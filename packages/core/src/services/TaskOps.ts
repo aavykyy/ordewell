@@ -9,7 +9,8 @@ import { taskPlacement } from './PlanTree';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
 import { validateTaskEdit, lockedTaskRefusal, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
 import { resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
-import { plannedTask, checkPlanInvariants, detectCycle, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, OPS_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask, type PlanTaskError } from './PlannedTask';
+import { plannedTask, checkPlanInvariants, detectCycle, notOnAScriptMessage, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, OPS_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask, type PlanTaskError } from './PlannedTask';
+import { clearedBodyFields } from '../models/ScriptTask';
 import { taggedReadOnlyMode } from './ModeResolver';
 
 /**
@@ -36,6 +37,7 @@ export type TaskOp =
 /** Fields the planner may change on an existing task. Everything else (id, status, verdict…) is system-owned. */
 export const UPDATABLE_FIELDS: (keyof Task)[] = [
   'title', 'description', 'prompt', 'dependencies', 'assignedRunner', 'assignedModel', 'taskMode', 'type', 'userSteps', 'autonomy', 'sliceType', 'ops', 'skills',
+  'commands', 'script', 'timeoutMs',
 ];
 
 /**
@@ -67,7 +69,8 @@ export function taskOpsProtocol(executionNote = '', tools = false): string[] {
     'Keep dependencies consistent: no cycles, no references to removed tasks, and never touch running or completed tasks — "rearm" is the one exception, below.',
     ...(tools ? ['edit_plan checks the batch when you call it and answers with what it will change, or with the error to fix — call it again in the same reply. The edit is applied when your reply ends; edits you make in one reply join one batch.'] : []),
     'Just declare the dependencies you want — display order is repaired for you afterwards, so a rewire or a newly added prerequisite never needs a "reorder" op. Only a task that is running or completed cannot be shifted, so an edit that would need one to move is rejected.' + executionNote,
-    'Flipping "type" between "ai" and "user" is a content change, not just a label: an update to "user" needs "userSteps" in the SAME op, and an update to "ai" needs "prompt" in the SAME op — the model/mode/effort/autonomy fields (flipping to "user", which also makes the task HITL) or the userSteps (flipping to "ai") are cleared automatically.',
+    'Flipping "type" between "ai", "user" and "script" is a content change, not just a label: an update to "user" needs "userSteps" in the SAME op, an update to "ai" needs "prompt", and an update to "script" needs "commands" or "script" — the fields the old type had and the new one does not are cleared automatically (flipping to "user" also makes the task HITL). Only a task that has not started can flip to or from "script".',
+    'A script task ("type":"script", top-level only) is run by Ordewell with no model: "commands" is a list of argument vectors run in order with no shell, stopping at the first that fails (e.g. [["git","push","origin","main"]]), or "script" is one script for the shell; "timeoutMs" is its time limit (ten minutes when left out). Give it exactly one of "commands" or "script", and never "prompt", "assignedRunner", "assignedModel", "skills", "readOnly" or "ops". Writing one body replaces the other. Changing its body or time limit takes it out of what the user approved, so it waits for their approval again.',
     '"skills" in "changes" REPLACES the task\'s whole skill list. To add one, send the names the plan block shows in its skills:[...] plus the new one; to drop one, send the rest; [] removes them all.',
     '"rearm" puts a failed OR completed task back to pending — verdict and output summary are cleared, any dependents it had blocked are released, and it may carry field changes (e.g. a corrected "prompt") applied in the same op. A running task cannot be re-armed. Never rearm a task just to relabel it — only when it should actually run again.',
   ];
@@ -164,7 +167,7 @@ function updatableChanges(raw: Partial<Task> | undefined): Partial<Task> {
   }
   if ('ops' in changes) changes.ops = opsFlag(changes.ops);
   if ('skills' in changes) changes.skills = skillNames(changes.skills);
-  return changes;
+  return clearedBodyFields(changes);
 }
 
 function findInTasks(tasks: readonly Task[], id: string): Task | undefined {
@@ -475,6 +478,9 @@ export function applyTaskOps(
     const target = findInTasks(tasks, ref.id);
     if (!target) return { error: `${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)` };
     if (refuseRunning && target.status === 'in_progress') return { error: `${label}: ${lockedTaskRefusal(target, 're-armed')}` };
+    // What only a runner would read, and that never lands on a task, is refused here for a script (ADR-0035).
+    const planners = op.changes ? (['readOnly', 'thinkingEffort'] as const).filter((f) => op.changes?.[f] !== undefined && op.changes?.[f] !== null && op.changes?.[f] !== false) : [];
+    if ((op.changes?.type ?? target.type) === 'script' && planners.length > 0) return { error: `${label}: "${target.title}" ${notOnAScriptMessage(planners)}` };
     if (op.changes && 'taskMode' in op.changes) return { error: `${label}: ${MODE_NOT_THE_PLANNERS}` };
     const changes = updatableChanges(op.changes);
     if (op.changes && 'thinkingEffort' in op.changes) {
@@ -497,7 +503,7 @@ export function applyTaskOps(
     const landed: Partial<Task> = { ...changes };
     const written = { ...target, ...changes };
     // A runner not allowed has nothing to resolve against; the plan's rules refuse it once the op is applied.
-    if (written.type === 'user' || runners.includes(written.assignedRunner)) {
+    if (written.type !== 'ai' || runners.includes(written.assignedRunner)) {
       const resolved = resolveAssignment({ writer: 'edit', task: written, before: target, readOnly, catalog: catalog ?? NO_CATALOG });
       if (!resolved.ok) return { error: `${label}: ${resolved.error}` };
       if (resolved.task.assignedModel !== written.assignedModel) landed.assignedModel = resolved.task.assignedModel;
@@ -611,7 +617,8 @@ export function applyTaskOps(
             fields: {
               description: toMerge.map((t) => t.description).filter(Boolean).join('\n\n'),
               prompt: toMerge.map((t) => t.prompt).filter(Boolean).join('\n\n---\n\n') || undefined,
-              type: toMerge.some((t) => t.type === 'user') ? 'user' : 'ai',
+              // A merge that takes in a script runs a body, which the merged task must state: no body is guessed (ADR-0035).
+              type: toMerge.some((t) => t.type === 'user') ? 'user' : toMerge.some((t) => t.type === 'script') ? 'script' : 'ai',
               assignedRunner: toMerge[0].assignedRunner,
               assignedModel: toMerge.find((t) => t.assignedModel)?.assignedModel,
               taskMode: (writes ?? toMerge[0]).taskMode,

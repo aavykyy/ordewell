@@ -1,4 +1,5 @@
 import { NOT_STARTED } from './status';
+import type { TaskType } from '../models/Task';
 
 /**
  * What a user can do to one task from its row. For a task paused on a usage
@@ -12,7 +13,7 @@ export type TaskRowPlacement = 'task' | 'subtask';
 
 interface ActionSubject {
   status: string;
-  type: 'ai' | 'user';
+  type: TaskType;
   awaitingReason?: string;
   resumeAt?: string | null;
   /** Its last attempt left a runner session to continue (ADR-0018, K1). */
@@ -22,6 +23,8 @@ interface ActionSubject {
 type Rule = readonly [TaskRowAction, (task: ActionSubject) => boolean];
 
 const UNSTARTED_AI = (t: ActionSubject): boolean => t.type === 'ai' && NOT_STARTED.has(t.status);
+/** Not started, and run by Ordewell rather than by hand: an AI task, or a script task (ADR-0035). */
+const UNSTARTED_RUN = (t: ActionSubject): boolean => t.type !== 'user' && NOT_STARTED.has(t.status);
 const QUEUED = (t: ActionSubject): boolean => t.status === 'pending' || t.status === 'approved';
 const PAUSED = (t: ActionSubject): boolean => t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit';
 const RESUMES = (t: ActionSubject): boolean => PAUSED(t) && !!t.resumeAt;
@@ -35,7 +38,7 @@ const TASK_RULES: readonly Rule[] = [
   ['resume-now', RESUMABLE],
   ['cancel-resume', RESUMES],
   ['skip', HOLDS_UP],
-  ['force-start', UNSTARTED_AI],
+  ['force-start', UNSTARTED_RUN],
   // A manual task has no runner to report it done, so it can always be marked;
   // a skipped one's kept work can still be vouched for.
   ['complete', (t) => t.status === 'awaiting_user' || t.status === 'skipped' || t.type === 'user'],

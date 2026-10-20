@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from '../interfaces/IRunner';
+import type { IRunner, IRunnerSession, QueuedTaskMessage, ScriptExit, StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from '../interfaces/IRunner';
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import type { CheckpointAnswer, TaskCompleteArgs } from './mcp/tools';
@@ -52,6 +52,7 @@ export abstract class AbstractRunnerSession implements IRunnerSession {
   abstract answerPermission(id: string, decision: ApprovalDecision): boolean | Promise<boolean>;
   abstract onTaskComplete(listener: (report: TaskCompleteArgs) => void): void;
   abstract onToolCheckpoint(handler: (question: string, signal: AbortSignal) => Promise<CheckpointAnswer>): void;
+  abstract onScriptExit(listener: (exit: ScriptExit) => void): void;
 }
 
 export abstract class AbstractRunner<S extends IRunnerSession> implements IRunner {

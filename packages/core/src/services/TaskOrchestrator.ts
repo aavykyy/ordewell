@@ -18,6 +18,7 @@ import type {
   IsolationMergeResult,
   IsolationRun,
   IWorktreeIsolation,
+  PreviousWork,
   TreeSnapshot,
 } from '../interfaces/IWorktreeIsolation';
 import { createWorktreeIsolation } from './GitWorktreeIsolation';
@@ -42,6 +43,8 @@ import { continuability, sessionOwner } from './continuation';
 import { quotedList } from '../utils/quotedList';
 import type { RunMergeView } from './SessionMessage';
 import { resumeTime } from '../taskRow/status';
+import { scriptBodyOf } from '../models/ScriptTask';
+import { SCRIPT_RUNNER, ScriptRunner } from './ScriptRunner';
 
 /** What ran an automatic Merge all: a task reaching its merge gate, or the run settling with landed work unmerged. */
 export type AutoMergeTrigger = { kind: 'gate'; taskId: string } | { kind: 'run_end' };
@@ -226,6 +229,8 @@ interface TaskAttempt {
    * task of the new one that happens to reuse its id.
    */
   readonly planScope: number;
+  /** A script task's attempt (ADR-0035): the script runner runs its body, with no model. */
+  readonly script: boolean;
 }
 
 type AttemptPhase = 'starting' | 'running' | 'integrating';
@@ -293,6 +298,8 @@ export interface TaskOrchestratorDeps {
   config: IConfig;
   notifications: INotification;
   runner: IRunner;
+  /** Runs script tasks' bodies (ADR-0035), in place of a registered runner. */
+  scriptRunner: IRunner;
   store: PlanStore;
   output: TaskOutputSource;
   /** The plan's isolation run and the open run's lifecycle (ADR-0013). */
@@ -336,6 +343,7 @@ export interface TaskOrchestratorOptions {
   config: IConfig;
   notifications: INotification;
   runner: IRunner;
+  scriptRunner?: IRunner;
   store?: PlanStore;
   output?: TaskOutputSource;
   isolation?: IWorktreeIsolation;
@@ -364,6 +372,7 @@ export class TaskOrchestrator {
   private config: IConfig;
   private notifications: INotification;
   private runner: IRunner;
+  private scriptRunner: IRunner;
   private store: PlanStore;
   private output: TaskOutputSource;
   private attempts = new Map<string, TaskAttempt>();
@@ -442,6 +451,7 @@ export class TaskOrchestrator {
     this.config = deps.config;
     this.notifications = deps.notifications;
     this.runner = deps.runner;
+    this.scriptRunner = deps.scriptRunner;
     this.store = deps.store;
     this.output = deps.output;
     this.runs = deps.runs;
@@ -513,6 +523,7 @@ export class TaskOrchestrator {
       config: options.config,
       notifications: options.notifications,
       runner: options.runner,
+      scriptRunner: options.scriptRunner ?? new ScriptRunner(),
       store,
       output,
       runs,
@@ -681,6 +692,7 @@ export class TaskOrchestrator {
   private runnerSession(taskId: string, action: keyof typeof CONTROL_WORDS): IRunnerSession {
     const task = this.store.get(taskId);
     if (!task) throw new TaskControlError(`No task ${taskId} in this plan.`);
+    if (task.type === 'script') throw new TaskControlError(`Task "${task.title}" is a script task: it runs no model, so there is no turn to ${CONTROL_WORDS[action]}. Stop it, or edit its body and retry it.`);
     const attempt = this.attempts.get(taskId);
     const session = attempt?.session;
     if (!attempt || !session || attempt.phase !== 'running' || attempt.decided) {
@@ -1081,6 +1093,7 @@ export class TaskOrchestrator {
     // reports meanwhile is still counted; whatever is still starting goes too.
     for (const attempt of this.attempts.values()) this.stopRunner(attempt);
     this.runner.stopAll();
+    this.scriptRunner.stopAll();
     // Interrupted work is kept like a failed attempt's: inspectable, and off
     // `active` so a crash-recovery prune does not sweep it away. A stopped
     // repair did not land, so its task waits on the user as its conflict did;
@@ -1124,7 +1137,7 @@ export class TaskOrchestrator {
    * read as running — or, in an isolated run, count as live work forever.
    */
   private recoverOrphans(): void {
-    const orphans = this.store.allTasks.filter((t) => t.type === 'ai' && t.status === 'in_progress' && !this.attempts.has(t.id) && !this.completing.has(t.id));
+    const orphans = this.store.allTasks.filter((t) => t.type !== 'user' && t.status === 'in_progress' && !this.attempts.has(t.id) && !this.completing.has(t.id));
     if (orphans.length === 0) return;
     for (const t of orphans) this.store.markPending(t.id);
     const one = orphans.length === 1;
@@ -1216,8 +1229,12 @@ export class TaskOrchestrator {
     this.stopRunner(attempt);
 
     console.error(`[TaskOrchestrator] Task ${taskRefOf(this.store.planTasks, task.id) ?? `#${task.order}`} "${task.title}" verdict=${verdict.outcome}`);
-    console.error(`[TaskOrchestrator] Runner: ${task.assignedRunner}, Model: ${task.assignedModel?.modelId ?? 'default'}`);
-    console.error(`[TaskOrchestrator] Prompt preview: ${(task.prompt ?? '').slice(0, 200)}`);
+    if (attempt.script) {
+      console.error(`[TaskOrchestrator] Script body: ${JSON.stringify(scriptBodyOf(task)).slice(0, 200)}`);
+    } else {
+      console.error(`[TaskOrchestrator] Runner: ${task.assignedRunner}, Model: ${task.assignedModel?.modelId ?? 'default'}`);
+      console.error(`[TaskOrchestrator] Prompt preview: ${(task.prompt ?? '').slice(0, 200)}`);
+    }
     if (attempt.kind.kind === 'repair') return this.settleRepair(task, attempt, verdict);
 
     // A verdict can arrive inside whatever ended the runner: a stop kills every
@@ -1890,12 +1907,12 @@ export class TaskOrchestrator {
    * so is the answer.
    * Reuses the scheduler's own claim so a force-started task gets the same
    * augmented prompt, session tracking, and exit handling — callers must not
-   * re-spawn the runner themselves. No-op if the task is unknown, not an AI
+   * re-spawn the runner themselves. No-op if the task is unknown, a user
    * task, or already running.
    */
   async forceStartTask(taskId: string, origin: RunOrigin = 'user'): Promise<string | undefined> {
     const task = this.store.get(taskId);
-    if (!task || task.type !== 'ai') return;
+    if (!task || task.type === 'user') return;
     if (this.attempts.has(taskId)) return;
     this.refuseOpsDuringMerge(taskId, FORCED_NOW);
     const queued = this.queueBehindDependencies(task);
@@ -2258,12 +2275,13 @@ export class TaskOrchestrator {
     const refused = this.claimRefusal(taskId, admission);
     if (refused) return { refused };
     const task = this.store.get(taskId)!;
+    const script = task.type === 'script';
     const attempt: TaskAttempt = {
       taskId: task.id,
       attempt: Math.max(this.spawnCounts.get(task.id) ?? 0, this.lastLoggedAttempt(task.id), ...task.attemptUsage?.map((u) => u.attempt) ?? []) + 1,
       phase: 'starting',
       session: null,
-      runner: this.store.resolveTaskRunner(task),
+      runner: script ? SCRIPT_RUNNER : this.store.resolveTaskRunner(task),
       cwd: null,
       worktree: false,
       integration: null,
@@ -2279,10 +2297,12 @@ export class TaskOrchestrator {
       reminded: false,
       runnerStopped: false,
       planScope: this.planScope,
+      script,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.attempts.set(task.id, attempt);
-    this.store.startAttemptUsage(task.id, attempt.attempt, attempt.runner, attempt.startedAt);
+    // A script spends nothing a ledger counts: no model, no tokens (ADR-0035).
+    if (!script) this.store.startAttemptUsage(task.id, attempt.attempt, attempt.runner, attempt.startedAt);
     this.store.markInProgress(task.id);
     this.emit('onTaskChanged');
     return { spawned: this.runClaimed(task, attempt, continuation) };
@@ -2314,18 +2334,20 @@ export class TaskOrchestrator {
   private async spawnAttempt(task: Task, attempt: TaskAttempt): Promise<boolean> {
     try {
       const { kind } = attempt;
-      // Nothing can drive a runner without a structured connector, so it is
-      // refused before a worktree is made for it.
-      if (!supportsTaskMode(attempt.runner)) {
-        const name = this.registry?.get(attempt.runner)?.manifest.displayName ?? attempt.runner;
-        throw new Error(`${name} has no structured connector, so Ordewell cannot run its tasks. Assign the task to another runner.`);
+      if (!attempt.script) {
+        // Nothing can drive a runner without a structured connector, so it is
+        // refused before a worktree is made for it.
+        if (!supportsTaskMode(attempt.runner)) {
+          const name = this.registry?.get(attempt.runner)?.manifest.displayName ?? attempt.runner;
+          throw new Error(`${name} has no structured connector, so Ordewell cannot run its tasks. Assign the task to another runner.`);
+        }
+        // The plan fixed this mode when it was made and ADR-0001 forbids
+        // swapping it here, so a host that cannot run it ends the attempt
+        // before a worktree is made for it.
+        const manifest = this.registry?.get(attempt.runner)?.manifest;
+        const unavailable = manifest && unavailableTaskModeMessage(manifest, task.taskMode);
+        if (unavailable) throw new Error(unavailable);
       }
-      // The plan fixed this mode when it was made and ADR-0001 forbids
-      // swapping it here, so a host that cannot run it ends the attempt
-      // before a worktree is made for it.
-      const manifest = this.registry?.get(attempt.runner)?.manifest;
-      const unavailable = manifest && unavailableTaskModeMessage(manifest, task.taskMode);
-      if (unavailable) throw new Error(unavailable);
       // Resumed beside a runner still winding it down, a session would run in
       // two processes, and count from before what the first one still reports.
       if (kind.kind === 'continuation') await this.windDowns.get(task.id);
@@ -2342,41 +2364,9 @@ export class TaskOrchestrator {
         this.abandonSpawn(task, attempt);
         return false;
       }
-      // Read where the attempt runs: a skill an earlier task committed is in
-      // this worktree only once that task's work has landed.
-      if (takesSkills(kind) && task.skills?.length) {
-        attempt.skills = resolveTaskSkills(task, this.skillsAt(this.skillRoots(cwd)), worktree ? (name) => this.uncommittedSkillFolder(name) : undefined);
-      }
-      const finalPrompt = attemptPrompt(kind, {
-        task,
-        plan: this.store.planTasks,
-        planMapEnabled: this.config.planMapEnabled,
-        previousWork,
-        skills: attempt.skills,
-        repairPrompt: (t) => this.landing.repairPrompt(t),
-        previousAttempt: (taskId) => this.opsPreviousAttempt(taskId),
-      });
-      const env = await this.envForTask(cwd);
-      const session = await this.runner.spawn({
-        taskId: task.id,
-        runner: attempt.runner,
-        prompt: finalPrompt,
-        modelId: task.assignedModel?.modelId,
-        thinkingEffort: task.assignedModel?.thinkingEffort,
-        modelVariants: task.assignedModel?.availableVariants,
-        mode: task.taskMode ?? 'build',
-        cwd,
-        registry: this.registry ?? undefined,
-        order: task.order,
-        title: task.title,
-        env,
-        resumeSessionId: kind.kind === 'continuation' ? kind.resumeSessionId : undefined,
-        resumeCost: kind.kind === 'continuation' ? countedSessionCost(task.attemptUsage, kind.resumeSessionId) : undefined,
-        resumeWindow: kind.kind === 'continuation' ? resumedSessionWindow(task.attemptUsage, attempt.runner, attempt.attempt, kind.resumeSessionId) : undefined,
-        attempt: attempt.attempt,
-        ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
-        onNotice: (message) => this.tell('warn', `Task "${task.title}": ${message}`),
-      });
+      const session = attempt.script
+        ? await this.spawnScript(task, attempt, cwd)
+        : await this.spawnRunner(task, attempt, cwd, worktree, previousWork);
 
       // Stop/load/cancel can end the attempt while the async adapter is
       // starting. Do not resurrect that execution after the surface already
@@ -2429,7 +2419,8 @@ export class TaskOrchestrator {
       // Each way out settles the task's status before it awaits anything, so
       // no tick in between finds it in progress with no attempt.
       const refusal = err instanceof Error ? err.message : String(err);
-      if (attempt.kind.kind !== 'repair' && classifyRunnerStop(refusal) === 'usage-limit') {
+      // A script has no runner whose account a limit could stop (ADR-0035).
+      if (attempt.kind.kind !== 'repair' && !attempt.script && classifyRunnerStop(refusal) === 'usage-limit') {
         // The limit refused the turn Ordewell was starting: a pause, as one
         // mid-turn is, and the saved session stays for the resume to continue.
         this.pauseOnLimit(task, attempt, refusal);
@@ -2498,6 +2489,73 @@ export class TaskOrchestrator {
       await this.tick();
       return false;
     }
+  }
+
+  /**
+   * The runner's half of a start: the skills read where the attempt runs, the
+   * prompt its kind is told, and the runner spawned on its model and mode.
+   */
+  private async spawnRunner(task: Task, attempt: TaskAttempt, cwd: string, worktree: boolean, previousWork: PreviousWork | undefined): Promise<IRunnerSession> {
+    const { kind } = attempt;
+    // Read where the attempt runs: a skill an earlier task committed is in
+    // this worktree only once that task's work has landed.
+    if (takesSkills(kind) && task.skills?.length) {
+      attempt.skills = resolveTaskSkills(task, this.skillsAt(this.skillRoots(cwd)), worktree ? (name) => this.uncommittedSkillFolder(name) : undefined);
+    }
+    const finalPrompt = attemptPrompt(kind, {
+      task,
+      plan: this.store.planTasks,
+      planMapEnabled: this.config.planMapEnabled,
+      previousWork,
+      skills: attempt.skills,
+      repairPrompt: (t) => this.landing.repairPrompt(t),
+      previousAttempt: (taskId) => this.opsPreviousAttempt(taskId),
+    });
+    const env = await this.envForTask(cwd);
+    return this.runner.spawn({
+      taskId: task.id,
+      runner: attempt.runner,
+      prompt: finalPrompt,
+      modelId: task.assignedModel?.modelId,
+      thinkingEffort: task.assignedModel?.thinkingEffort,
+      modelVariants: task.assignedModel?.availableVariants,
+      mode: task.taskMode ?? 'build',
+      cwd,
+      registry: this.registry ?? undefined,
+      order: task.order,
+      title: task.title,
+      env,
+      resumeSessionId: kind.kind === 'continuation' ? kind.resumeSessionId : undefined,
+      resumeCost: kind.kind === 'continuation' ? countedSessionCost(task.attemptUsage, kind.resumeSessionId) : undefined,
+      resumeWindow: kind.kind === 'continuation' ? resumedSessionWindow(task.attemptUsage, attempt.runner, attempt.attempt, kind.resumeSessionId) : undefined,
+      attempt: attempt.attempt,
+      ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
+      onNotice: (message) => this.tell('warn', `Task "${task.title}": ${message}`),
+    });
+  }
+
+  /**
+   * A script task's start (ADR-0035): its body as the plan holds it now, run
+   * by the script runner at the workspace root with the workspace's own
+   * variables, as a task's runner gets them (ADR-0016). There is no prompt,
+   * so no skills and no account of an earlier attempt: a retry runs the body
+   * again as written.
+   */
+  private async spawnScript(task: Task, attempt: TaskAttempt, cwd: string): Promise<IRunnerSession> {
+    const body = scriptBodyOf(task);
+    if (!body) throw new Error(`Task "${task.title}" has no script to run: give it "commands" or a "script".`);
+    const env = await this.envForTask(cwd);
+    return this.scriptRunner.spawn({
+      taskId: task.id,
+      runner: attempt.runner,
+      prompt: '',
+      cwd,
+      order: task.order,
+      title: task.title,
+      env,
+      attempt: attempt.attempt,
+      script: body,
+    });
   }
 
   /** For a skill the main checkout has, the folder a worktree only gets once it is committed. */
@@ -2603,7 +2661,8 @@ export class TaskOrchestrator {
     attempt.runnerStopped = true;
     const { taskId } = attempt;
     // A stop that failed leaves nothing to wait for, and nothing awaits this but a continue.
-    const windDown = Promise.all([this.windDowns.get(taskId), this.runner.stop(session.id)]).catch(() => undefined).then(() => {
+    const runner = attempt.script ? this.scriptRunner : this.runner;
+    const windDown = Promise.all([this.windDowns.get(taskId), runner.stop(session.id)]).catch(() => undefined).then(() => {
       if (this.windDowns.get(taskId) === windDown) this.windDowns.delete(taskId);
     });
     this.windDowns.set(taskId, windDown);

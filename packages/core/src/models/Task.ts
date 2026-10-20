@@ -14,9 +14,12 @@ export interface UserStep {
   completed: boolean;
 }
 
-/** One deterministic signal gathered while verifying a completed task. `completion_marker` is only in verdicts saved before completion was reported through `task_complete` alone. */
+/**
+ * One deterministic signal gathered while verifying a completed task. `completion_marker` is only in verdicts saved before completion was reported through `task_complete` alone.
+ * `script_exit` is a script task's exit status, its one evidence (ADR-0035).
+ */
 export interface VerificationCheck {
-  name: 'exit_code' | 'completion_marker' | 'task_complete' | 'manual';
+  name: 'exit_code' | 'completion_marker' | 'task_complete' | 'manual' | 'script_exit';
   passed: boolean;
   /** A check that did not apply. Skipped checks don't affect the verdict. */
   skipped: boolean;
@@ -40,7 +43,8 @@ export interface TaskOutputSummary {
   capturedAt: string;
 }
 
-export type TaskType = 'ai' | 'user';
+/** `script` is an ops task whose body Ordewell runs with no model (ADR-0035). */
+export type TaskType = 'ai' | 'user' | 'script';
 /**
  * `skipped` is terminal and verdict-less: the task will not be waited for, and
  * nothing it did lands. Its dependents go ahead without it once the work it
@@ -169,7 +173,8 @@ export interface Task {
    * An ops task (ADR-0020): it changes no repository files, runs at the
    * workspace root rather than in a worktree, and waits for the change tasks
    * it depends on to be merged into the user's branch. Top-level AI tasks
-   * only; absent means a change task.
+   * only; absent means a change task. A script task is one by nature and
+   * stores none (see {@link runsAsOps}).
    */
   ops?: boolean;
   /**
@@ -193,6 +198,15 @@ export interface Task {
    */
   addedBy?: 'supervisor';
   attemptUsage?: AttemptUsage[];
+  /**
+   * A script task's body (ADR-0035), exactly one of these two: argument
+   * vectors run in order with no shell, stopping at the first that fails, or
+   * one script run by the research shell's interpreter.
+   */
+  commands?: string[][];
+  script?: string;
+  /** A script task's time limit; absent means ten minutes (`DEFAULT_SCRIPT_TIMEOUT_MS`). */
+  timeoutMs?: number;
 }
 
 export interface DiscoveredMode {
@@ -699,12 +713,13 @@ export { taskOrderLabel, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, res
 
 export function createTask(overrides: Partial<Task> = {}): Task {
   const skills = skillNames(overrides.skills);
+  const type = overrides.type ?? 'ai';
   return {
     id: overrides.id ?? uuidv4(),
     order: overrides.order ?? 0,
     title: overrides.title ?? '',
     description: overrides.description ?? '',
-    type: overrides.type ?? 'ai',
+    type,
     status: overrides.status ?? 'pending',
     dependencies: overrides.dependencies ?? [],
     prompt: overrides.prompt,
@@ -715,13 +730,17 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     ...(overrides.attemptUsage ? { attemptUsage: structuredClone(overrides.attemptUsage) } : {}),
     assignedModel: overrides.assignedModel,
     assignedRunner: overrides.assignedRunner ?? DEFAULT_RUNNERS[0],
-    taskMode: overrides.taskMode ?? 'build',
+    // A script task runs in no mode (ADR-0035): one given it would read as a mode it runs in.
+    taskMode: overrides.taskMode ?? (type === 'script' ? undefined : 'build'),
     autonomy: overrides.autonomy,
     sliceType: overrides.sliceType,
     userStoriesCovered: overrides.userStoriesCovered,
     ...(opsFlag(overrides.ops, overrides.type) ? { ops: true } : {}),
     ...(skills ? { skills } : {}),
     ...(overrides.addedBy === 'supervisor' ? { addedBy: 'supervisor' as const } : {}),
+    ...(overrides.commands !== undefined ? { commands: overrides.commands.map((argv) => [...argv]) } : {}),
+    ...(overrides.script !== undefined ? { script: overrides.script } : {}),
+    ...(overrides.timeoutMs !== undefined ? { timeoutMs: overrides.timeoutMs } : {}),
   };
 }
 
@@ -768,6 +787,14 @@ export function inheritedSkills(chosen: unknown, inherited: readonly string[] | 
  */
 export function opsFlag(value: unknown, type: Task['type'] = 'ai'): true | undefined {
   return value === true && type === 'ai' ? true : undefined;
+}
+
+/**
+ * Whether a task runs as an ops task (ADR-0020): an AI task marked so, or a
+ * script task, which is one by nature and never marked (ADR-0035).
+ */
+export function runsAsOps(task: Pick<Task, 'ops' | 'type'>): boolean {
+  return task.type === 'script' || opsFlag(task.ops, task.type) === true;
 }
 
 /**
@@ -902,14 +929,15 @@ export function approvalRecordOf(plan: ApprovalRecord): ApprovalRecord {
 }
 
 /**
- * A task the scheduler leaves for the user (ADR-0035): an AI task not started
- * yet, in a plan they approved, outside their approval record — the planner
- * added it since. It starts once they start it or execute the plan. In a plan
- * they never approved nothing is theirs yet, so nothing is singled out.
+ * A task the scheduler leaves for the user (ADR-0035): an AI or script task
+ * not started yet, in a plan they approved, outside their approval record —
+ * the planner added it since, or changed a script's body. It starts once they
+ * start it or execute the plan. In a plan they never approved nothing is
+ * theirs yet, so nothing is singled out.
  */
 export function waitsForApproval(task: Pick<Task, 'id' | 'type' | 'status'>, record: ApprovalRecord): boolean {
   return record.approved === true
-    && task.type === 'ai'
+    && task.type !== 'user'
     && (task.status === 'pending' || task.status === 'approved')
     && !(record.approvedTasks ?? []).includes(task.id);
 }
@@ -949,7 +977,9 @@ function holdsSettledWork(task: Task): boolean {
  * so the status it writes is not evidence. A settled task is kept exactly as
  * it stands wherever the rewrite names it, and put back beside its old
  * neighbour where the rewrite leaves it out. Every other task keeps the status
- * it had; a task the rewrite adds starts pending.
+ * it had; a task the rewrite adds starts pending. A failed task the rewrite
+ * turns into a script task or out of one is kept as it was: what ran, and
+ * where, is fixed once it has run (ADR-0020, ADR-0035).
  */
 export function keepExecutionState(current: readonly Task[], rewrite: Task[]): Task[] {
   const existing = new Map(flattenTasks(current).map((t) => [t.id, t]));
@@ -959,6 +989,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
     const result = tasks.map((t): Task => {
       const prior = existing.get(t.id);
       if (prior && SETTLED_STATUSES.has(prior.status)) return { ...prior };
+      if (prior?.status === 'failed' && (prior.type === 'script') !== (t.type === 'script')) return { ...prior };
       return {
         ...t,
         status: prior?.status ?? 'pending',

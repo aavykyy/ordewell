@@ -1,5 +1,5 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type RunnerCommand, type RunTask, type RunView, type SupervisorLevel, type TaskLogFollow, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type RunnerCommand, type RunTask, type RunView, type SupervisorLevel, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { SaveSettingsEffect } from './reducers/settings';
 import type { StepperState } from './reducers/stepper';
@@ -20,7 +20,8 @@ export interface TaskView {
   title: string;
   description?: string;
   prompt?: string;
-  type: 'ai' | 'user';
+  /** A script task is projected as an ops AI task until the pane draws its body (ADR-0035). */
+  type: TaskType;
   status: string;
   /** Advisory silence timestamp from VerdictEngine — set while the task's runner has gone quiet. */
   idleSince?: string | null;

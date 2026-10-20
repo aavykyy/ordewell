@@ -3,6 +3,7 @@ import type { PlanStore } from './PlanStore';
 import type { IsolationRunController } from './IsolationRunController';
 import { classifyAttempt, mergeExcludes } from './attemptKind';
 import { blockingFailures } from './blocking';
+import { scriptBodyOf } from '../models/ScriptTask';
 
 /**
  * Why a task cannot start now: the one start rule (ADR-0034), which the
@@ -15,7 +16,7 @@ export type StartWait =
   | { kind: 'started' }
   /** Mark complete is landing its work. */
   | { kind: 'completing' }
-  /** An AI task with no prompt yet: there is nothing to run. */
+  /** An AI task with no prompt yet, or a script task with no body to run: there is nothing to run. */
   | { kind: 'no-prompt' }
   /** Outside the user's approval record (ADR-0035). */
   | { kind: 'unapproved' }
@@ -27,7 +28,7 @@ export type StartWait =
   | { kind: 'dependencies'; waiting: string[] }
   /** A force start queued behind the dependencies still under way or yet to run, which starts once they finish. */
   | { kind: 'queued'; waiting: string[] }
-  /** An ops task, and a Merge all is under way (ADR-0020). */
+  /** An ops task, a script task among them, and a Merge all is under way (ADR-0020). */
   | { kind: 'merging' }
   /** Its runner hit its usage limit: nothing more starts on that runner until the reset. */
   | { kind: 'usage-limit'; runner: string }
@@ -81,7 +82,7 @@ export interface ReadinessInput extends StartRuleInput {
   maxParallel: number;
 }
 
-/** One AI task the start rule held back, with why, for the scheduler's log. */
+/** One AI or script task the start rule held back, with why, for the scheduler's log. */
 export interface ReadyTaskExclusion {
   task: Readonly<Task>;
   waits: StartWait[];
@@ -92,7 +93,7 @@ export interface Readiness {
   ready: Task[];
   /** How many tasks nothing holds back, before the slot cap. */
   candidateCount: number;
-  /** AI tasks with a prompt the start rule held back, with why. */
+  /** AI tasks with a prompt, and script tasks, the start rule held back, with why. */
   excluded: ReadyTaskExclusion[];
   /** Tasks held back by nothing but their merge gate ({@link onlyAtGate}), in plan order. */
   gated: Task[];
@@ -118,7 +119,7 @@ export function selectReadyTasks(input: ReadinessInput): Readiness {
   return {
     ready: candidates.slice(0, Math.max(0, input.maxParallel - input.active)),
     candidateCount: candidates.length,
-    excluded: judged.filter(({ task, waits }) => task.type === 'ai' && task.prompt && waits.length > 0),
+    excluded: judged.filter(({ task, waits }) => (task.type === 'script' || (task.type === 'ai' && task.prompt)) && waits.length > 0),
     gated: judged.filter(({ waits }) => onlyAtGate(waits)).map(({ task }) => task),
   };
 }
@@ -161,7 +162,7 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   const waits: StartWait[] = [];
   if (task.status !== 'pending' && task.status !== 'approved') waits.push({ kind: 'started' });
   if (input.completing.has(task.id)) waits.push({ kind: 'completing' });
-  if (!byHand && !task.prompt) waits.push({ kind: 'no-prompt' });
+  if (task.type === 'ai' ? !task.prompt : task.type === 'script' && !scriptBodyOf(task)) waits.push({ kind: 'no-prompt' });
   if (!input.approved(task.id)) waits.push({ kind: 'unapproved' });
   if (!forced && input.onHold.has(task.id)) waits.push({ kind: 'on-hold' });
   const failed = forced ? [] : plan.blocked().get(task.id) ?? [];
@@ -170,7 +171,8 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   const waiting = forced || queued ? underWay(task, store, runs, plan) : unmetDependencies(task, store, runs);
   if (waiting.length > 0) waits.push(queued ? { kind: 'queued', waiting } : { kind: 'dependencies', waiting });
   if (input.merging && mergeExcludes(classifyAttempt(store.isOps(task.id)))) waits.push({ kind: 'merging' });
-  if (!forced && !byHand) {
+  // A script task runs on no runner, so no runner's limit holds it (ADR-0035).
+  if (!forced && task.type === 'ai') {
     const runner = store.resolveTaskRunner(task);
     if (plan.limited().has(runner)) waits.push({ kind: 'usage-limit', runner });
   }
@@ -260,7 +262,8 @@ function landed(id: string, store: Pick<PlanStore, 'isCompleted'>, runs: Pick<Is
 
 /**
  * The merge gate (ADR-0020): the completed ancestors of a task that runs
- * outside a worktree — an ops task or a user task — whose landed work is not
+ * outside a worktree — an ops task, a script task among them (ADR-0035), or a
+ * user task — whose landed work is not
  * in the user's branch yet. What it acts on, or what the user checks by hand,
  * is their checkout, which does not hold that work until it is merged. Every
  * ancestor counts, not only the direct dependencies: a dependency on a

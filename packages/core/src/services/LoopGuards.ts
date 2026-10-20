@@ -1,4 +1,5 @@
 import { flattenTasks, flattenTasksWithParents, type Task } from '../models/Task';
+import { DEFAULT_SCRIPT_TIMEOUT_MS } from '../models/ScriptTask';
 import type { ExecutionCommandName, ExecutionRecord } from '../models/Execution';
 import { UPDATABLE_FIELDS } from './TaskOps';
 import type { ExecutionCommand } from './ExecutionCommands';
@@ -57,6 +58,12 @@ export interface AttemptShape {
   runner: string;
   model: string | null;
   effort: string | null;
+  /**
+   * A script task's body and time limit, read as a prompt is (ADR-0035):
+   * what runs is all a script's retry could change. Absent for any other task,
+   * and from a shape saved before script tasks.
+   */
+  script?: { commands: readonly (readonly string[])[] | null; script: string | null; timeoutMs: number };
 }
 
 export function attemptShape(task: Readonly<Task>): AttemptShape {
@@ -66,6 +73,9 @@ export function attemptShape(task: Readonly<Task>): AttemptShape {
     runner: task.assignedRunner,
     model: task.assignedModel?.modelId ?? null,
     effort: task.assignedModel?.thinkingEffort ?? null,
+    ...(task.type === 'script'
+      ? { script: { commands: task.commands ?? null, script: task.script ?? null, timeoutMs: task.timeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS } }
+      : {}),
   };
 }
 
@@ -110,9 +120,12 @@ export function retryLimit(task: GuardedTask, retried: number, limit: number, as
 /** A retry after a failure, with what the failed attempt was told and who ran it unchanged, is refused. */
 export function identicalRetry(task: GuardedTask, failedWith: AttemptShape | undefined, now: AttemptShape): GuardTrip | null {
   if (!failedWith || stable(failedWith) !== stable(now)) return null;
+  const refusal = now.script
+    ? `Refused: ${named(task)} failed with this same body and time limit, and an unchanged retry would run the same commands. Change something or escalate: edit its "commands", "script" or "timeoutMs" with edit_plan, then retry; or tell the user.`
+    : `Refused: ${named(task)} failed with this same prompt and model, and an unchanged retry would fail the same way. Change something or escalate: edit its prompt with edit_plan, or move it to another model or runner, then retry; or tell the user.`;
   return {
     key: `identical-retry:${task.id}`,
-    refusal: `Refused: ${named(task)} failed with this same prompt and model, and an unchanged retry would fail the same way. Change something or escalate: edit its prompt with edit_plan, or move it to another model or runner, then retry; or tell the user.`,
+    refusal,
     escalation: `Loop guard, identical retry: I tried to retry ${named(task)} unchanged after it failed, and was stopped. If I cannot say what to change, it needs you.`,
   };
 }

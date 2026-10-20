@@ -94,6 +94,10 @@ export type SerializedTask = {
   /** Set only on a task an Act supervisor added (ADR-0029). */
   addedBy?: 'supervisor';
   attemptUsage?: AttemptUsage[];
+  /** A script task's body and time limit (ADR-0035); absent on any other task. */
+  commands?: string[][];
+  script?: string;
+  timeoutMs?: number;
 };
 
 /** Skill loads go out as notices: their bodies are for the planner, and stay in the session. */
@@ -407,6 +411,9 @@ export function serializeTask(t: SurfaceTask): SerializedTask {
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(t.skills?.length ? { skills: [...t.skills] } : {}),
     ...(t.addedBy ? { addedBy: t.addedBy } : {}),
+    ...(t.commands ? { commands: t.commands.map((argv) => [...argv]) } : {}),
+    ...(t.script !== undefined ? { script: t.script } : {}),
+    ...(t.timeoutMs !== undefined ? { timeoutMs: t.timeoutMs } : {}),
   };
 }
 

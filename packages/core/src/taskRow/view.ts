@@ -1,5 +1,5 @@
 import { taskUsageSummary, type AttemptUsage, type TaskUsageSummary } from '../models/Usage';
-import type { AwaitingReason } from '../models/Task';
+import type { AwaitingReason, TaskType } from '../models/Task';
 import type { TaskIsolationState } from '../interfaces/IWorktreeIsolation';
 import { taskOrderLabel, taskRefOf } from '../services/TaskRefs';
 import { capConflictFiles } from '../services/conflictFiles';
@@ -16,7 +16,7 @@ import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskR
 export interface TaskRowSubject {
   id: string;
   order: number;
-  type: 'ai' | 'user';
+  type: TaskType;
   status: string;
   dependencies: readonly string[];
   taskMode?: string;
@@ -174,7 +174,8 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
   return {
     usage: latestAttempt ? { totals: spend.totals, ...(spend.contextFill ? { contextFill: spend.contextFill } : {}), attempt: latestAttempt.attempt } : task.type === 'ai' && ['completed', 'failed', 'in_progress', 'awaiting_user'].includes(task.status) ? { totals: {}, attempt: 0 } : null,
     orderLabel: taskOrderLabel(task, parent),
-    kind: task.type === 'user' ? 'user' : task.ops ? 'ops' : 'ai',
+    // A script task is an ops task by nature (ADR-0035), and drawn as one.
+    kind: task.type === 'user' ? 'user' : task.ops || task.type === 'script' ? 'ops' : 'ai',
     status: blocked.length > 0 ? 'blocked' : taskStatusKind(task),
     running: isTaskRunning(task),
     awaiting: awaitingLabel(task),

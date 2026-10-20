@@ -157,7 +157,7 @@ export function carryPlannedModes(
   const carry = (t: Task): Task => {
     const subtasks = (t.subtasks ?? []).map(carry);
     const was = prior.get(t.id);
-    if (t.type === 'user' || !was || was.type === 'user' || t.taskMode === taggedReadOnlyMode(catalog.runnerModes[t.assignedRunner])) return { ...t, subtasks };
+    if (t.type !== 'ai' || !was || was.type !== 'ai' || t.taskMode === taggedReadOnlyMode(catalog.runnerModes[t.assignedRunner])) return { ...t, subtasks };
     const mode = plannedMode(t.assignedRunner, catalog.runnerModes, { readOnly: false, current: was.taskMode }, catalog.autonomousDefault ?? true);
     return { ...t, subtasks, ...(mode.ok && mode.mode !== undefined ? { taskMode: mode.mode } : {}) };
   };

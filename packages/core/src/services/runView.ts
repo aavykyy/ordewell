@@ -62,6 +62,7 @@ function changeTask(tasks: RunTask[], taskId: string, change: (task: RunTask) =>
 const PATCHABLE: ReadonlySet<string> = new Set<keyof PlanFields>([
   'order', 'title', 'type', 'status', 'description', 'dependencies', 'assignedRunner', 'assignedModel', 'taskMode', 'prompt',
   'userSteps', 'autonomy', 'sliceType', 'userStoriesCovered', 'awaitingReason', 'resumeAt', 'skipReason', 'ops', 'skills', 'addedBy', 'attemptUsage',
+  'commands', 'script', 'timeoutMs',
 ]);
 
 function patchTask(task: RunTask, changes: Record<string, unknown>): RunTask {

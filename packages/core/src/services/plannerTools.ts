@@ -1,4 +1,5 @@
 import { flattenTasks, type RunnerId, type SkillLoad, type Task, type Verdict } from '../models/Task';
+import { scriptBodyOf } from '../models/ScriptTask';
 import type { SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, snapshotSkill } from './skillInvocation';
 import { autonomyLevelLabel, readOnlyMode } from './ModeResolver';
@@ -76,9 +77,9 @@ export type PlanEditOutcome =
   | { ok: true; summary: string[]; coerced?: Omit<AssignmentAdjustment, 'taskId'>[] }
   | { ok: false; errors: string[] };
 
-/** The runners a set of tasks runs on. A user task runs on none. */
+/** The runners a set of tasks runs on. A user task runs on none, and a script task on no runner (ADR-0035). */
 export function runnersOf(tasks: readonly Task[]): RunnerId[] {
-  return [...new Set(flattenTasks(tasks).filter((t) => t.type !== 'user').map((t) => t.assignedRunner))];
+  return [...new Set(flattenTasks(tasks).filter((t) => t.type === 'ai').map((t) => t.assignedRunner))];
 }
 
 export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
@@ -299,9 +300,10 @@ function taskDetail(plan: readonly Task[], ref: string, fields: readonly TaskQue
   const wants = (field: TaskQueryField) => fields.includes(field);
   return {
     ...taskHead(plan, task),
-    type: task.type === 'user' ? 'user' : 'ai',
+    type: task.type,
     ...(wants('description') ? { description: task.description || null } : {}),
-    ...(wants('prompt') ? { prompt: task.prompt || null } : {}),
+    // A script task's body is what it runs, as a prompt is what a runner is told (ADR-0035).
+    ...(wants('prompt') ? (task.type === 'script' ? { body: scriptBodyOf(task) } : { prompt: task.prompt || null }) : {}),
     ...(wants('userSteps')
       ? { userSteps: task.userSteps?.length ? task.userSteps.map((s) => ({ order: s.order, instruction: s.instruction, completed: s.completed === true })) : null }
       : {}),

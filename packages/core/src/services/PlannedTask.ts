@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Task, RunnerId, TaskModelAssignment, DEFAULT_RUNNERS, createTask, flattenTasksWithParents, inheritedSkills, skillNames } from '../models/Task';
 import { taggedReadOnlyMode, type RunnerModeInfo } from './ModeResolver';
 import { resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
+import { notAScriptsFields, scriptBodyErrors } from '../models/ScriptTask';
 
 /** One reason a planned task was refused, pinned to the task and field it is about. */
 export interface PlanTaskError {
@@ -79,11 +80,32 @@ function text(value: unknown): string | undefined {
 }
 
 /**
+ * What a script task's planner may not write on it (ADR-0035): it runs its
+ * body with no model, so nothing about a runner, a model, a mode or a prompt
+ * applies, and it has no subtasks.
+ */
+const NOT_ON_A_SCRIPT = ['assignedRunner', 'assignedModel', 'thinkingEffort', 'taskMode', 'readOnly', 'prompt', 'skills', 'userSteps', 'ops', 'subtasks'] as const;
+
+/** The fields a planner wrote on a script task that it may not have, by name; none when it wrote none. */
+export function notOnAScript(raw: Record<string, unknown>): string[] {
+  return NOT_ON_A_SCRIPT.filter((f) => {
+    const value = raw[f];
+    return value !== undefined && value !== null && value !== false && !(Array.isArray(value) && value.length === 0);
+  });
+}
+
+/** The refusal of those fields, worded for the planner. */
+export function notOnAScriptMessage(fields: readonly string[]): string {
+  return `is a script task, which runs its "commands" or "script" with no model: leave out ${fields.map((f) => `"${f}"`).join(', ')}`;
+}
+
+/**
  * Why a task may not be an ops task (ADR-0020), or null when it may: the flag
  * decides where the task runs, and a manual task runs nowhere, a subtask
  * where its parent does.
  */
 export function opsPlacementRefusal(type: Task['type'], isSubtask: boolean): string | null {
+  if (type === 'script') return 'is a script task, which is an ops task by nature: leave "ops" out';
   if (type !== 'ai') return 'is a manual task: only an AI task can be an ops task';
   if (isSubtask) return 'is a subtask, which runs with its parent: only a top-level task can be an ops task';
   return null;
@@ -122,6 +144,37 @@ function modelOf(raw: Record<string, unknown>, from: TaskModelAssignment | undef
 }
 
 /**
+ * A planned task's body fields (ADR-0035): what the planner wrote, else what
+ * the task it is made from had. Only a well-formed value is kept on the task;
+ * `malformed` names the fields that were not, for their refusal, and `raw` is
+ * what was judged.
+ */
+function bodyFields(raw: Record<string, unknown>, base: Partial<Task>): {
+  fields: Pick<Task, 'commands' | 'script' | 'timeoutMs'>;
+  raw: Record<'commands' | 'script' | 'timeoutMs', unknown>;
+  malformed: Set<string>;
+} {
+  const pick = (field: 'commands' | 'script' | 'timeoutMs'): unknown => (raw[field] !== undefined && raw[field] !== null ? raw[field] : base[field]);
+  const judged = { commands: pick('commands'), script: pick('script'), timeoutMs: pick('timeoutMs') };
+  const malformed = new Set<string>();
+  const commands = isCommands(judged.commands) ? judged.commands : undefined;
+  if (judged.commands !== undefined && !commands) malformed.add('commands');
+  const script = typeof judged.script === 'string' ? judged.script : undefined;
+  if (judged.script !== undefined && script === undefined) malformed.add('script');
+  const timeoutMs = typeof judged.timeoutMs === 'number' ? judged.timeoutMs : undefined;
+  if (judged.timeoutMs !== undefined && timeoutMs === undefined) malformed.add('timeoutMs');
+  return {
+    fields: { ...(commands ? { commands } : {}), ...(script !== undefined ? { script } : {}), ...(timeoutMs !== undefined ? { timeoutMs } : {}) },
+    raw: judged,
+    malformed,
+  };
+}
+
+function isCommands(value: unknown): value is string[][] {
+  return Array.isArray(value) && value.every((argv) => Array.isArray(argv) && argv.every((word) => typeof word === 'string'));
+}
+
+/**
  * Build a task from what a planner wrote, by whichever route it arrived: a
  * submitted plan, or an edit that adds, merges or splits. Every fallback a
  * planner's omission meets is here, so the routes cannot drift apart:
@@ -155,15 +208,24 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   const id = freshIds || !plannerId ? newId() : plannerId;
   if (freshIds && plannerId) renamed.set(plannerId, id);
 
-  const type: Task['type'] = raw.type === 'user' || raw.type === 'ai' ? raw.type : base.type ?? 'ai';
+  const type: Task['type'] = raw.type === 'user' || raw.type === 'ai' || raw.type === 'script' ? raw.type : base.type ?? 'ai';
   const ai = type === 'ai';
+  const script = type === 'script';
   const assignedRunner = text(raw.assignedRunner) ?? base.assignedRunner ?? catalog.runners[0] ?? DEFAULT_RUNNERS[0];
   const description = text(raw.description) ?? base.description ?? title;
 
+  // What it may not have is refused rather than dropped: a prompt left on a
+  // script, or a runner named for it, says the planner meant something else.
+  const notScripts = script ? notOnAScript(raw) : [];
+  if (notScripts.length > 0) errors.push({ taskId: id, field: notScripts[0], message: `${where} ${notOnAScriptMessage(notScripts)}` });
+  // A body's shape is judged here, where it is still what the planner wrote: a Task holds only a well-formed one.
+  const body = bodyFields(raw, base);
+  const shapeErrors = scriptBodyErrors({ type, ...body.raw }).filter((e) => body.malformed.has(e.field));
+  for (const e of shapeErrors) errors.push({ taskId: id, field: e.field, message: `${where} ${e.message}` });
   // A manual task stores no ops flag, so this is the one place it can still be seen.
-  if (raw.ops === true && !ai) errors.push({ taskId: id, field: 'ops', message: `${where} ${opsPlacementRefusal(type, !!parent)}` });
-  if (raw.taskMode !== undefined) ignored.push({ taskId: id, field: 'taskMode', message: `${where}: ${MODE_NOT_THE_PLANNERS}` });
-  if (!ai && raw.readOnly === true) ignored.push({ taskId: id, field: 'readOnly', message: `${where}: ${MANUAL_NOT_READ_ONLY}` });
+  if (raw.ops === true && !ai && !script) errors.push({ taskId: id, field: 'ops', message: `${where} ${opsPlacementRefusal(type, !!parent)}` });
+  if (raw.taskMode !== undefined && !script) ignored.push({ taskId: id, field: 'taskMode', message: `${where}: ${MODE_NOT_THE_PLANNERS}` });
+  if (type === 'user' && raw.readOnly === true) ignored.push({ taskId: id, field: 'readOnly', message: `${where}: ${MANUAL_NOT_READ_ONLY}` });
   const ops = raw.ops !== undefined ? raw.ops === true : base.ops;
   if (ai && ops && raw.readOnly === true) ignored.push({ taskId: id, field: 'readOnly', message: `${where}: ${OPS_NOT_READ_ONLY}` });
   // A read-only task's subtasks run as tasks of their own, so they would
@@ -196,7 +258,8 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
     description,
     type,
     dependencies: Array.isArray(raw.dependencies) ? raw.dependencies.map(String) : base.dependencies ?? [],
-    prompt: text(raw.prompt) || base.prompt || (ai ? description || title || undefined : undefined),
+    // What a merge or split carries over for a runner is nothing a script runs.
+    prompt: script ? undefined : text(raw.prompt) || base.prompt || (ai ? description || title || undefined : undefined),
     userSteps: Array.isArray(raw.userSteps)
       ? raw.userSteps.map((s) => (isRecord(s) ? s : {})).map((s) => ({ order: Number(s.order ?? 0), instruction: String(s.instruction ?? ''), completed: false }))
       : base.userSteps,
@@ -206,10 +269,11 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
     autonomy,
     sliceType,
     userStoriesCovered: Array.isArray(raw.userStoriesCovered) ? raw.userStoriesCovered.map(String) : base.userStoriesCovered,
-    ops,
-    skills: from ? inheritedSkills(raw.skills, base.skills) : skillNames(raw.skills),
+    ops: script ? undefined : ops,
+    skills: script ? undefined : from ? inheritedSkills(raw.skills, base.skills) : skillNames(raw.skills),
+    ...body.fields,
   };
-  let taskMode = base.taskMode;
+  let taskMode = script ? undefined : base.taskMode;
   let landedModel = assignedModel;
   if (ai && catalog.runners.includes(assignedRunner)) {
     const resolved = resolveAssignment({
@@ -241,7 +305,8 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
  * route they arrived by and whoever wrote them, the planner or the user.
  * `runners` are the ones the writer may put a task on (`assignableRunners`),
  * any when undefined; with `runnerModes`, an ops task is held off its
- * runner's read-only mode.
+ * runner's read-only mode. A script task (ADR-0035) runs exactly one
+ * well-formed body, at the top level, and carries nothing a runner would read.
  */
 export function checkPlanInvariants(
   tasks: readonly Task[],
@@ -262,12 +327,20 @@ export function checkPlanInvariants(
     if (t.type === 'user' && t.sliceType && t.sliceType !== 'HITL') {
       fail('sliceType', `User ${where} has sliceType "${t.sliceType}". User tasks must have sliceType "HITL".`);
     }
-    const opsRefused = t.ops ? opsPlacementRefusal(t.type, parent !== null) : null;
+    const opsRefused = t.ops && t.type !== 'script' ? opsPlacementRefusal(t.type, parent !== null) : null;
     if (opsRefused) fail('ops', `${where} ${opsRefused}`);
+    if (t.type === 'script') {
+      // It runs at the workspace root on its own (ADR-0035): nothing hangs under it, and it hangs under nothing.
+      if (parent !== null) fail('type', `${where} is a script task: only a top-level task can be one, as only a top-level task can be an ops task`);
+      if (t.subtasks?.length) fail('subtasks', `${where} is a script task, which has no subtasks: make each step a command of its own, or a task of its own`);
+      const extra = notAScriptsFields(t);
+      if (extra.length > 0) fail(extra[0], `${where} ${notOnAScriptMessage(extra)}`);
+    }
+    for (const e of scriptBodyErrors(t)) fail(e.field, `${where} ${e.message}`);
     if (t.ops && t.taskMode !== undefined && t.taskMode === taggedReadOnlyMode(runnerModes?.[t.assignedRunner])) {
       fail('taskMode', `${where} is an ops task, which runs commands, so it cannot run in its runner's read-only mode`);
     }
-    if (runners && t.type !== 'user' && !runners.includes(t.assignedRunner)) {
+    if (runners && t.type === 'ai' && !runners.includes(t.assignedRunner)) {
       fail('assignedRunner', `${where} has invalid assignedRunner "${t.assignedRunner}". Expected one of: ${runners.join(', ')}`);
     }
   }

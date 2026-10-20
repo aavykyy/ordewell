@@ -91,7 +91,8 @@ export function toTaskView(task: SerializedTask & { status?: string }): TaskView
     taskMode: task.taskMode || undefined,
     assignedModel: task.assignedModel ?? undefined,
     subtasks: [...(task.subtasks ?? [])].sort((a, b) => a.order - b.order).map(toTaskView),
-    ...(task.ops ? { ops: true } : {}),
+    // Drawn as the ops task it is by nature until the CLI draws script tasks (ADR-0035).
+    ...(task.ops || task.type === 'script' ? { ops: true } : {}),
     ...(task.skills?.length ? { skills: [...task.skills] } : {}),
     ...(task.addedBy ? { addedBy: task.addedBy } : {}),
   };
