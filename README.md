@@ -30,7 +30,8 @@
 Describe what you want to build. Ordewell explores your repository, asks clarifying
 questions, and turns your goal into a plan you can read and edit. When you're ready,
 run it: independent tasks work in parallel, each on its own branch. Review the
-combined diff and choose when to merge it into your branch.
+combined diff and choose when to merge it into your branch. Nothing runs until you
+approve the plan.
 
 Claude Code, Codex and OpenCode are supported out of the box, and can be mixed
 freely within one plan.
@@ -85,7 +86,6 @@ OpenCode, and git for task isolation. On Windows, run the terminal UI under WSL.
 
 Run `ordewell` in your project to open the terminal UI, then type a goal. The first
 run lets you pick a planner and runners with `/planner` and `/runners`.
-The welcome screen says it plainly: nothing runs until you approve the plan (unless autorun is on).
 
 The same workflow is available from the command line:
 
@@ -105,6 +105,8 @@ ordewell task-runner 2 opencode     # move a task to another agent
 ordewell task-model 3 sonnet        # or just change its model
 ordewell task-deps 3 1,2            # make it wait for tasks 1 and 2
 ```
+
+Tried it? [Tell us how your first run went](https://github.com/ordewell/ordewell/discussions/115).
 
 ## See it in action
 

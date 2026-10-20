@@ -1,8 +1,8 @@
 # Ordewell for VS Code
 
-**Task orchestration for coding agents.** One goal becomes an ordered plan of tasks,
-each on its own runner, model and branch. Read and change the plan before anything
-runs, then review the result before it reaches your branch.
+**Plan once, run it across Claude Code, Codex and OpenCode, and review one branch.**
+One goal becomes an ordered plan of tasks, each on the runner and model that fits it.
+Nothing runs until you approve the plan.
 
 ![The planning loop](https://raw.githubusercontent.com/ordewell/ordewell/main/assets/readme/vscode-panel-loop.gif)
 
@@ -29,10 +29,13 @@ runs, then review the result before it reaches your branch.
 
 1. Install the extension.
 2. Open the Ordewell panel from the activity bar.
-3. Choose a planner in the planner bar. To plan with an API key instead, set
-   `ordewell.openAiApiKey` (OpenRouter) or `ordewell.apiKey` (Gemini), or export
-   `OPENROUTER_API_KEY` or `GEMINI_API_KEY`.
-4. Type a goal.
+3. Type a goal. With Claude Code, Codex or OpenCode installed, the first usable one
+   plans for you with no API key. Choose another planner in the planner bar.
+4. Review the plan, then approve it to run.
+
+To plan with an API key instead, set `ordewell.openAiApiKey` (OpenRouter) or
+`ordewell.apiKey` (Gemini), or export `OPENROUTER_API_KEY` or `GEMINI_API_KEY`. A key
+you have set takes priority over the installed agent.
 
 Each runner you want to use (Claude Code, Codex or OpenCode) must be installed and
 on your PATH. If a runner appears greyed out right after installing it, reload the
@@ -59,6 +62,7 @@ npm install -g ordewell
 - [Documentation](https://ordewell.ai/docs)
 - [Source code](https://github.com/ordewell/ordewell)
 - [Report a bug](https://github.com/ordewell/ordewell/issues)
+- [How did your first run go?](https://github.com/ordewell/ordewell/discussions/115) Tell us what worked and where you got stuck.
 
 Licensed under the [Apache License 2.0](https://github.com/ordewell/ordewell/blob/main/LICENSE).
 The Ordewell name and logos are not covered by this license.

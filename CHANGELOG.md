@@ -8,6 +8,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **The VS Code Marketplace listing is rewritten**, and the README states the
+  approval promise in its opening paragraph and links the first-run Discussion.
+
 ## [0.10.10] - 2026-10-19
 
 ### Added

@@ -1,7 +1,7 @@
 {
   "name": "ordewell",
   "displayName": "Ordewell",
-  "description": "LLM-powered task orchestration with codebase research, Claude Code & OpenCode",
+  "description": "Plan once, run it across Claude Code, Codex and OpenCode, and review one branch.",
   "version": "0.10.10",
   "private": true,
   "publisher": "ordewell",
