@@ -113,6 +113,45 @@ describe('a task card, pinned before its rules move to core', () => {
     expect(document.querySelector('.task-type-badge.ops')).toBeNull();
   });
 
+  describe('a script task (ADR-0035)', () => {
+    const scriptTask = (over: Partial<Task> = {}): Task => makeTask({
+      type: 'script', assignedRunner: undefined as never, taskMode: undefined, description: 'Tag it',
+      commands: [['git', 'tag', 'v1'], ['git', 'push', 'origin', 'v1']], timeoutMs: 90_000, ...over,
+    });
+
+    it('badges it Script, not AI or Ops', () => {
+      render(<TaskCard task={scriptTask()} models={[]} />);
+      expect(document.querySelector('.task-type-badge.script')?.textContent).toBe('Script');
+      expect(document.querySelector('.task-type-badge.ai')).toBeNull();
+      expect(document.querySelector('.task-type-badge.ops')).toBeNull();
+    });
+
+    it('shows the commands one to a line, and the time limit, in a read-only monospace block where the prompt goes', () => {
+      render(<TaskCard task={scriptTask()} models={[]} expanded onExpandedChange={noop} />);
+      const body = document.querySelector('.task-script-body');
+      expect(body?.tagName).toBe('PRE');
+      expect(body?.textContent).toBe('git tag v1\ngit push origin v1\n\nTime limit: 90 seconds.');
+      expect(document.querySelector('textarea')).toBeNull();
+      expect(document.querySelector('.task-prompt-editable')).toBeNull();
+    });
+
+    it('shows a script as written, a control character spelled out', () => {
+      render(<TaskCard task={scriptTask({ commands: undefined, script: 'set -e\necho hi\x1b[2J', timeoutMs: undefined })} models={[]} expanded onExpandedChange={noop} />);
+      expect(document.querySelector('.task-script-body')?.textContent).toBe('set -e\necho hi<U+001B>[2J\n\nTime limit: 10 minutes.');
+    });
+
+    it('offers no prompt editing, runner, model or mode picker, skills, or ops toggle, even before the plan runs', () => {
+      render(<TaskCard task={scriptTask()} models={[]} runners={[{ id: 'claude-code', displayName: 'Claude Code' }]} expanded onExpandedChange={noop}
+        onRunnerChange={noop} onModelChange={noop} onModeChange={noop} onPromptChange={noop} onSkillsChange={noop} {...handlers} />);
+      expect(document.querySelector('.task-ops-toggle')).toBeNull();
+      expect(document.querySelector('select')).toBeNull();
+      expect(document.querySelector('.task-prompt-textarea')).toBeNull();
+      expect(document.querySelector('.task-assignment')).toBeNull();
+      expect(screen.queryByText('Runner')).toBeNull();
+      expect(screen.queryByText('Mode')).toBeNull();
+    });
+  });
+
   it('badges a task a failure blocks with the failed task it waits on, in a subtask too (ADR-0034)', () => {
     const failed = makeTask({ id: 't1', order: 1, title: 'Setup', status: 'failed' });
     const parent = makeTask({ id: 't2', order: 2, title: 'Build', subtasks: [

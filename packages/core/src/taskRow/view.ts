@@ -77,8 +77,12 @@ export interface TaskRowContext {
   runnerScope?: AssignmentScope;
 }
 
-/** Whether the row stands for an AI task, a manual one, or an ops task (ADR-0020). */
-export type TaskRowKind = 'ai' | 'user' | 'ops';
+/**
+ * Whether the row stands for an AI task, a manual one, an ops task (ADR-0020),
+ * or a script task (ADR-0035): an ops task by nature, drawn with its body and
+ * with no prompt, runner or model to edit.
+ */
+export type TaskRowKind = 'ai' | 'user' | 'ops' | 'script';
 
 /** The task's whole spend (see `taskUsageSummary`); `attempt` is the latest one, 0 before any reported. */
 export interface TaskRowUsage extends Pick<TaskUsageSummary, 'totals' | 'contextFill'> {
@@ -174,8 +178,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
   return {
     usage: latestAttempt ? { totals: spend.totals, ...(spend.contextFill ? { contextFill: spend.contextFill } : {}), attempt: latestAttempt.attempt } : task.type === 'ai' && ['completed', 'failed', 'in_progress', 'awaiting_user'].includes(task.status) ? { totals: {}, attempt: 0 } : null,
     orderLabel: taskOrderLabel(task, parent),
-    // A script task is an ops task by nature (ADR-0035), and drawn as one.
-    kind: task.type === 'user' ? 'user' : task.ops || task.type === 'script' ? 'ops' : 'ai',
+    kind: task.type === 'user' ? 'user' : task.type === 'script' ? 'script' : task.ops ? 'ops' : 'ai',
     status: blocked.length > 0 ? 'blocked' : taskStatusKind(task),
     running: isTaskRunning(task),
     awaiting: awaitingLabel(task),

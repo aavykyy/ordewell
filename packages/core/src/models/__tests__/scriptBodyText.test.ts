@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { commandLine, scriptBodyText, timeLimitText } from '../ScriptTask';
+import { commandLine, scriptBodyText, scriptTaskText, timeLimitText } from '../ScriptTask';
 
 /**
  * A script task's body as a reader is shown it (ADR-0035): the approval card
@@ -37,5 +37,17 @@ describe('timeLimitText', () => {
     expect(timeLimitText(3_600_000)).toBe('1 hour');
     expect(timeLimitText(90_000)).toBe('90 seconds');
     expect(timeLimitText(1_500)).toBe('1500 milliseconds');
+  });
+});
+
+describe('scriptTaskText', () => {
+  it('is the body the approval card shows, so a row lists what the user consented to', () => {
+    const task = { type: 'script' as const, commands: [['git', 'tag', 'v1']], timeoutMs: 90_000 };
+    expect(scriptTaskText(task)).toBe(scriptBodyText({ commands: [['git', 'tag', 'v1']], timeoutMs: 90_000 }));
+  });
+
+  it('says so when the plan holds no valid body, or the task is no script task', () => {
+    expect(scriptTaskText({ type: 'script' })).toBe('This script task has no valid body, so it cannot run.');
+    expect(scriptTaskText({ type: 'ai', script: 'echo hi' })).toBe('This script task has no valid body, so it cannot run.');
   });
 });

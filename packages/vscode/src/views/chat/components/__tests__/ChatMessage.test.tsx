@@ -310,6 +310,25 @@ describe('approval cards (ADR-0018, A1)', () => {
     expect(onAnswerApproval).toHaveBeenCalledWith('ap-1', { decision: 'deny', note: 'use notes/ instead' });
   });
 
+  it('shows a script task start\'s body verbatim in a code block, pending and settled (ADR-0035)', () => {
+    const body = 'git tag v1\n  git push origin v1\n\nTime limit: 10 minutes.';
+    const start = card({ kind: 'task_start', approvalId: 'ap-2', subject: 'Run script task #2 "Push"', scope: 'Run script task #2 "Push"', body });
+
+    const { container, getByText, onResolveApproval, unmount } = draw(start);
+    expect(container.querySelector('pre.approval-card-body')?.textContent).toBe(body);
+    fireEvent.click(getByText('Allow'));
+    expect(onResolveApproval).toHaveBeenCalledWith('ap-2', true);
+    unmount();
+
+    const settled = draw({ ...start, status: 'granted', decidedBy: 'asked' });
+    expect(settled.container.querySelector('pre.approval-card-body')?.textContent).toBe(body);
+  });
+
+  it('shows no body block on a request that has none', () => {
+    const { container } = draw(card({ kind: 'shell_command' }));
+    expect(container.querySelector('.approval-card-body')).toBeNull();
+  });
+
   it('offers no grant for the task when the runner proposed none', () => {
     const { queryByText, getByText } = draw(card({ allowForTask: false }));
     expect(queryByText('Allow for this task')).toBeNull();

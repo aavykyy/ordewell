@@ -24,7 +24,7 @@ export interface PlanKey {
 export const PLAN_KEYS = {
   move: { keys: 'up / down', meaning: 'move between tasks', group: 'Navigation' },
   scroll: { keys: 'pgup / pgdn', meaning: 'scroll the plan', group: 'Navigation' },
-  expand: { keys: '→', meaning: "reveal a task's subtasks, then edit its prompt", group: 'Navigation', hint: '→ expand' },
+  expand: { keys: '→', meaning: "reveal a task's subtasks, then edit its prompt, or show a script task's body", group: 'Navigation', hint: '→ expand' },
   log: {
     keys: 'enter',
     meaning: "open the task's log and message its runner or, at a checkpoint, answer it",
@@ -117,7 +117,8 @@ function taskKeyIds(task: TaskView | undefined, runActive: boolean): PlanKeyId[]
     case 'skipped':
     case 'done': return ['mark', 'log'];
     case 'blocked': return ['start', 'skip', 'runPlan'];
-    default: return row.kind === 'user' ? ['mark', 'runPlan'] : ['start', 'runPlan', 'model', 'effort'];
+    // A manual task and a script task have no model to pick.
+    default: return row.kind === 'user' ? ['mark', 'runPlan'] : row.kind === 'script' ? ['start', 'runPlan'] : ['start', 'runPlan', 'model', 'effort'];
   }
 }
 

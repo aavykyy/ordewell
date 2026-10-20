@@ -358,6 +358,22 @@ function approvalLine(block: ApprovalBlock, cols: number): string {
   return `${paint(mark)}${truncate(line, cols).slice(mark.length)}`;
 }
 
+/** A settled request's body is a record, so a long one is counted rather than filling the transcript. */
+const SETTLED_BODY_LINES = 20;
+
+/**
+ * What a script task's start was asked for, verbatim under the request's line
+ * (ADR-0035). Waiting, it is whole: the pane scrolls, and the answer is about
+ * exactly this. Settled, a long one is cut with the count of what is not shown.
+ */
+function approvalBodyLines(block: ApprovalBlock, cols: number): string[] {
+  if (!block.body) return [];
+  const lines = wrap(sanitize(block.body).replace(/\n+$/, '').replace(/\t/g, '    '), Math.max(1, cols - 4)).map((line) => `    ${line}`);
+  if (block.status === 'pending' || lines.length <= SETTLED_BODY_LINES) return lines;
+  const hidden = lines.length - SETTLED_BODY_LINES;
+  return [...lines.slice(0, SETTLED_BODY_LINES), style.grey(`    … ${hidden} more ${hidden === 1 ? 'line' : 'lines'}`)];
+}
+
 /** Keys first, so a narrow pane cuts the optional parts and never `ctrl-y`. */
 function approvalKeysLine(block: ApprovalBlock, cols: number): string {
   const keys = ['ctrl-y allow', ...(block.allowForTask ? ['ctrl-t allow for task'] : []), 'ctrl-g deny (composer text is the note)'];
@@ -464,7 +480,7 @@ function blockLines(block: DisplayBlock, cols: number, detailAll: boolean): stri
     case 'subagent':
       return subagentLines(block, cols, detailAll);
     case 'approval':
-      return [approvalLine(block, cols)];
+      return [approvalLine(block, cols), ...approvalBodyLines(block, cols)];
     case 'plan':
       return [planLine(block, cols)];
     case 'skill_load':

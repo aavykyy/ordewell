@@ -106,6 +106,20 @@ describe('PlanCardGroup — Execute Plan / Stop', () => {
     expect(screen.queryByRole('button', { name: 'Approve all' })).toBeNull();
   });
 
+  it('offers Approve all for a script task that waits for approval, like any other (ADR-0035)', () => {
+    const onApproveAll = vi.fn();
+    const script = makeTask({ id: 't2', order: 2, title: 'Push the tag', type: 'script', commands: [['git', 'push']] });
+    const run = { ...EMPTY_RUN, tasks: [{ ...script, subtasks: [], waitsForApproval: true }] };
+    render(
+      <PlanCardGroup run={run} tasks={[makeTask(), script]} models={emptyModels} isExecuting={true}
+        onStopExecution={vi.fn()} onApproveAll={onApproveAll} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve all' }));
+
+    expect(onApproveAll).toHaveBeenCalledOnce();
+  });
+
   it('renders per-task Run Task button via onRunTask when not executing', () => {
     render(
       <PlanCardGroup run={EMPTY_RUN}
