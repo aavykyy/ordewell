@@ -939,7 +939,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
   const taskAllow = { ordewell_task_complete: 'allow', ordewell_checkpoint: 'allow' };
   const plannerAllow = Object.fromEntries([
     'list_runners', 'list_models', 'submit_plan', 'edit_plan', 'task_query', 'task_output', 'task_diff', 'run_command', 'fetch', 'web_search', 'load_skill',
-    'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'merge_all',
+    'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'merge_all', 'run_script',
   ].map((tool) => [`ordewell_${tool}`, 'allow']));
 
   // A host running inside OpenCode carries its own configuration, which a child rightly keeps.

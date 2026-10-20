@@ -259,10 +259,11 @@ function markPlan(view: ConversationView, content: string, turnId: string | unde
   return append(view, (id) => ({ type: 'plan', id, text: '', ...marker }));
 }
 
-function requestApproval(view: ConversationView, { id: approvalId, kind, subject, scope, detail, turnId }: Message<'approval_request'>): ConversationView {
+function requestApproval(view: ConversationView, { id: approvalId, kind, subject, scope, detail, body, turnId }: Message<'approval_request'>): ConversationView {
   return append(view, (id) => ({
     type: 'approval', id, approvalId, kind, subject, scope, status: 'pending',
     ...(detail ? { detail } : {}),
+    ...(body ? { body } : {}),
     ...(turnId ? { turnId } : {}),
   }));
 }

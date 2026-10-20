@@ -16,6 +16,7 @@ import { definitionPattern, referencePattern, languageForId, includeGlobFor } fr
 import { resolveAll, vetEgress, type ResolveAll } from './egressGuard';
 import { carriesSecret, sensitiveEnvValues } from './outboundSecrets';
 import { READ_REFUSAL_HINT, disableWebCommandStartup, pinWebCommandAddresses, wgetVersionCommands } from './webCommands';
+import { NOT_APPROVED_HINT } from './effectRoute';
 
 export { AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMANDS, classifyCommand, pathLikeArgs } from './commandPolicy';
 
@@ -275,7 +276,7 @@ export abstract class BaseFileSystem implements IFileSystem {
           success: false,
           output: outside.length > 0
             ? `Access denied: "${command}" touches ${touched}, outside the workspace root (${root}), and was not approved. Keep research inside the workspace, or ask the user to approve this location.${cdUnfollowed(command, this.policyOptions()) ? CD_HINT : ''}`
-            : `Command not approved: ${command}\nIt is outside the auto-allowed read-only set and the planner allowlist (${scope}). Continue without it. If it would change something outside the repository, add it to the plan as an ops task; if it only reads, ask the user to approve it or add it to the planner allowlist.${/(^| )g?sed( |$)/.test(scope) ? SED_HINT : ''}`,
+            : `Command not approved: ${command}\nIt is outside the auto-allowed read-only set and the planner allowlist (${scope}). ${NOT_APPROVED_HINT}${/(^| )g?sed( |$)/.test(scope) ? SED_HINT : ''}`,
           truncated: false,
         };
       }

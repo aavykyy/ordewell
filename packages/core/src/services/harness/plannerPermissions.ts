@@ -3,6 +3,7 @@ import type { ApprovalDecision, IApproval } from '../../interfaces/IApproval';
 import type { IWebFetcher } from '../../interfaces/IWebFetcher';
 import { grantScopeFor, resolveWithin } from '../pathScope';
 import type { PlannerAsk } from './AgentAdapter';
+import { NOT_APPROVED_HINT } from '../effectRoute';
 
 /**
  * What a harness planner's own tool requests are decided against (ADR-0026):
@@ -21,7 +22,6 @@ export interface PlannerPermissionGate {
 // `other` is not always a write: a read the envelope has no rule for lands here
 // too, so the message names the envelope rather than claiming an edit was tried.
 const UNKNOWN_TOOL_DENIAL = 'The Ordewell planner is read-only and its envelope has no rule for this tool, so it did not run. Read with the read tools, use run_command for commands and fetch or web_search for the web; changes belong to the plan\'s tasks.';
-const OPS_HINT = 'Continue without it. If it would change something outside the repository, add it to the plan as an ops task; if it only reads, ask the user to approve it or add it to the planner allowlist.';
 
 const ALLOW: ApprovalDecision = { decision: 'allow' };
 const NOBODY_TO_ASK = 'Nobody can approve this here. Continue without it.';
@@ -69,7 +69,7 @@ export async function decidePlannerPermission(
         tool: ask.tool,
         detail: `The planner wants to use "${ask.tool}"${ask.server ? ` from ${ask.server}` : ''}. It may change things outside the repository.`,
       });
-      return granted ? ALLOW : deny(`Not approved: ${ask.scope}. ${OPS_HINT}`);
+      return granted ? ALLOW : deny(`Not approved: ${ask.scope}. ${NOT_APPROVED_HINT}`);
     }
     case 'fetch': {
       if (!gate.fetcher) return deny('This fetch cannot be approved here.');

@@ -47,6 +47,12 @@ export interface ApprovalRequest {
   scopes?: string[];
   /** One-line context for the prompt. */
   detail?: string;
+  /**
+   * For a `task_start` of a script task: what it runs, verbatim, one command
+   * to a line, and its time limit (ADR-0035). Shown in full, since the
+   * consent is to it, not to a description.
+   */
+  body?: string;
   /** The task whose runner asked; absent for the planner's own requests. */
   taskId?: string;
   /** "Allow for this task" can be offered: the runner proposed its own session-scoped grant. */
