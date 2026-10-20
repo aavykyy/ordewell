@@ -42,6 +42,7 @@ import { instructionsBlock, repoRoot } from './repoConfig';
 import { NOT_APPROVED, decideProjectServers, fileProjectServerApprovals, heldServersNote, recordUnusable, type ProjectServerApprovals } from './projectServers';
 import { TurnReply } from './turnReply';
 import type { IApproval } from '../../interfaces/IApproval';
+import { withTurnBudgets, type TurnBudgets } from '../PlannerBudgets';
 
 /**
  * How many times a turn that backgrounded a subagent may be asked to wait for
@@ -74,6 +75,8 @@ export interface CliAgentAiServiceDeps extends Partial<AgentProcessDeps> {
   mcpServer?: OrdewellMcpServer;
   /** A person's approvals of project MCP servers, kept across sessions (ADR-0028). Defaults to Ordewell's data directory. */
   projectServerApprovals?: ProjectServerApprovals;
+  /** What the planner is shown of its context and budgets at the start of each turn. */
+  turnBudgets?: TurnBudgets;
 }
 
 interface OneShotCatalog {
@@ -197,6 +200,7 @@ export class CliAgentAiService implements IAiService {
   /** The conversation's session, from its start until the next session boundary. */
   private session: PlannerSession | null = null;
   private readonly mcpServer: OrdewellMcpServer;
+  private readonly turnBudgets: TurnBudgets | undefined;
   private readonly projectServerApprovals: ProjectServerApprovals;
   private activeAbort: AbortController | null = null;
 
@@ -221,6 +225,7 @@ export class CliAgentAiService implements IAiService {
     this.makeAdapter = deps.createAdapter ?? createPlannerAdapter;
     this.workspaceRoot = deps.workspaceRoot ?? (() => process.cwd());
     this.mcpServer = deps.mcpServer ?? sharedMcpServer();
+    this.turnBudgets = deps.turnBudgets;
     this.projectServerApprovals = deps.projectServerApprovals ?? fileProjectServerApprovals();
   }
 
@@ -392,7 +397,8 @@ export class CliAgentAiService implements IAiService {
       // (ADR-0025), so its reply is prose whatever JSON it shows, and a plan
       // or edit lands only from a submission the conversation accepted.
       const turn = await settleReply({
-        message,
+        // The turn's own input carries the budgets, not the system prompt, which stays cacheable.
+        message: withTurnBudgets(this.turnBudgets, message),
         send,
         onProgress,
         signal: combined,

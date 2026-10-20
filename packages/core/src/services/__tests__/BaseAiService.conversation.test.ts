@@ -3,6 +3,7 @@ import { BaseAiService, type ResearchChat, type ResearchTurn, type ToolResult, t
 import type { IConfig } from '../../interfaces/IConfig';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import { fakeConfig as makeFakeConfig } from '../../testing';
+import { TurnBudgets } from '../PlannerBudgets';
 
 const PLAN_JSON = JSON.stringify({
   tasks: [{
@@ -64,6 +65,21 @@ describe('runConversationTurn plan commit', () => {
     const turn = await svc.runTurn(makeCtx(chat), 'go');
     expect(turn.kind).toBe('plan');
     if (turn.kind === 'plan') expect(turn.text).toContain('"tasks"');
+  });
+});
+
+describe('runConversationTurn budgets', () => {
+  it('appends the budget block to the turn\'s input, and only to the first send', async () => {
+    const chat = new ScriptedChat([proseTurn('Which store?')]);
+    const budgets = new TurnBudgets([() => 'Web reads left this turn: 40.']);
+    await new TestService(fakeConfig(), budgets).runTurn(makeCtx(chat), 'add a cache');
+    expect(chat.sent).toEqual(['add a cache\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 40.']);
+  });
+
+  it('sends the message as it is when no budget has a number', async () => {
+    const chat = new ScriptedChat([proseTurn('Which store?')]);
+    await new TestService(fakeConfig(), new TurnBudgets([() => undefined])).runTurn(makeCtx(chat), 'add a cache');
+    expect(chat.sent).toEqual(['add a cache']);
   });
 });
 

@@ -759,6 +759,25 @@ describe('PlannerConversation planner turn', () => {
     expect(state.plan!.conversationHistory).toBe(before);
   });
 
+  it('tells the planner what its reads have left: a user turn counts down to landing, a wake-up has its one budget', async () => {
+    const seen: Array<{ left: number; hardStop?: number } | undefined> = [];
+    const held: { conversation?: { readsLeft: { left: number; hardStop?: number } | undefined } } = {};
+    const ai = fakeAi({
+      continueConversation: vi.fn(async () => {
+        seen.push(held.conversation?.readsLeft);
+        return { kind: 'message', text: 'ok', researchLog: [] } satisfies ConversationTurn;
+      }),
+    });
+    const { conversation } = fakeHost(ai, threeTurnPlan());
+    held.conversation = conversation;
+
+    expect(conversation.readsLeft).toBeUndefined();
+    await conversation.reply('Also CSV');
+    await conversation.reply('', { wakeUps: ['Run update:\n- task #1 failed'], wakeUp: { readBudget: 4, refused: () => undefined } });
+
+    expect(seen).toEqual([{ left: 3, hardStop: 6 }, { left: 4 }]);
+  });
+
   it('still lands what a stopped turn had, since the stop was its own', async () => {
     const { ai, calls } = heldBackend();
     const { conversation, state } = fakeHost(ai, threeTurnPlan());

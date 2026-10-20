@@ -377,6 +377,19 @@ describe('WebReadPolicy budget', () => {
   });
 });
 
+describe('WebReadPolicy remaining', () => {
+  it('counts the current turn\'s reads down, and starts over with a new turn', async () => {
+    let turn = 't1';
+    const { reads } = setup({ autonomous: true, policy: { budget: () => 2, turn: () => turn } });
+
+    expect(reads.remaining()).toBe(2);
+    await reads.decide({ kind: 'fetch', url: 'https://a.example.com/' });
+    expect(reads.remaining()).toBe(1);
+    turn = 't2';
+    expect(reads.remaining()).toBe(2);
+  });
+});
+
 describe('WebReadPolicy record', () => {
   it('records the actual subagent refusal and reports a gap only the planner can resolve', async () => {
     for (const kind of ['fetch', 'search'] as const) {

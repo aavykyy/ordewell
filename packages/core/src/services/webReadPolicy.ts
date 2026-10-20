@@ -187,6 +187,12 @@ export class WebReadPolicy {
     return { label, request: request(query) };
   }
 
+  /** Reads the current planner turn may still make, for the planner to see. */
+  remaining(): number {
+    const used = this.spent.turn === this.turn() ? this.spent.reads : 0;
+    return Math.max(0, this.budget() - used);
+  }
+
   private spend(): { turn: string | undefined } | undefined {
     const turn = this.turn();
     if (this.spent.turn !== turn) this.spent = { turn, reads: 0 };

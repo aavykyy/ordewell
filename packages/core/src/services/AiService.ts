@@ -216,7 +216,7 @@ export function createAiService(config: IConfig, deps?: CliAgentAiServiceDeps): 
     return new CliAgentAiService(config, deps);
   }
   if (config.aiProvider === 'google') {
-    return new GeminiService(config);
+    return new GeminiService(config, deps?.turnBudgets);
   }
-  return new OpenAiService(config);
+  return new OpenAiService(config, deps?.turnBudgets);
 }
