@@ -951,6 +951,32 @@ describe('the command seam\'s extension points', () => {
     expect(host.record).toHaveBeenLastCalledWith(expect.objectContaining({ command: 'run_script', consent: { by: 'allowlist', rule: 'git push origin feature/*' } }), expect.stringContaining('which your effect allowlist rule "git push origin feature/*" covers'));
   });
 
+  it.each([
+    ['the user\'s turn in Guarded', PLANNER, { autonomous: () => false }],
+    ['the user\'s turn in Full with autorun', PLANNER, { autorun: () => true }],
+    ['the supervisor\'s at Act', { kind: 'supervisor', level: 'act' } as ExecutionActor, {}],
+  ])('runs a covered script in %s, with no card, and records the rule rather than the row it would otherwise take (ADR-0035)', async (_, actor, over) => {
+    const host = { ...scriptHost(), ...over };
+    const request = vi.fn();
+    const commands = new ExecutionCommands({ host, consent: { request }, effects: () => 'git push origin feature/*' });
+
+    await commands.run({ command: 'run_script', title: 'Push', commands: [['git', 'push', 'origin', 'feature/login']] }, actor);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.startTask).toHaveBeenCalledWith('s2', actor);
+    expect(host.record).toHaveBeenLastCalledWith(expect.objectContaining({ command: 'run_script', consent: { by: 'allowlist', rule: 'git push origin feature/*' } }), expect.any(String));
+  });
+
+  it('refuses a covered script to the supervisor at Watch, which suggests it instead (ADR-0035)', async () => {
+    const host = scriptHost();
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() }, effects: () => 'git push origin feature/*' });
+
+    expect(await commands.run({ command: 'run_script', title: 'Push', commands: [['git', 'push', 'origin', 'feature/login']] }, { kind: 'supervisor', level: 'watch' }))
+      .toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/at Watch.*Suggest it to the user instead/) });
+    expect(host.addScript).not.toHaveBeenCalled();
+    expect(host.startTask).not.toHaveBeenCalled();
+  });
+
   it('never asks the effect allowlist about a script body, and has no rule of its own: without one the user is asked', async () => {
     const host = { ...scriptHost(), autonomous: () => false };
     const request = vi.fn(async () => false);

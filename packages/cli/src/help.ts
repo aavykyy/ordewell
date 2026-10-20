@@ -159,6 +159,9 @@ Environment:
   ORDEWELL_APPROVAL_DEFAULTS false: drop the built-in read-only allowlist
   ORDEWELL_WEB_READ_BUDGET   Fetches and web searches the planner may make per turn
                              (default: 40; 0 turns web reads off)
+  ORDEWELL_EFFECT_ALLOW      Script tasks the planner may run unasked, comma-separated rules matched
+                             against each whole command, flags included: "git push origin feature/*".
+                             Every command must be covered; none is by default
   ORDEWELL_PORT              Daemon port CLI commands target (default: 3742)
   ORDEWELL_DIRENV            false: agents skip the project's direnv .envrc
   ORDEWELL_RESEARCH_ENABLED  true (default) or false
