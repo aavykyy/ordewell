@@ -1,14 +1,16 @@
 import * as fsSync from 'fs';
 import * as path from 'path';
 import {
+  assertLimits,
   assertProfilePaths,
   execProbe,
+  launchEnv,
   probeByRunning,
-  SandboxUnsupportedError,
   type ProbeExec,
   type SandboxBackend,
   type SandboxInvocation,
   type SandboxLaunch,
+  type SandboxLimits,
   type SandboxProbe,
   type SandboxProfile,
 } from './SandboxBackend';
@@ -42,6 +44,24 @@ function shallowFirst(paths: readonly string[]): string[] {
 }
 
 /**
+ * Runs before bubblewrap, outside it, then becomes it, so the caller's kill
+ * at the wall-time limit and `--die-with-parent` reach the sandbox's PID
+ * namespace, and every process in it, unchanged (ADR-0036 S1). Older kernels
+ * count the process limit against all of the user's processes and newer ones
+ * against the sandbox's own, so it is set above every process the host runs
+ * now: never already spent, and still a bound. Dash names that limit `-p`
+ * where bash names it `-u`. Only numbers from
+ * {@link SandboxLimits} enter the text, and the command reaches it as the
+ * last of its arguments.
+ */
+function limitsPrelude(limits: SandboxLimits): string {
+  const processes = `$(($(set -- /proc/[0-9]*; echo $#) + ${limits.processes}))`;
+  return `{ ulimit -u ${processes} 2>/dev/null || ulimit -p ${processes}; } && ulimit -v ${Math.ceil(limits.memoryBytes / 1024)} \\
+  || { echo 'The sealed run could not be held to its limits, so it did not run.' >&2; exit 125; }
+exec "$@"`;
+}
+
+/**
  * Linux's bubblewrap (ADR-0011 B4). Every path is its own argv entry, so none
  * is ever parsed as an option or a list.
  *
@@ -53,6 +73,11 @@ function shallowFirst(paths: readonly string[]): string[] {
  * - `--new-session`, so the command has no controlling terminal to type into
  *   with TIOCSTI.
  * - `--unshare-ipc`, so the host's System V shared memory is out of reach.
+ *
+ * A throwaway directory is an overlay whose upper layer is a tmpfs
+ * (`--overlay-src`, `--tmp-overlay`, bubblewrap 0.10 and later on a kernel
+ * that lets a user namespace mount one); an older one fails the probe, and the
+ * caller asks again with the directory read-only.
  */
 export class BubblewrapBackend implements SandboxBackend {
   readonly name = 'bubblewrap';
@@ -69,8 +94,8 @@ export class BubblewrapBackend implements SandboxBackend {
   }
 
   wrap(invocation: SandboxInvocation, profile: SandboxProfile): SandboxLaunch {
-    if (profile.limits) throw new SandboxUnsupportedError(this.name, 'resource limits');
     assertProfilePaths(this.name, profile);
+    if (profile.limits) assertLimits(this.name, profile.limits);
 
     const args = ['--new-session', '--die-with-parent', '--unshare-pid', '--unshare-ipc'];
     if (!profile.network) args.push('--unshare-net');
@@ -78,12 +103,16 @@ export class BubblewrapBackend implements SandboxBackend {
     args.push('--dev', '/dev', '--proc', '/proc');
     // Before the read list and the writable directories, which may live under /tmp.
     if (profile.privateTmp) args.push('--tmpfs', '/tmp');
-    if (profile.read !== 'host') for (const p of shallowFirst(profile.read)) args.push('--ro-bind', p, p);
+    const throwaway = new Set(profile.throwaway);
+    const readOnly = profile.read === 'host' ? [] : profile.read.filter((p) => !throwaway.has(p));
+    for (const p of shallowFirst([...readOnly, ...throwaway])) args.push(...(throwaway.has(p) ? ['--overlay-src', p, '--tmp-overlay', p] : ['--ro-bind', p, p]));
     // An empty directory over a directory, /dev/null over anything else: a socket that is a file can only be covered by another file.
     for (const p of shallowFirst(profile.masked ?? [])) args.push(...(this.isDirectory(p) ? ['--tmpfs', p] : ['--ro-bind', '/dev/null', p]));
     for (const p of shallowFirst(profile.write)) args.push('--bind', p, p);
     args.push('--', invocation.shell, ...invocation.shellArgs);
 
-    return { file: this.bwrap, args, env: { ...invocation.env, ...profile.env } };
+    const env = launchEnv(invocation, profile);
+    if (!profile.limits) return { file: this.bwrap, args, env };
+    return { file: '/bin/sh', args: ['-c', limitsPrelude(profile.limits), 'ordewell-sealed', this.bwrap, ...args], env, wallTimeMs: profile.limits.wallTimeMs };
   }
 }

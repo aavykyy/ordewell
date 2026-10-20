@@ -2734,10 +2734,11 @@ Windows box can answer POSIX.
 
 **Planner sandbox** (`services/sandbox/`, ADR-0011) — the OS sandbox every
 command of the planner's shell runs in, beneath the classifier: Seatbelt on
-macOS, bubblewrap on Linux, none on Windows. One profile for every command: the
-host readable, the session's *scratch directory* writable, and the network only
-for a command that was approved; an `auto` one has none, nor the local services
-that would act for it. A `SandboxBackend` (`probe`, `wrap`) turns the *research
+macOS, bubblewrap on Linux, none on Windows. One profile for every command the
+classifier allowed: the host readable, the session's *scratch directory*
+writable, and the network only for a command that was approved; an `auto` one
+has none, nor the local services that would act for it. A *sealed run* has a
+stricter profile of its own. A `SandboxBackend` (`probe`, `wrap`) turns the *research
 shell* and a `SandboxProfile` into the launcher to spawn, with the command
 appended last, so the string classified is the string that runs; a backend
 refuses a profile it cannot enforce. Probed once per process; where it cannot
@@ -2746,11 +2747,30 @@ Separate from Codex's *Sandbox probe*, which asks whether Codex's own sandbox
 starts. *Avoid:* "container" — sandboxes share nothing and need no daemon.
 
 **Scratch directory** — the one directory a planner command may write, set as
-its `TMPDIR`: made under the OS temporary directory on the session's first
-command, private to the user, and removed when the session ends or resets (or
-by the next process, when the one that made it was killed). The
-caches read commands write as a side effect (npm's, Go's, the XDG cache root)
-point at it. *Avoid:* "workspace" — the workspace is read-only to the planner.
+its `TMPDIR` (and a *sealed run*'s `HOME`): made under the OS temporary
+directory on the session's first command, private to the user, and removed
+when the session ends or resets (or by the next process, when the one that made
+it was killed). The caches read commands write as a side effect (npm's, Go's,
+the XDG cache root) point at it, and a sealed run keeps intermediate files
+there for the session's later commands. *Avoid:* "workspace" — the workspace
+is read-only to the planner.
+
+**Sealed run** (`PlannerShellSandbox.launchSealed`, ADR-0036) — a planner
+command run where it can compute anything and change nothing, so that no
+classifier has to vouch for it: the workspace read-only (a throwaway overlay on
+a bubblewrap that has one), the *scratch directory* writable and its `HOME`,
+nothing else readable but the system's executables, libraries and minimal
+configuration, no network, none of the host's environment beyond `PATH` and the
+locale, a `/tmp` of its own, limits on processes, memory and wall time, and
+dying with its parent. A command runs sealed when the planner passes
+`sealed: true` to `bash` or `run_command`, or when the envelope would refuse it
+without asking anyone: the classifier's `refuse`, or the `allowlist` approval
+mode's. A research subagent runs sealed what would have asked. A `!` allowlist
+exclusion and a denial given on the card still refuse; where no sandbox can
+hold one, a refusal stays a refusal. Its result starts with `[Ran sealed`,
+which the research timeline turns into a mark on the row. *Avoid:* "safe mode",
+"dry run" — the command really runs, against the real workspace, and only its
+reach is cut.
 
 **Kill tree** (`utils/processTree.ts`) — the one way an agent process is stopped.
 On POSIX a runner is spawned as the leader of its own process group

@@ -1,4 +1,4 @@
-import { toolHeadline, type ResearchStep, type ResearchStepOutcome } from '@ordewell/core';
+import { ranSealed, toolHeadline, withoutSealedMark, type ResearchStep, type ResearchStepOutcome } from '@ordewell/core';
 import type { WsEvent } from '../apiClient';
 
 /**
@@ -46,8 +46,10 @@ export function formatStepLine(event: WsEvent, options: StepLineOptions = {}): s
     const step = event.step as ResearchStep | undefined;
     if (!step) return null;
     const mark = OUTCOME_MARK[step.outcome] ?? '✓';
-    const summary = summarize(step.tool, step.args, step.toolLabel);
-    const result = oneLine(step.result ?? '', options.verbose ? VERBOSE_RESULT_CHARS : RESULT_CHARS);
+    // A sealed run says so on its first line (ADR-0036 S4), which would fill the preview: the log tags it instead.
+    const sealed = step.tool === 'bash' && ranSealed(step.result ?? '');
+    const summary = `${summarize(step.tool, step.args, step.toolLabel)}${sealed ? ' [sealed]' : ''}`;
+    const result = oneLine(withoutSealedMark(step.result ?? ''), options.verbose ? VERBOSE_RESULT_CHARS : RESULT_CHARS);
     const indent = event.subagentId ? '  ↳ ' : '';
     return result ? `${indent}${mark} ${summary} → ${result}` : `${indent}${mark} ${summary}`;
   }

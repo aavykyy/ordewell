@@ -9,9 +9,12 @@ import {
   plannerShellProfile,
   resolvePlannerSandbox,
   sandboxedFailureNote,
+  sealedShellProfile,
   sweepOrphanScratch,
   PLANNER_SANDBOX_DOCS,
+  SEALED_LIMITS,
   type PlannerSandboxAvailability,
+  type SealedAvailability,
 } from '../plannerSandbox';
 import type { ProbeExec, SandboxBackend, SandboxProfile } from '../SandboxBackend';
 import { classifyOutcome } from '../../researchStepSummary';
@@ -26,7 +29,7 @@ function recordingExec(result: { code: number | null; output: string }): { exec:
 
 function linux(files: string[], exec: ProbeExec, extra: { env?: NodeJS.ProcessEnv; dirs?: string[] } = {}) {
   const present = new Set(files);
-  const dirs = new Set(extra.dirs ?? []);
+  const dirs = new Set([...(extra.dirs ?? []), '/usr', '/bin', '/work']);
   return {
     platform: 'linux' as NodeJS.Platform,
     env: extra.env ?? { PATH: '/usr/bin:/bin' },
@@ -34,7 +37,19 @@ function linux(files: string[], exec: ProbeExec, extra: { env?: NodeJS.ProcessEn
     stat: (p: string) => (dirs.has(p) ? { canonical: p, directory: true } : null),
     uid: 1000,
     exec,
+    probeWorkspace: '/work',
   };
+}
+
+/** An exec that answers each call with the next result, the last one for the rest. */
+function scriptedExec(results: Array<{ code: number | null; output: string }>): { exec: ProbeExec; calls: Array<{ file: string; args: string[] }> } {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  return { calls, exec: async (file, args) => { calls.push({ file, args }); return results[Math.min(calls.length - 1, results.length - 1)]; } };
+}
+
+function sealedOf(availability: PlannerSandboxAvailability): SealedAvailability {
+  if (!availability.available) throw new Error('expected a sandbox');
+  return availability.sealed;
 }
 
 function unavailableNotice(availability: PlannerSandboxAvailability): string {
@@ -77,7 +92,8 @@ describe('resolvePlannerSandbox', () => {
       dirs: ['/run/user/1000', '/tmp/.X11-unix'],
     }));
     expect(availability.available).toBe(true);
-    expect(calls).toHaveLength(1);
+    // The planner's profile, then the sealed one.
+    expect(calls).toHaveLength(2);
     const args = calls[0].args.join(' ');
     expect(calls[0].file).toBe('/usr/bin/bwrap');
     expect(args).toContain('--unshare-net');
@@ -98,11 +114,91 @@ describe('resolvePlannerSandbox', () => {
     expect(notice).not.toContain('AppArmor');
   });
 
+  it('probes a sealed run with its own profile, overlay first, then read-only where the overlay cannot start (ADR-0036 S1)', async () => {
+    const { exec, calls } = scriptedExec([{ code: 0, output: '' }, { code: 1, output: 'bwrap: Unknown option --overlay-src' }, { code: 0, output: '' }]);
+    const sealed = sealedOf(await resolvePlannerSandbox(linux(['/usr/bin/bwrap'], exec)));
+    expect(sealed.available).toBe(true);
+    expect(calls).toHaveLength(3);
+    const [overlay, readOnly] = [calls[1], calls[2]].map((call) => call.args.join(' '));
+    expect(calls[1].file).toBe('/bin/sh');
+    expect(overlay).toContain('--overlay-src /work --tmp-overlay /work');
+    expect(readOnly).toContain('--ro-bind /work /work');
+    expect(readOnly).not.toContain('--overlay-src');
+    expect(readOnly).toContain('--ro-bind /usr /usr --ro-bind /bin /bin');
+    expect(readOnly).not.toContain('--ro-bind / /');
+    if (sealed.available) expect(sealed.profile({ workspace: '/work/repo' }).throwaway).toBeUndefined();
+  });
+
+  it('keeps the sandbox but says sealed runs are unavailable where neither sealed probe starts (S6)', async () => {
+    const { exec } = scriptedExec([{ code: 0, output: '' }, { code: 125, output: 'The sealed run could not be held to its limits, so it did not run.' }]);
+    const availability = await resolvePlannerSandbox(linux(['/usr/bin/bwrap'], exec));
+    expect(availability.available).toBe(true);
+    const sealed = sealedOf(availability);
+    expect(sealed.available).toBe(false);
+    if (sealed.available) return;
+    expect(sealed.notice).toContain('Sealed runs are unavailable on this machine: bubblewrap could not start one (The sealed run could not be held to its limits');
+    expect(sealed.notice).toContain('a loop or a script for an interpreter, is refused rather than run sealed');
+  });
+
+  it('says in the notice of a host without a sandbox that loops and scripts are refused for that reason (S6)', async () => {
+    const notice = unavailableNotice(await resolvePlannerSandbox({ platform: 'win32' }));
+    expect(notice).toContain('a command those rules refuse, such as a loop or a script for an interpreter, is refused rather than run sealed');
+  });
+
+  it("names macOS's links as the links themselves, and Apple's developer directory where it points", async () => {
+    const real: Record<string, string> = { '/private/var/select/developer_dir': '/Applications/Xcode.app/Contents/Developer' };
+    const present = new Set(['/usr', '/private/etc', '/private/var/db', '/private/var/db/xcode_select_link', '/opt/homebrew', '/opt/homebrew/var', '/private/var/select/developer_dir', '/private/tmp']);
+    const { exec, calls } = recordingExec({ code: 0, output: '' });
+    const availability = await resolvePlannerSandbox({
+      platform: 'darwin', exists: () => true, exec, probeWorkspace: '/private/tmp',
+      stat: (p) => (present.has(p) ? { canonical: real[p] ?? p, directory: true } : null),
+    });
+    const sealed = sealedOf(availability);
+    if (!sealed.available) throw new Error('expected sealed runs');
+    const read = sealed.profile({ workspace: '/w' }).read;
+    expect(read).toEqual(['/usr', '/private/etc', '/private/var/db/xcode_select_link', '/opt/homebrew', '/Applications/Xcode.app/Contents/Developer', '/w']);
+    expect(sealed.profile({ workspace: '/w' }).masked).toEqual(['/opt/homebrew/var']);
+    // Seatbelt has no overlay: the probe that asks for one fails without starting, and the second one runs.
+    expect(calls).toHaveLength(2);
+  });
+
   it('probes once per process: later callers share the first answer', () => {
     const first = resolvePlannerSandbox();
     expect(resolvePlannerSandbox()).toBe(first);
     clearPlannerSandboxCache();
     expect(resolvePlannerSandbox()).not.toBe(first);
+  });
+});
+
+describe('sealedShellProfile (ADR-0036 S1)', () => {
+  const host = { platform: 'linux' as NodeJS.Platform, reads: ['/usr', '/bin'], masked: [], overlay: false };
+
+  it('reads the system and the workspace, writes scratch alone, and makes scratch its home', () => {
+    const profile = sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/work/repo' });
+    expect(profile).toMatchObject({
+      read: ['/usr', '/bin', '/work/repo'],
+      write: ['/tmp/s'],
+      network: false,
+      privateTmp: true,
+      limits: SEALED_LIMITS,
+    });
+    expect(profile.throwaway).toBeUndefined();
+    expect(profile.env).toMatchObject({ HOME: '/tmp/s', TMPDIR: '/tmp/s', PYTHONPYCACHEPREFIX: '/tmp/s/pycache' });
+  });
+
+  it('keeps none of the credentials the host environment holds', () => {
+    const kept = sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/w' }).inheritEnv ?? [];
+    expect(kept).toContain('PATH');
+    for (const secret of ['HOME', 'AWS_SECRET_ACCESS_KEY', 'GITHUB_TOKEN', 'GH_TOKEN', 'SSH_AUTH_SOCK', 'KUBECONFIG', 'ANTHROPIC_API_KEY']) expect(kept).not.toContain(secret);
+  });
+
+  it('lays an overlay over the workspace where the host has one', () => {
+    expect(sealedShellProfile({ ...host, overlay: true }, { workspace: '/work/repo' }).throwaway).toEqual(['/work/repo']);
+  });
+
+  it('writes one more directory when it is given one, and only then', () => {
+    expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/work/repo', writable: '/work/tree' }).write).toEqual(['/tmp/s', '/work/tree']);
+    expect(sealedShellProfile(host, { workspace: '/work/repo' }).write).toEqual([]);
   });
 });
 
@@ -145,11 +241,12 @@ function fakeBackend(): SandboxBackend & { profiles: SandboxProfile[] } {
   };
 }
 
-function availableWith(backend: SandboxBackend): () => Promise<PlannerSandboxAvailability> {
+function availableWith(backend: SandboxBackend, sealed: SealedAvailability = { available: true, profile: (opts) => sealedShellProfile({ platform: 'linux', reads: ['/usr'], masked: [], overlay: false }, opts) }): () => Promise<PlannerSandboxAvailability> {
   return async () => ({
     available: true,
     backend,
     profile: (opts) => plannerShellProfile({ platform: 'linux', services: [] }, opts),
+    sealed,
   });
 }
 
@@ -210,6 +307,44 @@ describe('PlannerShellSandbox', () => {
   it('never runs a cmd.exe command in the POSIX shell it would wrap', async () => {
     const sandbox = new PlannerShellSandbox(availableWith(fakeBackend()));
     await expect(sandbox.launch({ ...POSIX, dialect: 'cmd' }, { network: false })).rejects.toThrow('POSIX shell');
+    await expect(sandbox.launchSealed({ ...POSIX, dialect: 'cmd' }, { workspace: tmpdir() })).rejects.toThrow('POSIX shell');
+  });
+
+  it("seals a run in the session's own scratch directory, with the workspace as the kernel names it (ADR-0036 S1)", async () => {
+    const backend = fakeBackend();
+    const sandbox = new PlannerShellSandbox(availableWith(backend));
+    expect(await sandbox.canSeal()).toBe(true);
+    await sandbox.launch(POSIX, { network: false });
+    const root = mkdtempSync(join(tmpdir(), 'ordewell-sealed-ws-'));
+    try {
+      await sandbox.launchSealed(POSIX, { workspace: root });
+      const [planner, sealed] = backend.profiles;
+      expect(sealed.write).toEqual(planner.write);
+      expect(sealed.read).toEqual(['/usr', realpathSync(root)]);
+      expect(sealed.env.HOME).toBe(planner.write[0]);
+      await sandbox.launchSealed(POSIX, { workspace: root, writable: root });
+      expect(backend.profiles[2].write).toEqual([planner.write[0], realpathSync(root)]);
+    } finally {
+      sandbox.end();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('cannot seal where no sandbox runs, or where the sandbox cannot start a sealed run, and says so once (S6)', async () => {
+    const notices: string[] = [];
+    const none = new PlannerShellSandbox(async () => ({ available: false, notice: 'no sandbox' }));
+    none.setNotice((m) => notices.push(m));
+    expect(await none.canSeal()).toBe(false);
+    await none.launch(POSIX, { network: false });
+    await expect(none.launchSealed(POSIX, { workspace: tmpdir() })).rejects.toThrow('sealed runs are unavailable');
+
+    const unsealed = new PlannerShellSandbox(availableWith(fakeBackend(), { available: false, notice: 'no sealed runs' }));
+    unsealed.setNotice((m) => notices.push(m));
+    await unsealed.launch(POSIX, { network: false });
+    expect(await unsealed.canSeal()).toBe(false);
+    expect(notices).toEqual(['no sandbox', 'no sealed runs']);
+    none.end();
+    unsealed.end();
   });
 });
 

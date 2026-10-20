@@ -17,7 +17,7 @@ import type { TaskLogEvent } from '../models/TaskLog';
 import { renderTaskLog } from './taskLogRead';
 import { taskReadPage } from './taskReadPage';
 import type { TaskDiffRead, TaskDiffResult } from './taskDiffRead';
-import type { ToolOutcome } from '../interfaces/IFileSystem';
+import type { BashOptions, ToolOutcome } from '../interfaces/IFileSystem';
 import type { CommandOutcome, ExecutionCommand } from './ExecutionCommands';
 import { resolveTaskRef, taskRefOf } from './TaskRefs';
 
@@ -52,8 +52,8 @@ export interface PlannerToolsHost {
   taskDiff(taskId: string, options: TaskDiffRead): Promise<TaskDiffResult>;
   /** The catalog a plan's tasks will see where they run, which attached skill names are checked against. */
   taskSkills(): SkillLookup;
-  /** The planner's research shell: classified, confined and approved as the API planner's `bash` is (ADR-0026). */
-  runCommand(command: string, signal: AbortSignal): Promise<ToolOutcome>;
+  /** The planner's research shell: classified, confined and approved as the API planner's `bash` is (ADR-0026), or sealed (ADR-0036). */
+  runCommand(command: string, signal: AbortSignal, opts?: BashOptions): Promise<ToolOutcome>;
   /** A fetch through the session's web fetcher, whose web-read policy decides it (ADR-0027). */
   fetchUrl(url: string): Promise<ToolOutcome>;
   /** A search the same way; undefined when the fetcher has no search. */
@@ -119,8 +119,8 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       return { text: skill.content };
     },
 
-    async runCommand({ command }, { signal }) {
-      const outcome = await host.runCommand(command, signal);
+    async runCommand({ command, sealed }, { signal }) {
+      const outcome = await (sealed ? host.runCommand(command, signal, { sealed }) : host.runCommand(command, signal));
       return { text: outcome.output || (outcome.success ? '(no output)' : 'The command failed with no output.'), ...(outcome.success ? {} : { isError: true }) };
     },
 

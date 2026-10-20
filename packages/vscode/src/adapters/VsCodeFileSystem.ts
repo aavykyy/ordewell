@@ -31,10 +31,13 @@ const BASH_TIMEOUT_MS = 120_000;
 
 interface ExecResult { stdout: string; stderr: string; code: number | null }
 
+/** How long a sealed run's output may trail its exit. */
+const SEALED_OUTPUT_GRACE_MS = 1_000;
+
 function run(
   file: string,
   args: string[],
-  opts: { cwd?: string; timeout: number; shell?: boolean | string; env?: NodeJS.ProcessEnv; signal?: AbortSignal },
+  opts: { cwd?: string; timeout: number; shell?: boolean | string; env?: NodeJS.ProcessEnv; signal?: AbortSignal; sealed?: boolean },
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     // Node hands only ENOENT/EAGAIN/EMFILE/ENFILE from spawn(2) to the
@@ -43,13 +46,17 @@ function run(
     // this promise and abort the whole planner turn instead of the one tool
     // call. Kept in step with PoolFileSystem.run, which had the same defect.
     try {
-      execFile(file, args, {
+      const child = execFile(file, args, {
         cwd: opts.cwd,
         timeout: opts.timeout,
         maxBuffer: MAX_OUTPUT_BYTES,
         encoding: 'utf8',
         shell: opts.shell,
         env: opts.env,
+        // A sealed run's wall-time limit is a kill, not a request it may trap
+        // (ADR-0036 S1); the sandbox takes the processes it started down with
+        // it. Kept in step with PoolFileSystem's run.
+        ...(opts.sealed ? { killSignal: 'SIGKILL' as const } : {}),
         // Node kills the child when this aborts and calls back with an
         // ABORT_ERR, which lands on the `code: 1` branch below — a failed
         // tool call, like any command that did not finish. Stopping the
@@ -59,6 +66,9 @@ function run(
         const code = err && typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : err ? 1 : 0;
         resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code });
       });
+      // A process that left a sealed run's process group can hold its output
+      // open after the run has ended: the result is what arrived by then.
+      if (opts.sealed) child.once('exit', () => setTimeout(() => { child.stdout?.destroy(); child.stderr?.destroy(); }, SEALED_OUTPUT_GRACE_MS).unref());
     } catch (err) {
       // `code: null` rather than 1: the search adapters read 0 and 1 as "ran,
       // possibly no matches", so a 1 would surface a confident "No matches
@@ -270,10 +280,10 @@ export class VsCodeFileSystem extends BaseFileSystem {
     // around the POSIX shell, or the POSIX shell found on a Windows box:
     // either way the command goes last, in the dialect `BaseFileSystem`
     // classified it under.
-    const { file, args, env } = shell;
+    const { file, args, env, wallTimeMs } = shell;
     const result = file === null
       ? await run(command, [], { cwd: this.getWorkspaceRoot(), timeout: BASH_TIMEOUT_MS, shell: true, env, signal })
-      : await run(file, [...args, command], { cwd: this.getWorkspaceRoot(), timeout: BASH_TIMEOUT_MS, env, signal });
+      : await run(file, [...args, command], { cwd: this.getWorkspaceRoot(), timeout: wallTimeMs ?? BASH_TIMEOUT_MS, env, signal, sealed: wallTimeMs !== undefined });
     const out = (result.stdout || '').trim();
     const err = (result.stderr || '').trim();
 

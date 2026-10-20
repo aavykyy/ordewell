@@ -576,6 +576,13 @@ body {
   color: var(--orange);
 }
 
+/* A sealed run is a fact about where the command ran, not an exception. */
+.cmd-row-sealed {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 .cmd-row[data-status='pending'] .cmd-row-icon {
   animation: cmd-row-pulse 1.4s ease-in-out infinite;
 }

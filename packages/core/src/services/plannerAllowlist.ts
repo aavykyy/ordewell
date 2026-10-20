@@ -140,6 +140,22 @@ export function commandAllowedBy(list: PlannerAllowlist, command: CommandWords):
   return list.commands.find((rule) => ruleCovers(rule, command))?.text;
 }
 
+/**
+ * The `!` entry that names a command found anywhere among these words, or
+ * undefined (ADR-0036 S3). {@link commandAllowedBy} matches the command a
+ * segment runs; a sealed run's line may be one the classifier never read
+ * that far (a loop's body, a runner's argument), so here the excluded
+ * binary is looked for at every word, by its name without a path, and the
+ * rule's words after it. A word that only mentions the binary still counts:
+ * over-excluding costs one refusal.
+ */
+export function commandExcludedBy(list: PlannerAllowlist, words: readonly string[]): string | undefined {
+  const names = words.map((word) => word.slice(word.lastIndexOf('/') + 1).toLowerCase());
+  return list.commandExclusions.find((rule) => (rule.binary === '*'
+    ? exclusionCovers(rule, { binary: '*', args: words })
+    : names.some((name, i) => name === rule.binary.toLowerCase() && exclusionCovers(rule, { binary: rule.binary, args: words.slice(i + 1) }))))?.text;
+}
+
 /** Whether an MCP tool, by its own name without the server, runs unasked. */
 export function toolAllowed(list: PlannerAllowlist, tool: string): boolean {
   if (list.toolExclusions.some((re) => re.test(tool))) return false;

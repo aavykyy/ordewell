@@ -196,7 +196,7 @@ export type {
 export { EMPTY_RUN, reduceRun } from './services/runView';
 export { serializeTask, serializeTaskStatus, serializePlan, surfacePlan, surfacePlanState, executionSummary, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, type ExecutionSummary } from './services/SessionMessage';
 export { blockingFailures, type BlockingSubject } from './services/blocking';
-export { summarizeToolCall, classifyOutcome } from './services/researchStepSummary';
+export { summarizeToolCall, classifyOutcome, ranSealed, withoutSealedMark } from './services/researchStepSummary';
 export * from './conversation';
 export * from './taskRow';
 export { VerdictEngine } from './services/VerdictEngine';
@@ -252,8 +252,8 @@ export {
   researchShellWarning,
 } from './services/researchShell';
 export type { ResearchShell, ResearchShellDeps, ShellDialect, ShellLaunch } from './services/researchShell';
-export { PlannerShellSandbox, resolvePlannerSandbox, clearPlannerSandboxCache, PLANNER_SANDBOX_DOCS } from './services/sandbox/plannerSandbox';
-export type { PlannerSandboxAvailability, PlannerSandboxDeps } from './services/sandbox/plannerSandbox';
+export { PlannerShellSandbox, resolvePlannerSandbox, clearPlannerSandboxCache, PLANNER_SANDBOX_DOCS, SEALED_LIMITS } from './services/sandbox/plannerSandbox';
+export type { PlannerSandboxAvailability, PlannerSandboxDeps, SealedAvailability, SealedRunOptions } from './services/sandbox/plannerSandbox';
 export type { SandboxBackend, SandboxProfile, SandboxLimits, SandboxInvocation, SandboxLaunch } from './services/sandbox/SandboxBackend';
 export { clipboardCopyCommand } from './utils/clipboard';
 export type { HasBinFn } from './utils/clipboard';

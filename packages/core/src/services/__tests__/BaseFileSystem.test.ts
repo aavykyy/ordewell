@@ -9,6 +9,8 @@ import type { ResolveAll } from '../egressGuard';
 import { runResearchAgent } from '../ResearchSubagents';
 import type { ShellLaunch } from '../researchShell';
 import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from '../ApprovalPolicy';
+import { classifyOutcome, ranSealed } from '../researchStepSummary';
+import { STOPPED_TOOL_RESULT } from '../executeTool';
 import type { GrepOptions, ReadFileOpts, ToolOutcome } from '../../interfaces/IFileSystem';
 import { fakeSecret } from './fakeSecret';
 
@@ -1040,7 +1042,8 @@ describe('BaseFileSystem runs the planner shell in the sandbox', () => {
     result: ToolOutcome = { success: true, output: 'ran', truncated: false };
 
     constructor(launch?: (network: boolean) => Promise<PlannerShellLaunch>) {
-      const sandbox = new PlannerShellSandbox();
+      // No sealed runs here, so a refusal stays one on every host; those have their own suite below.
+      const sandbox = new PlannerShellSandbox(async () => ({ available: false, notice: '' }));
       super(undefined, sandbox);
       sandbox.launch = async (_shell, opts) => {
         this.launches.push(opts);
@@ -1153,5 +1156,180 @@ describe('BaseFileSystem runs the planner shell in the sandbox', () => {
     });
     expect(fs.runs.map((r) => r.command)).toEqual(['git log -1']);
     expect(fs.launches).toEqual([{ network: false }]);
+  });
+});
+
+/**
+ * What the envelope would refuse without asking runs sealed where the sandbox
+ * can seal it (ADR-0036 S2): asked for, the classifier's refusal, and the
+ * approval mode's. An exclusion and a person's denial still refuse (S3), and
+ * where nothing can seal, a refusal is a refusal (S6).
+ */
+describe('BaseFileSystem runs sealed what it would refuse without asking (ADR-0036)', () => {
+  const SEALED: ShellLaunch = { file: '/sealed', args: ['--sealed', '/bin/sh', '-c'], wallTimeMs: 60_000 };
+
+  class SealingFileSystem extends TestFileSystem {
+    sealedRuns: string[] = [];
+    unsealedRuns: string[] = [];
+    result: ToolOutcome = { success: true, output: 'computed', truncated: false };
+
+    constructor(canSeal = true) {
+      const sandbox = new PlannerShellSandbox(async () => ({ available: false, notice: '' }));
+      super(undefined, sandbox);
+      sandbox.canSeal = async () => canSeal;
+      sandbox.launchSealed = async () => SEALED;
+    }
+
+    protected async execBashImpl(command: string, shell: ShellLaunch): Promise<ToolOutcome> {
+      (shell === SEALED ? this.sealedRuns : this.unsealedRuns).push(command);
+      return this.result;
+    }
+  }
+
+  function policy(opts: ConstructorParameters<typeof ApprovalPolicy>[0] = {}): { approval: ApprovalPolicy; asked: string[] } {
+    const asked: string[] = [];
+    return { asked, approval: new ApprovalPolicy({ ask: async (req) => { asked.push(req.subject); return false; }, ...opts }) };
+  }
+
+  it.each([
+    ['a loop', 'for f in *.md; do wc -l "$f"; done'],
+    ['inline code', 'python3 -c "print(sum(range(10)))"'],
+    ['code piped into an interpreter', 'git log --format=%an | python3 -c "import sys; print(len(set(sys.stdin)))"'],
+    ['a write', 'echo draft > notes.txt'],
+  ])("runs %s the classifier refuses sealed, and says so first (S2, S4)", async (_what, command) => {
+    const fs = new SealingFileSystem();
+    const outcome = await fs.bash(command);
+    expect(fs.sealedRuns).toEqual([command]);
+    expect(fs.unsealedRuns).toEqual([]);
+    expect(outcome.success).toBe(true);
+    const [header, ...rest] = outcome.output.split('\n');
+    expect(header).toMatch(/^\[Ran sealed instead of being refused: no network, no home directory, and nothing it writes reaches the workspace\./);
+    expect(rest.join('\n')).toBe('computed');
+    expect(ranSealed(outcome.output)).toBe(true);
+    expect(classifyOutcome(outcome.success, outcome.output)).toBe('success');
+  });
+
+  it('runs sealed, as asked, a command that would have asked, and asks nobody', async () => {
+    const fs = new SealingFileSystem();
+    const { approval, asked } = policy();
+    fs.setApproval(approval);
+    const outcome = await fs.bash('npm ls --all', undefined, { sealed: true });
+    expect(asked).toEqual([]);
+    expect(fs.sealedRuns).toEqual(['npm ls --all']);
+    expect(outcome.output).toMatch(/^\[Ran sealed as asked: /);
+  });
+
+  it('runs sealed what the allowlist mode refuses without asking, and still asks under Guarded', async () => {
+    const full = new SealingFileSystem();
+    const denying = policy({ mode: 'deny' });
+    full.setApproval(denying.approval);
+    expect((await full.bash('npm test')).output).toMatch(/^\[Ran sealed instead of being refused/);
+    expect(denying.asked).toEqual([]);
+    expect(full.sealedRuns).toEqual(['npm test']);
+
+    const guarded = new SealingFileSystem();
+    const asking = policy();
+    guarded.setApproval(asking.approval);
+    expect((await guarded.bash('npm test')).output).toContain('Command not approved: npm test');
+    expect(asking.asked).toEqual(['npm test']);
+    expect(guarded.sealedRuns).toEqual([]);
+  });
+
+  it('never runs sealed what the user denied on the card, even when sealed is asked for (S3)', async () => {
+    const fs = new SealingFileSystem();
+    const { approval, asked } = policy();
+    fs.setApproval(approval);
+    await fs.bash('npm test');
+    const retried = await fs.bash('npm test', undefined, { sealed: true });
+    expect(asked).toEqual(['npm test']);
+    expect(retried).toMatchObject({ success: false });
+    expect(retried.output).toContain('The user denied it this session, and a denial holds for a sealed run too.');
+    expect(fs.sealedRuns).toEqual([]);
+    expect(fs.unsealedRuns).toEqual([]);
+  });
+
+  it.each([
+    ['a refused loop', 'for n in a b; do kubectl get secret "$n"; done', {}],
+    ['what the mode refuses', 'kubectl get secrets', {}],
+    ['a command asked to run sealed', 'kubectl get secrets -o yaml', { sealed: true }],
+    ['inline code naming it through a runner', 'env kubectl get secret x | python3 -c "print(1)"', {}],
+  ])('refuses %s that an exclusion names, sealed or not (S3)', async (_what, command, opts) => {
+    const fs = new SealingFileSystem();
+    fs.setApproval(policy({ mode: 'deny', preApproved: ['!kubectl *secret*'] }).approval);
+    const outcome = await fs.bash(command, undefined, opts);
+    expect(outcome.output).toBe('Command refused: the planner allowlist excludes it ("!kubectl *secret*"), and an exclusion holds for a sealed run too.');
+    expect(classifyOutcome(outcome.success, outcome.output)).toBe('refused');
+    expect(fs.sealedRuns).toEqual([]);
+  });
+
+  it('refuses a path an exclusion names, sealed or not (S3)', async () => {
+    const fs = new SealingFileSystem();
+    fs.setApproval(policy({ mode: 'deny', preApproved: ['!/etc/*'] }).approval);
+    expect((await fs.bash('cat /etc/hosts', undefined, { sealed: true })).output)
+      .toBe('Command refused: the planner allowlist excludes "/etc/hosts", and an exclusion holds for a sealed run too.');
+    expect((await fs.bash('cat /etc/hosts')).output).toMatch(/^Access denied:/);
+    expect(fs.sealedRuns).toEqual([]);
+  });
+
+  it('refuses as before where nothing can seal (S6)', async () => {
+    const fs = new SealingFileSystem(false);
+    fs.setApproval(policy({ mode: 'deny' }).approval);
+    expect((await fs.bash('for f in *; do wc -l "$f"; done')).output).toMatch(/^Command refused: /);
+    expect((await fs.bash('npm test')).output).toContain('Command not approved: npm test');
+    expect((await fs.bash('git status', undefined, { sealed: true })).output).toBe('Command refused: this machine has no sandbox to run a command sealed in. Run it without "sealed", and Ordewell\'s command rules judge it as they do every command.');
+    expect(fs.sealedRuns).toEqual([]);
+    expect(fs.unsealedRuns).toEqual([]);
+  });
+
+  it("says a sealed failure is the sandbox's to understand, not one to retry (S4)", async () => {
+    const fs = new SealingFileSystem();
+    fs.result = { success: false, output: 'Command exited 1:\ncurl: (6) Could not resolve host: example.com', truncated: false };
+    const outcome = await fs.bash('for h in a b; do curl https://example.com/$h; done');
+    expect(outcome.output).toContain('curl: (6) Could not resolve host');
+    expect(outcome.output).toContain('so running it sealed again fails the same way');
+    expect(classifyOutcome(outcome.success, outcome.output)).toBe('failure');
+  });
+
+  it('reports a stopped sealed run as a stop', async () => {
+    const fs = new SealingFileSystem();
+    const controller = new AbortController();
+    fs.result = { success: false, output: STOPPED_TOOL_RESULT, truncated: false };
+    controller.abort();
+    expect((await fs.bash('for f in *; do :; done', controller.signal)).output).toBe(STOPPED_TOOL_RESULT);
+  });
+
+  it("runs a research subagent's refused, asking and outside commands sealed, and nobody is asked (S5)", async () => {
+    const commands = ['python3 -c "print(1)"', 'gh issue list', 'cat /etc/hosts', 'git log -1'];
+    const run = async (fs: SealingFileSystem) => {
+      let turn = 0;
+      const results: string[] = [];
+      await runResearchAgent('look', {
+        fs,
+        createChat: () => ({
+          sendMessage: async () => ({ text: '', toolCalls: commands.map((command, i) => ({ name: 'bash', args: { command }, id: `c${i}` })), hasToolCalls: true }),
+          sendToolResults: async (toolResults) => {
+            results.push(...toolResults.map((r) => r.output));
+            return turn++ === 0 ? { text: 'digest', toolCalls: [], hasToolCalls: false } : { text: '', toolCalls: [], hasToolCalls: false };
+          },
+        }),
+      });
+      return results;
+    };
+
+    const sealing = new SealingFileSystem();
+    const { approval, asked } = policy();
+    sealing.setApproval(approval);
+    const results = await run(sealing);
+    expect(sealing.sealedRuns).toEqual(commands.slice(0, 3));
+    expect(sealing.unsealedRuns).toEqual(['git log -1']);
+    expect(results.slice(0, 3).every(ranSealed)).toBe(true);
+    expect(asked).toEqual([]);
+
+    const unsealed = new SealingFileSystem(false);
+    const refusals = await run(unsealed);
+    expect(refusals[0]).toMatch(/^Command refused: /);
+    expect(refusals[1]).toContain('needs user approval, and research agents run in the background');
+    expect(refusals[2]).toContain('outside the workspace');
+    expect(unsealed.sealedRuns).toEqual([]);
   });
 });

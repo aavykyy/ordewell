@@ -521,7 +521,7 @@ export class Session {
     taskLog: (taskId, attempt) => this.taskLog(taskId, attempt),
     taskDiff: (taskId, options) => this.runs.taskDiff(taskId, options),
     taskSkills: () => this.workspaceSkills(),
-    runCommand: (command, signal) => this.fsAdapter.bash(command, signal),
+    runCommand: (command, signal, opts) => this.fsAdapter.bash(command, signal, opts),
     fetchUrl: (url) => this.fetcher.fetch(url),
     webSearch: async (query) => this.fetcher.search?.(query),
     execute: (command) => this.execute(command, this.turnActor()),

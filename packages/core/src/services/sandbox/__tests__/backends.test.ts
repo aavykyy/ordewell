@@ -1,13 +1,27 @@
 import { describe, it, expect } from 'vitest';
 import { SeatbeltBackend, SANDBOX_EXEC } from '../seatbelt';
 import { BubblewrapBackend, findBubblewrap } from '../bubblewrap';
-import { SandboxUnsupportedError, type SandboxInvocation, type SandboxProfile, type ProbeExec } from '../SandboxBackend';
+import { SandboxUnsupportedError, type SandboxInvocation, type SandboxLimits, type SandboxProfile, type ProbeExec } from '../SandboxBackend';
 
 const SH: SandboxInvocation = { shell: '/bin/sh', shellArgs: ['-c'], env: { PATH: '/usr/bin:/bin', HOME: '/home/me' } };
 const SCRATCH = '/tmp/ordewell-planner-abc';
 
 function profile(overrides: Partial<SandboxProfile> = {}): SandboxProfile {
   return { write: [SCRATCH], read: 'host', network: false, env: { TMPDIR: SCRATCH }, ...overrides };
+}
+
+const LIMITS: SandboxLimits = { processes: 64, memoryBytes: 2 * 1024 ** 3, wallTimeMs: 30_000 };
+
+/** A sealed run's profile, as ADR-0036 S1 shapes it. */
+function sealed(overrides: Partial<SandboxProfile> = {}): SandboxProfile {
+  return profile({
+    read: ['/usr', '/bin', '/work/repo'],
+    privateTmp: true,
+    env: { TMPDIR: SCRATCH, HOME: SCRATCH },
+    inheritEnv: ['PATH'],
+    limits: LIMITS,
+    ...overrides,
+  });
 }
 
 /** A path built to break out of any quoting a backend might have done by hand. */
@@ -31,7 +45,7 @@ describe('SeatbeltBackend.wrap', () => {
     const launch = seatbelt.wrap(SH, profile());
     const text = profileText(launch.args);
     expect(text).toMatch(/^\(version 1\)\n\(deny default\)/);
-    expect(text).toContain('(allow file-write* (subpath (param "WRITABLE_0")))');
+    expect(text).toContain('(allow file-read* file-test-existence file-map-executable file-write* (subpath (param "WRITABLE_0")))');
     expect(launch.args).toContain(`WRITABLE_0=${SCRATCH}`);
     expect(launch.args[launch.args.indexOf(`WRITABLE_0=${SCRATCH}`) - 1]).toBe('-D');
     // Nothing but the scratch directory, the device files and the shell's own here-document names.
@@ -61,7 +75,7 @@ describe('SeatbeltBackend.wrap', () => {
   it('keeps a writable directory inside a masked one writable, as bubblewrap does', () => {
     const text = profileText(seatbelt.wrap(SH, profile({ masked: ['/run/user/501'] })).args);
     expect(text.indexOf('(deny file-read* file-write* (subpath (param "MASKED_0")))'))
-      .toBeLessThan(text.indexOf('(allow file-write* (subpath (param "WRITABLE_0")))'));
+      .toBeLessThan(text.indexOf('file-write* (subpath (param "WRITABLE_0")))'));
   });
 
   it('sets the profile environment over the one the shell had', () => {
@@ -70,13 +84,62 @@ describe('SeatbeltBackend.wrap', () => {
   });
 
   it.each<[string, Partial<SandboxProfile>]>([
-    ['a read list', { read: ['/usr'] }],
-    ['a private /tmp', { privateTmp: true }],
-    ['resource limits', { limits: { processes: 64 } }],
+    ['a throwaway overlay', { read: ['/work/repo'], throwaway: ['/work/repo'] }],
     ['a relative path', { write: ['scratch'] }],
     ['an option-shaped path', { write: ['--help'] }],
+    ['a limit that is not a whole number', { limits: { ...LIMITS, processes: 1.5 } }],
   ])('refuses %s rather than enforce less than it was asked', (_what, overrides) => {
     expect(() => seatbelt.wrap(SH, profile(overrides))).toThrow(SandboxUnsupportedError);
+  });
+
+  describe('a sealed profile (ADR-0036 S1)', () => {
+    it('reads only what it lists, the directories above it by name, and none of the user preferences or other processes', () => {
+      const launch = seatbelt.wrap(SH, sealed({ masked: ['/usr/local/var'] }));
+      const text = profileText(launch.args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1));
+      expect(text).not.toContain('(allow file-read* file-test-existence file-map-executable)\n');
+      expect(text).not.toContain('user-preference-read');
+      expect(text).not.toContain('com.apple.cfprefsd');
+      expect(text).toContain('(allow process-info* (target same-sandbox))');
+      expect(text).toContain('(allow file-read* file-test-existence file-map-executable (subpath (param "READ_0")) (subpath (param "READ_1")) (subpath (param "READ_2")))');
+      expect(launch.args).toEqual(expect.arrayContaining(['READ_0=/usr', 'READ_1=/bin', 'READ_2=/work/repo']));
+      // Stat, never read: the workspace's and the scratch directory's parents.
+      expect(launch.args).toEqual(expect.arrayContaining(['ABOVE_0=/work', 'ABOVE_1=/tmp']));
+      expect(text).toMatch(/\(allow file-read-metadata \(literal \(param "ABOVE_0"\)\)/);
+      expect(text.indexOf('(deny file-read* file-write* (subpath (param "MASKED_0")))')).toBeGreaterThan(text.indexOf('READ_2'));
+    });
+
+    it('keeps a hostile path out of the profile text in the read list too', () => {
+      const launch = seatbelt.wrap(SH, sealed({ read: [HOSTILE] }));
+      expect(launch.args.find((arg) => arg.startsWith('(version 1)'))).not.toContain('a"b');
+      expect(launch.args).toContain(`READ_0=${HOSTILE}`);
+    });
+
+    it('hides the host /tmp from a profile that reads the host, but for the shell\'s here-documents', () => {
+      const text = profileText(seatbelt.wrap(SH, profile({ privateTmp: true })).args);
+      const deny = text.indexOf('(deny file-read* file-write* (subpath "/private/tmp") (subpath "/private/var/tmp"))');
+      expect(deny).toBeGreaterThan(text.indexOf('(allow file-read* file-test-existence file-map-executable)'));
+      expect(text.indexOf('(allow file-read* file-write* (regex #"^/private/tmp/sh-thd-[0-9]+$"))')).toBeGreaterThan(deny);
+    });
+
+    it('starts behind a bash prelude that sets the limits and owns the process group, and asks the caller to keep the time', () => {
+      const launch = seatbelt.wrap(SH, sealed());
+      expect(launch.file).toBe('/bin/bash');
+      expect(launch.args[0]).toBe('-c');
+      const prelude = launch.args[1];
+      expect(prelude).toContain('ulimit -u $((n + 64))');
+      expect(prelude).toContain(`ulimit -v $((v + ${2 * 1024 * 1024}))`);
+      expect(prelude).toContain('set -m');
+      expect(prelude).toContain('kill -KILL -$pid');
+      // `$0`, then the launcher and the shell, with the command left to come last.
+      expect(launch.args.slice(2, 4)).toEqual(['ordewell-sealed', SANDBOX_EXEC]);
+      expect(launch.args.slice(-2)).toEqual(['/bin/sh', '-c']);
+      expect(launch.wallTimeMs).toBe(30_000);
+    });
+
+    it('keeps only the environment the profile names, then sets its own', () => {
+      const { env } = seatbelt.wrap({ ...SH, env: { PATH: '/usr/bin', AWS_SECRET_ACCESS_KEY: 'x', HOME: '/home/me' } }, sealed());
+      expect(env).toEqual({ PATH: '/usr/bin', TMPDIR: SCRATCH, HOME: SCRATCH });
+    });
   });
 });
 
@@ -130,10 +193,42 @@ describe('BubblewrapBackend.wrap', () => {
   });
 
   it.each<[string, Partial<SandboxProfile>]>([
-    ['resource limits', { limits: { memoryBytes: 1 << 30 } }],
+    ['a limit that is not a whole number', { limits: { ...LIMITS, memoryBytes: -1 } }],
     ['a relative path', { masked: ['run/user'] }],
+    ['a relative throwaway directory', { throwaway: ['repo'] }],
   ])('refuses %s rather than enforce less than it was asked', (_what, overrides) => {
     expect(() => bwrap().wrap(SH, profile(overrides))).toThrow(SandboxUnsupportedError);
+  });
+
+  describe('a sealed profile (ADR-0036 S1)', () => {
+    it('lays a throwaway overlay over the workspace in place of a read-only bind', () => {
+      const { args } = bwrap().wrap(SH, sealed({ throwaway: ['/work/repo'] }));
+      const joined = args.join(' ');
+      expect(joined).toContain('--overlay-src /work/repo --tmp-overlay /work/repo');
+      expect(joined).not.toContain('--ro-bind /work/repo');
+      expect(joined).toContain('--ro-bind /usr /usr --ro-bind /bin /bin');
+      expect(joined).toContain('--unshare-net');
+      expect(joined).toContain('--tmpfs /tmp');
+    });
+
+    it('starts behind a prelude that sets the limits and then becomes bubblewrap, so its kill and its parent\'s death reach the sandbox', () => {
+      const launch = bwrap().wrap(SH, sealed());
+      expect(launch.file).toBe('/bin/sh');
+      const prelude = launch.args[1];
+      // dash calls the process limit -p, bash -u.
+      const processes = '$(($(set -- /proc/[0-9]*; echo $#) + 64))';
+      expect(prelude).toContain(`ulimit -u ${processes} 2>/dev/null || ulimit -p ${processes}`);
+      expect(prelude).toContain(`ulimit -v ${2 * 1024 * 1024}`);
+      expect(prelude).toMatch(/exec "\$@"$/);
+      expect(launch.args.slice(2, 4)).toEqual(['ordewell-sealed', '/usr/bin/bwrap']);
+      expect(launch.args).toContain('--die-with-parent');
+      expect(launch.wallTimeMs).toBe(30_000);
+    });
+
+    it('keeps only the environment the profile names, then sets its own', () => {
+      const { env } = bwrap().wrap({ ...SH, env: { PATH: '/usr/bin', GITHUB_TOKEN: 'x', HOME: '/home/me' } }, sealed());
+      expect(env).toEqual({ PATH: '/usr/bin', TMPDIR: SCRATCH, HOME: SCRATCH });
+    });
   });
 });
 
@@ -159,7 +254,7 @@ describe('probing a backend', () => {
 
   it('fails a profile the backend cannot enforce without running anything', async () => {
     const { exec, calls } = recording({ code: 0, output: '' });
-    const probe = await new SeatbeltBackend(exec).probe(profile({ privateTmp: true }));
+    const probe = await new SeatbeltBackend(exec).probe(profile({ read: ['/work/repo'], throwaway: ['/work/repo'] }));
     expect(probe.ok).toBe(false);
     expect(calls).toEqual([]);
   });

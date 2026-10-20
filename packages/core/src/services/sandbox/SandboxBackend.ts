@@ -14,7 +14,11 @@ import * as path from 'path';
  * callers do not change.
  */
 
-/** What one command may touch. Every path is absolute and canonical (symlinks resolved), as the kernel will see it. */
+/**
+ * What one command may touch. Every path is absolute, and canonical
+ * (symlinks resolved) wherever the backend matches the path the kernel
+ * resolves, as Seatbelt does.
+ */
 export interface SandboxProfile {
   /** Directories the command may write, recursively. Nothing else can be written. */
   write: readonly string[];
@@ -22,26 +26,46 @@ export interface SandboxProfile {
    * What the command may read besides `write`. `'host'` is the whole
    * filesystem: the planner's reads are confined by ADR-0008's path check,
    * not here (ADR-0011 B2). A list confines reads to those paths, for a
-   * profile that must not see the user's files (ADR-0036 S1).
+   * profile that must not see the user's files (ADR-0036 S1). Bubblewrap
+   * mounts a listed link where it is named, so `/bin` still starts programs
+   * on a system where it links to `/usr/bin`.
    */
   read: 'host' | readonly string[];
+  /**
+   * Listed directories mounted with a throwaway overlay: a write there
+   * succeeds and is gone when the command ends, so a tool that writes a cache
+   * beside the code still runs (ADR-0036 S1). A backend without one refuses
+   * the profile, a host too old for one fails its probe, and either way the
+   * caller asks again with the directory read-only.
+   */
+  throwaway?: readonly string[];
   /** Directories the command cannot see into although `read` covers them: where local services listen that would write on its behalf. */
   masked?: readonly string[];
   network: boolean;
-  /** A fresh, empty `/tmp` of the command's own instead of the host's. */
+  /** The host's `/tmp` out of the command's sight: an empty one of its own where the backend can mount one, none at all where it cannot. */
   privateTmp?: boolean;
   /** Set over the environment the command inherits. */
   env: Readonly<Record<string, string>>;
+  /** The variables the command keeps from the host's environment; absent keeps them all. Its credentials live there too. */
+  inheritEnv?: readonly string[];
   limits?: SandboxLimits;
 }
 
+/**
+ * Held by the kernel's resource limits, set before the launcher starts, and
+ * by the caller's clock (ADR-0036 S1).
+ */
 export interface SandboxLimits {
-  /** Processes the command may have at once. */
-  processes?: number;
-  /** Bytes of memory any one of its processes may map. */
-  memoryBytes?: number;
-  /** Milliseconds before the whole command is killed. */
-  wallTimeMs?: number;
+  /** Processes the command may start beyond those its user already runs, which the kernel's limit counts too. */
+  processes: number;
+  /**
+   * Bytes of address space any one of its processes may map. On macOS, where
+   * every program maps hundreds of gigabytes as it starts, it is counted on
+   * top of that.
+   */
+  memoryBytes: number;
+  /** Milliseconds before the caller kills the command, and with it every process it started. */
+  wallTimeMs: number;
 }
 
 /** The unsandboxed shell: a POSIX shell that takes the command string after `shellArgs`. */
@@ -57,6 +81,8 @@ export interface SandboxLaunch {
   file: string;
   args: string[];
   env: NodeJS.ProcessEnv;
+  /** The profile's wall-time limit: the caller kills the launch with SIGKILL once it has run this long. */
+  wallTimeMs?: number;
 }
 
 export type SandboxProbe = { ok: true } | { ok: false; detail: string };
@@ -90,10 +116,29 @@ export class SandboxUnsupportedError extends Error {
  * an option.
  */
 export function assertProfilePaths(backend: string, profile: SandboxProfile): void {
-  const paths = [...profile.write, ...(profile.read === 'host' ? [] : profile.read), ...(profile.masked ?? [])];
+  const paths = [...profile.write, ...(profile.read === 'host' ? [] : profile.read), ...(profile.throwaway ?? []), ...(profile.masked ?? [])];
   for (const p of paths) {
     if (!path.posix.isAbsolute(p) || p.includes('\0')) throw new SandboxUnsupportedError(backend, `the path ${JSON.stringify(p)}`);
   }
+}
+
+/**
+ * Limits reach the prelude script as numbers, so each must be a positive
+ * integer: anything else would be shell text in a script that runs outside
+ * the sandbox.
+ */
+export function assertLimits(backend: string, limits: SandboxLimits): void {
+  for (const [name, value] of Object.entries(limits)) {
+    if (!Number.isSafeInteger(value) || value <= 0) throw new SandboxUnsupportedError(backend, `the limit ${name}=${String(value)}`);
+  }
+}
+
+/** The environment a wrapped command starts with: what the profile keeps of the shell's, then what it sets. */
+export function launchEnv(invocation: SandboxInvocation, profile: SandboxProfile): NodeJS.ProcessEnv {
+  const kept = profile.inheritEnv === undefined
+    ? invocation.env
+    : Object.fromEntries(profile.inheritEnv.flatMap((name) => (invocation.env[name] === undefined ? [] : [[name, invocation.env[name]]])));
+  return { ...kept, ...profile.env };
 }
 
 export type ProbeExec = (file: string, args: string[], env: NodeJS.ProcessEnv) => Promise<{ code: number | null; output: string }>;

@@ -1,4 +1,4 @@
-import { PLANNER_EXECUTION_TOOLS, PLANNER_TASK_READ_TOOLS, type McpTool, type PlannerToolHandler } from './mcp/tools';
+import { PLANNER_EXECUTION_TOOLS, PLANNER_TASK_READ_TOOLS, SEALED_PARAM, SEALED_RUNS, type McpTool, type PlannerToolHandler } from './mcp/tools';
 import type OpenAI from 'openai';
 import { SchemaType, type FunctionDeclaration, type Schema } from '@google/generative-ai';
 
@@ -109,9 +109,10 @@ export const RESEARCH_TOOLS: ResearchToolSpec[] = [
   },
   {
     name: 'bash',
-    description: 'Run a shell command for research. Read-only inspection (ls, tree, git log/status/diff/show, wc, find, rg, jq, …) runs immediately. Anything else — test suites, package managers, cloud CLIs like az/gh/aws/kubectl — pauses for one user approval and is then remembered for the rest of the session. Commands that write or mutate (rm, mv, cp, chmod, sudo, mkdir, git push/commit, output redirection, piping into a shell) are always refused: you are a planner, so describe the change as a task and let the runner make it. When to use: diagnosing before planning — reproduce a failure, query a remote environment, inspect build config. When NOT to use: file search (use glob/grep/find_symbol/list_dir instead).',
+    description: `Run a shell command for research. Read-only inspection (ls, tree, git log/status/diff/show, wc, find, rg, jq, …) runs immediately. Anything else — test suites, package managers, cloud CLIs like az/gh/aws/kubectl — pauses for one user approval and is then remembered for the rest of the session. Commands that write or mutate (rm, mv, cp, chmod, sudo, mkdir, git push/commit, output redirection, piping into a shell) never change anything: you are a planner, so describe the change as a task and let the runner make it. ${SEALED_RUNS} When to use: diagnosing before planning — reproduce a failure, query a remote environment, inspect build config. When NOT to use: file search (use glob/grep/find_symbol/list_dir instead).`,
     properties: {
       command: { type: 'string', description: 'The shell command to run' },
+      sealed: { type: 'boolean', description: SEALED_PARAM },
     },
     required: ['command'],
   },

@@ -187,13 +187,15 @@ function truncatePath(path: string, max: number): string {
 function commandHeader(block: ToolBlock, cols: number, detailAll: boolean): string[] {
   const name = sanitize(block.headline.name);
   const keyArg = sanitize(block.headline.keyArg);
+  // A sealed run had no network, no home and kept nothing it wrote (ADR-0036 S4).
+  const tag = block.sealed ? ' · sealed' : '';
   if (detailAll) {
-    return wrap(`${name}(${keyArg})`, Math.max(1, cols - 2)).map((line, i) => (i === 0 ? `${commandMark(block)} ${line}` : `  ${line}`));
+    return wrap(`${name}(${keyArg})${tag}`, Math.max(1, cols - 2)).map((line, i) => (i === 0 ? `${commandMark(block)} ${line}` : `  ${line}`));
   }
   const open = `● ${name}(`;
-  const room = cols - width(open) - 1;
+  const room = cols - width(open) - 1 - width(tag);
   const cut = PATH_LIKE.test(keyArg) ? truncatePath(keyArg, room) : truncate(keyArg, room);
-  const text = room > 1 ? `${open}${cut})` : truncate(`${open}${keyArg})`, cols);
+  const text = room > 1 ? `${open}${cut})${tag}` : truncate(`${open}${keyArg})${tag}`, cols);
   return [`${commandMark(block)}${text.slice(1)}`];
 }
 

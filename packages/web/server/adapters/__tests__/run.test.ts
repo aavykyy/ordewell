@@ -155,3 +155,19 @@ describe('run — an aborted planning turn kills the child', () => {
     expect(r.stdout).not.toContain('should not run');
   });
 });
+
+describe.skipIf(process.platform === 'win32')('run — a sealed run (ADR-0036 S1)', () => {
+  it('is killed at its wall time with a signal the command cannot trap', async () => {
+    const started = Date.now();
+    const r = await run('/bin/sh', ['-c', "trap '' TERM; sleep 5"], { timeout: 300, sealed: true });
+    expect(r.code).not.toBe(0);
+    expect(Date.now() - started).toBeLessThan(3_000);
+  });
+
+  it('answers soon after it exits, though a process it left behind holds its output open', async () => {
+    const started = Date.now();
+    const r = await run('/bin/sh', ['-c', 'sleep 5 & echo done'], { timeout: 10_000, sealed: true });
+    expect(r).toMatchObject({ code: 0, stdout: 'done\n' });
+    expect(Date.now() - started).toBeLessThan(3_000);
+  });
+});
