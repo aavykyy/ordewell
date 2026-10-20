@@ -4,7 +4,7 @@
 each on its own runner, model and branch. Read and change the plan before anything
 runs, then review the result before it reaches your branch.
 
-![The planning loop](https://raw.githubusercontent.com/ordewell/ordewell/main/assets/readme/vscode-panel-loop.gif)
+![Ordewell in VS Code: a goal typed into the panel becomes a plan with a runner and model on each task, three tasks run in parallel, and the supervisor reports on the result (sped up in places)](https://raw.githubusercontent.com/ordewell/ordewell/main/assets/readme/vscode-panel-loop.gif)
 
 ## Features
 
