@@ -2,8 +2,9 @@ import type { Task } from '../models/Task';
 import type { PlanStore } from './PlanStore';
 import type { IsolationRunController } from './IsolationRunController';
 import { classifyAttempt, mergeExcludes } from './attemptKind';
-import { blockingFailures } from './blocking';
+import { blockingFailures, planBlocks } from './blocking';
 import { scriptBodyOf } from '../models/ScriptTask';
+import { betweenRounds, checkOf, loopRoundOf } from '../models/Loop';
 
 /**
  * Why a task cannot start now: the one start rule (ADR-0034), which the
@@ -14,6 +15,12 @@ import { scriptBodyOf } from '../models/ScriptTask';
 export type StartWait =
   /** Under way, waiting on the user, or ended: only a retry, a continue or a resume starts it again. */
   | { kind: 'started' }
+  /**
+   * A loop's check between rounds (ADR-0045 L3): the loop runs it again, as
+   * round `round` of `maxRounds`, once its body has passed and landed;
+   * `waiting` is the body that has not yet.
+   */
+  | { kind: 'repeating'; round: number; maxRounds: number; waiting: string[] }
   /** Mark complete is landing its work. */
   | { kind: 'completing' }
   /** An AI task with no prompt yet, or a script task with no body to run: there is nothing to run. */
@@ -24,6 +31,8 @@ export type StartWait =
   | { kind: 'on-hold' }
   /** The failed tasks it waits on through its dependencies (ADR-0034). */
   | { kind: 'blocked'; failed: string[] }
+  /** In a loop's body, whose check has not found the work wanting this round: it runs only if `check` fails (ADR-0045 L4). */
+  | { kind: 'loop-check'; check: string }
   /** What its dependencies still hold it back for (see {@link unmetDependencies}). */
   | { kind: 'dependencies'; waiting: string[] }
   /** A force start queued behind the dependencies still under way or yet to run, which starts once they finish. */
@@ -140,15 +149,19 @@ export function waitOf<K extends StartWaitKind>(waits: readonly StartWait[], kin
 /** What one judgement of the whole plan reads, worked out once however many tasks it judges. */
 interface PlanJudgement {
   blocked(): ReadonlyMap<string, string[]>;
+  /** The loops' checks between rounds whose loop goes on (ADR-0045 L3). */
+  repeating(): ReadonlySet<string>;
   /** The runners a task waits on the usage limit of. */
   limited(): ReadonlySet<string>;
 }
 
 function judgeOnce(store: StartRuleInput['store']): PlanJudgement {
-  let blocked: ReadonlyMap<string, string[]> | undefined;
+  let blocks: ReturnType<typeof planBlocks> | undefined;
   let limited: ReadonlySet<string> | undefined;
+  const judged = () => (blocks ??= planBlocks(store.allTasks));
   return {
-    blocked: () => (blocked ??= blockingFailures(store.allTasks)),
+    blocked: () => judged().blocked,
+    repeating: () => judged().repeating,
     limited: () => (limited ??= new Set(store.allTasks
       .filter((t) => t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit')
       .map((t) => store.resolveTaskRunner(t)))),
@@ -160,15 +173,27 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   const byHand = task.type === 'user';
   const queued = input.queued.has(task.id);
   const waits: StartWait[] = [];
-  if (task.status !== 'pending' && task.status !== 'approved') waits.push({ kind: 'started' });
+  if (task.status !== 'pending' && task.status !== 'approved') {
+    // The loop starts its check again; nobody has to (ADR-0045 L5).
+    if (task.loop && plan.repeating().has(task.id)) {
+      const waiting = task.loop.body.filter((id) => !landed(id, store, runs));
+      waits.push({ kind: 'repeating', round: loopRoundOf(task) + 1, maxRounds: task.loop.maxRounds, waiting });
+    } else waits.push({ kind: 'started' });
+  }
   if (input.completing.has(task.id)) waits.push({ kind: 'completing' });
   if (task.type === 'ai' ? !task.prompt : task.type === 'script' && !scriptBodyOf(task)) waits.push({ kind: 'no-prompt' });
   if (!input.approved(task.id)) waits.push({ kind: 'unapproved' });
   if (!forced && input.onHold.has(task.id)) waits.push({ kind: 'on-hold' });
   const failed = forced ? [] : plan.blocked().get(task.id) ?? [];
   if (failed.length > 0) waits.push({ kind: 'blocked', failed });
+  // A body runs only for its check: until the check fails this round, that is
+  // what it waits for, not a dependency to finish. A force start still queues
+  // behind the check, as behind any dependency under way.
+  const check = forced || queued ? undefined : checkOf(store.allTasks, task.id);
+  const forCheck = !!check && UNDECIDED.has(check.status);
+  if (forCheck) waits.push({ kind: 'loop-check', check: check.id });
   // A forced start goes past a failure, so only what is still under way holds it.
-  const waiting = forced || queued ? underWay(task, store, runs, plan) : unmetDependencies(task, store, runs);
+  const waiting = (forced || queued ? underWay(task, store, runs, plan) : unmetDependencies(task, store, runs)).filter((id) => !forCheck || id !== check.id);
   if (waiting.length > 0) waits.push(queued ? { kind: 'queued', waiting } : { kind: 'dependencies', waiting });
   if (input.merging && mergeExcludes(classifyAttempt(store.isOps(task.id)))) waits.push({ kind: 'merging' });
   // A script task runs on no runner, so no runner's limit holds it (ADR-0035).
@@ -185,8 +210,23 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   return waits;
 }
 
+/** A check's statuses before it has found anything this round: not run yet, under way, or waiting on the user. */
+const UNDECIDED: ReadonlySet<string> = new Set(['pending', 'approved', 'in_progress', 'awaiting_user']);
+
 /** What the dependency rule reads of the plan. */
 type DependencyStore = Pick<PlanStore, 'allTasks' | 'get' | 'isCompleted' | 'isSkipped'>;
+
+/**
+ * A task's dependencies the dependency rule holds it to. A body task's
+ * dependency on its own check between rounds is met: the check's report is
+ * what it fixes, and the check runs again only after it (ADR-0045 L4).
+ */
+function heldTo(task: Readonly<Pick<Task, 'dependencies'> & Partial<Pick<Task, 'id'>>>, store: Pick<PlanStore, 'get'>): readonly string[] {
+  return task.dependencies.filter((id) => {
+    const dep = store.get(id);
+    return !(dep && task.id !== undefined && betweenRounds(dep) && dep.loop?.body.includes(task.id));
+  });
+}
 
 /**
  * The tasks a task's dependencies still hold it back for, nearest first and
@@ -201,11 +241,11 @@ type DependencyStore = Pick<PlanStore, 'allTasks' | 'get' | 'isCompleted' | 'isS
  * finish (ADR-0034), so only work still under way or yet to run is waited for.
  */
 export function unmetDependencies(
-  task: Readonly<Pick<Task, 'dependencies'>>,
+  task: Readonly<Pick<Task, 'dependencies'> & Partial<Pick<Task, 'id'>>>,
   store: DependencyStore,
   runs: Pick<IsolationRunController, 'openRecord'>,
 ): string[] {
-  return waitingBehind(task.dependencies, store, runs, { pastFailures: false });
+  return waitingBehind(heldTo(task, store), store, runs, { pastFailures: false });
 }
 
 /**
@@ -214,7 +254,7 @@ export function unmetDependencies(
  * way or yet to run that it waits on is still waited for, through it.
  */
 function underWay(task: Readonly<Task>, store: DependencyStore, runs: Pick<IsolationRunController, 'openRecord'>, plan: PlanJudgement): string[] {
-  return waitingBehind(task.dependencies, store, runs, { pastFailures: true, blocked: plan.blocked });
+  return waitingBehind(heldTo(task, store), store, runs, { pastFailures: true, blocked: plan.blocked });
 }
 
 /**
@@ -254,7 +294,7 @@ function waitingBehind(
 }
 
 /** Completed, and in an isolated run merged into the integration branch. */
-function landed(id: string, store: Pick<PlanStore, 'isCompleted'>, runs: Pick<IsolationRunController, 'openRecord'>): boolean {
+export function landed(id: string, store: Pick<PlanStore, 'isCompleted'>, runs: Pick<IsolationRunController, 'openRecord'>): boolean {
   if (!store.isCompleted(id)) return false;
   const record = runs.openRecord(id);
   return !record || record.status === 'merged';
@@ -270,7 +310,8 @@ function landed(id: string, store: Pick<PlanStore, 'isCompleted'>, runs: Pick<Is
  * verification that landed nothing still means the work it verified. Empty
  * for a change task, and for any task of a run that never isolated. Judged
  * whatever the task's status: a retry of a failed ops task acts on the
- * checkout as a first start does.
+ * checkout as a first start does. A loop's check counts its body as what it
+ * acts on too: it runs again to check their work (ADR-0045 L9).
  */
 export function mergeGate(
   task: Readonly<Task>,
@@ -281,10 +322,10 @@ export function mergeGate(
   return ancestors(task, store).filter((id) => store.isCompleted(id) && runs.awaitsMerge(id));
 }
 
-/** Every task a task depends on, directly or through others, nearest first; a cycle is walked once. */
+/** Every task a task depends on, directly or through others, nearest first, and a check's body; a cycle is walked once. */
 function ancestors(task: Readonly<Task>, store: Pick<PlanStore, 'get'>): string[] {
   const seen = new Set<string>([task.id]);
-  const queue = [...task.dependencies];
+  const queue = [...task.dependencies, ...task.loop?.body ?? []];
   const found: string[] = [];
   for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
     if (seen.has(id)) continue;

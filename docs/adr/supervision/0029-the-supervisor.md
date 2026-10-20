@@ -91,7 +91,9 @@ A wake-up turn is opened by a batch from `WakePolicy`
 (`packages/core/src/services/WakePolicy.ts`), the pure, tested debounce #59
 built. The attention events are:
 
-- a task failed;
+- a task failed — a loop's check that fails a round with rounds left has not,
+  and wakes it once, when its loop runs out of rounds
+  ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md));
 - a task is waiting for input;
 - a task is waiting for approval;
 - a task went idle;
@@ -330,6 +332,10 @@ Checked at the seam, where the action executes:
 - **Wake-up rate**: more than six wake-ups within 30 minutes with no pass in
   between drops the run to Watch, with a notice. A supervisor that keeps waking
   and nothing passes is spinning.
+- **A loop's rounds are no retries**: the loop runs its check again itself, so
+  neither the retry limit nor the identical-retry guard counts a round, and a
+  supervisor's start or skip of a check between rounds is refused, since its
+  loop goes on without anyone (ADR-0045 L7).
 
 A start of a task that failed is a retry however it is asked for — `run_task`,
 or `run_plan`, which would start every failed task again. What the guards
@@ -563,3 +569,4 @@ until #30 exists.
 - 2026-10-18 — a plan scope that ends while a wake-up turn is out discards it with its timeout and grace, so its grace never abandons the next scope's turn or counts a failure there.
 - 2026-10-18 — the Merge all payload carries the merge result alone; whether the merge closed the run is the Session's `run_closed` ([ADR-0013](../isolation/0013-worktree-isolation.md)), and the payload cannot say it another way.
 - 2026-10-18 — loading a session keeps saved planner inputs and supervisor batches idle, without rearming the supervisor debounce.
+- 2026-10-21 — a loop's check failing a round with rounds left is no attention event and no failure the guards remember; it wakes the supervisor once, when its loop runs out of rounds, and the supervisor neither starts nor skips it between rounds ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md)).

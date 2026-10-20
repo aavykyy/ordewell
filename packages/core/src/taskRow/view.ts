@@ -1,5 +1,6 @@
 import { taskUsageSummary, type AttemptUsage, type TaskUsageSummary } from '../models/Usage';
 import type { AwaitingReason, TaskType } from '../models/Task';
+import type { TaskLoop } from '../models/Loop';
 import type { TaskIsolationState } from '../interfaces/IWorktreeIsolation';
 import { taskOrderLabel, taskRefOf } from '../services/TaskRefs';
 import { capConflictFiles } from '../services/conflictFiles';
@@ -60,6 +61,10 @@ interface PlanRefTask {
   status?: string;
   dependencies?: readonly string[];
   subtasks?: readonly PlanRefTask[];
+  /** A loop's check and its round, read so its dependents are not shown blocked between rounds (ADR-0045 L3). */
+  loop?: TaskLoop;
+  loopRound?: number;
+  verdict?: { outcome: string; reported?: string } | null;
 }
 
 export interface TaskRowContext {
@@ -146,7 +151,10 @@ export const namedRepos = (repos: readonly string[] | undefined): string[] => (r
 const filesOf = (files: string[] | undefined): string | null => (files?.length ? capConflictFiles(files) : null);
 
 const asBlocking = (tasks: readonly PlanRefTask[]): BlockingSubject[] =>
-  tasks.map((t) => ({ id: t.id, status: t.status ?? '', dependencies: t.dependencies ?? [], subtasks: asBlocking(t.subtasks ?? []) }));
+  tasks.map((t) => ({
+    id: t.id, status: t.status ?? '', dependencies: t.dependencies ?? [], subtasks: asBlocking(t.subtasks ?? []),
+    ...(t.loop ? { loop: t.loop, loopRound: t.loopRound, ...(t.verdict ? { verdict: t.verdict } : {}) } : {}),
+  }));
 
 /** What blocks a task not started, read off the plan tree; empty without one that carries statuses. */
 function blockedBy(task: TaskRowSubject, tasks: readonly PlanRefTask[] | undefined): string[] {

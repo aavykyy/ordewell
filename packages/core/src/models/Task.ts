@@ -5,6 +5,7 @@ import type { ExecutionRecord, SupervisorLevel } from './Execution';
 import type { SkillSource } from '../services/SkillsService';
 import type { SupervisionMemorySnapshot } from '../services/LoopGuards';
 import type { SupervisorSnapshot } from '../services/Supervisor';
+import type { TaskLoop } from './Loop';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
 import { subtreeIds, walkPlan } from '../services/PlanTree';
 
@@ -32,6 +33,15 @@ export interface Verdict {
   reason: string;
   checks: VerificationCheck[];
   decidedAt: string;
+  /**
+   * What the attempt's evidence said of the work: the status the runner's
+   * `task_complete` call reported, or a script's exit read the same way —
+   * `done` on exit 0, `failed` on a non-zero exit, a signal or its time limit,
+   * `blocked` when it could not start. A loop starts a round only on `failed`
+   * (ADR-0045 L2). Absent when nothing reported: a runner that exited without
+   * the call, Mark complete, a stopped script, a verdict saved before it was kept.
+   */
+  reported?: 'done' | 'failed' | 'blocked';
 }
 
 export interface TaskOutputSummary {
@@ -207,6 +217,14 @@ export interface Task {
   script?: string;
   /** A script task's time limit; absent means ten minutes (`DEFAULT_SCRIPT_TIMEOUT_MS`). */
   timeoutMs?: number;
+  /** Set on a loop's check (ADR-0045): the tasks that fix what it finds, and how many times it may run. */
+  loop?: TaskLoop;
+  /**
+   * The round of a loop's check's latest run, or the one it is running;
+   * absent is round 1. Execution state, saved so a reload resumes mid-round,
+   * and started over by a retry of the check (ADR-0045 L5, L7).
+   */
+  loopRound?: number;
 }
 
 export interface DiscoveredMode {
@@ -741,6 +759,8 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     ...(overrides.commands !== undefined ? { commands: overrides.commands.map((argv) => [...argv]) } : {}),
     ...(overrides.script !== undefined ? { script: overrides.script } : {}),
     ...(overrides.timeoutMs !== undefined ? { timeoutMs: overrides.timeoutMs } : {}),
+    ...(overrides.loop ? { loop: { body: [...overrides.loop.body], maxRounds: overrides.loop.maxRounds } } : {}),
+    ...(overrides.loopRound !== undefined ? { loopRound: overrides.loopRound } : {}),
   };
 }
 
@@ -878,15 +898,29 @@ export function addTaskToPlan(tasks: readonly Task[], partial: Partial<Task>): T
   return renumberTasks([...tasks, newTask]);
 }
 
+/**
+ * A removed task leaves every dependency on it, and every loop's body it was
+ * in (ADR-0045 L8): a loop it leaves with no body is no loop. Whether its
+ * removal may go ahead at all — a loop's check may not be removed — is the
+ * caller's to say.
+ */
 export function removeTaskFromPlan(tasks: readonly Task[], taskId: string): Task[] {
   const removed = subtreeIds(tasks, taskId);
   const prune = (level: readonly Task[]): Task[] => level
     .filter((t) => !removed.has(t.id))
-    .map((t) => ({
-      ...t,
-      dependencies: t.dependencies.filter((depId) => !removed.has(depId)),
-      subtasks: prune(t.subtasks),
-    }));
+    .map((t) => {
+      const pruned: Task = {
+        ...t,
+        dependencies: t.dependencies.filter((depId) => !removed.has(depId)),
+        subtasks: prune(t.subtasks),
+      };
+      if (!t.loop?.body.some((id) => removed.has(id))) return pruned;
+      const body = t.loop.body.filter((id) => !removed.has(id));
+      if (body.length > 0) return { ...pruned, loop: { ...t.loop, body } };
+      delete pruned.loop;
+      delete pruned.loopRound;
+      return pruned;
+    });
   return renumberTasks(prune(tasks));
 }
 
@@ -1001,6 +1035,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
         carriedFrom: prior?.carriedFrom,
         attemptSkills: prior?.attemptSkills,
         attemptUsage: prior?.attemptUsage,
+        loopRound: prior?.loopRound,
         // Where a task that has run ran is fixed, like its runner session (ADR-0020).
         ...(prior?.status === 'failed' ? { ops: prior.ops } : {}),
         forcedPastGate: prior?.forcedPastGate,

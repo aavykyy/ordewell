@@ -585,6 +585,9 @@ export class ExecutionCommands {
     if (task.status === 'completed') return { refusal: `${capitalize(label)} has already completed. ${voice.completed}` };
     const skipped = this.skippedRefusal(located, actor);
     if (skipped) return { refusal: skipped };
+    // Only the user's retry starts a check's rounds over (ADR-0045 L7).
+    const repeating = how === 'run' || actor.kind !== 'user' ? this.betweenRounds(located, tasks) : null;
+    if (repeating) return { refusal: repeating };
     const settled = task.status === 'failed' || task.status === 'awaiting_user' || task.status === 'skipped';
     if (how === 'run' && settled) {
       const next = task.status === 'awaiting_user' && task.awaitingReason === 'input'
@@ -598,6 +601,10 @@ export class ExecutionCommands {
     const failed = (waitOf(waits, 'blocked')?.failed ?? []).flatMap((id) => this.located(id, tasks) ?? []);
     if (failed.length > 0) {
       return { refusal: `${capitalize(label)} is blocked: ${named(failed)} failed. Retry ${failed.length === 1 ? 'it' : 'them'} first.` };
+    }
+    const check = this.located(waitOf(waits, 'loop-check')?.check ?? '', tasks);
+    if (check) {
+      return { refusal: `${capitalize(label)} is in the body of the loop of ${describe(check)}: it runs only if that check fails, and the loop starts it then.` };
     }
     const approval = this.unapproved(located, actor);
     if (approval && 'refusal' in approval) return approval;
@@ -745,6 +752,8 @@ export class ExecutionCommands {
     }
     const skipped = this.skippedRefusal(located, actor);
     if (skipped) return { refusal: skipped };
+    const repeating = actor.kind !== 'user' ? this.betweenRounds(located) : null;
+    if (repeating) return { refusal: repeating };
     const eligible = continuability(task);
     if (!eligible.ok) return { refusal: `${eligible.reason} ${voice.startOver}` };
     if (!message?.trim()) return { refusal: `Continuing ${label} in its saved session needs a message: what the runner should do next.` };
@@ -922,6 +931,19 @@ export class ExecutionCommands {
   }
 
   /**
+   * Why a loop's check between rounds is not started from the seam: its loop
+   * runs it again itself, once its body has landed (ADR-0045 L5). Null for
+   * any other task.
+   */
+  private betweenRounds(located: Located, tasks?: readonly Task[]): string | null {
+    const repeating = waitOf(this.host.startWaits(located.task), 'repeating');
+    if (!repeating) return null;
+    const fix = repeating.waiting.flatMap((id) => this.located(id, tasks) ?? []);
+    const when = fix.length > 0 ? `once ${named(fix)} ${fix.length === 1 ? 'has' : 'have'} passed and landed` : 'next';
+    return `${capitalize(describe(located))} is between rounds of its loop: it runs again on its own, as round ${repeating.round} of ${repeating.maxRounds}, ${when}. Leave it to the loop.`;
+  }
+
+  /**
    * A skip ends a task without a verdict and lands nothing, so it never
    * vouches for work. Anyone but the user names why, and the supervisor only
    * gives up on a task that already needs someone: failed, blocked, or
@@ -936,7 +958,10 @@ export class ExecutionCommands {
     if (task.status === 'skipped') return { refusal: `${capitalize(label)} is already skipped.` };
     if (actor.kind !== 'user') {
       if (!why) return { refusal: `Skipping ${label} needs a reason: it is shown to the user and told to the tasks that depend on it.` };
-      const needsSomeone = task.status === 'failed' || task.status === 'awaiting_user' || waitOf(this.host.startWaits(task), 'blocked') !== undefined;
+      const waits = this.host.startWaits(task);
+      // A check between rounds needs no one: its loop goes on (ADR-0045 L3).
+      if (waitOf(waits, 'repeating')) return { refusal: `${capitalize(label)} is between rounds of its loop, which goes on by itself: it needs no one, so the supervisor does not skip it.` };
+      const needsSomeone = task.status === 'failed' || task.status === 'awaiting_user' || waitOf(waits, 'blocked') !== undefined;
       if (!needsSomeone) return { refusal: `${capitalize(label)} has not started and nothing blocks it: the supervisor skips only a task that failed, is blocked or is waiting for input.` };
     }
     return {

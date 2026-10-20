@@ -10,6 +10,7 @@ import { SupervisionMemory, type GuardTarget, type GuardTrip } from './LoopGuard
 import { SUPERVISOR_LEVEL_LABEL } from './runSettingsText';
 import { executionSummary } from './SessionMessage';
 import { blockingFailures } from './blocking';
+import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 
 /** Supervisor levels, lowest first: an automatic lowering only ever goes down. */
 const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 };
@@ -146,8 +147,14 @@ export class RunSupervision {
     this.supervisor.observe(event);
   }
 
-  /** A task settled on its own: the guards remember a failure's shape, and the supervisor hears of it. */
+  /**
+   * A task settled on its own: the guards remember a failure's shape, and the
+   * supervisor hears of it. A loop's check that failed a round with rounds
+   * left is neither: the loop goes on with no one asked, so it counts for no
+   * guard and wakes no one (ADR-0045 L3, L7).
+   */
   taskSettled(task: Readonly<Task>): void {
+    if (betweenRounds(task)) return;
     this.guards.settled(task);
     const event = this.settledEvent(task);
     if (event) this.supervisor.observe(event);
@@ -276,7 +283,12 @@ export class RunSupervision {
   private settledEvent(task: Readonly<Task>): RunEventInput | null {
     const taskId = task.id;
     if (task.status === 'completed') return { kind: 'task_passed', taskId };
-    if (task.status === 'failed') return { kind: 'task_failed', taskId, ...(task.verdict?.reason ? { detail: task.verdict.reason } : {}) };
+    if (task.status === 'failed') {
+      // One event for the loop's whole run, saying how many rounds it took (ADR-0045 L6).
+      const rounds = outOfRounds(task) ? `its loop ran out of rounds: it failed all ${loopRoundOf(task)}. ` : '';
+      const detail = `${rounds}${task.verdict?.reason ?? ''}`.trim();
+      return { kind: 'task_failed', taskId, ...(detail ? { detail } : {}) };
+    }
     if (task.status !== 'awaiting_user') return null;
     switch (task.awaitingReason) {
       case 'checkpoint': {

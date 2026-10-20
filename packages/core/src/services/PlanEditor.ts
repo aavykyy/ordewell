@@ -16,6 +16,7 @@ import { checkTaskSkillsEdit, type SkillLookup } from './taskSkills';
 import { createTask, opsFlag, skillNames, updateTaskInPlan, type DiscoveredModel, type LegacyPlanState, type RunnerId, type Task, type TaskModelAssignment } from '../models/Task';
 import type { RunnerModelRef } from '../models/RunnerCommand';
 import { clearedBodyFields } from '../models/ScriptTask';
+import { loopRemovalRefusal, loopSpec } from '../models/Loop';
 
 /** The fields that decide what a task runs on: an edit that touches none of them leaves the assignment as it stands. */
 const ASSIGNMENT_FIELDS = ['assignedRunner', 'assignedModel', 'taskMode', 'type'] as const satisfies readonly (keyof Task)[];
@@ -346,7 +347,11 @@ export class PlanEditor {
    * deleting their own task means it.
    */
   async removeTask(taskId: string): Promise<LegacyPlanState | null> {
-    if (!this.plan() || !this.store.get(taskId)) return null;
+    const task = this.store.get(taskId);
+    if (!this.plan() || !task) return null;
+    // Its body would be left to run on its own (ADR-0045 L8); a body task leaves its loop as it goes.
+    const refused = loopRemovalRefusal(task);
+    if (refused) throw new PlanEditError(refused);
     for (const id of subtreeIds(this.store.planTasks, taskId)) await this.scheduler.releaseTask(id);
     return this.commit(() => (this.store.remove(taskId), true));
   }
@@ -447,6 +452,13 @@ function editableFields(given: Partial<Task>): Partial<Task> {
     if (key in given) (fields as Record<string, unknown>)[key] = (given as Record<string, unknown>)[key];
   }
   if ('ops' in fields) fields.ops = opsFlag(fields.ops);
+  if ('loop' in fields) {
+    // `null` drops the loop, and the round it was in with it (ADR-0045).
+    const spec = loopSpec(fields.loop);
+    if ('error' in spec) throw new PlanEditError(`This task ${spec.error}`);
+    fields.loop = spec.loop;
+    if (!spec.loop) fields.loopRound = undefined;
+  }
   return clearedBodyFields(fields);
 }
 

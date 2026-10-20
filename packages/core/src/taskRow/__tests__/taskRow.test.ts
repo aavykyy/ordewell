@@ -289,6 +289,19 @@ describe('the row view, every status against every annotation', () => {
     expect(blockedByLabel(['#1', '#2.1'])).toBe('Blocked by #1, #2.1');
   });
 
+  it('does not show a loop\'s check between rounds as blocking its dependents, until its loop stops (ADR-0045 L3)', () => {
+    const tree = (fix: string) => [
+      { id: 'c', order: 1, title: 'Review', status: 'failed', dependencies: [], loop: { body: ['f'], maxRounds: 3 }, verdict: { outcome: 'fail', reported: 'failed' } },
+      { id: 'f', order: 2, title: 'Fix', status: fix, dependencies: ['c'] },
+      { id: 'd', order: 3, title: 'Ship', status: 'pending', dependencies: ['c'] },
+    ];
+
+    expect(taskRowView(subject({ id: 'd', order: 3, dependencies: ['c'] }), { tasks: tree('in_progress') })).toMatchObject({ status: 'todo', blockedBy: null });
+    expect(taskRowView(subject({ id: 'd', order: 3, dependencies: ['c'] }), { tasks: tree('failed') })).toMatchObject({ status: 'blocked', blockedBy: ['#1'] });
+    const notRun = [{ ...tree('pending')[0], status: 'pending', verdict: null }, ...tree('pending').slice(1)];
+    expect(taskRowView(subject({ id: 'd', order: 3, dependencies: ['c'] }), { tasks: notRun })).toMatchObject({ status: 'todo', blockedBy: null });
+  });
+
   it('offers Skip on a task a failure blocks, though its own status is not blocked', () => {
     const tree = [
       { id: 't1', order: 1, title: 'Setup', status: 'failed', dependencies: [] },

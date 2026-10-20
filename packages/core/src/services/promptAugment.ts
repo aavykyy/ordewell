@@ -3,6 +3,7 @@ import { flattenTasksWithParents } from '../models/Task';
 import type { PreservedWork, PreviousWork } from '../interfaces/IWorktreeIsolation';
 import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
+import { betweenRounds, loopRoundOf } from '../models/Loop';
 
 const MAX_TAIL_CHARS = 500;
 /** Whole findings fit; a runaway summary does not bloat the session file, which holds every task's report. */
@@ -21,6 +22,8 @@ export interface PriorOutput {
   logTail: string;
   /** Set for a dependency that was skipped: nothing of it landed. `reason` is the skipper's, when they gave one. */
   skipped?: { reason?: string };
+  /** Set for the dependent's own loop's check, between rounds: the round its report is from (ADR-0045 L4). */
+  round?: { round: number; maxRounds: number };
 }
 
 function capReport(report: string): string {
@@ -46,6 +49,8 @@ export function collectDirectDependencyOutputs(task: Task, allTasks: readonly Ta
     const skipped = dep.status === 'skipped' ? { ...(dep.skipReason ? { reason: dep.skipReason } : {}) } : undefined;
     // A skip is said even of a task that never ran: the dependent starts without it.
     if (!deps.has(dep.id) || (!dep.outputSummary && !skipped)) continue;
+    // A check's summary is its latest round's: the loop clears it as the check runs again.
+    const round = dep.loop?.body.includes(task.id) && betweenRounds(dep) ? { round: loopRoundOf(dep), maxRounds: dep.loop.maxRounds } : undefined;
     out.push({
       label,
       title: dep.title,
@@ -53,6 +58,7 @@ export function collectDirectDependencyOutputs(task: Task, allTasks: readonly Ta
       report: dep.outputSummary?.report,
       logTail: dep.outputSummary?.logTail ?? '',
       ...(skipped ? { skipped } : {}),
+      ...(round ? { round } : {}),
     });
   }
   return out;
@@ -88,7 +94,10 @@ export function renderPriorOutputs(outputs: PriorOutput[]): string {
       if (o.skipped && !o.reviewReason && !o.report && !o.logTail) return `${heading}\n${skip}`;
       const reason = o.reviewReason || '(no review note)';
       const output = o.report ? `- Report:\n${indent(dependencyReport(o.report))}` : `- Tail:\n${o.logTail ? indent(o.logTail) : '  (no output captured)'}`;
-      return `${heading}\n${skip ? `${skip}\n` : ''}- Review: ${reason}\n${output}`;
+      const round = o.round
+        ? `- The check of your loop: it failed round ${o.round.round} of ${o.round.maxRounds}, and you are part of the fix. Fix what its report found; it runs again once the fix has landed.\n`
+        : '';
+      return `${heading}\n${skip ? `${skip}\n` : ''}${round}- Review: ${reason}\n${output}`;
     });
   return `## Prior task outputs\n\n${blocks.join('\n\n')}`;
 }
