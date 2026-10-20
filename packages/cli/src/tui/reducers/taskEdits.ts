@@ -5,8 +5,13 @@ import { assignedModelFor, effortsForTask, modesForTask, runnerAccepts } from '.
 import { picker, pickerItemsFor } from './pickers';
 import { fail, step, withSession, type Step } from './shared';
 
+/** Why a manual or script task offers no executor choice; a script task runs no model (ADR-0035). */
+function noExecutor(task: TaskView, manual: string, script: string): string {
+  return task.type === 'script' ? `A script task runs no model, so ${script}` : `Manual tasks do not run an executor, so ${manual}`;
+}
+
 export function openTaskRunnerPicker(state: TuiState, task: TaskView): Step {
-  if (task.type !== 'ai') return fail(state, 'Manual tasks do not run on an executor, so they have no runner.');
+  if (task.type !== 'ai') return fail(state, noExecutor(task, 'they have no runner.', 'it has no runner.'));
   const action = { kind: 'set-task-runner' as const, taskId: task.id };
   return step(
     {
@@ -39,6 +44,7 @@ export function confirmRemoveTask(state: TuiState, task: TaskView): Step {
  */
 export function toggleTaskOps(state: TuiState, task: TaskView, subtask: boolean, to: boolean = !task.ops): Step {
   if (!state.sessionId) return fail(state, 'No active plan.');
+  if (task.type === 'script') return fail(state, 'A script task is an ops task already: it runs in your checkout.');
   if (task.type !== 'ai') return fail(state, 'Only an AI task can be an ops task: a manual task already runs outside any worktree.');
   if (subtask) return fail(state, 'A subtask runs with its parent; make the parent an ops task instead.');
   if (!!task.ops === to) return fail(state, `${refFor(state, task)} is already ${to ? 'an ops' : 'a change'} task.`);
@@ -88,7 +94,7 @@ export function openTaskDepsPicker(state: TuiState, task: TaskView): Step {
 }
 
 export function openTaskSkillsPicker(state: TuiState, task: TaskView): Step {
-  if (task.type !== 'ai') return fail(state, 'Manual tasks do not run an executor, so they take no skills.');
+  if (task.type !== 'ai') return fail(state, noExecutor(task, 'they take no skills.', 'it takes no skills.'));
   const action = { kind: 'set-task-skills' as const, taskId: task.id };
   const items = pickerItemsFor(state, action);
   if (items.length === 0) {
@@ -121,7 +127,7 @@ export function assignTaskSkills(state: TuiState, sessionId: string, task: TaskV
 }
 
 export function openTaskModePicker(state: TuiState, task: TaskView): Step {
-  if (task.type !== 'ai') return fail(state, 'Manual tasks do not have an executor mode.');
+  if (task.type !== 'ai') return fail(state, noExecutor(task, 'they have no executor mode.', 'it has no mode.'));
   const modes = modesForTask(state.modesByRunner, task);
   if (modes.length === 0) {
     return fail(state, `${task.assignedRunner ?? 'This runner'} declares no modes.`);
@@ -141,7 +147,7 @@ export function openTaskModePicker(state: TuiState, task: TaskView): Step {
 }
 
 export function openTaskModelPicker(state: TuiState, task: TaskView): Step {
-  if (task.type !== 'ai') return fail(state, 'Manual tasks do not have an executor model.');
+  if (task.type !== 'ai') return fail(state, noExecutor(task, 'they have no executor model.', 'it has no model.'));
   const action = { kind: 'set-task-model' as const, taskId: task.id };
   return step(
     {
@@ -161,7 +167,7 @@ export function openTaskModelPicker(state: TuiState, task: TaskView): Step {
 }
 
 export function openTaskEffortPicker(state: TuiState, task: TaskView): Step {
-  if (task.type !== 'ai') return fail(state, 'Manual tasks do not have a thinking effort.');
+  if (task.type !== 'ai') return fail(state, noExecutor(task, 'they have no thinking effort.', 'it has no thinking effort.'));
   if (!task.assignedModel) return fail(state, 'Choose a model for this task before setting its thinking effort.');
   const action = { kind: 'set-task-effort' as const, taskId: task.id };
   return step(
@@ -307,7 +313,7 @@ export function taskSkillsCommand(state: TuiState, args: string[]): Step {
   return taskCommand(state, args[0], (sessionId, taskId) => {
     const task = findTask(state.tasks, taskId)!;
     if (args.length < 2) return openTaskSkillsPicker(state, task);
-    if (task.type !== 'ai') return fail(state, 'Manual tasks do not run an executor, so they take no skills.');
+    if (task.type !== 'ai') return fail(state, noExecutor(task, 'they take no skills.', 'it takes no skills.'));
     const value = args.slice(1).join(' ');
     const names = value.toLowerCase() === 'none' ? [] : [...new Set(value.toLowerCase().split(/[,\s]+/).filter(Boolean))];
     const unknown = names.filter((name) => !state.taskSkills.some((s) => s.name === name));

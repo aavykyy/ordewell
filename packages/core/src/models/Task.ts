@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { PlanIsolation } from '../interfaces/IWorktreeIsolation';
 import type { AttemptUsage, PlannerUsage, ReportedWindow, UsageRecord, UsageTotals } from './Usage';
-import type { ExecutionRecord, SupervisorLevel } from './Execution';
+import type { ExecutionRecord, ScriptConsent, SupervisorLevel } from './Execution';
 import type { SkillSource } from '../services/SkillsService';
 import type { SupervisionMemorySnapshot } from '../services/LoopGuards';
 import type { SupervisorSnapshot } from '../services/Supervisor';
@@ -225,7 +225,26 @@ export interface Task {
    * and started over by a retry of the check (ADR-0045 L5, L7).
    */
   loopRound?: number;
+  /**
+   * A planner turn waits for this task's result (ADR-0037, R2): set when the
+   * tool that started it answered before it ended, and cleared once its end is
+   * reported, in a planner turn acting for whoever started it (R3).
+   */
+  reportTo?: TaskReportTo;
 }
+
+/**
+ * Who started a task whose result is owed to the planner (ADR-0037, R3): a
+ * planner turn in the user's conversation, or the supervisor, at its level
+ * then, with how the user consented to it (ADR-0035).
+ */
+export type TaskReportTo = { consent: ScriptConsent } & (
+  | { actor: 'planner-turn' }
+  | { actor: 'supervisor'; level: SupervisorLevel }
+);
+
+/** Whose authority a turn opened without the user acts with (ADR-0037, R3): the user's turn, or the supervisor's. */
+export type TurnAuthority = 'user' | 'supervisor';
 
 export interface DiscoveredMode {
   id: string;
@@ -506,6 +525,12 @@ export interface PendingPlanTurn {
   skills?: SkillLoad[];
   /** Force sent: it waits ahead of every input not forced, and its turn is its own (ADR-0023, F2). */
   forced?: true;
+  /**
+   * A supervisor input carrying a report the planner asked for (ADR-0037, R2),
+   * which opens a turn at every supervisor level: `user` for a task started in
+   * the user's turn, which the turn then acts as (R3).
+   */
+  report?: TurnAuthority;
 }
 
 /**
@@ -1039,6 +1064,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
         // Where a task that has run ran is fixed, like its runner session (ADR-0020).
         ...(prior?.status === 'failed' ? { ops: prior.ops } : {}),
         forcedPastGate: prior?.forcedPastGate,
+        reportTo: prior?.reportTo,
         subtasks: overlay(t.subtasks ?? [], prior?.subtasks ?? []),
       };
     });

@@ -151,6 +151,16 @@ const messageTaskInput = z.object({
   text: z.string().trim().min(1).describe('The message. A running task reads it at its next step; one waiting for input takes it as its answer.'),
 });
 
+// What the body holds is judged by the plan's rules, as a script task's in submit_plan is (ADR-0035).
+const runScriptInput = z.object({
+  title: z.string().trim().min(1).describe('What the script does, as its task in the plan is titled.'),
+  commands: z.array(z.array(z.string())).optional()
+    .describe('Argument vectors run in order with no shell, stopping at the first that fails, like [["git", "push", "origin", "main"]]. Exactly one of commands or script.'),
+  script: z.string().optional().describe('A script, run by the shell your run_command uses, for an effect that needs one (a pipe, a loop). Exactly one of commands or script.'),
+  timeoutMs: z.number().optional().describe('Its time limit in milliseconds; ten minutes when left out.'),
+  dependencies: z.array(taskRef).optional().describe('Tasks in the plan it runs after. It waits for the user to merge their work into their branch first.'),
+});
+
 const answerApprovalInput = z.object({
   task: taskRef,
   approval: z.string().optional().describe('Which request, when the task has more than one waiting; a refusal lists them.'),
@@ -177,6 +187,7 @@ export type RetryTaskArgs = z.infer<typeof retryTaskInput>;
 export type MessageTaskArgs = z.infer<typeof messageTaskInput>;
 export type SkipTaskArgs = z.infer<typeof skipTaskInput>;
 export type AnswerApprovalArgs = z.infer<typeof answerApprovalInput>;
+export type RunScriptArgs = z.infer<typeof runScriptInput>;
 
 /** What a handler answers with. `isError` marks a refusal the caller should act on. */
 export interface McpToolReply {
@@ -236,6 +247,7 @@ export interface PlannerToolHandler {
   messageTask?: Run<MessageTaskArgs>;
   answerApproval?: Run<AnswerApprovalArgs>;
   mergeAll?: Run<RunPlanArgs>;
+  runScript?: Run<RunScriptArgs>;
 }
 
 export interface McpTool<H> {
@@ -330,6 +342,8 @@ export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     answerApprovalInput, (h) => h.answerApproval?.bind(h), PLANNER_EXECUTES),
   tool('merge_all', 'Merge the run\'s landed work into the user\'s branch, as their Merge all does, opening the merge gates that wait on it. Only the supervisor at Act may, in a wake-up turn; otherwise the user presses Merge all.',
     runPlanInput, (h) => h.mergeAll?.bind(h), PLANNER_EXECUTES),
+  tool('run_script', 'Perform an exact effect yourself — a push, a tag, one setting on a cloud resource — as a script task: added to the plan and started at once, at the workspace root, with no model. Returns its verdict and the end of its output, or after a minute that it is still running; its result then reaches you in a run update when it ends. The user consents first: in Guarded, or in Full without autorun, they are asked on the approval card, shown the commands as written, and a denial leaves the task in the plan, not approved. For an effect that needs judgment, add an ops task instead; a change to repository files is a change task.',
+    runScriptInput, (h) => h.runScript?.bind(h), PLANNER_EXECUTES),
 ];
 
 export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [

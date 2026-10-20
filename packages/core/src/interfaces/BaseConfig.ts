@@ -216,6 +216,13 @@ export abstract class BaseConfig implements IConfig {
       .filter(Boolean);
   }
 
+  get effectAllowlist(): string[] {
+    return (process.env.ORDEWELL_EFFECT_ALLOW || '')
+      .split(/[,\n]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
   /**
    * Who plans when no surface setting names a planner: an explicit
    * AI_PROVIDER, then a vendor whose key is in the environment,

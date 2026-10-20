@@ -93,6 +93,8 @@ export interface IConfig {
   approvalPreApproved: string[];
   /** Whether the built-in allowlist of read-only command families and MCP tools applies. */
   approvalDefaults: boolean;
+  /** The user's effect allowlist rules (ADR-0035, `effectAllowlist.ts`), read on every request. It has no defaults. */
+  effectAllowlist: string[];
   /** How many fetches and searches one planner turn may make (ADR-0027). User-only, like the approval settings. */
   webReadBudget: number;
 

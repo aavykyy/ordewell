@@ -121,9 +121,70 @@ export function clearedBodyFields(changes: Partial<Task>): Partial<Task> {
 const PLAIN_WORD = /^[A-Za-z0-9_@%+=:,./-]+$/;
 
 /**
- * An argument vector as a reader would type it in a POSIX shell: a word is
- * quoted only where it needs to be. For reading only; nothing runs it.
+ * A character a reader cannot see for what it is: a control or format
+ * character (a bidirectional override among them), or a line or paragraph
+ * separator. Shown as itself, it could make the text read as something other
+ * than what runs.
+ */
+const UNSEEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+
+/**
+ * An argument vector as a reader would type it in a shell: a word is quoted
+ * only where it needs to be, and one holding a character a reader cannot see
+ * is written with escapes (`$'…'`), so a command is always one line and reads
+ * as what runs. For reading only; nothing runs it.
  */
 export function commandLine(argv: readonly string[]): string {
-  return argv.map((word) => (PLAIN_WORD.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`)).join(' ');
+  return argv.map(quotedWord).join(' ');
+}
+
+function quotedWord(word: string): string {
+  if (PLAIN_WORD.test(word)) return word;
+  if (!UNSEEN.test(word)) return `'${word.replace(/'/g, `'\\''`)}'`;
+  return `$'${[...word].map(escaped).join('')}'`;
+}
+
+const ESCAPES: Record<string, string> = { '\\': '\\\\', "'": "\\'", '\n': '\\n', '\r': '\\r', '\t': '\\t' };
+
+function escaped(char: string): string {
+  return ESCAPES[char] ?? (UNSEEN.test(char) ? codeOf(char) : char);
+}
+
+function codeOf(char: string): string {
+  const code = char.codePointAt(0) ?? 0;
+  const hex = code.toString(16).toUpperCase();
+  return code <= 0xff ? `\\x${hex.padStart(2, '0')}` : code <= 0xffff ? `\\u${hex.padStart(4, '0')}` : `\\U${hex.padStart(8, '0')}`;
+}
+
+/**
+ * A script task's body as the approval card shows it (ADR-0035), so the
+ * consent is to what will run: each command on a line of its own, or the
+ * script as written, then the time limit. A character a reader cannot see in
+ * a script, but for its line breaks and tabs, is shown as its code.
+ */
+export function scriptBodyText(body: ScriptBody): string {
+  const shown = 'commands' in body
+    ? body.commands.map(commandLine)
+    : [body.script.replace(/\r\n|[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (char) => (char === '\r\n' || char === '\n' || char === '\t'
+      ? char
+      : `<U+${(char.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}>`))];
+  return [...shown, '', `Time limit: ${timeLimitText(body.timeoutMs)}.`].join('\n');
+}
+
+/**
+ * A script task as a row shows it: the body {@link scriptBodyText} gives the
+ * approval card, so what the user read when consenting is what the plan lists.
+ * A task whose body the plan's rules refuse says so rather than showing nothing.
+ */
+export function scriptTaskText(task: BodyFields): string {
+  const body = scriptBodyOf(task);
+  return body ? scriptBodyText(body) : 'This script task has no valid body, so it cannot run.';
+}
+
+/** A time limit in the largest units it is a whole number of: "10 minutes", "90 seconds". */
+export function timeLimitText(ms: number): string {
+  const units: [number, string][] = [[3_600_000, 'hour'], [60_000, 'minute'], [1_000, 'second'], [1, 'millisecond']];
+  const [size, name] = units.find(([unit]) => ms % unit === 0) ?? units[units.length - 1];
+  const n = ms / size;
+  return `${n} ${name}${n === 1 ? '' : 's'}`;
 }

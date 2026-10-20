@@ -1926,6 +1926,19 @@ export class TaskOrchestrator {
   }
 
   /**
+   * Start an approved task once its merge gate opens, never past it: a script
+   * task `run_script` added behind work not merged into the user's branch yet
+   * (ADR-0035). A scheduler driving the run starts it as it would any task;
+   * otherwise it waits with the queued force starts, confirmed past nothing,
+   * so it starts once Merge all has merged that work, and a Stop withdraws it.
+   */
+  startAtGate(taskId: string): void {
+    if (!this.store.get(taskId) || this.attempts.has(taskId)) return;
+    if (!this.isScheduling) this.queuedStarts.set(taskId, { pastGate: [] });
+    this.emit('onTaskChanged');
+  }
+
+  /**
    * A forced start, from its run opening to its claim. It is judged again once
    * the run has opened, against the task as it stands then, which is what
    * the claim reads and runs. A queued one that something holds back again

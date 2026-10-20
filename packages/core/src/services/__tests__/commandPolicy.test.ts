@@ -276,6 +276,14 @@ describe('classifyCommand', () => {
       expect(reason).toMatch(/read-only planner/i);
       expect(reason).toMatch(/runner/i);
     });
+
+    it.each(['git push origin main', 'git tag v1.2.0', 'npm publish', 'kubectl apply -f deploy.yaml', 'wget --post-data=a=b -O - https://example.com/hook'])(
+      'points %s at run_script for an exact effect, and at an ops task for one that needs judgment (ADR-0035)', (command) => {
+        const { tier, reason } = classifyCommand(command);
+        expect(tier).toBe('refuse');
+        expect(reason).toContain('call run_script with the exact commands');
+        expect(reason).toContain('ops task');
+      });
   });
 
   describe('chained commands are classified per stage, not by the string as a whole', () => {

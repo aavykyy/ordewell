@@ -230,8 +230,9 @@ describe('the row view, every status against every annotation', () => {
     expect(taskRowView(subject()).kind).toBe('ai');
     expect(taskRowView(subject({ ops: true })).kind).toBe('ops');
     expect(taskRowView(subject({ type: 'user', ops: true })).kind).toBe('user');
-    // An ops task by nature (ADR-0035), drawn as one until surfaces draw its body.
-    expect(taskRowView(subject({ type: 'script' })).kind).toBe('ops');
+    // An ops task by nature (ADR-0035), but drawn with its body, so it has a kind of its own.
+    expect(taskRowView(subject({ type: 'script' })).kind).toBe('script');
+    expect(taskRowView(subject({ type: 'script', ops: true })).kind).toBe('script');
   });
 
   it('offers a script task the force start an AI task gets, but never the ops toggle', () => {

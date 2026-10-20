@@ -235,6 +235,30 @@ describe('handleStatus --output', () => {
     srv.close();
   });
 
+  it('tags a script task [SCR] in the task list (ADR-0035)', async () => {
+    const session = {
+      meta: SESSION.meta,
+      plan: {
+        pendingTasks: [
+          { id: 't1', order: 1, title: 'Change', type: 'ai', status: 'pending', dependencies: [] },
+          { id: 't2', order: 2, title: 'Push the tag', type: 'script', status: 'pending', dependencies: [], commands: [['git', 'push']] },
+        ],
+      },
+    };
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(session));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
+
+    const rows = stripAnsi(stdout).split('\n').filter((line) => /^\s+\d+\. /.test(line));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).not.toContain('[SCR]');
+    expect(rows[1]).toMatch(/\[[^\]]+\] \[SCR\] Push the tag/);
+    srv.close();
+  });
+
   // The flag every surface shows for a task outside the user's scope (ADR-0043).
   it('flags a task on a runner switched off or a model off its allowlist, subtasks too, and never a finished one', async () => {
     const session = {

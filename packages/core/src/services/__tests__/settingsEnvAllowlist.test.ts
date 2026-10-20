@@ -48,9 +48,10 @@ describe('admitSettingsEnv', () => {
       ORDEWELL_AUTONOMOUS_MODE: 'true',
       ORDEWELL_APPROVAL_MODE: 'yolo',
       ORDEWELL_APPROVAL_ALLOW: 'rm -rf /',
+      ORDEWELL_EFFECT_ALLOW: 'git push *',
     });
     expect(accepted).toEqual({});
-    expect(rejected).toEqual(['ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_APPROVAL_MODE', 'ORDEWELL_APPROVAL_ALLOW']);
+    expect(rejected).toEqual(['ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_APPROVAL_MODE', 'ORDEWELL_APPROVAL_ALLOW', 'ORDEWELL_EFFECT_ALLOW']);
   });
 
   it('refuses the settings-path override — the settings service mkdirs recursively for it', () => {

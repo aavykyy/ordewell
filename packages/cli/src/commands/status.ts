@@ -111,8 +111,8 @@ function printOneSession(
     const icon = iconFor(blocked.has(t.id) ? 'blocked' : t.status);
     const model = t.assignedModel ? ` (${t.assignedModel.modelLabel})` : '';
     const shortId = (t.id ?? '').slice(-8);
-    console.log(`  ${taskOrderLabel(t).padStart(2)}. ${icon} [${shortId}] ${t.title}${model}`);
     const row = taskRowView({ ...t, dependencies: t.dependencies ?? [], waitsForApproval: waitsForApproval(t, record) }, { tasks: allTasks, runnerScope });
+    console.log(`  ${taskOrderLabel(t).padStart(2)}. ${icon} [${shortId}]${row.kind === 'script' ? ' [SCR]' : ''} ${t.title}${model}`);
     const waiting = approval(row, taskOrderLabel(t));
     if (waiting) console.log(`      ${waiting}`);
     if (row.assignmentFlag) console.log(`      ⚠ ${assignmentFlagText(row)}`);

@@ -920,8 +920,75 @@ describe('the command seam\'s extension points', () => {
       startWaits: () => [], waitingRequests: () => [],
       runPlan: vi.fn(), joinRun: vi.fn(async () => ''), startTask: vi.fn(), forceStart: vi.fn(), markComplete: vi.fn(), markNotDone: vi.fn(), interrupt: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(), resumeNow: vi.fn(),
       messageTask: vi.fn(), forceMessage: vi.fn(), forceSendQueued: vi.fn(), removeQueued: vi.fn(), cancelResume: vi.fn(), awaitsCheckpoint: () => false, answerCheckpoint: vi.fn(), approveReview: vi.fn(), answerRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, editedTasks: () => tasks, heldHandle: () => undefined, deferUntilLanded: vi.fn(), queuedNotRun: vi.fn(),
+      heldPlan: () => false, draftScript: () => ({ ok: false, errors: ['not here'] }), addScript: vi.fn(), startAtGate: vi.fn(), awaitEnd: vi.fn(async () => {}), owe: vi.fn(), reportTail: () => undefined,
     };
   }
+
+  /** A host whose plan takes the script task `run_script` drafts, which then runs until its wait ends. */
+  function scriptHost() {
+    const host = stubHost();
+    const tasks = [...host.tasks()!];
+    const drafted = task('s2', 2, { type: 'script', prompt: undefined, taskMode: undefined, commands: [['git', 'push', 'origin', 'feature/login']] });
+    return {
+      ...host, tasks: () => tasks, editedTasks: () => tasks, taskApproved: () => false, running: () => false,
+      draftScript: () => ({ ok: true as const, task: drafted }),
+      addScript: vi.fn((added: Task) => { tasks.push(added); }),
+    };
+  }
+
+  it('lets an effect allowlist rule the user wrote pre-approve a commands body, and says so in the record (ADR-0035)', async () => {
+    const host = scriptHost();
+    const request = vi.fn();
+    const effects = vi.fn(() => 'git push origin feature/*');
+    const commands = new ExecutionCommands({ host, consent: { request }, effects });
+
+    await commands.run({ command: 'run_script', title: 'Push', commands: [['git', 'push', 'origin', 'feature/login']] }, PLANNER);
+
+    expect(effects).toHaveBeenCalledWith({ commands: [['git', 'push', 'origin', 'feature/login']], timeoutMs: 600_000 });
+    expect(request).not.toHaveBeenCalled();
+    expect(host.approve).toHaveBeenCalledWith(['s2']);
+    expect(host.startTask).toHaveBeenCalledWith('s2', PLANNER);
+    expect(host.record).toHaveBeenLastCalledWith(expect.objectContaining({ command: 'run_script', consent: { by: 'allowlist', rule: 'git push origin feature/*' } }), expect.stringContaining('which your effect allowlist rule "git push origin feature/*" covers'));
+  });
+
+  it.each([
+    ['the user\'s turn in Guarded', PLANNER, { autonomous: () => false }],
+    ['the user\'s turn in Full with autorun', PLANNER, { autorun: () => true }],
+    ['the supervisor\'s at Act', { kind: 'supervisor', level: 'act' } as ExecutionActor, {}],
+  ])('runs a covered script in %s, with no card, and records the rule rather than the row it would otherwise take (ADR-0035)', async (_, actor, over) => {
+    const host = { ...scriptHost(), ...over };
+    const request = vi.fn();
+    const commands = new ExecutionCommands({ host, consent: { request }, effects: () => 'git push origin feature/*' });
+
+    await commands.run({ command: 'run_script', title: 'Push', commands: [['git', 'push', 'origin', 'feature/login']] }, actor);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.startTask).toHaveBeenCalledWith('s2', actor);
+    expect(host.record).toHaveBeenLastCalledWith(expect.objectContaining({ command: 'run_script', consent: { by: 'allowlist', rule: 'git push origin feature/*' } }), expect.any(String));
+  });
+
+  it('refuses a covered script to the supervisor at Watch, which suggests it instead (ADR-0035)', async () => {
+    const host = scriptHost();
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() }, effects: () => 'git push origin feature/*' });
+
+    expect(await commands.run({ command: 'run_script', title: 'Push', commands: [['git', 'push', 'origin', 'feature/login']] }, { kind: 'supervisor', level: 'watch' }))
+      .toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/at Watch.*Suggest it to the user instead/) });
+    expect(host.addScript).not.toHaveBeenCalled();
+    expect(host.startTask).not.toHaveBeenCalled();
+  });
+
+  it('never asks the effect allowlist about a script body, and has no rule of its own: without one the user is asked', async () => {
+    const host = { ...scriptHost(), autonomous: () => false };
+    const request = vi.fn(async () => false);
+    const effects = vi.fn(() => 'anything');
+
+    await new ExecutionCommands({ host, consent: { request }, effects }).run({ command: 'run_script', title: 'Push', script: 'git push origin main' }, PLANNER);
+    await new ExecutionCommands({ host, consent: { request } }).run({ command: 'run_script', title: 'Push', commands: [['git', 'push']] }, PLANNER);
+
+    expect(effects).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(host.startTask).not.toHaveBeenCalled();
+  });
 
   it('asks the supervisor policy, given the level and the command', async () => {
     const host = stubHost();

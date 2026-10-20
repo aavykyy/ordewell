@@ -10,7 +10,7 @@ import type { ForkedDialogue } from './conversationFork';
 import { condensedNotice, extractSummary, keptTail, summaryRequest } from './conversationSummary';
 import type { ConversationMessage, LegacyPlanState, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
 import { flattenTasksWithParents, isUserMessage } from '../models/Task';
-import type { ExecutionRecord } from '../models/Execution';
+import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
@@ -159,6 +159,17 @@ export interface WakeUpTurn {
   refused(change: PlanChange): string | undefined;
   /** Told to the model after the digests and never saved, like the plan block: who it is in this turn, and what it may do. */
   brief?: string;
+  /**
+   * Who the turn acts for at the command seam, read at each call; absent, the
+   * supervisor at the run's level. A turn on a report owed to the user's turn
+   * acts as that turn did, and speaks as the planner (ADR-0037, R3).
+   */
+  actor?: () => Extract<ExecutionActor, { kind: 'planner-turn' | 'supervisor' }>;
+}
+
+/** The planner speaks as the supervisor in a wake-up turn, but for one acting as the user's turn. */
+function bySupervisor(wakeUp: WakeUpTurn | undefined): boolean {
+  return wakeUp !== undefined && wakeUp.actor?.().kind !== 'planner-turn';
 }
 
 /** One user turn, from the message to its settled outcome: every backend call it makes streams through `stream`. */
@@ -1052,7 +1063,7 @@ export class PlannerConversation {
       type: 'planner_turn_started', turnId, prompt: prompt.text,
       ...(skills.length > 0 ? { skills } : {}),
       ...(wakeUps.length > 0 ? { wakeUps: [...wakeUps] } : {}),
-      ...(wakeUp ? { supervisor: true } : {}),
+      ...(bySupervisor(wakeUp) ? { supervisor: true } : {}),
       ...(forced ? { forced: true } : {}),
     });
     let outcome: PlannerTurnOutcome = 'error';
@@ -1125,7 +1136,7 @@ export class PlannerConversation {
     const { turnId } = userTurn.stream;
     const now = new Date().toISOString();
     // A supervisor's words and edits are drawn as the supervisor's, so the user can tell what changed on its own.
-    const supervisor = userTurn.wakeUp !== undefined;
+    const supervisor = bySupervisor(userTurn.wakeUp);
     let said: Landed[] = [];
     const plan = this.host.mutate(() => {
       this.writeHeld(userTurn, researchLog);

@@ -12,11 +12,17 @@ import { SchemaType, type FunctionDeclaration, type Schema } from '@google/gener
 
 type ParamType = 'string' | 'number' | 'array' | 'boolean';
 
+/** An `array` parameter's elements: arrays themselves for a list of argument vectors. */
+interface ResearchToolItems {
+  type: ParamType;
+  items?: ResearchToolItems;
+}
+
 interface ResearchToolParam {
   type: ParamType;
   description: string;
   /** Element type for `array` parameters. */
-  items?: { type: ParamType };
+  items?: ResearchToolItems;
   /** Closed value set, projected as a JSON-schema enum. */
   enum?: string[];
 }
@@ -156,6 +162,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const JSON_PARAM_TYPES: Record<string, ParamType> = { string: 'string', number: 'number', integer: 'number', boolean: 'boolean', array: 'array' };
 
+/** A JSON schema's type as a research tool's; anything else, a union among them, is a string. */
+function paramType(schema: Record<string, unknown>): ParamType {
+  return (typeof schema.type === 'string' ? JSON_PARAM_TYPES[schema.type] : undefined) ?? 'string';
+}
+
+/** What an array schema holds, as deep as it nests; providers refuse an array that does not say. */
+function itemsOf(schema: Record<string, unknown>): ResearchToolItems | undefined {
+  if (paramType(schema) !== 'array') return undefined;
+  const items = isRecord(schema.items) ? schema.items : {};
+  const nested = itemsOf(items);
+  return { type: paramType(items), ...(nested ? { items: nested } : {}) };
+}
+
 /**
  * One MCP tool's input as a research tool spec. A union (a task named by id
  * or by order) is declared a string, which every provider's schema can say and
@@ -170,9 +189,11 @@ function specFromMcp(tool: McpTool<PlannerToolHandler>): ResearchToolSpec {
     properties: Object.fromEntries(Object.entries(properties).map(([key, raw]) => {
       const schema = isRecord(raw) ? raw : {};
       const values = Array.isArray(schema.enum) ? schema.enum.filter((v): v is string => typeof v === 'string') : [];
+      const items = itemsOf(schema);
       const param: ResearchToolParam = {
-        type: (typeof schema.type === 'string' ? JSON_PARAM_TYPES[schema.type] : undefined) ?? 'string',
+        type: paramType(schema),
         description: typeof schema.description === 'string' ? schema.description : '',
+        ...(items ? { items } : {}),
         ...(values.length > 0 ? { enum: values } : {}),
       };
       return [key, param];
@@ -247,7 +268,7 @@ export function toGeminiToolDeclarations(plannerTools = false): FunctionDeclarat
       properties[key] = {
         type: SCHEMA_TYPE[param.type],
         description: param.description,
-        ...(param.items ? { items: { type: SCHEMA_TYPE[param.items.type] } } : {}),
+        ...(param.items ? { items: geminiItems(param.items) } : {}),
         ...(param.enum ? { format: 'enum', enum: param.enum } : {}),
       };
     }
@@ -263,6 +284,10 @@ export function toGeminiToolDeclarations(plannerTools = false): FunctionDeclarat
     };
   }) : [];
   return [...tools, ...reads];
+}
+
+function geminiItems(items: ResearchToolItems): Schema {
+  return { type: SCHEMA_TYPE[items.type], ...(items.items ? { items: geminiItems(items.items) } : {}) };
 }
 
 function geminiSchema(value: unknown): Schema {

@@ -9,7 +9,7 @@ import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
-import { blockedByLabel, dependencyCandidates, capConflictFiles, pausedOnLimit, skippedLabel, taskRowView } from '@ordewell/core/plan-utils';
+import { blockedByLabel, dependencyCandidates, capConflictFiles, pausedOnLimit, scriptTaskText, skippedLabel, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind, AssignmentScope } from '@ordewell/core';
 
 export interface RunnerMode {
@@ -411,7 +411,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
             <TaskCheck row={row} taskId={task.id} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
             <span className="task-order">{row.orderLabel}</span>
             <span className={`task-type-badge ${task.type}`}>
-              {isUserTask ? 'Manual' : 'AI'}
+              {isUserTask ? 'Manual' : row.kind === 'script' ? 'Script' : 'AI'}
             </span>
             {row.kind === 'ops' && (
               <span className="task-type-badge ops" title="An ops task: it changes no repository files and runs in your checkout, once the work it depends on is merged">Ops</span>
@@ -572,6 +572,14 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
                     )}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Where the prompt goes, read-only: only the planner writes a script's body, and it is what the user consents to (ADR-0035). */}
+            {row.kind === 'script' && (
+              <div className="task-script">
+                <pre className="task-script-body" aria-label="Script body">{scriptTaskText(task)}</pre>
+                <div className="task-ops-note">Runs in your checkout with no model, once the work it depends on is merged.</div>
               </div>
             )}
 

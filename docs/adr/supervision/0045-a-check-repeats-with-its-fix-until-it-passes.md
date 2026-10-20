@@ -107,7 +107,9 @@ round *r* and round *r* + 1 the body runs once.
   its last round failing, closes the loop: what of the body has not run or did
   not pass ends skipped with why, and a body task at work is left to finish.
   Out of rounds, the one `task_failed` the supervisor hears says "its loop ran
-  out of rounds: it failed all *N*".
+  out of rounds: it failed all *N*", and so does the report of a check whose
+  result a planner turn asked for (ADR-0037, R2), which is owed only now: a
+  round's failure is no end it reports.
 - **What stops a loop, and what starts its rounds over (L7).** A body task that
   fails, is skipped or is blocked stops the loop: the check is then the
   failure it is stored as, and its dependents are blocked until what stopped

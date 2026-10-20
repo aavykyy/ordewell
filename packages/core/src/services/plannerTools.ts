@@ -58,8 +58,12 @@ export interface PlannerToolsHost {
   fetchUrl(url: string): Promise<ToolOutcome>;
   /** A search the same way; undefined when the fetcher has no search. */
   webSearch(query: string): Promise<ToolOutcome | undefined>;
-  /** An execution command through the session's command seam (ADR-0029), asked by this planner turn. */
-  execute(command: ExecutionCommand): Promise<CommandOutcome>;
+  /**
+   * An execution command through the session's command seam (ADR-0029), asked
+   * by this planner turn. `signal` ends a wait on the caller's behalf: the
+   * call's own cancellation, or its turn ending.
+   */
+  execute(command: ExecutionCommand, signal?: AbortSignal): Promise<CommandOutcome>;
   /** Why the open turn may not make this change — a wake-up turn under Watch, say (ADR-0029); undefined when it may. */
   editsRefused(change: PlanChange): string | undefined;
 }
@@ -84,9 +88,9 @@ export function runnersOf(tasks: readonly Task[]): RunnerId[] {
 
 export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
   // Bound to the turn it was made in: a late call from a turn that ended has nobody's consent behind it.
-  const execute = async (command: ExecutionCommand): Promise<McpToolReply> => {
+  const execute = async (command: ExecutionCommand, signal?: AbortSignal): Promise<McpToolReply> => {
     if (host.turnId() === undefined) return { isError: true, text: JSON.stringify({ ok: false, outcome: 'refused', reason: 'No planning turn is open, so nothing was done.' }) };
-    const outcome = await host.execute(command);
+    const outcome = await host.execute(command, signal);
     return outcome.ok
       ? answer({ ok: true, result: outcome.message })
       : { isError: true, text: JSON.stringify({ ok: false, outcome: outcome.outcome, reason: outcome.message }) };
@@ -106,6 +110,13 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       ...(note !== undefined ? { note } : {}),
     }),
     mergeAll: () => execute({ command: 'merge_all' }),
+    runScript: ({ title, commands, script, timeoutMs, dependencies }, { signal }) => execute({
+      command: 'run_script', title,
+      ...(commands !== undefined ? { commands } : {}),
+      ...(script !== undefined ? { script } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(dependencies !== undefined ? { dependencies: dependencies.map(String) } : {}),
+    }, signal),
 
     async loadSkill({ name }) {
       const skills = modelInvocablePlannerSkills(host.skills());

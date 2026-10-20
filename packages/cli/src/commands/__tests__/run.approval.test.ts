@@ -35,4 +35,36 @@ describe('ordewell run while a task waits for the user\'s approval (ADR-0035)', 
     expect(out).toContain('#0002 pending: waits for your approval: `ordewell force-start <id>` approves it, `ordewell run` approves all');
     expect(out).not.toMatch(/#0001 [^\n]*approval/);
   });
+
+  it('tags a script task\'s line [SCR] once it starts (ADR-0035)', async () => {
+    const script: Event[] = [
+      { type: 'task_started', taskId: 'task-0002', order: 2, title: 'Push the tag', runner: 'script' },
+      { type: 'status_update', tasks: [
+        { id: 'task-0001', status: 'completed', verdict: null },
+        { id: 'task-0002', status: 'in_progress', verdict: null },
+      ] },
+      { type: 'execution_complete', summary: { total: 2, completed: 1, failed: 0, blocked: 0, skipped: 0 } },
+    ];
+    const api = {
+      streamExecution: vi.fn((_id: string, onEvent: (e: Event) => void, onReady?: (error?: Error) => void) => new Promise<void>((resolve) => {
+        setTimeout(() => onReady?.(), 0);
+        setTimeout(() => { script.forEach(onEvent); resolve(); }, 5);
+      })),
+      executePlan: vi.fn().mockResolvedValue({ status: 'running' }),
+    } as unknown as ApiClient;
+    const written: string[] = [];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => { written.push(String(chunk)); return true; });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await handleRun(['--session-id', 's1'], api);
+    } finally {
+      stderr.mockRestore();
+      log.mockRestore();
+    }
+
+    const out = written.join('');
+    expect(out).toMatch(/#0002 \[SCR\] in_progress/);
+    expect(out).not.toMatch(/#0001 \[SCR\]/);
+  });
 });
