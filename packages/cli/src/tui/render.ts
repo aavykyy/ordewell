@@ -2,7 +2,7 @@ import { firstGrapheme, graphemes, pad, stripAnsi, style, truncate, width, wrap 
 import { cursorInLines } from './editor';
 import { activeToken, composerCompletions, runnerCommandFor, skillMatchKind, slashTokens } from './slash';
 import {
-  bodyRows, chatInputWrap, chatLayout, footerHints, helpLayout, type HelpSheet, packHints, planLayout, planOffset,
+  approvalLayout, bodyRows, chatInputWrap, chatLayout, footerHints, helpLayout, type HelpSheet, packHints, planLayout, planOffset,
   stopHint,
   chatActivity,
   runnerStoppable,
@@ -13,7 +13,7 @@ import { chatEditorRoomFor, chatPaneWidth, chatPromptLabel, paneColumns, planPan
 import { currentHandoff, diffRoom, handoffActions } from './handoff';
 import { handoffBase, handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
 import { capConflictFiles, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
-import { matchingItems, plannerInFlight, runnerCommands, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
+import { matchingItems, runnerCommands, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
 import type { StepperState } from './reducers/stepper';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 
@@ -452,53 +452,7 @@ function renderOverlay(state: TuiState, rows: number, cols: number): string[] {
   const overlay = state.overlay!;
   if (overlay.kind === 'help') return renderHelp(overlay.scroll ?? 0, overlay.sheet ?? 'commands', rows, cols);
   if (overlay.kind === 'approval') {
-    const { request } = overlay;
-    const headline = request.kind === 'shell_command'
-      ? 'The planner wants to run a command'
-      : request.kind === 'url_fetch'
-        ? 'The planner wants to fetch a URL'
-        : request.kind === 'web_search'
-          ? 'The planner wants to search the web'
-          : request.kind === 'mcp_tool'
-            ? 'The planner wants to use an MCP tool'
-            : request.kind === 'mcp_server'
-              ? 'The planner wants to start a project MCP server'
-              : request.kind === 'task_start'
-                ? 'The planner wants to start work'
-                : 'The planner wants to read a path outside the workspace';
-    const queued = state.pendingApprovals.length;
-
-    return frame(
-      'Approval needed',
-      [
-        headline,
-        '',
-        `  ${style.yellow(request.subject)}`,
-        '',
-        // Disambiguates the `external_path` case: an auto-tier command like
-        // `cat` touching an outside path reads identically to a plain
-        // `read_file` without it.
-        ...(request.detail ? [style.grey(request.detail), ''] : []),
-        // The grant is wider than the request, so name it rather than letting
-        // the user discover it when the next call silently does not prompt. A
-        // start is asked every time (ADR-0029), so it grants nothing more.
-        ...(request.kind === 'task_start' ? [] : [style.grey(`Approving also allows ${request.scope} for the rest of this session.`)]),
-        ...(queued > 0 ? [style.grey(`${queued} more waiting.`)] : []),
-        '',
-        // ESC is not "deny" while a turn is in flight — it kills the turn and
-        // takes this prompt with it. Offering it as the deny key there would
-        // teach the wrong thing about the most destructive key on the sheet.
-        // With a prompt queued the first ESC unsends that instead, so the hint
-        // names the take-back rather than the twice-to-stop.
-        style.grey(plannerInFlight(state)
-          ? state.queuedPrompts.length > 0
-            ? 'y or enter allows · n denies · esc takes back the queued prompt'
-            : 'y or enter allows · n denies · esc twice stops planning'
-          : 'y or enter allows · n or esc denies'),
-      ],
-      rows,
-      cols,
-    );
+    return frame('Approval needed', approvalLayout(state, overlay.request, overlay.scroll ?? 0, rows, cols).lines, rows, cols);
   }
   if (overlay.kind === 'confirm') return renderConfirm(overlay, rows, cols);
   if (overlay.kind === 'prompt') {

@@ -36,7 +36,7 @@ export interface CommandWords {
   scopeWords?: number;
 }
 
-interface RuleWord {
+export interface RuleWord {
   matches: (word: string) => boolean;
   wildcard: boolean;
 }
@@ -62,14 +62,14 @@ export interface PlannerAllowlist {
  * deletes the instance named `list`: a CLI that takes positional names lets
  * any read verb be spelled as the name of a write.
  */
-const MUTATING_VERB = /^(abort|ack|activate|add|apply|approve|archive|assign|attach|bind|call|cancel|clear|clone|close|commit|copy|cp|create|deactivate|delete|deploy|destroy|detach|disable|download|drain|drop|dump|edit|enable|evict|exec|execute|expire|export|failover|flush|grant|import|insert|install|invoke|kill|label|lock|login|logout|merge|migrate|modify|move|mv|patch|pause|promote|publish|pull|purge|push|put|reboot|redeploy|register|reject|release|remove|rename|reopen|replace|request|reset|resize|restart|restore|resume|revoke|rm|rollback|rotate|run|scale|scp|send|set|ssh|start|stop|submit|suspend|sync|rsync|tag|taint|terminate|transfer|truncate|undelete|uninstall|unlock|unregister|unset|untag|update|upgrade|upload|write)([-_:.].*)?$/i;
+export const MUTATING_VERB = /^(abort|ack|activate|add|apply|approve|archive|assign|attach|bind|call|cancel|clear|clone|close|commit|copy|cp|create|deactivate|delete|deploy|destroy|detach|disable|download|drain|drop|dump|edit|enable|evict|exec|execute|expire|export|failover|flush|grant|import|insert|install|invoke|kill|label|lock|login|logout|merge|migrate|modify|move|mv|patch|pause|promote|publish|pull|purge|push|put|reboot|redeploy|register|reject|release|remove|rename|reopen|replace|request|reset|resize|restart|restore|resume|revoke|rm|rollback|rotate|run|scale|scp|send|set|ssh|start|stop|submit|suspend|sync|rsync|tag|taint|terminate|transfer|truncate|undelete|uninstall|unlock|unregister|unset|untag|update|upgrade|upload|write)([-_:.].*)?$/i;
 
 function globRegExp(glob: string, flags = ''): RegExp {
   const escaped = glob.split('*').map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*');
   return new RegExp(`^${escaped}$`, flags);
 }
 
-function ruleWord(pattern: string): RuleWord {
+export function ruleWord(pattern: string): RuleWord {
   if (!pattern.includes('*')) return { matches: (word) => word === pattern, wildcard: false };
   const re = globRegExp(pattern);
   return { matches: (word) => re.test(word), wildcard: true };
@@ -134,9 +134,14 @@ function exclusionCovers(rule: CommandRule, command: CommandWords): boolean {
   return next === rule.words.length;
 }
 
+/** Whether a `!` command entry holds for this command, wherever its words appear. */
+export function commandExcluded(list: PlannerAllowlist, command: CommandWords): boolean {
+  return list.commandExclusions.some((rule) => exclusionCovers(rule, command));
+}
+
 /** The rule that lets this command run unasked, or undefined when none does or an exclusion holds. */
 export function commandAllowedBy(list: PlannerAllowlist, command: CommandWords): string | undefined {
-  if (list.commandExclusions.some((rule) => exclusionCovers(rule, command))) return undefined;
+  if (commandExcluded(list, command)) return undefined;
   return list.commands.find((rule) => ruleCovers(rule, command))?.text;
 }
 

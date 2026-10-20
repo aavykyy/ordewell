@@ -152,4 +152,49 @@ describe('approval queue', () => {
     expect(reset.overlay).toBeNull();
     expect(reset.pendingApprovals).toEqual([]);
   });
+
+  describe('a script task start (ADR-0035)', () => {
+    const START: ApprovalRequestView = {
+      id: 'ap-9', kind: 'task_start', subject: 'Run script task #2 "Push"', scope: 'Run script task #2 "Push"',
+      body: Array.from({ length: 80 }, (_, i) => `echo line-${i}`).join('\n'),
+    };
+
+    it('keeps the body on the modal, whether it arrives live or is synced after a reconnect', () => {
+      const live = withPending(START);
+      expect(live.overlay).toMatchObject({ kind: 'approval', request: { id: 'ap-9', body: START.body } });
+
+      const synced = reduce(initialState({ sessionId: 's1' }), {
+        type: 'sessionMessage', sessionId: 's1', message: { type: 'approval_request', ...START },
+      }).state;
+      expect(synced.overlay).toMatchObject({ request: { body: START.body } });
+    });
+
+    it('scrolls the body with the arrow and page keys, to its end and no further, without answering', () => {
+      const open = withPending(START);
+
+      const down = press(open, 'down');
+      expect(down.state.overlay).toMatchObject({ kind: 'approval', scroll: 1 });
+      expect(down.effects).toEqual([]);
+
+      const end = press(press(open, 'pagedown').state, 'pagedown');
+      const far = [...Array(20)].reduce((state: TuiState) => press(state, 'pagedown').state, end.state);
+      const scroll = far.overlay?.kind === 'approval' ? far.overlay.scroll ?? 0 : -1;
+      expect(scroll).toBeGreaterThan(0);
+      expect(press(far, 'pagedown').state.overlay).toMatchObject({ scroll });
+      expect(press(far, 'pageup').state.overlay).toMatchObject({ kind: 'approval', scroll: expect.any(Number) });
+    });
+
+    it('still answers from a scrolled modal', () => {
+      const scrolled = press(withPending(START), 'down').state;
+
+      expect(press(scrolled, 'y', 'y').effects).toContainEqual({ type: 'respondApproval', sessionId: 's1', approvalId: 'ap-9', granted: true });
+    });
+
+    it('leaves arrow keys alone on a request with no body', () => {
+      const step = press(withPending(), 'down');
+
+      expect(step.state.overlay).toMatchObject({ kind: 'approval' });
+      expect(step.state.overlay).not.toHaveProperty('scroll');
+    });
+  });
 });

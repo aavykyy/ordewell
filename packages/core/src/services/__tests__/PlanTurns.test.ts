@@ -26,6 +26,7 @@ function fakeHost(current: { plan: LegacyPlanState | null } = { plan: plan() }) 
     plan: () => current.plan,
     conversationBusy: vi.fn(() => false),
     mayWake: vi.fn(() => true),
+    mayReport: vi.fn(() => true),
     persist: vi.fn(() => { saved.push((current.plan?.pendingTurns ?? []).map((t) => t.text)); }),
     announce: vi.fn(),
     interrupt: vi.fn(),
@@ -306,7 +307,43 @@ describe('PlanTurns: wake-ups (ADR-0029)', () => {
     host.mayWake.mockReturnValue(true);
     runner.pump();
     expect(turns).toHaveLength(1);
-    expect(turns[0].prompt).toEqual({ source: 'supervisor', text: '', skills: [], wakeUps: ['Run update:\n- task #1 failed'] });
+    expect(turns[0].prompt).toEqual({ source: 'supervisor', text: '', skills: [], wakeUps: ['Run update:\n- task #1 failed'], authority: 'supervisor' });
+  });
+
+  it('opens a turn on a report the planner asked for while the supervisor may not wake, acting for whose turn started it (ADR-0037)', () => {
+    const { host, turns } = fakeHost();
+    host.mayWake.mockReturnValue(false);
+    const runner = new PlanTurns(host);
+
+    void runner.enqueue({ ...wakeUp('Run update:\n- task #2 ended'), report: 'user' }).catch(() => {});
+
+    expect(turns).toHaveLength(1);
+    expect(turns[0].prompt).toMatchObject({ source: 'supervisor', wakeUps: ['Run update:\n- task #2 ended'], authority: 'user' });
+  });
+
+  it('holds a report while one may not open a turn, until it may', () => {
+    const { host, turns } = fakeHost();
+    host.mayReport.mockReturnValue(false);
+    const runner = new PlanTurns(host);
+
+    void runner.enqueue({ ...wakeUp(), report: 'supervisor' }).catch(() => {});
+    expect(turns).toHaveLength(0);
+
+    host.mayReport.mockReturnValue(true);
+    runner.pump();
+    expect(turns[0].prompt).toMatchObject({ authority: 'supervisor' });
+  });
+
+  it('gives a report owed to the user\'s turn a turn of its own, past the supervisor\'s wake-ups that may not open one', async () => {
+    const { host, turns } = fakeHost();
+    host.mayWake.mockReturnValue(false);
+    const runner = new PlanTurns(host);
+    void runner.enqueue(wakeUp('Run update:\n- task #1 failed')).catch(() => {});
+
+    void runner.enqueue({ ...wakeUp('Run update:\n- task #2 ended'), report: 'user' }).catch(() => {});
+
+    expect(turns).toHaveLength(1);
+    expect(turns[0].prompt.wakeUps).toEqual(['Run update:\n- task #2 ended']);
   });
 
   it('delivers waiting wake-ups with the user\'s next message, whatever the supervisor may do', async () => {

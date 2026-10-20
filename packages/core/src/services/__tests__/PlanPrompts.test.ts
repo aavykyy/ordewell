@@ -4,6 +4,7 @@ import type { RepoGroupLayout } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type DiscoveredModel, type RunnerId } from '../../models/Task';
 
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
+import { validatePlanTasks } from '../PlanValidator';
 import type { SkillInfo } from '../SkillsService';
 
 const modes = (over: Partial<PlannerModes> = {}): PlannerModes => ({ ...DEFAULT_PLANNER_MODES, ...over });
@@ -184,7 +185,7 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
     expect(harness).not.toContain('Sonnet');
     expect(harness).toContain('list_models');
     expect(variant(false)).toContain('Sonnet');
-    for (const shared of ['"tasks"', 'assignedRunner', 'assignedModel', 'sliceType', 'VERTICAL SLICE PLANNING', 'PROJECT CONTEXT HERE',
+    for (const shared of ['"tasks"', 'assignedRunner', 'assignedModel', 'sliceType', 'BUILD PLANS:', 'VERTICAL TRACER-BULLET SLICE', 'STRATEGY:', 'YOUR CONTEXT:', 'PROJECT CONTEXT HERE',
       // A subtask is a full task object with the same required fields. Dropping
       // this from one variant is exactly how the requirement went unstated.
       'at every depth']) {
@@ -440,5 +441,132 @@ describe('the outline gate and autorun (ADR-0030)', () => {
     expect(p).toMatch(/AUTORUN is on/);
     expect(p).toMatch(/do not wait for the user to confirm it/i);
     expect(p).toMatch(/ask the user BEFORE planning/);
+  });
+});
+
+describe('the strategy step and the context rules (#108)', () => {
+  const prompt = (harness: boolean, extra: { execution?: boolean; autorun?: boolean } = {}) =>
+    buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, ...extra });
+  const variants = [false, true].flatMap((harness) => [false, true].map((execution) => ({ harness, execution })));
+
+  /** One section's text: from its header to the blank line that ends it. */
+  function section(p: string, header: string): string {
+    const at = p.indexOf(`\n${header}\n`);
+    expect(at).toBeGreaterThan(-1);
+    const end = p.indexOf('\n\n', at + 1);
+    return p.slice(at + 1, end === -1 ? undefined : end);
+  }
+
+  it.each(variants)('chooses a strategy before the outline (%o)', ({ harness, execution }) => {
+    const p = prompt(harness, { execution });
+    expect(p.indexOf('\nSTRATEGY:\n')).toBeLessThan(p.indexOf('\nOUTLINE PHASE:\n'));
+    expect(p).toMatch(/3\. Choose a strategy for the goal \(STRATEGY below\)/);
+    expect(p).toMatch(/4\. When the strategy calls for a plan/);
+  });
+
+  it.each(variants)('teaches each kind of goal (%o)', ({ harness, execution }) => {
+    const strategy = section(prompt(harness, { execution }), 'STRATEGY:');
+    expect(strategy).toMatch(/- A question your research can answer: answer it here, in your reply\. No plan\./);
+    expect(strategy).toMatch(/- A small effect you can state as exact commands: one script task\b/);
+    expect(strategy).toMatch(/An effect that needs judgment is an ops task\./);
+    expect(strategy).toMatch(/- A build with known steps: a plan of vertical slices, under BUILD PLANS below\./);
+    expect(strategy).toMatch(/- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix\./);
+    expect(strategy).toMatch(/failing test or a command that fails is the reproduction, and what the fix is checked against/);
+    expect(strategy).toMatch(/Plan the fix once the reports name the cause/);
+    expect(strategy).toMatch(/- An open problem with no known path: plan only the first round of exploration, as read-only tasks/);
+    expect(strategy).toMatch(/extend the plan with the next round/);
+  });
+
+  it('offers run_script for an exact effect only where the execution tools are', () => {
+    for (const harness of [false, true]) {
+      expect(section(prompt(harness, { execution: true }), 'STRATEGY:')).toMatch(/In the user's turn, run it with run_script/);
+      const without = section(prompt(harness), 'STRATEGY:');
+      expect(without).not.toContain('run_script');
+      expect(without).toMatch(/one script task, in a plan of its own/);
+    }
+  });
+
+  it.each(variants)('tells the planner how to spend its context (%o)', ({ harness, execution }) => {
+    const rules = section(prompt(harness, { execution }), 'YOUR CONTEXT:');
+    expect(rules).toMatch(/your context is the scarcest resource in the run/);
+    expect(rules).toMatch(/Go deep yourself when the work is small, sequential/);
+    expect(rules).toMatch(/Delegate when a piece is independent, large, or only its conclusion matters/);
+    expect(rules).toMatch(/map it first .*then split along the seams the map shows/);
+    expect(rules).toMatch(/self-contained brief: its goal, its inputs, what to report back, and how its result will be checked/);
+    expect(rules).toMatch(/Plan the integration step/);
+    expect(rules).toMatch(/Prefer evidence you can check .* over a task's own word/);
+    expect(rules).toMatch(/how full your context is and what remains of your reads/);
+  });
+
+  it('keeps every slicing rule under BUILD PLANS, and nowhere a non-build goal would read it as its own', () => {
+    for (const isolated of [false, LONE_REPO] as const) {
+      for (const harness of [false, true]) {
+        const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, isolatedExecution: isolated });
+        const build = section(p, 'BUILD PLANS:');
+        expect(build).toMatch(/^BUILD PLANS:\nWhen the strategy is a build, these rules apply as well\. No other strategy is planned as vertical slices\./);
+        const buildOnly = [
+          'VERTICAL TRACER-BULLET SLICE',
+          'Size each slice to fit a single fresh agent session',
+          'make the change easy, then make the easy change',
+          'EXPAND-CONTRACT',
+          '"userStoriesCovered" links a slice to the user stories it delivers',
+          'Reference specific files and patterns from your research in task prompts.',
+          'must not each append to the same shared file',
+          ...(isolated ? [] : ['specify different target files to avoid merge conflicts']),
+        ];
+        for (const rule of buildOnly) {
+          expect(build).toContain(rule);
+          expect(p.split(rule)).toHaveLength(2);
+        }
+      }
+    }
+  });
+
+  it('keeps the rules every plan needs outside BUILD PLANS', () => {
+    const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { isolatedExecution: LONE_REPO });
+    const build = section(p, 'BUILD PLANS:');
+    for (const general of ['never by an absolute path', 'Never add a dependency just because two tasks touch the same file', 'CHANGE AND OPS TASKS:', '"sliceType" is REQUIRED on every task']) {
+      expect(p).toContain(general);
+      expect(build).not.toContain(general);
+    }
+  });
+
+  it('shows the outline example as a build\'s, not as the shape of every outline', () => {
+    const p = prompt(false);
+    expect(p).toContain('a numbered list of the plan\'s tasks in order');
+    expect(p).toContain('For a build, each item is a vertical tracer-bullet slice');
+    expect(p).toContain('- Example, for a build: "1. Set up database schema');
+  });
+});
+
+describe('script tasks in the conversation prompt (ADR-0035)', () => {
+  const prompt = (harness: boolean) => buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness });
+
+  it.each([false, true])('teaches the plan JSON for a script task (harness: %s)', (harness) => {
+    const p = prompt(harness);
+    expect(p).toContain('"type": "ai|user|script"');
+    expect(p).toContain('"type": "script", "dependencies": ["task-2"], "commands": [["git", "push", "origin", "release"]], "sliceType": "AFK"');
+    expect(p).toMatch(/"commands" is a list of argument vectors, run in order with no shell, stopping at the first that fails/);
+    expect(p).toMatch(/give "script" instead.*Give exactly one of the two/);
+    expect(p).toMatch(/"timeoutMs" is its time limit in milliseconds; ten minutes when left out/);
+    expect(p).toMatch(/Only a top-level task can be one\. Leave out "prompt", "assignedRunner", "assignedModel", "readOnly", "ops", "skills", "userSteps" and "subtasks"/);
+  });
+
+  it('shows an example the plan\'s own rules accept', () => {
+    const example = prompt(true).split('\n').find((line) => line.includes('"type": "script"'));
+    const dependency = { id: 'task-2', title: 'Fix', type: 'ai', prompt: 'fix it', assignedRunner: 'claude-code', autonomy: 'AFK', sliceType: 'AFK' };
+    const result = validatePlanTasks({ tasks: [dependency, JSON.parse(example ?? '')] }, ['claude-code']);
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it('points a refused command in the harness planner\'s research at a script task or an ops task', () => {
+    expect(prompt(true)).toContain('add it to the plan instead: a script task when you can state the exact commands, an ops task when it needs judgment');
+  });
+
+  it('gives the conversation planner the three shapes of a change to the world, and the one-shot planner none of it', () => {
+    const p = conversation(LONE_REPO);
+    expect(p).toMatch(/A script task when you can state the exact commands.*An ops task when the work needs judgment.*A change task for files\./);
+    expect(p).toMatch(/A script task is an ops task in where and when it runs/);
+    expect(oneShot(LONE_REPO)).not.toMatch(/script task/i);
   });
 });

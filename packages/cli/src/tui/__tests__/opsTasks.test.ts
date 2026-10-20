@@ -125,3 +125,86 @@ describe('ops tasks and merge gates in the TUI (ADR-0020)', () => {
     expect(frame(asked.state)).toContain('No isolated run to hand off');
   });
 });
+
+describe('script tasks in the plan pane (ADR-0035)', () => {
+  const script = (over: Partial<TaskView> = {}): TaskView => ({
+    id: 's2', order: 2, title: 'Tag the release', type: 'script', status: 'pending', dependencies: ['t1'],
+    commands: [['git', 'tag', 'v1'], ['git', 'push', 'origin', 'v1']], timeoutMs: 90_000, ...over,
+  });
+
+  it('tags the row SCR, apart from OPS and AI', () => {
+    const out = frame(plan([change(), deploy(), script()]));
+
+    expect(out).toContain('SCR Tag the release');
+    expect(out).toContain('OPS Redeploy on dev');
+    expect(out).not.toMatch(/AI Tag the release/);
+  });
+
+  /** The plan pane's rows alone: the chat pane shares each screen row. */
+  const planRows = (state: TuiState): string[] => render(state).map((line) => line.slice(line.indexOf('│') + 1).trim());
+
+  it('shows the commands one to a line, and the time limit, where an ops task shows its prompt', () => {
+    const rows = planRows(plan([change(), script()], { selectedTask: 1, expandedTaskId: 's2' }));
+
+    const at = rows.indexOf('git tag v1');
+    expect(rows).toContain('Script');
+    expect(rows.slice(at, at + 4)).toEqual(['git tag v1', 'git push origin v1', '', 'Time limit: 90 seconds.']);
+  });
+
+  it('shows a script as written, its lines kept, and a control character spelled out rather than dropped', () => {
+    const body = script({ commands: undefined, script: 'set -e\n\techo hi\x1b[2J', timeoutMs: undefined });
+    const rows = planRows(plan([change(), body], { selectedTask: 1, expandedTaskId: 's2' }));
+
+    const at = rows.indexOf('set -e');
+    expect(rows.slice(at, at + 4)).toEqual(['set -e', 'echo hi<U+001B>[2J', '', 'Time limit: 10 minutes.']);
+  });
+
+  it('opens no prompt editor on right, and says the body is not edited here', () => {
+    const state = plan([change(), script()], { selectedTask: 1 });
+
+    const opened = press(state, 'right').state;
+
+    expect(opened.expandedTaskId).toBe('s2');
+    expect(opened.taskEditor).toBeNull();
+    expect(frame(opened)).not.toContain('enter save');
+    expect(frame(opened)).toContain('esc collapse');
+    // Typing into the open row does not start an edit either.
+    expect(press(opened, 'char', 'x').state.taskEditor).toBeNull();
+  });
+
+  it('offers no ops toggle, runner, model, mode, effort or skills for a script task', () => {
+    const state = plan([change(), script()], { selectedTask: 1 });
+
+    for (const letter of ['O', 'R', 'o', 'e', 'M', 'K']) {
+      const step = press(state, 'char', letter);
+      expect(step.effects, letter).toEqual([]);
+      expect(step.state.overlay, letter).toBeNull();
+    }
+    expect(frame(press(state, 'char', 'O').state)).toContain('ops task already');
+  });
+
+  it('still approves/starts a script task with f and removes it with d', () => {
+    const state = plan([change(), script()], { selectedTask: 1 });
+
+    expect(press(state, 'char', 'f').effects).toMatchObject([{ type: 'taskAction', taskId: 's2', action: 'force-start' }]);
+    expect(press(state, 'char', 'd').state.overlay).toMatchObject({ kind: 'confirm', action: { kind: 'remove-task', taskId: 's2' } });
+  });
+
+  it('names no model keys in the footer for a script task', () => {
+    const out = frame(plan([change(), script()], { selectedTask: 1, rows: 40, cols: 140 }));
+
+    expect(out).toContain('f start');
+    expect(out).not.toContain('o model');
+  });
+
+  it('carries the body and time limit from the plan to the pane, unsanitized', () => {
+    const state = reduce(initialState({ sessionId: 's1', rows: 30, cols: 100 }), {
+      type: 'planUpdated',
+      sessionId: 's1',
+      plan: { tasks: [{ id: 's2', order: 1, title: 'Tag', type: 'script', status: 'pending', dependencies: [], commands: [['git', 'tag', 'v1']], timeoutMs: 5000 }] },
+    }).state;
+
+    expect(state.tasks[0]).toMatchObject({ type: 'script', commands: [['git', 'tag', 'v1']], timeoutMs: 5000 });
+    expect(state.tasks[0].ops).toBeUndefined();
+  });
+});

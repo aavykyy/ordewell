@@ -43,7 +43,8 @@ export const ORDEWELL_SETTABLE_ENV: readonly string[] = [
  *
  * - The approval-mode and pre-approved-scope variables switch the consent gate
  *   off, so every later command runs unprompted; the web-read budget bounds
- *   how much a planner may send out unasked in Full.
+ *   how much a planner may send out unasked in Full; the effect allowlist
+ *   pre-approves script tasks that change real systems (ADR-0035).
  * - The settings-path override is honoured by the settings service, which
  *   creates directories recursively when persisting — admitting it turns the
  *   same write into an arbitrary-path file write.
@@ -59,6 +60,7 @@ export const SETTINGS_ENV_REFUSED: readonly string[] = [
   'ORDEWELL_APPROVAL_ALLOW',
   'ORDEWELL_APPROVAL_DEFAULTS',
   'ORDEWELL_WEB_READ_BUDGET',
+  'ORDEWELL_EFFECT_ALLOW',
   // Where settings are persisted.
   'ORDEWELL_SETTINGS_PATH',
   // Runtime options and dynamic loaders.

@@ -348,6 +348,8 @@ export function ApprovalCard({ block, onResolve }: { block: ApprovalBlock; onRes
       </div>
       <code className="approval-card-subject">{block.subject}</code>
       {block.detail && <div className="approval-card-detail">{block.detail}</div>}
+      {/* What a script task runs, verbatim: the answer is about exactly this (ADR-0035). */}
+      {block.body && <pre className="approval-card-body" aria-label="What it runs">{block.body}</pre>}
       {/* A start is asked every time (ADR-0029), so its answer grants nothing more. */}
       {block.kind !== 'task_start' && (
         <div className="approval-card-scope">

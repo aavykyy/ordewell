@@ -300,6 +300,7 @@ describe('Session approval flow', () => {
 
       expect(result.success).toBe(false);
       expect(result.output).toContain('ops task');
+      expect(result.output).toContain('call run_script with the exact commands');
       expect(fsAdapter.bashCalls).toEqual([]);
       expect(approvalRequests(messages)).toHaveLength(0);
     });

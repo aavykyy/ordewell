@@ -44,7 +44,7 @@ export type {
 export * from './models/Session';
 export * from './models/Usage';
 export * from './models/TaskLog';
-export { commandLine, scriptBodyOf, DEFAULT_SCRIPT_TIMEOUT_MS, type ScriptBody } from './models/ScriptTask';
+export { commandLine, scriptBodyOf, scriptBodyText, scriptTaskText, timeLimitText, DEFAULT_SCRIPT_TIMEOUT_MS, type ScriptBody } from './models/ScriptTask';
 export * from './models/RunnerCommand';
 export * from './models/Execution';
 export * from './interfaces/IFileSystem';
@@ -68,6 +68,7 @@ export type { HttpWebFetcherOptions, WebResponse, WebTransport } from './service
 export type { ApprovalMode, ApprovalModeSetting, ApprovalPolicyOptions, ApprovalSource } from './services/ApprovalPolicy';
 export { DEFAULT_PLANNER_ALLOWLIST, parseAllowlist, commandAllowedBy, toolAllowed, scopeAllowed } from './services/plannerAllowlist';
 export type { PlannerAllowlist, CommandWords } from './services/plannerAllowlist';
+export { parseEffectAllowlist, effectRuleFor, type EffectRules } from './services/effectAllowlist';
 export { PendingApprovals } from './services/PendingApprovals';
 export type { AskOptions, PendingApproval, PendingApprovalsOptions } from './services/PendingApprovals';
 export { RunnerApprovals } from './services/RunnerApprovals';

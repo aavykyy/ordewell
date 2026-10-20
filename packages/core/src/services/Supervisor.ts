@@ -1,4 +1,5 @@
 import type { SupervisorLevel } from '../models/Execution';
+import type { TurnAuthority } from '../models/Task';
 import { createWakePolicy, type RunEvent, type WakeBatch, type WakePolicy, type WakePolicySnapshot } from './WakePolicy';
 import { classifyRunnerStop } from './runnerExit';
 import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
@@ -49,8 +50,13 @@ export interface SupervisorSnapshot {
 export interface SupervisorHost {
   /** The current run's saved settings; null when no run has started. */
   run(): SupervisedRun | null;
-  /** Hand the planner a wake-up digest as the supervisor's input; it settles as the turn that takes it does. */
-  deliver(digest: string): Promise<unknown>;
+  /**
+   * Hand the planner a wake-up digest as the supervisor's input; it settles as
+   * the turn that takes it does. `report` marks one carrying a report the
+   * planner asked for, which opens a turn at every level, with whose authority
+   * (ADR-0037, R2, R3).
+   */
+  deliver(digest: string, report?: TurnAuthority): Promise<unknown>;
   /** Start whatever planner turn is now due. */
   pump(): void;
   /** Save what the supervisor gathered: a restart must still deliver a debounced batch (ADR-0029). */
@@ -157,28 +163,47 @@ export class Supervisor {
   }
 
   /**
-   * What a wake-up turn is held to under the run's level. The brief is the
-   * level's as the turn opens; what the turn may change is read as it makes
-   * the change, so a level lowered meanwhile applies at once.
+   * Whether a report the planner asked for may open a turn now: at every
+   * level (ADR-0037, R2), until the turns opened without the user have failed
+   * for the run, when another would only fail too. It then waits for the
+   * user's next message, as the supervisor's undelivered wake-ups do.
    */
-  wakeUpTurn(): WakeUpTurn {
+  mayReport(): boolean {
+    return this.failures < 2 && this.host.run()?.unsupervised === undefined;
+  }
+
+  /**
+   * What a wake-up turn is held to. One on the supervisor's inputs is held to
+   * the run's level: the brief is the level's as the turn opens, and what the
+   * turn may change and run is read as it does it, so a level lowered meanwhile
+   * applies at once. One on a report for a task the user's turn started acts
+   * as that turn did (ADR-0037, R3).
+   */
+  wakeUpTurn(authority: TurnAuthority = 'supervisor'): WakeUpTurn {
     const readBudget = this.host.readBudget();
+    if (authority === 'user') return { readBudget, refused: () => undefined, brief: reportBrief(readBudget), actor: () => ({ kind: 'planner-turn' }) };
     return {
       readBudget,
       refused: (change) => changeRefusal(this.level, change),
-      brief: this.level === 'act' ? actBrief(readBudget, this.host.retryLimit()) : watchBrief(readBudget),
+      brief: this.level === 'act' ? actBrief(readBudget, this.host.retryLimit()) : this.level === 'watch' ? watchBrief(readBudget) : offBrief(readBudget),
+      // A supervisor starts a task only at Act, so a report of one acts at the run's level now: never above the one it started at, and lowered with the run.
+      actor: () => ({ kind: 'supervisor', level: this.level }),
     };
   }
 
-  /** A run event. Ignored unless the supervisor watches: at Off, or once it failed, nothing is gathered. */
+  /**
+   * A run event. Ignored unless the supervisor watches — at Off, or once it
+   * failed, nothing is gathered — but for a report the planner asked for,
+   * gathered at every level (ADR-0037, R2).
+   */
   observe(event: RunEventInput): void {
-    if (!this.watching) return;
+    if (!this.watching && event.kind !== 'task_report') return;
     if (event.kind === 'run_finished') {
       if (this.finished) return;
       this.finished = true;
       this.runEndPending = true;
     }
-    if (event.kind === 'task_passed') this.wakeUps = [];
+    if (event.kind === 'task_passed' || event.report?.passed) this.wakeUps = [];
     this.policy.push({ ...event, at: this.now() });
     this.arm();
     this.host.saveState();
@@ -211,8 +236,12 @@ export class Supervisor {
     this.wakeUps = [];
     // A new run gathers its own events: what the previous one left undelivered
     // was already handed to the user's next turn, and must not wake this one.
+    // A report is the planner's answer, whichever run it ended in.
+    const reports = this.policy.snapshot().attention.filter((e) => e.kind === 'task_report');
     this.disarm();
     this.policy = createWakePolicy({ debounceMs: this.debounceMs });
+    for (const report of reports) this.policy.push(report);
+    this.arm();
   }
 
   /**
@@ -344,7 +373,8 @@ export class Supervisor {
         this.arm();
         return;
       }
-      this.countWakeUp();
+      // A report owed to the user's turn is not the supervisor waking itself.
+      if (batch.attention.some((e) => e.report?.authority !== 'user')) this.countWakeUp();
       this.deliver(batch);
     }, Math.max(0, due - this.now()));
   }
@@ -370,13 +400,28 @@ export class Supervisor {
     this.tick = null;
   }
 
+  /**
+   * A batch goes to the planner as the turns that act on it: the supervisor's
+   * own, and one for the reports owed to tasks the user's turn started, which
+   * acts as that turn did (ADR-0037, R3) and so never shares a turn with the
+   * supervisor's events.
+   */
   private deliver(batch: WakeBatch): void {
-    const runEnd = batch.attention.some((e) => e.kind === 'run_finished');
+    const theirs = batch.attention.filter((e) => e.report?.authority === 'user');
+    const own = batch.attention.filter((e) => e.report?.authority !== 'user');
+    const digest = (part: WakeBatch) => wakeUpDigest(part, (taskId) => this.host.describeTask(taskId), (taskId) => this.host.blockedBy(taskId));
     // A failure is the wake-up turn's to handle, in {@link turn}; the batch stays pending meanwhile.
-    void this.host.deliver(wakeUpDigest(batch, (taskId) => this.host.describeTask(taskId), (taskId) => this.host.blockedBy(taskId))).catch(() => {}).then(() => {
-      if (runEnd) this.runEndPending = false;
-      this.host.wakeUpEnded();
-    });
+    if (own.length > 0) {
+      const runEnd = own.some((e) => e.kind === 'run_finished');
+      const asked = own.some((e) => e.kind === 'task_report') ? 'supervisor' : undefined;
+      void this.host.deliver(digest({ attention: own, sinceLast: batch.sinceLast }), asked).catch(() => {}).then(() => {
+        if (runEnd) this.runEndPending = false;
+        this.host.wakeUpEnded();
+      });
+    }
+    if (theirs.length > 0) {
+      void this.host.deliver(digest({ attention: theirs, sinceLast: own.length > 0 ? [] : batch.sinceLast }), 'user').catch(() => {});
+    }
   }
 }
 
@@ -425,6 +470,32 @@ function actBrief(readBudget: number, retryLimit: number): string {
   ].join('\n');
 }
 
+/**
+ * A wake-up turn's brief once the supervisor is off for the run: what wakes it
+ * then is only a report it asked for as the supervisor (ADR-0037, R2).
+ */
+function offBrief(readBudget: number): string {
+  return [
+    'You are this plan\'s supervisor, woken by the run update above: the result of a task you started, which you asked for. The user did not write to you.',
+    'The supervisor is off for this run, so you cannot act in this turn: running, stopping or retrying tasks and editing the plan are refused.',
+    readsLine(readBudget),
+    'Tell the user, in a few lines, how it went and what you suggest; their reply is how a suggestion is applied.',
+  ].join('\n');
+}
+
+/**
+ * A report turn's brief for a task the user's turn started (ADR-0037, R3): it
+ * acts as that turn did, at whatever level the supervisor is.
+ */
+function reportBrief(readBudget: number): string {
+  return [
+    'The run update above is the result of a task you started in the user\'s turn, which had not ended when that turn did. The user did not write to you.',
+    'You act as in that turn: carry on with what the user asked, if it needs more, as you would have had the result come in it.',
+    readsLine(readBudget),
+    'Then tell the user, in a few lines, how it went and what, if anything, you did about it.',
+  ].join('\n');
+}
+
 function readsLine(readBudget: number): string {
   return `Read more with task_output, task_diff or task_query if you need to: up to ${readBudget} reads this turn. The update names what happened; it does not hold the logs.`;
 }
@@ -462,6 +533,8 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string, bl
       ? `automatic Merge all at the end of the run stopped${colon}; the run is handed over to the user to merge`
       : `automatic Merge all at the merge gate of ${task} stopped${colon}; the gate waits for the user`;
     case 'run_finished': return `the run finished${colon}`;
+    // Its result whole, not a digest line: the planner asked for it, and reads it here (ADR-0037, R2).
+    case 'task_report': return `${task}, whose result you asked for, has ended. ${(event.report?.text ?? '').split('\n').join('\n  ')}`;
     case 'task_passed': return `${task} passed`;
     case 'usage_limit': {
       const ids = event.taskIds ?? (event.taskId === undefined ? [] : [event.taskId]);

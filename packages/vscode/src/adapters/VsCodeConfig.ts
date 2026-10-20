@@ -274,6 +274,7 @@ export class VsCodeConfig extends BaseConfig {
     return parseApprovalModeSetting(this.config.get<string>('plannerApprovals', 'auto'));
   }
   get approvalPreApproved() { return [...(this.stringList('plannerAllowlist') ?? []), ...super.approvalPreApproved]; }
+  get effectAllowlist() { return [...(this.stringList('effectAllowlist') ?? []), ...super.effectAllowlist]; }
   get approvalDefaults() {
     if (process.env.ORDEWELL_APPROVAL_DEFAULTS !== undefined) return super.approvalDefaults;
     return this.config.get<boolean>('plannerAllowlistDefaults', true);

@@ -49,6 +49,7 @@ import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcomma
 import { AWK_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
 import { commandAllowedBy, commandExcludedBy, scopeExcluded, type PlannerAllowlist } from './plannerAllowlist';
 import { EFFECT_REFUSAL_HINT, READ_REFUSAL_HINT, webCommand, wgetVersionCommands } from './webCommands';
+import { EFFECT_ROUTE } from './effectRoute';
 
 export type { Dialect } from './shellLexer';
 
@@ -592,7 +593,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
     return `cmd.exe reads a "/" or "=" inside "${seg.ambiguousCmdName}" as ending the command name, so this classifier cannot tell which program would run. Name the program as a plain command, or describe the work as a task.`;
   }
   if (REFUSED_COMMANDS.includes(seg.binary)) {
-    return `"${seg.binary}" modifies state. You are a read-only planner — describe the change as a task instead, and the runner executing the plan will make it.`;
+    return `"${seg.binary}" modifies state. You are a read-only planner: ${EFFECT_ROUTE}`;
   }
   const runs = REFUSED_RUNNERS[seg.binary];
   if (runs) {
@@ -630,7 +631,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   if (subs) {
     const sub = subcommandOf(seg);
     if (sub && subs.includes(sub)) {
-      return `"${seg.binary} ${sub}" changes state or reaches outward. You are a read-only planner — put it in the plan and let the runner do it.`;
+      return `"${seg.binary} ${sub}" changes state or reaches outward. You are a read-only planner: ${EFFECT_ROUTE}`;
     }
   }
   // `git branch`/`git tag` are read-only subcommands, but their delete/move
@@ -641,7 +642,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
     if (sub === 'branch' || sub === 'tag') {
       const flag = seg.args.find((a) => ['-D', '-d', '-m', '-M', '--delete', '--move'].includes(a));
       if (flag) {
-        return `"git ${sub} ${flag}" mutates refs. You are a read-only planner — describe the change as a task instead.`;
+        return `"git ${sub} ${flag}" mutates refs. You are a read-only planner: ${EFFECT_ROUTE}`;
       }
       // The flag forms above are not the only way to write a ref: a bare
       // positional (`git branch foo`, `git tag v1`) creates or moves one with
@@ -652,7 +653,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
       const scan = scanFlags(seg);
       const target = scan?.operands[1];
       if (!listing && target) {
-        return `"git ${sub} ${target}" creates or moves a ref. You are a read-only planner — describe the change as a task instead.`;
+        return `"git ${sub} ${target}" creates or moves a ref. You are a read-only planner: ${EFFECT_ROUTE}`;
       }
     }
   }

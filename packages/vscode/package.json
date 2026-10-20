@@ -272,6 +272,13 @@
           "default": [],
           "description": "Extra planner allowlist entries. A command rule such as \"gh issue list\" or \"gcloud * * list\" covers commands whose leading words match it; \"mcp:find-*\" covers MCP tools by name; \"https://docs.example.com/*\" or \"/opt/data/*\" covers fetches and outside reads; \"web_search:<provider>\" covers searches sent to one provider: anthropic (Claude Code), openai (Codex), opencode (OpenCode) or duckduckgo (Ordewell's own search). A leading \"!\" excludes, and an exclusion wins in every mode: \"!web_search:*\" turns every search off. To turn all web reads off, add \"!web_search:*\", \"!https://*\" and \"!http://*\", or set the web-read budget to 0. \"mcp-server:<name>@<hash>\" starts one exact MCP server a repository declares for the planner (the approval shows the entry); \"!mcp-server:*\" starts none."
         },
+        "ordewell.effectAllowlist": {
+          "scope": "application",
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Script tasks the planner may run without asking you. A rule is matched against the whole command, every word in order and flags included: \"git push origin feature/*\" covers \"git push origin feature/login\", not the same push with \"--force\". \"*\" stands for one word, or inside a word for any run of characters, and a rule spells out its operation before any \"*\". A script task runs unasked only when every one of its commands is covered; a shell script, or a program named by its path, never is. The planner allowlist's \"!\" exclusions hold here too. There are no built-in rules."
+        },
         "ordewell.plannerWebReadBudget": {
           "scope": "application",
           "type": "integer",

@@ -1,7 +1,9 @@
 import { reconcileApprovals, type ApprovalRequestMessage } from '@ordewell/core';
 import type { Key } from '../keys';
 import type { ApprovalRequestView, TuiState } from '../state';
-import { step, type Step } from './shared';
+import { approvalScrollMax, bodyRows } from '../layout';
+import { WHEEL_NOTCH, pageNotch } from './pointer';
+import { clamp, step, type Step } from './shared';
 
 /**
  * Queue rather than stack: the planner blocks on each request, so showing them
@@ -36,9 +38,9 @@ export function syncApprovals(state: TuiState, waiting: readonly ApprovalRequest
   const answered = [...open, ...state.pendingApprovals].filter((request) => !ids.has(request.id));
   const dropped = answered.reduce((current, request) => dropApproval(current, request.id), { ...state, conversation: reconcileApprovals(state.conversation, waiting) });
   // A task runner's request is answered in its task view, never in the planner's modal.
-  return waiting.reduce((current, { id, kind, subject, scope, detail }) => (kind === 'runner_tool'
+  return waiting.reduce((current, { id, kind, subject, scope, detail, body }) => (kind === 'runner_tool'
     ? current
-    : enqueueApproval(current, { id, kind, subject, scope, ...(detail ? { detail } : {}) })), dropped);
+    : enqueueApproval(current, { id, kind, subject, scope, ...(detail ? { detail } : {}), ...(body ? { body } : {}) })), dropped);
 }
 
 function showNextApproval(state: TuiState): TuiState {
@@ -63,4 +65,22 @@ export function handleApprovalKey(
   return step(showNextApproval({ ...state, overlay: null }), state.sessionId
     ? [{ type: 'respondApproval', sessionId: state.sessionId, approvalId: request.id, granted: grant }]
     : []);
+}
+
+/**
+ * Moves a request's body in view, or null when the key is no scroll key or the
+ * request has no body to scroll. The wheel is the card's own here, as the
+ * body is what the answer is about.
+ */
+export function scrollApproval(
+  state: TuiState,
+  overlay: Extract<NonNullable<TuiState['overlay']>, { kind: 'approval' }>,
+  key: Key,
+): Step | null {
+  if (!overlay.request.body) return null;
+  const page = pageNotch(bodyRows(state));
+  const move: Record<string, number> = { down: 1, up: -1, pagedown: page, pageup: -page, scrolldown: WHEEL_NOTCH, scrollup: -WHEEL_NOTCH };
+  const delta = move[key.name];
+  if (delta === undefined) return null;
+  return step({ ...state, overlay: { ...overlay, scroll: clamp((overlay.scroll ?? 0) + delta, approvalScrollMax(state)) } });
 }

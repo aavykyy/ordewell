@@ -23,6 +23,8 @@ function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptio
     tasks: () => tasks,
     checkpointQuestion: () => undefined,
     recentOutput: () => undefined,
+    reportTail: () => undefined,
+    reported: vi.fn(),
     systemNote: vi.fn((text: string) => { transcript.push({ text, voice: 'system' }); }),
     supervisorNote: vi.fn((text: string) => { transcript.push({ text, voice: 'supervisor' }); }),
     changed: vi.fn(),
