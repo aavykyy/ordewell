@@ -39,7 +39,28 @@ export type ExecutionCommandName =
   | 'remove_queued'
   | 'cancel_resume'
   | 'answer_checkpoint'
-  | 'approve_review';
+  | 'approve_review'
+  | 'run_script';
+
+/**
+ * How the user consented to the script a `run_script` call ran (ADR-0035):
+ * on the approval card, by an effect allowlist rule (by name), by autorun in
+ * Full, or by choosing Act for the supervisor.
+ */
+export type ScriptConsent =
+  | { by: 'card' }
+  | { by: 'allowlist'; rule: string }
+  | { by: 'autorun' }
+  | { by: 'act' };
+
+/**
+ * Where a `run_script` call's task stood as the call answered, or as it ended
+ * later: `passed` and `failed` are its verdict, `changed-files` a pass that left
+ * a tracked change waiting on the user, `stopped` an attempt ended with no
+ * verdict, `running` one still under way after a minute, and `gated` one
+ * waiting at its merge gate.
+ */
+export type ScriptResult = 'passed' | 'failed' | 'changed-files' | 'stopped' | 'running' | 'gated';
 
 /**
  * One call at the command seam as the timeline keeps it: what was asked, by
@@ -56,5 +77,11 @@ export interface ExecutionRecord {
   outcome: 'done' | 'refused' | 'declined';
   /** The refusal, the message sent, or the note a denial carried. */
   detail?: string;
+  /** `run_script`: how the script was consented to, once it was. */
+  consent?: ScriptConsent;
+  /** `run_script`: where its task stood; one that answered before its end gets a record of that end too. */
+  result?: ScriptResult;
+  /** `run_script`: the record of that end, kept once the task ended after the call answered. */
+  ended?: true;
   at: string;
 }

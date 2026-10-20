@@ -34,6 +34,11 @@ describe('describeApproval', () => {
     expect(text).not.toMatch(/also allows/i);
   });
 
+  it('prints a script task\'s body whole, since the consent is to what runs (ADR-0035)', () => {
+    const text = describeApproval({ type: 'approval_request', id: 'ap-4', kind: 'task_start', subject: 'Run script task #2 "Push"', scope: 'Run script task #2 "Push"', body: 'git push origin main\n\nTime limit: 10 minutes.' });
+    expect(text).toContain('The planner wants to start work:\n    Run script task #2 "Push"\n      git push origin main\n\n      Time limit: 10 minutes.');
+  });
+
   it('leads with what will run, not with the internal scope', () => {
     const text = describeApproval(SHELL_EVENT);
     expect(text).toContain('npm test');

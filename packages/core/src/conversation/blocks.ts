@@ -125,6 +125,8 @@ export interface ApprovalBlock {
   subject: string;
   scope: string;
   detail?: string;
+  /** What a script task runs, verbatim, for a start the user is asked to approve (ADR-0035). */
+  body?: string;
   status: ApprovalStatus;
   /** Absent while pending. */
   decidedBy?: ApprovalSource;

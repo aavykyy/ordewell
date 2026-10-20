@@ -1,4 +1,4 @@
-import type { Task } from '../models/Task';
+import { runsAsOps, type Task } from '../models/Task';
 import type { PlanStore } from './PlanStore';
 import type { IsolationRunController } from './IsolationRunController';
 import { classifyAttempt, mergeExcludes } from './attemptKind';
@@ -170,7 +170,7 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   // A forced start goes past a failure, so only what is still under way holds it.
   const waiting = forced || queued ? underWay(task, store, runs, plan) : unmetDependencies(task, store, runs);
   if (waiting.length > 0) waits.push(queued ? { kind: 'queued', waiting } : { kind: 'dependencies', waiting });
-  if (input.merging && mergeExcludes(classifyAttempt(store.isOps(task.id)))) waits.push({ kind: 'merging' });
+  if (input.merging && mergeExcludes(classifyAttempt(opsOf(task, store)))) waits.push({ kind: 'merging' });
   // A script task runs on no runner, so no runner's limit holds it (ADR-0035).
   if (!forced && task.type === 'ai') {
     const runner = store.resolveTaskRunner(task);
@@ -277,8 +277,17 @@ export function mergeGate(
   store: Pick<PlanStore, 'get' | 'isCompleted' | 'isOps'>,
   runs: Pick<IsolationRunController, 'awaitsMerge'>,
 ): string[] {
-  if (task.type !== 'user' && !store.isOps(task.id)) return [];
+  if (task.type !== 'user' && !opsOf(task, store)) return [];
   return ancestors(task, store).filter((id) => store.isCompleted(id) && runs.awaitsMerge(id));
+}
+
+/**
+ * Whether a task runs as an ops task. One the plan does not hold yet — a held
+ * edit adds it, or `run_script` is about to (ADR-0035) — has no root in the
+ * store to ask, so it is judged by its own type and flag, as a top-level task.
+ */
+function opsOf(task: Readonly<Task>, store: Pick<PlanStore, 'get' | 'isOps'>): boolean {
+  return store.get(task.id) ? store.isOps(task.id) : runsAsOps(task);
 }
 
 /** Every task a task depends on, directly or through others, nearest first; a cycle is walked once. */

@@ -1,4 +1,4 @@
-import type { LegacyPlanState, PendingPlanTurn, PlanTurnSource, RunnerId, SkillLoad } from '../models/Task';
+import type { LegacyPlanState, PendingPlanTurn, PlanTurnSource, RunnerId, SkillLoad, TurnAuthority } from '../models/Task';
 import { ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError } from './PlannerConversation';
 import { PlannerResend, type PlannerLimit } from './PlannerResend';
 import type { TurnFailure } from './runnerExit';
@@ -15,6 +15,8 @@ export interface PlanTurnInput {
   source: PlanTurnSource;
   text: string;
   skills?: readonly SkillLoad[];
+  /** A supervisor input carrying a report the planner asked for; see {@link PendingPlanTurn.report}. */
+  report?: TurnAuthority;
   /** Stops the turn that takes this input. Not saved: a replayed input has no caller left to stop it. */
   signal?: AbortSignal;
 }
@@ -27,6 +29,11 @@ export interface PlanTurnInput {
 export interface TurnPrompt extends SkillInvocation {
   source: PlanTurnSource;
   wakeUps: string[];
+  /**
+   * A wake-up turn's: who it acts for (ADR-0037, R3) — the supervisor, or the
+   * user's turn whose report it delivers. Absent on the user's own turn.
+   */
+  authority?: TurnAuthority;
   /** The message was force sent: the turn replaces the one it stopped. */
   forced?: true;
 }
@@ -37,6 +44,8 @@ export interface PlanTurnsHost {
   conversationBusy(): boolean;
   /** Whether wake-ups alone may open a turn now; when not, they wait for one that may, or for the user's next message. */
   mayWake(): boolean;
+  /** Whether a report the planner asked for may open a turn now, whatever the supervisor's level (ADR-0037, R2). */
+  mayReport(): boolean;
   /** Save the pending list. */
   persist(): void;
   /** The wait on the planner's usage limit changed with no turn to say so: save the plan, and announce it. */
@@ -93,8 +102,14 @@ export function turnPrompt(batch: readonly PendingPlanTurn[]): TurnPrompt {
     text: fromUser.map((t) => t.text).join('\n\n'),
     skills: fromUser.flatMap((t) => t.skills ?? []),
     wakeUps: batch.filter((t) => t.source === 'supervisor').map((t) => t.text),
+    ...(fromUser.length === 0 ? { authority: authorityOf(batch[0]) } : {}),
     ...(batch.some((t) => t.forced) ? { forced: true } : {}),
   };
+}
+
+/** Who a wake-up input's turn acts for: the user's turn only for a report it is owed (ADR-0037, R3). */
+function authorityOf(input: PendingPlanTurn | undefined): TurnAuthority {
+  return input?.report === 'user' ? 'user' : 'supervisor';
 }
 
 /**
@@ -254,6 +269,7 @@ export class PlanTurns {
       timestamp: new Date().toISOString(),
       ...(input.skills && input.skills.length > 0 ? { skills: [...input.skills] } : {}),
       ...(forced ? { forced: true } : {}),
+      ...(input.report ? { report: input.report } : {}),
     };
   }
 
@@ -272,7 +288,6 @@ export class PlanTurns {
     if (!plan || this.host.conversationBusy()) return;
     const batch = this.liveBatch(plan);
     if (batch.length === 0) return;
-    if (batch.every((t) => t.source === 'supervisor') && (this.quiet || !this.host.mayWake())) return;
     const detecting = this.host.plannerDetecting();
     if (detecting) {
       this.detecting = true;
@@ -361,7 +376,10 @@ export class PlanTurns {
 
   /**
    * What the next turn takes: what waits, oldest first, less any input whose
-   * caller stopped it before its turn began — or a forced input alone.
+   * caller stopped it before its turn began — or a forced input alone. With
+   * no user input, only wake-ups that may open a turn now, and of one
+   * authority: a report owed to the user's turn and the supervisor's own
+   * inputs take turns of their own (ADR-0037, R3), the older first.
    */
   private liveBatch(plan: LegacyPlanState): PendingPlanTurn[] {
     const pending = plan.pendingTurns ?? [];
@@ -372,7 +390,16 @@ export class PlanTurns {
       for (const t of stopped) this.settle(t.id, (w) => w.reject(new PlannerTurnStoppedError()));
     }
     const live = plan.pendingTurns ?? [];
-    return live[0]?.forced ? [live[0]] : live;
+    if (live[0]?.forced) return [live[0]];
+    if (live.some((t) => t.source === 'user')) return live;
+    if (this.quiet) return [];
+    const authorities = [...new Set(live.map(authorityOf))];
+    return authorities.map((authority) => live.filter((t) => authorityOf(t) === authority)).find((group) => this.mayOpen(group)) ?? [];
+  }
+
+  /** A report the planner asked for opens a turn at every level (ADR-0037, R2); the supervisor's own wake-ups only while it watches. */
+  private mayOpen(wakeUps: readonly PendingPlanTurn[]): boolean {
+    return wakeUps.some((t) => t.report !== undefined) ? this.host.mayReport() : this.host.mayWake();
   }
 
   private async run(plan: LegacyPlanState, batch: readonly PendingPlanTurn[]): Promise<void> {

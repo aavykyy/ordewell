@@ -3,6 +3,7 @@ import { dialectFor, lex, lexAll, type Segment } from './shellLexer';
 import { unwrap } from './commandRunners';
 import type { ShellDialect } from './researchShell';
 import { blockedAddressReason } from './egressGuard';
+import { EFFECT_ROUTE } from './effectRoute';
 
 interface WebCommand {
   urls: URL[];
@@ -17,7 +18,7 @@ interface WebCommand {
 // some runners and a native tool for others, and a name that is hidden from the
 // model it is shown to only misleads it.
 export const READ_REFUSAL_HINT = 'Fetch the page with your web fetch tool instead.';
-export const EFFECT_REFUSAL_HINT = 'This sends data or changes something, so the planner should not do it itself: add it to the plan as an ops task (and, if it writes files, a change task).';
+export const EFFECT_REFUSAL_HINT = `This sends data or changes something, so it is not research: ${EFFECT_ROUTE}`;
 
 const CURL_EFFECT = new Set(['d', 'F', 'T', 'O', 'D', 'c', 'J', '--data', '--data-raw', '--data-binary', '--data-ascii', '--data-urlencode', '--form', '--form-string',
   '--json', '--upload-file', '--remote-name', '--remote-name-all', '--dump-header', '--cookie-jar', '--create-dirs', '--output-dir', '--remote-header-name']);

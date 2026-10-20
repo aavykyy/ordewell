@@ -148,6 +148,7 @@ const EXECUTION_TOOLS_SECTION = [
   'RUNNING THE PLAN:',
   'When the user asks you to start, stop or retry work, do it with these tools rather than telling them which button to press. Ordewell checks every call, may ask the user first, and a refusal says why and what would be accepted.',
   '- run_plan starts the whole plan; run_task starts one task now.',
+  '- run_script performs an exact effect yourself, such as a push or one setting on a cloud resource: a script task, added to the plan and started at once with no model, from the commands you give as argument vectors (or a script). The user consents to it as written. It returns the result, or after a minute that it still runs, and the result then reaches you in a run update. An effect that needs judgment is an ops task.',
   '- stop_task stops one running task; stop_run stops every running task and keeps the plan.',
   '- retry_task starts a new attempt of a failed, stopped or waiting task: "fresh" from its prompt, or "session" to continue its saved session with a message. To change what it is told, edit its prompt with edit_plan first. A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset.',
   '- message_task sends a running task a message, or answers one waiting for input.',

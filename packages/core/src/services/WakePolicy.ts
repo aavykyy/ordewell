@@ -1,7 +1,14 @@
+import type { TurnAuthority } from '../models/Task';
+
 /**
  * When the supervisor wakes during a run, and what it is told (#27). Only an
  * attention event wakes it; passes ride along as context. It keeps no clock:
  * the host stamps each event and polls on its own tick.
+ *
+ * `task_report` is a task addressed to the planner ending: one whose result a
+ * planner turn asked for and did not get before it answered (ADR-0037, R2).
+ * It is batched as any attention event is, and wakes the planner whatever the
+ * supervisor's level, since the planner asked for it.
  */
 
 export type RunEventKind =
@@ -13,7 +20,8 @@ export type RunEventKind =
   | 'landing_conflict'
   | 'usage_limit'
   | 'auto_merge_stopped'
-  | 'run_finished';
+  | 'run_finished'
+  | 'task_report';
 
 export type RunEvent = {
   kind: RunEventKind;
@@ -27,7 +35,18 @@ export type RunEvent = {
   resumeAt?: string | null;
   /** `usage_limit` in a batch: every task the runner's limit paused in it, in arrival order. */
   taskIds?: string[];
+  /** `task_report` only: the result the planner asked for. */
+  report?: TaskReportEvent;
 };
+
+export interface TaskReportEvent {
+  /** Whose turn started the task: the turn the report opens acts with its authority (ADR-0037, R3). */
+  authority: TurnAuthority;
+  /** Its verdict and the tail of its output, as the planner reads them: never cut to a digest line. */
+  text: string;
+  /** It passed: a pass, as far as the wake-up rate is concerned. */
+  passed: boolean;
+}
 
 export interface WakeBatch {
   /** What woke the supervisor, in arrival order; never empty. */
