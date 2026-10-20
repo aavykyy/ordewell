@@ -68,6 +68,7 @@ export type { HttpWebFetcherOptions, WebResponse, WebTransport } from './service
 export type { ApprovalMode, ApprovalModeSetting, ApprovalPolicyOptions, ApprovalSource } from './services/ApprovalPolicy';
 export { DEFAULT_PLANNER_ALLOWLIST, parseAllowlist, commandAllowedBy, toolAllowed, scopeAllowed } from './services/plannerAllowlist';
 export type { PlannerAllowlist, CommandWords } from './services/plannerAllowlist';
+export { parseEffectAllowlist, effectRuleFor, type EffectRules } from './services/effectAllowlist';
 export { PendingApprovals } from './services/PendingApprovals';
 export type { AskOptions, PendingApproval, PendingApprovalsOptions } from './services/PendingApprovals';
 export { RunnerApprovals } from './services/RunnerApprovals';

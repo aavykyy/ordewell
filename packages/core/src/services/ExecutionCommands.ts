@@ -261,7 +261,7 @@ export interface ExecutionCommandsDeps {
   consent: Pick<IApproval, 'request'>;
   supervisor?: SupervisorPolicy;
   guards?: readonly LoopGuard[];
-  /** What pre-approves a script's effect in the user's turn; nothing does unless set. */
+  /** What pre-approves a script's effect (ADR-0035); nothing does unless set. */
   effects?: EffectAllowlist;
   now?: () => string;
   /** How long `run_script` waits for its task's end; a minute unless set. */
@@ -564,25 +564,29 @@ export class ExecutionCommands {
 
   /**
    * Who may run a script without the mandate (#23), as ADR-0035's table says.
-   * In the user's turn: an effect their allowlist names runs, autorun in Full
-   * runs it (ADR-0030), and otherwise they are asked on the card. The
-   * supervisor's level decides for it: at Act it runs, the task it adds being
-   * approved (ADR-0029), and at Watch it is refused, to suggest it instead.
+   * An effect the user's allowlist covers runs in every row but one, and is
+   * recorded by its rule. In the user's turn: otherwise autorun in Full runs
+   * it (ADR-0030), and failing that they are asked on the card. The
+   * supervisor's level decides for it first: at Watch it is refused, to
+   * suggest it instead, covered or not; at Act it runs, the task it adds
+   * being approved (ADR-0029).
    */
   private scriptConsent(actor: ExecutionActor, body: ScriptBody | null): { kind: 'allow'; how: ScriptConsent } | { kind: 'ask' } | { kind: 'refuse'; reason: string } {
+    // A rule the user wrote covers the whole of a `commands` body, or nothing does.
+    const covered = (): ScriptConsent | undefined => {
+      const rule = body && 'commands' in body ? this.effects(body) : null;
+      return rule ? { by: 'allowlist', rule } : undefined;
+    };
     switch (actor.kind) {
       case 'user':
       case 'autorun': return { kind: 'refuse', reason: SCRIPTS_ARE_THE_PLANNERS };
       case 'supervisor': {
         const level = this.supervisor(actor.level, 'run_script');
-        return level.kind === 'allow' ? { kind: 'allow', how: { by: 'act' } } : level;
+        return level.kind === 'allow' ? { kind: 'allow', how: covered() ?? { by: 'act' } } : level;
       }
       case 'planner-turn': {
-        // The effect allowlist's hook (ADR-0035): a rule the user wrote covers the whole of a `commands` body, or nothing does.
-        const rule = body && 'commands' in body ? this.effects(body) : null;
-        if (rule) return { kind: 'allow', how: { by: 'allowlist', rule } };
-        if (this.addedMayStart(actor)) return { kind: 'allow', how: { by: 'autorun' } };
-        return { kind: 'ask' };
+        const how: ScriptConsent | undefined = covered() ?? (this.addedMayStart(actor) ? { by: 'autorun' } : undefined);
+        return how ? { kind: 'allow', how } : { kind: 'ask' };
       }
     }
   }

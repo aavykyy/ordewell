@@ -30,7 +30,7 @@ async function makeStore(initial: Record<string, string> = {}) {
 
 // Every ORDEWELL_* var BaseConfig or VsCodeConfig reads, so a developer shell
 // (the local .envrc exports several) cannot leak in and move a default.
-const ENV_KEYS = ['ORDEWELL_WORKTREE_ISOLATION', 'ORDEWELL_WORKTREE_SETUP', 'ORDEWELL_CONFLICT_REPAIR_ATTEMPTS', 'ORDEWELL_WORKSPACE_REPOS', 'ORDEWELL_WORKTREE_LINKS', 'ORDEWELL_MAX_PARALLEL', 'ORDEWELL_RESEARCH_ENABLED', 'ORDEWELL_RESEARCH_MAX_STEPS', 'ORDEWELL_RESEARCH_MAX_FILE_SIZE', 'ORDEWELL_PLAN_MAP_ENABLED', 'ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_APPROVAL_MODE', 'ORDEWELL_APPROVAL_ALLOW', 'ORDEWELL_WEB_READ_BUDGET', 'ORDEWELL_SUBAGENT_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'ORCHESTRATOR_MODEL', 'AI_PROVIDER'];
+const ENV_KEYS = ['ORDEWELL_WORKTREE_ISOLATION', 'ORDEWELL_WORKTREE_SETUP', 'ORDEWELL_CONFLICT_REPAIR_ATTEMPTS', 'ORDEWELL_WORKSPACE_REPOS', 'ORDEWELL_WORKTREE_LINKS', 'ORDEWELL_MAX_PARALLEL', 'ORDEWELL_RESEARCH_ENABLED', 'ORDEWELL_RESEARCH_MAX_STEPS', 'ORDEWELL_RESEARCH_MAX_FILE_SIZE', 'ORDEWELL_PLAN_MAP_ENABLED', 'ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_APPROVAL_MODE', 'ORDEWELL_APPROVAL_ALLOW', 'ORDEWELL_EFFECT_ALLOW', 'ORDEWELL_WEB_READ_BUDGET', 'ORDEWELL_SUBAGENT_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'ORCHESTRATOR_MODEL', 'AI_PROVIDER'];
 let savedEnv: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -128,6 +128,18 @@ describe('VsCodeConfig.webReadBudget', () => {
     __setConfig({ plannerWebReadBudget: 12 });
     process.env.ORDEWELL_WEB_READ_BUDGET = '0';
     expect(new VsCodeConfig(await makeStore({})).webReadBudget).toBe(0);
+  });
+});
+
+describe('VsCodeConfig.effectAllowlist (ADR-0035)', () => {
+  it('has no rules unless the user writes some', async () => {
+    expect(new VsCodeConfig(await makeStore({})).effectAllowlist).toEqual([]);
+  });
+
+  it('reads the setting, trimming blanks, beside ORDEWELL_EFFECT_ALLOW', async () => {
+    __setConfig({ effectAllowlist: [' git push origin feature/* ', ''] });
+    process.env.ORDEWELL_EFFECT_ALLOW = 'gh pr merge *, make release';
+    expect(new VsCodeConfig(await makeStore({})).effectAllowlist).toEqual(['git push origin feature/*', 'gh pr merge *', 'make release']);
   });
 });
 

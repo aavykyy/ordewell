@@ -16,6 +16,7 @@ import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type Run
 import { PlanStore } from './PlanStore';
 import { ApprovalPolicy, effectiveApprovalMode } from './ApprovalPolicy';
 import { DEFAULT_PLANNER_ALLOWLIST } from './plannerAllowlist';
+import { effectRuleFor, parseEffectAllowlist } from './effectAllowlist';
 import { PendingApprovals, type PendingApproval } from './PendingApprovals';
 import { RunnerApprovals } from './RunnerApprovals';
 import { approvalScopes, isRunnerApproval, type ApprovalAnswer, type ApprovalRequest } from '../interfaces/IApproval';
@@ -321,7 +322,7 @@ export function createSession(deps: SessionDeps): Session {
     autonomous: () => deps.config.autonomousMode,
     // Read per request, so a change of autonomy level or allowlist applies to the next call.
     mode: (kind) => effectiveApprovalMode(deps.config.approvalMode, deps.config.autonomousMode, kind),
-    preApproved: () => [...(deps.config.approvalDefaults ? DEFAULT_PLANNER_ALLOWLIST : []), ...deps.config.approvalPreApproved],
+    preApproved: () => plannerAllowlistOf(deps.config),
     ask: (req) => approvals.ask(req),
     // The interactive path (`asked`) already broadcasts approval_request +
     // approval_settled; only the silent sources need a signal, or a
@@ -394,6 +395,11 @@ export function createSession(deps: SessionDeps): Session {
 }
 
 /** Every credential the config holds, read afresh so a key set mid-session is covered. */
+/** The planner allowlist in force: the built-in reads unless turned off, then the user's entries. */
+function plannerAllowlistOf(config: IConfig): string[] {
+  return [...(config.approvalDefaults ? DEFAULT_PLANNER_ALLOWLIST : []), ...config.approvalPreApproved];
+}
+
 function configSecrets(config: IConfig): string[] {
   return [
     config.apiKey, config.openAiApiKey, config.openrouterKey, config.geminiKey, config.openaiCompatibleApiKey,
@@ -468,6 +474,8 @@ export class Session {
    * supervisor has first.
    */
   private sentHandoff: IsolationHandoff | null = null;
+  /** The effect allowlist rules already warned about as ignored, so each is said once, not on every script. */
+  private readonly ignoredEffectRules = new Set<string>();
   /** The run was forgotten and no surface has been told yet; see {@link announceClosed}. */
   private closedUnannounced = false;
   /** The edit the open planner turn holds, as last announced: a surface that joins mid-turn is shown it. */
@@ -688,6 +696,16 @@ export class Session {
       // A Guarded start asks on the card the planner's other requests use.
       consent: { request: (request) => this.approvals.ask(request) },
       guards: [this.supervision.guard],
+      // Read per request, like the planner allowlist, so an edited rule applies to the next script (ADR-0035).
+      effects: (body) => {
+        const rules = parseEffectAllowlist(this.config.effectAllowlist, plannerAllowlistOf(this.config));
+        for (const { rule, warning } of rules.ignored) {
+          if (this.ignoredEffectRules.has(rule)) continue;
+          this.ignoredEffectRules.add(rule);
+          this.notice('warn', warning);
+        }
+        return effectRuleFor(rules, body);
+      },
     });
 
     this.unsubObserver = this.orchestrator.subscribe(this.observer());

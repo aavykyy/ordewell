@@ -155,6 +155,59 @@ describe('run_script: consent, by ADR-0035\'s table', () => {
   });
 });
 
+describe('run_script: the effect allowlist (ADR-0035)', () => {
+  it('runs a script its rules cover in the user\'s turn under Guarded, with no card, and names the rule in the timeline', async () => {
+    const env = await supervised([task('t1', 1)], { config: { autonomousMode: false, effectAllowlist: ['git push origin *'] }, settings: { supervisorLevel: 'off' } });
+    await userTurn(env);
+
+    const reply = runScript(env);
+    await until(() => env.scripts.spawnedIds().length === 1);
+    scriptEnds(env);
+
+    expect(answer(await reply).result).toBe('Ran script task #2 "Push main". It passed.\nIt printed nothing.');
+    expect(cards(env)).toEqual([]);
+    expect(timeline(env).at(-1)).toMatchObject({
+      record: { command: 'run_script', consent: { by: 'allowlist', rule: 'git push origin *' }, result: 'passed' },
+      text: 'The planner ran script task #2 "Push main", which your effect allowlist rule "git push origin *" covers: it passed.',
+    });
+  });
+
+  it('reads the rules on every request, and asks on the card for a command they do not cover', async () => {
+    const rules: string[] = [];
+    const env = await supervised([task('t1', 1)], { config: { autonomousMode: false, effectAllowlist: rules }, settings: { supervisorLevel: 'off' } });
+    await userTurn(env);
+
+    void runScript(env, { title: 'Force push', commands: [['git', 'push', 'origin', 'main', '--force']] });
+    await until(() => cards(env).length === 1);
+    rules.push('git push origin *');
+    const reply = runScript(env);
+    await until(() => env.scripts.spawnedIds().length === 1);
+    const push = env.scripts.of(env.scripts.spawnedIds()[0]);
+    push.reportScriptExit(PASSED);
+    push.emitExit(0);
+
+    expect(answer(await reply).result).toBe('Ran script task #3 "Push main". It passed.\nIt printed nothing.');
+    expect(cards(env)).toHaveLength(1);
+  });
+
+  it('ignores a rule that names no operation before its `*`, said once however many scripts ask', async () => {
+    const env = await supervised([task('t1', 1)], { config: { autonomousMode: false, effectAllowlist: ['git * origin main'] }, settings: { supervisorLevel: 'off' } });
+    await userTurn(env);
+
+    void runScript(env);
+    await until(() => cards(env).length === 1);
+    env.session.resolveApproval(cards(env)[0].id, false);
+    void runScript(env, { title: 'Push again', commands: PUSH });
+    await until(() => cards(env).length === 2);
+
+    expect(env.notices.filter((n) => n.level === 'warn' && n.message.includes('effect allowlist'))).toEqual([{
+      type: 'notice', level: 'warn',
+      message: 'Ignored the effect allowlist rule "git * origin main": a rule spells out its operation, up to and including the verb, before any *.',
+    }]);
+    expect(env.scripts.spawnedIds()).toEqual([]);
+  });
+});
+
 describe('run_script: a card denied or never answered', () => {
   /** Guarded, a run under way, and the user's card for the script answered no. */
   async function denied(): Promise<Env> {
