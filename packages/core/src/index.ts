@@ -44,7 +44,7 @@ export type {
 export * from './models/Session';
 export * from './models/Usage';
 export * from './models/TaskLog';
-export { commandLine, scriptBodyOf, DEFAULT_SCRIPT_TIMEOUT_MS, type ScriptBody } from './models/ScriptTask';
+export { commandLine, scriptBodyOf, scriptBodyText, scriptTaskText, timeLimitText, DEFAULT_SCRIPT_TIMEOUT_MS, type ScriptBody } from './models/ScriptTask';
 export * from './models/RunnerCommand';
 export * from './models/Execution';
 export * from './interfaces/IFileSystem';

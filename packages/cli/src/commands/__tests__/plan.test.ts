@@ -169,6 +169,36 @@ describe('handlePlan', () => {
     srv.close();
   });
 
+  it('prints a script task as [SCR] with its commands under the title, and a legend line for it (ADR-0035)', async () => {
+    const withScript = {
+      tasks: [
+        { id: 't1', order: 1, title: 'Build', type: 'ai' },
+        { id: 't2', order: 2, title: 'Tag the release', type: 'script', dependencies: ['t1'], commands: [['git', 'tag', 'v1'], ['git', 'push', 'origin', 'v1']], timeoutMs: 90_000 },
+        { id: 't3', order: 3, title: 'Clean up', type: 'script', script: 'rm -rf dist\nls', ops: undefined },
+      ],
+      runners: ['claude-code'],
+    };
+    const srv = await planServer({ '/converse/start': { plan: withScript } }, []);
+    const { handlePlan } = await import('../plan');
+    const { stdout } = await capture(() =>
+      handlePlan(['--goal', 'ship it', '--workspace', '/tmp'], { api: new ApiClient(srv.port) }),
+    );
+    const lines = stdout.split('\n');
+    const title = lines.findIndex((l) => l.includes('[SCR] Tag the release'));
+    expect(title).toBeGreaterThan(-1);
+    expect(lines.slice(title + 1, title + 4)).toEqual([
+      '        git tag v1',
+      '        git push origin v1',
+      '',
+    ]);
+    expect(stdout).toContain('        Time limit: 90 seconds.');
+    expect(stdout).toContain('        rm -rf dist\n        ls');
+    expect(stdout).toContain('(1 AI, 2 Script, 0 Manual)');
+    expect(stdout).toContain('[SCR] = script task');
+    expect(stdout).not.toContain('[OPS]');
+    srv.close();
+  });
+
   it('forwards the planner environment to a daemon that was already running', async () => {
     // The daemon inherits its environment once, at spawn. Without this the
     // documented `AI_PROVIDER=codex ordewell plan …` planned with whatever the

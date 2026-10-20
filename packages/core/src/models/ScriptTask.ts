@@ -171,6 +171,16 @@ export function scriptBodyText(body: ScriptBody): string {
   return [...shown, '', `Time limit: ${timeLimitText(body.timeoutMs)}.`].join('\n');
 }
 
+/**
+ * A script task as a row shows it: the body {@link scriptBodyText} gives the
+ * approval card, so what the user read when consenting is what the plan lists.
+ * A task whose body the plan's rules refuse says so rather than showing nothing.
+ */
+export function scriptTaskText(task: BodyFields): string {
+  const body = scriptBodyOf(task);
+  return body ? scriptBodyText(body) : 'This script task has no valid body, so it cannot run.';
+}
+
 /** A time limit in the largest units it is a whole number of: "10 minutes", "90 seconds". */
 export function timeLimitText(ms: number): string {
   const units: [number, string][] = [[3_600_000, 'hour'], [60_000, 'minute'], [1_000, 'second'], [1, 'millisecond']];

@@ -20,7 +20,6 @@ export interface TaskView {
   title: string;
   description?: string;
   prompt?: string;
-  /** A script task is projected as an ops AI task until the pane draws its body (ADR-0035). */
   type: TaskType;
   status: string;
   /** Advisory silence timestamp from VerdictEngine — set while the task's runner has gone quiet. */
@@ -52,6 +51,11 @@ export interface TaskView {
   waitsForApproval?: boolean;
   /** An ops task (ADR-0020): it runs in the user's checkout, never a worktree. */
   ops?: boolean;
+  /** A script task's body (ADR-0035): argument vectors run in order, or one script. Kept raw: the pane shows it with unseen characters spelled out. */
+  commands?: string[][];
+  script?: string;
+  /** A script task's time limit; absent where it takes the default. */
+  timeoutMs?: number;
   /** Task skills attached by name, put in the runner's prompt at spawn. */
   skills?: string[];
   /** Set on a task an Act supervisor added during a run (ADR-0029). */
@@ -249,11 +253,14 @@ export interface ApprovalRequestView {
   subject: string;
   scope: string;
   detail?: string;
+  /** What a script task runs, verbatim, for a start the user is asked to approve (ADR-0035). */
+  body?: string;
 }
 
 export type Overlay =
   | { kind: 'help'; scroll?: number; sheet?: 'commands' | 'keys' }
-  | { kind: 'approval'; request: ApprovalRequestView }
+  /** `scroll` is how far into the request's `body` the card is read, when the body does not fit. */
+  | { kind: 'approval'; request: ApprovalRequestView; scroll?: number }
   | { kind: 'picker'; picker: PickerState }
   | { kind: 'stepper'; stepper: StepperState }
   /**

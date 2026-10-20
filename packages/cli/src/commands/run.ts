@@ -2,7 +2,7 @@ import { flag, hasFlag, readLastSession } from '../utils';
 import { handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
 import { iconFor } from '../utils/output';
 import type { ApiClient, TaskStatus } from '../apiClient';
-import { taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL } from '@ordewell/core';
+import { SCRIPT_RUNNER, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL } from '@ordewell/core';
 import { connect } from './shared';
 
 const inLine = (label: string): string => label.charAt(0).toLowerCase() + label.slice(1);
@@ -45,6 +45,8 @@ export async function followExecution(
   let dirtyRepos: string[] = [];
   const taskStates = new Map<string, TaskStatus>();
   let lastPrinted = '';
+  // The status stream carries no task type; a script task shows itself when it starts, on the runner it is run by.
+  const scriptTasks = new Set<string>();
 
   function printStatus(tasks: TaskStatus[]): void {
     for (const t of tasks) {
@@ -59,7 +61,7 @@ export async function followExecution(
         : '';
       // Nothing starts it on its own (ADR-0035), so a line that only said "pending" would read as next in line.
       const waits = t.waitsForApproval ? `: ${inLine(WAITS_FOR_APPROVAL_LABEL)}: \`ordewell force-start <id>\` approves it, \`ordewell run\` approves all` : '';
-      lines.push(`  ${icon} #${t.id.slice(-4)} ${t.status}${verdict}${waits}`);
+      lines.push(`  ${icon} #${t.id.slice(-4)}${scriptTasks.has(t.id) ? ' [SCR]' : ''} ${t.status}${verdict}${waits}`);
     }
     const output = lines.join('\n');
     if (output !== lastPrinted && output.trim()) {
@@ -81,6 +83,7 @@ export async function followExecution(
   });
   const stream = api.streamExecution(sessionId, (event) => {
     if (event.type === 'task_started') {
+      if (event.runner === SCRIPT_RUNNER) scriptTasks.add(event.taskId);
       process.stderr.write(`· ${taskStartedNotice(event.title, event.runner)}\n`);
     }
     if (event.type === 'checkpoint') {

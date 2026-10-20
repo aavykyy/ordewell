@@ -81,6 +81,8 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
     if (hasSubtasks && state.expandedTaskId !== task.id) {
       return step(settlePlan({ ...state, expandedTaskId: task.id, taskEditor: null }));
     }
+    // A script's body is the planner's to write: the row opens to show it, and nothing in it edits.
+    if (task.type === 'script') return step(settlePlan({ ...state, expandedTaskId: task.id, taskEditor: null }));
     const text = task.prompt ?? task.description ?? task.title;
     return step(settlePlan({
       ...state,
