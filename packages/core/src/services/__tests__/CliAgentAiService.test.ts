@@ -2573,6 +2573,43 @@ describe('CliAgentAiService — the native-shell setting (ADR-0036)', () => {
     expect(JSON.parse(steps[0].args)).toMatchObject({ command: 'for f in *; do echo "$f"; done' });
     expect(steps[1]).toMatchObject({ tool: 'bash', toolLabel: 'Monitor', success: true, result: 'line' });
   });
+
+  it('offers OpenCode 2.x its own shell once its server has reported a checked version, before the first turn', async () => {
+    const turns: AgentEvent[][] = [[{ type: 'assistant_text', runId: 'r1', text: 'One.' }, { type: 'turn_end' }]];
+    const { svc, starts } = recordingService(turns, () => '2.0.32', fakeConfig({ aiProvider: 'opencode', plannerNativeShell: true }));
+
+    await svc.startConversation(request());
+
+    // The first process is spawned before /api/info answers; the second, made
+    // once it has, is the one the first turn runs on.
+    expect(starts.map((start) => start.nativeShell)).toEqual([false, true]);
+  });
+
+  it('tells an OpenCode 1.x user that the opt-in was checked on 2.0.32', async () => {
+    const turns: AgentEvent[][] = [[{ type: 'assistant_text', runId: 'r1', text: 'One.' }, { type: 'turn_end' }]];
+    const { svc } = recordingService(turns, () => null, fakeConfig({ aiProvider: 'opencode', plannerNativeShell: true }));
+    const notices: string[] = [];
+
+    await svc.startConversation(request({ notice: (_level, message) => notices.push(message) }));
+
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain('OpenCode 1.x');
+  });
+
+  it('records an OpenCode shell command and its result as a bash step (N2.3)', async () => {
+    const { svc } = recordingService([[
+      { type: 'tool_call', id: 'cmd-1', name: 'shell', args: { command: 'ls' } },
+      { type: 'tool_result', id: 'cmd-1', name: 'shell', output: 'src', success: true },
+      { type: 'assistant_text', runId: 'r1', text: 'Done.' },
+      { type: 'turn_end' },
+    ]], () => '2.0.32', fakeConfig({ aiProvider: 'opencode', plannerNativeShell: true }));
+
+    const turn = await svc.startConversation(request());
+
+    const steps = turn.researchLog.filter((step): step is ResearchStep => !('type' in step));
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toMatchObject({ tool: 'bash', toolLabel: 'shell', success: true, result: 'src' });
+  });
 });
 
 describe('CliAgentAiService — conversationMatchesConfig', () => {
