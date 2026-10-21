@@ -82,6 +82,12 @@ function nonNegativeInt(raw: string | undefined, fallback: number): number {
   return /^\d+$/.test(trimmed) ? Number(trimmed) : fallback;
 }
 
+/** A setting that is off unless it says on: only the spellings a person writes for yes turn it on. */
+function isOn(raw: string | undefined): boolean {
+  const value = (raw ?? '').trim().toLowerCase();
+  return value === 'true' || value === '1' || value === 'yes' || value === 'on';
+}
+
 export abstract class BaseConfig implements IConfig {
   private _routed: { basis: string; lists: ProviderModelLists | null | undefined; provider: PlannerBackendId } | null = null;
 
@@ -205,6 +211,9 @@ export abstract class BaseConfig implements IConfig {
   get approvalMode(): ApprovalModeSetting { return parseApprovalModeSetting(process.env.ORDEWELL_APPROVAL_MODE); }
 
   get webReadBudget(): number { return nonNegativeInt(process.env.ORDEWELL_WEB_READ_BUDGET, DEFAULT_WEB_READ_BUDGET); }
+
+  /** The native-shell opt-in (ADR-0036 N1): off unless the launching environment says on. Never a workspace variable. */
+  get plannerNativeShell(): boolean { return isOn(process.env.ORDEWELL_PLANNER_NATIVE_SHELL); }
 
   get approvalDefaults(): boolean { return process.env.ORDEWELL_APPROVAL_DEFAULTS !== 'false' && process.env.ORDEWELL_APPROVAL_DEFAULTS !== '0'; }
 

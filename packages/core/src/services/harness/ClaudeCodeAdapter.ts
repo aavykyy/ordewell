@@ -247,6 +247,8 @@ interface ClaudeLine {
   session_id?: string;
   /** `init`: the mode the CLI actually started in. */
   permissionMode?: string;
+  /** `init`: the CLI's own version, named before the first tool call. */
+  claude_code_version?: string;
   /** `init`: the model the turn runs on, as the id it resolved to. */
   model?: string;
   result?: string;
@@ -415,6 +417,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private replyRuns = new ReplyRuns();
   /** The model answering the planner's current message, and the message's id, as its `message_start` named them. */
   private plannerModel: string | undefined;
+  /** The CLI's version, from its first `init`; the native-shell check reads it (ADR-0036 N2). */
+  private installedVersion: string | null = null;
   /**
    * The id the turn runs as, as `init` names it. A `[1m]` variant is the
    * selected id, while a message names the API's canonical id without it.
@@ -522,6 +526,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     if (!sessionId || this.reportedCostUsd === undefined) return null;
     return { sessionId, usd: this.reportedCostUsd, modelUsd: Object.fromEntries(this.reportedModelCostUsd) };
   }
+
+  version(): string | null { return this.installedVersion; }
 
   /**
    * A cleared conversation's totals start again from zero, so what follows is
@@ -899,6 +905,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         if (subagentId && (msg.subtype === 'init' || msg.subtype === 'compact_boundary')) return;
         if (msg.subtype === 'init') {
           this.clearFollowOnTimer();
+          if (msg.claude_code_version) this.installedVersion = msg.claude_code_version;
           if (this.refuseOtherMode(msg, emit)) return;
           if (msg.model && msg.model !== '<synthetic>') this.sessionModel = msg.model;
           this.readLoaded(msg, emit);

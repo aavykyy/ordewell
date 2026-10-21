@@ -189,6 +189,8 @@ describe('OpenCode 2.x — start', () => {
     expect(server.requests.some((r) => r.path === '/session')).toBe(false);
     for (const request of server.requests) expect(request.authorization).toBe(basic(password!));
     expect(adapter.nativeSessionId()).toBe(SES);
+    // The native-shell check reads it (ADR-0036 N2).
+    expect(adapter.version()).toBe('2.0.22');
     adapter.dispose();
   });
 

@@ -54,6 +54,13 @@ describe('admitSettingsEnv', () => {
     expect(rejected).toEqual(['ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_APPROVAL_MODE', 'ORDEWELL_APPROVAL_ALLOW', 'ORDEWELL_EFFECT_ALLOW']);
   });
 
+  it('refuses the native-shell opt-in — the user\'s alone, never a workspace\'s or a daemon update\'s (ADR-0036 N1)', () => {
+    expect(admitSettingsEnv({ ORDEWELL_PLANNER_NATIVE_SHELL: 'true' })).toEqual({
+      accepted: {},
+      rejected: ['ORDEWELL_PLANNER_NATIVE_SHELL'],
+    });
+  });
+
   it('refuses the settings-path override — the settings service mkdirs recursively for it', () => {
     expect(admitSettingsEnv({ ORDEWELL_SETTINGS_PATH: '/etc/cron.d/pwn' }).rejected)
       .toEqual(['ORDEWELL_SETTINGS_PATH']);
