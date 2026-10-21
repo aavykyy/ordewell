@@ -7,7 +7,7 @@ import { capConflictFiles } from '../services/conflictFiles';
 import { planBlocks, type BlockingSubject, type PlanBlocks } from '../services/blocking';
 import { checkOf, type LoopSubject } from '../models/Loop';
 import { assignmentConsequence, assignmentIssue, assignmentIssueText, type AssignmentScope } from '../services/AssignmentScope';
-import { approvalLabel, awaitingLabel, isTaskRunning, NOT_STARTED, resumeLabel, taskStatusKind, WAITS_FOR_APPROVAL_LABEL, type TaskStatusKind } from './status';
+import { approvalLabel, awaitingLabel, isTaskRunning, NOT_STARTED, researchWaitLabel, resumeLabel, taskStatusKind, WAITS_FOR_APPROVAL_LABEL, type TaskStatusKind } from './status';
 import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskRowPlacement } from './actions';
 import { loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, type LoopCheckState } from './loop';
 
@@ -36,6 +36,10 @@ export interface TaskRowSubject {
   waitsForApproval?: boolean;
   /** Why it is held out of the scheduler; absent when it is not held. */
   holdReason?: string | null;
+  /** A read-only task whose report is addressed to the planner (ADR-0037). */
+  research?: boolean;
+  /** The research limit it waits for, when that is what holds it (ADR-0037 R4). */
+  researchWait?: { kind: 'research-parallel' | 'research-message'; limit: number } | null;
   isolation?: TaskRowIsolation | null;
   mergeGate?: readonly string[];
   forcedPastGate?: readonly string[];
@@ -148,6 +152,10 @@ export interface TaskRowView {
   assignmentFlag: string | null;
   /** What the flag means for this task as it stands (a failed one runs again only if retried); set exactly when `assignmentFlag` is. */
   assignmentConsequence: string | null;
+  /** An AI task whose report goes to the planner and wakes it (ADR-0037). */
+  research: boolean;
+  /** The research limit holding a research task back, in sentence case; null when no limit does. */
+  researchWait: string | null;
   /** The task's mode is tagged autonomous: it runs without permission prompts. */
   autonomous: boolean;
   /** The repos its isolated work changed, by path; empty for a group of one. */
@@ -267,6 +275,8 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     approvals: approvalLabel(task.awaitingApproval),
     waitsForApproval: task.waitsForApproval && NOT_STARTED.has(task.status) ? WAITS_FOR_APPROVAL_LABEL : null,
     holdReason: task.holdReason?.trim() || null,
+    research: task.type === 'ai' && task.research === true,
+    researchWait: task.research && task.researchWait && NOT_STARTED.has(task.status) ? researchWaitLabel(task.researchWait) : null,
     ...flagOf(task, context.runnerScope),
     autonomous: task.type === 'ai' && context.modes?.find((m) => m.id === task.taskMode)?.autonomous === true,
     repos: namedRepos(isolation?.repos),

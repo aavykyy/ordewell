@@ -27,6 +27,7 @@ function RunValue({ run }: { run: GlobalRunSettings }) {
       {run.supervisorLevel === 'act' ? <span className="warn">{level}</span> : level}
       {` · auto-merge ${run.mergeAtGatesAutomatically ? 'on' : 'off'} · `}
       {run.autorun ? <span className="warn">autorun on</span> : 'autorun off'}
+      {` · research ${run.researchMaxParallel} at once, ${run.researchMaxPerMessage} per message`}
     </>
   );
 }
@@ -85,7 +86,7 @@ export default function EmptyState({ onLoadSession, runSettings }: EmptyStatePro
       {runSettings && (
         <div className="empty-state-setup">
           <SetupRow label="Autonomy" value={runSettings.autonomous ? 'Full' : 'Guarded'} warn={runSettings.autonomous} command="/auto" />
-          <SetupRow label="Run" value={<RunValue run={runSettings.run} />} command="/supervisor · /automerge · /autorun" />
+          <SetupRow label="Run" value={<RunValue run={runSettings.run} />} command="/supervisor · /automerge · /autorun · /research" />
         </div>
       )}
       {onLoadSession && (

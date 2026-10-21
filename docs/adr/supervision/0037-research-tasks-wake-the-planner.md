@@ -77,8 +77,12 @@ harness subagents stay as they are, awaited before the turn ends.**
   across turns, a research task. The planner's instructions say to use a
   research task for anything it would otherwise run in the background.
 - **On the surfaces (R6)**, a research task is a row in the plan, marked as
-  research, with its log, usage, stop and retry like any task. Its report is
-  drawn in the conversation as the run update that delivered it.
+  research, with its log, usage, stop and retry like any task. While a run
+  setting holds it back, the row says which limit and what ends the wait. Its
+  report is drawn in the conversation as the run update that delivered it:
+  whole when short, folded after a few lines when long with the lines left out
+  counted, and opened by the conversation's one detail switch. The two limits
+  are listed wherever the other run settings are.
 
 ## Considered options
 
@@ -116,4 +120,5 @@ harness subagents stay as they are, awaited before the turn ends.**
 - 2026-10-15 — accepted. Not yet implemented.
 - 2026-10-21 — where a research task works, and what it may write, follow read-only tasks as ADR-0046 defines them (R1).
 
-- 2026-10-21 — implemented the core lifecycle, authority, approval and persisted message limits; surface marks and planner guidance follow separately.
+- 2026-10-21 — implemented the core lifecycle, authority, approval and persisted message limits.
+- 2026-10-21 — implemented the surfaces (R6): the research mark, the limit it waits for and the report block on the TUI, VS Code and the CLI commands, and the planner's guidance (R5).

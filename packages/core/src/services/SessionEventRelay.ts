@@ -20,7 +20,7 @@ export interface SessionEventRelayDeps {
   /** Where isolation notices go, for a host whose notifications are not seen by the user. */
   onNotice?: (notice: SessionNotice) => void;
   store: Pick<PlanStore, 'allTasks' | 'snapshot'>;
-  orchestrator: Pick<TaskOrchestrator, 'getIdleSince' | 'getQueuedTaskMessages' | 'getMergeGate' | 'holdReason' | 'runMergeView'>;
+  orchestrator: Pick<TaskOrchestrator, 'getIdleSince' | 'getQueuedTaskMessages' | 'getMergeGate' | 'holdReason' | 'researchWait' | 'runMergeView'>;
   runs: Pick<IsolationRunController, 'taskIsolation'>;
   /** Shared with the Session, which snapshots, restores and clears it. */
   usage: PlannerUsageLedger;
@@ -133,6 +133,7 @@ export class SessionEventRelay {
         this.checkpointQuestion(t.id),
         this.waitsForApproval(t.id),
         this.orchestrator.holdReason(t.id),
+        this.orchestrator.researchWait(t.id),
       )),
       ...(runMerge ? { runMerge } : {}),
     };

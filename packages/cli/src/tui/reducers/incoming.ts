@@ -104,6 +104,9 @@ function runTaskToView(t: RunTask): TaskView {
     ...(t.waitsForApproval === true ? { waitsForApproval: true } : {}),
     ...(typeof t.holdReason === 'string' && t.holdReason.trim() ? { holdReason: sanitize(t.holdReason) } : {}),
     ...(t.ops === true ? { ops: true } : {}),
+    ...(t.research === true ? { research: true } : {}),
+    ...(t.researchWait && (t.researchWait.kind === 'research-parallel' || t.researchWait.kind === 'research-message') && Number.isFinite(t.researchWait.limit)
+      ? { researchWait: { kind: t.researchWait.kind, limit: t.researchWait.limit } } : {}),
     ...scriptBodyFields(t),
     ...loopFields(t),
     ...(Array.isArray(t.skills) && t.skills.length > 0 ? { skills: t.skills.map((name) => planLabel(name)) } : {}),

@@ -43,6 +43,19 @@ describe('a plan refresh keeps what the status stream reported', () => {
     expect(a.continuable).toBe(true);
   });
 
+  it('keeps the research mark from the plan and the limit the stream said it waits for (ADR-0037)', () => {
+    const waiting = status(loaded([task({ research: true, readOnly: true })]), [
+      { id: 'a', status: 'pending', verdict: null, research: true, researchWait: { kind: 'research-parallel', limit: 2 } },
+    ]);
+    expect(findTask(waiting.tasks, 'a')).toMatchObject({ research: true, researchWait: { kind: 'research-parallel', limit: 2 } });
+
+    const refreshed = reduce(waiting, { type: 'planUpdated', sessionId: 's1', plan: plan([task({ research: true })]) }).state;
+    expect(findTask(refreshed.tasks, 'a')).toMatchObject({ research: true, researchWait: { kind: 'research-parallel', limit: 2 } });
+
+    const started = status(refreshed, [{ id: 'a', status: 'in_progress', verdict: null, research: true }]);
+    expect(findTask(started.tasks, 'a')?.researchWait).toBeUndefined();
+  });
+
   it('keeps idleSince, approval count and a merge gate', () => {
     const running = status(loaded([task(), task({ id: 'b', order: 2, title: 'B' })]), [
       { id: 'a', status: 'in_progress', verdict: null, idleSince: '2026-10-13T09:05:00.000Z', awaitingApproval: 2, mergeGate: ['t0'] },

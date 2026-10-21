@@ -5,6 +5,7 @@ import { createTask, type DiscoveredModel, type RunnerId } from '../../models/Ta
 
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 import { validatePlanTasks } from '../PlanValidator';
+import { taskOpsProtocol } from '../TaskOps';
 import type { SkillInfo } from '../SkillsService';
 
 const modes = (over: Partial<PlannerModes> = {}): PlannerModes => ({ ...DEFAULT_PLANNER_MODES, ...over });
@@ -226,11 +227,85 @@ function oneShot(isolatedExecution: false | RepoGroupLayout) {
   return buildResearchPrompt('goal', '', {}, ['claude-code'], undefined, modes({ isolatedExecution }));
 }
 
-describe('read-only guidance (ADR-0031)', () => {
-  it('lets read-only tasks run commands in a disposable worktree, and keeps ops tasks separate', () => {
+describe('read-only guidance (ADR-0031, ADR-0046)', () => {
+  it('lets read-only tasks run anything sealed and try changes in a throwaway worktree, and keeps ops tasks separate', () => {
     for (const p of [conversation(false), oneShot(LONE_REPO)]) {
-      expect(p).toMatch(/"readOnly".*land nothing.*tests, scripts and builds.*run_command.*ops task/i);
+      expect(p).toMatch(/"readOnly".*land nothing.*run_command.*runs anything sealed: tests, scripts, builds, loops.*Never on an ops task/i);
+      expect(p).toMatch(/no network \(there is none inside a sealed run\)/);
+      expect(p).toMatch(/throwaway worktree.*edit files to try a fix, or add a failing test and run the suite on it\. None of that lands/);
+      expect(p).toMatch(/its task_complete report is its result/);
     }
+  });
+
+  it('says a sealed run has no worktree to write where the run does not isolate', () => {
+    expect(conversation(false)).toMatch(/throwaway worktree, where the run isolates/);
+  });
+});
+
+describe('research tasks (ADR-0037)', () => {
+  const prompt = (harness: boolean) => buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness });
+  const section = (p: string, header: string) => {
+    const at = p.indexOf(`\n${header}\n`);
+    expect(at).toBeGreaterThan(-1);
+    return p.slice(at + 1, p.indexOf('\n\n', at + 1));
+  };
+
+  it.each([false, true])('teaches when to use one, and that its report wakes the planner (harness: %s)', (harness) => {
+    const guide = section(prompt(harness), 'READ-ONLY TASKS:');
+    expect(guide).toMatch(/Add "research": true to a read-only top-level AI task whose report should come back to you: research that should outlive this turn, or that you would otherwise run in the background/);
+    expect(guide).toMatch(/wakes you with that report, at every supervisor level, while you keep talking with the user/);
+    expect(guide).toMatch(/Within a single turn, wait for your own subagents instead/);
+    expect(guide).toMatch(/Never on a subtask, an ops task or a loop's body/);
+  });
+
+  it.each([false, true])('asks for a self-contained brief and says what a research task may do (harness: %s)', (harness) => {
+    const guide = section(prompt(harness), 'READ-ONLY TASKS:');
+    expect(guide).toMatch(/may run anything sealed and try changes in its own throwaway worktree, but lands nothing/);
+    expect(guide).toMatch(/what to find out, where to start, what the report must contain .* and how you will check it/);
+  });
+
+  it.each([false, true])('names the limits and where the planner reads what is left (harness: %s)', (harness) => {
+    const p = prompt(harness);
+    expect(section(p, 'READ-ONLY TASKS:')).toMatch(/by default 2 research tasks run at once and 4 start per user message, your report turns counted/);
+    expect(section(p, 'YOUR CONTEXT:')).toMatch(/how many research tasks you may still start for this message/);
+  });
+
+  it.each([false, true])('shows "research" in PLAN FORMAT, with an example the plan\'s own rules accept (harness: %s)', (harness) => {
+    const p = prompt(harness);
+    const format = p.slice(p.indexOf('\nPLAN FORMAT:\n'), p.indexOf('\nSLICE CLASSIFICATION:\n'));
+    expect(format).toContain('"research": false,');
+    const example = JSON.parse(p.split('\n').find((line) => line.startsWith('{ "id": "scout-1"'))!);
+    expect(example).toMatchObject({ readOnly: true, research: true, type: 'ai' });
+    expect(example.prompt).toMatch(/Start at .*Report: .*the exact command you ran/);
+  });
+
+  it('sends the failure to explain and the open problem to research tasks', () => {
+    const strategy = section(prompt(true), 'STRATEGY:');
+    expect(strategy).toMatch(/reproduce it first, investigate competing hypotheses in parallel, then fix/);
+    expect(strategy).toMatch(/Give each hypothesis a research task of its own that reports the evidence for and against it, so they run in parallel while you keep talking with the user/);
+    expect(strategy).toMatch(/An open problem with no known path: plan only the first round of exploration, as research tasks that each report on one question\. Their reports wake you/);
+  });
+
+  it('is in the conversation prompt only, not the one-shot planner\'s', () => {
+    expect(oneShot(LONE_REPO)).not.toMatch(/"research"|research task/);
+  });
+});
+
+describe('sealed runs for the planner itself (ADR-0036)', () => {
+  const research = (p: string) => p.slice(p.indexOf('\nRESEARCH PHASE:\n'), p.indexOf('\n\n', p.indexOf('\nRESEARCH PHASE:\n') + 1));
+
+  it('says what run_command with "sealed": true is for, and what a sealed run lacks, for the harness planner', () => {
+    const phase = research(buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: true }));
+    expect(phase).toMatch(/run_command with "sealed": true runs a command without asking anyone, for local computation over the workspace: a loop over files, a script, a pipe into an interpreter/);
+    expect(phase).toMatch(/no network, the workspace read-only, and no home directory or credentials/);
+    expect(phase).toMatch(/would be refused for being a loop, a here-document or a pipe into an interpreter runs sealed on its own where this machine has a sandbox/);
+    expect(phase).toMatch(/Never seal a command that needs the network or the user's accounts/);
+  });
+
+  it('says the same of bash for the API planner', () => {
+    const phase = research(buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: false }));
+    expect(phase).toMatch(/bash with "sealed": true runs a command without asking anyone/);
+    expect(phase).not.toContain('run_command');
   });
 });
 
@@ -473,7 +548,7 @@ describe('the strategy step and the context rules (#108)', () => {
     expect(strategy).toMatch(/- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix\./);
     expect(strategy).toMatch(/failing test or a command that fails is the reproduction, and what the fix is checked against/);
     expect(strategy).toMatch(/Plan the fix once the reports name the cause/);
-    expect(strategy).toMatch(/- An open problem with no known path: plan only the first round of exploration, as read-only tasks/);
+    expect(strategy).toMatch(/- An open problem with no known path: plan only the first round of exploration, as research tasks/);
     expect(strategy).toMatch(/extend the plan with the next round/);
   });
 
@@ -495,7 +570,7 @@ describe('the strategy step and the context rules (#108)', () => {
     expect(rules).toMatch(/self-contained brief: its goal, its inputs, what to report back, and how its result will be checked/);
     expect(rules).toMatch(/Plan the integration step/);
     expect(rules).toMatch(/Prefer evidence you can check .* over a task's own word/);
-    expect(rules).toMatch(/how full your context is and what remains of your reads/);
+    expect(rules).toMatch(/how full your context is, what remains of your reads/);
   });
 
   it('keeps every slicing rule under BUILD PLANS, and nowhere a non-build goal would read it as its own', () => {
@@ -602,6 +677,14 @@ describe('loops in the conversation prompt (ADR-0045)', () => {
     expect(loops).toMatch(/never a manual task/);
   });
 
+  it('teaches the three ops that add a loop with edit_plan, in order', () => {
+    for (const harness of [false, true]) {
+      const loops = section(prompt(harness), 'LOOPS:');
+      expect(loops).toMatch(/(?:with edit_plan|in a task-ops reply), takes three ops in this order, since a handle cannot be referenced before the op that defines it: add the check without "loop", with a "handle"; add each body task, depending on the check's handle.*then update the check, by its handle, with "loop": \{"body": \[the body handles\]/);
+      expect(loops).toMatch(/(?:submit_plan|A whole plan) names ids directly, so it needs no handles/);
+    }
+  });
+
   it('prefers a script check, and has an AI check report failed with its findings and done without any', () => {
     const loops = section(prompt(true), 'LOOPS:');
     expect(loops).toMatch(/Prefer a script task as the check wherever a command can judge the work.*evidence you can check: 0 passes, anything else fails and starts a round/);
@@ -635,5 +718,19 @@ describe('loops in the conversation prompt (ADR-0045)', () => {
 
   it('is in the conversation prompt only, not the one-shot planner\'s', () => {
     expect(oneShot(LONE_REPO)).not.toMatch(/\bLOOPS:|"loop"/);
+  });
+});
+
+describe('the edit protocol explains loop and research (ADR-0045, ADR-0037)', () => {
+  it.each([false, true])('explains the loop field and the order of the ops that add one (tools: %s)', (tools) => {
+    const protocol = taskOpsProtocol('', tools).join('\n');
+    expect(protocol).toMatch(/"loop" makes a task the check of a loop .*\{"body": \["<id, #order or handle>", \.\.\.\], "maxRounds"\?: 1 to 10\}; null drops the loop/);
+    expect(protocol).toMatch(/adding a loop takes three ops in this order: "add" the check without "loop", with a "handle"; "add" each body task, depending on the check's handle.*then "update" the check, by its handle, with "loop": \{"body": \[the body handles\]\}/);
+  });
+
+  it('lists research on an added task and explains it', () => {
+    const protocol = taskOpsProtocol('', true).join('\n');
+    expect(protocol).toContain('"readOnly"?,"research"?,"ops"?');
+    expect(protocol).toMatch(/"research": true on a read-only top-level AI task makes it a research task, whose task_complete report wakes you/);
   });
 });

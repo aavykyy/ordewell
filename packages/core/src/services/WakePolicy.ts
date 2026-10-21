@@ -39,6 +39,9 @@ export type RunEvent = {
   report?: TaskReportEvent;
 };
 
+/** What a digest says between a task and its report, which a surface finds the report by to draw it apart from the update's other lines. */
+export const REPORT_LEAD = ', whose result you asked for, has ended.';
+
 export interface TaskReportEvent {
   /** Whose turn started the task: the turn the report opens acts with its authority (ADR-0037, R3). */
   authority: TurnAuthority;

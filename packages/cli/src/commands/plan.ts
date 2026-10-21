@@ -134,7 +134,7 @@ function printPlan(plan: PlanBody, sessionId: string, runners: string[], models:
   console.log(`Session: ${sessionId}\n`);
 
   for (const t of tasks) {
-    const typeIcon = t.type === 'user' ? '[MAN]' : t.type === 'script' ? '[SCR]' : t.ops ? '[OPS]' : '[ AI]';
+    const typeIcon = t.type === 'user' ? '[MAN]' : t.type === 'script' ? '[SCR]' : t.ops ? '[OPS]' : t.research ? '[RES]' : '[ AI]';
     const deps = t.dependencies?.length ? ` ← ${t.dependencies.join(', ')}` : '';
     console.log(`  ${taskOrderLabel(t).padStart(2)}. ${typeIcon} ${t.title}${modelSuffix(t)}${deps}`);
     // What the user approves and what runs: the body as the plan holds it, not a summary.
@@ -155,6 +155,9 @@ function printPlan(plan: PlanBody, sessionId: string, runners: string[], models:
   }
   if (tasks.some((t) => t.ops)) {
     console.log('  [OPS] = ops task: runs in your checkout once the work it depends on is merged (`ordewell handoff merge`)');
+  }
+  if (tasks.some((t) => t.research)) {
+    console.log('  [RES] = research task: read-only, lands nothing; its report wakes the planner when it ends');
   }
   if (scriptCount > 0) {
     console.log('  [SCR] = script task: runs the commands shown, with no model, in your checkout once the work it depends on is merged; the planner writes them, and you approve each');

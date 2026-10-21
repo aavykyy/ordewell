@@ -55,16 +55,43 @@ export function buildSubagentSystemPrompt(): string {
 /**
  * The planner's whole say over a task's mode (ADR-0031). Mode names are
  * runner-specific and were what it got wrong, so it sees none of them.
+ * What a read-only task is follows ADR-0046; `research` adds the research task
+ * (ADR-0037), taught to the conversation planner only, since a one-shot run has
+ * no conversation for a report to wake.
  */
-function readOnlyGuide(runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefined, tools: boolean): string {
+function readOnlyGuide(runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefined, tools: boolean, research = false): string {
   const able = runnerModes ? readOnlyRunners(runnerModes) : [];
+  const possible = tools || !runnerModes || able.length > 0;
   return [
-    'Set "readOnly": true on an AI task that must land nothing: a review, an audit, an analysis whose result is a report. It can run tests, scripts and builds through Ordewell run_command, and try changes in its disposable worktree; none of those changes lands. Never on an ops task, which acts in the workspace. Leave it false or out on every other task. A read-only task\'s subtasks are read-only too unless one sets "readOnly": false.',
-    'You never choose a runner mode. Each task runs in its runner\'s mode for the user\'s autonomy level (Full or Guarded), or in the runner\'s read-only mode when "readOnly" is true.',
+    'Set "readOnly": true on an AI task that must land nothing: a review, an audit, an investigation, an analysis whose result is a report. It reads with its runner\'s own read tools, and its only shell is Ordewell run_command, which runs anything sealed: tests, scripts, builds, loops. Sealed means no network (there is none inside a sealed run), no home directory or credentials, and nothing writable but the task\'s own throwaway worktree, where the run isolates. There it may edit files to try a fix, or add a failing test and run the suite on it. None of that lands: the worktree is thrown away when the task ends, and its task_complete report is its result. Never on an ops task, which acts in the workspace. Leave it false or out on every other task. A read-only task\'s subtasks are read-only too unless one sets "readOnly": false.',
+    'You never choose a runner mode. Each task runs in its runner\'s mode for the user\'s autonomy level (Full or Guarded), or as a read-only task when "readOnly" is true.',
     ...(tools
       ? ['A read-only task must go to a runner list_runners marks "readOnly": true.']
       : runnerModes ? [able.length > 0 ? `Runners with a read-only mode: ${able.join(', ')}.` : 'No runner here has a read-only mode, so do not set "readOnly".'] : []),
+    ...(research && possible ? researchTasksGuide(tools) : []),
   ].join('\n');
+}
+
+/**
+ * Research tasks (ADR-0037), as a read-only task's guide ends: when one is the
+ * right tool, what its brief holds, and the limits that bound it. What a task
+ * does is the read-only guide's; this only adds the report that comes back.
+ */
+function researchTasksGuide(tools: boolean): string[] {
+  return [
+    'Add "research": true to a read-only top-level AI task whose report should come back to you: research that should outlive this turn, or that you would otherwise run in the background. Its report is its task_complete summary, and when the task ends (passes, fails or is blocked) it wakes you with that report, at every supervisor level, while you keep talking with the user meanwhile. Within a single turn, wait for your own subagents instead (see RESEARCH PHASE). Never on a subtask, an ops task or a loop\'s body.',
+    'A research task may run anything sealed and try changes in its own throwaway worktree, but lands nothing. Write its prompt as a brief it can act on without this conversation: what to find out, where to start, what the report must contain (evidence for and against, file paths and line references, what it ran and what happened), and how you will check it. Prefer a command whose exit status settles a point over its prose.',
+    `You add a research task with the plan, or ${tools ? 'with edit_plan' : 'in a task-ops reply'} later, and it starts at once without asking. It is bounded by the run settings: by default 2 research tasks run at once and 4 start per user message, your report turns counted, and the rest wait for a slot or for the user's next message. The turn's input says how many are left. Spend them on the questions that decide the plan.`,
+  ];
+}
+
+/**
+ * What `sealed: true` is for, and what a refusal leaves open (ADR-0036). The
+ * planner is told the constraints it cannot see from its side: a sealed run
+ * has no network and no home, so a command that needs either fails there.
+ */
+function sealedGuide(tool: 'bash' | 'run_command'): string {
+  return `${tool} with "sealed": true runs a command without asking anyone, for local computation over the workspace: a loop over files, a script, a pipe into an interpreter. A sealed run has no network, the workspace read-only, and no home directory or credentials; $TMPDIR is a scratch directory for the session. A command that would be refused for being a loop, a here-document or a pipe into an interpreter runs sealed on its own where this machine has a sandbox, and you can ask for it yourself when you know a command is local computation. Never seal a command that needs the network or the user's accounts: it fails there. An allowlist exclusion and a command the user denied are refused either way, and without a sandbox a command that would run sealed is refused.`;
 }
 
 /**
@@ -91,12 +118,14 @@ function researchPhaseBlock(harnessMode: boolean): string {
       '- Explore the repository with your own tools until you understand its architecture',
       '- You are planning, not implementing: do NOT edit, create, or delete any file, and do not run commands that change the workspace',
       '- Run commands — git, gh, cloud CLIs, the project\'s own tooling — with the run_command tool, not a shell of your own. MCP tools the user configured (issue trackers, todo lists) are yours to read from too. Reads run at once; anything else is approved or refused by the user\'s settings. When something the plan needs to change is refused, add it to the plan instead: a script task when you can state the exact commands, an ops task when it needs judgment',
+      `- ${sealedGuide('run_command')}`,
       '- If you delegate exploration to your own agents, WAIT for their results inside this reply. Do NOT launch them in the background or async and end your turn saying you will report back later: your turn ending is what hands the conversation back to the user, and anything you say after it never reaches them.',
     ]
     : [
       '- Use list_dir with depth=2-3 for a tree overview',
       '- Use glob and grep to find relevant source files',
       '- Read key source files to understand architecture',
+      `- ${sealedGuide('bash')}`,
     ];
   return [
     ...shared,
@@ -246,7 +275,7 @@ export function buildConversationSystemPrompt(
   variant: ConversationVariant = {},
 ): string {
   const modelsJson = modelsJsonFor(modelsByRunner, runners);
-  return buildConversationBody(goal, context, modelsJson, runners, readOnlyGuide(runnerModes, variant.harness ?? false), variant);
+  return buildConversationBody(goal, context, modelsJson, runners, readOnlyGuide(runnerModes, variant.harness ?? false, true), variant);
 }
 
 /**
@@ -271,8 +300,8 @@ const PLANNER_TOOLS_CATALOG = [
  * grants nothing: what may run is decided at the command seam (ADR-0035).
  * Loops (ADR-0045) sit under the build and the failure to explain, since a
  * goal that is done only when something passes is usually one of those with a
- * check at its end. Research tasks (ADR-0037) join this list as they land;
- * until then an open problem is explored one round at a time with read-only tasks.
+ * check at its end. Research tasks (ADR-0037) are how a failure's hypotheses
+ * and an open problem's rounds are explored: their reports wake the planner.
  */
 function strategySection(execution: boolean): string[] {
   return [
@@ -283,9 +312,9 @@ function strategySection(execution: boolean): string[] {
       ? '- A small effect you can state as exact commands: one script task. In the user\'s turn, run it with run_script; when it belongs to a larger plan, make it a script task in that plan. An effect that needs judgment is an ops task.'
       : '- A small effect you can state as exact commands: one script task, in a plan of its own. An effect that needs judgment is an ops task.',
     '- A build with known steps: a plan of vertical slices, under BUILD PLANS below. When the build must also meet a bar that can be checked (the tests pass, a review finds nothing), end it with a loop, under LOOPS below.',
-    '- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix. A failing test or a command that fails is the reproduction, and what the fix is checked against. Give each hypothesis a task of its own that reports the evidence for and against it, read-only when reading is enough. Plan the fix once the reports name the cause. When the reproduction is a command you can run again, make it the check of a loop whose body is the fix, under LOOPS below.',
+    '- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix. A failing test or a command that fails is the reproduction, and what the fix is checked against. Give each hypothesis a research task of its own that reports the evidence for and against it, so they run in parallel while you keep talking with the user, within the research limits (see READ-ONLY TASKS). Plan the fix once the reports name the cause. When the reproduction is a command you can run again, make it the check of a loop whose body is the fix, under LOOPS below.',
     '- A goal that is done only when something passes ("until the tests pass", "until the review finds nothing"): a loop, under LOOPS below. It sits at the end of a build or a fix.',
-    '- An open problem with no known path: plan only the first round of exploration, as read-only tasks that each report on one question. Read their reports, then extend the plan with the next round, or with the build they point to.',
+    '- An open problem with no known path: plan only the first round of exploration, as research tasks that each report on one question. Their reports wake you: read them, then extend the plan with the next round, or with the build they point to.',
     'A goal can hold more than one kind: answer what your research answers, then plan the rest.',
     '',
   ];
@@ -304,7 +333,7 @@ const CONTEXT_SECTION = [
   '- Before going deep into anything that looks large, map it first (skim it, or send parallel read-only scouts), then split along the seams the map shows.',
   '- Give each delegated piece a self-contained brief: its goal, its inputs, what to report back, and how its result will be checked. A task never sees this conversation. Plan the integration step.',
   '- Prefer evidence you can check (a test, an exit code, a proof checker) over a task\'s own word.',
-  '- A turn\'s input may end with how full your context is and what remains of your reads. Plan the turn around it.',
+  '- A turn\'s input may end with how full your context is, what remains of your reads, and how many research tasks you may still start for this message. Plan the turn around it.',
   '',
 ];
 
@@ -371,6 +400,7 @@ function buildConversationBody(
     '      "assignedModel": { "modelId": "model-id", "modelLabel": "Model Label", "thinkingEffort": "a variant id from that model\'s variants list — omit if the model has none" },',
     '      "assignedRunner": "' + (tools ? 'a runner id from list_runners' : runners.join('|')) + '",',
     '      "readOnly": false,',
+    '      "research": false,',
     '      "autonomy": "AFK|HITL",',
     '      "sliceType": "AFK|HITL",',
     '      "ops": true,',
@@ -386,6 +416,9 @@ function buildConversationBody(
     '- "commands" is a list of argument vectors, run in order with no shell, stopping at the first that fails. For an effect that needs a shell (a pipe, a loop), give "script" instead: one script, run by the shell your own commands use. Give exactly one of the two.',
     '- "timeoutMs" is its time limit in milliseconds; ten minutes when left out.',
     '- Only a top-level task can be one. Leave out "prompt", "assignedRunner", "assignedModel", "readOnly", "ops", "skills", "userSteps" and "subtasks".',
+    '',
+    'A research task is a read-only AI task with "research": true (see READ-ONLY TASKS below). Its prompt is a brief that stands alone:',
+    '{ "id": "scout-1", "order": 2, "title": "Why does the cache serve stale entries?", "description": "Reports the evidence for and against one hypothesis", "type": "ai", "dependencies": [], "prompt": "Hypothesis: entries are keyed by path, so a rename keeps the old entry. Start at src/cache/store.ts. Reproduce it with a test in your own worktree. Report: whether the hypothesis holds, the evidence for and against it with file paths and line numbers, and the exact command you ran with its result.", "readOnly": true, "research": true, "autonomy": "AFK", "sliceType": "AFK" }',
     '',
     'A loop is one "loop" field on its check (see LOOPS below). A script task is the check here, and an AI task the fix:',
     '{ "id": "tests-1", "order": 4, "title": "Run the test suite", "description": "Passes when the suite does", "type": "script", "dependencies": ["task-3"], "commands": [["npm", "test"]], "sliceType": "AFK", "loop": { "body": ["fix-1"], "maxRounds": 3 } }',
@@ -426,6 +459,7 @@ function buildConversationBody(
     '- Prefer a script task as the check wherever a command can judge the work: the test suite, the type checker, the linter, a benchmark against a threshold. Its exit status is evidence you can check: 0 passes, anything else fails and starts a round.',
     '- Otherwise the check is an AI task, such as an adversarial review. Write in its prompt that it calls task_complete with status "failed" and every confirmed problem in its report when it finds any, and "done" when it confirms none. Only a "failed" report starts a round: "blocked" (it could not do the check) and a run that ends without a report start none.',
     '- Each body task is given the check\'s latest report as its prior task output, told which round it is from. Write its prompt to act on that report, and to change nothing else.',
+    `- Adding a loop to a plan you already submitted, ${tools ? 'with edit_plan' : 'in a task-ops reply'}, takes three ops in this order, since a handle cannot be referenced before the op that defines it: add the check without "loop", with a "handle"; add each body task, depending on the check's handle, with a handle of its own; then update the check, by its handle, with "loop": {"body": [the body handles], "maxRounds": 3}. ${tools ? 'submit_plan names' : 'A whole plan names'} ids directly, so it needs no handles.`,
     '- Choose "maxRounds" deliberately, from 1 to 10; it is 3 when left out. It is the most times the check runs, so it bounds the spend. Raise it only where each round is cheap and clearly converging. A check that fails its last round fails, and the tasks after it are blocked until someone looks.',
     '',
     'RULES:',

@@ -1,6 +1,6 @@
 import type { SupervisorLevel } from '../models/Execution';
 import type { TurnAuthority } from '../models/Task';
-import { createWakePolicy, type RunEvent, type WakeBatch, type WakePolicy, type WakePolicySnapshot } from './WakePolicy';
+import { createWakePolicy, REPORT_LEAD, type RunEvent, type WakeBatch, type WakePolicy, type WakePolicySnapshot } from './WakePolicy';
 import { classifyRunnerStop } from './runnerExit';
 import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
 import { PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlanChange, type WakeUpTurn } from './PlannerConversation';
@@ -551,7 +551,7 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string, bl
       : `automatic Merge all at the merge gate of ${task} stopped${colon}; the gate waits for the user`;
     case 'run_finished': return `the run finished${colon}`;
     // Its result whole, not a digest line: the planner asked for it, and reads it here (ADR-0037, R2).
-    case 'task_report': return `${task}, whose result you asked for, has ended. ${(event.report?.text ?? '').split('\n').join('\n  ')}`;
+    case 'task_report': return `${task}${REPORT_LEAD} ${(event.report?.text ?? '').split('\n').join('\n  ')}`;
     case 'task_passed': return `${task} passed`;
     case 'usage_limit': {
       const ids = event.taskIds ?? (event.taskId === undefined ? [] : [event.taskId]);

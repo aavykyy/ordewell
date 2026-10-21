@@ -50,7 +50,7 @@ interface TaskCardProps {
    * runner approvals, isolation and merge gate. Absent before the host has
    * folded the run, in which case the plan's own fields are all there is.
    */
-  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason'>;
+  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'researchWait'>;
   /** Every task's run entry, keyed by id, so a subtask card can read its own hold. */
   runsByTask?: ReadonlyMap<string, RunTask>;
   /** Opt in to resolving this task's merge conflict as an AI task. */
@@ -106,11 +106,12 @@ const STATUS_BADGE: Record<TaskStatusKind, { label: string; cls: string }> = {
 };
 
 /** The status badge: what an awaiting task waits on, why it is held, the failure a blocked one waits on, or why one was skipped, outranks the generic word. */
-export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'blockedBy' | 'skipReason' | 'holdReason'>): { label: string; cls: string } {
+export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'blockedBy' | 'skipReason' | 'holdReason' | 'researchWait'>): { label: string; cls: string } {
   const badge = STATUS_BADGE[row.status];
   if (row.status === 'skipped') return { ...badge, label: skippedLabel(row.skipReason) };
   if (row.awaiting) return { ...badge, label: row.awaiting };
   if (row.holdReason) return { ...badge, label: holdLabel(row.holdReason) };
+  if (row.researchWait) return { ...badge, label: row.researchWait };
   return { ...badge, label: row.blockedBy ? blockedByLabel(row.blockedBy) : badge.label };
 }
 
@@ -375,7 +376,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
   const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
   // The run's verdict and round are the newer word on a loop's check: they say whether it is between rounds (ADR-0045).
-  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate, holdReason: run?.holdReason, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true, ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}) }, { tasks: siblings, modes: activeModes, runnerScope });
+  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate, holdReason: run?.holdReason, researchWait: run?.researchWait, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true, ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}) }, { tasks: siblings, modes: activeModes, runnerScope });
   const conflictFiles = isolatedWork?.conflictFiles ?? [];
   const repair = isolatedWork?.repair ?? null;
 
@@ -432,6 +433,9 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             <span className={`task-type-badge ${task.type}`}>
               {isUserTask ? 'Manual' : row.kind === 'script' ? 'Script' : 'AI'}
             </span>
+            {row.research && (
+              <span className="task-type-badge research" title="A research task: read-only, it lands nothing. Its report comes back to the planner and wakes it when the task ends.">Research</span>
+            )}
             {row.kind === 'ops' && (
               <span className="task-type-badge ops" title="An ops task: it changes no repository files and runs in your checkout, once the work it depends on is merged">Ops</span>
             )}
@@ -804,7 +808,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             task held for the user must read as such whether or not a run is
             still being drawn as active — and so must one a failure blocks,
             one on hold, or a skipped one. */}
-        {(isExecuting || row.holdReason || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
+        {(isExecuting || row.holdReason || row.researchWait || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
           <StatusBadge status={status} />
         )}
         {planActions}

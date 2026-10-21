@@ -104,6 +104,10 @@ export interface TaskStatus {
   verdict: { outcome: string; reason: string; checks: unknown[]; reported?: string } | null;
   /** Added after the user approved the plan, so the scheduler leaves it for them (ADR-0035). */
   waitsForApproval?: boolean;
+  /** Set only on a research task, so a stream of statuses alone can say which task is one (ADR-0037). */
+  research?: true;
+  /** The research limit a research task waits for, when that is what holds it (ADR-0037 R4). */
+  researchWait?: { kind: 'research-parallel' | 'research-message'; limit: number };
   /** Set on a loop's check, with its round once past the first (ADR-0045). */
   loop?: TaskLoop;
   loopRound?: number;

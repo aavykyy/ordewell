@@ -2,7 +2,7 @@ import { flag, hasFlag, readLastSession } from '../utils';
 import { handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
 import { iconFor } from '../utils/output';
 import type { ApiClient, TaskStatus } from '../apiClient';
-import { loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, SCRIPT_RUNNER, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL } from '@ordewell/core';
+import { loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, researchWaitLabel, SCRIPT_RUNNER, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL } from '@ordewell/core';
 import { connect } from './shared';
 
 const inLine = (label: string): string => label.charAt(0).toLowerCase() + label.slice(1);
@@ -84,7 +84,9 @@ export async function followExecution(
         : '';
       // Nothing starts it on its own (ADR-0035), so a line that only said "pending" would read as next in line.
       const waits = t.waitsForApproval ? `: ${inLine(WAITS_FOR_APPROVAL_LABEL)}: \`ordewell force-start <id>\` approves it, \`ordewell run\` approves all` : '';
-      lines.push(`  ${icon} ${refOf(t.id)}${scriptTasks.has(t.id) ? ' [SCR]' : ''} ${t.status}${verdict}${waits}${loop ? ` · ↻ ${inLine(loop.text)}` : ''}`);
+      // Only while it has not started: the last wait it was sent is stale once it has.
+      const limit = t.research && t.researchWait && (t.status === 'pending' || t.status === 'approved') ? `: ${inLine(researchWaitLabel(t.researchWait))}` : '';
+      lines.push(`  ${icon} ${refOf(t.id)}${scriptTasks.has(t.id) ? ' [SCR]' : t.research ? ' [RES]' : ''} ${t.status}${verdict}${waits}${limit}${loop ? ` · ↻ ${inLine(loop.text)}` : ''}`);
     }
     const output = lines.join('\n');
     if (output !== lastPrinted && output.trim()) {

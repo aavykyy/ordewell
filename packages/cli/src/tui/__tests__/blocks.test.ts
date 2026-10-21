@@ -139,3 +139,50 @@ describe('a command that ran sealed (ADR-0036 S4)', () => {
     expect(plainRows(failed)[1]).toBe('  ⎿  Error: Command exited 6:');
   });
 });
+
+describe('a run update that delivers a research report (ADR-0037 R2)', () => {
+  const digest = (report: string[]): string => [
+    'Run update:',
+    `- task #3 "Scout the cache", whose result you asked for, has ended. ${report.join('\n  ')}`,
+  ].join('\n');
+  // The pane leaves a blank row after a block, which is no part of it.
+  const drawn = (text: string, detailAll: boolean, cols = 60): string[] =>
+    conversationLines([message('wake_up', text)], cols, detailAll).map(stripAnsi).filter((row, i, all) => i < all.length - 1 || row !== '');
+  const numbered = (n: number): string[] => ['It passed.', ...Array.from({ length: n - 1 }, (_, i) => `finding ${i + 1}`)];
+
+  it('draws a short report whole, beneath its task', () => {
+    const out = drawn(digest(numbered(4)), false);
+    expect(out[0]).toBe('↯ Run update:');
+    expect(out[1]).toContain('- task #3 "Scout the cache" ended, with this report:');
+    expect(out.slice(2)).toEqual(['    It passed.', '    finding 1', '    finding 2', '    finding 3']);
+  });
+
+  it('folds a long report, and says how many lines it leaves out', () => {
+    const out = drawn(digest(numbered(20)), false);
+    expect(out).toContain('    finding 7');
+    expect(out).not.toContain('    finding 8');
+    expect(out.at(-1)).toBe('    … +12 lines of the report (ctrl+o to expand)');
+  });
+
+  it('draws all of it when the detail is on, and says how to fold it back', () => {
+    const out = drawn(digest(numbered(20)), true);
+    expect(out).toContain('    finding 19');
+    expect(out.join('\n')).not.toContain('lines of the report');
+    expect(out.at(-1)).toBe('    … (ctrl+o to collapse)');
+  });
+
+  it('wraps a long line of the report rather than cutting it', () => {
+    const word = 'unbroken-'.repeat(3);
+    const out = drawn(digest(['It passed.', `${word} ${word} ${word}`]), false, 40).join('\n');
+    expect(out.match(/unbroken-/g)).toHaveLength(9);
+  });
+
+  it('keeps the update\'s other lines as they were', () => {
+    const text = `${digest(numbered(2))}\n- task #4 "Fix it" failed: tests red`;
+    expect(drawn(text, false)).toContain('  - task #4 "Fix it" failed: tests red');
+  });
+
+  it('draws an update with no report as it always was', () => {
+    expect(drawn('Run update:\n- task #4 "Fix it" failed: tests red', false)).toEqual(['↯ Run update:', '  - task #4 "Fix it" failed: tests red']);
+  });
+});
