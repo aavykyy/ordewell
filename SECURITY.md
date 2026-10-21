@@ -72,11 +72,15 @@ their own repositories. The parts most worth your attention:
   memory and time. A way for one to change the workspace, read your home
   directory or another repository, reach the network or a local service, see
   a credential, or outlive its limits is in scope, as is a way to run a
-  command sealed that a `!` allowlist exclusion names or that you denied. On
-  macOS, a process that leaves the run's process group (`setsid`) is not
-  killed with it, though it keeps the sealed profile, and a sealed run can
-  read the command lines (not the environments) of your other processes,
-  which Seatbelt does not filter; keep secrets out of command lines.
+  command sealed that a `!` allowlist exclusion names or that you denied. A
+  read-only task's sealed runs may also write its own worktree
+  ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md));
+  a way for one to write anywhere else, or for anything a read-only task
+  changed to land, is in scope. On macOS, a process that leaves the run's
+  process group (`setsid`) is not killed with it, though it keeps the sealed
+  profile, and a sealed run can read the command lines (not the
+  environments) of your other processes, which Seatbelt does not filter; keep
+  secrets out of command lines.
 - **The local API server.** `@ordewell/web` binds `127.0.0.1` and, since
   `0.4.8`, authenticates every request against a bearer token minted at daemon
   startup and written to an owner-readable file; browser `Origin` headers are
@@ -124,11 +128,22 @@ except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-s
   and reach the network; nothing at the OS or network layer bounds them yet. A
   change task works in its own git worktree. An ops task runs in your checkout,
   after a merge gate has put what it depends on there.
-- **Read-only tasks use their runner's own read-only mode**
-  ([ADR-0031](docs/adr/routing/0001-autonomous-mode-resolution.md#the-planner-says-read-only-not-a-mode-adr-0031)). That
-  mode differs by runner; Claude Code's plan mode, for example, may save notes
-  in its own config folder. A task's result is its `task_complete` report,
-  which Ordewell stores with the verdict.
+- **Read-only tasks land nothing**
+  ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
+  One works in a worktree of its own, which is thrown away when it ends with
+  whatever it changed, and its result is its `task_complete` report, which
+  Ordewell stores with the verdict. Its shell is Ordewell's `run_command`,
+  under the planner's command rules and asking nobody: a read-only command,
+  or one your allowlist covers, runs as the planner's would, and anything else
+  runs sealed, where the workspace is readable, nothing is writable but the
+  task's worktree and a scratch directory of its own, the repository's `.git`
+  stays read-only, and there is no network and no home directory, so none of
+  your credentials. Where no sandbox runs, what would run sealed is refused.
+  Its runner's own tools still run in the runner's read-only mode, which
+  differs by runner (Claude Code's plan mode, for example, may save notes in
+  its own config folder); withholding each runner's own write tools and
+  shell, so that every write a read-only task makes is inside the OS sandbox,
+  is not yet built.
 
 In practice:
 
@@ -145,7 +160,8 @@ Planned, not yet built:
 - An opt-in container setup with a credential broker and egress proxy
   ([#93](https://github.com/ordewell/ordewell/issues/93),
   [#99](https://github.com/ordewell/ordewell/issues/99)).
-- Read-only tasks defined by Ordewell rather than by each runner's mode
+- A read-only task's runner without its own write tools and shell, the same
+  on every runner
   ([#104](https://github.com/ordewell/ordewell/issues/104)).
 
 ## What is out of scope

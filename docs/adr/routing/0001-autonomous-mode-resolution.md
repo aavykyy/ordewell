@@ -6,6 +6,8 @@ folds:
 
 # 0001 — Autonomous mode resolution: the level picks the mode, the planner says only read-only
 
+*Pending:* [ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md) — a read-only task stops running in its runner's read-only mode: each runner's own writes and shell are withheld instead, the same on every runner, and the planner is told a read-only task can run commands.
+
 ## Problem
 
 Generating a plan means picking a runner mode per task — Claude's
@@ -62,7 +64,8 @@ Concretely:
   - **OpenCode:** `build` wears both tags — an honest no-op, since OpenCode has
     nothing safer than build, rather than a mystery.
 - **The planner says read-only, not a mode** (detailed below). It marks a task
-  `readOnly: true` when it must not change files, and names no mode. Ordewell
+  `readOnly: true` when it must land nothing, its report being its result
+  (ADR-0046), and names no mode. Ordewell
   fills the mode in when the task is planned: the runner's `readOnly` mode, or
   the runner's mode for the level. A planner edit that asks for no change
   keeps the task's mode when its runner offers it, so a mode the user picked
@@ -86,8 +89,10 @@ change files. Each built-in runner has a mode built for it, `plan`.
 
 #### What the planner says
 
-- **`readOnly: true`** on a task that must not change any file. Absent or
-  `false` otherwise. A task that must run commands — tests, scripts, builds —
+- **`readOnly: true`** on a task that must not change any file: it lands
+  nothing, its worktree is thrown away when it ends, and its report is its
+  result ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
+  Absent or `false` otherwise. A task that must run commands — tests, scripts, builds —
   is not read-only even when it changes no file: the read-only modes refuse
   them, and the planner is told so. It is the only mode-related field in the plan JSON,
   `submit_plan` and `edit_plan`.
@@ -289,3 +294,4 @@ writing.
   the runner moves to on its own is stated, never written
   ([ADR-0041](0041-a-tasks-model-follows-the-runners-own-switch.md)).
 - 2026-10-18 — one assignment resolver derives the mode for every writer: a user's move of a read-only task to a runner without a read-only mode is refused, a manual task the user turns into an AI one gets the level's mode, and a user's edit may not put an ops task on a read-only mode.
+- 2026-10-21 — a read-only task lands nothing: its worktree is thrown away and its runner is given Ordewell's sealed `run_command` (ADR-0046).

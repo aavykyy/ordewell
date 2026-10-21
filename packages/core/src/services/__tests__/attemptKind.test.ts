@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, mergeExcludes,
+  attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, landsNothing, mergeExcludes, takesSkills,
   type AttemptKind, type AttemptPromptSources,
 } from '../attemptKind';
 import type { AttemptIntent } from '../IsolationRunController';
@@ -10,38 +10,51 @@ const repair = { n: 1, limit: 2 };
 const resume = { message: 'one more thing', resumeSessionId: 'sess-1' };
 
 const KINDS: Record<string, AttemptKind> = {
-  change: classifyAttempt(false),
-  ops: classifyAttempt(true),
-  repair: classifyAttempt(false, { repair }),
-  'continued change': classifyAttempt(false, { continuation: resume }),
-  'continued ops': classifyAttempt(true, { continuation: resume }),
-  'carried-over change': classifyAttempt(false, { carriedFrom: 'codex' }),
+  change: classifyAttempt('change'),
+  ops: classifyAttempt('ops'),
+  repair: classifyAttempt('change', { repair }),
+  'continued change': classifyAttempt('change', { continuation: resume }),
+  'continued ops': classifyAttempt('ops', { continuation: resume }),
+  'carried-over change': classifyAttempt('change', { carriedFrom: 'codex' }),
+  'read-only': classifyAttempt('readOnly'),
+  'continued read-only': classifyAttempt('readOnly', { continuation: resume }),
 };
 
 describe('classifyAttempt', () => {
   it('reads a fresh attempt from the task alone', () => {
-    expect(classifyAttempt(false)).toEqual({ kind: 'change' });
-    expect(classifyAttempt(true)).toEqual({ kind: 'ops' });
+    expect(classifyAttempt('change')).toEqual({ kind: 'change' });
+    expect(classifyAttempt('ops')).toEqual({ kind: 'ops' });
   });
 
   it('carries what a repair or a continue is owed', () => {
-    expect(classifyAttempt(false, { repair })).toEqual({ kind: 'repair', repair });
-    expect(classifyAttempt(true, { continuation: resume })).toEqual({ kind: 'continuation', ops: true, ...resume });
+    expect(classifyAttempt('change', { repair })).toEqual({ kind: 'repair', repair });
+    expect(classifyAttempt('ops', { continuation: resume })).toEqual({ kind: 'continuation', work: 'ops', ...resume });
   });
 
   it('lets a repair outrank the ops mark, and a continue outrank a repair', () => {
-    expect(classifyAttempt(true, { repair }).kind).toBe('repair');
-    expect(classifyAttempt(false, { repair, continuation: resume }).kind).toBe('continuation');
+    expect(classifyAttempt('ops', { repair }).kind).toBe('repair');
+    expect(classifyAttempt('change', { repair, continuation: resume }).kind).toBe('continuation');
   });
 
   it('carries a paused change task\'s work over to its new runner, naming the runner it left', () => {
-    expect(classifyAttempt(false, { carriedFrom: 'codex' })).toEqual({ kind: 'carryOver', from: 'codex' });
+    expect(classifyAttempt('change', { carriedFrom: 'codex' })).toEqual({ kind: 'carryOver', from: 'codex' });
+  });
+
+  it('reads a read-only task as one that lands nothing, fresh or continued (ADR-0046)', () => {
+    expect(classifyAttempt('readOnly')).toEqual({ kind: 'readOnly' });
+    expect(classifyAttempt('readOnly', { continuation: resume })).toEqual({ kind: 'continuation', work: 'readOnly', ...resume });
+    for (const [name, kind] of Object.entries(KINDS)) expect(landsNothing(kind), name).toBe(name.endsWith('read-only'));
+  });
+
+  it('carries nothing over for a read-only task, whose worktree was thrown away', () => {
+    expect(classifyAttempt('readOnly', { carriedFrom: 'codex' })).toEqual({ kind: 'readOnly' });
+    expect(takesSkills(classifyAttempt('readOnly'))).toBe(true);
   });
 
   it('carries nothing over for an ops task, whose work is never in a worktree, and lets a repair or a continue outrank it', () => {
-    expect(classifyAttempt(true, { carriedFrom: 'codex' })).toEqual({ kind: 'ops' });
-    expect(classifyAttempt(false, { repair, carriedFrom: 'codex' }).kind).toBe('repair');
-    expect(classifyAttempt(false, { continuation: resume, carriedFrom: 'codex' }).kind).toBe('continuation');
+    expect(classifyAttempt('ops', { carriedFrom: 'codex' })).toEqual({ kind: 'ops' });
+    expect(classifyAttempt('change', { repair, carriedFrom: 'codex' }).kind).toBe('repair');
+    expect(classifyAttempt('change', { continuation: resume, carriedFrom: 'codex' }).kind).toBe('continuation');
   });
 });
 
@@ -53,12 +66,14 @@ describe('what each kind decides', () => {
     ['continued change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'restored' }],
     ['continued ops', { mergeExcludes: true, decidesIsolation: false, checksTree: true, cwd: 'workspace' }],
     ['carried-over change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'restored' }],
+    ['read-only', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'throwaway' }],
+    ['continued read-only', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'throwaway' }],
   ];
 
   it.each(table)('a %s attempt', async (name, expected) => {
     const kind = KINDS[name];
     const runs = {
-      attemptCwd: vi.fn(async (_t: unknown, intent: AttemptIntent) => ({ cwd: { fresh: 'fresh', repair: 'kept', restore: 'restored' }[intent], worktree: true })),
+      attemptCwd: vi.fn(async (_t: unknown, intent: AttemptIntent) => ({ cwd: { fresh: 'fresh', repair: 'kept', restore: 'restored', readOnly: 'throwaway' }[intent], worktree: true })),
       workspaceCwd: vi.fn(async () => ({ cwd: 'workspace', worktree: false })),
     };
 
@@ -82,13 +97,15 @@ describe('mergeExcludes: the one rule Merge all and ops work share (ADR-0020)', 
     ['continued change', false],
     ['continued ops', true],
     ['carried-over change', false],
+    ['read-only', false],
+    ['continued read-only', false],
   ])('%s attempt — excluded: %s', (name, excluded) => {
     expect(mergeExcludes(KINDS[name])).toBe(excluded);
   });
 
   it('holds back a fresh ops task exactly when the ops mark does', () => {
-    expect(mergeExcludes(classifyAttempt(true))).toBe(true);
-    expect(mergeExcludes(classifyAttempt(false))).toBe(false);
+    expect(mergeExcludes(classifyAttempt('ops'))).toBe(true);
+    expect(mergeExcludes(classifyAttempt('change'))).toBe(false);
   });
 });
 
@@ -113,6 +130,8 @@ describe('attemptPrompt', () => {
     ['continued change', { has: ['Check the working tree'], lacks: ['ORIGINAL BODY', '### Skill: tdd'], reads: [] }],
     ['continued ops', { has: ['in the same checkout', 'was not undone'], lacks: ['ORIGINAL BODY', '## Previous attempt'], reads: [] }],
     ['carried-over change', { has: ['ORIGINAL BODY', '### Skill: tdd', 'previous attempt on codex', 'may be unfinished'], lacks: ['## Previous attempt'], reads: [] }],
+    ['read-only', { has: ['ORIGINAL BODY', '### Skill: tdd'], lacks: ['## Previous attempt'], reads: [] }],
+    ['continued read-only', { has: ['nothing your earlier attempt changed was kept'], lacks: ['ORIGINAL BODY', 'Your previous changes are in the working tree'], reads: [] }],
   ];
 
   it.each(table)('a %s attempt', (name, expected) => {

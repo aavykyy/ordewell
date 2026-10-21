@@ -22,8 +22,11 @@ tree — nothing stops a run trampling uncommitted work.
 **When the workspace forms a repo group — a git repository, or a folder of them
 (ADR-0014) — each change task runs in its own worktree, and the results are
 integrated deterministically on a per-run branch.** A change task is every AI
-task that is not an ops task; an ops task runs at the workspace root, behind a
-merge gate (ADR-0020). A `WorktreeIsolation`
+task that is neither an ops task nor read-only; an ops task runs at the
+workspace root, behind a merge gate (ADR-0020), and a read-only task runs in a
+worktree of its own that lands nothing
+([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
+A `WorktreeIsolation`
 module in core owns every git and filesystem operation for this. The
 orchestrator gets a `cwd` from `prepare`, spawns the Runner there, and after the
 evidence-based Verdict lands the work. A single repository is a group of one;
@@ -111,7 +114,10 @@ everything below applies per repo of the group.
   on top of that tip, with a conflict fallback naming its preserved branches
   ([ADR-0018, K1](../runners/0018-structured-runner-transport.md)), so the saved runner
   session sees the edits it remembers. A carry-over to another runner after a
-  usage limit restores it the same way (ADR-0018, U1).
+  usage limit restores it the same way (ADR-0018, U1). A read-only task's
+  worktree is the exception (ADR-0046): it is never integrated, and every
+  release removes it whole, kept or not, with nothing preserved on a branch
+  and no git run inside it.
 - **Dirty trees.** Modified tracked files in any repo of the group make
   isolated execution unavailable for that run (`dirty`); untracked and ignored
   files do not, because the bootstrap accounts for them. `isActive` returns the
@@ -472,3 +478,4 @@ literal git command lines or private fields.
 - 2026-10-18 — the Session says when it closed the run (`run_closed`), and a surface re-told by a load or refresh takes `runSnapshot()` instead of reading the run record.
 - 2026-10-18 — a run held on a usage limit is no longer closed when its last attempt ends; it stays open for the reset (ADR-0034).
 - 2026-10-19 — adopting a saved run asks git what the user merged since and clears up a settled run left with nothing to hand over; a gone integration branch counts as merged.
+- 2026-10-21 — a read-only task's worktree lands nothing and is never kept, and removing a worktree follows no link a task put on the way (ADR-0046).

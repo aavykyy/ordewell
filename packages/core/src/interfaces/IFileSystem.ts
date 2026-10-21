@@ -69,6 +69,25 @@ export interface BashOptions {
   sealed?: boolean;
 }
 
+/** Where a read-only task's commands run (ADR-0046). */
+export interface TaskShellSite {
+  /** Where its commands start, and what their paths are confined to: the task's worktree, or the workspace root when the run does not isolate. */
+  cwd: string;
+  /** The task's own worktree, the one directory but scratch a sealed run may write; absent without one. */
+  writable?: string;
+}
+
+/**
+ * A read-only task's `run_command` (ADR-0046): the planner's command rules at
+ * the task's working directory, with nobody to ask. One per attempt, with a
+ * scratch directory of its own.
+ */
+export interface TaskShell {
+  run(command: string, signal?: AbortSignal): Promise<ToolOutcome>;
+  /** The attempt ended: its scratch directory goes. */
+  end(): void;
+}
+
 export interface IFileSystem {
   readFile(path: string, opts?: ReadFileOpts): Promise<ToolOutcome>;
   readFiles(paths: string[]): Promise<ToolOutcome>;
@@ -98,4 +117,6 @@ export interface IFileSystem {
   endSession?(): void;
   /** Whether a command can run sealed on this host (ADR-0036 S6); where it cannot, the session's one notice says so. */
   canSeal?(): Promise<boolean>;
+  /** A read-only task's shell at `site`, held to this session's allowlist and never asking (ADR-0046). */
+  taskShell?(site: TaskShellSite): TaskShell;
 }

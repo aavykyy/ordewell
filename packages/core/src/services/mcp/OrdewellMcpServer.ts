@@ -4,7 +4,7 @@ import { Server as McpProtocolServer } from '@modelcontextprotocol/sdk/server/in
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { extractPresentedToken } from '../../utils/daemonToken';
-import { PLANNER_TOOLS, TASK_TOOLS, type McpTool, type PlannerToolHandler, type TaskToolHandler } from './tools';
+import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, type McpTool, type PlannerToolHandler, type TaskToolHandler } from './tools';
 
 /**
  * The Ordewell MCP server (ADR-0022): one loopback listener per process,
@@ -35,6 +35,8 @@ export interface TaskTokenScope {
   taskId: string;
   /** The attempt generation the token is good for; a later attempt gets a new token. */
   attempt: number;
+  /** A read-only task's attempt (ADR-0046): its token lists `run_command` too, and no other task's does. */
+  readOnly?: boolean;
 }
 
 export interface PlannerTokenScope {
@@ -53,6 +55,8 @@ export interface McpCredential {
   token: string;
   /** The planner tools the token hides ({@link PlannerTokenScope.hidden}), so the runner is told of and pre-allows only what it is served. */
   hidden?: readonly string[];
+  /** The token serves a read-only task's tools ({@link TaskTokenScope.readOnly}), so the runner is told of and pre-allows `run_command`. */
+  readOnly?: true;
 }
 
 type Grant =
@@ -76,8 +80,9 @@ export class OrdewellMcpServer {
     return this.boundUrl;
   }
 
-  issueTaskToken(scope: TaskTokenScope, handler: TaskToolHandler = {}): Promise<McpCredential> {
-    return this.issue({ role: 'task', scope: { ...scope }, handler, revoked: new AbortController() });
+  async issueTaskToken(scope: TaskTokenScope, handler: TaskToolHandler = {}): Promise<McpCredential> {
+    const credential = await this.issue({ role: 'task', scope: { ...scope }, handler, revoked: new AbortController() });
+    return scope.readOnly ? { ...credential, readOnly: true } : credential;
   }
 
   async issuePlannerToken(scope: PlannerTokenScope, handler: PlannerToolHandler = {}): Promise<McpCredential> {
@@ -171,7 +176,7 @@ export class OrdewellMcpServer {
     // Stateless: a fresh server per request, built from the grant, so the tool
     // list and every call are fixed by the token on that very request.
     const mcp = new McpProtocolServer({ name: 'ordewell', version: '1' }, { capabilities: { tools: {} } });
-    if (grant.role === 'task') serveTools(mcp, TASK_TOOLS, grant.handler, grant.revoked.signal, this.heartbeatMs);
+    if (grant.role === 'task') serveTools(mcp, grant.scope.readOnly ? READ_ONLY_TASK_TOOLS : TASK_TOOLS, grant.handler, grant.revoked.signal, this.heartbeatMs);
     else serveTools(mcp, PLANNER_TOOLS.filter((tool) => !grant.scope.hidden?.includes(tool.name)), grant.handler, grant.revoked.signal, this.heartbeatMs);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {

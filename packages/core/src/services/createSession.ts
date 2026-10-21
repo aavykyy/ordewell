@@ -309,6 +309,8 @@ export function createSession(deps: SessionDeps): Session {
     lastLoggedAttempt: (taskId) => session.taskLogAttempts(taskId).at(-1) ?? 0,
     runSettings: () => session.planState?.runSettings,
     isApproved: (taskId) => session.isApproved(taskId),
+    // The planner's command rules, at the read-only task's own working directory (ADR-0046).
+    taskShell: (site) => deps.fsAdapter.taskShell?.(site),
   });
   const usage = new PlannerUsageLedger(windows);
   const events = new SessionEventRelay({

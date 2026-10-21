@@ -60,8 +60,9 @@ reach.**
   platform offers a throwaway overlay, the workspace may be mounted with one
   instead of read-only, so a tool that writes a cache beside the code still
   runs; nothing written reaches the workspace either way. The profile takes
-  one more writable directory as a parameter, none by default, for a
-  read-only task's sealed commands in its own throwaway worktree (#104).
+  one more writable directory as a parameter, none by default: a read-only
+  task's sealed commands get its own throwaway worktree
+  ([ADR-0046](0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
 - **What runs sealed (S2).** A command runs sealed when the planner asks for
   it (`run_command` with `sealed: true`), or when the envelope would refuse it
   without asking: the classifier's `refuse`, or a command the approval mode
@@ -80,7 +81,8 @@ reach.**
   research timeline marks the step as sealed.
 - **Research subagents get it too (S5).** A sealed run never asks anything,
   which is what a subagent needs (ADR-0008, T6): what would have asked runs
-  sealed for them.
+  sealed for them. So does a read-only task's `run_command`, from its own
+  worktree (ADR-0046).
 - **Where no sandbox runs (S6)**, on Windows or a Linux host without
   unprivileged user namespaces, a refusal is a refusal as today, and the
   planner surface's one notice (ADR-0011, B5) also says that loops and scripts
@@ -191,3 +193,4 @@ reach.**
 
 - 2026-10-15 — accepted. Not yet implemented; sealed runs need #64 first.
 - 2026-10-21 — sealed runs implemented (#109) on Seatbelt and bubblewrap, for `bash`, `run_command` and research subagents; the native-shell opt-in waits for #110.
+- 2026-10-21 — a read-only task's `run_command` runs sealed with its worktree writable (ADR-0046).

@@ -13,10 +13,11 @@ import type {
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import type { RunnerSessionCost } from '../models/Usage';
-import { checkpointReply, type CheckpointAnswer, type TaskCompleteArgs } from './mcp/tools';
+import { checkpointReply, commandReply, type CheckpointAnswer, type TaskCompleteArgs } from './mcp/tools';
 import { sharedMcpServer, type OrdewellMcpServer, type TaskTokenScope } from './mcp/OrdewellMcpServer';
 import { mcpClientConfig } from './mcp/clientConfig';
 import type { ResearchToolType } from '../models/Task';
+import type { TaskShell } from '../interfaces/IFileSystem';
 import { resolveTaskRunnerFlags } from '../plugins/resolveArgs';
 import { AbstractRunner, AbstractRunnerSession, type RunnerSpawnOptions } from './AbstractRunner';
 import type { AgentEvent, AgentProcessDeps, TaskModeAgentAdapter, TaskStartOptions } from './harness/AgentAdapter';
@@ -221,8 +222,8 @@ interface SessionLaunch {
   createAdapter: (runner: string, deps: AgentProcessDeps) => TaskModeAgentAdapter;
   startOptions: TaskStartOptions;
   interruptGraceMs: number;
-  /** Where this attempt's task tools are served (ADR-0022). */
-  tools: { server: OrdewellMcpServer; scope: TaskTokenScope };
+  /** Where this attempt's task tools are served (ADR-0022), and a read-only attempt's shell (ADR-0046). */
+  tools: { server: OrdewellMcpServer; scope: TaskTokenScope; shell?: TaskShell };
   onNotice?: (message: string) => void;
 }
 
@@ -316,7 +317,7 @@ export class StructuredSession extends AbstractRunnerSession {
    * at all throws instead: spawning it again would fail the same way.
    */
   private async startAttached(opts: TaskStartOptions): Promise<void> {
-    const { server, scope } = this.launch.tools;
+    const { server, scope, shell } = this.launch.tools;
     const spawned = await spawnAttached({
       runner: this.launch.runner,
       create: () => this.launch.createAdapter(this.launch.runner, this.launch.deps),
@@ -329,6 +330,8 @@ export class StructuredSession extends AbstractRunnerSession {
           if (!this.checkpointHandler) return { text: 'checkpoint is not available in this session.', isError: true };
           return checkpointReply(await this.checkpointHandler(question, signal));
         },
+        // The call's signal aborts when the token is revoked, so a command still running ends with the attempt.
+        ...(shell ? { runCommand: async ({ command }, { signal }) => commandReply(await shell.run(command, signal)) } : {}),
       }),
       revoke: (token) => server.revoke(token),
       start: (adapter, credential) => {
@@ -946,7 +949,11 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
         resumeCost: opts.resumeCost,
       },
       interruptGraceMs: this.interruptGraceMs,
-      tools: { server: this.mcp, scope: { sessionId: opts.planSessionId ?? '', taskId: opts.taskId, attempt: opts.attempt ?? 1 } },
+      tools: {
+        server: this.mcp,
+        scope: { sessionId: opts.planSessionId ?? '', taskId: opts.taskId, attempt: opts.attempt ?? 1, ...(opts.shell ? { readOnly: true } : {}) },
+        ...(opts.shell ? { shell: opts.shell } : {}),
+      },
       onNotice: opts.onNotice,
     });
 

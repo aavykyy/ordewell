@@ -6,7 +6,8 @@ import type { RunnerSpawnOptions } from '../AbstractRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import type { IRunnerSession, StructuredEvent, StructuredTurnEnd } from '../../interfaces/IRunner';
 import type { AgentEvent, SpawnFn, AgentStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
-import type { OrdewellMcpServer } from '../mcp/OrdewellMcpServer';
+import type { OrdewellMcpServer, TaskTokenScope } from '../mcp/OrdewellMcpServer';
+import type { TaskToolHandler } from '../mcp/tools';
 import { TASK_COMPLETION_CONTRACT } from '../mcp';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import { claudeTurnEndQueue, claudeSteerRecording, fakeSpawn, fixture, type FakeSpawnResult, type ScriptedReply } from './harnessTestKit';
@@ -985,6 +986,51 @@ describe('StructuredRunner: tools or nothing (ADR-0022)', () => {
     const spawn = () => runner.spawn(options({ onNotice: (message) => notices.push(message) }));
     return { runner, spawn, adapters, issued, revoked, notices };
   }
+
+  it("serves a read-only attempt's run_command from its shell, and no other attempt's (ADR-0046)", async () => {
+    const issued: Array<{ scope: TaskTokenScope; handler: TaskToolHandler }> = [];
+    const server = {
+      issueTaskToken: async (scope: TaskTokenScope, handler: TaskToolHandler) => {
+        issued.push({ scope, handler });
+        return { url: 'http://127.0.0.1:1/mcp', token: `tok-${issued.length}`, ...(scope.readOnly ? { readOnly: true as const } : {}) };
+      },
+      revoke: () => {},
+    } as unknown as OrdewellMcpServer;
+    const started: Array<TaskStartOptions['mcp']> = [];
+    const createAdapter = (): TaskModeAgentAdapter => ({
+      agentId: 'claude-code',
+      exited: false,
+      start: async (opts) => { if (opts.kind === 'task') started.push(opts.mcp); },
+      send: async () => {},
+      nativeSessionId: () => null,
+      dispose: () => {},
+      interrupt: async () => true,
+      onProcessExit: () => {},
+      answerPermission: () => false,
+      mcpAttached: async () => true,
+    });
+    const ran: Array<{ command: string; aborted: boolean | undefined }> = [];
+    const shell = {
+      run: async (command: string, signal?: AbortSignal) => {
+        ran.push({ command, aborted: signal?.aborted });
+        return { success: false, output: 'Command exited 1:\nFAIL cache.test.ts', truncated: false };
+      },
+      end: () => {},
+    };
+    const runner = new StructuredRunner({ createAdapter, mcp: server });
+
+    const readOnly = await runner.spawn(options({ shell }));
+    const change = await runner.spawn(options({ taskId: 'task-2' }));
+
+    expect(issued.map((i) => i.scope.readOnly)).toEqual([true, undefined]);
+    expect(started.map((mcp) => mcp?.readOnly)).toEqual([true, undefined]);
+    expect(issued[1].handler.runCommand).toBeUndefined();
+    const reply = await issued[0].handler.runCommand!({ command: 'npm test' }, { signal: new AbortController().signal });
+    expect(reply).toEqual({ text: 'Command exited 1:\nFAIL cache.test.ts', isError: true });
+    expect(ran).toEqual([{ command: 'npm test', aborted: false }]);
+    readOnly.kill();
+    change.kill();
+  });
 
   it('sends the prompt to the first process when the runner reports the server connected', async () => {
     const env = attaching([true]);

@@ -1383,8 +1383,8 @@ without a gate and keeps its mid-run card for a gate wait.
 *Avoid:* per-repo merge — there is none, by design (ADR-0014).
 
 **Change task** — a task whose result is a change to repository files: it runs
-in a worktree and lands on the integration branch. Every task is one unless it
-is marked `ops` (ADR-0020).
+in a worktree and lands on the integration branch. Every AI task is one unless
+it is marked `ops` (ADR-0020) or is a *read-only task* (ADR-0046).
 *Avoid:* "code task" — docs and config edits are changes too.
 
 **Ops task** — an AI task marked `ops: true` (ADR-0020): it changes no repository files, acting instead on systems outside the repo (a
@@ -1968,17 +1968,26 @@ purpose: ModeResolver resolves *runner modes*; ModelResolver resolves *models*.
 *Avoid:* "the parser" for this policy — it lives in `ModeResolver.ts`, not the
 plan parser, even though the parser calls `plannedMode`.
 
-**Read-only task** — an AI task the planner marks `readOnly: true` because it
-must not change any file: a review, an audit, an analysis whose result is a
-report (ADR-0031). It runs in its runner's `readOnly`-tagged mode (`plan` on
-every built-in runner), at either level, and stays read-only through a
+**Read-only task** — an AI task that lands nothing (ADR-0046): a review, an
+audit, an analysis whose result is its `task_complete` report. The planner
+marks it `readOnly: true` (ADR-0031), and the task stores that as its runner's
+`readOnly`-tagged mode (`plan` on every built-in runner), at either level. It
+works in a worktree of its own where the run isolates, which is thrown away
+whatever it changed when the attempt ends (`AttemptKind` `readOnly`,
+`IsolationTaskRecord.readOnly`), and keeps its runner's own read tools. Its
+shell is Ordewell's `run_command`, on its token alone (`BaseFileSystem.taskShell`):
+the planner's command rules from the task's working directory, asking
+nobody, where what would ask or be refused is a *sealed run* with the
+worktree writable, so it can try a fix or add a failing test and run the
+suite; git there reads and records nothing. It stays read-only through a
 planner's move or split unless the planner lifts it with `readOnly: false`.
 Its AI subtasks are read-only too unless one says otherwise; a manual task
-and an ops task cannot be one.
-The planner's only say over a task's mode; a runner without a read-only mode
-cannot take one. It is a request, not a task field: the task stores the mode.
+and an ops task cannot be one. The planner's only say over a task's mode; a
+runner without a read-only mode cannot take one. It is a request, not a task
+field: the task stores the mode.
 *Avoid:* "plan mode task" (`plan` is one runner's mode id, not the concept),
-"analysis task".
+"analysis task", "read-only mode" for the task (the mode is the runner's; what
+makes the task read-only is that nothing lands).
 
 **Unavailable mode** (`RunnerModeInfo.unavailable`,
 `RunnerRegistry.setUnavailableModes`, `unavailableModeReason`) — a mode a
@@ -2811,7 +2820,9 @@ locale, a `/tmp` of its own, limits on processes, memory and wall time, and
 dying with its parent. A command runs sealed when the planner passes
 `sealed: true` to `bash` or `run_command`, or when the envelope would refuse it
 without asking anyone: the classifier's `refuse`, or the `allowlist` approval
-mode's. A research subagent runs sealed what would have asked. A `!` allowlist
+mode's. A research subagent runs sealed what would have asked, and so does a
+*read-only task*'s `run_command`, with the task's worktree writable and a
+scratch directory of its own (ADR-0046). A `!` allowlist
 exclusion and a denial given on the card still refuse; where no sandbox can
 hold one, a refusal stays a refusal. Its result starts with `[Ran sealed`,
 which the research timeline turns into a mark on the row. *Avoid:* "safe mode",

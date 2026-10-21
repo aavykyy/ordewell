@@ -1,10 +1,11 @@
-import { unavailableTaskModeMessage } from './ModeResolver';
+import { taggedReadOnlyMode, unavailableTaskModeMessage } from './ModeResolver';
 import { McpAttachError, RunnerStartupExit } from './harness/ordewellBinding';
 import * as path from 'path';
 import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasksWithParents, pausedOnLimit, waitsForReset, type RunSettings } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
+import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
 import type { RunnerModelRef } from '../models/RunnerCommand';
 import { countedSessionCost, resumedSessionWindow } from '../models/Usage';
 import { summarizeOutput } from './promptAugment';
@@ -32,8 +33,8 @@ import { landed, selectReadyTasks, startWaits, waitOf, type ForcedStart, type Re
 import { blockingFailures, planBlocks, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 import {
-  attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, mergeExcludes, takesSkills,
-  type AttemptKind, type Continuation,
+  attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, landsNothing, mergeExcludes, takesSkills,
+  type AttemptKind, type Continuation, type TaskWork,
 } from './attemptKind';
 import { resolveTaskSkills, TaskSkillsError, type SkillLookup } from './taskSkills';
 import { SkillsService, workspaceSkillRoots } from './SkillsService';
@@ -232,6 +233,8 @@ interface TaskAttempt {
   readonly planScope: number;
   /** A script task's attempt (ADR-0035): the script runner runs its body, with no model. */
   readonly script: boolean;
+  /** A read-only attempt's `run_command` (ADR-0046), ended with the attempt. */
+  shell: TaskShell | null;
 }
 
 type AttemptPhase = 'starting' | 'running' | 'integrating';
@@ -333,6 +336,8 @@ export interface TaskOrchestratorDeps {
    * owns it, and the scheduler starts nothing outside it.
    */
   isApproved: (taskId: string) => boolean;
+  /** A read-only attempt's shell (ADR-0046); absent, its runner is given no `run_command`. */
+  taskShell?: (site: TaskShellSite) => TaskShell | undefined;
 }
 
 /**
@@ -357,6 +362,7 @@ export interface TaskOrchestratorOptions {
   runSettings?: () => SchedulerRunSettings | undefined;
   /** Every task is approved unless a Session supplies its record: an orchestrator on its own has no user to ask. */
   isApproved?: (taskId: string) => boolean;
+  taskShell?: (site: TaskShellSite) => TaskShell | undefined;
 }
 
 /**
@@ -447,6 +453,7 @@ export class TaskOrchestrator {
   private lastLoggedAttempt: (taskId: string) => number;
   private runSettings: () => SchedulerRunSettings | undefined;
   private isApproved: (taskId: string) => boolean;
+  private taskShell: (site: TaskShellSite) => TaskShell | undefined;
 
   constructor(deps: TaskOrchestratorDeps) {
     this.config = deps.config;
@@ -465,6 +472,7 @@ export class TaskOrchestrator {
     this.lastLoggedAttempt = deps.lastLoggedAttempt;
     this.runSettings = deps.runSettings;
     this.isApproved = deps.isApproved;
+    this.taskShell = deps.taskShell ?? (() => undefined);
 
     this.store.onMutate = () => this.emit('onTaskChanged');
     this.verifier.onVerdict((taskId, verdict) => { void this.deliverVerdict(taskId, verdict); });
@@ -537,6 +545,7 @@ export class TaskOrchestrator {
       lastLoggedAttempt: options.lastLoggedAttempt ?? (() => 0),
       runSettings: options.runSettings ?? (() => undefined),
       isApproved: options.isApproved ?? (() => true),
+      ...(options.taskShell ? { taskShell: options.taskShell } : {}),
     });
     return orchestrator;
   }
@@ -1434,7 +1443,18 @@ export class TaskOrchestrator {
 
   /** The kind a task's next attempt starts as, short of a repair or a continue: what is weighed before one exists. */
   private nextAttemptKind(taskId: string): AttemptKind {
-    return classifyAttempt(this.store.isOps(taskId), { carriedFrom: this.store.get(taskId)?.carriedFrom });
+    const task = this.store.get(taskId);
+    return classifyAttempt(task ? this.workOf(task) : 'change', { carriedFrom: task?.carriedFrom });
+  }
+
+  /**
+   * What a task's work is. A read-only task is one on the mode its runner's
+   * manifest tags read-only (ADR-0001), which is what lands nothing (ADR-0046).
+   */
+  private workOf(task: Task): TaskWork {
+    if (this.store.isOps(task.id)) return 'ops';
+    const modes = this.registry?.get(this.store.resolveTaskRunner(task))?.manifest.modes;
+    return task.type === 'ai' && task.taskMode !== undefined && task.taskMode === taggedReadOnlyMode(modes) ? 'readOnly' : 'change';
   }
 
   /**
@@ -2385,7 +2405,7 @@ export class TaskOrchestrator {
       cwd: null,
       worktree: false,
       integration: null,
-      kind: classifyAttempt(this.store.isOps(task.id), { repair: this.landing.nextRepair(task.id), continuation, carriedFrom: task.carriedFrom }),
+      kind: classifyAttempt(this.workOf(task), { repair: this.landing.nextRepair(task.id), continuation, carriedFrom: task.carriedFrom }),
       snapshot: null,
       startedAt: new Date().toISOString(),
       decided: false,
@@ -2398,6 +2418,7 @@ export class TaskOrchestrator {
       runnerStopped: false,
       planScope: this.planScope,
       script,
+      shell: null,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.attempts.set(task.id, attempt);
@@ -2451,7 +2472,7 @@ export class TaskOrchestrator {
       // Resumed beside a runner still winding it down, a session would run in
       // two processes, and count from before what the first one still reports.
       if (kind.kind === 'continuation') await this.windDowns.get(task.id);
-      const { cwd, worktree, previousWork } = await attemptCwd(kind, task, this.runs);
+      const { cwd, worktree, previousWork, workspace } = await attemptCwd(kind, task, this.runs);
       attempt.cwd = cwd;
       attempt.worktree = worktree;
       if (checksTree(kind)) attempt.snapshot = await this.runs.snapshotWorkspace();
@@ -2466,7 +2487,7 @@ export class TaskOrchestrator {
       }
       const session = attempt.script
         ? await this.spawnScript(task, attempt, cwd)
-        : await this.spawnRunner(task, attempt, cwd, worktree, previousWork);
+        : await this.spawnRunner(task, attempt, cwd, worktree ? workspace : undefined, previousWork);
 
       // Stop/load/cancel can end the attempt while the async adapter is
       // starting. Do not resurrect that execution after the surface already
@@ -2593,9 +2614,12 @@ export class TaskOrchestrator {
 
   /**
    * The runner's half of a start: the skills read where the attempt runs, the
-   * prompt its kind is told, and the runner spawned on its model and mode.
+   * prompt its kind is told, and the runner spawned on its model and mode. A
+   * read-only attempt is given its shell, which may write its task workspace,
+   * `writable`, and nothing of the user's (ADR-0046).
    */
-  private async spawnRunner(task: Task, attempt: TaskAttempt, cwd: string, worktree: boolean, previousWork: PreviousWork | undefined): Promise<IRunnerSession> {
+  private async spawnRunner(task: Task, attempt: TaskAttempt, cwd: string, writable: string | undefined, previousWork: PreviousWork | undefined): Promise<IRunnerSession> {
+    const worktree = attempt.worktree;
     const { kind } = attempt;
     // Read where the attempt runs: a skill an earlier task committed is in
     // this worktree only once that task's work has landed.
@@ -2612,6 +2636,8 @@ export class TaskOrchestrator {
       previousAttempt: (taskId) => this.opsPreviousAttempt(taskId),
     });
     const env = await this.envForTask(cwd);
+    if (landsNothing(kind)) attempt.shell = this.taskShell({ cwd, ...(writable ? { writable } : {}) }) ?? null;
+    const shell = attempt.shell;
     return this.runner.spawn({
       taskId: task.id,
       runner: attempt.runner,
@@ -2630,6 +2656,7 @@ export class TaskOrchestrator {
       resumeWindow: kind.kind === 'continuation' ? resumedSessionWindow(task.attemptUsage, attempt.runner, attempt.attempt, kind.resumeSessionId) : undefined,
       attempt: attempt.attempt,
       ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
+      ...(shell ? { shell } : {}),
       onNotice: (message) => this.tell('warn', `Task "${task.title}": ${message}`),
     });
   }
@@ -2692,6 +2719,7 @@ export class TaskOrchestrator {
    */
   private abandonSpawn(task: Task, attempt: TaskAttempt, session?: IRunnerSession): void {
     session?.kill();
+    attempt.shell?.end();
     if (this.attempts.has(task.id) || this.completing.has(task.id) || this.store.get(task.id)?.status !== 'in_progress') return;
     if (attempt.kind.kind === 'repair') this.store.markAwaitingUser(task.id, 'conflict');
     else this.store.markPending(task.id);
@@ -2740,6 +2768,7 @@ export class TaskOrchestrator {
     if (attempt) {
       this.store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined, nativeSessionId ?? undefined);
       this.output.detach(taskId);
+      attempt.shell?.end();
     }
     if (attempt && session) this.saveNativeSession(taskId, nativeSessionId, attempt.runner);
     if (stopsRunner(reason)) {

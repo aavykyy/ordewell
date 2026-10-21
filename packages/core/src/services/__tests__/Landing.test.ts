@@ -4,6 +4,7 @@ import { IsolationRunController, type IsolationRunListener } from '../IsolationR
 import { PlanStore } from '../PlanStore';
 import { createTask, type Task, type Verdict } from '../../models/Task';
 import { fakeConfig, FakeWorktreeIsolation } from '../../testing';
+import type { AttemptKind } from '../attemptKind';
 import { fakeNotification } from './sessionTestKit';
 
 const task = (id: string, order: number, over: Partial<Task> = {}): Task =>
@@ -11,6 +12,8 @@ const task = (id: string, order: number, over: Partial<Task> = {}): Task =>
 
 const verdict = (outcome: Verdict['outcome'], reason: string): Verdict => ({ outcome, reason, checks: [], decidedAt: '2026-09-28T00:00:00.000Z' });
 const passed = verdict('pass', 'Completion marker found');
+const CHANGE: AttemptKind = { kind: 'change' };
+const READ_ONLY: AttemptKind = { kind: 'readOnly' };
 
 async function setup(opts: { isolation?: FakeWorktreeIsolation; conflictRepairAttempts?: number; tasks?: Task[] } = {}) {
   const isolation = opts.isolation ?? new FakeWorktreeIsolation();
@@ -33,7 +36,7 @@ async function conflicted(opts: { conflictRepairAttempts?: number } = {}) {
   env.isolation.outcomes.set('t1', 'conflict');
   env.isolation.conflictFiles.set('t1', ['a.ts']);
   await env.prepare(t1);
-  await env.landing.landPassed(t1, { worktree: true });
+  await env.landing.landPassed(t1, { worktree: true, kind: CHANGE });
   return { ...env, t1 };
 }
 
@@ -45,7 +48,7 @@ describe('Landing', () => {
       await prepare(t1);
       vi.mocked(listener.changed).mockClear();
 
-      const outcome = await landing.landPassed(t1, { worktree: true });
+      const outcome = await landing.landPassed(t1, { worktree: true, kind: CHANGE });
 
       expect(outcome).toEqual({ kind: 'landed', messages: [] });
       expect(completesTask(outcome)).toBe(true);
@@ -57,17 +60,42 @@ describe('Landing', () => {
     it('has nothing to land from an attempt that ran in the workspace root', async () => {
       const { landing, isolation } = await setup();
 
-      const outcome = await landing.landPassed(task('t1', 1), { worktree: false });
+      const outcome = await landing.landPassed(task('t1', 1), { worktree: false, kind: CHANGE });
 
       expect(outcome).toEqual({ kind: 'nothing-to-land', messages: [] });
       expect(completesTask(outcome)).toBe(true);
       expect(isolation.taskIdsFor('integrate')).toEqual([]);
     });
 
+    it('lands nothing from a read-only attempt: its worktree goes, whatever it changed (ADR-0046)', async () => {
+      const { landing, isolation, runs, record } = await setup();
+      const t1 = task('t1', 1);
+      await runs.attemptCwd(t1, 'readOnly');
+      expect(record('t1')?.readOnly).toBe(true);
+
+      const outcome = await landing.landPassed(t1, { worktree: true, kind: READ_ONLY });
+
+      expect(outcome).toEqual({ kind: 'nothing-to-land', messages: [] });
+      expect(completesTask(outcome)).toBe(true);
+      expect(isolation.taskIdsFor('integrate')).toEqual([]);
+      expect(isolation.calls).toContainEqual({ op: 'release', taskId: 't1', keep: false });
+      expect(record('t1')).toBeUndefined();
+    });
+
+    it('lands nothing from a read-only task the user marks complete, and lets its worktree go', async () => {
+      const { landing, isolation, runs, record } = await setup();
+      const t1 = task('t1', 1);
+      await runs.attemptCwd(t1, 'readOnly');
+
+      expect(await landing.landVouched(t1)).toEqual({ kind: 'nothing-to-land', messages: [] });
+      expect(isolation.taskIdsFor('integrate')).toEqual([]);
+      expect(record('t1')).toBeUndefined();
+    });
+
     it('owes a conflicted landing a repair, keeping its worktree for it', async () => {
       const { landing, isolation, t1, record } = await conflicted();
 
-      expect(await landing.landPassed(t1, { worktree: true })).toEqual({
+      expect(await landing.landPassed(t1, { worktree: true, kind: CHANGE })).toEqual({
         kind: 'repair-needed',
         repair: { n: 1, limit: 2 },
         messages: [{ level: 'warn', text: 'Task "Task t1" passed, but merging it into ordewell/run1/integration conflicted (a.ts).' }],
@@ -79,7 +107,7 @@ describe('Landing', () => {
     it('leaves a conflict for the user when repair is off, and says why', async () => {
       const { landing, t1 } = await conflicted({ conflictRepairAttempts: 0 });
 
-      const outcome = await landing.landPassed(t1, { worktree: true });
+      const outcome = await landing.landPassed(t1, { worktree: true, kind: CHANGE });
 
       expect(outcome).toEqual({
         kind: 'awaiting_user',
@@ -99,7 +127,7 @@ describe('Landing', () => {
       await prepare(t1);
       record('t1')!.landingError = 'its worktree is missing';
 
-      expect(await landing.landPassed(t1, { worktree: true })).toEqual({
+      expect(await landing.landPassed(t1, { worktree: true, kind: CHANGE })).toEqual({
         kind: 'awaiting_user',
         reason: 'landing-failed',
         messages: [{ level: 'error', text: 'Task "Task t1" passed, but git could not integrate its work (its worktree is missing). Its worktree is kept for inspection.' }],
@@ -117,7 +145,7 @@ describe('Landing', () => {
       const t1 = task('t1', 1);
       await prepare(t1);
 
-      const outcome = await landing.landPassed(t1, { worktree: true });
+      const outcome = await landing.landPassed(t1, { worktree: true, kind: CHANGE });
 
       expect(outcome.messages).toEqual([{ level: 'error', text: 'Task "Task t1" passed, but git could not integrate its work in web, so none of it landed. Its worktrees are kept for inspection.' }]);
     });
@@ -125,7 +153,7 @@ describe('Landing', () => {
     it('cannot land a worktree attempt whose record went with a discarded run', async () => {
       const { landing, isolation } = await setup();
 
-      const outcome = await landing.landPassed(task('t1', 1), { worktree: true });
+      const outcome = await landing.landPassed(task('t1', 1), { worktree: true, kind: CHANGE });
 
       expect(outcome).toMatchObject({ kind: 'awaiting_user', reason: 'landing-failed' });
       expect(isolation.taskIdsFor('integrate')).toEqual([]);
@@ -146,7 +174,7 @@ describe('Landing', () => {
       const { landing, isolation, prepare } = await setup();
       const t2 = task('t2', 2);
       await prepare(t2);
-      await landing.landPassed(t2, { worktree: true });
+      await landing.landPassed(t2, { worktree: true, kind: CHANGE });
 
       expect(await landing.landVouched(task('t1', 1))).toEqual({ kind: 'nothing-to-land', messages: [] });
       expect(await landing.landVouched(t2)).toEqual({ kind: 'nothing-to-land', messages: [] });
@@ -265,7 +293,7 @@ describe('Landing', () => {
       const env = await setup({ tasks: [t1, task('r1', 2)], conflictRepairAttempts: 0 });
       env.isolation.outcomes.set('t1', 'conflict');
       await env.prepare(t1);
-      await env.landing.landPassed(t1, { worktree: true });
+      await env.landing.landPassed(t1, { worktree: true, kind: CHANGE });
       env.runs.linkResolver('r1', 't1');
       env.isolation.outcomes.set('t1', 'merged');
       return { ...env, t1 };
