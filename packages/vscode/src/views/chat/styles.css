@@ -385,6 +385,26 @@ body {
   word-break: break-word;
 }
 
+/* A research report in a run update (ADR-0037): text to read, set apart from Ordewell's own lines */
+.chat-report {
+  margin: 4px 0;
+}
+
+.chat-report-head {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chat-report-body {
+  margin: 2px 0 0;
+  padding: 4px 8px;
+  border-left: 2px solid var(--cyan);
+  font: inherit;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .plan-supervisor-stopped {
   color: var(--orange);
 }
@@ -5821,6 +5841,12 @@ body.vscode-high-contrast-light .pending-message {
 .task-type-badge.ops {
   background: var(--purple-subtle);
   color: var(--purple);
+}
+
+/* A research task (ADR-0037): read-only, its report returns to the planner */
+.task-type-badge.research {
+  background: var(--cyan-subtle);
+  color: var(--cyan);
 }
 
 /* A script task (ADR-0035): an ops task by nature, drawn with its body */

@@ -4,7 +4,7 @@ import type {
   ApprovalBlock, ApprovalDecision, ApprovalKind, ApprovalSource, DisplayBlock, MessageBlock, PlanBlock, SkillLoadBlock, SubagentBlock, SubagentStatus,
   ThinkingDisplayBlock, ToolBlock, ToolStatus, DiffRow, DiffStat,
 } from '@ordewell/core';
-import { diffRows, diffSummary, formatTokenCount, loadedSkillTokens, markdownHtml, outputLines, outputPreview } from '@ordewell/core/plan-utils';
+import { diffRows, diffSummary, formatTokenCount, loadedSkillTokens, markdownHtml, outputLines, outputPreview, REPORT_PREVIEW_LINES, wakeUpItems } from '@ordewell/core/plan-utils';
 
 /*
  * The planner conversation (#51 display blocks) as the webview draws it.
@@ -28,7 +28,34 @@ export function renderMarkdown(text: string): string {
   return markdownHtml(text).trimEnd();
 }
 
-export default function ChatMessage({ block }: { block: MessageBlock }) {
+/**
+ * The run update that woke the planner, with each report it carries drawn
+ * whole when short and folded when long: the fold says how many lines it
+ * leaves out, and the conversation's one detail switch opens it (ADR-0037 R2).
+ */
+function RunUpdate({ text, expanded }: { text: string; expanded: boolean }) {
+  return (
+    <div className="chat-msg chat-msg-wake-up">
+      <span className="chat-msg-label">Run update</span>
+      <div className="chat-msg-content">
+        {wakeUpItems(text).map((item, i) => {
+          if (item.kind === 'line') return <div key={i}>{item.text}</div>;
+          const shown = expanded ? item.lines : item.lines.slice(0, REPORT_PREVIEW_LINES);
+          const hidden = item.lines.length - shown.length;
+          return (
+            <div key={i} className="chat-report">
+              <div className="chat-report-head">Report from task {item.task}</div>
+              <pre className="chat-report-body">{shown.join('\n')}</pre>
+              {hidden > 0 && <span className="cmd-row-more">{moreLines(hidden)} of the report</span>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export default function ChatMessage({ block, expanded = false }: { block: MessageBlock; expanded?: boolean }) {
   if (block.role === 'system' || block.role === 'error') {
     return (
       <div className={`chat-msg chat-msg-${block.role}`}>
@@ -38,6 +65,7 @@ export default function ChatMessage({ block }: { block: MessageBlock }) {
   }
   // The run update that woke the supervisor: Ordewell's words to it, shown as they were sent.
   if (block.role === 'wake_up') {
+    if (wakeUpItems(block.text).some((item) => item.kind === 'report')) return <RunUpdate text={block.text} expanded={expanded} />;
     return (
       <div className="chat-msg chat-msg-wake-up">
         <span className="chat-msg-label">Run update</span>
@@ -385,7 +413,7 @@ function Block({
     case 'compaction':
       return <div className="chat-msg chat-msg-system">Context compacted{block.trigger === 'auto' ? ' by the runner on its own' : ''}{block.preTokens !== undefined && block.postTokens !== undefined ? ` · ${formatTokenCount(block.preTokens)} → ${formatTokenCount(block.postTokens)} tokens` : ''}</div>;
     case 'message':
-      return <ChatMessage block={block} />;
+      return <ChatMessage block={block} expanded={expanded} />;
     case 'thinking':
       return <ThinkingBlock block={block} expanded={expanded} />;
     case 'tool':

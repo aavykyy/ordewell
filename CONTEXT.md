@@ -285,6 +285,8 @@ same setting, including `run_script` reports. Excess tasks wait with a
 readiness reason; excess reports wait for the next user message. Both counters
 survive a reload and reset only for a new user message. Removing research or
 lifting read-only withdraws the approval granted as research landed.
+Surfaces mark its row as research, say which limit holds it, and draw its
+report in the run update that delivered it, folded when long.
 *Avoid:* "background agent" — a harness's subagents are awaited inside their
 turn; work across turns is a task in the plan.
 

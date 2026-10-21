@@ -199,6 +199,25 @@ describe('handlePlan', () => {
     srv.close();
   });
 
+  it('prints a research task as [RES], with a legend line for it (ADR-0037)', async () => {
+    const withResearch = {
+      tasks: [
+        { id: 't1', order: 1, title: 'Scout the cache', type: 'ai', readOnly: true, research: true },
+        { id: 't2', order: 2, title: 'Build', type: 'ai' },
+      ],
+      runners: ['claude-code'],
+    };
+    const srv = await planServer({ '/converse/start': { plan: withResearch } }, []);
+    const { handlePlan } = await import('../plan');
+    const { stdout } = await capture(() =>
+      handlePlan(['--goal', 'find it', '--workspace', '/tmp'], { api: new ApiClient(srv.port) }),
+    );
+    expect(stdout).toContain(' 1. [RES] Scout the cache');
+    expect(stdout).toContain(' 2. [ AI] Build');
+    expect(stdout).toContain('[RES] = research task: read-only, lands nothing; its report wakes the planner when it ends');
+    srv.close();
+  });
+
   it('prints a loop\'s check and body with the rounds and the link between them (ADR-0045)', async () => {
     const withLoop = {
       tasks: [

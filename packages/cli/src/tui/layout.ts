@@ -655,6 +655,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ),
     setupRow('Autonomy', state.autonomous ? style.yellow('Full') : 'Guarded', '', cols),
     setupRow('Run', runSettingsValue(state), '/settings', cols),
+    setupRow('Research', `${state.runSettings.researchMaxParallel} at once, ${state.runSettings.researchMaxPerMessage} per message`, '/research', cols),
     '',
   ];
   // Only once nothing usable was found: a key reaches the welcome with the catalog, after the probe.
@@ -898,7 +899,9 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
         ? style.cyan('SCR')
         : row.kind === 'ops'
           ? style.magenta('OPS')
-          : style.grey(' AI');
+          : row.research
+            ? style.cyan('RES')
+            : style.grey(' AI');
   const caret = selected ? style.brand('❯') : ' ';
 
   // A subtask row names itself by its dotted order ("2.1") and steps in under
@@ -936,7 +939,8 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     ? `${inRow(row.approvals)}: enter opens it`
     : row.awaiting ? inRow(row.awaiting) : '';
   const skills = (task.skills ?? []).join(' · ');
-  const meta = [activity, runner, model];
+  // A running row's tag says RUN, so the mark moves to the line beneath it.
+  const meta = [activity, ...(row.research && row.running ? [style.cyan('research')] : []), runner, model];
   // The variant rides on the meta line only when the whole line still fits;
   // when it does not, the effort gives way rather than truncating the model.
   const variant = task.type === 'ai' ? sanitize(task.assignedModel?.thinkingEffort ?? '') : '';
@@ -977,6 +981,9 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   if (row.holdReason) {
     lines.push(...statusLines(style.yellow, '⏸', `${inRow(holdLabel(row.holdReason))} · retry or f start when ready`, cols, bodyPad));
   }
+  if (row.researchWait) {
+    lines.push(...statusLines(style.yellow, '⏸', inRow(row.researchWait), cols, bodyPad));
+  }
   if (row.blockedBy) {
     lines.push(...statusLines(style.red, '⊘', `${inRow(blockedByLabel(row.blockedBy))}: runs once ${row.blockedBy.length === 1 ? 'it is retried and passes' : 'they are retried and pass'}`, cols, bodyPad));
   }
@@ -1008,6 +1015,9 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
       if (task.isolation.state !== 'integrated' && task.isolation.worktree) {
         lines.push(...taskText('Worktree', task.isolation.worktree, cols, bodyPad));
       }
+    }
+    if (row.research) {
+      lines.push(...taskText('Research', 'Read-only: it lands nothing. Its report wakes the planner when it ends.', cols, bodyPad));
     }
     if (row.kind === 'ops') {
       lines.push(...taskText('Ops', 'Runs in your checkout, not a worktree, once the work it depends on is merged. O makes it a change task.', cols, bodyPad));

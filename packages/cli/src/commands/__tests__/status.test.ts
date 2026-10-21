@@ -140,6 +140,36 @@ describe('handleStatus --output', () => {
     srv.close();
   });
 
+  it('marks a research task, and says which research limit holds it back', async () => {
+    const session = {
+      ...SESSION,
+      plan: { pendingTasks: [
+        { id: 't1', order: 1, type: 'ai', title: 'Scout the cache', status: 'pending', research: true },
+        { id: 't2', order: 2, type: 'ai', title: 'Plain task', status: 'pending' },
+      ] },
+      run: {
+        tasks: [
+          { id: 't1', order: 1, title: 'Scout the cache', status: 'pending', research: true, researchWait: { kind: 'research-message', limit: 4 } },
+          { id: 't2', order: 2, title: 'Plain task', status: 'pending' },
+        ],
+        runMerge: null,
+        handoff: null,
+        mergeResult: null,
+      },
+    };
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(session));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
+    const lines = stripAnsi(stdout).split('\n');
+    expect(lines.find((l) => l.includes('Scout the cache'))).toContain(' [RES] ');
+    expect(lines.find((l) => l.includes('Plain task'))).not.toContain('[RES]');
+    expect(stdout).toContain('Waits for your next message: this message has used its 4 research tasks');
+    srv.close();
+  });
+
   // A running session's finished tasks come back in a flat execution log, a
   // finished subtask both on its own and inside its parent.
   it('lists each task once, at its own depth, when finished ones come from the execution log', async () => {

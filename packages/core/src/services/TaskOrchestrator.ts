@@ -30,7 +30,7 @@ import { completesTask, Landing, type LandingMessage, type LandingOutcome, type 
 import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import { RELAPSE_MS, RESUME_MARGIN_MS, UsageLimitWaits } from './UsageLimitWaits';
 import { landed, selectReadyTasks, startWaits, waitOf, type ForcedStart, type Readiness, type StartRuleInput, type StartWait, type StartWaitKind } from './readiness';
-import type { ResearchSchedule } from './ResearchTasks';
+import type { ResearchSchedule, ResearchWait } from './ResearchTasks';
 import { blockingFailures, planBlocks, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 import {
@@ -968,6 +968,14 @@ export class TaskOrchestrator {
   /** Why a task is held out of auto-scheduling, as the surfaces show it; null when it is not held. */
   holdReason(taskId: string): string | null {
     return this.onHold.get(taskId) ?? null;
+  }
+
+  /** The research limit holding a research task back, when it is the first thing that does (ADR-0037 R4). */
+  researchWait(taskId: string): ResearchWait | undefined {
+    const task = this.store.get(taskId);
+    if (!task?.research) return;
+    const [first] = this.startWaits(task);
+    return first?.kind === 'research-parallel' || first?.kind === 'research-message' ? first : undefined;
   }
 
   /**

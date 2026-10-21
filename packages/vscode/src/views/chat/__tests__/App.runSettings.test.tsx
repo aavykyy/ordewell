@@ -28,7 +28,7 @@ describe('run settings in the chat', () => {
 
     const setup = document.querySelector('.empty-state-setup')!.textContent!;
     expect(setup).toMatch(/Autonomy\s*Full\s*\/auto/);
-    expect(setup).toMatch(/Run\s*supervisor Act · auto-merge off · autorun off\s*\/supervisor · \/automerge · \/autorun/);
+    expect(setup).toMatch(/Run\s*supervisor Act · auto-merge off · autorun off · research 2 at once, 4 per message\s*\/supervisor · \/automerge · \/autorun · \/research/);
   });
 
   it('shows them on the plan bar, and the run\'s own level where it differs', () => {

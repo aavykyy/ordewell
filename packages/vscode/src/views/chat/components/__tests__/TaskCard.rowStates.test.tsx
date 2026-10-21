@@ -309,3 +309,30 @@ describe('a subtask card, pinned before its rules move to core', () => {
     expect(badge()?.textContent).toBe('On hold: could not connect to Ordewell\'s tools; start it again');
   });
 });
+
+describe('a research task card (ADR-0037)', () => {
+  const research = (over: Partial<Task> = {}) => makeTask({ research: true, ...over });
+  const badges = (): string[] => Array.from(document.querySelectorAll('.task-type-badge')).map((b) => b.textContent ?? '');
+
+  it('is marked Research beside AI, and a task that is not research is not', () => {
+    const { unmount } = render(<TaskCard task={research()} models={[]} />);
+    expect(badges()).toEqual(['AI', 'Research']);
+    expect(document.querySelector('.task-type-badge.research')?.getAttribute('title')).toContain('Its report comes back to the planner and wakes it');
+    unmount();
+    render(<TaskCard task={makeTask()} models={[]} />);
+    expect(badges()).toEqual(['AI']);
+  });
+
+  it('says which research limit holds it back, where its status reads', () => {
+    const { unmount } = render(<TaskCard task={research()} models={[]} run={{ researchWait: { kind: 'research-parallel', limit: 2 } }} />);
+    expect(badge()?.textContent).toBe('Waits for a research slot: 2 research tasks run at once');
+    unmount();
+    render(<TaskCard task={research()} models={[]} run={{ researchWait: { kind: 'research-message', limit: 4 } }} />);
+    expect(badge()?.textContent).toBe('Waits for your next message: this message has used its 4 research tasks');
+  });
+
+  it('reads its own status once it has started, whatever wait the stream last sent', () => {
+    render(<TaskCard task={research({ status: 'in_progress' })} models={[]} isExecuting run={{ researchWait: { kind: 'research-parallel', limit: 2 } }} />);
+    expect(badge()?.textContent).toBe('Running');
+  });
+});

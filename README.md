@@ -64,6 +64,9 @@ freely within one plan.
   automatically.
 - **Read-only tasks.** A review or an audit runs without write access, so it
   cannot change your repository.
+- **Research tasks.** A read-only task can be research: its report goes back to
+  the planner, which wakes to read it while you keep talking. `/research` bounds
+  how many run.
 - **A planner that cannot write.** It reads, asks, and plans. Commands that would
   change your repository are refused, and an effect such as a push reaches the
   world only as a script task or an ops task in the plan.

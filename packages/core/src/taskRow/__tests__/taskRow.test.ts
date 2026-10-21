@@ -157,11 +157,26 @@ describe('actions per status', () => {
   });
 });
 
+describe('the research mark and its wait', () => {
+  it('says what a research task waits for, and when it starts again', () => {
+    expect(taskRowView(subject({ research: true, researchWait: { kind: 'research-message', limit: 4 } })).researchWait)
+      .toBe('Waits for your next message: this message has used its 4 research tasks');
+    expect(taskRowView(subject({ research: true, researchWait: { kind: 'research-message', limit: 1 } })).researchWait)
+      .toBe('Waits for your next message: this message has used its 1 research task');
+    expect(taskRowView(subject({ research: true, researchWait: { kind: 'research-parallel', limit: 1 } })).researchWait)
+      .toBe('Waits for a research slot: 1 research task runs at once');
+  });
+
+  it('marks only an AI task as research', () => {
+    expect(taskRowView(subject({ type: 'script', research: true })).research).toBe(false);
+  });
+});
+
 describe('the row view, every status against every annotation', () => {
   const isolated = { branch: 'b', worktree: 'w', repos: ['.'] };
   const annotations: [string, Partial<TaskRowSubject>, (view: ReturnType<typeof taskRowView>, status: string) => void][] = [
     ['nothing', {}, (v) => {
-      expect(v).toMatchObject({ conflict: null, repairing: null, repaired: null, mergeGate: null, opsChangedFiles: false, forcedPastGate: null, approvals: null, autonomous: false, waitsForApproval: null, holdReason: null });
+      expect(v).toMatchObject({ conflict: null, repairing: null, repaired: null, mergeGate: null, opsChangedFiles: false, forcedPastGate: null, approvals: null, autonomous: false, waitsForApproval: null, holdReason: null, research: false, researchWait: null });
     }],
     ['a conflict in a named repo', { isolation: { ...isolated, state: 'conflict', conflictRepo: 'api', conflictFiles: ['a', 'b', 'c', 'd', 'e', 'f'] } }, (v) => {
       expect(v.conflict).toEqual({ repo: 'api', files: 'a, b, c, d, e, +1 more' });
@@ -213,6 +228,16 @@ describe('the row view, every status against every annotation', () => {
     ['a hold with its reason', { holdReason: 'could not connect to Ordewell\'s tools; start it again' }, (v) => {
       expect(v.holdReason).toBe('could not connect to Ordewell\'s tools; start it again');
       expect(holdLabel(v.holdReason!)).toBe('On hold: could not connect to Ordewell\'s tools; start it again');
+    }],
+    ['a research task', { research: true }, (v) => {
+      expect(v).toMatchObject({ research: true, researchWait: null, kind: 'ai' });
+    }],
+    // The limit is only a reason while the task has not started: afterwards the stream may still carry the last one it sent.
+    ['a research task held by the limit', { research: true, researchWait: { kind: 'research-parallel', limit: 2 } }, (v, status) => {
+      expect(v.researchWait).toBe(status === 'pending' || status === 'approved' || status === 'blocked' ? 'Waits for a research slot: 2 research tasks run at once' : null);
+    }],
+    ['a research limit on a task that is not research', { researchWait: { kind: 'research-message', limit: 4 } }, (v) => {
+      expect(v).toMatchObject({ research: false, researchWait: null });
     }],
     ['dependencies', { dependencies: ['t1', 'ghost'] }, (v) => {
       expect(v.dependencies).toEqual(['#1', 'ghost']);

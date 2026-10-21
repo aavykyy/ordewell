@@ -1,5 +1,5 @@
 import {
-  diffRows, diffSummary, formatTokenCount, loadedSkillTokens, outputLines, outputPreview, usageText,
+  diffRows, diffSummary, formatTokenCount, loadedSkillTokens, outputLines, outputPreview, usageText, wakeUpItems, REPORT_PREVIEW_LINES,
   type DiffRow, type DiffStat,
   type ApprovalBlock, type ApprovalKind, type ApprovalSource, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
   type CommandBlock, type CommandStatus, type CompactionBlock, type RunnerLoadedBlock,
@@ -72,6 +72,33 @@ function messageLines(block: MessageBlock, cols: number): string[] {
     else rows.push(` ${note}`);
   }
   return block.role === 'user' ? onBand(rows, cols) : rows;
+}
+
+/**
+ * A run update that carries a report (ADR-0037 R2): the update's own lines as
+ * they were, and each report beneath its task, in the default colour so it
+ * reads as text rather than as Ordewell's voice. Folded after a few lines, and
+ * the fold counts what it leaves out; null for an update with no report, which
+ * is drawn as any message.
+ */
+function reportUpdateLines(block: MessageBlock, cols: number, detailAll: boolean): string[] | null {
+  const items = wakeUpItems(sanitize(block.text));
+  if (!items.some((item) => item.kind === 'report')) return null;
+  const rows = [style.yellow(`↯ Run update:`)];
+  for (const item of items) {
+    if (item.kind === 'line') {
+      rows.push(...wrap(item.text, Math.max(1, cols - 2)).map((line) => style.yellow(`  ${line}`)));
+      continue;
+    }
+    rows.push(...wrap(`- task ${item.task} ended, with this report:`, Math.max(1, cols - 2)).map((line) => style.yellow(`  ${line}`)));
+    const room = Math.max(1, cols - 4);
+    const shown = detailAll ? item.lines : item.lines.slice(0, REPORT_PREVIEW_LINES);
+    rows.push(...shown.flatMap((line) => wrap(line, room)).map((line) => `    ${line}`));
+    const hidden = item.lines.length - shown.length;
+    if (hidden > 0) rows.push(style.grey(`    … +${countOf(hidden, 'line')} of the report (ctrl+o to expand)`));
+    else if (detailAll && item.lines.length > REPORT_PREVIEW_LINES) rows.push(style.grey('    … (ctrl+o to collapse)'));
+  }
+  return rows;
 }
 
 /** An empty row above and below, every row painted out to the pane's edge; with colour off only the empty rows remain. */
@@ -474,7 +501,7 @@ function planLine(block: PlanBlock, cols: number): string {
 function blockLines(block: DisplayBlock, cols: number, detailAll: boolean): string[] {
   switch (block.type) {
     case 'message':
-      return messageLines(block, cols);
+      return (block.role === 'wake_up' ? reportUpdateLines(block, cols, detailAll) : null) ?? messageLines(block, cols);
     case 'thinking':
       return thinkingLines(block, cols, detailAll);
     case 'tool':

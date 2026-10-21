@@ -185,6 +185,27 @@ describe('research starts and limits (ADR-0037 R4)', () => {
     await until(() => env.run.spawnedIds().includes(c.id));
   });
 
+  it('tells the surfaces which research limit holds a task back, and stops once it starts', async () => {
+    const env = await supervised([], { execute: false, settings: { supervisorLevel: 'off', researchMaxParallel: 1, researchMaxPerMessage: 2 } });
+    await userTurn(env);
+    await add(env, 3);
+    await until(() => env.run.spawnedIds().length === 1);
+    const [a, b, c] = research(env);
+    const waits = (): Record<string, unknown> => {
+      const update = env.messages.filter((m) => m.type === 'status_update').at(-1);
+      return update?.type === 'status_update' ? Object.fromEntries(update.tasks.map((t) => [t.id, t.researchWait])) : {};
+    };
+    expect(waits()).toEqual({ [a.id]: undefined, [b.id]: { kind: 'research-parallel', limit: 1 }, [c.id]: { kind: 'research-parallel', limit: 1 } });
+    await report(env, a.id);
+    await until(() => env.planner.calls.length === 2);
+    env.planner.calls.at(-1)!.finish(prose('Continue investigating.'));
+    await until(() => env.run.spawnedIds().length === 2);
+    await settled();
+    expect(waits()).toMatchObject({ [b.id]: undefined, [c.id]: { kind: 'research-message', limit: 2 } });
+    const update = env.messages.filter((m) => m.type === 'status_update').at(-1);
+    expect(update?.type === 'status_update' && update.tasks.every((t) => t.research === true)).toBe(true);
+  });
+
   it.each(['research', 'readOnly'] as const)('withdraws automatic approval when an edit removes %s', async (field) => {
     const env = await supervised([], { execute: false, settings: { supervisorLevel: 'off', researchMaxParallel: 1 } });
     await userTurn(env);

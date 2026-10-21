@@ -69,6 +69,50 @@ describe('ordewell run while a task waits for the user\'s approval (ADR-0035)', 
   });
 });
 
+describe('ordewell run on a research task (ADR-0037)', () => {
+  const run = async (script: Event[]): Promise<string> => {
+    const api = {
+      streamExecution: vi.fn((_id: string, onEvent: (e: Event) => void, onReady?: (error?: Error) => void) => new Promise<void>((resolve) => {
+        setTimeout(() => onReady?.(), 0);
+        setTimeout(() => { script.forEach(onEvent); resolve(); }, 5);
+      })),
+      executePlan: vi.fn().mockResolvedValue({ status: 'running' }),
+    } as unknown as ApiClient;
+    const written: string[] = [];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => { written.push(String(chunk)); return true; });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await handleRun(['--session-id', 's1'], api);
+    } finally {
+      stderr.mockRestore();
+      log.mockRestore();
+    }
+    return written.join('');
+  };
+  const done = { type: 'execution_complete', summary: { total: 2, completed: 1, failed: 0, blocked: 0, skipped: 0 } } as Event;
+
+  it('tags its line [RES], and says which research limit holds it back', async () => {
+    const out = await run([
+      { type: 'status_update', tasks: [
+        { id: 'task-0001', status: 'in_progress', verdict: null },
+        { id: 'task-0002', status: 'pending', verdict: null, research: true, researchWait: { kind: 'research-parallel', limit: 2 } },
+      ] },
+      done,
+    ]);
+    expect(out).toContain('#0002 [RES] pending: waits for a research slot: 2 research tasks run at once');
+    expect(out).not.toMatch(/#0001 [^\n]*(\[RES\]|research)/);
+  });
+
+  it('drops the wait once the task has started', async () => {
+    const out = await run([
+      { type: 'status_update', tasks: [{ id: 'task-0002', status: 'in_progress', verdict: null, research: true, researchWait: { kind: 'research-parallel', limit: 2 } }] },
+      done,
+    ]);
+    expect(out).toMatch(/#0002 \[RES\] in_progress/);
+    expect(out).not.toContain('research slot');
+  });
+});
+
 describe('ordewell run on a loop (ADR-0045)', () => {
   const found = { outcome: 'fail' as const, reason: 'two tests fail', checks: [], reported: 'failed' as const };
   const loop = { body: ['task-0002'], maxRounds: 3 };

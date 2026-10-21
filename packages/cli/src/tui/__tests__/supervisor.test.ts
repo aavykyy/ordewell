@@ -86,6 +86,7 @@ describe('run settings in the TUI (ADR-0030)', () => {
 
     expect(welcome).toMatch(/Autonomy\s+Full\s*\n/);
     expect(welcome).toMatch(/Run\s+supervisor Act · auto-merge off · autorun on\s+\/settings/);
+    expect(welcome).toMatch(/Research\s+2 at once, 4 per message\s+\/research/);
   });
 
   it('shows them on the status line, and the run\'s own level where it differs', () => {

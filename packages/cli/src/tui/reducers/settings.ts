@@ -6,7 +6,7 @@ import { step, type Effect, type Step } from './shared';
 
 /**
  * `/settings`: the run settings `/auto`, `/supervisor`, `/automerge`,
- * `/autorun` and `/parallel` set one at a time, as one stepped panel. Each
+ * `/autorun`, `/research` and `/parallel` set one at a time, as one stepped panel. Each
  * enter saves its step, and only if it changed, through the same paths those
  * commands use.
  */
@@ -94,6 +94,18 @@ export const SETTINGS: StepperDefinition = {
       hint: 'How many AI tasks run at once, a live run included',
       number: { min: 1, current: (state) => state.maxParallel },
     },
+    {
+      id: 'researchParallel',
+      label: 'Research at once',
+      hint: 'How many research tasks may run at once',
+      number: { min: 1, current: (state) => state.runSettings.researchMaxParallel },
+    },
+    {
+      id: 'researchPerMessage',
+      label: 'Research per message',
+      hint: 'How many research tasks may start, and report turns open, for each message you send',
+      number: { min: 1, current: (state) => state.runSettings.researchMaxPerMessage },
+    },
   ],
   save: saveChoices,
 };
@@ -133,6 +145,14 @@ function saveChoices(state: TuiState, choices: StepChoices): Step {
   if (autorun !== state.runSettings.autorun) {
     run.autorun = autorun;
     changed.push(`Autorun ${onOff(autorun)}`);
+  }
+  if (choices.researchParallel !== undefined && Number(choices.researchParallel) !== state.runSettings.researchMaxParallel) {
+    run.researchMaxParallel = Number(choices.researchParallel);
+    changed.push(`Research at once ${choices.researchParallel}`);
+  }
+  if (choices.researchPerMessage !== undefined && Number(choices.researchPerMessage) !== state.runSettings.researchMaxPerMessage) {
+    run.researchMaxPerMessage = Number(choices.researchPerMessage);
+    changed.push(`Research per message ${choices.researchPerMessage}`);
   }
   const parallel = Number(choices.parallel);
   if (parallel !== state.maxParallel) {

@@ -11,6 +11,7 @@ import type { QueuedTaskMessage } from '../interfaces/IRunner';
 import { canContinue } from './continuation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
 import { blockingFailures } from './blocking';
+import type { ResearchWait } from './ResearchTasks';
 
 export type SerializedTaskStatus = {
   id: string;
@@ -54,6 +55,10 @@ export type SerializedTaskStatus = {
   waitsForApproval?: true;
   /** Why a task is held out of auto-scheduling, in the user's words; absent when it is not held. */
   holdReason?: string;
+  /** Set only on a research task, so a stream of statuses alone can say which task is one (ADR-0037). */
+  research?: true;
+  /** The research limit a research task waits for, when that is what holds it (ADR-0037 R4); absent otherwise. */
+  researchWait?: ResearchWait;
   attemptUsage?: AttemptUsage[];
   /** Set only on a loop's check, so a stream of statuses alone can say which task is one (ADR-0045). */
   loop?: TaskLoop;
@@ -364,7 +369,7 @@ export type PlanSnapshot = { type: 'plan_snapshot'; plan: SurfacePlan | SurfaceP
 /** What only the status stream says about a task; a plan refresh keeps these as they were. */
 export type RunTaskStatus = Partial<Pick<
   SerializedTaskStatus,
-  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason'
+  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'researchWait'
 >>;
 
 /** A task in the run view: the plan's fields, then the status stream's. */
@@ -443,6 +448,7 @@ export function serializeTaskStatus(
   checkpoint = '',
   waitsForApproval = false,
   holdReason: string | null = null,
+  researchWait: ResearchWait | undefined = undefined,
 ): SerializedTaskStatus {
   return {
     id: t.id,
@@ -464,6 +470,8 @@ export function serializeTaskStatus(
     ...(t.forcedPastGate?.length ? { forcedPastGate: [...t.forcedPastGate] } : {}),
     ...(waitsForApproval ? { waitsForApproval: true as const } : {}),
     ...(holdReason ? { holdReason } : {}),
+    ...(t.research ? { research: true as const } : {}),
+    ...(researchWait ? { researchWait } : {}),
     ...(t.loop ? { loop: { body: [...t.loop.body], maxRounds: t.loop.maxRounds } } : {}),
     ...(t.loop && t.loopRound !== undefined ? { loopRound: t.loopRound } : {}),
   };

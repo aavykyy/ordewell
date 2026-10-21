@@ -17,6 +17,8 @@ export { NO_TURN, followTurn, stopTurn } from './turnGate';
 export type { TurnGate, GatedConversation } from './turnGate';
 export { hasHiddenDetail } from './detail';
 export { taskStartedNotice } from './notices';
+export { wakeUpItems, hasLongReport, REPORT_PREVIEW_LINES } from './wakeUp';
+export type { WakeUpItem } from './wakeUp';
 export { skillTokens, loadedSkillTokens } from './skillTokens';
 export type { SkillToken } from './skillTokens';
 export { markdownHtml, markdownTokens } from './markdown';
