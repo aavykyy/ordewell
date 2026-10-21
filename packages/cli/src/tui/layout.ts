@@ -263,7 +263,7 @@ export function stopHint(state: TuiState): string {
 }
 
 /**
- * 120ms spinner ticks one colour of the status dot lasts: ~480ms, slow enough
+ * 200ms spinner ticks one colour of the status dot lasts: 800ms, slow enough
  * to read as a pulse and well under the repaint rate the plan spinner already
  * sets. The frame counter wraps at a multiple of this and of the spinner's ten
  * frames, so neither animation skips a beat at the wrap.

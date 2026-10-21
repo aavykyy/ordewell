@@ -1,5 +1,5 @@
 import {
-  diffRows, diffSummary, formatTokenCount, loadedSkillTokens, outputLines, outputPreview, usageText, wakeUpItems, REPORT_PREVIEW_LINES,
+  diffRows, diffSummary, formatTokenCount, loadedSkillTokens, outputPreview, usageText, wakeUpItems, REPORT_PREVIEW_LINES,
   type DiffRow, type DiffStat,
   type ApprovalBlock, type ApprovalKind, type ApprovalSource, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
   type CommandBlock, type CommandStatus, type CompactionBlock, type RunnerLoadedBlock,
@@ -22,6 +22,27 @@ function countOf(n: number, noun: string): string {
 
 function firstLine(text: string): string {
   return sanitize(text).trim().split('\n')[0].trim();
+}
+
+/**
+ * The head of a block's text. A model can stream megabytes just as a test run
+ * prints them, and re-wrapping all of it on every delta is the same freeze;
+ * past this many characters the frame shows the head and says how much it
+ * left out, so nothing disappears without a word.
+ */
+const TEXT_DISPLAY_CHARS = 32 * 1024;
+
+function shownText(text: string): { text: string; hiddenChars: number } {
+  if (text.length <= TEXT_DISPLAY_CHARS) return { text, hiddenChars: 0 };
+  // Prefer a line boundary near the cap so the cut does not split a sentence
+  // in the middle; a single unbroken line is cut where the budget ends.
+  const boundary = text.lastIndexOf('\n', TEXT_DISPLAY_CHARS);
+  const cut = boundary > TEXT_DISPLAY_CHARS - 2_000 ? boundary : TEXT_DISPLAY_CHARS;
+  return { text: text.slice(0, cut), hiddenChars: text.length - cut };
+}
+
+function textCutNote(hiddenChars: number): string {
+  return style.grey(`… ${countOf(hiddenChars, 'character')} not shown`);
 }
 
 /** The end of `text` that fits in `max` columns. */
@@ -59,13 +80,15 @@ const ROLE_CONTINUATION: Partial<Record<MessageRole, Paint>> = {
 };
 
 function messageLines(block: MessageBlock, cols: number): string[] {
-  const text = sanitize(block.text);
+  const shown = shownText(block.text);
+  const text = sanitize(shown.text);
   const room = Math.max(1, cols - 2);
   const wrapped = block.role === 'planner' || block.role === 'agent' || block.role === 'supervisor'
     ? renderMarkdown(text, room)
     : block.skills ? skillPaintedLines(text, block.skills, room) : wrap(text, room);
   const rest: Paint = ROLE_CONTINUATION[block.role] ?? ((t) => t);
   const rows = wrapped.map((line, i) => (i === 0 ? ROLE_PREFIX[block.role](line) : rest(`  ${line}`)));
+  if (shown.hiddenChars > 0) rows.push(textCutNote(shown.hiddenChars));
   if (block.role === 'user' && block.forced) {
     const note = style.grey(' · sent now');
     if (width(rows[0]) + width(note) <= cols) rows[0] += note;
@@ -82,7 +105,8 @@ function messageLines(block: MessageBlock, cols: number): string[] {
  * is drawn as any message.
  */
 function reportUpdateLines(block: MessageBlock, cols: number, detailAll: boolean): string[] | null {
-  const items = wakeUpItems(sanitize(block.text));
+  const shown = shownText(block.text);
+  const items = wakeUpItems(sanitize(shown.text));
   if (!items.some((item) => item.kind === 'report')) return null;
   const rows = [style.yellow(`↯ Run update:`)];
   for (const item of items) {
@@ -92,12 +116,13 @@ function reportUpdateLines(block: MessageBlock, cols: number, detailAll: boolean
     }
     rows.push(...wrap(`- task ${item.task} ended, with this report:`, Math.max(1, cols - 2)).map((line) => style.yellow(`  ${line}`)));
     const room = Math.max(1, cols - 4);
-    const shown = detailAll ? item.lines : item.lines.slice(0, REPORT_PREVIEW_LINES);
-    rows.push(...shown.flatMap((line) => wrap(line, room)).map((line) => `    ${line}`));
-    const hidden = item.lines.length - shown.length;
+    const shownLines = detailAll ? item.lines : item.lines.slice(0, REPORT_PREVIEW_LINES);
+    rows.push(...shownLines.flatMap((line) => wrap(line, room)).map((line) => `    ${line}`));
+    const hidden = item.lines.length - shownLines.length;
     if (hidden > 0) rows.push(style.grey(`    … +${countOf(hidden, 'line')} of the report (ctrl+o to expand)`));
     else if (detailAll && item.lines.length > REPORT_PREVIEW_LINES) rows.push(style.grey('    … (ctrl+o to collapse)'));
   }
+  if (shown.hiddenChars > 0) rows.push(textCutNote(shown.hiddenChars));
   return rows;
 }
 
@@ -136,19 +161,20 @@ function skillLoadLine(block: SkillLoadBlock, cols: number): string {
 }
 
 function thinkingLines(block: ThinkingDisplayBlock, cols: number, detailAll: boolean): string[] {
-  const text = sanitize(block.text).trim();
+  const shown = shownText(block.text);
+  const text = sanitize(shown.text).trim();
   const head = `∴ Thinking (${countOf(text ? text.split(/\s+/).length : 0, 'word')})`;
   if (detailAll) {
     const body = text ? wrap(text, Math.max(1, cols - 2)).map((line) => style.grey(`  ${line}`)) : [];
-    return [style.grey(truncate(head, cols)), ...body];
+    return [style.grey(truncate(head, cols)), ...body, ...(shown.hiddenChars > 0 ? [textCutNote(shown.hiddenChars)] : [])];
   }
   const latest = block.streaming ? (text.split('\n').at(-1) ?? '').trim() : '';
   const room = cols - width(`${head} · `);
   if (!latest || room < 2) return [style.grey(truncate(head, cols))];
   // A live line grows at its end, so a row too short for it keeps the end;
   // the ellipsis says the slice starts mid-sentence.
-  const shown = width(latest) > room ? `…${tailOf(latest, room - 1)}` : latest;
-  return [style.grey(`${head} · ${shown}`)];
+  const shownLatest = width(latest) > room ? `…${tailOf(latest, room - 1)}` : latest;
+  return [style.grey(`${head} · ${shownLatest}`)];
 }
 
 // ── Command rows ─────────────────────────────────────────────────────────────
@@ -157,6 +183,114 @@ function thinkingLines(block: ThinkingDisplayBlock, cols: number, detailAll: boo
 const OUTPUT_HEAD = '  ⎿  ';
 const OUTPUT_INDENT = '     ';
 const PREVIEW_LINES = 3;
+
+/**
+ * A tool's output is only ever read at its head. Test runs and builds print
+ * megabytes, and sanitizing, splitting and wrapping all of it on every frame
+ * is what froze the pane while a task's suite ran: each new chunk made the
+ * block a new object, so the drawn-line cache missed and the whole output was
+ * parsed again. Past these bounds the head is shown and the rest is counted,
+ * with a row that says so — the block still holds all of it, only the frame is
+ * bounded.
+ */
+const FULL_OUTPUT_MAX = 64 * 1024;
+const PREVIEW_CHARS = 4 * 1024;
+const DETAIL_LINES = 2_000;
+const DETAIL_CHARS = 256 * 1024;
+const DIFF_LINES = 2_000;
+const DIFF_CHARS = 256 * 1024;
+
+interface OutputHead {
+  lines: string[];
+  hiddenLineCount: number;
+}
+
+/**
+ * Line count of an output that only grows, remembered across frames. Concatenating
+ * a chunk onto `block.output` makes a new string, so a per-block cache never
+ * hits; remembering the last text and adding the new tail's newlines does.
+ */
+let countedOutput: { text: string; count: number } | null = null;
+
+function countNewlines(text: string, from = 0): number {
+  let count = 0;
+  for (let at = text.indexOf('\n', from); at >= 0; at = text.indexOf('\n', at + 1)) count += 1;
+  return count;
+}
+
+function lineCountOf(output: string): number {
+  const memo = countedOutput;
+  if (memo && output.startsWith(memo.text)) {
+    const count = memo.count + countNewlines(output, memo.text.length);
+    countedOutput = { text: output, count };
+    return count;
+  }
+  const count = countNewlines(output);
+  countedOutput = { text: output, count };
+  return count;
+}
+
+/**
+ * The first `maxLines` lines, sanitized later by the caller, reading no more
+ * than `maxChars` of them. `full` marks a head that more output cannot change:
+ * either enough lines were taken, or the character budget was reached.
+ */
+let headOutput: { text: string; maxLines: number; maxChars: number; lines: string[]; full: boolean } | null = null;
+
+function headLines(output: string, maxLines: number, maxChars: number): string[] {
+  const memo = headOutput;
+  if (memo && memo.maxLines === maxLines && memo.maxChars === maxChars && memo.full && output.startsWith(memo.text)) {
+    return memo.lines;
+  }
+  const lines: string[] = [];
+  let start = 0;
+  let used = 0;
+  let full = false;
+  while (lines.length < maxLines) {
+    if (start > output.length) {
+      full = true;
+      break;
+    }
+    const end = output.indexOf('\n', start);
+    const stop = end < 0 ? output.length : end;
+    const length = stop - start;
+    // The first line always lands, even when a single minified line is wider
+    // than the character budget; it is cut rather than dropped.
+    if (lines.length > 0 && used + length > maxChars) {
+      full = true;
+      break;
+    }
+    lines.push(length > maxChars ? output.slice(start, start + maxChars) : output.slice(start, stop));
+    used += Math.min(length, maxChars) + 1;
+    if (end < 0) {
+      full = true;
+      break;
+    }
+    start = end + 1;
+  }
+  if (lines.length >= maxLines || used >= maxChars) full = true;
+  headOutput = { text: output, maxLines, maxChars, lines, full };
+  return lines;
+}
+
+/**
+ * What a block shows of its output: the head, and how many lines it leaves
+ * out. Small outputs keep `outputPreview`'s exact trimming; large ones are
+ * bounded so the cost of a frame does not grow with the run's output.
+ */
+function shownOutput(output: string, maxLines: number, maxChars: number): OutputHead {
+  if (output.length <= FULL_OUTPUT_MAX) return outputPreview(output, maxLines);
+  const lines = headLines(output, maxLines, maxChars);
+  const total = output.length === 0 ? 0 : lineCountOf(output) + 1;
+  return { lines, hiddenLineCount: Math.max(0, total - lines.length) };
+}
+
+/** `output` cut to the rows a diff may read, for the same reason. */
+function diffOutput(output: string): { text: string; hiddenLineCount: number } {
+  if (output.length <= FULL_OUTPUT_MAX) return { text: output, hiddenLineCount: 0 };
+  const shown = shownOutput(output, DIFF_LINES, DIFF_CHARS);
+  return { text: shown.lines.join('\n'), hiddenLineCount: shown.hiddenLineCount };
+}
 
 function underHeader(lines: string[]): string[] {
   return lines.map((line, i) => `${i === 0 ? style.grey(OUTPUT_HEAD) : OUTPUT_INDENT}${line}`);
@@ -244,25 +378,33 @@ function argumentLines(args: string): string[] {
 
 /**
  * What hangs off `⎿`. Collapsed: a three-line preview that counts what it
- * hides, or one status line. In full detail: everything, wrapped.
+ * hides, or one status line. In full detail: everything up to the display
+ * cap, then a row that says how much was cut, so a huge output never reads as
+ * complete when it is not.
  */
 function resultLines(block: ToolBlock, room: number, detailAll: boolean): string[] {
   if (block.status === 'pending') return [style.grey('Running…')];
   const fit = (line: string): string[] => (detailAll ? wrap(line, room) : [truncate(line, room)]);
   const outcome = unsettledOutcome(block);
   if (outcome) {
-    const [reason, ...rest] = outputLines(block.output).map(sanitize);
+    const { lines, hiddenLineCount } = shownOutput(block.output, detailAll ? DETAIL_LINES : 1, detailAll ? DETAIL_CHARS : PREVIEW_CHARS);
+    const [reason, ...rest] = lines.map(sanitize);
     const status = fit(reason ? `${outcome.label}: ${reason}` : outcome.label).map(outcome.paint);
-    return detailAll ? [...status, ...rest.flatMap(fit).map(style.grey)] : status;
+    const more = hiddenLineCount > 0 ? [style.grey(`… +${countOf(hiddenLineCount, 'line')} not shown`)] : [];
+    return detailAll ? [...status, ...rest.flatMap(fit).map(style.grey), ...more] : status;
   }
   if (detailAll) {
-    const lines = outputLines(block.output).map(sanitize);
+    const { lines, hiddenLineCount } = shownOutput(block.output, DETAIL_LINES, DETAIL_CHARS);
+    const text = lines.map(sanitize);
     // The collapsed preview counts what it hides; the expanded view marks the
     // same rows with how to fold it back — the note flips rather than vanishes.
-    const note = lines.length > PREVIEW_LINES ? ['… (ctrl+o to collapse)'] : [];
-    return lines.length > 0 ? [...lines.flatMap(fit), ...note].map(style.grey) : [style.grey('(no output)')];
+    const note = [
+      ...(text.length > PREVIEW_LINES ? ['… (ctrl+o to collapse)'] : []),
+      ...(hiddenLineCount > 0 ? [`… +${countOf(hiddenLineCount, 'line')} not shown`] : []),
+    ];
+    return text.length > 0 ? [...text.flatMap(fit), ...note].map(style.grey) : [style.grey('(no output)')];
   }
-  const { lines, hiddenLineCount } = outputPreview(block.output, PREVIEW_LINES);
+  const { lines, hiddenLineCount } = shownOutput(block.output, PREVIEW_LINES, PREVIEW_CHARS);
   if (lines.length === 0) return [style.grey('(no output)')];
   const more = hiddenLineCount > 0 ? [`… +${countOf(hiddenLineCount, 'line')} (ctrl+o to expand)`] : [];
   return [...lines.map(sanitize), ...more].map((line) => style.grey(truncate(line, room)));
@@ -285,7 +427,8 @@ const DIFF_SIGN: Record<DiffRow['kind'], string> = { added: '+', removed: '-', c
  * the rest; in full detail, all of it.
  */
 function diffLines(block: ToolBlock, diff: DiffStat, room: number, detailAll: boolean): string[] {
-  const rows = diffRows(block.output);
+  const bounded = diffOutput(block.output);
+  const rows = diffRows(bounded.text);
   const gutter = Math.max(0, ...rows.map((row) => String(row.line ?? '').length));
   const draw = (row: DiffRow): string[] => {
     const text = row.kind === 'gap' ? `${' '.repeat(gutter)} ⋮` : `${String(row.line ?? '').padStart(gutter)} ${DIFF_SIGN[row.kind]} ${sanitize(row.text)}`;
@@ -293,7 +436,10 @@ function diffLines(block: ToolBlock, diff: DiffStat, room: number, detailAll: bo
   };
   const shown = detailAll ? rows : rows.slice(0, DIFF_PREVIEW_ROWS);
   const hidden = rows.length - shown.length;
-  const more = hidden > 0 ? [style.grey(`… +${countOf(hidden, 'line')} (ctrl+o to expand)`)] : [];
+  const more = [
+    ...(hidden > 0 ? [style.grey(`… +${countOf(hidden, 'line')} (ctrl+o to expand)`)] : []),
+    ...(bounded.hiddenLineCount > 0 ? [style.grey(`… +${countOf(bounded.hiddenLineCount, 'line')} not shown`)] : []),
+  ];
   return [diffSummary(diff), ...shown.flatMap(draw), ...more];
 }
 
@@ -457,9 +603,14 @@ function runnerCommandLines(block: CommandBlock, cols: number, detailAll: boolea
   const status = `  ${block.status}`;
   const head = `${style.accent('❯')} ${truncate(typed, Math.max(1, cols - 2 - width(status)))}${COMMAND_PAINT[block.status](status)}`;
   const room = Math.max(1, cols - OUTPUT_INDENT.length);
-  const printed = outputLines(block.output).map(sanitize);
-  const shown = detailAll ? printed.flatMap((line) => wrap(line, room)) : printed.slice(0, PREVIEW_LINES).map((line) => truncate(line, room));
-  return [head, ...underHeader(shown.map(style.grey))];
+  const printed = shownOutput(block.output, detailAll ? DETAIL_LINES : PREVIEW_LINES, detailAll ? DETAIL_CHARS : PREVIEW_CHARS);
+  const shown = detailAll
+    ? printed.lines.flatMap((line) => wrap(sanitize(line), room))
+    : printed.lines.map((line) => truncate(sanitize(line), room));
+  const more = printed.hiddenLineCount > 0
+    ? [style.grey(truncate(`… +${countOf(printed.hiddenLineCount, 'line')} ${detailAll ? 'not shown' : '(ctrl+o to expand)'}`, room))]
+    : [];
+  return [head, ...underHeader([...shown.map(style.grey), ...more])];
 }
 
 function compactionLine(block: CompactionBlock, cols: number): string {

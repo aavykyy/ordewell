@@ -291,6 +291,91 @@ describe('openTerminal', () => {
     terminal.close();
   });
 
+  it('writes only the rows that changed since the last frame', () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    terminal.draw(['same', 'old', 'same']);
+    output.writes.length = 0;
+    terminal.draw(['same', 'new', 'same']);
+    const draw = output.writes.join('');
+
+    expect(draw).toContain('\x1b[2;1Hnew');
+    expect(draw).not.toContain('\x1b[1;1H');
+    expect(draw).not.toContain('\x1b[3;1H');
+    terminal.close();
+  });
+
+  it('repaints every row after a resize cleared the screen', () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    terminal.draw(['same', 'old', 'same']);
+    output.emit('resize');
+    output.writes.length = 0;
+    terminal.draw(['same', 'new', 'same']);
+    const draw = output.writes.join('');
+
+    expect(draw).toContain('\x1b[1;1Hsame');
+    expect(draw).toContain('\x1b[2;1Hnew');
+    expect(draw).toContain('\x1b[3;1Hsame');
+    terminal.close();
+  });
+
+  it('repaints every row after a palette change, since the band has a new colour', () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    terminal.draw(['same', 'same']);
+    input.emit('data', '\x1b]11;rgb:ff/ff/ff\x07');
+    output.writes.length = 0;
+    terminal.draw(['same', 'same']);
+    const draw = output.writes.join('');
+
+    expect(draw).toContain('\x1b[1;1Hsame');
+    expect(draw).toContain('\x1b[2;1Hsame');
+    terminal.close();
+  });
+
+  it('repaints every row after reset() handed the screen back from the shell', () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    terminal.draw(['same', 'same']);
+    terminal.reset();
+    output.writes.length = 0;
+    terminal.draw(['same', 'same']);
+    const draw = output.writes.join('');
+
+    expect(draw).toContain('\x1b[1;1Hsame');
+    expect(draw).toContain('\x1b[2;1Hsame');
+    terminal.close();
+  });
+
   it('disables autowrap for the draw and restores it right after, so an over-wide row clips instead of wrapping into the next line', () => {
     const input = new FakeInput();
     const output = new FakeOutput();
