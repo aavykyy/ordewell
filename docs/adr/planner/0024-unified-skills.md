@@ -41,11 +41,19 @@ a name gets a warning:
 - **`disable-model-invocation`** and **`user-invocable`**, Claude Code's
   invocation fields, with its meaning. Unmarked is both: the user may type
   `/name` and a model may invoke it.
-- **Built-in planner skills are user-only** (`disable-model-invocation: true`):
-  `grilling`, `to-spec` and `improve-codebase-architecture`. A planner skill
-  steers the whole conversation and nothing in its description bounds when that
-  is right, so no model sees one in a catalog or can pick one on its own; the
-  user opts in.
+- **Built-in planner skills that interview or write for the user are
+  user-only** (`disable-model-invocation: true`): `grilling`, `to-spec` and
+  `improve-codebase-architecture`. A planner skill steers the whole
+  conversation, and nothing in the description of these bounds when that is
+  right, so no model sees one in a catalog or can pick one on its own; the user
+  opts in.
+- **Built-in planner skills that are strategies are model-invocable**:
+  `diagnose` and `explore`, each of which says in its description which goals
+  it is for (a failure to explain; an open problem) and which it is not. The
+  planner's prompt lists them under *ORDEWELL PLANNER SKILLS* when it has tools,
+  and it loads one with `load_skill` when the goal fits. They go deeper than
+  the planner's strategy step, which names the strategies and stays in the
+  prompt. Typing `/diagnose` or `/explore` still works.
 - **A built-in task skill may be model-invocable** when its description states
   where it applies. `tdd` is the first: its seed does not set
   `disable-model-invocation`, so the planner's catalog of task skills lists it
@@ -177,6 +185,11 @@ server).
 - **Falling back to the exploration envelope for `load_skill`.** The envelope
   is a security boundary (ADR-0008); a new verb on it for skills would widen
   it. A planner without tools gets no catalog instead.
+- **Keeping every built-in planner skill user-only.** `diagnose` and `explore`
+  would then be used only when the user remembered to type them, and the
+  planner would plan a failure or an open problem from the prompt's one-line
+  strategy. Their descriptions bound when they apply, which is what the
+  user-only rule was missing for the other three.
 - **Keeping every built-in user-only.** It left the one skill with a written
   "when it applies" rule unused unless the user remembered to type it, which is
   the failure the planner's catalog exists to remove.
@@ -192,3 +205,4 @@ server).
 - 2026-10-09 — accepted: one format and loader; planner and task skills; the `tdd` and `verify` toggles dropped.
 - 2026-10-11 — amended: the `tdd` built-in is model-invocable; the other built-ins stay user-only.
 - 2026-10-17 — ADR-0021 folded in (*Built-in seeds refresh*).
+- 2026-10-21 — amended: the `diagnose` and `explore` built-ins are model-invocable planner skills.

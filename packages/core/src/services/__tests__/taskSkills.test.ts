@@ -123,11 +123,37 @@ describe('the built-in tdd skill', () => {
 
     expect(catalog).toContain(`- tdd: ${skills.find((skill) => skill.name === 'tdd')?.description}`);
     expect(catalog).toContain('Attach one of these to a task only where its description says it applies.');
-    expect(catalog).not.toMatch(/grilling|to-spec|improve-codebase-architecture/);
-    expect(text).not.toContain('ORDEWELL PLANNER SKILLS:');
+    expect(catalog).not.toMatch(/grilling|to-spec|improve-codebase-architecture|diagnose|explore/);
     for (const name of ['grilling', 'to-spec', 'improve-codebase-architecture']) {
       expect(skills.find((skill) => skill.name === name)).toMatchObject({ modelInvocable: false });
     }
+  });
+});
+
+describe('the built-in planner skills diagnose and explore', () => {
+  beforeEach(() => {
+    h.builtinDir = path.resolve(__dirname, '..', '..', '..', 'skills');
+  });
+
+  it.each(['diagnose', 'explore'])('%s ships as a model-invocable planner skill', (name) => {
+    const skill = createSkillsService(workspace).findSkill(name);
+
+    expect(skill).toMatchObject({ name, source: 'global', appliesTo: 'planner', modelInvocable: true, userInvocable: true });
+    expect(skill?.metadata.name).toBe(name);
+    expect(skill?.description).toMatch(/^[A-Z].*\.$/);
+    expect(skill?.content.length).toBeGreaterThan(0);
+    expect(fs.existsSync(path.join(globalSkills(), name, 'SKILL.md'))).toBe(true);
+  });
+
+  it('are the planner skills a harness planner is offered to load, and no task skill', () => {
+    const skills = createSkillsService(workspace).listSkills();
+    const text = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: true, skills });
+    const catalog = text.split('ORDEWELL PLANNER SKILLS:')[1].split('\n\n')[0];
+
+    for (const name of ['diagnose', 'explore']) {
+      expect(catalog).toContain(`- ${name}: ${skills.find((skill) => skill.name === name)?.description}`);
+    }
+    expect(catalog).not.toMatch(/grilling|to-spec|improve-codebase-architecture|tdd/);
   });
 });
 
