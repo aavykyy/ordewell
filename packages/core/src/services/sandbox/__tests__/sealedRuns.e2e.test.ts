@@ -181,6 +181,29 @@ describe('sealed runs', async () => {
       await vi.waitFor(() => expect(left()).toEqual([]), { timeout: 20_000, interval: 500 });
     });
 
+    it('backgrounds a job without a stray "Killed" line, keeping the foreground exit code', async () => {
+      // The process-group reaper must not let monitor mode print its own kill
+      // into the command's output, which reads as a crash (fail-visibly).
+      const result = await sealed('sleep 0.1 & echo hi');
+      expect(result.out).toContain('hi');
+      expect(result.out).not.toMatch(/Killed/);
+      expect(result.code).toBe(0);
+    });
+
+    it.skipIf(process.platform !== 'darwin')('cannot load a launchd job through the inherited bootstrap port', async () => {
+      // launchd would run the job outside the sandbox, as the user; (deny
+      // job-creation) refuses it. A read-only probe, cleaned up either way.
+      const label = `com.ordewell.sealed-test.${process.pid}`;
+      try {
+        const result = await sealed(`launchctl submit -l '${label}' -- /usr/bin/true`);
+        expect(result.code).not.toBe(0);
+        // Nothing loaded: printing the job from outside fails too.
+        expect(spawnSync('launchctl', ['print', `gui/${process.getuid?.() ?? 0}/${label}`]).status).not.toBe(0);
+      } finally {
+        spawnSync('launchctl', ['remove', label]);
+      }
+    });
+
     describe('through the planner shell', () => {
       it('runs a refused loop sealed, and says so first', async () => {
         const fs = new HostFileSystem(workspace, sandbox);
@@ -204,6 +227,19 @@ describe('sealed runs', async () => {
         expect((await fs.bash('npm test', undefined, { sealed: true })).output).toContain('The user denied it this session');
         expect(fs.runs).toBe(0);
         expect(readdirSync(workspace)).not.toContain('node_modules');
+      });
+
+      it('still refuses a denied command when a loop wraps it (S3)', async () => {
+        const fs = new HostFileSystem(workspace, sandbox);
+        let asks = 0;
+        fs.setApproval(new ApprovalPolicy({ ask: async () => { asks += 1; return false; } }));
+        expect((await fs.bash('npm test')).output).toContain('Command not approved: npm test');
+        // The classifier refuses the loop unread; without the inner-scope check
+        // it would run `npm test` sealed, routing around the denial.
+        const wrapped = await fs.bash('for f in *.md; do npm test; done');
+        expect(wrapped.output).toContain('The user denied "npm test" this session');
+        expect(fs.runs).toBe(0);
+        expect(asks).toBe(1);
       });
     });
   });

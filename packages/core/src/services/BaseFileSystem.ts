@@ -9,7 +9,7 @@ import {
   GREP_DEFAULT_HEAD_LIMIT,
 } from '../interfaces/IFileSystem';
 import { IApproval, DENY_ALL, type ApprovalRequest } from '../interfaces/IApproval';
-import { cdUnfollowed, classifyCommand, excludedBy, pathRefs, type CommandPolicyOptions } from './commandPolicy';
+import { cdUnfollowed, classifyCommand, excludedBy, innerCommandScopes, pathRefs, type CommandPolicyOptions } from './commandPolicy';
 import { resolveResearchShell, researchShellWarning, researchPolicyOptions, type ResearchShell, type ShellLaunch } from './researchShell';
 import { PlannerShellSandbox, SEALED_FAILURE_NOTE, sandboxedFailureNote, sealedRunHeader } from './sandbox/plannerSandbox';
 import { resolveWithin, resolveRef, grantScopeFor, isInertDevice } from './pathScope';
@@ -324,6 +324,23 @@ export abstract class BaseFileSystem implements IFileSystem {
     return this.runShell(command, tier === 'ask', signal);
   }
 
+  /**
+   * A scope inside `command` the user denied on the card this session, or
+   * undefined (ADR-0036 S3). The whole command's request is peeked by the
+   * caller; this reaches the commands a refused wrapper hides, each remembered
+   * under its own scope, so wrapping a denied command never routes around the
+   * denial.
+   */
+  private deniedInnerScope(command: string): string | undefined {
+    const peek = this.approval.peek;
+    if (!peek) return undefined;
+    for (const scope of innerCommandScopes(command, this.policyOptions())) {
+      const standing = peek.call(this.approval, { kind: 'shell_command', subject: command, scope });
+      if (standing.decision === 'deny' && standing.source === 'remembered') return scope;
+    }
+    return undefined;
+  }
+
   /** A refusal the envelope reached without asking anyone, run sealed where this host can (ADR-0036 S2), or `refused` as it was (S6). */
   private async sealedInstead(command: string, request: ApprovalRequest | undefined, refused: ToolOutcome, signal?: AbortSignal): Promise<ToolOutcome> {
     return (await this.sandbox.canSeal()) ? this.runSealed(command, request, 'refused', signal) : refused;
@@ -346,6 +363,13 @@ export abstract class BaseFileSystem implements IFileSystem {
     if (standing?.decision === 'deny' && standing.source === 'remembered') {
       return refusal(`Command not approved: ${command}\nThe user denied it this session, and a denial holds for a sealed run too. Continue without it.`);
     }
+    // A denial is keyed on each command's own scope, so a refused wrapper — a
+    // loop, a pipe — whose own request peek() never matched still refuses when
+    // it carries a command the user said no to (S3). Only the person's denial
+    // ('remembered'); a scope the approval mode alone would refuse is what a
+    // sealed run is for (S2).
+    const denied = this.deniedInnerScope(command);
+    if (denied) return refusal(`Command not approved: ${command}\nThe user denied "${denied}" this session, and a denial holds for a sealed run too. Continue without it.`);
 
     let shell: ShellLaunch;
     try {
