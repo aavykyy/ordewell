@@ -10,6 +10,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- **Planner skills for a failure to explain and an open problem.** `diagnose`
+  reproduces a failure first, tests competing hypotheses as parallel research
+  tasks, decides from the evidence, then plans the fix inside a loop checked by
+  the reproduction. `explore` plans one round of deliberately different research
+  tasks, tries to break each promising claim, and extends the plan as reports
+  come back. The planner loads either itself when the goal fits, and you can
+  type `/diagnose` or `/explore`.
 - **Sealed runs.** Where the planner's sandbox runs, a command its command
   rules would refuse without asking (a loop over files, a here-document, a few
   lines of Python over a command's output) runs sealed instead: the workspace

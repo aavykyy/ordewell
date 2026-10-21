@@ -8,7 +8,7 @@ import { builtinSkillsDir } from './builtinSkills';
 import { isSkillName } from '../models/Task';
 import { workspaceRepoGroup } from './repoGroup';
 
-export const BUILTIN_SKILL_NAMES = ['grilling', 'to-spec', 'improve-codebase-architecture', 'tdd'] as const;
+export const BUILTIN_SKILL_NAMES = ['grilling', 'to-spec', 'improve-codebase-architecture', 'tdd', 'diagnose', 'explore'] as const;
 
 /** Built-in skills that were renamed/removed; their stale seeds are pruned from ~/.ordewell/skills. */
 export const RETIRED_BUILTIN_SKILL_NAMES = ['grill-me'] as const;
