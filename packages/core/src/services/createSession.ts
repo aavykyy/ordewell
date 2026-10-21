@@ -223,10 +223,10 @@ function isPlannerApproval(request: ApprovalRequest): boolean {
  * what the task says, not where it stands, so a run moving a task on meanwhile
  * is not mistaken for the planner rewriting it.
  */
-function writtenTasks(before: readonly Task[], after: readonly Task[]): string[] {
+function writtenTasks(before: readonly Task[], after: readonly Task[]): Task[] {
   const said = ({ subtasks: _subtasks, status: _status, ...task }: Task): string => JSON.stringify(task);
   const prior = new Map(flattenTasks(before).map((t) => [t.id, said(t)]));
-  return flattenTasks(after).filter((t) => prior.get(t.id) !== said(t)).map((t) => t.id);
+  return flattenTasks(after).filter((t) => prior.get(t.id) !== said(t));
 }
 
 /**
@@ -862,6 +862,7 @@ export class Session {
       this.store.add(task);
       return true;
     });
+    this.turnEffects.scriptAdded(task.id);
     if (actor.kind === 'supervisor') this.supervision.edited(before, this.store.planTasks);
   }
 
@@ -922,7 +923,7 @@ export class Session {
     const held = this.conversation.pendingOps();
     if (!held || held.length === 0 || !this.plan) return unedited;
     const runners = this.editRunners();
-    const result = applyTaskOps(this.store.planTasks, held, runners, this.catalog.edit(runners));
+    const result = applyTaskOps(this.store.planTasks, held, runners, this.catalog.edit(runners), [], this.turnEffects.addedPastEdit);
     return result.ok ? { tasks: result.tasks, handles: result.handles ?? new Map() } : unedited;
   }
 
@@ -953,7 +954,7 @@ export class Session {
    */
   private checkPlannerOps(ops: TaskOp[], held: readonly TaskOp[] = []): ApplyTaskOpsResult {
     const runners = this.editRunners();
-    const result = applyTaskOps(this.store.planTasks, ops, runners, this.catalog.edit(runners), held);
+    const result = applyTaskOps(this.store.planTasks, ops, runners, this.catalog.edit(runners), held, this.turnEffects.addedPastEdit);
     if (!result.ok || !this.supervisorEditing()) return result;
     const trip = this.supervision.checkEdit(this.store.planTasks, result.tasks);
     if (!trip) return result;
@@ -1733,14 +1734,14 @@ export class Session {
     if (this.orchestrator.isRunning || this.orchestrator.awaitsResume) {
       this.orchestrator.reconcilePlan(coerced, runners);
     } else {
-      this.orchestrator.loadPlan(coerced, runners);
+      this.orchestrator.loadPlan(coerced, runners, true);
       this.store.resetForRun({ keepScheduledResumes: true });
     }
     this.withdrawApprovals(rewritten);
     // Once they are in the plan: approval is only ever of a task the plan holds.
     if (bySupervisor) this.approve(added);
     // With autorun on the user said they need not approve what the planner writes in their turn; read as it lands, so turning it off first holds the task.
-    else if (this.turnActor().kind === 'planner-turn' && this.userRunSettings().autorun) this.approve(writtenTasks(before, coerced));
+    else if (this.turnActor().kind === 'planner-turn' && this.userRunSettings().autorun) this.approve(this.commands.autorunApproves(writtenTasks(before, coerced)));
     return coerced.length;
   }
 

@@ -343,6 +343,12 @@ export class ExecutionCommands {
   private readonly effects: EffectAllowlist;
   private readonly now: () => string;
   private readonly scriptWaitMs: number;
+  /**
+   * The script tasks whose `run_script` card is open. Their consent is the
+   * card's to give, to the body it shows: executing the plan meanwhile leaves
+   * them out, or a no on the card would come after a yes it never gave.
+   */
+  private readonly carded = new Set<string>();
 
   constructor(private readonly deps: ExecutionCommandsDeps) {
     this.host = deps.host;
@@ -484,7 +490,13 @@ export class ExecutionCommands {
   private async askForScript(command: RunScript, actor: ExecutionActor, draft: Readonly<Task>, admission: StartAdmission): Promise<ScriptConsent | CommandOutcome> {
     const added = this.located(draft.id);
     if (!added) return this.refuse(command, actor, undefined, 'The script task left the plan as it was added, so nothing ran.');
-    const allowed = await this.deps.consent.request(this.question(command, actor, added));
+    let allowed: boolean;
+    this.carded.add(draft.id);
+    try {
+      allowed = await this.deps.consent.request(this.question(command, actor, added));
+    } finally {
+      this.carded.delete(draft.id);
+    }
     // The user's Stop withdrew the start; the task stays, as a card left unanswered leaves it.
     if (!admission.current()) return this.refuse(command, actor, added, STOPPED_BEFORE_START);
     if (!allowed) {
@@ -592,6 +604,18 @@ export class ExecutionCommands {
   }
 
   /**
+   * Of the tasks a planner edit in the user's turn wrote, the ones autorun
+   * approves as the edit lands: all of them, but for a script task, which
+   * runs unasked only where `run_script` would run it unasked (ADR-0035), so
+   * under Guarded it waits for the user unless their effect allowlist covers
+   * it. Its row shows the body verbatim, and starting it is their consent.
+   */
+  autorunApproves(written: readonly Readonly<Task>[]): string[] {
+    const turn: ExecutionActor = { kind: 'planner-turn' };
+    return written.filter((t) => t.type !== 'script' || this.scriptConsent(turn, scriptBodyOf(t)).kind === 'allow').map((t) => t.id);
+  }
+
+  /**
    * A task `run_script` answered for before it ended has ended: its result
    * joins the timeline beside its start, with who asked and how it was
    * consented to (ADR-0035).
@@ -675,7 +699,7 @@ export class ExecutionCommands {
     if (!STARTS.has(command.command)) return [];
     if (this.asksToApprove(actor)) return named.flatMap(({ task }) => withSubtasks(task));
     if (actor.kind !== 'user' && actor.kind !== 'autorun' && !this.addedMayStart(actor)) return [];
-    return located ? withSubtasks(located.task) : this.all().map(({ task }) => task.id);
+    return located ? withSubtasks(located.task) : this.all().map(({ task }) => task.id).filter((id) => !this.carded.has(id));
   }
 
   /**
@@ -756,7 +780,7 @@ export class ExecutionCommands {
     if (this.host.hasLiveWork()) {
       // The user's Execute approves what waits rather than restarting the run under way; counted before the approval it records.
       if (actor.kind === 'user') {
-        const waiting = all.filter(({ task }) => this.host.waitsForApproval(task.id)).length;
+        const waiting = all.filter(({ task }) => this.host.waitsForApproval(task.id) && !this.carded.has(task.id)).length;
         return { act: async () => ({ message: await this.host.joinRun(waiting) }) };
       }
       return { refusal: `The plan is already running (${named(live)} ${live.length === 1 ? 'is' : 'are'} running). Start one more ready task with run_task, or wait.` };

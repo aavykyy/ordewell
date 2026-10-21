@@ -96,8 +96,11 @@ interface ScriptSessionSetup {
  * handed on as the attempt's evidence ({@link onScriptExit}), and only then
  * does the session exit.
  *
- * Every step leads its own process group, so the time limit and a stop end
- * whatever it started, and nothing a step left running outlives the task.
+ * Every step leads its own process group, so the time limit, a stop and the
+ * task's end reach whatever it started in that group. A process that leaves
+ * the group (`setsid`, `setpgrp`) is out of reach of a group signal, and once
+ * its parent exits nothing ties it to the step: holding it is the work of a
+ * boundary around the task, a container or a lease (#97, #99), not of a signal.
  */
 export class ScriptSession extends AbstractRunnerSession {
   private readonly events = new EventEmitter();

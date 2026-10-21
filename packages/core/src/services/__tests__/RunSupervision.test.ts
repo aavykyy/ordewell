@@ -160,6 +160,22 @@ describe('an automatic lowering', () => {
     expect(supervision.level).toBe('watch');
     expect(supervision.mayWake()).toBe(true);
   });
+
+  it('stops only the report turns at Off when a report turn fails twice: there was no supervisor to stop', async () => {
+    const { supervision, plan, transcript } = harness({ supervisorLevel: 'off' });
+    supervision.runStarted('user');
+    const fail = () => supervision.wakeUp(async () => { throw new Error('planner exited'); }, undefined, 'user');
+
+    await expect(fail()).rejects.toThrow('planner exited');
+    await expect(fail()).rejects.toThrow('planner exited');
+
+    expect(plan.runSettings!.unsupervised).toBe('the planner\'s report turn failed twice (planner exited)');
+    expect(supervision.mayReport()).toBe(false);
+    expect(transcript.at(-1)).toEqual({
+      voice: 'system',
+      text: 'Report turns stopped: the planner\'s report turn failed twice (planner exited). The reports the planner asked for reach it with your next message.',
+    });
+  });
 });
 
 describe('the end-of-run handoff', () => {

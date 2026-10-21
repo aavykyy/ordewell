@@ -6,6 +6,7 @@ import type { McpToolReply } from '../mcp';
 import { WAKE_DEBOUNCE_MS } from '../Supervisor';
 import { SCRIPT_ANSWER_WAIT_MS } from '../ExecutionCommands';
 import { FakeWorktreeIsolation } from '../../testing';
+import type { TaskOp } from '../TaskOps';
 import { fakeConfig, makeSession, taskOf, testWorkspace } from './sessionTestKit';
 import { changeSettings, ctx, NOW, plan, prose, recordingRunner, settled, supervised, task, until, waitForInput, wokenUp, type Env, type Options } from './supervisorTestKit';
 
@@ -267,6 +268,25 @@ describe('run_script: a card denied or never answered', () => {
     expect(scripts.spawnedIds()).toEqual([]);
   });
 
+  it('leaves it unapproved when the user executes the plan while its card is open, and then denies it', async () => {
+    const env = await supervised([task('t1', 1)], { config: { autonomousMode: false }, settings: { supervisorLevel: 'off' } });
+    await userTurn(env);
+    const reply = runScript(env);
+    await until(() => cards(env).length === 1);
+
+    const executed = await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    expect(executed).toEqual({ ok: true, message: 'The plan is already running, and no task waits for your approval.' });
+    expect(env.session.isApproved(scriptTask(env)!.id)).toBe(false);
+    env.session.resolveApproval(cards(env)[0].id, false);
+    expect(answer(await reply).outcome).toBe('declined');
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    await until(() => taskOf(env.session, 't1')!.status === 'completed');
+    await settled();
+
+    expect(env.session.isApproved(scriptTask(env)!.id)).toBe(false);
+    expect(env.scripts.spawnedIds()).toEqual([]);
+  });
+
   it('leaves it unapproved when the card times out unanswered: absence is denial', async () => {
     const env = await supervised([task('t1', 1)], { config: { autonomousMode: false }, settings: { supervisorLevel: 'off' } });
     await userTurn(env);
@@ -365,6 +385,22 @@ describe('run_script: a script still running after a minute, and its report', ()
 });
 
 describe('run_script: where and when it may run', () => {
+  it('lands a reorder the turn holds that lists every task but the script run_script added past it, keeping the script last', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2)], { settings: { supervisorLevel: 'off', autorun: true } });
+    await userTurn(env, 'do task 2 first, and push main');
+    const edit = await env.planner.tools().editPlan!({ ops: [{ op: 'reorder', taskIds: ['#2', '#1'] }] }, ctx);
+    expect(edit.isError).toBeFalsy();
+    const reply = runScript(env);
+    await until(() => env.scripts.spawnedIds().length === 1);
+    scriptEnds(env);
+    expect(answer(await reply).ok).toBe(true);
+    env.planner.calls[0].finish(prose('Reordered, and pushed main.'));
+    await settled();
+
+    expect(env.session.planTasks.map((t) => [t.id, t.order])).toEqual([['t2', 1], ['t1', 2], [scriptTask(env)!.id, 3]]);
+    expect(env.notices.filter((n) => n.level !== 'info')).toEqual([]);
+  });
+
   it('refuses a call while the turn holds a whole plan, which would leave the script out', async () => {
     const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off', autorun: true } });
     await userTurn(env);
@@ -428,6 +464,47 @@ describe('run_script behind a closed merge gate', () => {
     await session.execute({ command: 'merge_all' }, { kind: 'user' });
 
     await until(() => scripts.spawnedIds().includes(script.id));
+  });
+});
+
+describe('run_script behind a closed merge gate, through a later edit', () => {
+  /** A script run_script left at its merge gate, and the user's next turn's edit `ops` landed. */
+  async function gatedScript(ops: TaskOp[]): Promise<Env> {
+    const env = await supervised([task('t1', 1)], { isolation: new FakeWorktreeIsolation(), config: { autonomousMode: true }, settings: { supervisorLevel: 'off', autorun: false } });
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    await until(() => taskOf(env.session, 't1')!.status === 'completed');
+    await settled();
+    await userTurn(env);
+    const reply = runScript(env, { title: 'Push main', commands: PUSH, dependencies: ['#1'] });
+    await until(() => cards(env).length === 1);
+    env.session.resolveApproval(cards(env)[0].id, true);
+    expect(answer(await reply).result).toMatch(/waits at its merge gate/);
+    env.planner.calls[0].finish(prose('It waits for your merge.'));
+    await settled();
+
+    void env.session.continueConversation('also add docs');
+    await until(() => env.planner.calls.length === 2);
+    const edit = await env.planner.tools().editPlan!({ ops }, ctx);
+    expect(edit.isError).toBeFalsy();
+    env.planner.calls[1].finish(prose('Edited the plan.'));
+    await settled();
+    return env;
+  }
+
+  it('still starts once the user merges after a planner edit lands that leaves the script alone', async () => {
+    const env = await gatedScript([{ op: 'add', task: { title: 'Write docs', prompt: 'write docs' } }]);
+    await env.session.execute({ command: 'merge_all' }, { kind: 'user' });
+
+    await until(() => env.scripts.spawnedIds().includes(scriptTask(env)!.id));
+  });
+
+  it('does not start once the user merges when that edit changed what the script runs', async () => {
+    const env = await gatedScript([{ op: 'update', taskId: '#2', changes: { commands: [['git', 'push', 'origin', 'main', '--force']] } }]);
+    await env.session.execute({ command: 'merge_all' }, { kind: 'user' });
+    await settled();
+
+    expect(env.session.waitsForApproval(scriptTask(env)!.id)).toBe(true);
+    expect(env.scripts.spawnedIds()).toEqual([]);
   });
 });
 
