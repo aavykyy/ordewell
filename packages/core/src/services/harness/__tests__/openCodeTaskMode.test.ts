@@ -1050,7 +1050,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
         permission: { ...unrelated.permission, ...taskAllow },
       });
       expect(carriesParent(env)).toBe(false);
-      expect(await adapter.mcpAttached()).toBe(true);
+      expect(await adapter.mcpAttached()).toBe('connected');
       adapter.dispose();
     });
 
@@ -1108,7 +1108,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     const { adapter, env } = await startTask(fakeServer(), taskStart({ mcp }), { OPENCODE_CONFIG_CONTENT: '// mine\n{}' });
 
     expect(env.OPENCODE_CONFIG_CONTENT).toBe('// mine\n{}');
-    expect(await adapter.mcpAttached()).toBe(false);
+    expect(await adapter.mcpAttached()).toBe('failed');
     adapter.dispose();
   });
 
@@ -1187,11 +1187,11 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
 
   it('reports the server attached once OpenCode lists it as connected, and not when it failed', async () => {
     const connected = await startTask(fakeServer({ 'GET /mcp': () => ({ ordewell: { status: 'connected' } }) }), taskStart({ mcp }));
-    expect(await connected.adapter.mcpAttached()).toBe(true);
+    expect(await connected.adapter.mcpAttached()).toBe('connected');
     connected.adapter.dispose();
 
     const failed = await startTask(fakeServer({ 'GET /mcp': () => ({ ordewell: { status: 'failed', error: 'refused' } }) }), taskStart({ mcp }));
-    expect(await failed.adapter.mcpAttached()).toBe(false);
+    expect(await failed.adapter.mcpAttached()).toBe('failed');
     failed.adapter.dispose();
   });
 });

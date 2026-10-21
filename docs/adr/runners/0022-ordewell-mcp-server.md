@@ -18,8 +18,9 @@ and call the same task read handlers directly from their tool loop.
 which tools the caller sees and what they act on.** Task runners complete and
 ask checkpoints through it; coding-agent planners read the live catalog and
 submit plans through it. Attachment is required before any coding-agent prompt:
-check after spawn, respawn once with a fresh token, then fail if it still cannot
-connect (ADR-0025). API planners keep JSON envelopes and the same task read tools; completion and checkpoint
+check after spawn, respawn once with a fresh token, then hold a task whose
+runner never connected, or fail it when the runner reports the server failed
+(ADR-0025). API planners keep JSON envelopes and the same task read tools; completion and checkpoint
 text markers have no role.
 
 ### Tools per token
@@ -87,8 +88,13 @@ on the same mechanism.
   Codex and OpenCode use the required server. API planners (`OpenAiService`,
   `GeminiService`) keep envelopes and their existing query read loop, alongside direct task read tool calls.
 - **Tools or nothing (S2).** Neither a task nor a coding-agent planner runs
-  without its tools. One automatic respawn is allowed; a second attach failure
-  fails the task or planner turn. There is no marker fallback.
+  without its tools. One automatic respawn is allowed. A task runner that stays
+  alive but never reports the server connected is held out of the scheduler
+  with that reason, its dependents left on the plan rather than blocked, and a
+  later start runs it again; a runner that reports the server `failed` — a
+  configuration problem — still fails the task. A coding-agent planner turn
+  fails on either outcome, since a turn has no task to hold. There is no
+  marker fallback.
 - **Pre-authorized, in every mode (S3).** Calling an Ordewell tool never
   triggers a permission prompt: Claude Code `--allowedTools` with each tool's
   full name, Codex's per-server approval configuration, OpenCode's permission
@@ -279,3 +285,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-17 — the live enabled runners (L1) are read from one settings file shared with VS Code, and the planner is told on its next turn what changed ([ADR-0043](../routing/0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md)).
 - 2026-10-18 — `submit_plan` and `edit_plan` report what the assignment resolver adjusted, an edit's own ops included (P2, [ADR-0003](../routing/0003-per-runner-model-allowlist.md)).
 - 2026-10-21 — `run_script` joins the execution tools, and a script task's exit status is its completion evidence, handed to `VerdictEngine` ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
+- 2026-10-21 — S2: a task runner the server never reaches while its process runs is held with a reason instead of failing and blocking its dependents; a `failed` report still fails it, and a planner turn still fails either way.

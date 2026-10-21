@@ -9,6 +9,7 @@ import type { AgentEvent, SpawnFn, AgentStartOptions, TaskModeAgentAdapter, Task
 import type { OrdewellMcpServer } from '../mcp/OrdewellMcpServer';
 import { TASK_COMPLETION_CONTRACT } from '../mcp';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
+import { McpAttachTimeout } from '../harness/ordewellBinding';
 import { claudeTurnEndQueue, claudeSteerRecording, fakeSpawn, fixture, type FakeSpawnResult, type ScriptedReply } from './harnessTestKit';
 
 /**
@@ -1041,10 +1042,12 @@ describe('StructuredRunner: tools or nothing (ADR-0022)', () => {
     expect(env.adapters[0].sent).toEqual([]);
   });
 
-  it('fails the start when the respawn does not attach either, with nothing sent and nothing left running', async () => {
+  it('reports a timeout when the respawn does not attach either, with nothing sent and nothing left running', async () => {
     const env = attaching([false, false]);
 
-    await expect(env.spawn()).rejects.toThrow(
+    const spawned = env.spawn();
+    await expect(spawned).rejects.toBeInstanceOf(McpAttachTimeout);
+    await expect(spawned).rejects.toThrow(
       'Could not start claude-code with Ordewell\'s tools, so the task was not sent to it. First spawn: claude-code did not report Ordewell\'s MCP server connected. Respawn: claude-code did not report Ordewell\'s MCP server connected.',
     );
     await tick();

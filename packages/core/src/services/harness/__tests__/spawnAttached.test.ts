@@ -1,12 +1,12 @@
-import { describe, it, expect } from 'vitest';
-import { McpAttachError, spawnAttached } from '../ordewellBinding';
+import { describe, it, expect, vi } from 'vitest';
+import { MCP_ATTACH_TIMEOUT_MS, McpAttachError, McpAttachTimeout, awaitAttach, spawnAttached, type AttachState } from '../ordewellBinding';
 
 /**
  * The ADR-0025 rule, once for every runner: a spawn reports the server
  * connected or is killed with its token, and one respawn is all it gets.
  */
-function spawning(reports: boolean[]) {
-  const adapters: Array<{ disposed: boolean; startedWith?: string; mcpAttached(): Promise<boolean>; dispose(): void }> = [];
+function spawning(reports: Array<boolean | AttachState>) {
+  const adapters: Array<{ disposed: boolean; startedWith?: string; mcpAttached(): Promise<boolean | AttachState>; dispose(): void }> = [];
   const issued: string[] = [];
   const revoked: string[] = [];
   const respawns: string[] = [];
@@ -49,8 +49,42 @@ describe('spawnAttached', () => {
     expect(env.respawns).toEqual([]);
   });
 
+  it('keeps waiting while its runner stays pending past ten seconds, then connects', async () => {
+    vi.useFakeTimers();
+    try {
+      const started = Date.now();
+      const disposed: string[] = [];
+      const spawned = spawnAttached({
+        runner: 'claude-code',
+        create: () => {
+          const id = `adapter-${disposed.length + 1}`;
+          return {
+            dispose: () => { disposed.push(id); },
+            mcpAttached: () => awaitAttach(
+              async () => (Date.now() - started >= 11_000 ? 'connected' : 'pending'),
+              MCP_ATTACH_TIMEOUT_MS,
+              1_000,
+            ),
+          };
+        },
+        issueToken: async () => ({ url: 'http://127.0.0.1:1/mcp', token: 'tok-1' }),
+        revoke: () => {},
+        start: async () => {},
+        failed: (first, second) => `${first} ${second}`,
+      });
+
+      await vi.advanceTimersByTimeAsync(12_000);
+      const attached = await spawned;
+
+      expect(attached?.token).toBe('tok-1');
+      expect(disposed).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('kills a spawn that did not attach, takes its token back and keeps the respawn on a fresh token', async () => {
-    const env = spawning([false, true]);
+    const env = spawning(['pending', true]);
 
     const spawned = await env.spawn();
 
@@ -62,17 +96,90 @@ describe('spawnAttached', () => {
     expect(env.respawns).toEqual(['claude-code did not report Ordewell\'s MCP server connected']);
   });
 
-  it('throws McpAttachError when the respawn does not attach either, with both spawns killed and both tokens revoked', async () => {
-    const env = spawning([false, false]);
+  it('respawns once when the runner reported the server failed, and keeps a later connection', async () => {
+    const env = spawning(['failed', 'connected']);
+
+    const spawned = await env.spawn();
+
+    expect(spawned?.token).toBe('tok-2');
+    expect(env.adapters[0].disposed).toBe(true);
+  });
+
+  it('throws McpAttachTimeout when the respawn never connects, with both spawns killed and both tokens revoked', async () => {
+    const env = spawning(['pending', 'pending']);
 
     const spawned = env.spawn();
 
-    await expect(spawned).rejects.toBeInstanceOf(McpAttachError);
+    await expect(spawned).rejects.toBeInstanceOf(McpAttachTimeout);
     await expect(spawned).rejects.toThrow(
       'Could not start. First spawn: claude-code did not report Ordewell\'s MCP server connected. Respawn: claude-code did not report Ordewell\'s MCP server connected.',
     );
     expect(env.adapters).toHaveLength(2);
     expect(env.adapters.every((adapter) => adapter.disposed)).toBe(true);
     expect(env.revoked).toEqual(['tok-1', 'tok-2']);
+  });
+
+  it('throws McpAttachError when the respawn reports the server failed, so a configuration problem is never a hold', async () => {
+    const env = spawning(['failed', 'failed']);
+
+    const spawned = env.spawn();
+
+    await expect(spawned).rejects.toBeInstanceOf(McpAttachError);
+    expect(env.adapters).toHaveLength(2);
+    expect(env.adapters.every((adapter) => adapter.disposed)).toBe(true);
+    expect(env.revoked).toEqual(['tok-1', 'tok-2']);
+  });
+});
+
+describe('awaitAttach', () => {
+  it('keeps waiting past ten seconds while the runner is alive and still pending', async () => {
+    vi.useFakeTimers();
+    try {
+      const started = Date.now();
+      // A runner on a loaded machine may stay pending well past the ten
+      // seconds that used to end the wait, then connect without ever failing.
+      const attached = awaitAttach(
+        async () => (Date.now() - started >= 11_000 ? 'connected' : 'pending'),
+        MCP_ATTACH_TIMEOUT_MS,
+        1_000,
+      );
+
+      await vi.advanceTimersByTimeAsync(12_000);
+
+      expect(await attached).toBe('connected');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops at once when the runner reports the server failed', async () => {
+    vi.useFakeTimers();
+    try {
+      const started = Date.now();
+      const attached = awaitAttach(
+        async () => (Date.now() - started >= 1_000 ? 'failed' : 'pending'),
+        60_000,
+        1_000,
+      );
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(await attached).toBe('failed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is pending when the cap passes with the runner still starting', async () => {
+    vi.useFakeTimers();
+    try {
+      const attached = awaitAttach(async () => 'pending', 5_000, 1_000);
+
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(await attached).toBe('pending');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

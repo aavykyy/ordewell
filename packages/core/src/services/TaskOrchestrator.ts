@@ -1,5 +1,5 @@
 import { unavailableTaskModeMessage } from './ModeResolver';
-import { McpAttachError, RunnerStartupExit } from './harness/ordewellBinding';
+import { McpAttachError, McpAttachTimeout, RunnerStartupExit } from './harness/ordewellBinding';
 import * as path from 'path';
 import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasksWithParents, pausedOnLimit, waitsForReset, type RunSettings } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
@@ -409,12 +409,13 @@ export class TaskOrchestrator {
   /** What the workspace env has already warned about, so a run says it once, not per task. */
   private envWarnings = new Set<string>();
   /**
-   * Tasks pulled out of auto-scheduling (user-cancelled or failed to spawn).
-   * They stay 'pending' — "not executed" — but the scheduler skips them until
-   * the user retries or force-starts, which would otherwise loop forever on a
-   * task whose spawn always throws.
+   * Tasks pulled out of auto-scheduling (user-cancelled, marked not done, or a
+   * start that could not reach its runner), each with the reason the surfaces
+   * show. They stay 'pending' — "not executed" — but the scheduler skips them
+   * until the user retries or force-starts, which would otherwise loop forever
+   * on a task whose spawn always throws.
    */
-  private onHold = new Set<string>();
+  private onHold = new Map<string, string>();
   /**
    * Force starts queued behind dependencies the scheduler will not start them
    * after: outside a run it drives, or past a failed dependency, which it
@@ -949,6 +950,11 @@ export class TaskOrchestrator {
     return waitOf(this.startWaits(task), 'merge-gate')?.unmerged ?? [];
   }
 
+  /** Why a task is held out of auto-scheduling, as the surfaces show it; null when it is not held. */
+  holdReason(taskId: string): string | null {
+    return this.onHold.get(taskId) ?? null;
+  }
+
   /**
    * Every reason a task cannot start now, from the one start rule
    * (ADR-0034); none when it can. `forced` judges a start the user forced.
@@ -1460,7 +1466,7 @@ export class TaskOrchestrator {
     if (!this.attempts.has(taskId) && task.status !== 'in_progress') return;
     const ended = this.endAttempt(taskId, 'cancel');
     this.store.markPending(taskId);
-    this.onHold.add(taskId);
+    this.onHold.set(taskId, 'cancelled; retry or force start to run it again');
     this.emit('onTaskChanged');
     await this.runs.release(taskId, worktree, ended?.integration);
     await this.tick();
@@ -1544,7 +1550,7 @@ export class TaskOrchestrator {
     this.verifier.clear(task);
     this.store.retry(taskId);
     this.store.removeFromLog(taskId);
-    this.onHold.add(taskId);
+    this.onHold.set(taskId, 'marked not done; retry or force start to run it again');
 
     this.notifications.info(`Task "${task.title}" marked not done.`);
     this.emit('onTaskChanged');
@@ -2519,6 +2525,9 @@ export class TaskOrchestrator {
       // Each way out settles the task's status before it awaits anything, so
       // no tick in between finds it in progress with no attempt.
       const refusal = err instanceof Error ? err.message : String(err);
+      // A missed attach is a hold for a start or a continue: nothing ran, so
+      // the task is not failed and its saved session stays for a retry.
+      const attachTimeout = err instanceof McpAttachTimeout;
       // A script has no runner whose account a limit could stop (ADR-0035).
       if (attempt.kind.kind !== 'repair' && !attempt.script && classifyRunnerStop(refusal) === 'usage-limit') {
         // The limit refused the turn Ordewell was starting: a pause, as one
@@ -2531,7 +2540,7 @@ export class TaskOrchestrator {
         await this.tick();
         return false;
       }
-      if (attempt.kind.kind === 'continuation') {
+      if (attempt.kind.kind === 'continuation' && !attachTimeout) {
         // A runner that exits while starting on a saved session has refused it.
         const refused = err instanceof RunnerStartupExit;
         const reason = refused
@@ -2550,6 +2559,20 @@ export class TaskOrchestrator {
       if (attempt.kind.kind === 'repair') {
         this.store.markAwaitingUser(task.id, 'conflict');
         this.settleUnlanded(task, await this.landing.unrepaired(task, `could not start: ${err instanceof Error ? err.message : String(err)}`), attempt.admission);
+        this.emit('onTaskSettled', { taskId: task.id });
+        this.emit('onTaskChanged');
+        await this.tick();
+        return false;
+      }
+      if (attachTimeout) {
+        // The runner stayed up but never connected. Nothing was sent to it
+        // and no verdict exists, so the task is held with a reason rather
+        // than failed: its dependents stay on the plan, and a later start
+        // can still run it (ADR-0022, S2).
+        this.store.markPending(task.id);
+        this.onHold.set(task.id, 'could not connect to Ordewell\'s tools; start it again');
+        await this.runs.release(task.id, { keep: false });
+        this.tell('warn', `Task "${task.title}" is on hold: could not connect to Ordewell's tools. Start it again.`);
         this.emit('onTaskSettled', { taskId: task.id });
         this.emit('onTaskChanged');
         await this.tick();
@@ -2582,7 +2605,7 @@ export class TaskOrchestrator {
       // Couldn't spawn — the task was never executed, so it stays "to do".
       // Held out of auto-scheduling to avoid a spawn-throw retry loop.
       this.store.markPending(task.id);
-      this.onHold.add(task.id);
+      this.onHold.set(task.id, `could not start: ${err instanceof Error ? err.message : String(err)}; start it again`);
       await this.runs.release(task.id, { keep: false });
       this.tell('error', `Failed to start task "${task.title}": ${err}`);
       this.emit('onTaskChanged');

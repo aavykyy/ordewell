@@ -11,7 +11,7 @@ import { probeCodexSandbox, codexSandboxUnavailableMessage, codexShellOffNote, t
 import { ORDEWELL_MCP_SERVER_NAME } from '../mcp';
 import { untrustedProjects } from './codexRepoConfig';
 import { CODEX_ORDEWELL } from './codexOrdewell';
-import { awaitAttach, type AttachState } from './ordewellBinding';
+import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
 import { CodexRpc, type RpcMessage, type RpcResponse } from './codexRpc';
 import { settleWithin } from './settleWithin';
 import { PermissionLedger } from './permissionLedger';
@@ -19,8 +19,6 @@ import { ReplyRuns } from './replyRuns';
 import { codexSessionBilling, codexUsageLimitSignal, mergeCodexRateLimits, type CodexRateLimits } from './codexUsageLimit';
 
 const HANDSHAKE_TIMEOUT_MS = 30000;
-/** Codex starts a thread's MCP servers as the thread opens; one that is not up by now is not coming. */
-const MCP_ATTACH_TIMEOUT_MS = 10_000;
 
 /**
  * One entry of a Codex turn. Field names are the app-server protocol's, taken
@@ -595,8 +593,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
    * has tried to connect (ADR-0022, S4). A report that came before this was
    * asked is kept, so asking late still gets the answer.
    */
-  async mcpAttached(): Promise<boolean> {
-    if (!this.startOpts?.mcp || !this.process) return false;
+  async mcpAttached(): Promise<AttachState> {
+    if (!this.startOpts?.mcp || !this.process) return 'failed';
     return awaitAttach(async (left) => {
       const known = CODEX_ORDEWELL.attachState(this.mcpStartup);
       if (known !== 'pending') return known;

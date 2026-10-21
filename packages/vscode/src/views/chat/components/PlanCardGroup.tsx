@@ -273,6 +273,7 @@ export default function PlanCardGroup({
               <TaskCard
                 task={task}
                 run={runByTask.get(task.id)}
+                runsByTask={runByTask}
                 models={taskModels}
                 modes={taskModes}
                 modelsByRunner={modelsByRunner}

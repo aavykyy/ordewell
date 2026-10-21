@@ -9,7 +9,7 @@ function plan(): LegacyPlanState {
   return { tasks: [], generatedAt: '2026-01-01T00:00:00Z', status: 'approved', runners: ['claude-code'], lastUpdated: '2026-01-01T00:00:00Z' };
 }
 
-function setup() {
+function setup(holds: ReadonlyMap<string, string> = new Map()) {
   const sent: SessionMessage[] = [];
   const notices: SessionNotice[] = [];
   const store = new PlanStore();
@@ -25,7 +25,7 @@ function setup() {
     broadcast: (m) => sent.push(m),
     onNotice: (n) => notices.push(n),
     store,
-    orchestrator: { getIdleSince: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], runMergeView: () => null },
+    orchestrator: { getIdleSince: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], holdReason: (id) => holds.get(id) ?? null, runMergeView: () => null },
     runs: { taskIsolation: () => null },
     usage,
   });
@@ -44,6 +44,16 @@ describe('SessionEventRelay', () => {
     expect(sent).toHaveLength(1);
     const [update] = sent;
     expect(update.type === 'status_update' && update.tasks.map((t) => t.status)).toEqual(['completed', 'failed', 'pending']);
+  });
+
+  it('carries a task\'s hold reason to every surface', () => {
+    const { relay, sent } = setup(new Map([['t3', 'could not connect to Ordewell\'s tools; start it again']]));
+
+    relay.status(plan());
+
+    const [update] = sent;
+    expect(update.type === 'status_update' && update.tasks.find((t) => t.id === 't3')?.holdReason)
+      .toBe('could not connect to Ordewell\'s tools; start it again');
   });
 
   it('saves and broadcasts an attempt’s session billing even when its runner reports no cost', () => {

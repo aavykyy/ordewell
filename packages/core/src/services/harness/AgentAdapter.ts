@@ -5,6 +5,7 @@ import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { McpClientConfig } from '../mcp';
 import type { ProjectMcpServer } from './repoConfig';
 import type { RunnerCommand, RunnerMcpServer, RunnerModelRef } from '../../models/RunnerCommand';
+import type { AttachState } from './ordewellBinding';
 
 
 /**
@@ -278,8 +279,11 @@ export interface AgentAdapter {
    * Whether the Ordewell MCP server passed in the start options' `mcp` is
    * connected, as the runner itself reports it (ADR-0022, S4). Absent on an
    * adapter that cannot inject the server at all, which cannot run tasks.
+   * `false` is the old boolean answer for "not attached"; a real adapter says
+   * `pending` while its process is still starting, or `failed` when the
+   * runner reports the server cannot connect.
    */
-  mcpAttached?(): Promise<boolean>;
+  mcpAttached?(): Promise<boolean | AttachState>;
 
   /**
    * The approved project servers (ADR-0028) this runner started but cannot
@@ -307,7 +311,7 @@ export interface AgentAdapter {
 
 /** What an adapter adds to run a task rather than a planner (ADR-0018). */
 export interface TaskModeAgentAdapter extends AgentAdapter {
-  mcpAttached(): Promise<boolean>;
+  mcpAttached(): Promise<boolean | AttachState>;
   /**
    * Ask the running turn to stop, keeping the process and its session. Resolves
    * true once the agent acknowledged it; the turn then ends with
