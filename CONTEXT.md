@@ -895,10 +895,26 @@ families only.
 *Avoid:* "whitelist", "pre-approved scopes" for the rules (a rule names an
 operation by its words, a scope is what one approval remembers).
 
+**Effect allowlist** (`effectAllowlist.ts`; ADR-0035) — the user's standing
+approval for named effects, beside the *Planner allowlist*, which names reads.
+VS Code `ordewell.effectAllowlist`, elsewhere `ORDEWELL_EFFECT_ALLOW`; user
+settings only, refused from a workspace's environment files, read on every
+request, with no built-in entries. A rule is matched against a whole command,
+every word in order and flags included, and spells out its operation before any
+`*`. A `*` never stands for a flag, a refspec's `+` or `:`, or a word across a
+`:` outside a URL. It covers a script task's `commands` body only, and only when
+every command is covered; a `script` body, and a program named by its path,
+never are. The planner allowlist's `!` exclusions hold, and win. A covered
+script task runs without asking, recorded by its rule.
+*Avoid:* "whitelist"; "approved commands" — it approves a script task, and a
+covered one is still a task in the plan with a log and a verdict; confusing it
+with the *Planner allowlist*, which never covers an effect.
+
 **Approval mode** — what happens to a planner request the *planner allowlist*
 does not cover: `ask` the user, refuse it (`allowlist`), or run it (`allow`).
 The default, `auto`, follows the autonomy level: Guarded asks, Full refuses
-and the plan carries the change as an *ops task*. Web reads are the one
+and the planner carries the change as a *script task* when it can state the
+exact commands, or the plan as an *ops task*. Web reads are the one
 exception: `auto` allows them at both levels (ADR-0027).
 *Avoid:* conflating it with a task's mode or the autonomy level itself.
 
@@ -1396,10 +1412,33 @@ the group, it waits on the user (`awaitingReason: 'files-changed'`) rather than
 completing. A retry is told what the attempt before it did, since its effects
 are never rolled back. The planner sets the mark and splits a mixed request into
 a change task and an ops task; the user can flip it until the task starts. A
-subtask runs with its top-level task.
+subtask runs with its top-level task. A *Script task* is an ops task too, by
+its type, with no `ops` mark.
 *Avoid:* "operation" as the term (used loosely everywhere), "external effects
 task", "checkout task" — it runs at the workspace root, which in a group is not
 one checkout.
+
+**Script task** (`type: 'script'`, `models/ScriptTask.ts`; ADR-0035) — an ops
+task whose body is a literal script that Ordewell runs itself, with no runner,
+model or mode. The body is `commands`, argument vectors run in order with no
+shell and stopping at the first that fails, or `script`, one script for the
+research shell's interpreter, outside the planner's sandbox; a time limit
+(ten minutes unless the task sets one) ends it as failed. It is top-level only,
+runs at the workspace root with the workspace's environment, and is an ops task
+in everything else: the merge gate, the Merge-all exclusion and the tracked-file
+check. Its verdict is its exit status, handed to `VerdictEngine` as the
+attempt's evidence in place of a `task_complete` call: every step exiting 0
+passes. The planner adds one with `edit_plan` or `submit_plan`, or adds it and
+starts it at once with `run_script`; the user consents to the body as written,
+on the approval card or through the *Effect allowlist*, and a changed body needs
+consent again. Surfaces draw it as an ops task with its body in place of a
+prompt, read-only. The planner writes one for an effect it can state as exact
+commands (a push, one setting on a cloud resource); an effect that needs
+judgment is an ops task.
+*Avoid:* "command", "action", "effect" or "operation" as the term (ADR-0035
+rejected them for ops tasks too); "ops task" for it where the difference
+matters — an ops task has a runner and a model, a script task has neither;
+"shell task" — `commands` run with no shell.
 
 **Merge gate** — where an ops task or a user task that depends on change tasks
 waits until their work is merged into the user's branch (ADR-0020): until the
@@ -2076,7 +2115,9 @@ required completion check, with `exit_code` as supporting diagnostic evidence.
 A manual completion has a `manual` check. `model_review`, `workspace_changes`
 and `verify_command` were removed because they conflated evidence with opinion.
 Verification never asks a model to break a tie. A runner exit without a
-completion call fails, even with exit code zero.
+completion call fails, even with exit code zero. A *Script task* has no runner
+to make the call: its `script_exit` check, the exit status of the literal script
+the plan holds, is its evidence.
 *Avoid:* using it for a *Loop check*, which is a task, not a signal.
 
 **Testing strategy** — *removed.* Verification is completion-evidence based;
@@ -2491,8 +2532,9 @@ paused.
 **Command seam** (`ExecutionCommands`, `Session.execute`) — the one core entry
 point every execution action reaches the scheduler through: `run_plan`,
 `run_task`, `stop_task`, `stop_run`, `retry_task`, `message_task`,
-`answer_approval`, `merge_all`, `skip_task` (ADR-0029, #91), and the user's
-own controls, refused to anyone else: `force_start`, `mark_complete`,
+`answer_approval`, `merge_all`, `skip_task` (ADR-0029, #91), `run_script`
+(ADR-0035: it adds a *Script task* and starts it in one step; only a planner
+turn or the supervisor calls it), and the user's own controls, refused to anyone else: `force_start`, `mark_complete`,
 `mark_not_done`, `interrupt_task`, a force send (`message_task` with `force`),
 `force_send_queued`, `remove_queued`, `cancel_resume`, `answer_checkpoint` and
 `approve_review`. Resume now is `retry_task` from `session` on a paused task.

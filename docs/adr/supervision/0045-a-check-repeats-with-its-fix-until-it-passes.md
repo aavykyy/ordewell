@@ -101,6 +101,10 @@ round *r* and round *r* + 1 the body runs once.
   first. The rounds take the one start rule: approval, holds, the Merge-all
   exclusion of ops work and the merge gate apply to them as to any start, and
   a Stop ends a round's running attempt as it ends any.
+  A check started again from outside while a fix of its body is still at work
+  or has passed and not landed (a retry, a force start) waits for that fix to
+  finish and land, as it waits on its dependencies, so it checks the fix
+  rather than racing it. It then runs as round 1 of a new set of rounds (L7).
 - **A loop ends once (L6).** A pass, a Mark complete or a skip of the check, or
   its last round failing, closes the loop: what of the body has not run or did
   not pass ends skipped with why, and a body task at work is left to finish.
@@ -119,6 +123,9 @@ round *r* and round *r* + 1 the body runs once.
   after a usage limit goes on in the round it was in. A supervisor or planner
   start of a check between rounds is refused, with the line that the loop runs
   it again itself, and the supervisor does not skip it: it needs no one.
+  A new round revives only the skips the loop made itself, the body that went
+  unrun when the loop closed; a body task the user skipped stays skipped, and
+  keeps stopping the loop, until they retry it.
 - **Removing a body task takes it out of its loop; a check is not removed
   (L8).** A body task removed from the plan leaves its loop's body, as it
   leaves dependency lists, and a loop left with no body is dropped. A check
@@ -213,3 +220,4 @@ check or body; a user editing a loop's `loop` field by hand from a surface.
 
 - 2026-10-21 — accepted; core implemented (#118).
 - 2026-10-21 — surfaces draw the rounds and the planner prompt teaches loops (#118); implemented.
+- 2026-10-21 — a check retried or force-started while a fix of its body is at work waits for it to land, then runs as round 1 of a new set of rounds (L5); a new round revives only the loop's own skips, never the user's (L7).

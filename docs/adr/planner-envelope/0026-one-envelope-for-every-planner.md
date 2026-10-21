@@ -5,7 +5,7 @@ amends: ["0008", "0009"]
 
 # 0026 — One envelope for every planner
 
-*Pending:* [ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md) — the effect allowlist, and the `allowlist` mode's pointer to script tasks; [ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md) — sealed runs, and a harness's own shell as a user's opt-in.
+*Pending:* [ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md) — sealed runs, and a harness's own shell as a user's opt-in.
 
 ## Problem
 
@@ -39,8 +39,11 @@ on a person, without one that acts outside a record.
 **Every planner, API or harness, researches inside the same envelope, decided
 by Ordewell. Read-only commands run. Anything else runs if a standing
 allowlist covers it, and otherwise follows the approval mode. File writes are
-refused in every mode.** Mutation belongs to the runners; an effect the plan
-needs is an ops task ([ADR-0020](../isolation/0020-ops-tasks-and-merge-gates.md)).
+refused in every mode.** Mutation of files belongs to the runners. An effect
+the plan needs is a script task when the planner can state its exact commands
+([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)), and an
+ops task when it needs judgment
+([ADR-0020](../isolation/0020-ops-tasks-and-merge-gates.md)).
 
 ### Commands go through Ordewell, not the harness shell
 
@@ -167,13 +170,15 @@ purpose, because on an untrusted repository someone else wrote them:
 | --- | --- |
 | `auto` (default) | follows the autonomy level: Guarded is `ask`, Full is `allowlist` |
 | `ask` | asks the user once per scope |
-| `allowlist` | refused without asking, with a pointer to an ops task |
+| `allowlist` | refused without asking, with a pointer to `run_script` for an exact effect and to an ops task for one that needs judgment |
 | `allow` | runs, file writes still refused |
 
-In Full, a planner never waits on a person and never acts outside its
-standing approvals; whatever else the plan needs to change is an ops task,
-which runs at Full without asking and leaves a record. The allowlist applies
-in every mode, so a Guarded planner asks only about what it does not cover.
+In Full, `run_command` never waits on a person and never acts outside its
+standing approvals; whatever else the plan needs to change is a script task or
+an ops task, which leave a record. A script task runs under ADR-0035's consent
+rule, not this one, and an ops task runs at Full without asking. The allowlist
+applies in every mode, so a Guarded planner asks only about what it does not
+cover.
 
 Settings: VS Code `ordewell.plannerApprovals`, `ordewell.plannerAllowlist`,
 `ordewell.plannerAllowlistDefaults`; elsewhere `ORDEWELL_APPROVAL_MODE`,
@@ -181,7 +186,9 @@ Settings: VS Code `ordewell.plannerApprovals`, `ordewell.plannerAllowlist`,
 request, so a change of autonomy level applies to the next call. Neither can
 come from the repository: the VS Code settings are user settings only, which a
 workspace's `.vscode/settings.json` cannot override, and the variables are
-refused from a workspace's environment files (ADR-0016).
+refused from a workspace's environment files (ADR-0016). The effect allowlist
+(ADR-0035) is a separate list with the same two rules, and it never widens what
+`run_command` runs.
 
 ## Key properties
 
@@ -224,8 +231,8 @@ refused from a workspace's environment files (ADR-0016).
   request, so Ordewell would see only part of what runs.
 - **Make Full autonomy `allow`.** Rejected as the default: a session's
   approvals cost a handful of answers, while one injected `gh repo delete` or
-  `npm publish` is unrecoverable. An effect belongs in an ops task, with a
-  record and a verdict.
+  `npm publish` is unrecoverable. An effect belongs in a script task or an ops
+  task, with a record and a verdict.
 - **Match the allowlist against approval scopes.** Rejected: a scope keeps two
   words past the binary, so `gcloud compute instances list` and
   `gcloud compute instances delete` share one, and no scope pattern can tell
@@ -282,3 +289,4 @@ refused from a workspace's environment files (ADR-0016).
 - 2026-10-13 — the three adapters' copies of the permission table disagreed: Codex allowed an Ordewell tool without logging it, only OpenCode cancelled a request left open at a turn's end, and Codex named an approval's tool from a call that had already finished. One permission ledger now holds the table for every runner.
 - 2026-10-18 — the permission ledger waits for HTTP reply delivery and retains failed answers for retry.
 - 2026-10-20 — every planner command, `run_command`'s included, runs in ADR-0011's OS sandbox where the host has one.
+- 2026-10-21 — the planner performs an exact effect itself as a script task, so the `allowlist` mode's refusal points at `run_script` and an ops task, and the effect allowlist is a separate list ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
