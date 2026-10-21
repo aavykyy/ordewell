@@ -5,8 +5,6 @@ amends: ["0001", "0013", "0020", "0029"]
 
 # 0030 — Run settings are global, saved and live; autorun
 
-*Pending:* [ADR-0035](0035-effects-are-consented-and-recorded.md) — with autorun on in Full, the planner's script tasks run without asking.
-
 **Amends:** ADR-0029 — the supervisor level, merge at gates automatically, the
 retry limit and the wake-up read budget stop being per-plan settings saved at
 run start; the default level becomes Watch; "an unapproved task never starts"
@@ -219,6 +217,13 @@ refused, and the task waited for a person the user had said was not needed.
   turning autorun off or going to Guarded stops it at once. A start that goes
   through approves the task, as the user's own start does.
 - **Ops tasks too**, for the reason autorun starts them in a submitted plan.
+- **Script tasks, and `run_script`, in Full only** ([ADR-0035](0035-effects-are-consented-and-recorded.md)).
+  With autorun on in Full, on an approved plan, `run_script` runs a script
+  without asking, and a script task the planner writes in the user's turn is
+  approved as it lands. Under Guarded autorun does not do so: `run_script` asks
+  on the approval card, and a script task the planner writes waits for the
+  user's approval unless their effect allowlist covers it. A script's body is
+  shown verbatim either way.
 - **Only a planner turn the user started, and only on a plan the user or
   autorun approved.** Under Guarded, autorun off, or a plan never approved, an
   added task waits for the user as before. The supervisor's starts follow its
@@ -328,3 +333,4 @@ the daemon reads it from there at generation.
   whose Setup block already shows the same values.
 - 2026-10-14 — the status row the badge shares speaks only for the chat on
   screen; what the run waits on moved to the plan pane's title.
+- 2026-10-21 — with autorun on in Full, the planner's `run_script` and the script tasks it writes in the user's turn run without asking; under Guarded autorun approves the rest of what the planner writes, but not a script task unless the effect allowlist covers it ([ADR-0035](0035-effects-are-consented-and-recorded.md)).

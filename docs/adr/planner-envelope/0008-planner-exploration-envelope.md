@@ -4,8 +4,6 @@ status: accepted
 
 # 0008 — The planner's exploration envelope: tiered commands, confined paths, one approval seam
 
-*Pending:* [ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md) — the planner performs exact effects as script tasks, and its refusals point there.
-
 See also [ADR-0011](0011-sandboxing-the-planners-shell.md): the classifier
 below is a denylist over a real shell, not an OS-level sandbox for it. That
 ADR runs the planner's shell under the same kind of OS sandbox Codex already
@@ -35,7 +33,7 @@ Meanwhile paths were not confined at all. `PoolFileSystem.resolve()` was `path.i
 | `ask` | anything else not obviously destructive — one approval, remembered at `scope` granularity for the session |
 | `refuse` | writes, privilege escalation, output redirection, piping or redirecting code into an interpreter, inline code in any spelling the interpreter accepts — never runs as classified, never prompts; runs sealed where the planner's sandbox can seal it |
 
-`refuse` is deliberately **not promptable**. A planner that can `rm` is a planner that can silently break the workspace it was asked to reason about, and this repo's thesis already puts mutation in the runners. Where ADR-0011's sandbox runs, a refused command, and one the approval mode refuses without asking, runs sealed instead ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md)): the workspace read-only, no home directory and no network, so an `rm` there only reports an error, and a loop or a few lines of Python compute without the classifier having to read them. A `!` exclusion and a person's denial still refuse. Elsewhere a refusal is a refusal.
+`refuse` is deliberately **not promptable**. A planner that can `rm` is a planner that can silently break the workspace it was asked to reason about, and this repo's thesis puts changes to repository files in the runners' change tasks. The envelope is for reading. Its refusals say where an effect goes instead ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)): `run_script` for one the planner can state as exact commands, which the user consents to as written; an ops task for one that needs judgment. Where ADR-0011's sandbox runs, a refused command, and one the approval mode refuses without asking, runs sealed instead ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md)): the workspace read-only, no home directory and no network, so an `rm` there only reports an error, and a loop or a few lines of Python compute without the classifier having to read them. A `!` exclusion and a person's denial still refuse. Elsewhere a refusal is a refusal.
 
 Path confinement moved into `BaseFileSystem` as template methods: every public method resolves and authorizes before delegating to an adapter `*Impl`, which therefore only ever receives an absolute, approved path. Out-of-workspace access is an `ask`, scoped to the containing directory.
 
@@ -415,3 +413,4 @@ model's refusal to write were never security evidence.
 - 2026-10-14 — the TUI status row no longer lists the planner's in-flight calls: it relates to the selected chat only and says Planning, with the calls in the transcript.
 - 2026-10-17 — the Codex planner paragraph reads `approvalPolicy: on-request`, as ADR-0026 made it on 2026-10-10; it still said `never`.
 - 2026-10-21 — where the planner's sandbox runs, a command refused without asking, by the classifier or the approval mode, runs sealed instead, and so does what a research subagent would have asked about ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md), #109).
+- 2026-10-21 — the planner performs an exact effect itself as a script task through `run_script`, outside this envelope, and the refusals and the `allowlist` mode's refusal point there instead of at an ops task alone ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).

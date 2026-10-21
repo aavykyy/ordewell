@@ -1,20 +1,19 @@
 ---
 status: accepted
-implemented: partial
 amends: ["0008", "0009", "0020", "0022", "0026", "0029", "0030"]
-note: "the scheduler starting only approved tasks (#95) is implemented; script tasks and the effect allowlist are not yet. Settles #95."
+note: "Settles #95. The mandate (#23) takes over the consent table and the effect allowlist when it lands."
 ---
 
 # 0035 — Every effect is consented to and recorded, whoever performs it
 
 ## Problem
 
-Since ADR-0008 the planner never acts on its own account. Mutation belongs to
-the runners (ADR-0009), and an effect the plan needs is an ops task (ADR-0020,
-ADR-0026). The envelope refuses the commonest effects outright (`git push`,
-`git commit`), and in Full it refuses everything the allowlist does not cover.
-Pushing a branch, or setting one value on a cloud resource in Full, therefore
-takes a runner session: a model that reads its harness's instructions and the
+ADR-0008 kept the planner from acting on its own account. Mutation belonged to
+the runners (ADR-0009), and an effect the plan needed was an ops task
+(ADR-0020, ADR-0026). The envelope refuses the commonest effects outright
+(`git push`, `git commit`), and in Full it refuses everything the allowlist
+does not cover. Pushing a branch, or setting one value on a cloud resource in
+Full, therefore took a runner session: a model that reads its harness's instructions and the
 task's prompt, then runs one command. The planner hears how it went in a later
 turn.
 
@@ -81,7 +80,7 @@ writes repository files.**
 - **Its verdict is its exit status.** Every command exiting 0, or the script
   exiting 0, passes. Anything else fails, with the status and the tail of the
   error output as the reason. A wall-clock limit, ten minutes unless the task
-  sets another, ends it as failed. `VerdictEngine` stays the only producer of
+  sets another (at most a day), ends it as failed. `VerdictEngine` stays the only producer of
   verdicts: the exit status is handed to it as the attempt's evidence, as a
   runner's `task_complete` call is. No model is asked anything. This is the
   one completion that is not a `task_complete` call, because there is no
@@ -89,6 +88,9 @@ writes repository files.**
   plan holds.
 - **Its log is its task log**: each command as run, its output and its exit
   status. The planner reads it with `task_output`, as any task's.
+- **Only the planner writes the body.** The surfaces draw a script task as an
+  ops task with its body, read-only, in place of a prompt, and the task editor
+  leaves it alone; the user consents to it or does not.
 - **A retry runs it again as written.** To change what runs, the planner edits
   it first (`edit_plan`), so the plan holds what ran. The supervisor's
   identical-retry guard (ADR-0029) reads the body as it reads a prompt; the
@@ -111,27 +113,38 @@ writes repository files.**
   and the Merge-all exclusion an ops task takes when it starts. A closed merge
   gate leaves it in the plan, waiting at the gate, and `run_script` says so.
 - **Consent.** Until the mandate (#23), a script task the planner adds gets
-  the consent any task the planner adds gets (ADR-0029, ADR-0030), with two
-  differences: the effect allowlist can pre-approve it, and in Full without
-  autorun the user is asked on the approval card rather than left to start it:
+  the consent any task the planner adds gets (ADR-0029, ADR-0030), with three
+  differences: the effect allowlist can pre-approve it, in Full without autorun
+  the user is asked on the approval card rather than left to start it, and
+  autorun in Guarded does not approve it (see below):
 
   | turn | covered by the effect allowlist | otherwise |
   |---|---|---|
   | the user's, Guarded | runs | the user approves it on the approval card |
   | the user's, Full | runs | the user approves it on the approval card |
-  | the user's, Full with autorun | runs | runs |
+  | the user's, Full with autorun, on an approved plan | runs | runs |
   | the supervisor's, at Act | runs | runs: a task it adds is approved (ADR-0029) |
   | the supervisor's, at Watch | refused: suggest it to the user | refused: suggest it to the user |
 
-  The card shows the commands or the script verbatim, so the consent is to
+  In Full with autorun, a plan the user has not approved yet gets the card, as
+  in the first two rows. The effect allowlist is read on every call. The card
+  shows the commands or the script verbatim, so the consent is to
   what will run, not to a description of it. In Full without autorun the user
   reviews what the planner proposes in any case; the card puts the script in
   front of them when it would run. An unanswered or denied card leaves the
   task in the plan, unapproved, for the user to start or remove: absence is
-  denial (ADR-0008, T5). A script task in a submitted plan is approved with
-  the plan, like every task in it, and runs when the scheduler reaches it.
+  denial (ADR-0008, T5). While a `run_script` card is open, Execute and
+  `run_plan` leave that script out of what they approve, so the card alone
+  decides and a denial after an Execute does not come too late. A script task in
+  a submitted plan is approved with the plan, like every task in it, and runs
+  when the scheduler reaches it.
+- **A script waiting at a closed merge gate keeps its place.** `run_script`
+  leaves it in the plan, approved, and a later planner edit that leaves its
+  body alone does not drop its queued start; one that changes the body takes
+  it out of the approved set, and it then does not run.
 - **Consent is to a body.** An edit that changes an approved script task's
-  body or time limit takes it out of the approved set, and the new body needs
+  body or time limit, or turns it into another type of task (or another type
+  into a script task), takes it out of the approved set, and the new body needs
   consent by the same rule. Otherwise a script approved as shown could run as
   something else. The same question for an AI task's prompt belongs to the
   mandate (#23).
@@ -147,7 +160,8 @@ The user's standing approval for named effects, beside the planner allowlist
   rule must match every word, in order. `git push origin feature/*` covers
   `git push origin feature/login`, and not `git push origin feature/login
   --force`. `*` stands for one word, or inside a word for any run of
-  characters, as in the planner allowlist.
+  characters, as in the planner allowlist, except that it never stands for
+  what changes the effect (see below).
 - **A rule names its operation before any `*`.** The words up to and
   including the operation's verb are spelled out, so `az webapp config * set`
   is not a rule, while
@@ -157,16 +171,36 @@ The user's standing approval for named effects, beside the planner allowlist
   covered.** A `script` body is shell, and matching shell text against a rule
   is the classifier's problem again (ADR-0036). A script needs a person,
   autorun in Full, or an Act supervisor.
+- **A `*` never stands for what changes the effect.** It never stands for a
+  word starting with `-`, `+` or `:` (a flag, a refspec's force or delete),
+  unless the rule's own word starts that way, so `git push origin *` covers
+  neither `--force` nor `+main` nor `:main`. It never runs over a `:`, except
+  inside a `scheme://` URL, which is a value an effect takes (`curl -X POST *`),
+  so `feature/*` cannot name `feature/x:main`, which pushes to `main`; a rule
+  spells out a colon itself, as in `docker push app:*`. On Windows a word
+  starting with `/` counts as a flag too; elsewhere it starts a path, which is
+  a value.
 - **The planner allowlist's `!` exclusions hold for effects too**, and an
-  exclusion wins.
+  exclusion wins; a `!` entry written in the effect allowlist counts as one. A
+  command exclusion is matched as the planner allowlist matches it. A path or
+  URL exclusion holds for an argument that names an absolute path (or one
+  starting `~`) or a URL it covers: the argument whole, or the part after a
+  `=`, `@`, `:` or `,` or a short flag (`--url=…`, `-d @…`), as written or
+  normalised. A path also stands as `dir/*`, so `!/home/me/.ssh/*` holds for
+  `/home/me/.ssh` itself, and a URL as its origin. A relative path is not
+  checked, since the body does not say where it runs.
 - **A program named by its path (`./bin/deploy`) is never covered**: it is a
   file the repository ships (ADR-0026).
 - **A rule that runs the repository's own code** (`npm run deploy`,
   `make release`) runs whatever the repository holds when it runs. Such rules
   are the user's to write; the list has no built-in entries at all.
+- **An entry that is no rule is ignored, with a warning**: one whose program
+  is named by its path or is a `*`, or whose operation is not spelled out
+  before its first `*`.
 - **User settings only**: VS Code `ordewell.effectAllowlist`, elsewhere
-  `ORDEWELL_EFFECT_ALLOW`, refused from a workspace's environment files like
-  the other approval settings (ADR-0016, ADR-0026), and read on every request.
+  `ORDEWELL_EFFECT_ALLOW` (comma- or newline-separated), refused from a
+  workspace's environment files like the other approval settings (ADR-0016,
+  ADR-0026), and read on every request.
 - The mandate's `effect` grant takes it over when the mandate lands (#23).
 
 ### The scheduler starts only approved tasks
@@ -187,13 +221,24 @@ makes ADR-0029's "an unapproved task never starts" true of the scheduler too.
 How the user approves what waits, without starting anything early:
 
 - **With autorun on, a task the planner adds in the user's turn needs no
-  approval.** Autorun is the user's standing word that they need not approve
-  what the planner writes; the tasks the edit wrote are approved as it lands,
-  in Full and in Guarded alike, and start once their dependencies finish. The
-  setting is read as the edit lands, so turning autorun off first holds the
-  task. A task added while autorun was off is approved when the planner next
-  rewrites it with autorun on. A supervisor's wake-up turn is not the user's
-  turn and approves nothing this way.
+  approval, a script task apart.** Autorun is the user's standing word that
+  they need not approve what the planner writes; the tasks the edit wrote are
+  approved as it lands, in Full and in Guarded alike, and start once their
+  dependencies finish. The setting is read as the edit lands, so turning
+  autorun off first holds the task. A task added while autorun was off is
+  approved when the planner next rewrites it with autorun on. A supervisor's
+  wake-up turn is not the user's turn and approves nothing this way.
+- **A script task is the exception: autorun approves one only where
+  `run_script` would run it unasked.** That is Full with autorun on an approved
+  plan, or a body the effect allowlist covers. In Guarded, any other script
+  task the planner writes waits for the user's approval, and no card is asked:
+  its row shows the body verbatim, and starting it, or Execute, is the user's
+  consent. Otherwise a Guarded user's turn with autorun on would run a script
+  the user was never shown, and a card the user denied could be undone by the
+  next edit in the same turn.
+- **With autorun off, a script task added by `edit_plan` waits for approval even
+  when the effect allowlist covers it.** The allowlist pre-approves a script
+  through `run_script`, and through an edit only while autorun is on.
 - **`/run` (Execute) while a run is under way approves every task that waits.**
   It does not restart the run: each approved task starts once its dependencies
   finish, and the answer says how many were approved. A run the scheduler was
@@ -231,7 +276,8 @@ The timeline records a script task's start as it records any start through the
 seam (ADR-0029), with who asked (the user, a planner turn, the supervisor,
 autorun), how it was consented to (the card, an allowlist rule by name, autorun
 in Full, Act) and its verdict. Surfaces draw it as an ops task whose prompt is
-its body.
+its body, read-only. The end of a `run_script` that was still running after its
+minute is recorded beside its start.
 
 ## Considered options
 
@@ -263,6 +309,10 @@ its body.
 - **Run every script task unattended in Full.** Rejected: without autorun the
   user reviews what the planner proposes, and an effect gets the same review,
   on the card, when it would run.
+- **Let autorun approve a script task in Guarded too.** Rejected: Guarded means
+  the user is asked first, and a script the planner wrote in their turn would
+  run having been shown to no one. The approval card is the one place the body
+  is put in front of them before it runs.
 - **Ask for every script task until the mandate.** Rejected: autorun in Full
   already starts ops tasks unattended (ADR-0030). A stricter rule for script
   tasks than for the ops tasks they replace would push the planner back to ops
@@ -302,11 +352,9 @@ its body.
 - The plan schema gains `type: 'script'` with `commands` or `script` and an
   optional time limit; `submit_plan` and `edit_plan` accept it; the execution
   tools gain `run_script`.
-- When this is implemented, CLAUDE.md and AGENTS.md state the script-task
-  exception to the `task_complete` rule, CONTEXT.md gains *Script task* and
-  *Effect allowlist*, SECURITY.md's "What each part can touch" names script
-  tasks, and ADR-0008, ADR-0009, ADR-0020, ADR-0022, ADR-0026, ADR-0029 and
-  ADR-0030 are rewritten where they say the planner never acts.
+- AGENTS.md states the script-task exception to the `task_complete` rule,
+  CONTEXT.md defines *Script task* and *Effect allowlist*, and SECURITY.md's
+  "What each part can touch" names both.
 
 ## History
 
@@ -314,3 +362,4 @@ its body.
 - 2026-10-16 — #95 implemented: the scheduler starts only tasks in the approval record, checked at the one claim every start passes, and a task the user adds by hand is approved as it lands. A task added after approval waits, shown as waiting for the user's approval to start in VS Code, the TUI, `ordewell status` and `ordewell run`; the user approves it by starting it or executing the plan. Seen live: in Guarded with autorun on, a task the planner added in the user's turn during a run started on its own, with no card. Script tasks and the effect allowlist are not yet implemented.
 - 2026-10-17 — approving what waits: with autorun on the planner's additions in the user's turn are approved as they land, `/run` during a run approves every waiting task and joins the run, and a force start approves the task but queues it behind dependencies still under way; the rows say "waits for your approval" and name the key that approves.
 - 2026-10-17 — a force start past a failure waits for the work a blocked dependency waits on, and a Stop with no run under way withdraws a queued start.
+- 2026-10-21 — script tasks, `run_script` and the effect allowlist implemented (#107). The plan model, the validator, `submit_plan`, `edit_plan` and the plan JSON accept `type: 'script'`; `ScriptSession` runs a body at the workspace root with no model, behind an ops task's merge gate and Merge-all exclusion, and hands its exit status to `VerdictEngine`. `run_script` is on the MCP server and the API planner, and the end of one still running after a minute reaches the planner as a report. Consent follows the table, and an edit to a body, a time limit or the type withdraws an approval. The effect allowlist is `ordewell.effectAllowlist` / `ORDEWELL_EFFECT_ALLOW`, with the wildcard and exclusion rules above. Surfaces draw a script task read-only; the timeline records who asked and how it was consented to. Where the built code differs from this ADR's first text: autorun in Guarded does not approve a script task the planner writes in the user's turn unless the effect allowlist covers it, and no card is asked; with autorun off, a script task added by `edit_plan` waits even when the allowlist covers it; the autorun row of the table needs an approved plan; Execute leaves out a script whose card is open; a script waiting at a closed merge gate keeps its queued start across an edit that leaves its body alone.

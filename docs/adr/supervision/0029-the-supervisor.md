@@ -5,7 +5,7 @@ amends: ["0009", "0013", "0020", "0022"]
 
 # 0029 — The supervisor: levels, live planner turns, execution tools and auto-merge
 
-*Pending:* [ADR-0035](0035-effects-are-consented-and-recorded.md) — `run_script` and its consent; [ADR-0037](0037-research-tasks-wake-the-planner.md) — a research task's report wakes the planner at every level.
+*Pending:* [ADR-0037](0037-research-tasks-wake-the-planner.md) — a research task's report wakes the planner at every level.
 
 **Amends:** ADR-0009 and ADR-0022 — the planner gains execution tools, a further
 explicit exception to harness planners being read-only; ADR-0013 — "never
@@ -182,6 +182,7 @@ the same seam through its own tool definitions.
 | `answer_approval` | deny a runner approval with a note, or escalate it to the user — never allow |
 | `merge_all` | Merge all, in Act wake-up turns only |
 | `skip_task` | end a task that failed, is blocked or is waiting for input as *skipped*, with a required reason; nothing of it lands, and its dependents go ahead, told the reason. In Act wake-up turns only |
+| `run_script` | add a script task ([ADR-0035](0035-effects-are-consented-and-recorded.md)) and start it in one step; answers with its verdict and the tail of its output, or "still running" after a minute |
 
 A start the turn asks for after editing that task in the same reply — an edit
 held until the reply ends — waits for the edit to land and then goes through
@@ -251,14 +252,17 @@ narrow (deny), or hand the decision to a person.
   `merge_all` and `skip_task` are refused: the user is in the conversation,
   and presses Merge all or skips the task themselves. A skip decides that
   work will not be waited for, which only the user, or a supervisor they let
-  act, decides.
+  act, decides. A `run_script` call asks the user on the approval card, shown
+  the script as written, unless the effect allowlist covers it, or autorun in
+  Full approves it ([ADR-0035](0035-effects-are-consented-and-recorded.md)).
 - **A wake-up turn under Watch** refuses every execution tool with "suggest it
   to the user".
-- **A wake-up turn under Act** allows all of them without asking. Choosing Act
-  is the consent.
+- **A wake-up turn under Act** allows all of them without asking, `run_script`
+  included, which the timeline records as consented to by Act, or by the
+  effect allowlist rule that covers it. Choosing Act is the consent.
 
 **Tasks the supervisor adds under Act count as pre-approved and may start —
-ops tasks included.** This is a deliberate choice, and it carries the risk
+ops tasks and script tasks included.** This is a deliberate choice, and it carries the risk
 #23's comment describes: an instruction injected into something the planner
 read — an issue body, a fetched page, a task's output — can become an ops task
 that runs unattended on real systems, in the session's mode, with no one asked
@@ -496,8 +500,9 @@ until #30 exists.
   planner gains matching tool definitions. Both go through the command seam.
 - Harness planners can now change what runs, not only the plan. The file-write
   and shell invariants of ADR-0008, ADR-0009 and ADR-0026 are unchanged: the
-  planner still edits no file and runs nothing outside its envelope. Effects
-  still happen only in tasks.
+  planner still edits no file and its commands run inside its envelope. An
+  effect happens only in a task: a task runner's, or the script task that
+  `run_script` adds ([ADR-0035](0035-effects-are-consented-and-recorded.md)).
 - A plan gains pending turns — the user's messages and the wake-up batches not
   yet delivered — and the run's `runSettings`. The level, retry limit, read
   budget and merge setting are global ([ADR-0030](0030-global-run-settings.md));
@@ -570,3 +575,4 @@ until #30 exists.
 - 2026-10-18 — the Merge all payload carries the merge result alone; whether the merge closed the run is the Session's `run_closed` ([ADR-0013](../isolation/0013-worktree-isolation.md)), and the payload cannot say it another way.
 - 2026-10-18 — loading a session keeps saved planner inputs and supervisor batches idle, without rearming the supervisor debounce.
 - 2026-10-21 — a loop's check failing a round with rounds left is no attention event and no failure the guards remember; it wakes the supervisor once, when its loop runs out of rounds, and the supervisor neither starts nor skips it between rounds ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md)).
+- 2026-10-21 — `run_script` joins the execution tools: the planner performs an exact effect itself as a script task, consented to by the card, the effect allowlist, autorun in Full or Act, and refused at Watch ([ADR-0035](0035-effects-are-consented-and-recorded.md)).
