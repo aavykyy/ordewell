@@ -2483,17 +2483,25 @@ describe('CliAgentAiService — the native-shell setting (ADR-0036)', () => {
     expect(starts[1].nativeShell).toBe(true);
   });
 
-  it('keeps the process while the setting stands', async () => {
+  it('opens the process once for the checked version, then keeps it while the setting stands', async () => {
     const turns: AgentEvent[][] = [
       [{ type: 'assistant_text', runId: 'r1', text: 'One.' }, { type: 'turn_end' }],
       [{ type: 'assistant_text', runId: 'r2', text: 'Two.' }, { type: 'turn_end' }],
+      [{ type: 'assistant_text', runId: 'r3', text: 'Three.' }, { type: 'turn_end' }],
     ];
     const { svc, starts } = recordingService(turns, () => '2.1.304', fakeConfig({ aiProvider: 'claude-code', plannerNativeShell: true }));
 
     await svc.startConversation(request());
-    await svc.continueConversation('Go on', () => {});
+    // The flag is decided before this process is asked for its version, so the
+    // first process keeps run_command alone (ADR-0036 N2).
+    expect(starts[0].nativeShell).toBe(false);
 
-    expect(starts).toHaveLength(1);
+    await svc.continueConversation('Go on', () => {});
+    expect(starts).toHaveLength(2);
+    expect(starts[1].nativeShell).toBe(true);
+
+    await svc.continueConversation('Still on', () => {});
+    expect(starts).toHaveLength(2);
   });
 
   it('says once per session why the setting is not offered on an unchecked version', async () => {
@@ -2545,6 +2553,25 @@ describe('CliAgentAiService — the native-shell setting (ADR-0036)', () => {
 
     expect(notices).toHaveLength(1);
     expect(notices[0]).toContain('Claude Code 2.1.300');
+  });
+
+  it('records every native shell command and its result as a bash step on the timeline (N2.3, N6)', async () => {
+    const { svc } = recordingService([[
+      { type: 'tool_call', id: 'cmd-1', name: 'Bash', args: { command: 'for f in *; do echo "$f"; done' } },
+      { type: 'tool_result', id: 'cmd-1', name: 'Bash', output: 'a\nsrc', success: true },
+      { type: 'tool_call', id: 'cmd-2', name: 'Monitor', args: { command: 'tail -f log' } },
+      { type: 'tool_result', id: 'cmd-2', name: 'Monitor', output: 'line', success: true },
+      { type: 'assistant_text', runId: 'r1', text: 'Done.' },
+      { type: 'turn_end' },
+    ]], () => '2.1.304', fakeConfig({ aiProvider: 'claude-code', plannerNativeShell: true }));
+
+    const turn = await svc.startConversation(request());
+
+    const steps = turn.researchLog.filter((step): step is ResearchStep => !('type' in step));
+    expect(steps).toHaveLength(2);
+    expect(steps[0]).toMatchObject({ tool: 'bash', toolLabel: 'Bash', success: true, result: 'a\nsrc' });
+    expect(JSON.parse(steps[0].args)).toMatchObject({ command: 'for f in *; do echo "$f"; done' });
+    expect(steps[1]).toMatchObject({ tool: 'bash', toolLabel: 'Monitor', success: true, result: 'line' });
   });
 });
 

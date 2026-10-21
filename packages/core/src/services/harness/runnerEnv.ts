@@ -44,12 +44,15 @@ function inherited(source: Record<string, string | undefined>, drop: (key: strin
  * (ADR-0016), which still win if they set a host-only one on purpose but never
  * supply a token; then the adapter's `launch` variables, the only source of one.
  * Neither inherited source keeps a parent Ordewell's OpenCode server entry.
+ * `drop` removes what a launch must not carry from either inherited source,
+ * such as the credentials a native-shell planner must not hold (ADR-0036 N2.2).
  */
 export function runnerEnv(
   resolvedPath: string,
   workspace: Record<string, string> = {},
   launch: Record<string, string> = {},
+  drop?: (name: string) => boolean,
 ): NodeJS.ProcessEnv {
-  const host = inherited(process.env, (key) => isHostOnly(key) || isMcpToken(key));
-  return withPath(host, resolvedPath, { ...inherited(workspace, isMcpToken), ...launch });
+  const host = inherited(process.env, (key) => isHostOnly(key) || isMcpToken(key) || drop?.(key) === true);
+  return withPath(host, resolvedPath, { ...inherited(workspace, (key) => isMcpToken(key) || drop?.(key) === true), ...launch });
 }

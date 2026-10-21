@@ -18,17 +18,27 @@ import { settleWithin } from './settleWithin';
 import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState, type OrdewellToolRole } from './ordewellBinding';
 import { claudeLocalServers } from './claudeRepoConfig';
 import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
+import { isCredentialVariable } from './credentialEnv';
+import { PlannerShellSandbox } from '../sandbox/plannerSandbox';
+import { createNativeShellLauncher, type NativeShellLauncher } from '../sandbox/nativeShellLauncher';
+import { assertWorkspaceExists } from '../../utils/workspace';
+import { augmentedPath } from '../../utils/shellPath';
 
 /**
  * Native plan mode permits Bash writes to its plan file, and saved allow rules
  * run shell commands without asking. Withhold shell tools and native plan-mode
  * transitions as well as direct edits so neither can reopen that write path;
- * a planner's commands go through Ordewell's `run_command` (ADR-0026).
+ * a planner's commands go through Ordewell's `run_command` (ADR-0026). `Monitor`
+ * is a shell too and is withheld for the same reason, unless the user's
+ * native-shell opt-in puts both under Ordewell's sandbox (ADR-0036 N6).
  */
 const DISALLOWED_TOOLS = [
   'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell',
-  'Bash', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode',
+  'Bash', 'Monitor', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode',
 ];
+
+/** Claude Code's own shell tools: what the opt-in lets through (ADR-0036 N2, N6). */
+const NATIVE_SHELL_TOOLS = new Set(['Bash', 'Monitor']);
 
 /**
  * `default`, so what the mode cannot decide — an MCP tool the user configured,
@@ -47,10 +57,30 @@ const PLANNER_PERMISSION_MODE = 'default';
  * at once. A user's own hook runs on the planner's tool calls and can write,
  * which no planner may (ADR-0028).
  */
+const PLANNER_ASK_RULES = ['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS'];
 const PLANNER_SETTINGS = JSON.stringify({
   disableAllHooks: true,
-  permissions: { ask: ['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS'] },
+  permissions: { ask: PLANNER_ASK_RULES },
 });
+
+/**
+ * The planner's settings with the native shell on (ADR-0036 N2, N3): the
+ * launcher and its short temporary directory go in the `env` block, because a
+ * settings `env` from another layer takes precedence over the process
+ * environment, and set here it wins over that. Claude Code's own sandbox is
+ * off: it takes extra writable paths from user settings `--settings` cannot
+ * remove, so it could not hold N2.1, and Ordewell's profile is around every
+ * command instead. `Bash` and `Monitor` are asked so a user's own allow rule
+ * cannot skip Ordewell's decision.
+ */
+function nativeShellSettings(launcher: NativeShellLauncher): string {
+  return JSON.stringify({
+    disableAllHooks: true,
+    permissions: { ask: [...PLANNER_ASK_RULES, 'Bash', 'Monitor'] },
+    sandbox: { enabled: false },
+    env: launcher.env,
+  });
+}
 
 /**
  * Claude Code's own memory is off for planners and tasks alike (ADR-0032): a
@@ -87,10 +117,15 @@ const PATH_TOOLS: Record<string, { field: string; directory: boolean }> = {
 };
 
 /** What a planner's `can_use_tool` request is for (ADR-0026). Claude names an MCP tool `mcp__<server>__<tool>`. */
-function plannerAsk(name: string, input: Record<string, unknown>, server: string | undefined): PlannerAsk {
+function plannerAsk(name: string, input: Record<string, unknown>, server: string | undefined, nativeShell: boolean): PlannerAsk {
   if (name.startsWith('mcp__')) {
     const tool = name.split('__').slice(2).join('__');
     return { kind: 'mcp', scope: name, tool: tool || name, ...(server ? { server } : {}) };
+  }
+  // Only when the opt-in wired the launcher: otherwise these are withheld, and
+  // one that reaches here anyway is an unknown tool, not a sandboxed command.
+  if (nativeShell && NATIVE_SHELL_TOOLS.has(name)) {
+    return { kind: 'native-shell', tool: name, ...(typeof input.command === 'string' ? { command: input.command } : {}) };
   }
   if (name === 'WebFetch' && typeof input.url === 'string') return { kind: 'fetch', url: input.url };
   if (name === 'WebSearch' && typeof input.query === 'string') return { kind: 'search', query: input.query, provider: 'anthropic' };
@@ -406,6 +441,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     () => ({ role: this.role, autoApprove: false, decide: readOnlyTaskPolicy(this.readOnlySite) }),
   );
   private readOnlySite: TaskStartOptions | null = null;
+  /** The sealed launcher this process's shell goes through, when the opt-in is on (ADR-0036 N2). */
+  private nativeShell: NativeShellLauncher | null = null;
+  /** The sandbox that holds the native shell; its scratch directory goes with the process. */
+  private nativeSandbox: PlannerShellSandbox | null = null;
 
   /** This turn's runs of reply text, each a text block named `<message id>:<block index>`. */
   private replyRuns = new ReplyRuns();
@@ -485,18 +524,51 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    */
   private modelCommands: { args: string; turnsLeft: number }[] = [];
 
+  /**
+   * Prepare the native shell before the process starts, or fail the start
+   * rather than run it outside a sandbox. The launcher is a file this process
+   * owns: `CLAUDE_CODE_SHELL_PREFIX` can only name a program, and Claude Code
+   * hands it the whole command as one argument (ADR-0036 N2).
+   */
+  override async start(opts: AgentStartOptions): Promise<void> {
+    if (opts.kind === 'planner' && opts.nativeShell === true) {
+      // The launcher resolves the workspace on disk before the runner's own
+      // check would run, so a missing one must be reported as itself.
+      assertWorkspaceExists(opts.cwd, { isDirectory: this.deps.isDirectory });
+      const sandbox = (this.deps.nativeShellSandbox ?? (() => new PlannerShellSandbox()))();
+      try {
+        // The same PATH the harness itself starts with, so a command finds the
+        // tools the user's CLI does even when the host was launched from a GUI.
+        const PATH = await (this.deps.resolvePath ?? augmentedPath)();
+        this.nativeShell = await createNativeShellLauncher({
+          workspace: opts.cwd,
+          sandbox,
+          platform: this.deps.platform,
+          env: { ...process.env, PATH },
+        });
+      } catch (err) {
+        sandbox.end();
+        throw new Error(`The native-shell setting is on, but Ordewell could not put this planner's shell in its sandbox (${err instanceof Error ? err.message : String(err)}). Turn the setting off, or fix the sandbox, and start the conversation again.`);
+      }
+      this.nativeSandbox = sandbox;
+    }
+    await super.start(opts);
+  }
+
   protected spawnSpec(opts: AgentStartOptions, workspace: Record<string, string>): SpawnSpec {
     if (opts.kind === 'task') return this.taskSpawnSpec(opts);
+    const nativeShell = this.nativeShell;
+    const disallowed = nativeShell ? DISALLOWED_TOOLS.filter((tool) => !NATIVE_SHELL_TOOLS.has(tool)) : DISALLOWED_TOOLS;
     const args = [
       ...PROTOCOL_ARGS,
       // The read-only guarantee, enforced at spawn rather than by prompt.
       '--permission-prompt-tool', 'stdio',
       '--permission-mode', PLANNER_PERMISSION_MODE,
-      '--disallowedTools', DISALLOWED_TOOLS.join(','),
+      '--disallowedTools', disallowed.join(','),
       // In `-p` a repository's settings apply trusted or not: their hooks,
       // `env` and helper commands run before the first turn (ADR-0028).
       '--setting-sources', 'user',
-      '--settings', PLANNER_SETTINGS,
+      '--settings', nativeShell ? nativeShellSettings(nativeShell) : PLANNER_SETTINGS,
       '--append-system-prompt', opts.systemPrompt,
     ];
     if (opts.mcp) args.push(...this.ordewellServerArgs(opts.mcp, 'planner', this.plannerServers(opts, workspace)));
@@ -512,7 +584,17 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       this.pendingResume = opts.resumeSessionId;
     }
     this.configDir = workspace.CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
-    return { command: 'claude', args, env: NO_AUTO_MEMORY };
+    // N2.2: a sandboxed command can read its parent's environment on macOS, so
+    // the credentials must not be in this process at all. The harness's own
+    // login stays (N3). The launcher's two variables are here as well as in
+    // `--settings` env: the settings block is the one that wins, and this
+    // covers whatever reads them before settings are parsed.
+    return {
+      command: 'claude',
+      args,
+      env: nativeShell ? { ...NO_AUTO_MEMORY, ...nativeShell.env } : NO_AUTO_MEMORY,
+      ...(nativeShell ? { envDrop: isCredentialVariable } : {}),
+    };
   }
 
   sessionCost(): RunnerSessionCost | null {
@@ -730,6 +812,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   dispose(): void {
     this.clearFollowOnTimer();
     this.removeMcpConfig();
+    this.nativeShell?.remove();
+    this.nativeShell = null;
+    this.nativeSandbox?.end();
+    this.nativeSandbox = null;
     super.dispose();
   }
 
@@ -824,7 +910,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
           input,
           suggestions,
           ...(msg.request.tool_use_id ? { toolUseId: msg.request.tool_use_id } : {}),
-          ...(this.role === 'planner' || this.readOnlySite ? { ask: plannerAsk(name, input, msg.request.mcp_server?.name) } : {}),
+          ...(this.role === 'planner' || this.readOnlySite ? { ask: plannerAsk(name, input, msg.request.mcp_server?.name, this.nativeShell !== null) } : {}),
           ordewell: this.givenOrdewell && CLAUDE_ORDEWELL.isOrdewellAsk(name),
         }, { id, input, suggestions }, emit);
         return;

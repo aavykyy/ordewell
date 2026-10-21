@@ -44,6 +44,12 @@ export interface SandboxProfile {
   network: boolean;
   /** The host's `/tmp` out of the command's sight: an empty one of its own where the backend can mount one, none at all where it cannot. */
   privateTmp?: boolean;
+  /**
+   * Whether a networked command reaches the keychain, where `gh` and git's
+   * credential helpers keep the user's tokens (B3). Defaults to true for an
+   * approved command; a native shell must not have it (ADR-0036 N2.2).
+   */
+  keychain?: boolean;
   /** Set over the environment the command inherits. */
   env: Readonly<Record<string, string>>;
   /** The variables the command keeps from the host's environment; absent keeps them all. Its credentials live there too. */

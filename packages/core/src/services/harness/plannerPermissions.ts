@@ -75,6 +75,11 @@ export async function decidePlannerPermission(
 ): Promise<ApprovalDecision> {
   if (!ask || ask.kind === 'other') return deny(ask?.note ?? UNKNOWN_TOOL_DENIAL);
   if (ask.kind === 'path') return decideRead(ask, gate);
+  // The opt-in is the consent (ADR-0036 N1): the command runs under Ordewell's
+  // sealed profile, with the network its harness gives it (N2, N3), and every
+  // call is on the timeline already. Asking per command would be a second
+  // consent for the same grant, and nobody is there to give it in a one-shot.
+  if (ask.kind === 'native-shell') return ALLOW;
   const { approval } = gate;
   if (!approval) return deny(NOBODY_TO_ASK);
 

@@ -257,6 +257,8 @@ export {
 } from './services/researchShell';
 export type { ResearchShell, ResearchShellDeps, ShellDialect, ShellLaunch } from './services/researchShell';
 export { PlannerShellSandbox, resolvePlannerSandbox, clearPlannerSandboxCache, PLANNER_SANDBOX_DOCS, SEALED_LIMITS } from './services/sandbox/plannerSandbox';
+export { createNativeShellLauncher, nativeShellInvocation } from './services/sandbox/nativeShellLauncher';
+export type { NativeShellLauncher } from './services/sandbox/nativeShellLauncher';
 export type { PlannerSandboxAvailability, PlannerSandboxDeps, SealedAvailability, SealedRunOptions } from './services/sandbox/plannerSandbox';
 export type { SandboxBackend, SandboxProfile, SandboxLimits, SandboxInvocation, SandboxLaunch } from './services/sandbox/SandboxBackend';
 export { clipboardCopyCommand } from './utils/clipboard';

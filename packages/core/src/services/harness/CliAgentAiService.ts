@@ -136,6 +136,8 @@ class PlannerSession {
   nativeSearch = false;
   /** The {@link PlannerStartOptions.nativeShell} the running process was spawned with. */
   nativeShell = false;
+  /** The version the last process reported, kept across a restart for the native-shell check (ADR-0036 N2). */
+  nativeShellVersion: string | null = null;
   /**
    * Where the native-shell setting's one warning goes (ADR-0036 N4). A
    * one-shot session has none: no surface is showing it.
@@ -628,6 +630,7 @@ export class CliAgentAiService implements IAiService {
     }
     // A failed or stopped turn may have ended before the harness named its
     // version; the next one can still say why the setting is not offered.
+    session.nativeShellVersion = adapter.version?.() ?? session.nativeShellVersion;
     if (!error && !signal?.aborted) this.noticeNativeShell(session, adapter);
 
     // Anything still pending when the turn ended never produced a result —
@@ -663,7 +666,7 @@ export class CliAgentAiService implements IAiService {
   private async startAdapter(opts: PlannerStartOptions, tools: PlannerToolsOffer, session: PlannerSession): Promise<AgentAdapter> {
     const server = this.mcpServer;
     // Decided once, here, so the token's tools and the session's config are the same decision.
-    const start: PlannerStartOptions = { ...opts, nativeSearch: this.nativeSearch(session), nativeShell: this.nativeShell() };
+    const start: PlannerStartOptions = { ...opts, nativeSearch: this.nativeSearch(session), nativeShell: this.nativeShellOffered(session) };
     const spawned = await spawnAttached({
       runner: this.runner,
       create: () => this.newAdapter(),
@@ -678,6 +681,9 @@ export class CliAgentAiService implements IAiService {
     session.token = spawned.token;
     session.nativeSearch = start.nativeSearch ?? false;
     session.nativeShell = start.nativeShell ?? false;
+    // A harness that reports its version as it connects (OpenCode 2.x) has it
+    // before the first turn; Claude Code names it on `init`, inside one.
+    session.nativeShellVersion = spawned.adapter.version?.() ?? session.nativeShellVersion;
     return spawned.adapter;
   }
 
@@ -693,9 +699,20 @@ export class CliAgentAiService implements IAiService {
     return provider !== undefined && (session.searchesUnasked?.(provider) ?? false);
   }
 
-  /** Whether the user let this planner use its harness's own shell (ADR-0036 N1). Read afresh, so a change reopens the process. */
-  private nativeShell(): boolean {
-    return this.config.plannerNativeShell;
+  /**
+   * Whether this planner process may be given its harness's own shell
+   * (ADR-0036 N1, N2): the setting is on, and the version the last process
+   * reported is one N2's live checks cover (N5). A version not known yet is
+   * not offered, so the first process keeps `run_command` alone; once a turn
+   * has named one, the next process gets the shell.
+   */
+  private nativeShellOffered(session: PlannerSession): boolean {
+    if (!this.config.plannerNativeShell) return false;
+    return nativeShellOffer({
+      runner: this.runner,
+      version: session.nativeShellVersion,
+      platform: this.processDeps.platform ?? process.platform,
+    }).offered;
   }
 
   /**
@@ -738,7 +755,7 @@ export class CliAgentAiService implements IAiService {
    */
   private async ensureAdapter(session: PlannerSession): Promise<AgentAdapter> {
     const live = session.adapter;
-    if (live && !live.exited && session.nativeSearch === this.nativeSearch(session) && session.nativeShell === this.nativeShell()) return live;
+    if (live && !live.exited && session.nativeSearch === this.nativeSearch(session) && session.nativeShell === this.nativeShellOffered(session)) return live;
     session.stop();
     const start = session.start;
     if (!start) throw new Error('No active planner conversation.');

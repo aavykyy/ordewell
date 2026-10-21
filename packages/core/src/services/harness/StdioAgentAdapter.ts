@@ -17,6 +17,8 @@ export interface SpawnSpec {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  /** Names the launch must not inherit from the host or the workspace (ADR-0036 N2.2). */
+  envDrop?: (name: string) => boolean;
 }
 
 /**
@@ -93,7 +95,7 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
     try {
       await this.runner.start(opts.cwd, (workspace) => {
         const spec = this.spawnSpec(opts, workspace);
-        return { command: spec.command, args: spec.args, env: () => spec.env ?? {} };
+        return { command: spec.command, args: spec.args, env: () => spec.env ?? {}, ...(spec.envDrop ? { envDrop: spec.envDrop } : {}) };
       }, (child) => {
         this.process = child;
         this.readProtocol();

@@ -5,7 +5,7 @@ import type { ResearchShell, ShellLaunch } from '../researchShell';
 import { SEALED_RUN_MARK } from '../researchStepSummary';
 import { BubblewrapBackend, findBubblewrap } from './bubblewrap';
 import { SANDBOX_EXEC, SeatbeltBackend } from './seatbelt';
-import { execProbe, type ProbeExec, type SandboxBackend, type SandboxInvocation, type SandboxLimits, type SandboxProfile } from './SandboxBackend';
+import { execProbe, type ProbeExec, type SandboxBackend, type SandboxInvocation, type SandboxLaunch, type SandboxLimits, type SandboxProfile } from './SandboxBackend';
 
 /**
  * The planner's shell inside an OS sandbox (ADR-0011): every command the
@@ -24,6 +24,22 @@ export interface SealedRunOptions {
   workspace: string;
   /** None by default, so the workspace stays read-only. A read-only task passes its own throwaway worktree (ADR-0046). */
   writable?: string;
+  /**
+   * A harness's short per-session temporary directory, writable besides the
+   * scratch one (ADR-0036 N2). A native shell needs it: Claude Code writes the
+   * shell's working directory there after every command.
+   */
+  tmpdir?: string;
+  /**
+   * The network the harness gives its own shell (ADR-0036 N3). A sealed run has
+   * none (S1); only the native-shell opt-in asks for this profile with one.
+   */
+  network?: boolean;
+  /**
+   * Whether the keychain is in reach with that network. Defaults to true, as
+   * for an approved command; a native shell passes false (N2.2).
+   */
+  keychain?: boolean;
 }
 
 export type SealedAvailability =
@@ -190,11 +206,12 @@ export function sealedShellProfile(
   opts: SealedRunOptions & { scratch?: string },
 ): SandboxProfile {
   return {
-    write: [opts.scratch, opts.writable].filter((p): p is string => !!p),
+    write: [opts.scratch, opts.writable, opts.tmpdir].filter((p): p is string => !!p),
     read: [...host.reads, opts.workspace],
     ...(host.overlay ? { throwaway: [opts.workspace] } : {}),
     masked: host.masked,
-    network: false,
+    network: opts.network === true,
+    ...(opts.keychain === undefined ? {} : { keychain: opts.keychain }),
     privateTmp: true,
     env: opts.scratch ? { ...scratchEnv(opts.scratch, host.platform), HOME: opts.scratch } : {},
     inheritEnv: SEALED_ENV,
@@ -441,6 +458,36 @@ export class PlannerShellSandbox {
       workspace: canonical(opts.workspace),
       ...(opts.writable ? { writable: canonical(opts.writable) } : {}),
     }));
+  }
+
+  /**
+   * The launch for a harness's own shell (ADR-0036 N2): the same sealed profile
+   * as a sealed run, with the network the harness gives it (N3), plus the
+   * harness's short temporary directory. The workspace stays read-only. Throws
+   * where the sandbox cannot run, so a caller never falls back to the bare shell.
+   */
+  async launchNativeShell(opts: { workspace: string; tmpdir: string; shell: string; shellArgs?: readonly string[]; env?: NodeJS.ProcessEnv }): Promise<SandboxLaunch> {
+    const availability = await this.resolve();
+    if (!availability.available || !availability.sealed.available) throw new Error('a sandbox for the native shell is unavailable on this machine');
+    const profile = availability.sealed.profile({
+      scratch: this.scratchDir(),
+      workspace: fsSync.realpathSync(opts.workspace),
+      tmpdir: fsSync.realpathSync(opts.tmpdir),
+      network: true,
+      // N2.2: the user's keychain stays out of reach even with the network.
+      keychain: false,
+    });
+    // A sealed run's limits come with a prelude that kills the command when
+    // the caller's stdin pipe closes, since that is how a run learns Ordewell
+    // died. The harness is the caller here and may hand the launcher an empty
+    // pipe, which would kill every command; the harness bounds its own shell's
+    // time instead. The workspace stays read-only even where a sealed run may
+    // take a throwaway overlay (S1): a native command writes nothing of the
+    // workspace, not even into a layer that is discarded.
+    return availability.backend.wrap(
+      { shell: opts.shell, shellArgs: opts.shellArgs ?? ['-c'], env: opts.env ?? process.env },
+      { ...profile, limits: undefined, throwaway: undefined },
+    );
   }
 
   /** The session ended: its scratch directory goes, and a next session starts with a fresh one and its own notice. */

@@ -62,6 +62,13 @@ describe('SeatbeltBackend.wrap', () => {
     expect(on).toContain('com.apple.SecurityServer');
   });
 
+  it('keeps the keychain out of reach of a native shell that has the network (ADR-0036 N2.2)', () => {
+    const text = profileText(seatbelt.wrap(SH, profile({ network: true, keychain: false })).args);
+    expect(text).toContain('(allow network-outbound network-inbound network-bind system-socket)');
+    expect(text).toContain('com.apple.trustd');
+    expect(text).not.toContain('com.apple.SecurityServer');
+  });
+
   it('never puts a path into the profile text, so none can become syntax', () => {
     const plain = seatbelt.wrap(SH, profile());
     const hostile = seatbelt.wrap(SH, profile({ write: [HOSTILE], masked: [HOSTILE] }));

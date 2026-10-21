@@ -105,13 +105,10 @@ const PRIVATE_TMP = `(deny file-read* file-write* (subpath "/private/tmp") (subp
 
 /**
  * What an approved command's network needs beyond the sockets themselves:
- * name resolution, TLS trust, and the keychain, where `gh` and git's
- * credential helper keep the user's tokens. The keychain service also takes
- * writes; that is part of what approving a networked command trusts it with.
+ * name resolution and TLS trust.
  */
 const NETWORK_PROFILE = `(allow network-outbound network-inbound network-bind system-socket)
 (allow mach-lookup
-  (global-name "com.apple.SecurityServer")
   (global-name "com.apple.networkd")
   (global-name "com.apple.ocspd")
   (global-name "com.apple.trustd")
@@ -119,6 +116,14 @@ const NETWORK_PROFILE = `(allow network-outbound network-inbound network-bind sy
   (global-name "com.apple.TrustEvaluationAgent")
   (global-name "com.apple.SystemConfiguration.DNSConfiguration")
   (global-name "com.apple.SystemConfiguration.configd"))`;
+
+/**
+ * The keychain, where `gh` and git's credential helper keep the user's tokens.
+ * An approved command gets it; a native shell does not, since N2.2 requires
+ * that it cannot act on the user's accounts (ADR-0036).
+ */
+const KEYCHAIN_PROFILE = `(allow mach-lookup
+  (global-name "com.apple.SecurityServer"))`;
 
 /**
  * Runs before the sandbox, outside it, under macOS's /bin/bash. It sets the
@@ -200,6 +205,7 @@ export class SeatbeltBackend implements SandboxBackend {
       if (above.length) rules.push(`(allow file-read-metadata ${filters('ABOVE', 'literal', above)})`);
     }
     if (profile.network) rules.push(NETWORK_PROFILE);
+    if (profile.network && profile.keychain !== false) rules.push(KEYCHAIN_PROFILE);
     // The last matching rule wins, so a writable directory inside a masked one stays writable, as under bubblewrap.
     if (profile.masked?.length) rules.push(`(deny file-read* file-write* ${filters('MASKED', 'subpath', profile.masked)})`);
     if (profile.write.length) rules.push(`(allow file-read* file-test-existence file-map-executable file-write* ${filters('WRITABLE', 'subpath', profile.write)})`);
