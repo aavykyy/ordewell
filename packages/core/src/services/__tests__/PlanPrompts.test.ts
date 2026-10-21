@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildConflictRepairPrompt, buildConflictResolutionPrompt, buildConversationSystemPrompt, buildPlanWithResults, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt } from '../PlanPrompts';
+import { buildConflictRepairPrompt, buildConflictResolutionPrompt, buildConversationSystemPrompt, buildPlanWithResults, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt, NATIVE_SHELL_GUIDE } from '../PlanPrompts';
 import type { RepoGroupLayout } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type DiscoveredModel, type RunnerId } from '../../models/Task';
 
@@ -172,11 +172,18 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
     expect(harness).toMatch(/do NOT edit, create, or delete any file/i);
   });
 
-  it('says the harness\'s own shell is available only when the native-shell setting is on', () => {
-    const prompt = (nativeShell: boolean) => buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: true, nativeShell });
-    expect(prompt(true)).toContain('The native-shell setting is on');
-    expect(prompt(false)).not.toContain('The native-shell setting is on');
-    expect(prompt(false)).not.toContain('your own shell is available too');
+  // Whether a process has the shell is known only when it is spawned, so the
+  // conversation prompt never says it; the spawn adds NATIVE_SHELL_GUIDE (ADR-0036 N1).
+  it('never offers the harness\'s own shell in the conversation prompt itself', () => {
+    const prompt = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: true });
+    expect(prompt).not.toMatch(/your own shell is available/i);
+    expect(prompt).toContain('not a shell of your own');
+  });
+
+  it('tells a planner given its own shell what it cannot reach from it', () => {
+    expect(NATIVE_SHELL_GUIDE).toContain('workspace read-only');
+    expect(NATIVE_SHELL_GUIDE).toContain('localhost');
+    expect(NATIVE_SHELL_GUIDE).toContain('run_command');
   });
 
   // A harness planner that backgrounds its exploration agents ends its turn on

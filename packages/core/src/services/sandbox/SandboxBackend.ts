@@ -50,6 +50,14 @@ export interface SandboxProfile {
    * approved command; a native shell must not have it (ADR-0036 N2.2).
    */
   keychain?: boolean;
+  /**
+   * Whether a networked command reaches what listens on this machine itself:
+   * loopback addresses and Unix sockets. Defaults to true. A native shell must
+   * not: the harness's own server and Ordewell's daemon listen there and act
+   * outside the sandbox for whoever holds their password, which a macOS
+   * command can read from their environments (ADR-0036 N2).
+   */
+  localNetwork?: boolean;
   /** Set over the environment the command inherits. */
   env: Readonly<Record<string, string>>;
   /** The variables the command keeps from the host's environment; absent keeps them all. Its credentials live there too. */

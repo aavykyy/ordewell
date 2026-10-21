@@ -69,6 +69,17 @@ describe('SeatbeltBackend.wrap', () => {
     expect(text).not.toContain('com.apple.SecurityServer');
   });
 
+  it('keeps a native shell that has the network off this machine\'s own services, since a local API acts outside the sandbox (ADR-0036 N2)', () => {
+    const text = profileText(seatbelt.wrap(SH, profile({ network: true, localNetwork: false })).args);
+    const network = text.indexOf('(allow network-outbound network-inbound network-bind system-socket)');
+    const deny = text.indexOf('(deny network-outbound (remote ip "localhost:*") (remote unix-socket))');
+    expect(network).toBeGreaterThan(-1);
+    expect(deny).toBeGreaterThan(network);
+    // Name resolution goes through mDNSResponder's socket, and logging through syslog's.
+    expect(text.indexOf('(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")) (literal "/private/var/run/syslog"))')).toBeGreaterThan(deny);
+    expect(profileText(seatbelt.wrap(SH, profile({ network: true })).args)).not.toContain('(deny network-outbound');
+  });
+
   it('never puts a path into the profile text, so none can become syntax', () => {
     const plain = seatbelt.wrap(SH, profile());
     const hostile = seatbelt.wrap(SH, profile({ write: [HOSTILE], masked: [HOSTILE] }));
@@ -164,6 +175,11 @@ describe('BubblewrapBackend.wrap', () => {
       ],
       env: { PATH: '/usr/bin:/bin', HOME: '/home/me', TMPDIR: SCRATCH },
     });
+  });
+
+  it('refuses a network without this machine\'s own services, which needs a network namespace of its own', () => {
+    expect(() => bwrap().wrap(SH, profile({ network: true, localNetwork: false }))).toThrow(SandboxUnsupportedError);
+    expect(() => bwrap().wrap(SH, profile({ network: false, localNetwork: false }))).not.toThrow();
   });
 
   it('keeps the network for an approved command', () => {
