@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import {
   enabledRunners, listSessions, loadSession, knownModelId, runnerForProvider, getProviderMeta,
   ORCHESTRATOR_SHORTCUTS, parseAutonomyLevel,
-  automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary, type GlobalRunSettings,
+  researchSummary, researchSettingsChange, RESEARCH_USAGE, automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary, type GlobalRunSettings,
 } from '@ordewell/core';
 import type { AiProvider, PlannerBackendId, IConfig, RunnerRegistry, ModelResolver, SettingsService, RunnerModeInfo, DiscoveredModel, PlannerModelRecall, PlannerSelectionChange } from '@ordewell/core';
 import type { ApiProvider } from '../adapters/SecretStore';
@@ -314,6 +314,15 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
   }
   if (cmd === '/settings') {
     deps.chatProvider.openSettings();
+    return;
+  }
+  if (cmd === '/research') {
+    if (args.length === 0) vscode.window.showInformationMessage(`${researchSummary(deps.runSettings.get())}. ${RESEARCH_USAGE}`);
+    else {
+      const changes = researchSettingsChange(args);
+      if (changes) deps.runSettings.change(changes);
+      else vscode.window.showWarningMessage(RESEARCH_USAGE);
+    }
     return;
   }
   if (cmd === '/supervisor' || cmd === '/automerge' || cmd === '/autorun') {

@@ -5,7 +5,6 @@ amends: ["0009", "0013", "0020", "0022"]
 
 # 0029 — The supervisor: levels, live planner turns, execution tools and auto-merge
 
-*Pending:* [ADR-0037](0037-research-tasks-wake-the-planner.md) — a research task's report wakes the planner at every level.
 
 **Amends:** ADR-0009 and ADR-0022 — the planner gains execution tools, a further
 explicit exception to harness planners being read-only; ADR-0013 — "never
@@ -52,7 +51,8 @@ prompt, and the run never depends on it.**
 
 ### Supervisor levels
 
-- **Off** — today. The planner speaks only when the user writes to it.
+- **Off** — the planner speaks when the user writes to it or a task returns
+  a report it asked for (ADR-0037 R2).
 - **Watch** — #27 as decided. The supervisor wakes on attention events, reads
   everything, and writes to the user. Execution tools and plan edits are
   refused in its wake-up turns, with a note telling it to suggest the action
@@ -103,8 +103,14 @@ built. The attention events are:
 - **new:** a task paused on a usage limit, with the time it resumes (#84).
   Every task one runner's limit pauses is one entry.
 
-A pass never wakes it. Passes ride along as "since last time: tasks 2, 3, 4
-passed". Events close together — within five seconds of the first — are merged
+An ordinary pass never wakes it. Passes ride along as "since last time: tasks
+2, 3, 4 passed". A research task's end, passed, failed or blocked, is an
+attention event at every level, Off included: the run update carries its whole
+report or its reason. It uses the report path shared with `run_script`, and
+acts with the authority of the turn that started it. Automatic report turns
+from either kind of task are bounded per user message; excess reports wait
+for the next user message ([ADR-0037](0037-research-tasks-wake-the-planner.md),
+R2–R4). Events close together — within five seconds of the first — are merged
 into one wake-up; the run's end is delivered at once. The policy is code,
 not prompt text, so when the supervisor speaks is testable without a model.
 
@@ -576,3 +582,5 @@ until #30 exists.
 - 2026-10-18 — loading a session keeps saved planner inputs and supervisor batches idle, without rearming the supervisor debounce.
 - 2026-10-21 — a loop's check failing a round with rounds left is no attention event and no failure the guards remember; it wakes the supervisor once, when its loop runs out of rounds, and the supervisor neither starts nor skips it between rounds ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md)).
 - 2026-10-21 — `run_script` joins the execution tools: the planner performs an exact effect itself as a script task, consented to by the card, the effect allowlist, autorun in Full or Act, and refused at Watch ([ADR-0035](0035-effects-are-consented-and-recorded.md)).
+
+- 2026-10-21 — research reports wake the planner at every level under the originating authority; all automatic report turns share the persisted message limit (ADR-0037 R2, R3, R4).

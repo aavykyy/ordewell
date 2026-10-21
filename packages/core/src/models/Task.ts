@@ -187,6 +187,10 @@ export interface Task {
    * stores none (see {@link runsAsOps}).
    */
   ops?: boolean;
+  /** A top-level read-only AI task whose report returns to the planner (ADR-0037 R1). */
+  research?: boolean;
+  /** A retry still owes research's report under its original authority (ADR-0037 R3). */
+  researchOrigin?: TaskReportTo;
   /**
    * The dependencies, by title, whose work was not merged into the user's
    * branch when the user force-started this task past its merge gate
@@ -227,8 +231,8 @@ export interface Task {
   loopRound?: number;
   /**
    * A planner turn waits for this task's result (ADR-0037, R2): set when the
-   * tool that started it answered before it ended, and cleared once its end is
-   * reported, in a planner turn acting for whoever started it (R3).
+   * tool that started it answered before it ended, or when research lands.
+   * Cleared once its end is reported, in a turn acting for whoever started it (R3).
    */
   reportTo?: TaskReportTo;
 }
@@ -236,9 +240,9 @@ export interface Task {
 /**
  * Who started a task whose result is owed to the planner (ADR-0037, R3): a
  * planner turn in the user's conversation, or the supervisor, at its level
- * then, with how the user consented to it (ADR-0035).
+ * then, with script consent (ADR-0035) or the research profile (ADR-0037 R4).
  */
-export type TaskReportTo = { consent: ScriptConsent } & (
+export type TaskReportTo = ({ consent: ScriptConsent; research?: never } | { research: true; consent?: never }) & (
   | { actor: 'planner-turn' }
   | { actor: 'supervisor'; level: SupervisorLevel }
 );
@@ -516,6 +520,8 @@ export type PlanTurnSource = 'user' | 'supervisor';
  * with it, whatever turns fail meanwhile.
  */
 export interface PendingPlanTurn {
+  /** Its user message already opened a budget: a usage-limit resend must keep the spending (ADR-0037 R4). */
+  budgetStarted?: true;
   id: string;
   source: PlanTurnSource;
   /** The user's message, or a wake-up batch's digest. */
@@ -546,6 +552,8 @@ export interface RunSettings {
   supervisorRetryLimit?: number;
   /** Absent on a run started before ADR-0030: the user's setting. */
   wakeUpReadBudget?: number;
+  researchMaxParallel?: number;
+  researchMaxPerMessage?: number;
   /** Why the supervisor stopped for the rest of this run, which carries on as Off; absent while it watches. */
   unsupervised?: string;
 }
@@ -574,6 +582,10 @@ export interface PlannerResendState {
 }
 
 export interface LegacyPlanState {
+  /** ADR-0037 R4: starts and automatic report turns since the last user message, kept across runs and reloads. */
+  researchBudget?: { tasks: number; reports: number };
+  /** Research profiles the planner approved as they landed: lifting one withdraws its approval (ADR-0037 R4). */
+  researchApprovals?: string[];
   runSettings?: RunSettings;
   /** What supervision remembers across a daemon restart (ADR-0029); absent on plans saved before it existed. */
   supervision?: SupervisionSnapshot;
@@ -786,6 +798,7 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     ...(overrides.timeoutMs !== undefined ? { timeoutMs: overrides.timeoutMs } : {}),
     ...(overrides.loop ? { loop: { body: [...overrides.loop.body], maxRounds: overrides.loop.maxRounds } } : {}),
     ...(overrides.loopRound !== undefined ? { loopRound: overrides.loopRound } : {}),
+    ...(overrides.research !== undefined ? { research: overrides.research } : {}),
   };
 }
 
@@ -1065,6 +1078,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
         ...(prior?.status === 'failed' ? { ops: prior.ops } : {}),
         forcedPastGate: prior?.forcedPastGate,
         reportTo: prior?.reportTo,
+        researchOrigin: prior?.researchOrigin,
         subtasks: overlay(t.subtasks ?? [], prior?.subtasks ?? []),
       };
     });

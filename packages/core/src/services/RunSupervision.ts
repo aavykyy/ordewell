@@ -11,7 +11,8 @@ import { SUPERVISOR_LEVEL_LABEL } from './runSettingsText';
 import { executionSummary } from './SessionMessage';
 import { blockingFailures, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
-import { reportEnded, taskReport } from './taskReport';
+import { reportEnded, researchReport, taskReport } from './taskReport';
+import { researchReportTo } from './ResearchTasks';
 
 /** Supervisor levels, lowest first: an automatic lowering only ever goes down. */
 const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 };
@@ -121,6 +122,8 @@ export class RunSupervision {
         supervisorLevel: user.supervisorLevel,
         supervisorRetryLimit: user.supervisorRetryLimit,
         wakeUpReadBudget: user.wakeUpReadBudget,
+        researchMaxParallel: user.researchMaxParallel,
+        researchMaxPerMessage: user.researchMaxPerMessage,
       };
       this.guards.forget();
     }
@@ -150,6 +153,8 @@ export class RunSupervision {
     if (changes.mergeAtGatesAutomatically !== undefined) settings.mergeAtGatesAutomatically = changes.mergeAtGatesAutomatically;
     if (changes.supervisorRetryLimit !== undefined) settings.supervisorRetryLimit = changes.supervisorRetryLimit;
     if (changes.wakeUpReadBudget !== undefined) settings.wakeUpReadBudget = changes.wakeUpReadBudget;
+    if (changes.researchMaxParallel !== undefined) settings.researchMaxParallel = changes.researchMaxParallel;
+    if (changes.researchMaxPerMessage !== undefined) settings.researchMaxPerMessage = changes.researchMaxPerMessage;
     this.host.save();
   }
 
@@ -173,7 +178,7 @@ export class RunSupervision {
     this.reportStoppedLoops(repeating, task.id);
     if (repeating.has(task.id)) return;
     this.guards.settled(task);
-    const to = task.reportTo;
+    const to = this.reportAddress(task);
     if (to && reportEnded(task)) {
       this.supervisor.observe({ kind: 'task_report', taskId: task.id, report: this.reportOf(task, to) });
       this.host.reported(task.id, to);
@@ -201,8 +206,16 @@ export class RunSupervision {
   private reportOf(task: Readonly<Task>, to: TaskReportTo): RunEventInput['report'] {
     const authority: TurnAuthority = to.actor === 'supervisor' ? 'supervisor' : 'user';
     const rounds = outOfRoundsNote(task);
-    const text = taskReport(task, this.host.reportTail(task.id));
+    const tail = this.host.reportTail(task.id);
+    const text = to.research ? researchReport(task, tail) : taskReport(task, tail);
     return { authority, text: rounds ? `${rounds.charAt(0).toUpperCase()}${rounds.slice(1)} ${text}` : text, passed: task.status === 'completed' };
+  }
+
+  private reportAddress(task: Readonly<Task>): TaskReportTo | undefined {
+    if (task.reportTo) return task.reportTo;
+    if (!task.research) return;
+    return task.researchOrigin ?? researchReportTo(task.addedBy === 'supervisor'
+      ? { kind: 'supervisor', level: this.level } : { kind: 'planner-turn' });
   }
 
   /** The run finished; a handoff deferred to the supervisor is resent once its wake-up turn on it is over. */

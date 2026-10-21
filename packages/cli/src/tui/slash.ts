@@ -59,6 +59,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'allowlist', usage: '/allowlist [set <runner> <ids> | clear <runner>]', description: 'Limit which models a runner may use', category: 'models' },
   { name: 'runners', usage: '/runners [<id> on|off]', description: `Enable or disable runners (${runnerIdList()})`, category: 'models' },
   { name: 'auto', usage: '/auto [full|guarded]', description: 'Autonomy level for new plans: Full or Guarded', category: 'models' },
+  { name: 'research', usage: '/research [parallel <n>|per-message <n>]', description: 'Bound research tasks and automatic report turns', category: 'models' },
   { name: 'supervisor', usage: '/supervisor [off|watch|act] · retries <n> · reads <n>', description: 'Whether the planner watches or acts on your runs, now and from then on', category: 'models' },
   { name: 'automerge', usage: '/automerge [on|off]', description: 'Merge into your branch by itself at merge gates and at the end of a run', category: 'models' },
   { name: 'autorun', usage: '/autorun [on|off]', description: 'Start each plan the planner submits, without review', category: 'models' },

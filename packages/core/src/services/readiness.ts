@@ -5,6 +5,7 @@ import { classifyAttempt, mergeExcludes } from './attemptKind';
 import { planBlocks } from './blocking';
 import { scriptBodyOf } from '../models/ScriptTask';
 import { betweenRounds, checkOf, loopRoundOf } from '../models/Loop';
+import type { ResearchSchedule, ResearchWait } from './ResearchTasks';
 
 /**
  * Why a task cannot start now: the one start rule (ADR-0034), which the
@@ -13,6 +14,7 @@ import { betweenRounds, checkOf, loopRoundOf } from '../models/Loop';
  * one that holds, in this order, so the first is the reason a task waits.
  */
 export type StartWait =
+  | ResearchWait
   /** Under way, waiting on the user, or ended: only a retry, a continue or a resume starts it again. */
   | { kind: 'started' }
   /**
@@ -63,6 +65,7 @@ export type ForcedStart = { queued: false } | { queued: true; pastGate: readonly
 
 /** What the start rule reads: the plan, the holds, and the open isolated run. */
 export interface StartRuleInput {
+  research?: ResearchSchedule;
   store: Pick<PlanStore, 'allTasks' | 'get' | 'isCompleted' | 'isSkipped' | 'isOps' | 'resolveTaskRunner'>;
   /** Task ids pulled out of the scheduler (cancelled, marked not done, or a start that could not reach its runner), with why when the caller has it. */
   onHold: Pick<ReadonlySet<string>, 'has'> & Partial<Pick<ReadonlyMap<string, string>, 'get'>>;
@@ -183,6 +186,8 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   if (input.completing.has(task.id)) waits.push({ kind: 'completing' });
   if (task.type === 'ai' ? !task.prompt : task.type === 'script' && !scriptBodyOf(task)) waits.push({ kind: 'no-prompt' });
   if (!input.approved(task.id)) waits.push({ kind: 'unapproved' });
+  const research = input.research?.wait(task);
+  if (research) waits.push(research);
   if (!forced && input.onHold.has(task.id)) {
     const reason = input.onHold.get?.(task.id);
     waits.push({ kind: 'on-hold', ...(reason ? { reason } : {}) });

@@ -148,6 +148,16 @@ function RunSettingsRows({ value, onChange }: { value: RunSettingsValue; onChang
           />
         </>
       )}
+      <NumberRow
+        label="Parallel research tasks" value={run.researchMaxParallel} min={1} host={value}
+        hint={(n) => `Up to ${plural(n, 'research task', 'research tasks')} at a time.`}
+        onCommit={(researchMaxParallel) => onChange({ run: { researchMaxParallel } })}
+      />
+      <NumberRow
+        label="Research per message" value={run.researchMaxPerMessage} min={1} host={value}
+        hint={(n) => `Up to ${n} research tasks and ${n} automatic report turns per user message; includes script reports.`}
+        onCommit={(researchMaxPerMessage) => onChange({ run: { researchMaxPerMessage } })}
+      />
       <PillRow label="Automerge" options={AUTOMERGE} current={run.mergeAtGatesAutomatically} onPick={(mergeAtGatesAutomatically) => onChange({ run: { mergeAtGatesAutomatically } })} />
       <PillRow label="Autorun" options={AUTORUN} current={run.autorun} onPick={(autorun) => onChange({ run: { autorun } })} />
       <NumberRow
