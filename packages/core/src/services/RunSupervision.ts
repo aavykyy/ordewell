@@ -10,6 +10,7 @@ import { SupervisionMemory, type GuardTarget, type GuardTrip } from './LoopGuard
 import { SUPERVISOR_LEVEL_LABEL } from './runSettingsText';
 import { executionSummary } from './SessionMessage';
 import { blockingFailures } from './blocking';
+import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 import { reportEnded, taskReport } from './taskReport';
 
 /** Supervisor levels, lowest first: an automatic lowering only ever goes down. */
@@ -18,6 +19,11 @@ const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 }
 /** A run the supervisor opens continues the last; every other actor asks for the user (ADR-0029, ADR-0030). */
 export function runOrigin(actor: ExecutionActor): RunOrigin {
   return actor.kind === 'supervisor' ? 'supervisor' : 'user';
+}
+
+/** One word for a loop's whole run, saying how many rounds it took (ADR-0045 L6); empty for any other failure. */
+function outOfRoundsNote(task: Readonly<Task>): string {
+  return outOfRounds(task) ? `its loop ran out of rounds: it failed all ${loopRoundOf(task)}.` : '';
 }
 
 /**
@@ -156,9 +162,13 @@ export class RunSupervision {
    * A task settled on its own: the guards remember a failure's shape, and the
    * supervisor hears of it. The end of a task whose result a planner turn
    * asked for is that turn's report instead, which wakes the planner at every
-   * level (ADR-0037, R2).
+   * level (ADR-0037, R2). A loop's check that failed a round with rounds left
+   * is none of these: the loop goes on with no one asked, so it counts for no
+   * guard, wakes no one, and owes its report only once the loop is over
+   * (ADR-0045 L3, L7).
    */
   taskSettled(task: Readonly<Task>): void {
+    if (betweenRounds(task)) return;
     this.guards.settled(task);
     const to = task.reportTo;
     if (to && reportEnded(task)) {
@@ -172,7 +182,9 @@ export class RunSupervision {
 
   private reportOf(task: Readonly<Task>, to: TaskReportTo): RunEventInput['report'] {
     const authority: TurnAuthority = to.actor === 'supervisor' ? 'supervisor' : 'user';
-    return { authority, text: taskReport(task, this.host.reportTail(task.id)), passed: task.status === 'completed' };
+    const rounds = outOfRoundsNote(task);
+    const text = taskReport(task, this.host.reportTail(task.id));
+    return { authority, text: rounds ? `${rounds.charAt(0).toUpperCase()}${rounds.slice(1)} ${text}` : text, passed: task.status === 'completed' };
   }
 
   /** The run finished; a handoff deferred to the supervisor is resent once its wake-up turn on it is over. */
@@ -307,7 +319,10 @@ export class RunSupervision {
   private settledEvent(task: Readonly<Task>): RunEventInput | null {
     const taskId = task.id;
     if (task.status === 'completed') return { kind: 'task_passed', taskId };
-    if (task.status === 'failed') return { kind: 'task_failed', taskId, ...(task.verdict?.reason ? { detail: task.verdict.reason } : {}) };
+    if (task.status === 'failed') {
+      const detail = `${outOfRoundsNote(task)} ${task.verdict?.reason ?? ''}`.trim();
+      return { kind: 'task_failed', taskId, ...(detail ? { detail } : {}) };
+    }
     if (task.status !== 'awaiting_user') return null;
     switch (task.awaitingReason) {
       case 'checkpoint': {

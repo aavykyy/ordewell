@@ -1570,6 +1570,8 @@ function waitNote(waits: readonly StartWait[], refs: (ids: readonly string[]) =>
     case 'dependencies':
     case 'queued': return ` waits:${wait.kind}${refs(wait.waiting)}`;
     case 'merge-gate': return ` waits:merge-gate${refs(wait.unmerged)}`;
+    case 'repeating': return ` waits:repeating(round ${wait.round} of ${wait.maxRounds})${wait.waiting.length > 0 ? refs(wait.waiting) : ''}`;
+    case 'loop-check': return ` waits:loop-check${refs([wait.check])}`;
     case 'usage-limit': return ` waits:usage-limit[${wait.runner}]`;
     default: return ` waits:${wait.kind}`;
   }

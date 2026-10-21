@@ -1,7 +1,7 @@
 import { unavailableTaskModeMessage } from './ModeResolver';
 import { McpAttachError, RunnerStartupExit } from './harness/ordewellBinding';
 import * as path from 'path';
-import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, pausedOnLimit, waitsForReset, type RunSettings } from '../models/Task';
+import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasksWithParents, pausedOnLimit, waitsForReset, type RunSettings } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
@@ -28,8 +28,9 @@ import { IsolationRunController } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
 import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import { RELAPSE_MS, RESUME_MARGIN_MS, UsageLimitWaits } from './UsageLimitWaits';
-import { selectReadyTasks, startWaits, waitOf, type ForcedStart, type Readiness, type StartRuleInput, type StartWait, type StartWaitKind } from './readiness';
-import { blockingFailures } from './blocking';
+import { landed, selectReadyTasks, startWaits, waitOf, type ForcedStart, type Readiness, type StartRuleInput, type StartWait, type StartWaitKind } from './readiness';
+import { blockingFailures, planBlocks, repeatingChecks } from './blocking';
+import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 import {
   attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, mergeExcludes, takesSkills,
   type AttemptKind, type Continuation,
@@ -1033,10 +1034,7 @@ export class TaskOrchestrator {
     }
 
     const waitingRunners = new Set(this.store.allTasks.filter(waitsForReset).map((t) => this.store.resolveTaskRunner(t)));
-    this.store.load(adopted, planRunners);
-    for (const t of flattenTasks(adopted)) {
-      if (t.status === 'failed') this.store.markFailed(t.id);
-    }
+    this.store.load(adopted, planRunners, { keepFailed: true });
     // An edit that took the last task waiting on a runner's reset out of the
     // plan — or ended its pause by re-arming it — releases the hold and
     // disarms the wait, so the run goes on and no timer resumes a wait
@@ -1264,9 +1262,10 @@ export class TaskOrchestrator {
     } else {
       // Missing completion evidence is a hard boundary for what depends on
       // this task: its dependents are blocked until a retry passes
-      // (ADR-0034). Independent work keeps starting.
+      // (ADR-0034). Independent work keeps starting. A loop's check that
+      // starts a round instead is no failure yet (ADR-0045 L3).
       this.store.markFailed(taskId);
-      this.notifications.error(unresumedReason ?? `Task "${task.title}" failed verification: ${verdict.reason}`);
+      if (!this.startRound(taskId)) this.notifications.error(unresumedReason ?? failureText(this.store.get(taskId) ?? task, verdict));
       if (attempt.worktree) await this.runs.release(taskId, { keep: true });
     }
 
@@ -1327,6 +1326,7 @@ export class TaskOrchestrator {
   private async applyLanding(task: Task, outcome: LandingOutcome, admission: Admitted, onLanded: () => void): Promise<void> {
     if (!completesTask(outcome)) return this.settleUnlanded(task, outcome, admission);
     this.store.markCompleted(task.id);
+    this.closeLoop(task, LOOP_PASSED);
     onLanded();
     this.say(outcome.messages);
     await this.landResolved(task.id, admission);
@@ -1503,8 +1503,10 @@ export class TaskOrchestrator {
       this.completing.delete(taskId);
     }
 
-    if (completesTask(landing)) this.store.markCompleted(taskId);
-    else this.settleUnlanded(task, landing, admission);
+    if (completesTask(landing)) {
+      this.store.markCompleted(taskId);
+      this.closeLoop(task, 'not needed: its check was marked complete');
+    } else this.settleUnlanded(task, landing, admission);
     this.store.setTaskVerdict(taskId, verdict);
     this.store.setTaskOutputSummary(taskId, summarizeOutput(verdict.reason, ''));
     this.logAndArchive(task, verdict);
@@ -1559,6 +1561,7 @@ export class TaskOrchestrator {
       const ended = this.endAttempt(taskId, 'skip');
       this.verifier.clear(task);
       this.store.markSkipped(taskId, reason?.trim() || undefined);
+      this.closeLoop(task, 'not needed: its check was skipped');
       this.onHold.delete(taskId);
       this.notifications.info(`Task "${task.title}" skipped: none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done.`);
       this.emit('onTaskChanged');
@@ -1864,7 +1867,8 @@ export class TaskOrchestrator {
       else if (!this.mayResume(task, admission, now !== undefined)) return;
       const resumeSessionId = task.runnerSessionId;
       this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
-      this.store.retry(taskId);
+      // The attempt the limit cut short goes on, in the round it was in.
+      this.store.retry(taskId, { sameRound: true });
       this.onHold.delete(taskId);
       const message = asked && now?.message ? `${LIMIT_RESET_MESSAGE}\n\n${now.message}` : LIMIT_RESET_MESSAGE;
       const continuation = resumeSessionId ? { message, resumeSessionId } : null;
@@ -1959,6 +1963,8 @@ export class TaskOrchestrator {
       const requeued = !forced.queued && task ? this.queueBehindDependencies(task) : null;
       if (requeued) return requeued;
       this.refuseClaim(taskId, admission);
+      // Forced again after a failure, a loop's check starts its rounds over, as a retry does (ADR-0045 L7).
+      if (this.store.isFailed(taskId)) this.store.startRoundsOver(taskId);
       // A force start is the user's own act, so it ends the task's pause: its
       // resume goes, and the hold with it once nothing else waits (U1).
       this.dropResume(taskId);
@@ -2093,6 +2099,7 @@ export class TaskOrchestrator {
     // that would otherwise end under it. Its release ticks again.
     if (this.startHolds > 0) return;
 
+    this.repeatChecks();
     let readiness = this.readiness();
     // Work merged by hand opens a gate as Merge all does; only git can tell.
     // A user task's gate counts too, though the scheduler never starts one.
@@ -2177,11 +2184,11 @@ export class TaskOrchestrator {
       if (!remainingById.has(task.id)) continue;
       console.log(`  - ${label}. ${task.title} [${task.type}/${task.status}] prompt=${!!task.prompt}`);
     }
-    const blocked = blockingFailures(this.store.planTasks);
+    const { blocked, repeating } = planBlocks(this.store.planTasks);
     if (remaining.length === 0) {
       this.runState = 'finished';
       this.sayFinished();
-    } else if (remaining.every((t) => t.status === 'failed' || blocked.has(t.id))) {
+    } else if (remaining.every((t) => (t.status === 'failed' && !repeating.has(t.id)) || blocked.has(t.id))) {
       // Nothing left can start until a failed task is retried (ADR-0034):
       // the run ends, and a retry continues it.
       this.runState = 'endedOnFailure';
@@ -2200,6 +2207,67 @@ export class TaskOrchestrator {
     this.emit('onTick');
     await this.closeRun();
     this.emit('onExecutionComplete');
+  }
+
+  /**
+   * A loop's check failed (ADR-0045). With `failed` evidence and rounds left,
+   * a round starts: its body runs again as new attempts, each from the
+   * integration tip, so it builds on what earlier rounds landed, and true says
+   * the failure is the round's, not the task's. Approval is not spent by a
+   * run, so the plan's approval of the body covers every round. Out of
+   * rounds, the body still to run will not run.
+   */
+  private startRound(checkId: string): boolean {
+    const check = this.store.get(checkId);
+    if (!check?.loop) return false;
+    if (outOfRounds(check)) {
+      this.closeLoop(check, 'not run: the loop ran out of rounds');
+      return false;
+    }
+    if (!betweenRounds(check)) return false;
+    const body = check.loop.body.flatMap((id) => this.store.get(id) ?? []);
+    for (const task of body.filter((t) => !this.attempts.has(t.id) && REPEATABLE.has(t.status))) {
+      this.store.retry(task.id);
+      this.onHold.delete(task.id);
+      this.queuedStarts.delete(task.id);
+    }
+    const named = quotedList(body.map((t) => t.title));
+    this.tell('info', `Task "${check.title}" failed round ${loopRoundOf(check)} of ${check.loop.maxRounds}: ${named} ${body.length === 1 ? 'runs' : 'run'} to fix what it found, then it checks again.`);
+    return true;
+  }
+
+  /**
+   * The loop is over (ADR-0045 L6): its check passed, or will run no more.
+   * What of its body has not run, or did not pass, is not waited for: it ends
+   * skipped, with why. A body task at work is left to finish.
+   */
+  private closeLoop(check: Readonly<Task>, reason: string): void {
+    for (const id of check.loop?.body ?? []) {
+      const task = this.store.get(id);
+      if (!task || this.attempts.has(id) || !LEFT_UNDONE.has(task.status)) continue;
+      this.store.markSkipped(id, reason);
+      this.onHold.delete(id);
+      this.queuedStarts.delete(id);
+    }
+  }
+
+  /**
+   * A check whose round's body has all passed and landed runs again, as the
+   * next round (ADR-0045 L5). Read off the plan at each tick rather than at a
+   * body's verdict, so whatever finishes the body — a verdict, a retry, a Mark
+   * complete, a reload in between — resumes the loop alike.
+   */
+  private repeatChecks(): void {
+    let repeated = false;
+    for (const id of repeatingChecks(this.store.planTasks)) {
+      const check = this.store.get(id);
+      if (!check?.loop || this.attempts.has(id) || !check.loop.body.every((b) => landed(b, this.store, this.runs))) continue;
+      this.store.repeat(id);
+      this.onHold.delete(id);
+      repeated = true;
+      this.notifications.info(`The fix for task "${check.title}" has landed: it checks again, round ${loopRoundOf(check)} of ${check.loop.maxRounds}.`);
+    }
+    if (repeated) this.emit('onTaskChanged');
   }
 
   /** Skipped work is not completed work, so a run with any says so rather than that everything completed. */
@@ -2707,6 +2775,21 @@ export class TaskOrchestrator {
 }
 
 const LIMIT_RESET_MESSAGE = 'Your usage limit has reset. Carry on with the task from where you stopped.';
+
+/** Why a loop's body that did not run ends skipped once its check passes (ADR-0045 L6). */
+const LOOP_PASSED = 'not needed: its check passed';
+
+/** A body task a round runs again: not at work, and not waiting on the user. */
+const REPEATABLE: ReadonlySet<Task['status']> = new Set<Task['status']>(['pending', 'approved', 'completed', 'failed', 'skipped']);
+
+/** A body task a closed loop leaves undone: it has not run, or it did not pass. */
+const LEFT_UNDONE: ReadonlySet<Task['status']> = new Set<Task['status']>(['pending', 'approved', 'failed']);
+
+/** What a failed task's notice says; a loop's check out of rounds says how many it ran. */
+function failureText(task: Readonly<Task>, verdict: Verdict): string {
+  if (outOfRounds(task)) return `Task "${task.title}" failed in all ${loopRoundOf(task)} rounds of its loop: ${verdict.reason}`;
+  return `Task "${task.title}" failed verification: ${verdict.reason}`;
+}
 
 /** How much of an ops task's last attempt the next one is shown. */
 const OPS_RETRY_TAIL_LINES = 60;

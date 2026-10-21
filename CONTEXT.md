@@ -932,7 +932,8 @@ with a task's *task token*: the only runner completion evidence. It is handed
 to `VerdictEngine`, which alone produces the verdict after checking the current
 generation. Evidence held behind an undelivered message is superseded when
 that message is read. Only `done` passes; `blocked` and `failed` carry their
-reason. The
+reason, and the verdict keeps which (`Verdict.reported`): only `failed` starts
+a *Loop*'s round. The
 `summary` is the task's *Report*.
 *Avoid:* "self-report" or "the model says it's done" (it is the runner's
 explicit signal bound to the attempt, not a judgement anyone weighs), and
@@ -1038,7 +1039,8 @@ reconciled into it rather than reloaded over it, leaving the failed task failed:
 an edit is not a retry. A task at work — force-started, or waiting on the user —
 is never blocked. A usage-limit pause with a reset holds the whole run until it;
 one without a time keeps only its own runner's tasks from starting, and a
-merge gate keeps the run waiting; neither is a block.
+merge gate keeps the run waiting; neither is a block. A *Loop*'s check
+*between rounds* is stored failed but blocks nothing while its loop goes on.
 *Avoid:* "halted run" — a failure no longer halts the run; "waiting" for it — a
 task waiting on its dependencies starts on its own once they complete, a blocked
 one only after a retry or a skip.
@@ -1047,8 +1049,9 @@ one only after a retry or a skip.
 task can start now and, if not, every reason it waits, in a fixed order whose
 first is *the* reason (ADR-0034): it has started; Mark complete is landing it;
 it has no prompt; it is outside the user's approval record; it is on hold; it
-is blocked; its dependencies are not met, or, queued by a force start, are
-still under way; a Merge all is under way and it is an ops task; its runner
+is blocked; it is in a *Loop*'s body whose check has not failed this round
+(`loop-check`, "runs if #X fails"); its dependencies are not met, or, queued
+by a force start, are still under way; a Merge all is under way and it is an ops task; its runner
 waits on a usage limit's reset; a planner turn holds new starts; it is at its
 *Merge gate*; it is a user task. One pure function over the plan, the holds
 and the open isolated run, which the scheduler, the explicit starts, the
@@ -1056,7 +1059,8 @@ automatic merge at a gate, the command seam's refusals, the task row's merge
 gate and the planner's view of the plan (`waits:` on each task's line) read. A
 force start reads it as forced: past a hold, a failure, a usage limit and the
 gate the user confirmed. The claim is separate: it checks only what can change
-at the last moment.
+at the last moment. A loop's check *between rounds* waits `repeating` in place
+of "it has started": its loop starts it again.
 *Avoid:* "readiness gate" for one of its reasons, and "gate" for any reason but
 the *Merge gate*.
 
@@ -1076,6 +1080,47 @@ reason, and only a task that failed, is blocked or is waiting for input — and
 it never runs a skipped task again (ADR-0029).
 *Avoid:* "completed" or "done" for it — nothing of it landed; "cancelled" —
 a cancel returns a task to pending.
+
+**Loop** (`Task.loop`, `models/Loop.ts`; ADR-0045) — a *Loop check* that
+repeats with its fix until it passes, declared on it as `loop: { body, maxRounds }`.
+Ordewell runs it with no planner turn: the check runs; while it fails with
+rounds left, its *body* runs with its report and then the check runs again.
+It ends when the check passes (the body that did not run is skipped as not
+needed), when it runs out of rounds (the check fails, its dependents are
+blocked, the supervisor hears once), or when a body task fails or is skipped,
+which stops it until that task is retried and passes. The plan does not grow:
+each round is a new attempt of the same tasks.
+*Avoid:* "cycle" or "back-edge" — the graph stays acyclic, and the loop is a
+declaration on one task; "retry" for a round — a retry of the check starts its
+rounds over, and the guards count no round; "iteration".
+
+**Loop check** — the task that declares the *Loop*, "the check" within it: an
+AI task reporting through `task_complete`, or a script task, whose verdict
+decides whether the loop goes on. A round starts only on `failed` evidence
+(`Verdict.reported`): a `blocked` report, an exit without one or a script that
+could not start starts none, and the check fails as any task does.
+*Avoid:* a bare "check" where a verdict's *Check* could be meant — this one is
+a task; "test" or "review" for the role — those are what a loop check may do;
+"declared check" — that is #39's acceptance check, which is not a loop's.
+
+**Body** (of a loop) — the top-level tasks `loop.body` names, which fix what the
+check found. A body task depends on its check, and otherwise only on what the
+check depends on or on other body tasks; nothing outside the loop depends on
+it. It runs only for its check: before the check fails it waits `loop-check`,
+and once the loop is over, a body task that has not run ends skipped. Removing
+one takes it out of its loop; a check with a loop cannot be removed.
+*Avoid:* "fix task" as a kind of task — any AI or script task can be in a body.
+
+**Round** (`Task.loopRound`) — one run of a loop's check, and the body's run
+before it: round 1 is the check's first run, and `maxRounds` (3 unless set, at
+most 10) is the most it runs in one set of rounds. The round is saved on the
+check, so a reload resumes mid-round. A check that failed with rounds left is
+**between rounds** (`betweenRounds`): stored failed, but no failure for the
+blocked rule, the run's end, wake-ups or the loop guards while its loop goes
+on; it runs again once its body has passed and landed.
+*Avoid:* "attempt" for a round — a round is the loop's count, and the check's
+attempts are counted apart; "repeating" as a status — it is derived, never
+stored.
 
 **Attempt usage** (`AttemptUsage`, `Task.attemptUsage`) — the persisted ledger
 of one task attempt: its number, runner, the runner session it ran in
@@ -2023,6 +2068,7 @@ A manual completion has a `manual` check. `model_review`, `workspace_changes`
 and `verify_command` were removed because they conflated evidence with opinion.
 Verification never asks a model to break a tie. A runner exit without a
 completion call fails, even with exit code zero.
+*Avoid:* using it for a *Loop check*, which is a task, not a signal.
 
 **Testing strategy** — *removed.* Verification is completion-evidence based;
 the planner no longer assigns a testing strategy per task. The `user_verify`

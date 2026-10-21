@@ -9,7 +9,9 @@ export type { TaskRef } from './services/TaskOps';
 export { summarizeToolCall } from './services/researchStepSummary';
 export { truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH } from './services/SessionMessage';
 export { capConflictFiles } from './services/conflictFiles';
-export { blockingFailures, type BlockingSubject } from './services/blocking';
+export { blockingFailures, repeatingChecks, type BlockingSubject } from './services/blocking';
+// What a loop's rows say (ADR-0045) is read the way the scheduler reads it.
+export { betweenRounds, outOfRounds, loopRoundOf, checkOf, type TaskLoop } from './models/Loop';
 export { SUPERVISOR_LEVEL_LABEL, parseCount } from './services/runSettingsText';
 // The shared conversation view (#51) is pure too, so every surface — a webview
 // included — draws from the same reducer.

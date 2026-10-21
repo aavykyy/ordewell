@@ -11,6 +11,7 @@ import { validateTaskEdit, lockedTaskRefusal, type TaskEditActor, type TaskEditC
 import { resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
 import { plannedTask, checkPlanInvariants, detectCycle, notOnAScriptMessage, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, OPS_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask, type PlanTaskError } from './PlannedTask';
 import { clearedBodyFields } from '../models/ScriptTask';
+import { loopRemovalRefusal, loopReshapeRefusal, loopSpec } from '../models/Loop';
 import { taggedReadOnlyMode } from './ModeResolver';
 
 /**
@@ -37,7 +38,7 @@ export type TaskOp =
 /** Fields the planner may change on an existing task. Everything else (id, status, verdict…) is system-owned. */
 export const UPDATABLE_FIELDS: (keyof Task)[] = [
   'title', 'description', 'prompt', 'dependencies', 'assignedRunner', 'assignedModel', 'taskMode', 'type', 'userSteps', 'autonomy', 'sliceType', 'ops', 'skills',
-  'commands', 'script', 'timeoutMs',
+  'commands', 'script', 'timeoutMs', 'loop',
 ];
 
 /**
@@ -284,6 +285,8 @@ export function canMergeTasks(tasks: readonly Task[], selectedIds: string[]): { 
   for (const t of toMerge) {
     if (t.status === 'in_progress') return { ok: false, error: `"${t.title}" is running and cannot be merged` };
     if (t.status === 'completed') return { ok: false, error: `"${t.title}" is completed and cannot be merged` };
+    const looped = loopReshapeRefusal(tasks, t, 'merged');
+    if (looped) return { ok: false, error: looped };
   }
   const ordered = [...toMerge].sort((a, b) => a.order - b.order);
   const survivorId = '__merge_sim__';
@@ -319,7 +322,8 @@ export function canSplitTask(tasks: readonly Task[], taskId: string): { ok: bool
   if (!target) return { ok: false, error: 'Task not found' };
   if (target.status === 'in_progress') return { ok: false, error: `"${target.title}" is running and cannot be split` };
   if (target.status === 'completed') return { ok: false, error: `"${target.title}" is completed and cannot be split` };
-  return { ok: true };
+  const looped = loopReshapeRefusal(tasks, target, 'split');
+  return looped ? { ok: false, error: looped } : { ok: true };
 }
 
 
@@ -449,7 +453,10 @@ export function applyTaskOps(
         if (typeof done === 'string') return done;
         subtasks.push(done);
       }
-      return { ...t, dependencies: ids, subtasks };
+      if (!t.loop) return { ...t, dependencies: ids, subtasks };
+      const body = resolveDeps(t.loop.body, opIndex);
+      if (body.bad.length) return `unknown tasks in the loop's "body"${parentTitle !== undefined ? ` of ${taskWhere(t.title, parentTitle)}` : ''}: ${body.bad.join(', ')}`;
+      return { ...t, dependencies: ids, subtasks, loop: { ...t.loop, body: body.ids } };
     };
     const done = walk(planned.task);
     return typeof done === 'string' ? { error: done } : { task: done };
@@ -515,6 +522,19 @@ export function applyTaskOps(
       if (bad.length) return { error: `${label}: unknown dependencies: ${bad.join(', ')}` };
       landed.dependencies = ids;
     }
+    if ('loop' in changes) {
+      // `null` drops the loop, and the round it was in with it (ADR-0045).
+      const spec = loopSpec(changes.loop);
+      if ('error' in spec) return { error: `${label}: "${target.title}" ${spec.error}` };
+      if (spec.loop) {
+        const { ids, bad } = resolveDeps(spec.loop.body, opIndex);
+        if (bad.length) return { error: `${label}: unknown tasks in the loop's "body": ${bad.join(', ')}` };
+        landed.loop = { ...spec.loop, body: ids };
+      } else {
+        landed.loop = undefined;
+        landed.loopRound = undefined;
+      }
+    }
     return { target, changes: landed, fields: changedFields(target, changes, landed, catalog), check };
   };
 
@@ -568,7 +588,7 @@ export function applyTaskOps(
         if (!target) { errors.push(`${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)`); break; }
         // Removing the task takes its whole subtree, so every task in it meets
         // the same lock rule as the named one (ADR-0029).
-        const locked = lockedTaskRefusal(target, 'removed') ?? lockedInSubtree(target);
+        const locked = lockedTaskRefusal(target, 'removed') ?? lockedInSubtree(target) ?? loopRemovalRefusal(target);
         if (locked) { errors.push(`${label}: ${locked}`); break; }
         tasks = removeTaskFromPlan(tasks, target.id);
         summary.push(`Removed "${target.title}"`);
@@ -598,7 +618,7 @@ export function applyTaskOps(
         if (resolved.some((t) => !t)) { errors.push(`${label}: unknown task in merge list (already removed, merged, or split by an earlier op)`); break; }
         const toMerge = [...new Map(resolved.map((t) => [t!.id, t!])).values()].sort((a, b) => a.order - b.order);
         if (toMerge.length < 2) { errors.push(`${label}: merge needs at least two tasks`); break; }
-        const locked = toMerge.map((t) => lockedTaskRefusal(t, 'merged')).find((refusal) => refusal !== null);
+        const locked = toMerge.map((t) => lockedTaskRefusal(t, 'merged') ?? loopReshapeRefusal(tasks, t, 'merged')).find((refusal) => refusal !== null);
         if (locked) { errors.push(`${label}: ${locked}`); break; }
         const idSet = new Set(toMerge.map((t) => t.id));
         const unionDepsRaw = [...new Set(toMerge.flatMap((t) => t.dependencies))].filter((d) => !idSet.has(d));
@@ -658,7 +678,7 @@ export function applyTaskOps(
         if ('error' in ref) { errors.push(`${label}: ${ref.error}`); break; }
         const target = findTopLevel(tasks, ref.id);
         if (!target) { errors.push(`${label}: task "${op.taskId}" not found`); break; }
-        const locked = lockedTaskRefusal(target, 'split');
+        const locked = lockedTaskRefusal(target, 'split') ?? loopReshapeRefusal(tasks, target, 'split');
         if (locked) { errors.push(`${label}: ${locked}`); break; }
         const parts = op.parts ?? [];
         if (parts.length < 2) { errors.push(`${label}: split needs at least two parts`); break; }
@@ -725,7 +745,8 @@ export function applyTaskOps(
         const prep = prepareEdit(op, i, label, 'direct', true);
         if ('error' in prep) { errors.push(prep.error); break; }
         const { target, changes, fields, check } = prep;
-        tasks = updateTaskInPlan(tasks, target.id, { ...changes, status: 'pending', verdict: undefined, outputSummary: undefined, awaitingReason: undefined, resumeAt: undefined, skipReason: undefined });
+        // A re-armed check starts its rounds over, as a retry does (ADR-0045 L7).
+        tasks = updateTaskInPlan(tasks, target.id, { ...changes, status: 'pending', verdict: undefined, outputSummary: undefined, awaitingReason: undefined, resumeAt: undefined, skipReason: undefined, loopRound: undefined });
         const clearedNote = check.clear?.length ? `; cleared ${check.clear.join(', ')}` : '';
         const changedNote = fields.length ? ` (${fields.join(', ')})` : '';
         summary.push(`Re-armed "${target.title}"${changedNote}${clearedNote}`);

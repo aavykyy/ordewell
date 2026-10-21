@@ -185,3 +185,34 @@ describe('the end-of-run handoff', () => {
     expect(host.resendHandoff).not.toHaveBeenCalled();
   });
 });
+
+describe('a loop\'s check whose result a planner turn asked for (ADR-0045 L3, L6; ADR-0037 R2)', () => {
+  const failedRound = (loopRound: number): Partial<Task> => ({
+    status: 'failed',
+    loop: { body: ['t2'], maxRounds: 3 },
+    loopRound,
+    verdict: { outcome: 'fail', reason: 'two tests fail', checks: [], decidedAt: '2026-10-13T00:00:00Z', reported: 'failed' },
+  });
+  const owed = (loopRound: number): Task => ({ ...task('t1', 1, failedRound(loopRound)), reportTo: { actor: 'planner-turn', consent: { by: 'autorun' } } });
+
+  it('owes its report only once the loop is over, and the report names the rounds it took', async () => {
+    vi.useFakeTimers();
+    const { supervision, tasks, host } = harness({ supervisorLevel: 'off' });
+    supervision.runStarted('user');
+
+    tasks[0] = owed(1);
+    supervision.taskSettled(tasks[0]);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(host.reported).not.toHaveBeenCalled();
+    expect(host.deliver).not.toHaveBeenCalled();
+
+    tasks[0] = owed(3);
+    supervision.taskSettled(tasks[0]);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(host.reported).toHaveBeenCalledTimes(1);
+    expect(host.deliver).toHaveBeenCalledTimes(1);
+    expect(host.deliver).toHaveBeenCalledWith(expect.stringContaining('Its loop ran out of rounds: it failed all 3. It failed: two tests fail'), 'user');
+  });
+});
