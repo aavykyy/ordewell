@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0008", "0011", "0026"]
-note: "sealed runs are implemented (#109); the native-shell setting and its eligibility table are implemented (#110); wiring each harness's tools is pending"
+note: "sealed runs are implemented (#109); the native-shell setting and its eligibility table are implemented (#110); Claude Code's shell is wired (#110); OpenCode's is pending"
 ---
 
 # 0036 — The planner's shell: sealed runs instead of refusals, and the harness's own shell as an opt-in
@@ -193,7 +193,12 @@ that with this in view.
      CLI configuration, git credentials, SSH keys, package-registry tokens. The
      shell can read the workspace and run local tools, but cannot act on the
      user's accounts. So it is a second way to read and never a second route
-     to effects, which stay script tasks and ops tasks (ADR-0035). What a
+     to effects, which stay script tasks and ops tasks (ADR-0035). The planner
+     process itself is started without the user's credential variables, a
+     curated list of names and patterns covering cloud, registry, git and
+     service tokens, keeping only what the harness needs for its own login
+     (N3): on macOS a sandboxed command can read its parent's environment, so a
+     value left there is in reach however the profile confines files. What a
      process of the user holds in its environment or command line is not a
      store: on macOS it is the residual above, which Ordewell's Seatbelt
      does not close for a native shell either.
@@ -204,7 +209,8 @@ that with this in view.
   instruction could then send workspace contents to an address it chose. That
   is the residual the opt-in accepts, and the egress proxy (#88) is its guard
   once it exists. The harness's own login stays readable from its shell, as it
-  is for every runner task today (#93).
+  is for every runner task today (#93), and is the one credential family the
+  process scrub above keeps.
 - **A harness that cannot be held to N2 (N4)** is not offered the opt-in, and
   the setting says why. Cloud reads that need the user's credentials stay on
   `run_command`, classified and allowlisted, whether or not the opt-in is on.
@@ -214,6 +220,11 @@ that with this in view.
   either, so the opt-in is not offered there yet, even where the bubblewrap
   probe would pass: that probe says the sandbox can start, not that either
   harness's shell was held to N2 there.
+- **Monitor (N6).** Claude Code's second shell tool, `Monitor`, runs through
+  the same launcher and asks before it runs, so it is offered and withheld
+  with `Bash`. With the opt-in off both are disallowed, since otherwise
+  `Monitor` would be a shell the envelope never sees; with it on, each of its
+  commands is a `bash` step on the timeline (N2.3).
 
 ## Live checks
 
@@ -385,3 +396,4 @@ shell.
 - 2026-10-21 — a read-only task's `run_command` runs sealed with its worktree writable (ADR-0046).
 - 2026-10-21 — live checks of N2 on Claude Code 2.1.304 and OpenCode 2.0.32 (#110), recorded under Live checks.
 - 2026-10-21 — the native-shell setting and its eligibility table implemented (#110): Claude Code 2.1.304–2.1.x and OpenCode 2.0.32–2.0.x on macOS; OpenCode 1.x and Linux stay on `run_command` until checked live.
+- 2026-10-21 — Claude Code's native shell wired (#110): `CLAUDE_CODE_SHELL_PREFIX` names a launcher built on the sealed profile, with the network (N3), the workspace read-only, the session scratch and a short `CLAUDE_CODE_TMPDIR` writable; both variables go in the `--settings` `env` block, Claude Code's own sandbox is off, `Bash` and `Monitor` are asked and allowed through the `native-shell` kind, and the planner process starts without the user's credential variables (N2.2), the keychain included. `Monitor` is withheld whenever the opt-in is off (N6), and its commands are `bash` steps on the timeline.

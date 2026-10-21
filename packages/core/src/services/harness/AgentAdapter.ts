@@ -5,6 +5,7 @@ import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { McpClientConfig } from '../mcp';
 import type { ProjectMcpServer } from './repoConfig';
 import type { RunnerCommand, RunnerMcpServer, RunnerModelRef } from '../../models/RunnerCommand';
+import type { PlannerShellSandbox } from '../sandbox/plannerSandbox';
 
 
 /**
@@ -154,6 +155,8 @@ export type PlannerAsk =
    */
   | { kind: 'search'; query: string; provider: string; providerLabel?: string }
   | { kind: 'path'; path: string; directory: boolean }
+  /** A command through the harness's own shell, allowed by the user's opt-in and held in Ordewell's sandbox (ADR-0036 N2, N3). */
+  | { kind: 'native-shell'; tool: string; command?: string }
   /** `note` is why, for a tool the runner knows the planner must not use, in place of the envelope's generic refusal. */
   | { kind: 'other'; note?: string };
 
@@ -191,8 +194,9 @@ export interface PlannerStartOptions extends AgentStartCommon {
   nativeSearch?: boolean;
   /**
    * Whether the user let this planner use its harness's own shell beside
-   * Ordewell's tools (ADR-0036 N1). The adapter offers it only for a version
-   * that passed N2's live checks (see `nativeShellOffer`); absent means off.
+   * Ordewell's tools (ADR-0036 N1). The caller sets it only for a version that
+   * passed N2's live checks (see `nativeShellOffer`); absent means off. When
+   * true, the adapter puts every command in Ordewell's sealed profile (N2).
    */
   nativeShell?: boolean;
   /**
@@ -410,6 +414,8 @@ export interface AgentProcessDeps {
   exists?: (candidate: string) => boolean;
   /** The workspace's own variables for a cwd (ADR-0016). Defaults to {@link resolveWorkspaceEnv}. */
   workspaceEnv?: (cwd: string) => Promise<Record<string, string>>;
+  /** Builds the sandbox around a planner's own shell (ADR-0036 N2). Defaults to the host's probe. */
+  nativeShellSandbox?: () => PlannerShellSandbox;
 }
 
 /** Builds the adapter for one runner id, or null when that runner cannot plan. */

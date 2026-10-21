@@ -167,7 +167,7 @@ describe('StructuredRunner spawn', () => {
     const args = spawned.lastArgs();
     expect(args[args.indexOf('--permission-mode') + 1]).toBe(expected);
     // Only the question tool: a task keeps every other tool its mode allows.
-    expect(args[args.indexOf('--disallowedTools') + 1]).toBe(mode === 'plan' ? 'AskUserQuestion,Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,PowerShell,EnterPlanMode,ExitPlanMode' : 'AskUserQuestion');
+    expect(args[args.indexOf('--disallowedTools') + 1]).toBe(mode === 'plan' ? 'AskUserQuestion,Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,Monitor,PowerShell,EnterPlanMode,ExitPlanMode' : 'AskUserQuestion');
     // The one system prompt a task has: how it ends, which the CLI's compaction cannot summarise away.
     expect(args[args.indexOf('--append-system-prompt') + 1]).toContain('call the `task_complete` tool with status `done`');
     expect(args).not.toContain('--dangerously-skip-permissions');

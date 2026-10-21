@@ -73,7 +73,7 @@ describe('ClaudeCodeAdapter start switch', () => {
       '--include-partial-messages',
       '--permission-prompt-tool', 'stdio',
       '--permission-mode', 'default',
-      '--disallowedTools', 'Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,PowerShell,EnterPlanMode,ExitPlanMode',
+      '--disallowedTools', 'Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,Monitor,PowerShell,EnterPlanMode,ExitPlanMode',
       '--setting-sources', 'user',
       '--settings', '{"disableAllHooks":true,"permissions":{"ask":["WebFetch","WebFetch(domain:*)","WebSearch","mcp__*","Read","Grep","Glob","LS"]}}',
       '--append-system-prompt', 'PLAN',
@@ -99,7 +99,7 @@ describe('ClaudeCodeAdapter start switch', () => {
     const args = spawned.lastArgs();
 
     expect(args.flatMap((arg, i) => (arg === '--permission-mode' ? [args[i + 1]] : []))).toEqual(['default']);
-    expect(args[args.indexOf('--disallowedTools') + 1].split(',')).toEqual(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell', 'Bash', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode']);
+    expect(args[args.indexOf('--disallowedTools') + 1].split(',')).toEqual(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell', 'Bash', 'Monitor', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode']);
     expect(args[args.indexOf('--setting-sources') + 1]).toBe('user');
     expect(JSON.parse(args[args.indexOf('--settings') + 1])).toEqual({
       disableAllHooks: true,
@@ -184,7 +184,7 @@ describe('ClaudeCodeAdapter task argv for every effort and mode', () => {
       '--replay-user-messages',
       '--permission-prompt-tool', 'stdio',
       '--permission-mode', permissionMode,
-      '--disallowedTools', mode === 'plan' ? 'AskUserQuestion,Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,PowerShell,EnterPlanMode,ExitPlanMode' : 'AskUserQuestion',
+      '--disallowedTools', mode === 'plan' ? 'AskUserQuestion,Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,Monitor,PowerShell,EnterPlanMode,ExitPlanMode' : 'AskUserQuestion',
       ...(mode === 'plan' ? ['--setting-sources', 'user', '--settings', '{"disableAllHooks":true,"permissions":{"ask":["WebFetch","WebFetch(domain:*)","WebSearch","mcp__*","Read","Grep","Glob","LS"]}}'] : []),
       ...thinkingArgs,
       ...(model ? ['--model', model] : []),

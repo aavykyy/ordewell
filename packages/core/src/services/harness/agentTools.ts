@@ -20,6 +20,8 @@ const KNOWN_TOOLS: Record<string, ResearchToolType> = {
   grep: 'grep',
   glob: 'glob',
   bash: 'bash',
+  // Its second shell tool, under the same opt-in and launcher (ADR-0036 N6).
+  monitor: 'bash',
   ls: 'list_dir',
   webfetch: 'fetch',
   websearch: 'web_search',

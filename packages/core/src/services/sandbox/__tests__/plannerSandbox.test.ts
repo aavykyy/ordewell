@@ -200,6 +200,15 @@ describe('sealedShellProfile (ADR-0036 S1)', () => {
     expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/work/repo', writable: '/work/tree' }).write).toEqual(['/tmp/s', '/work/tree']);
     expect(sealedShellProfile(host, { workspace: '/work/repo' }).write).toEqual([]);
   });
+
+  it('keeps its network off unless a native shell asks for the harness\'s own (N3)', () => {
+    expect(sealedShellProfile(host, { workspace: '/w' }).network).toBe(false);
+    expect(sealedShellProfile(host, { workspace: '/w', network: true }).network).toBe(true);
+  });
+
+  it('writes the harness\'s short temp folder beside the scratch one (N2)', () => {
+    expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/w', tmpdir: '/tmp/t' }).write).toEqual(['/tmp/s', '/tmp/t']);
+  });
 });
 
 describe('plannerShellProfile', () => {
@@ -327,6 +336,28 @@ describe('PlannerShellSandbox', () => {
     } finally {
       sandbox.end();
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("wraps a harness's own shell in the sealed profile, with the network and its short temp folder (ADR-0036 N2, N3)", async () => {
+    const backend = fakeBackend();
+    const sandbox = new PlannerShellSandbox(availableWith(backend));
+    const root = mkdtempSync(join(tmpdir(), 'ordewell-native-ws-'));
+    const short = mkdtempSync(join(tmpdir(), 'ordewell-native-tmp-'));
+    try {
+      const launch = await sandbox.launchNativeShell({ workspace: root, tmpdir: short, shell: '/bin/zsh' });
+      const profile = backend.profiles[0];
+      expect(launch.file).toBe('/sandbox');
+      expect(launch.args).toEqual(['--policy', '/bin/zsh', '-c']);
+      expect(profile).toMatchObject({ network: true, privateTmp: true, keychain: false });
+      expect(profile.throwaway).toBeUndefined();
+      expect(profile.read).toEqual(['/usr', realpathSync(root)]);
+      expect(profile.write).toContain(realpathSync(short));
+      expect(profile.env.HOME).toBe(profile.write[0]);
+    } finally {
+      sandbox.end();
+      rmSync(root, { recursive: true, force: true });
+      rmSync(short, { recursive: true, force: true });
     }
   });
 
