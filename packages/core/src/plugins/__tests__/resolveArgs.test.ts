@@ -49,7 +49,7 @@ describe('resolveTaskRunnerFlags', () => {
     ['', 'default'],
     ['default', 'default'],
     ['auto', 'auto'],
-    ['plan', 'plan'],
+    ['plan', 'default'],
     // A mode the manifest does not map is passed through as its own id.
     ['dontAsk', 'dontAsk'],
   ])('maps Claude mode "%s" to --permission-mode %s', (mode, expected) => {
@@ -58,7 +58,7 @@ describe('resolveTaskRunnerFlags', () => {
 
   it.each([
     ['build', { permissionMode: 'build', modeSettings: { approvals: 'auto' } }],
-    ['plan', { permissionMode: 'plan', modeSettings: {} }],
+    ['plan', { permissionMode: 'build', readOnly: true, modeSettings: {} }],
   ])('hands an OpenCode %s task its agent and how its requests are answered', (mode, expected) => {
     expect(resolveTaskRunnerFlags(OPENCODE_MANIFEST, { mode })).toEqual(expected);
   });

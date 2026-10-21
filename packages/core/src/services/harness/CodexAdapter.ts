@@ -1,3 +1,4 @@
+import { readOnlyTask } from './plannerPermissions';
 import { randomUUID } from 'crypto';
 import { isAbsolute, relative, sep } from 'path';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskModeAgentAdapter } from './AgentAdapter';
@@ -428,15 +429,16 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   protected async handshake(opts: AgentStartOptions): Promise<void> {
     // Before the protocol, the machine: a Codex whose sandbox cannot start runs
     // no command and works from imagination instead of from the repository.
-    this.sandbox = await probeCodexSandbox(this.deps, opts.cwd, this.spawnEnv);
+    const readOnly = readOnlyTask(opts);
+    this.sandbox = readOnly ? 'default' : await probeCodexSandbox(this.deps, opts.cwd, this.spawnEnv);
     // A full-access task asks for no sandbox, so a host without one is no reason to refuse it.
     const needsSandbox = opts.kind === 'planner' || opts.flags.permissionMode !== 'danger-full-access';
     // A planner still reads through Ordewell's `run_command`, so it plans with
-    // its own shell off instead of not at all. A task has no such second shell,
-    // and switching its mode would rewrite the plan (ADR-0001).
-    this.ownShellOff = this.sandbox === 'unavailable' && opts.kind === 'planner' && !!opts.mcp;
+    // its own shell off instead of not at all. Read-only tasks always use
+    // that profile (ADR-0046); change tasks keep their planned mode (ADR-0001).
+    this.ownShellOff = readOnly || (this.sandbox === 'unavailable' && opts.kind === 'planner' && !!opts.mcp);
     if (this.sandbox === 'unavailable' && needsSandbox && !this.ownShellOff) throw new Error(codexSandboxUnavailableMessage(opts.kind));
-    if (this.ownShellOff) this.announce({ type: 'thinking', text: codexShellOffNote() });
+    if (this.ownShellOff && !readOnly) this.announce({ type: 'thinking', text: codexShellOffNote() });
 
     // A binary that rejects `app-server` outright dies immediately; waiting
     // out the timeout would turn a one-line diagnostic into a 30s stall.
@@ -557,8 +559,9 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         sandbox: opts.flags.permissionMode,
         ...(approvalPolicy ? { approvalPolicy } : {}),
         ...(approvalsReviewer ? { approvalsReviewer } : {}),
-        ...(opts.mcp ? { developerInstructions: CODEX_ORDEWELL.taskInstructions() } : {}),
+        ...(opts.mcp ? { developerInstructions: CODEX_ORDEWELL.taskInstructions(readOnlyTask(opts)) } : {}),
         ...threadConfig,
+        ...(readOnlyTask(opts) ? { config: { ...config, projects: untrustedProjects(opts.cwd), web_search: 'disabled' } } : {}),
       };
     }
     const nativeSearch = opts?.nativeSearch ?? false;
@@ -746,7 +749,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         // Answered rather than refused: it is not a capability request, and
         // failing it would break a tool for no reason.
         this.rpc.respond(msg.id, { currentTimeAt: Math.floor(Date.now() / 1000) });
-      } else if (this.startOpts?.kind === 'task') {
+      } else if (this.startOpts?.kind === 'task' && !readOnlyTask(this.startOpts)) {
         this.openTaskRequest(msg, emit);
       } else {
         this.answerServerRequest(msg, emit);
@@ -1053,8 +1056,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     const method = msg.method!;
     const params = msg.params ?? {};
     if (this.raiseOrdewellAsk(msg, method, params, emit)) return;
-    if (this.holdMcpToolApproval(msg, method, params, emit)) return;
-    const result = DECLINE_RESULTS[method];
+    if (!readOnlyTask(this.startOpts) && this.holdMcpToolApproval(msg, method, params, emit)) return;
+    const result = readOnlyTask(this.startOpts) && method === 'item/permissions/requestApproval' ? { permissions: {}, scope: 'turn' } : DECLINE_RESULTS[method];
     if (result) {
       this.rpc.respond(msg.id!, result);
     } else {

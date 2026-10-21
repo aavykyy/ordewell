@@ -1,4 +1,4 @@
-import { unavailableTaskModeMessage } from './ModeResolver';
+import { taggedReadOnlyMode, unavailableTaskModeMessage } from './ModeResolver';
 import { spawnAttached } from './harness/ordewellBinding';
 import { EventEmitter } from 'events';
 import { spawn as nodeSpawn } from 'child_process';
@@ -942,6 +942,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
       startOptions: {
         kind: 'task',
         cwd: opts.cwd,
+        workspaceRoot: opts.workspaceRoot,
         model: opts.modelId,
         mode: opts.mode ?? 'default',
         flags: resolveTaskRunnerFlags(manifest, { mode: opts.mode ?? 'default', model: opts.modelId, thinkingEffort: opts.thinkingEffort }),
@@ -951,7 +952,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
       interruptGraceMs: this.interruptGraceMs,
       tools: {
         server: this.mcp,
-        scope: { sessionId: opts.planSessionId ?? '', taskId: opts.taskId, attempt: opts.attempt ?? 1, ...(opts.shell ? { readOnly: true } : {}) },
+        scope: { sessionId: opts.planSessionId ?? '', taskId: opts.taskId, attempt: opts.attempt ?? 1, ...(opts.shell || opts.mode !== undefined && opts.mode === taggedReadOnlyMode(manifest.modes) ? { readOnly: true } : {}) },
         ...(opts.shell ? { shell: opts.shell } : {}),
       },
       onNotice: opts.onNotice,

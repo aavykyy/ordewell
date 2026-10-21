@@ -337,8 +337,8 @@ const PLANNER_READ_ONLY = { readOnlyHint: true };
 
 /**
  * A read-only task's tools (ADR-0046): the task tools, and `run_command`, its
- * only shell. It changes nothing that lands, so it says it is read-only, as
- * a runner's own read-only mode requires of a tool it lets run.
+ * only shell. Its hint describes its landing effects: nothing it changes
+ * reaches the plan's branches.
  */
 export const READ_ONLY_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   ...TASK_TOOLS,

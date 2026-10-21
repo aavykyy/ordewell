@@ -59,7 +59,7 @@ export function buildSubagentSystemPrompt(): string {
 function readOnlyGuide(runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefined, tools: boolean): string {
   const able = runnerModes ? readOnlyRunners(runnerModes) : [];
   return [
-    'Set "readOnly": true on an AI task that must not change any file: a review, an audit, an analysis whose result is a report. Never on a task that must run commands — tests, scripts, builds — nor on an ops task: a read-only mode refuses them, even when they change no file. Leave it false or out on every other task. A read-only task\'s subtasks are read-only too unless one sets "readOnly": false.',
+    'Set "readOnly": true on an AI task that must land nothing: a review, an audit, an analysis whose result is a report. It can run tests, scripts and builds through Ordewell run_command, and try changes in its disposable worktree; none of those changes lands. Never on an ops task, which acts in the workspace. Leave it false or out on every other task. A read-only task\'s subtasks are read-only too unless one sets "readOnly": false.',
     'You never choose a runner mode. Each task runs in its runner\'s mode for the user\'s autonomy level (Full or Guarded), or in the runner\'s read-only mode when "readOnly" is true.',
     ...(tools
       ? ['A read-only task must go to a runner list_runners marks "readOnly": true.']

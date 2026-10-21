@@ -73,7 +73,7 @@ describe('OrdewellMcpServer', () => {
     expect(mcpClientConfig(writer).readOnly).toBeUndefined();
     const tools = (await readOnly.listTools()).tools;
     expect(tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'run_command', 'task_complete']);
-    // A runner's read-only mode refuses a tool that does not say it is one.
+    // The hint names what lands, even when a command changes its disposable worktree.
     expect(tools.find((t) => t.name === 'run_command')?.annotations?.readOnlyHint).toBe(true);
     expect((await change.listTools()).tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'task_complete']);
 

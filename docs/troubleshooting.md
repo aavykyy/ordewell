@@ -2,8 +2,7 @@
 
 ## Codex sandbox unavailable on this host
 
-Ordewell shows **Codex sandbox unavailable on this host: read-only and Guarded
-modes are off**, and Codex tasks in a read-only or Guarded mode are refused.
+Ordewell shows **Codex sandbox unavailable on this host: Guarded mode is off**, and Codex tasks in Guarded mode are refused.
 
 ### Cause
 
@@ -17,10 +16,9 @@ on codex-cli 0.162 either.
 On such a host, Ordewell probes the sandbox once per daemon. While it cannot
 start:
 
-- Codex's sandboxed modes, read-only (`plan`) and Guarded (`agent`), are off.
+- Codex's Guarded (`agent`) mode is off. Ordewell's read-only profile (`plan`) remains available: its native shell is off, and commands use Ordewell's run_command.
   Its Full access mode is not sandboxed and stays available.
-- The planner is not offered a read-only task on Codex, and a plan or an edit
-  that puts a task in one of those modes is refused with the reason. A task
+- A plan or an edit that puts a task in Guarded mode is refused with the reason. A task
   already in one fails at start with the same reason. Ordewell never swaps the
   mode for another.
 - A Codex planner still plans: its own shell is off and it reads through

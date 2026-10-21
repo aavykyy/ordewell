@@ -130,7 +130,7 @@ describe.skipIf(!hasGit)('a paused task moved to another runner keeps its uncomm
     await vi.waitFor(() => expect(h.task().status).toBe('completed'), { timeout: 20_000 });
     expect(git(root, 'show', 'ordewell/carry-run/integration:new.txt')).toBe('new implementation');
     expect(h.task().carriedFrom).toBeUndefined();
-  }, 30_000);
+  });
 
   it('starts fresh from the integration tip when the paused work conflicts with what landed, and says where that work is', async () => {
     const root = repo();
@@ -165,7 +165,7 @@ describe.skipIf(!hasGit)('a paused task moved to another runner keeps its uncomm
     expect(git(root, 'show', `${kept}:new.txt`)).toBe('new implementation');
     const warned = vi.mocked(h.notifications.warn).mock.calls.map(([message]) => message);
     expect(warned).toContainEqual(expect.stringMatching(new RegExp(`Task "Implement feature" starts fresh on codex.*not carried over.*${kept}`)));
-  }, 30_000);
+  });
 
   it('still carries the work over when the plan is reloaded between the move and the start', async () => {
     const root = repo();
@@ -189,7 +189,7 @@ describe.skipIf(!hasGit)('a paused task moved to another runner keeps its uncomm
     expect(moved.runner).toBe('codex');
     expect(readFileSync(join(moved.cwd, 'feature.txt'), 'utf8')).toBe('half implemented\n');
     expect(moved.prompt).toContain('previous attempt on claude-code');
-  }, 30_000);
+  });
 
   it('a shared run starts the new runner in the checkout, where the paused attempt left its edits', async () => {
     const root = repo();
@@ -207,7 +207,7 @@ describe.skipIf(!hasGit)('a paused task moved to another runner keeps its uncomm
     expect(moved.runner).toBe('codex');
     expect(readFileSync(join(root, 'feature.txt'), 'utf8')).toBe('half implemented\n');
     expect(moved.prompt).toContain('The files in your working tree come from a previous attempt on claude-code');
-  }, 30_000);
+  });
 
   it('a fresh retry after the move starts clean, carrying nothing over', async () => {
     const root = repo();
@@ -227,7 +227,7 @@ describe.skipIf(!hasGit)('a paused task moved to another runner keeps its uncomm
     const retried = h.requests[2];
     expect(readFileSync(join(retried.cwd, 'feature.txt'), 'utf8')).toBe('initial implementation\n');
     expect(retried.prompt).not.toContain('## Work carried over');
-  }, 30_000);
+  });
 });
 
 describe.skipIf(!hasGit)('a finished task moved to another runner', () => {
@@ -259,7 +259,7 @@ describe.skipIf(!hasGit)('a finished task moved to another runner', () => {
     expect(moved.prompt).toContain('previous attempt on claude-code');
     expect(h.task().carriedFrom).toBeUndefined();
     expect(h.task().runnerSessionOwner).toBeUndefined();
-  }, 30_000);
+  });
 
   it('a completed task\'s Retry after the move carries the earlier files over too', async () => {
     const root = repo();
@@ -276,5 +276,5 @@ describe.skipIf(!hasGit)('a finished task moved to another runner', () => {
     const moved = h.requests[1];
     expect(moved.runner).toBe('codex');
     expect(moved.prompt).toContain('The files in your working tree come from a previous attempt on claude-code');
-  }, 30_000);
+  });
 });

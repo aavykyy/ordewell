@@ -195,11 +195,13 @@ except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-s
   your credentials. On macOS the three gaps listed under Sealed runs stay
   open to these runs too. Where no sandbox runs, what would run sealed is
   refused.
-  Its runner's own tools still run in the runner's read-only mode, which
-  differs by runner (Claude Code's plan mode, for example, may save notes in
-  its own config folder); withholding each runner's own write tools and
-  shell, so that every write a read-only task makes is inside the OS sandbox,
-  is not yet built.
+  Native writes and the native shell are withheld on every runner. Claude
+  Code decides native reads against the real paths of the task worktree and
+  workspace, refusing outside reads without asking. OpenCode denies external
+  directories except those roots; Codex reads through `run_command` with its
+  native shell off. Project config is disabled as for planners, and Claude's
+  hooks are off. Native web tools are refused: tasks have no planner web-policy
+  channel to check them. Ordewell's task tools remain available.
 
 In practice:
 
@@ -219,9 +221,6 @@ Planned, not yet built:
 - An opt-in container setup with a credential broker and egress proxy
   ([#93](https://github.com/ordewell/ordewell/issues/93),
   [#99](https://github.com/ordewell/ordewell/issues/99)).
-- A read-only task's runner without its own write tools and shell, the same
-  on every runner
-  ([#104](https://github.com/ordewell/ordewell/issues/104)).
 
 ## What is out of scope
 

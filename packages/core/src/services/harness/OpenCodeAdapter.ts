@@ -1,9 +1,10 @@
+import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 import type { ChildProcess } from 'child_process';
 import type { RunnerCommand, RunnerMcpServer } from '../../models/RunnerCommand';
 import { randomBytes } from 'crypto';
 import { RunnerProcess } from './runnerProcess';
 import { OpenCodeV2 } from './OpenCodeV2';
-import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV } from './openCodeOrdewell';
+import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV, OPENCODE_READ_ONLY_PERMISSION } from './openCodeOrdewell';
 import { awaitAttach } from './ordewellBinding';
 import { TASK_COMPLETION_CONTRACT, type McpClientConfig } from '../mcp';
 import type { ProjectMcpServer } from './repoConfig';
@@ -54,6 +55,9 @@ const DISABLED_TOOLS: Record<string, boolean> = {
  * task's agent decides what it may do.
  */
 const TASK_DISABLED_TOOLS: Record<string, boolean> = { question: false };
+const READ_ONLY_DISABLED_TOOLS: Record<string, boolean> = Object.fromEntries(
+  Object.entries(OPENCODE_READ_ONLY_PERMISSION).filter(([name, effect]) => name !== '*' && name !== 'external_directory' && effect === 'deny').map(([name]) => [name, false]),
+);
 
 interface OpenCodePart {
   id?: string;
@@ -276,7 +280,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   private mcpServers: string[] = [];
   private readonly permissions = openCodePermissions(
     (id, sessionId, decision) => this.replyPermission(id, sessionId, permissionReply(decision, 'reply')),
-    () => ({ role: this.task ? 'task' : 'planner', autoApprove: !!this.task && autoApproves(this.task) }),
+    () => ({ role: this.task ? 'task' : 'planner', autoApprove: !!this.task && autoApproves(this.task), decide: readOnlyTaskPolicy(this.task) }),
   );
   /** Messages handed into the running task turn, until the model reads them (ADR-0023). Kept across turns: the server keeps the message too. */
   private readonly steers = new PendingSteers();
@@ -322,8 +326,10 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
         // over content that cannot be merged too: a planner without its policy may not start.
         const existing = workspaceEnv[OPENCODE_CONFIG_VARIABLE] ?? process.env[OPENCODE_CONFIG_VARIABLE];
         const projectServers = opts.kind === 'planner' ? Object.fromEntries((opts.projectServers ?? []).map((server) => [server.name, server.definition])) : {};
-        const ordewellConfig = opts.kind === 'planner'
-          ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, 'planner', projectServers) ?? OPENCODE_ORDEWELL.configContent(undefined, opts.mcp ?? null, 'planner', projectServers)
+        const readOnly = opts.kind === 'task' && readOnlyTask(opts);
+        const role = readOnly ? 'readOnlyTask' : opts.kind;
+        const ordewellConfig = opts.kind === 'planner' || readOnly
+          ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined) ?? OPENCODE_ORDEWELL.configContent(undefined, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined)
           : opts.mcp ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp, 'task') : null;
         if (opts.mcp && ordewellConfig === null) {
           console.error('[opencode] OPENCODE_CONFIG_CONTENT is not a JSON object, so the Ordewell tools were not injected.');
@@ -331,7 +337,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
         this.ordewell = ordewellConfig === null ? null : opts.mcp ?? null;
         return {
           PWD: opts.cwd,
-          ...(opts.kind === 'planner' ? OPENCODE_PLANNER_ENV : {}),
+          ...(opts.kind === 'planner' || readOnly ? OPENCODE_PLANNER_ENV : {}),
           ...(ordewellConfig === null ? {} : { [OPENCODE_CONFIG_VARIABLE]: ordewellConfig }),
           OPENCODE_SERVER_USERNAME: SERVER_USERNAME,
           OPENCODE_SERVER_PASSWORD: password,
@@ -620,7 +626,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       parts: [{ type: 'text', text: message }],
       // The manifest's meaning of the task's mode (ADR-0001): for OpenCode a mode is an agent.
       agent: task.flags.permissionMode,
-      tools: TASK_DISABLED_TOOLS,
+      tools: readOnlyTask(task) ? READ_ONLY_DISABLED_TOOLS : TASK_DISABLED_TOOLS,
       ...(task.mcp ? { system: TASK_COMPLETION_CONTRACT } : {}),
       ...(model ? { model } : {}),
       ...(task.flags.effort ? { variant: task.flags.effort } : {}),
@@ -1023,7 +1029,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       // The patterns `always` would grant: the runner's own offer, and the only grounds for "Allow for this task".
       ...(ask.always?.length ? { suggestions: ask.always } : {}),
       ...(ask.tool?.callID ? { toolUseId: ask.tool.callID } : {}),
-      ...(this.task ? {} : { ask: openCodePlannerAsk(name, ask, this.mcpServers) }),
+      ...(!this.task || readOnlyTask(this.task) ? { ask: openCodePlannerAsk(name, ask, this.mcpServers) } : {}),
       ordewell: !!this.ordewell && OPENCODE_ORDEWELL.isOrdewellAsk(name),
     }, ask.sessionID ?? this.sessionId ?? '', seen, onEvent);
   }

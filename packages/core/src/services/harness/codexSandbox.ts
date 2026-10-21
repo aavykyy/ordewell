@@ -127,7 +127,7 @@ export function codexShellOffNote(): string {
 export const CODEX_SANDBOX_DOCS = 'https://github.com/ordewell/ordewell/blob/main/docs/troubleshooting.md#codex-sandbox-unavailable-on-this-host';
 
 /** The one line a surface shows next to the runner list while Codex's sandboxed modes are off. */
-export const CODEX_SANDBOX_OFF_LINE = 'Codex sandbox unavailable on this host: read-only and Guarded modes are off';
+export const CODEX_SANDBOX_OFF_LINE = 'Codex sandbox unavailable on this host: Guarded mode is off';
 
 /**
  * Why each sandboxed Codex mode is off. It is a whole sentence with both ways
@@ -135,7 +135,7 @@ export const CODEX_SANDBOX_OFF_LINE = 'Codex sandbox unavailable on this host: r
  * failure at spawn all show it as it is.
  */
 export const CODEX_SANDBOX_MODE_REASON =
-  `Codex's sandbox cannot start on this host (its kernel restricts unprivileged user namespaces), so Codex's read-only and Guarded modes are off. Use Full access or another runner, or fix the host: ${CODEX_SANDBOX_DOCS}`;
+  `Codex's sandbox cannot start on this host (its kernel restricts unprivileged user namespaces), so Codex's Guarded mode is off. Use Full access or another runner, or fix the host: ${CODEX_SANDBOX_DOCS}`;
 
 /**
  * The line a runner or mode list shows, and the page that explains it, when

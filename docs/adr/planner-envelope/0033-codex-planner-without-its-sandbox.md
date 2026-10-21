@@ -53,23 +53,17 @@ Codex task that needs a sandbox is still refused.**
   planner has the Ordewell server. A planner without it would have no way to
   read, and is refused as before. In practice every harness planner has the
   server (ADR-0025).
-- **Tasks are told, not surprised.** A task has no second shell, and
-  switching its mode to Full access would rewrite the plan (ADR-0001). So the
-  probe's answer goes into the runner catalog: each Codex mode the manifest
-  tags `sandboxed` (`agent`, `plan`) carries an `unavailable` reason on this
-  host, and Full access does not. The planner is not offered them: `list_runners`
-  shows Codex without a read-only mode, a read-only task cannot be assigned to
-  it (ADR-0031's refusal names the runners that can), and under Guarded a task
-  on Codex is refused rather than moved to Full access. `submit_plan` and
-  `edit_plan` refuse such a mode with the reason, as does a hand edit on any
-  surface, and a task already holding one fails at spawn, before a worktree is
-  made, with the same reason. The reason names the options: Full access,
-  another runner, or fixing the host.
+- **Tasks are told, not surprised.** A change task in Guarded has no second
+  shell, and switching its mode to Full access would rewrite the plan
+  (ADR-0001). The probe marks the manifest's `sandboxed` mode (`agent`)
+  unavailable, so planning, editing and spawning refuse it with a reason.
+  Full access and Ordewell's read-only profile (`plan`, ADR-0046) stay
+  available. The read-only profile always has its native shell off and uses
+  its task token's `run_command`; it needs no Codex sandbox probe.
 - **One probe per daemon, asked again on a runner-list refresh.** The answer
   is cached; refreshing the runner list (and a daemon restart) probes again,
   so a host fixed while Ordewell runs is noticed. The surfaces show one line,
-  *Codex sandbox unavailable on this host: read-only and Guarded modes are
-  off*, with a link to the troubleshooting page.
+  *Codex sandbox unavailable on this host: Guarded mode is off*, with a link to the troubleshooting page.
 - **The probe's decision is unchanged.** macOS (Seatbelt) and Windows are never probed,
   and a working bubblewrap or Landlock backend keeps Codex's shell as before.
 
@@ -121,3 +115,5 @@ Codex task that needs a sandbox is still refused.**
 - 2026-10-13 — the probe is launched in its own process group and killed, group and all, when it times out, instead of being left running.
 - 2026-10-14 — Codex's sandboxed modes are marked unavailable in the catalog while the probe fails, so they are not assigned and a task holding one fails at spawn with the reason.
 - 2026-10-20 — ADR-0011's sandbox runs `run_command` where the host has one; on a host where Codex's sandbox cannot start, it cannot start either.
+
+- 2026-10-21 — Ordewell's read-only task profile stays available without a native sandbox (ADR-0046); only Guarded is marked unavailable.
