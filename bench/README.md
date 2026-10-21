@@ -20,6 +20,9 @@ core stack:
 - `mock-provider.mjs` — a local OpenAI-compatible server simulating budget-model
   quirks (streamed reasoning, fenced JSON with trailing commas, prose preambles,
   empty turns, grilling-ignoring eagerness). Deterministic and offline.
+- `scenarios.mjs` — the webview harness's scripted conversation tour, and
+  `GOAL_SCENARIOS`: one scenario per kind of goal the planner's strategy step
+  teaches (#108), driven by the live harness below.
 - `drive-conversation.mjs` — drives `OpenAiService`/`Session` through scripted
   scenarios with assertions (against the mock), or prints a behavioral report
   against a real model: `--real --model deepseek/deepseek-v4-flash` with
@@ -29,6 +32,45 @@ core stack:
   chat webview in a browser with a mocked VS Code API, replay a full planning
   conversation, assert the sequential-timeline UI contract, and capture
   screenshots.
+
+### Kinds of goal (#108)
+
+The strategy step tells the planner what kind of goal it is looking at. The
+mock suite runs one scenario per kind through a real `Session`, with a persona
+(`mock/goal-*`) that replies with that kind's plumbing:
+
+| Kind | Persona | What the session must accept |
+| --- | --- | --- |
+| A question | `mock/goal-question` | no plan, a prose answer, the conversation still open |
+| A small effect | `mock/goal-effect` | one `run_script` call, which adds a script task and runs it; its exit status passes |
+| A build | `mock/goal-build` | a committed plan of three chained vertical slices, no research, script or loop |
+| A failure to explain | `mock/goal-failure` | a reproduction script task as a loop's check, the fix in its body, two read-only research tasks with no dependencies that are approved and start in parallel |
+| An open problem | `mock/goal-open` | a committed first round of research tasks only, approved and started |
+
+The API planner submits a whole plan as the JSON envelope — the same commit
+path a harness planner's `submit_plan` reaches — and calls `run_script` as an
+execution tool. The assertions are about that plumbing: the session validates,
+adopts, approves and starts what the planner sends. They are not a judgment of
+the prompt; only a real model can show what strategy it picks.
+
+`--real` replays the same five goals against a real provider and writes a
+behavioural report to `bench/live/.real-report/` (gitignored), or `--out DIR`:
+
+```bash
+OPENROUTER_API_KEY=sk-or-... node bench/live/drive-conversation.mjs \
+  --real --model deepseek/deepseek-v4-flash
+```
+
+`--model` picks the model, or `MODEL` in the environment as `drive-taskops.mjs`
+reads it; the key and base URL come from `OPENROUTER_API_KEY` and
+`OPENROUTER_BASE_URL`, never from the file.
+
+The report records the strategy observed for each goal, the plan's shape and a
+transcript excerpt. It grades nothing — it has no pass/fail thresholds — and
+makes no cost or performance claim, per [AGENTS.md](../AGENTS.md). A real run
+may ask questions; one generic nudge answers, so the report shows the planner's
+own choice rather than a scripted one. `--real --goal "..." --replies "a::b"`
+still runs a single goal the old way.
 
 ## Execution pipeline harness (`bench/pipeline/`)
 
