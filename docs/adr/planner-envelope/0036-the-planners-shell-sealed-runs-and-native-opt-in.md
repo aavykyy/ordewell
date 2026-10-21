@@ -133,6 +133,103 @@ reach.**
   the setting says why. Cloud reads that need the user's credentials stay on
   `run_command`, classified and allowlisted, whether or not the opt-in is on.
 
+## Live checks
+
+Checked live on 2026-10-21 on macOS 26 (Seatbelt), against Claude Code 2.1.304
+and OpenCode 2.0.32. Each harness was launched as Ordewell launches its planner
+(Claude: `-p` stream-json, `default` mode, `--permission-prompt-tool stdio`,
+`--setting-sources user`, `--settings` with `disableAllHooks` and the ask
+rules; OpenCode: `opencode serve` with `OPENCODE_DISABLE_PROJECT_CONFIG=1`, the
+planner policy in `OPENCODE_CONFIG_CONTENT` and as session rules), with its
+shell let through: Claude's `Bash` not withheld, OpenCode's `shell` asked
+rather than denied, every ask answered allow. Fixtures: a throwaway repository
+whose config carries hooks, an `.mcp.json`, an `opencode.json` server and an
+OpenCode plugin, each writing a marker; canary credential files (`~/.aws`,
+`~/.config/gcloud`, `~/.azure`, `~/.ssh`, `~/.npmrc`, `~/.git-credentials`,
+`~/.netrc`, `~/.config/gh`, `~/.docker`, `~/.kube`) in a temporary folder
+standing for the home directory; two canary credential variables
+(`GITHUB_TOKEN`, `AWS_SECRET_ACCESS_KEY`) in the launch environment. The user's
+real `~/.ssh`, `~/.azure` and `~/.config/gh` were read into `/dev/null`, the
+keychain through `security find-generic-password -w` (exit code only) and
+`git credential-osxkeychain` (byte count only), and `ssh-add -l` tried the
+agent. Unsandboxed, every one of them was readable. Two routes were tried for
+each harness: its own sandbox, and Ordewell's backend built on this branch:
+the sealed profile (S1) with the network on (N3), wrapped around the harness's
+shell.
+
+| N2 check | Claude Code, its own sandbox | Claude Code, Ordewell's sandbox | OpenCode 2.0.32, Ordewell's sandbox |
+| --- | --- | --- | --- |
+| 1. writes only to scratch | holds, until a user setting widens it | holds | holds |
+| 2. credential files, keychain, ssh-agent | unreadable | unreadable | unreadable |
+| 2. credentials in the environment | readable | dropped; the harness's own environment still readable | dropped; the harness's own environment still readable |
+| 3. no saved setting bypasses it | fails: three user settings widen writes | holds with the prefix in `--settings` `env` | holds with `shell` in `OPENCODE_CONFIG_CONTENT` |
+| 4. every command in the event stream | holds | holds, and each asks first | holds, and each asks first |
+| 5. repository config runs nothing | holds | holds | holds |
+
+- **Claude Code's own sandbox.** `--settings` set `sandbox.enabled`,
+  `failIfUnavailable`, `allowUnsandboxedCommands: false`,
+  `autoAllowBashIfSandboxed`, `filesystem.allowWrite` (scratch),
+  `filesystem.denyWrite` (the workspace) and `filesystem.denyRead` (`~/` and
+  the canary folder). Writes reached scratch and Claude's temporary directory,
+  `/tmp/claude-<uid>`, which every Claude Code session of the user shares and
+  whose other sessions' task outputs stay readable; with `CLAUDE_CODE_TMPDIR`
+  the session gets its own instead. A background command, a subagent's `Bash`,
+  `Monitor` and `dangerouslyDisableSandbox: true` were all held. Credential
+  files under a denied path, the keychain (`security` exit 44) and the agent
+  were out of reach, but both canary variables were in the shell's
+  environment, and `sysctl kern.procargs2` on `$PPID` returned the Claude
+  process's own environment with them. Each new network host reached
+  `can_use_tool` as `SandboxNetworkAccess`. Other layers' `enabled: false`,
+  `allowUnsandboxedCommands: true` and `excludedCommands` did not loosen it.
+  Each of three user settings, added in turn to `~/.claude/settings.json`,
+  made a folder outside scratch writable: `sandbox.filesystem.allowWrite`, an
+  `Edit(…)` allow rule, and `permissions.additionalDirectories`. A setting
+  the user saved for interactive work therefore widens the planner's shell,
+  and `--settings` cannot take an entry back. 2.1.304 ignores an untrusted
+  project's allow rules and `additionalDirectories`; its sandbox keys apply
+  and did not widen the sandbox either.
+- **Claude Code under Ordewell's sandbox.** Claude's sandbox off;
+  `CLAUDE_CODE_SHELL_PREFIX` names a launcher, which receives the whole
+  command string as one argument and runs it with `/bin/zsh -c` under the
+  profile; `CLAUDE_CODE_TMPDIR` names a short per-session folder (Claude warns
+  above about 30 bytes) that the profile makes writable, since Claude writes
+  the shell's working directory there after every command. N2.1 and the files,
+  keychain and agent of N2.2 held on the same paths as above, and the canary
+  variables were gone. A settings `env` block in a lower layer replaced a
+  prefix set only in the process environment, which took the command out of
+  the sandbox; set in `--settings` `env`, the prefix won. With Claude's own
+  sandbox off, every `Bash` and `Monitor` call reached `can_use_tool` before it
+  ran. Claude's start-up shell snapshot runs the user's shell profile outside
+  both sandboxes. It is not a tool call and reads none of the repository's
+  config.
+- **OpenCode 2.0.32** has no OS sandbox of its own. Its shell is the `shell`
+  of the last config layer that sets one, or else `SHELL`. With `SHELL`
+  naming the launcher in the server's environment, N2.1 and N2.2 held as for
+  Claude, including `background: true`, a subagent's child session and a
+  `workdir` outside the workspace. A `shell` key in a config layer beat
+  `SHELL`: the command ran unsandboxed and wrote outside. Ordewell's
+  `OPENCODE_CONFIG_CONTENT` setting `shell` beat one in an `OPENCODE_CONFIG`
+  file standing for the user's global config. Each `shell.created` event names
+  the shell the call ran in. A saved `always` permission skips the question
+  but not the shell. A user's global plugin can still choose the shell, as
+  code that already runs in the server as the user (by source). OpenCode 1.x
+  is not installed here and was not checked.
+- **The event stream (N2.3).** Claude: every command was a `tool_use` in
+  stream-json, a subagent's carrying `parent_tool_use_id`, and the launcher
+  logged one invocation per `tool_use` (`Bash`, background `Bash`, a
+  subagent's `Bash`, `Monitor`). OpenCode: each was a `session.tool.called`, a
+  `permission.asked` and a `shell.created` on `/api/event`, child sessions'
+  included, again one launcher invocation each.
+- **The repository's config (N2.4).** No marker was written in any run made
+  with the planner's launch, on either route.
+- **Environment credentials, either route.** A sandboxed command on macOS can
+  read the argv and environment of any non-platform process of the user,
+  the harness's own included, through `sysctl kern.procargs2`. This was shown
+  from inside the sealed profile against a `node` process holding a canary.
+  N2.2 for variables therefore needs the harness itself started without the
+  user's credential variables, beyond its own login (N3).
+- **Codex** was not checked: N1 changes nothing for it.
+
 ## Considered options
 
 - **Teach the classifier loops** (unroll a literal `for` list, parse compound
@@ -191,3 +288,4 @@ reach.**
 
 - 2026-10-15 — accepted. Not yet implemented; sealed runs need #64 first.
 - 2026-10-21 — sealed runs implemented (#109) on Seatbelt and bubblewrap, for `bash`, `run_command` and research subagents; the native-shell opt-in waits for #110.
+- 2026-10-21 — live checks of N2 on Claude Code 2.1.304 and OpenCode 2.0.32 (#110), recorded under Live checks.
