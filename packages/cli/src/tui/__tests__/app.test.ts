@@ -4,6 +4,9 @@ import { style } from '../ansi';
 import type { Effect } from '../reducer';
 import { lastMessage, messagesOf } from './chat';
 
+/** The paint interval `createApp` keeps between message-driven frames. */
+const FRAME_BUDGET_MS = 33;
+
 function harness(over: Parameters<typeof createApp>[0]['initial'] = {}) {
   const frames: string[][] = [];
   const performed: Effect[] = [];
@@ -67,6 +70,46 @@ describe('createApp', () => {
     await new Promise<void>((r) => queueMicrotask(() => r()));
     expect(h.frames).toHaveLength(2);
     expect(h.frames[1].join('\n')).toContain('h');
+  });
+
+  it('paints a keystroke at once, without waiting for the frame budget', () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness();
+      h.app.start();
+      const before = h.frames.length;
+
+      h.app.dispatch({ type: 'key', key: { name: 'char', char: 'h' } });
+
+      expect(h.frames).toHaveLength(before + 1);
+      expect(h.frames.at(-1)?.join('\n')).toContain('h');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('coalesces a burst of incoming messages into frames at the paint budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness();
+      h.app.start();
+      const before = h.frames.length;
+
+      // A macrotask apart, as websocket messages arrive — the old microtask
+      // batching painted every one of them.
+      for (let i = 0; i < 60; i++) {
+        h.app.dispatch({ type: 'notice', message: `line ${i}` });
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      await vi.advanceTimersByTimeAsync(FRAME_BUDGET_MS);
+
+      const painted = h.frames.length - before;
+      expect(painted).toBeGreaterThan(0);
+      expect(painted).toBeLessThanOrEqual(3);
+      expect(h.frames.at(-1)?.join('\n')).toContain('line 59');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('performs the effects an action produces', () => {

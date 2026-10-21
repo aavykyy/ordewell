@@ -36,8 +36,18 @@ describe('a wrapped line keeps the colour it started in', () => {
   });
 });
 
-describe('model Markdown is sanitized before it is parsed (#83)', () => {
-  // Only the TUI's own colour may remain: any other escape would act on the terminal.
+describe('a huge message is cut for the frame, with a note', () => {
+  it('shows its head and counts the characters it left out', () => {
+    const huge = `start ${'word '.repeat(40_000)}end`;
+    const out = conversationLines([message('planner', huge)], 60, false).map(stripAnsi).join('\n');
+
+    expect(out).toContain('start');
+    expect(out).toContain('not shown');
+    expect(out).not.toContain('end');
+  });
+});
+
+describe('model Markdown is sanitized before it is parsed (#83)', () => {  // Only the TUI's own colour may remain: any other escape would act on the terminal.
   const strayEscapes = (lines: string[]): string[] =>
     // eslint-disable-next-line no-control-regex
     lines.join('\n').replace(/\x1b\[[0-9;]*m/g, '').match(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g) ?? [];
@@ -95,6 +105,19 @@ describe('a task\'s runner commands in its log (#66)', () => {
   it('marks a compaction, with the context before and after it', () => {
     expect(plainRows([{ type: 'compaction', id: 'b1', trigger: 'manual', preTokens: 24939, postTokens: 3615 }])).toEqual(['≡ Context compacted · 25k → 3.6k tokens']);
     expect(plainRows([{ type: 'compaction', id: 'b1', trigger: 'auto' }])).toEqual(['≡ Context compacted by the runner on its own']);
+  });
+
+  it('says how much of a huge output it leaves out instead of reading all of it', () => {
+    const huge = Array.from({ length: 100_000 }, (_, i) => `test case ${i} passed`).join('\n');
+    const block = { type: 'command' as const, id: 'b1', name: 'test', status: 'done' as const, output: huge };
+
+    const collapsed = plainRows([block]);
+    expect(collapsed.slice(1, 4)).toEqual(['  ⎿  test case 0 passed', '     test case 1 passed', '     test case 2 passed']);
+    expect(collapsed.at(-1)).toBe('     … +99997 lines (ctrl+o to expand)');
+
+    const detail = plainRows([block], true);
+    expect(detail.length).toBeLessThanOrEqual(2_002);
+    expect(detail.at(-1)).toBe('     … +98000 lines not shown');
   });
 
   it('collapses what the runner loaded to one line, and lists it in full detail', () => {

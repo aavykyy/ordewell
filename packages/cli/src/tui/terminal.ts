@@ -130,11 +130,24 @@ export function openTerminal(options: TerminalOptions): Terminal {
 
   output.write(modes() + CLEAR + (style.enabled ? BACKGROUND_QUERY : ''));
 
+  let closed = false;
+  // What the last frame actually put on the screen. A row whose rendered text
+  // did not change costs no bytes at all; a resize, `reset()` and a palette
+  // change clear the screen and force the next draw to repaint every row.
+  let lastRaw: string[] = [];
+  let lastPainted: string[] = [];
+  let lastCols = 0;
+  let fullRepaint = true;
+
   const decode = createKeyDecoder();
   const onData = (chunk: string) => {
     const { rest, background } = takeBackgroundReply(chunk);
     if (background) {
       palette.background = background;
+      // The band is mixed from the background, so every row that carries it
+      // must be painted again — a diff against the old frame would keep the
+      // colour the terminal no longer has.
+      fullRepaint = true;
       options.onRepaint?.();
     }
     for (const key of decode(rest)) options.onKey(key);
@@ -150,6 +163,7 @@ export function openTerminal(options: TerminalOptions): Terminal {
     // believing we hold a mouse we lost costs the user their wheel until they
     // toggle `/mouse` off and on again.
     output.write(CLEAR + (mouse ? MOUSE_TRACKING_ON : ''));
+    fullRepaint = true;
     const { rows, cols } = size();
     options.onResize(rows, cols);
   };
@@ -161,18 +175,17 @@ export function openTerminal(options: TerminalOptions): Terminal {
     return { rows: output.rows || 24, cols: output.columns || 80 };
   }
 
-  let closed = false;
-
   return {
     size,
     draw(frame) {
       if (closed) return;
-      // Row-anchored rather than home-and-blit: each row is positioned
+      // Row-anchored rather than home-and-blit: each changed row is positioned
       // absolutely and erased to end of line, so a row that renders wider
       // than measured only misplaces itself instead of shoving every row
-      // below it down by one line. Still not clear-and-redraw — that makes
-      // the whole screen flicker on every keystroke — each row is erased,
-      // not the frame.
+      // below it down by one line. Unchanged rows are not written at all:
+      // a spinner tick or a streamed log line touches a handful of rows, and
+      // rewriting the other forty every frame is what made the pane lag while
+      // several tasks ran at once.
       //
       // `paintOnly` runs on the way out for the same reason `clampToCols`
       // does: it is the last point every byte bound for the tty passes
@@ -184,13 +197,24 @@ export function openTerminal(options: TerminalOptions): Terminal {
       // With autowrap off the cursor stays on the last column after a full
       // row, so an erase there would take that column's character with it.
       const { cols } = size();
-      const rows = frame
-        .map((line, i) => {
-          const row = clampToCols(paintOnly(line), cols);
-          return `\x1b[${i + 1};1H${row}${width(row) < cols ? '\x1b[K' : ''}`;
-        })
-        .join('');
-      output.write(AUTOWRAP_OFF + rows + AUTOWRAP_ON);
+      const force = fullRepaint || cols !== lastCols;
+      fullRepaint = false;
+      const raw: string[] = [];
+      const painted: string[] = [];
+      let rows = '';
+      for (const [i, line] of frame.entries()) {
+        // A raw row that did not change paints the same as last time, so it
+        // is not sanitized, measured or written again.
+        const unchanged = !force && lastRaw[i] === line;
+        const row = unchanged ? lastPainted[i] : clampToCols(paintOnly(line), cols);
+        raw.push(line);
+        painted.push(row);
+        if (!unchanged) rows += `\x1b[${i + 1};1H${row}${width(row) < cols ? '\x1b[K' : ''}`;
+      }
+      lastRaw = raw;
+      lastPainted = painted;
+      lastCols = cols;
+      if (rows) output.write(AUTOWRAP_OFF + rows + AUTOWRAP_ON);
     },
     setMouse(enabled) {
       if (closed || enabled === mouse) return;
@@ -200,6 +224,9 @@ export function openTerminal(options: TerminalOptions): Terminal {
     reset() {
       if (closed) return;
       output.write(modes() + CLEAR);
+      // The shell handed back a plain screen: nothing from the last frame is
+      // on it any more.
+      fullRepaint = true;
     },
     close() {
       if (closed) return;
