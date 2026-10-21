@@ -37,6 +37,7 @@ export class TurnEffects {
   private editLanded = false;
   private submitted = false;
   private settled = false;
+  private readonly scripts = new Set<string>();
 
   constructor(private readonly host: TurnEffectsHost) {}
 
@@ -57,6 +58,13 @@ export class TurnEffects {
   }
 
   get planSubmitted(): boolean { return this.submitted; }
+
+  /** A script task `run_script` put in the plan in this turn, past its held edit (ADR-0035), which that edit lands around. */
+  scriptAdded(taskId: string): void {
+    this.scripts.add(taskId);
+  }
+
+  get addedPastEdit(): ReadonlySet<string> { return this.scripts; }
 
   /** Starts are still owed: the turn is open, or its deferred starts are still being run. */
   get outstanding(): boolean { return !this.settled || this.deferred.length > 0; }

@@ -977,7 +977,14 @@ export class TaskOrchestrator {
     return blockingFailures(this.store.planTasks).get(taskId) ?? [];
   }
 
-  loadPlan(tasks: readonly Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS]): void {
+  /**
+   * `edited`: the plan is the last one edited, not a new one. Only a Stop
+   * withdraws a queued start (ADR-0035), so one of a task the edit keeps
+   * stays queued: a script task waiting at its merge gate still starts at
+   * Merge all.
+   */
+  loadPlan(tasks: readonly Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS], edited = false): void {
+    const queued = edited ? [...this.queuedStarts] : [];
     // End what belongs to the plan being replaced before it is swapped: its
     // ledgers are its tasks', and a task of the next plan that reuses an id
     // must not inherit them. The bump then closes the scope, so a runner still
@@ -999,7 +1006,7 @@ export class TaskOrchestrator {
     this.retryCounts.clear();
     this.spawnCounts.clear();
     this.onHold.clear();
-    this.queuedStarts.clear();
+    this.queuedStarts = new Map(queued.filter(([id]) => this.store.get(id)));
     this.recoverOrphans();
     this.rearmLimitWaits();
   }

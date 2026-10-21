@@ -46,14 +46,16 @@ export function sameScriptBody(a: BodyFields, b: BodyFields): boolean {
 }
 
 /**
- * The script tasks an edit gave another body or limit. Consent is to a body,
- * so each leaves the approved set; a task new to the plan was never in it.
+ * The tasks an edit gave another script body or limit, a script made another
+ * type of task among them. Consent is to a body, so each leaves the approved
+ * set: a yes to a literal script is no yes to a prompt a model interprets. A
+ * task new to the plan was never in it.
  */
 export function rewrittenScripts(before: readonly Task[], after: readonly Task[]): string[] {
   const prior = new Map(flattenTasks(before).map((t) => [t.id, t]));
   return flattenTasks(after).filter((t) => {
     const was = prior.get(t.id);
-    return t.type === 'script' && was !== undefined && !sameScriptBody(was, t);
+    return was !== undefined && (t.type === 'script' || was.type === 'script') && !sameScriptBody(was, t);
   }).map((t) => t.id);
 }
 

@@ -215,13 +215,16 @@ export class Supervisor {
   }
 
   /**
-   * Keep a save's gathered state without waking the planner just because the
-   * session was opened (ADR-0029). A new run event may arm it again.
+   * Keep a save's gathered state without waking the supervisor just because
+   * the session was opened (ADR-0029): its own events wait for a new run event
+   * to arm it again. A report the planner asked for is owed at every level,
+   * and is delivered once due (ADR-0037, R2).
    */
   restore(snapshot: SupervisorSnapshot | undefined): void {
     this.disarm();
     this.policy.restore(snapshot?.policy);
     this.wakeUps = [...(snapshot?.wakeUps ?? [])];
+    if (snapshot?.policy.attention.some((e) => e.kind === 'task_report')) this.arm(true);
   }
 
   /**
@@ -270,9 +273,10 @@ export class Supervisor {
    * that does not end when stopped has the conversation taken from it, so the
    * run is never left waiting on a hung planner. A failure is counted before
    * the caller hears of it, so the retry the caller's next pump makes is
-   * already the supervisor's decision.
+   * already the supervisor's decision. `authority` is whose the turn is, as
+   * {@link wakeUpTurn} reads it.
    */
-  async turn<T>(run: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  async turn<T>(run: (signal: AbortSignal, turn: WakeUpTurn) => Promise<T>, signal?: AbortSignal, authority: TurnAuthority = 'supervisor'): Promise<T> {
     const controller = new AbortController();
     const relay = () => controller.abort();
     if (signal?.aborted) controller.abort();
@@ -282,7 +286,7 @@ export class Supervisor {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let grace: ReturnType<typeof setTimeout> | undefined;
     // A run that throws before its first await fails the turn like any other failure, rather than escaping the count.
-    const answered = (async () => run(controller.signal))();
+    const answered = (async () => run(controller.signal, this.wakeUpTurn(authority)))();
     // Raced below; once the race is lost, the turn's own failure is nobody's to hear.
     answered.catch(() => {});
     const hung = new Promise<never>((_, reject) => {
@@ -307,7 +311,7 @@ export class Supervisor {
       return landed;
     } catch (err) {
       const failure = timedOut && !discarded ? new WakeUpTimeoutError(this.turnTimeoutMs) : err;
-      this.failed(failure);
+      this.failed(failure, authority);
       throw failure;
     } finally {
       clearTimeout(timer);
@@ -317,7 +321,7 @@ export class Supervisor {
     }
   }
 
-  private failed(err: unknown): void {
+  private failed(err: unknown, authority: TurnAuthority): void {
     // The user's stop, or a plan change: the supervisor did not fail.
     if (err instanceof PlannerTurnStoppedError || err instanceof PlannerTurnDiscardedError) return;
     // Not the supervisor's failure: the turn's wake-ups wait with its other
@@ -337,11 +341,14 @@ export class Supervisor {
     }
     this.failures++;
     this.host.restartPlanner();
+    // A turn on reports owed to the user's turn is the planner's, not the
+    // supervisor's (ADR-0037, R3); at Off only reports open one at all.
+    const report = authority === 'user' || this.level === 'off';
     if (this.failures < 2) {
-      this.host.notice('warn', `The supervisor's wake-up turn failed (${brief(reason)}). Retrying once with the planner restarted.`);
+      this.host.notice('warn', `${report ? 'The planner\'s report turn' : 'The supervisor\'s wake-up turn'} failed (${brief(reason)}). Retrying once with the planner restarted.`);
       return;
     }
-    this.giveUp(`its wake-up turn failed twice (${brief(reason)})`);
+    this.giveUp(`${report ? 'the planner\'s report turn' : 'its wake-up turn'} failed twice (${brief(reason)})`);
   }
 
   /** The run goes on without a supervisor, and nothing that happened is lost (see {@link standDown}). */
@@ -362,17 +369,19 @@ export class Supervisor {
     if (held) this.deliver(held);
   }
 
-  private arm(): void {
+  /** Deliver what is gathered once due; `reportsOnly` leaves the supervisor's own events to wait for a run event. */
+  private arm(reportsOnly = false): void {
     const due = this.policy.dueAt();
     if (due === null) return;
     this.disarm();
     this.tick = setTimeout(() => {
       this.tick = null;
-      const batch = this.policy.poll(this.now());
-      if (!batch) {
-        this.arm();
+      const polled = this.policy.poll(this.now());
+      if (!polled) {
+        this.arm(reportsOnly);
         return;
       }
+      const batch = reportsOnly ? this.takeReports(polled) : polled;
       // A report owed to the user's turn is not the supervisor waking itself.
       if (batch.attention.some((e) => e.report?.authority !== 'user')) this.countWakeUp();
       this.deliver(batch);
@@ -393,6 +402,14 @@ export class Supervisor {
     const minutes = Math.max(1, Math.round((now - this.wakeUps[0]) / 60_000));
     this.wakeUps = [];
     this.host.dropToWatch(`woke ${count} times in ${minutes} minute${minutes === 1 ? '' : 's'} with no task passing in between`);
+  }
+
+  /** A batch's reports, the rest put back with the passes, which are the supervisor's context. */
+  private takeReports(batch: WakeBatch): WakeBatch {
+    const held = batch.attention.filter((e) => e.kind !== 'task_report');
+    if (held.length === 0) return batch;
+    this.policy.restore({ attention: held, sinceLast: batch.sinceLast });
+    return { attention: batch.attention.filter((e) => e.kind === 'task_report'), sinceLast: [] };
   }
 
   private disarm(): void {

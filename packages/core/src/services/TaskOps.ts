@@ -373,6 +373,11 @@ function idsOf(op: unknown): () => string {
  * applies and the result validates (deps resolve, no cycles, running and
  * completed tasks untouched), or nothing is returned and `errors` explains
  * why. The caller commits `tasks` on ok.
+ *
+ * `addedPast` are tasks put in the plan past the turn's held edit, as
+ * `run_script` puts its own (ADR-0035): a `reorder` may leave them out, as
+ * one written before they were added could not list them, and they then
+ * keep their place after the tasks it lists.
  */
 export function applyTaskOps(
   currentTasks: readonly Task[],
@@ -380,6 +385,7 @@ export function applyTaskOps(
   runners: RunnerId[],
   catalog?: AssignmentCatalog,
   held: readonly TaskOp[] = [],
+  addedPast: ReadonlySet<string> = new Set(),
 ): ApplyTaskOpsResult {
   // Ops already accepted earlier in the batch apply first; errors number only
   // the new ones, as the planner wrote them in the call it is answered for.
@@ -600,8 +606,9 @@ export function applyTaskOps(
         if (badRef) { errors.push(`${label}: ${badRef.error}`); break; }
         const resolved = (refs as { id: string }[]).map((r) => findTopLevel(tasks, r.id));
         if (resolved.some((t) => !t)) { errors.push(`${label}: unknown task in reorder list`); break; }
-        const orderIds = resolved.map((t) => t!.id);
-        if (new Set(orderIds).size !== tasks.length) {
+        const listed = resolved.map((t) => t!.id);
+        const orderIds = [...listed, ...tasks.filter((t) => addedPast.has(t.id) && !listed.includes(t.id)).map((t) => t.id)];
+        if (orderIds.length !== tasks.length || new Set(orderIds).size !== tasks.length) {
           errors.push(`${label}: reorder must list every top-level task exactly once (${tasks.length} tasks)`);
           break;
         }

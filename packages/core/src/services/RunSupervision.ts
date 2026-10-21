@@ -236,7 +236,7 @@ export class RunSupervision {
    * see {@link Supervisor.turn}.
    */
   wakeUp<T>(reply: (signal: AbortSignal, turn: WakeUpTurn) => Promise<T>, signal?: AbortSignal, authority: TurnAuthority = 'supervisor'): Promise<T> {
-    return this.supervisor.turn((turnSignal) => reply(turnSignal, this.supervisor.wakeUpTurn(authority)), signal);
+    return this.supervisor.turn(reply, signal, authority);
   }
 
   /** The command seam's loop guard: a supervisor's call checked against what this run remembers. */
@@ -294,12 +294,15 @@ export class RunSupervision {
 
   /**
    * The supervisor failed for the rest of the run: the run carries on as Off.
+   * At Off, the turns that failed were report turns, and they stop instead.
    * Said in the transcript, where its notes would have been, and as a notice.
    */
   private goUnsupervised(reason: string): void {
     const settings = this.settings();
     if (!settings || settings.unsupervised) return;
-    const text = `The supervisor stopped: ${reason}. The run carries on unsupervised; what it was not told reaches the planner with your next message.`;
+    const text = this.level === 'off'
+      ? `Report turns stopped: ${reason}. The reports the planner asked for reach it with your next message.`
+      : `The supervisor stopped: ${reason}. The run carries on unsupervised; what it was not told reaches the planner with your next message.`;
     settings.unsupervised = reason;
     this.host.systemNote(text);
     this.host.notice('warn', text);

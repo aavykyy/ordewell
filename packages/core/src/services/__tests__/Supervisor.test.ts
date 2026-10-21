@@ -125,6 +125,41 @@ describe('Supervisor', () => {
       vi.useRealTimers();
     });
 
+    it('is delivered once due after a restart that restored it inside its debounce window, without the supervisor\'s own events', async () => {
+      vi.useFakeTimers();
+      const before = new Supervisor(host({ level: 'watch' }), { debounceMs: 10 });
+      before.observe({ kind: 'task_failed', taskId: 't2' });
+      before.observe(report('user'));
+      const saved = before.snapshot();
+      before.reset();
+      const h = host({ level: 'watch' });
+      const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+      supervisor.restore(saved);
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(h.deliver.mock.calls).toEqual([[expect.stringMatching(/^Run update:\n- task #1 "Task t1", whose result you asked for/), 'user']]);
+      expect(supervisor.snapshot().policy.attention).toEqual([expect.objectContaining({ kind: 'task_failed', taskId: 't2' })]);
+
+      supervisor.observe({ kind: 'waiting_input', taskId: 't3' });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(h.deliver).toHaveBeenCalledTimes(2);
+      expect(h.deliver.mock.calls[1]).toEqual([expect.stringMatching(/failed\n- task #3 "Task t3" is waiting for input$/), undefined]);
+      vi.useRealTimers();
+    });
+
+    it('calls a failed report turn of the user\'s a report turn, in the retry and in the give-up', async () => {
+      const h = host({ level: 'off' });
+      const supervisor = new Supervisor(h);
+      const fail = () => supervisor.turn(async () => { throw new Error('planner exited'); }, undefined, 'user');
+
+      await expect(fail()).rejects.toThrow('planner exited');
+      expect(h.notice).toHaveBeenCalledWith('warn', 'The planner\'s report turn failed (planner exited). Retrying once with the planner restarted.');
+      await expect(fail()).rejects.toThrow('planner exited');
+      expect(h.goUnsupervised).toHaveBeenCalledWith('the planner\'s report turn failed twice (planner exited)');
+    });
+
     it('opens no turn once the turns opened without the user have failed for the run', () => {
       expect(new Supervisor(host({ level: 'off', unsupervised: 'its wake-up turn failed twice' })).mayReport()).toBe(false);
     });
@@ -145,6 +180,23 @@ describe('Supervisor', () => {
 
       expect(turn.actor?.()).toEqual({ kind: 'supervisor', level: 'watch' });
     });
+  });
+
+  it('does not wake on the events a restart restored, with no report among them: a session opening is not a run event', async () => {
+    vi.useFakeTimers();
+    const before = new Supervisor(host({ level: 'watch' }), { debounceMs: 10 });
+    before.observe({ kind: 'task_failed', taskId: 't1' });
+    const saved = before.snapshot();
+    before.reset();
+    const h = host({ level: 'watch' });
+    const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+    supervisor.restore(saved);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(h.deliver).not.toHaveBeenCalled();
+    expect(supervisor.snapshot().policy.attention).toHaveLength(1);
+    vi.useRealTimers();
   });
 
   it('tells a wake-up turn at Watch its read budget, and refuses every change to the plan', () => {
