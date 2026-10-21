@@ -27,7 +27,8 @@ wrong tool for making arbitrary local computation safe.
 ADR-0011 runs every planner command in an OS sandbox where the platform has
 one, and (B7) leaves relaxing the classifier because of it to an ADR of its
 own. With nothing writable but a scratch folder, no network and no home
-directory, a command can compute anything and change nothing, and whether the
+directory, a command can compute anything and change nothing (on Linux
+without exception; macOS keeps three residuals, below), and whether the
 classifier can read it stops mattering.
 
 Separately, harness planners' own shells are withheld (ADR-0026): every
@@ -41,8 +42,13 @@ without asking runs sealed instead: with the workspace read-only, a scratch
 folder writable, no home directory and no network. What the classifier allows
 or asks about is unchanged, and where no sandbox runs a refusal is still a
 refusal. Separately, a user may let a harness planner use its own shell, held
-to the same limit on writes and with none of the user's credentials in
+to the same limit on writes and with none of the user's credential stores in
 reach.**
+
+On Linux the profile below is the whole guarantee. On macOS it holds for files,
+home directory, environment and network, and three things no Seatbelt rule
+closes stay open to a sealed run ([What holds on Linux and on
+macOS](#what-holds-on-linux-and-on-macos)).
 
 ### Sealed runs
 
@@ -56,7 +62,8 @@ reach.**
   live there too; no network; a fresh `/dev`, `/proc` and `/tmp`; limits on
   processes, memory and wall time; and it dies with its parent. What it can
   read outside the workspace is fixed by the profile, the same for every
-  command, and holds no user data, so no path is asked about. Where the
+  command, and holds no user data (on macOS but for the here-document files
+below), so no path is asked about. Where the
   platform offers a throwaway overlay, the workspace may be mounted with one
   instead of read-only, so a tool that writes a cache beside the code still
   runs; nothing written reaches the workspace either way. The profile takes
@@ -91,6 +98,70 @@ reach.**
   cannot read is not taught to it to save a refusal; where a sandbox runs, it
   runs sealed. Fixes for commands it misreads go on as before.
 
+### What holds on Linux and on macOS
+
+Linux's PID namespace leaves a sealed run no other process to look at, and its
+mount namespace leaves it no file of the user's but the workspace, so S1 holds
+as written. On macOS, Seatbelt enforces S1's files, home directory,
+environment and network. Three things it promises are not held there, because
+no Seatbelt rule gates them (checked on macOS 26). They are open to every
+command in the planner's sandbox, sealed or not.
+
+1. **Other processes' command lines and environments.** A command can read the
+   command line of the user's other processes, and the environment of those
+   that are not Apple platform binaries, through `sysctl` `kern.procargs2`
+   (the numeric MIB `{1, 49, pid}`). Node, Homebrew's Python and dev servers
+   are exposed, and their environments often hold API keys and tokens. Neither
+   the profile's `sysctl-read` rule nor its `process-info*` rules reach it,
+   and macOS has no seccomp to filter the call.
+2. **The user's existing launchd jobs.** A command inherits the bootstrap port
+   to launchd, and through it can read the definition of a loaded job,
+   environment variables included (`launchctl print`); start one, which then
+   runs outside the sandbox, as the user (`launchctl kickstart`; with `-k` the
+   call fails); unload one (`launchctl bootout`, `launchctl remove`); and
+   enable or disable one persistently (`launchctl enable`, `disable`). It
+   cannot load or submit a new job: the profile's `(deny job-creation)`
+   closes that.
+3. **The shared here-document files.** macOS's `/bin/sh` (bash 3.2) writes a
+   here-document to `/private/tmp/sh-thd-N` whatever `TMPDIR` says, so the
+   profile allows reads and writes of names of that pattern, and `/tmp` is
+   otherwise out of reach. A command can read or overwrite such a file while
+   another process of the user is using it, which makes them a channel at
+   names it can guess. Removing the allowance breaks here-documents.
+
+So on macOS the promises that none of the user's credentials is in reach and
+that a sealed run changes nothing hold as follows: nothing of the user's
+files, home directory or Ordewell's own environment is readable and nothing is
+written outside scratch, but for the here-document files; and what a process of
+the user holds in its environment or command line, and the state of the user's
+launchd jobs, are not out of reach. A value read this way is returned to the
+planner like any command's output. To leave the machine it needs a later step
+that has the network, since a sealed run has none:
+
+- a web read (a fetch or a search, ADR-0027) is checked for an `!` exclusion,
+  the web-read budget, private and loopback addresses, and a secret check on
+  its URL or query, which looks for Ordewell's own secrets, the values of
+  sensitive variables in Ordewell's environment and well-known token formats.
+  That check narrows what a URL carries and does not close it: an encoded or
+  split value passes, and so does a value from another process's environment
+  that has none of those shapes. Under `auto`, in Guarded and in Full, a web
+  read is not asked about;
+- `curl` and `wget` through `run_command` go through the same checks on their
+  URLs and are approved per origin; in Full and under `allowlist` they are
+  refused whatever the allowlist says, and then run sealed, with no network
+  (ADR-0027);
+- any other command that reaches the network (`gh`, `git ls-remote`, a cloud
+  CLI) asks, and the card shows the command, or the user's allowlist rule
+  admits it without asking; in Full it runs only if allowlisted, and
+  otherwise runs sealed, with no network.
+
+Mitigations to come: the egress proxy (#88), through which the sandbox's
+network is planned to go, and a container or VM backend (#99), where other
+processes are not visible, which closes the first two for good. Stage 2 below
+gives a sealed run a network of its own, so on macOS the secret check would be
+what stands between a value read this way and a URL; the proxy's ADR decides
+that with this in view.
+
 ### Network, in stages
 
 1. **Now: none.** A sealed run has no network. A loop of cloud reads runs as
@@ -99,7 +170,7 @@ reach.**
 2. **With the egress proxy (#88):** a sealed run reaches the network only
    through the proxy, under the web-read policy (ADR-0027): exclusions, the
    budget, and private addresses refused on every connection. It still has no
-   home directory, so still no credentials: public reads only.
+   home directory, so no credentials of its own: public reads only.
 3. **In a lease with a credential broker (#93, #97, #99):** read-scoped
    credentials attached by the broker. Decided with the lease's ADR.
 
@@ -122,7 +193,10 @@ reach.**
      CLI configuration, git credentials, SSH keys, package-registry tokens. The
      shell can read the workspace and run local tools, but cannot act on the
      user's accounts. So it is a second way to read and never a second route
-     to effects, which stay script tasks and ops tasks (ADR-0035).
+     to effects, which stay script tasks and ops tasks (ADR-0035). What a
+     process of the user holds in its environment or command line is not a
+     store: on macOS it is the residual above, which Ordewell's Seatbelt
+     does not close for a native shell either.
   3. Every command it runs reaches the research timeline from the harness's
      own event stream, as `run_command`'s commands do.
   4. The repository's config still runs nothing (ADR-0028).
@@ -144,6 +218,15 @@ reach.**
 - **Run every planner command sealed, and drop the classifier where a sandbox
   runs.** Rejected: cloud CLIs and `gh` need the network and the user's
   credentials, and sealing them breaks the reads ADR-0026 exists for.
+- **Sealed runs off by default on macOS until the egress proxy (#88).**
+  Rejected by the maintainer on 2026-10-21, with the three residuals above
+  known. A value read through them still needs a later step with the network
+  to leave the machine, and that step goes through the envelope's checks
+  (above). And sealed runs are what lets the planner loop and run a script on
+  macOS: without them every refusal there is a refusal again, which is the
+  problem this ADR starts from. The residuals are stated instead, in
+  SECURITY.md with advice for macOS users, and closed where they can be by
+  the proxy and a container or VM backend.
 - **Give sealed runs the network now.** Rejected until #88: an unclassified
   command with a network can carry anything it read to any address.
 - **Seal with the home directory mounted read-only**, as ADR-0011's profile for
@@ -178,9 +261,11 @@ reach.**
   Ordewell dies. A process that leaves the group with `setsid` outlives the
   run, still sealed. Its process and memory limits are counted on top of what
   the user already runs and what every macOS program maps as it starts. A
-  sealed run there can still read the command lines of the user's other
-  processes, which `sysctl` hands out under no rule a Seatbelt profile can
-  deny, though not their environments; Linux's PID namespace hides them.
+  sealed run there still has the three residuals above: what the user's other
+  processes hold in their command lines and environments, their launchd jobs,
+  and the shared here-document files. No Seatbelt rule closes them; Linux's
+  PID and mount namespaces leave a sealed run none of them. SECURITY.md says
+  so to macOS users.
 - Homebrew's data directories are hidden from a sealed run on macOS; its
   configuration stays readable, since git and OpenSSL stop on a file the
   sandbox denies rather than one that is missing.
@@ -193,4 +278,5 @@ reach.**
 
 - 2026-10-15 — accepted. Not yet implemented; sealed runs need #64 first.
 - 2026-10-21 — sealed runs implemented (#109) on Seatbelt and bubblewrap, for `bash`, `run_command` and research subagents; the native-shell opt-in waits for #110.
+- 2026-10-21 — the three macOS residuals recorded (other processes' command lines and environments, existing launchd jobs, the shared here-document files), and sealed runs kept on by default there.
 - 2026-10-21 — a read-only task's `run_command` runs sealed with its worktree writable (ADR-0046).

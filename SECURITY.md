@@ -63,7 +63,9 @@ their own repositories. The parts most worth your attention:
   scratch directory where the sandbox runs, or to reach the network when it
   ran without asking, is in scope. A command the user approved keeps the
   network and the local services it reaches through it (ADR-0011 lists them);
-  that is what the approval grants.
+  that is what the approval grants. On macOS, Seatbelt leaves three things open
+  to every command in the sandbox, sealed or not (see Sealed runs); Linux's
+  namespaces close them.
 - **Sealed runs.** A sealed run executes a command no classifier vouched for,
   so its profile is the whole guarantee: the workspace read-only (or under a
   throwaway overlay), the session's scratch directory its only writable place
@@ -76,11 +78,49 @@ their own repositories. The parts most worth your attention:
   read-only task's sealed runs may also write its own worktree
   ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md));
   a way for one to write anywhere else, or for anything a read-only task
-  changed to land, is in scope. On macOS, a process that leaves the run's
-  process group (`setsid`) is not killed with it, though it keeps the sealed
-  profile, and a sealed run can read the command lines (not the
-  environments) of your other processes, which Seatbelt does not filter; keep
-  secrets out of command lines.
+  changed to land, is in scope.
+
+  On Linux that profile is the whole guarantee: the PID namespace leaves a
+  sealed run no other process to look at. **On macOS, three things no Seatbelt
+  rule closes are known and recorded in
+  [ADR-0036](docs/adr/planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md),
+  and stay open to a command in the sandbox, sealed or not. Reporting one of
+  these as new is not needed; a way to close one without breaking the shell is
+  welcome, and so is any further route like them:**
+
+  - *Your other processes' command lines and environments.* A command can read
+    the command line of your other processes, and the environment of those
+    that are not Apple platform binaries, through `sysctl`
+    (`kern.procargs2`). Node, Homebrew's Python and dev servers are exposed,
+    and their environments often hold API keys and tokens.
+  - *Your existing launchd jobs.* Through the bootstrap port it inherits, a
+    command can read the definition of a loaded job, environment variables
+    included (`launchctl print`), start one, which then runs outside the
+    sandbox (`launchctl kickstart`), unload one, and enable or disable one
+    persistently. It cannot load or submit a new job.
+  - *The shared here-document files.* macOS's `/bin/sh` (bash 3.2) writes
+    here-documents to `/private/tmp/sh-thd-N`, so the profile allows reads
+    and writes of names of that pattern, and a command can read or overwrite
+    one while another of your processes is using it.
+
+  A sealed run has no network, so a value read this way leaves the machine
+  only through a later step that has one: a web read, a `curl` or `wget` you
+  approved, or a networked command you approved or allowlisted. Those pass the
+  envelope's checks, which narrow what a URL or query carries and do not
+  close it ([ADR-0027](docs/adr/planner-envelope/0027-web-reads-in-the-planner-envelope.md)).
+  A web read is not asked about under `auto`. The egress proxy
+  ([#88](https://github.com/ordewell/ordewell/issues/88)) and a container or VM
+  backend, where other processes are not visible
+  ([#99](https://github.com/ordewell/ordewell/issues/99)), are planned
+  mitigations.
+
+  On macOS, a process that leaves the run's process group (`setsid`) is also
+  not killed with it, though it keeps the sealed profile. If you use a planner
+  on macOS to read repositories you do not trust, do not keep long-lived
+  secrets in the environment or on the command line of processes that run
+  beside it (a dev server started with a token, a shell that exports a key):
+  keep them in a file only you can read, the keychain or a credential helper,
+  prefer tokens that are short-lived or narrowly scoped, and use Guarded.
 - **The local API server.** `@ordewell/web` binds `127.0.0.1` and, since
   `0.4.8`, authenticates every request against a bearer token minted at daemon
   startup and written to an owner-readable file; browser `Origin` headers are
@@ -118,8 +158,8 @@ except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-s
   without asking has no network. There, a command the envelope would refuse
   without asking runs sealed instead: no network, no home directory, nothing
   readable outside the workspace but the system's own files, and nothing
-  written reaching the workspace. A `!` exclusion and a command you denied
-  are still refused
+  written reaching the workspace, and on macOS but for the residuals under
+  Sealed runs above. A `!` exclusion and a command you denied are still refused
   ([ADR-0036](docs/adr/planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md)).
   The one effect a planner performs itself is a script task (next item).
 - **Script tasks run as you, with no model.** A script task is a list of
@@ -152,7 +192,9 @@ except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-s
   runs sealed, where the workspace is readable, nothing is writable but the
   task's worktree and a scratch directory of its own, the repository's `.git`
   stays read-only, and there is no network and no home directory, so none of
-  your credentials. Where no sandbox runs, what would run sealed is refused.
+  your credentials. On macOS the three gaps listed under Sealed runs stay
+  open to these runs too. Where no sandbox runs, what would run sealed is
+  refused.
   Its runner's own tools still run in the runner's read-only mode, which
   differs by runner (Claude Code's plan mode, for example, may save notes in
   its own config folder); withholding each runner's own write tools and

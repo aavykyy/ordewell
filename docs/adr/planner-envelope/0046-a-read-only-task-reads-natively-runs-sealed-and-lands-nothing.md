@@ -137,9 +137,11 @@ nothing.
   runner's own read rules let them, and a link a sealed command makes in the
   worktree can name a file outside it. What such a read finds reaches the model
   and its report; it writes nothing.
-- On macOS a process that leaves a sealed run's process group outlives it,
-  still sealed (ADR-0036), and can still be writing the worktree while it is
-  removed.
+- On macOS a read-only task's sealed runs keep the three residuals ADR-0036
+  records (other processes' command lines and environments, existing launchd
+  jobs, the shared here-document files), and a process that leaves a sealed
+  run's process group outlives it, still sealed, and can still be writing the
+  worktree while it is removed.
 - A failed or stopped read-only attempt leaves its log and its report to look
   at, and no worktree.
 - Where no sandbox runs, a read-only task runs only the classifier's read-only
