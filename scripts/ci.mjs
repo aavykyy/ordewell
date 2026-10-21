@@ -42,6 +42,26 @@ async function plannerE2e() {
   }
 }
 
+/**
+ * The real Linux sandbox, not just the arguments it is given: bubblewrap and
+ * the user-namespace fix are the point of the step, and a skip in CI would be
+ * green without either. A local Linux box whose sudo would prompt is skipped
+ * with that reason rather than left waiting for a password.
+ */
+function linuxSandboxE2e() {
+  if (process.platform !== 'linux') {
+    console.log('Skipping the real bubblewrap suite: it runs on Linux, where bubblewrap is the backend (macOS uses Seatbelt).');
+    return 0;
+  }
+  const installed = sh('sh', ['-c', 'command -v bwrap >/dev/null']) === 0;
+  const restricted = spawnSync('sysctl', ['-n', 'kernel.apparmor_restrict_unprivileged_userns'], { encoding: 'utf8' }).stdout?.trim() === '1';
+  if ((!installed || restricted) && sh('sudo', ['-n', 'true']) !== 0) {
+    console.log('Skipping the real bubblewrap suite: installing bubblewrap or lifting the user-namespace restriction needs sudo, and sudo would prompt for a password here.');
+    return 0;
+  }
+  return sh('bash', ['scripts/linux-sandbox-e2e.sh']);
+}
+
 function integrationTest() {
   const workspace = mkdtempSync(join(tmpdir(), 'ordewell-integration-workspace-'));
   const env = { ORDEWELL_TEST_WORKSPACE: workspace };
@@ -59,6 +79,7 @@ function integrationTest() {
 /** Run here, keyed by the step's name in ci.yml. */
 const STEPS = {
   'Build (core first — cli, web and vscode compile against its dist/)': () => npm('run', 'build:core'),
+  'Planner sandbox — real bubblewrap e2e': linuxSandboxE2e,
   'Verify scripts (offline, against the built core)': () => {
     for (const f of readdirSync('scripts').filter((f) => /^verify-.*\.mjs$/.test(f)).sort()) {
       if (sh('node', [join('scripts', f)]) !== 0) return 1;

@@ -44,6 +44,14 @@ jobs:
       - name: Build (core first — cli, web and vscode compile against its dist/)
         run: npm run build:core
 
+      # The unit tests only prove the arguments bubblewrap is given; these
+      # suites start a real one. Ubuntu 24.04 restricts unprivileged user
+      # namespaces, so the step applies the fix docs/troubleshooting.md gives
+      # users, then ORDEWELL_REQUIRE_SANDBOX makes a probe that still fails a
+      # test failure rather than a skip.
+      - name: Planner sandbox — real bubblewrap e2e
+        run: bash scripts/linux-sandbox-e2e.sh
+
       # Skills seeding, slash invocation and the settings migration, each run
       # against the built core in a throwaway HOME.
       - name: Verify scripts (offline, against the built core)
