@@ -11,7 +11,7 @@ import { fakeMcpServer, fakeSpawn, fixture, openCodeFixture, planJson, scriptedA
 import type { McpToolReply, SubmitPlanArgs } from '../mcp/tools';
 import type { SkillLookup } from '../taskSkills';
 import type { SkillInfo } from '../SkillsService';
-import type { AgentAdapter, AgentEvent } from '../harness/AgentAdapter';
+import type { AgentAdapter, AgentEvent, PlannerStartOptions } from '../harness/AgentAdapter';
 import type { ApprovalRequest } from '../../interfaces/IApproval';
 import { addPlannerUsage, plannerContextFill } from '../../models/Usage';
 import { TurnStream } from '../replyStream';
@@ -79,6 +79,15 @@ function claudeSays(text: string): string {
     { type: 'system', subtype: 'init', session_id: 'sess-says', cwd: '/repo', permissionMode: 'plan' },
     { type: 'assistant', session_id: 'sess-says', message: { id: 'msg_says', role: 'assistant', content: text ? [{ type: 'text', text }] : [] } },
     { type: 'result', subtype: 'success', session_id: 'sess-says', is_error: false, result: text },
+  ].map((line) => `${JSON.stringify(line)}\n`).join('');
+}
+
+/** The same turn with the `claude_code_version` a real `init` carries, for the native-shell check (ADR-0036 N2). */
+function claudeVersionSays(version: string, text: string): string {
+  return [
+    { type: 'system', subtype: 'init', session_id: 'sess-version', cwd: '/repo', permissionMode: 'plan', claude_code_version: version },
+    { type: 'assistant', session_id: 'sess-version', message: { id: 'msg_version', role: 'assistant', content: [{ type: 'text', text }] } },
+    { type: 'result', subtype: 'success', session_id: 'sess-version', is_error: false, result: text },
   ].map((line) => `${JSON.stringify(line)}\n`).join('');
 }
 
@@ -2431,6 +2440,111 @@ describe('CliAgentAiService — resource lifecycle', () => {
     } finally {
       process.off('unhandledRejection', onUnhandled);
     }
+  });
+});
+
+describe('CliAgentAiService — the native-shell setting (ADR-0036)', () => {
+  /** A service whose adapter reports `version`, with every start recorded. */
+  function recordingService(turns: AgentEvent[][], version: () => string | null, config = fakeConfig({ aiProvider: 'claude-code' })) {
+    const starts: PlannerStartOptions[] = [];
+    const scripted = scriptedAdapter(turns);
+    const mcp = fakeMcpServer();
+    const svc = new CliAgentAiService(config, {
+      createAdapter: (runner, deps): AgentAdapter => {
+        const adapter = scripted(runner, deps)!;
+        return { ...adapter, version, start: async (opts) => { if (opts.kind === 'planner') starts.push(opts); } };
+      },
+      fetch: (async () => { throw new Error('no HTTP in this test'); }) as unknown as typeof fetch,
+      resolvePath: async () => '/usr/bin',
+      workspaceRoot: () => '/repo',
+      platform: 'darwin',
+      isDirectory: () => true,
+      exists: () => true,
+      mcpServer: mcp,
+    });
+    return { svc, starts, config };
+  }
+
+  it('carries the setting into every planner start, and reopens the process when it changes', async () => {
+    const turns: AgentEvent[][] = [
+      [{ type: 'assistant_text', runId: 'r1', text: 'One.' }, { type: 'turn_end' }],
+      [{ type: 'assistant_text', runId: 'r2', text: 'Two.' }, { type: 'turn_end' }],
+    ];
+    const config = fakeConfig({ aiProvider: 'claude-code', plannerNativeShell: false });
+    const { svc, starts } = recordingService(turns, () => '2.1.304', config);
+
+    await svc.startConversation(request());
+    expect(starts[0].nativeShell).toBe(false);
+
+    config.plannerNativeShell = true;
+    await svc.continueConversation('Go on', () => {});
+
+    expect(starts).toHaveLength(2);
+    expect(starts[1].nativeShell).toBe(true);
+  });
+
+  it('keeps the process while the setting stands', async () => {
+    const turns: AgentEvent[][] = [
+      [{ type: 'assistant_text', runId: 'r1', text: 'One.' }, { type: 'turn_end' }],
+      [{ type: 'assistant_text', runId: 'r2', text: 'Two.' }, { type: 'turn_end' }],
+    ];
+    const { svc, starts } = recordingService(turns, () => '2.1.304', fakeConfig({ aiProvider: 'claude-code', plannerNativeShell: true }));
+
+    await svc.startConversation(request());
+    await svc.continueConversation('Go on', () => {});
+
+    expect(starts).toHaveLength(1);
+  });
+
+  it('says once per session why the setting is not offered on an unchecked version', async () => {
+    const turns: AgentEvent[][] = [
+      [{ type: 'assistant_text', runId: 'r1', text: 'One.' }, { type: 'turn_end' }],
+      [{ type: 'assistant_text', runId: 'r2', text: 'Two.' }, { type: 'turn_end' }],
+    ];
+    const { svc } = recordingService(turns, () => '2.1.300', fakeConfig({ aiProvider: 'claude-code', plannerNativeShell: true }));
+    const notices: Array<{ level: string; message: string }> = [];
+
+    await svc.startConversation(request({ notice: (level, message) => notices.push({ level, message }) }));
+    await svc.continueConversation('Go on', () => {});
+
+    expect(notices).toHaveLength(1);
+    expect(notices[0].level).toBe('warn');
+    expect(notices[0].message).toContain('2.1.300');
+  });
+
+  it('says nothing when the checked version is offered, and nothing while the setting is off', async () => {
+    const turns: AgentEvent[][] = [
+      [{ type: 'assistant_text', runId: 'r1', text: 'One.' }, { type: 'turn_end' }],
+      [{ type: 'assistant_text', runId: 'r2', text: 'Two.' }, { type: 'turn_end' }],
+    ];
+    const notices: string[] = [];
+    const offered = recordingService(turns, () => '2.1.304', fakeConfig({ aiProvider: 'claude-code', plannerNativeShell: true }));
+    await offered.svc.startConversation(request({ notice: (_level, message) => notices.push(message) }));
+    expect(notices).toEqual([]);
+
+    const off = recordingService(turns, () => '2.1.300', fakeConfig({ aiProvider: 'claude-code', plannerNativeShell: false }));
+    await off.svc.startConversation(request({ notice: (_level, message) => notices.push(message) }));
+    expect(notices).toEqual([]);
+  });
+
+  it('reads Claude Code\'s version from its init line before the first tool call', async () => {
+    const spawned = fakeSpawn([claudeVersionSays('2.1.300', 'Done.')]);
+    const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'claude-code', plannerNativeShell: true }), {
+      spawn: spawned.spawn,
+      fetch: (async () => { throw new Error('no HTTP in this test'); }) as unknown as typeof fetch,
+      resolvePath: async () => '/usr/bin',
+      workspaceRoot: () => '/repo',
+      platform: 'darwin',
+      isDirectory: () => true,
+      exists: () => true,
+      mcpServer: fakeMcpServer(),
+    });
+    const notices: string[] = [];
+
+    await svc.startConversation(request({ notice: (_level, message) => notices.push(message) }));
+
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain('Claude Code 2.1.300');
   });
 });
 

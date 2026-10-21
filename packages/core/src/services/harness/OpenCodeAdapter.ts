@@ -260,6 +260,8 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
 
   private process: ChildProcess | null = null;
   private baseUrl: string | null = null;
+  /** The server's version from `/api/info`; null on 1.x, which does not report one (ADR-0036 N2). */
+  private serverVersion: string | null = null;
   /** Sent on every request to a task's server, which a per-task password secures. */
   private authorization: string | null = null;
   private sessionId: string | null = null;
@@ -381,6 +383,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     }
 
     const version = await this.v2Version();
+    this.serverVersion = version;
     if (version !== null) {
       this.v2 = new OpenCodeV2({
         version,
@@ -1069,6 +1072,8 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   }
 
   nativeSessionId(): string | null { return this.sessionId; }
+
+  version(): string | null { return this.serverVersion; }
 
   unusableProjectServers(): ProjectMcpServer[] { return this.v2?.unusableProjectServers() ?? []; }
 

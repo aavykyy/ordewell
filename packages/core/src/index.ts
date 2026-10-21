@@ -137,6 +137,8 @@ export { ClaudeCodeAdapter } from './services/harness/ClaudeCodeAdapter';
 export { CodexAdapter } from './services/harness/CodexAdapter';
 export { CodexSandboxAvailability, codexSandboxNotice, CODEX_SANDBOX_DOCS, CODEX_SANDBOX_OFF_LINE } from './services/harness/codexSandbox';
 export { OpenCodeAdapter } from './services/harness/OpenCodeAdapter';
+export { nativeShellOffer } from './services/harness/nativeShell';
+export type { NativeShellOffer } from './services/harness/nativeShell';
 export { mapAgentTool, normalizeAgentArgs } from './services/harness/agentTools';
 export type { MappedTool } from './services/harness/agentTools';
 export { applyTaskOps, parseTaskOpsJson, textHasTaskOps, canMergeTasks, canSplitTask, canSetDependencies, dependencyCandidates, dependentsOf } from './services/TaskOps';
@@ -290,6 +292,7 @@ export {
   type PlannerSelectionState,
 } from './services/selectPlanner';
 export { DEFAULT_MAX_PARALLEL, parseMaxParallel } from './utils/maxParallel';
+export { compareVersions, parseVersion } from './utils/version';
 
 export { walkPlan, taskPlacement, subtreeIds } from './services/PlanTree';
 export type { TreeTask, TaskPlacement } from './services/PlanTree';

@@ -190,6 +190,12 @@ export interface PlannerStartOptions extends AgentStartCommon {
    */
   nativeSearch?: boolean;
   /**
+   * Whether the user let this planner use its harness's own shell beside
+   * Ordewell's tools (ADR-0036 N1). The adapter offers it only for a version
+   * that passed N2's live checks (see `nativeShellOffer`); absent means off.
+   */
+  nativeShell?: boolean;
+  /**
    * The repository's own MCP servers this planner may start, as approved
    * (ADR-0028). The runner is launched without the repository's config, so
    * these are the only ones it gets, and each is handed over as parsed.
@@ -264,6 +270,14 @@ export interface AgentAdapter {
 
   /** The agent's native session id once it has announced one. Resumption hint only. */
   nativeSessionId(): string | null;
+
+  /**
+   * The installed version the agent reported, once it has (ADR-0036 N2):
+   * Claude Code's `claude_code_version` on its first `init`, an OpenCode 2.x
+   * server's `/api/info`. Null while unknown, and on OpenCode 1.x, which does
+   * not report one.
+   */
+  version?(): string | null;
 
   /** What has been counted of the session's running cost, for a runner that reports one; null while unknown. */
   sessionCost?(): RunnerSessionCost | null;

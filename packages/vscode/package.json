@@ -292,6 +292,12 @@
           "default": true,
           "description": "Include Ordewell's built-in allowlist of read-only commands (GitHub, GitLab, Azure, Google Cloud, AWS, Kubernetes, containers, installed packages and more) and read-only MCP tools."
         },
+        "ordewell.plannerNativeShell": {
+          "scope": "application",
+          "type": "boolean",
+          "default": false,
+          "description": "Let a harness planner (Claude Code, OpenCode) use its own shell beside run_command, with writes confined to a scratch folder and the user's credential stores out of reach. Only offered for versions checked live: Claude Code 2.1.304–2.1.x and OpenCode 2.0.32–2.0.x on macOS. Other versions and platforms, and OpenCode 1.x, keep run_command alone. The shell keeps whatever network its harness gives it. Codex already has its own shell, so this changes nothing for it. A user setting: a workspace cannot set it."
+        },
         "ordewell.worktreeIsolation": {
           "type": "boolean",
           "default": true,

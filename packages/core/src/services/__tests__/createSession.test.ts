@@ -1864,3 +1864,25 @@ describe("the planner shell's notice and scratch directory (ADR-0011)", () => {
     expect(endSession).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('the native-shell setting\'s notice channel (ADR-0036 N4)', () => {
+  it('hands a harness planner the session notice, so it can say why the setting is not offered', async () => {
+    const notices: unknown[] = [];
+    const startConversation = vi.fn(async (req: { notice?: (level: 'warn', message: string) => void }) => {
+      req.notice?.('warn', 'The planner\'s own shell is off: Claude Code 2.1.300 has not been checked.');
+      return { kind: 'message' as const, text: 'hello', researchLog: [] };
+    });
+    const session = makeSession({
+      aiService: { startConversation, hasActiveConversation: () => false, reset: vi.fn() },
+      onNotice: (notice) => notices.push(notice),
+    });
+
+    await session.startPlanning('test goal', ['claude-code']);
+
+    expect(notices).toEqual([{
+      type: 'notice',
+      level: 'warn',
+      message: 'The planner\'s own shell is off: Claude Code 2.1.300 has not been checked.',
+    }]);
+  });
+});

@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0008", "0011", "0026"]
-note: "sealed runs are implemented (#109); the native-shell opt-in waits for #110"
+note: "sealed runs are implemented (#109); the native-shell setting and its eligibility table are implemented (#110); wiring each harness's tools is pending"
 ---
 
 # 0036 — The planner's shell: sealed runs instead of refusals, and the harness's own shell as an opt-in
@@ -208,6 +208,12 @@ that with this in view.
 - **A harness that cannot be held to N2 (N4)** is not offered the opt-in, and
   the setting says why. Cloud reads that need the user's credentials stay on
   `run_command`, classified and allowlisted, whether or not the opt-in is on.
+- **What is offered now (N5).** The opt-in is offered for Claude Code 2.1.304
+  through 2.1.x and OpenCode 2.0.32 through 2.0.x, on macOS. OpenCode 1.x was
+  not checked live, so it keeps `run_command` alone. Linux was not checked live
+  either, so the opt-in is not offered there yet, even where the bubblewrap
+  probe would pass: that probe says the sandbox can start, not that either
+  harness's shell was held to N2 there.
 
 ## Live checks
 
@@ -378,3 +384,4 @@ shell.
 - 2026-10-21 — the three macOS residuals recorded (other processes' command lines and environments, existing launchd jobs, the shared here-document files), and sealed runs kept on by default there.
 - 2026-10-21 — a read-only task's `run_command` runs sealed with its worktree writable (ADR-0046).
 - 2026-10-21 — live checks of N2 on Claude Code 2.1.304 and OpenCode 2.0.32 (#110), recorded under Live checks.
+- 2026-10-21 — the native-shell setting and its eligibility table implemented (#110): Claude Code 2.1.304–2.1.x and OpenCode 2.0.32–2.0.x on macOS; OpenCode 1.x and Linux stay on `run_command` until checked live.

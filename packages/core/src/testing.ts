@@ -67,6 +67,7 @@ export function fakeConfig(overrides: Partial<IConfig> = {}): IConfig {
     approvalDefaults: false,
     effectAllowlist: [],
     webReadBudget: 40,
+    plannerNativeShell: false,
     setProviderModelLists: () => {},
     getProviderBaseUrl: () => '',
     // Every vendor holds a key, so no planner turn is refused for want of one
