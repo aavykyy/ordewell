@@ -9,7 +9,7 @@ import { Supervisor, type RunEventInput, type SupervisorHost, type SupervisorOpt
 import { SupervisionMemory, type GuardTarget, type GuardTrip } from './LoopGuards';
 import { SUPERVISOR_LEVEL_LABEL } from './runSettingsText';
 import { executionSummary } from './SessionMessage';
-import { blockingFailures } from './blocking';
+import { blockingFailures, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 import { reportEnded, taskReport } from './taskReport';
 
@@ -163,12 +163,15 @@ export class RunSupervision {
    * supervisor hears of it. The end of a task whose result a planner turn
    * asked for is that turn's report instead, which wakes the planner at every
    * level (ADR-0037, R2). A loop's check that failed a round with rounds left
-   * is none of these: the loop goes on with no one asked, so it counts for no
-   * guard, wakes no one, and owes its report only once the loop is over
-   * (ADR-0045 L3, L7).
+   * is none of these while its loop goes on: no one is asked, so it counts for
+   * no guard, wakes no one, and owes its report only once the loop is over
+   * (ADR-0045 L3, L7). A body task that fails stops the loop, so the report
+   * its check owes goes then.
    */
   taskSettled(task: Readonly<Task>): void {
-    if (betweenRounds(task)) return;
+    const repeating = repeatingChecks([...this.host.tasks()]);
+    this.reportStoppedLoops(repeating, task.id);
+    if (repeating.has(task.id)) return;
     this.guards.settled(task);
     const to = task.reportTo;
     if (to && reportEnded(task)) {
@@ -180,6 +183,21 @@ export class RunSupervision {
     if (event) this.supervisor.observe(event);
   }
 
+  /**
+   * The reports owed by loops' checks between rounds whose loop has stopped
+   * (ADR-0045 L7): the check is the failure it is stored as now, and no
+   * further round will settle it. `settling` is the task settling now, whose
+   * own report its settling sends.
+   */
+  private reportStoppedLoops(repeating: ReadonlySet<string>, settling?: string): void {
+    for (const check of this.host.tasks()) {
+      const to = check.reportTo;
+      if (!to || check.id === settling || !betweenRounds(check) || repeating.has(check.id)) continue;
+      this.supervisor.observe({ kind: 'task_report', taskId: check.id, report: this.reportOf(check, to) });
+      this.host.reported(check.id, to);
+    }
+  }
+
   private reportOf(task: Readonly<Task>, to: TaskReportTo): RunEventInput['report'] {
     const authority: TurnAuthority = to.actor === 'supervisor' ? 'supervisor' : 'user';
     const rounds = outOfRoundsNote(task);
@@ -189,6 +207,8 @@ export class RunSupervision {
 
   /** The run finished; a handoff deferred to the supervisor is resent once its wake-up turn on it is over. */
   runFinished(): void {
+    // A skip of a body task stops its loop and settles nothing.
+    this.reportStoppedLoops(repeatingChecks([...this.host.tasks()]));
     const { total, completed, failed, blocked, skipped } = executionSummary(flattenTasks([...this.host.tasks()]));
     this.supervisor.observe({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}${blocked > 0 ? `, ${blocked} blocked` : ''}${skipped > 0 ? `, ${skipped} skipped` : ''}` });
     if (!this.supervisor.awaitsRunEnd) this.handOver();
