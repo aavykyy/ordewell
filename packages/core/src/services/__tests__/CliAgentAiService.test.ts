@@ -2504,6 +2504,30 @@ describe('CliAgentAiService — the native-shell setting (ADR-0036)', () => {
     expect(starts).toHaveLength(2);
   });
 
+  // The prompt is decided with the process, not with the setting: a planner
+  // told of a shell it was not given spends calls on refusals (N1, N4).
+  it('tells the planner of its own shell only in a process that was given one', async () => {
+    const turns = (): AgentEvent[][] => [
+      [{ type: 'assistant_text', runId: 'r1', text: 'One.' }, { type: 'turn_end' }],
+      [{ type: 'assistant_text', runId: 'r2', text: 'Two.' }, { type: 'turn_end' }],
+    ];
+    const told = (start: PlannerStartOptions) => (start.systemPrompt ?? '').includes('your own shell is available too');
+
+    const checked = recordingService(turns(), () => '2.1.304', fakeConfig({ aiProvider: 'claude-code', plannerNativeShell: true }));
+    await checked.svc.startConversation(request());
+    await checked.svc.continueConversation('Go on', () => {});
+    expect(checked.starts.map((start) => [start.nativeShell, told(start)])).toEqual([[false, false], [true, true]]);
+
+    const unchecked = recordingService(turns(), () => '2.1.303', fakeConfig({ aiProvider: 'claude-code', plannerNativeShell: true }));
+    await unchecked.svc.startConversation(request());
+    await unchecked.svc.continueConversation('Go on', () => {});
+    expect(unchecked.starts.map(told)).toEqual([false]);
+
+    const codex = recordingService(turns(), () => '0.163.0', fakeConfig({ aiProvider: 'codex', plannerNativeShell: true }));
+    await codex.svc.startConversation(request());
+    expect(codex.starts.map(told)).toEqual([false]);
+  });
+
   it('says once per session why the setting is not offered on an unchecked version', async () => {
     const turns: AgentEvent[][] = [
       [{ type: 'assistant_text', runId: 'r1', text: 'One.' }, { type: 'turn_end' }],

@@ -6,6 +6,7 @@ import {
   execProbe,
   launchEnv,
   probeByRunning,
+  SandboxUnsupportedError,
   type ProbeExec,
   type SandboxBackend,
   type SandboxInvocation,
@@ -94,6 +95,8 @@ export class BubblewrapBackend implements SandboxBackend {
   }
 
   wrap(invocation: SandboxInvocation, profile: SandboxProfile): SandboxLaunch {
+    // Sharing the host's network namespace shares its loopback; keeping one without the other needs a network of its own.
+    if (profile.network && profile.localNetwork === false) throw new SandboxUnsupportedError(this.name, "the network without this machine's own services");
     assertProfilePaths(this.name, profile);
     if (profile.limits) assertLimits(this.name, profile.limits);
 

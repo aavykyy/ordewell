@@ -2901,6 +2901,8 @@ names its launcher in the harness's own spelling — `CLAUDE_CODE_SHELL_PREFIX`,
 or `SHELL` plus the config layer's `shell` — and every command runs through it
 in the *sealed run* profile with the network (N3), so the workspace stays
 read-only and the keychain and the user's credential files stay out of reach;
+that network stops at the machine itself, with loopback and local Unix sockets
+refused, since the harness's own server and Ordewell's daemon listen there;
 the planner's process starts without the user's credential variables (N2.2)
 and keeps the harness's own login (N3). Each command is a `bash` step, and an
 OpenCode `shell.created` that names another shell fails its call. Off by

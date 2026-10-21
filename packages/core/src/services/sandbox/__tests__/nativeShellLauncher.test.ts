@@ -99,6 +99,9 @@ describe('createNativeShellLauncher (ADR-0036 N2)', () => {
       expect(profile.write).toContain(realpathSync(launcher.tmpdir));
       expect(profile.write).toContain(profile.env.TMPDIR);
       expect(profile.network).toBe(true);
+      // The harness's own server and Ordewell's daemon listen on loopback and
+      // run what they are asked outside the sandbox.
+      expect(profile.localNetwork).toBe(false);
       // The launcher itself is outside every writable directory: a command
       // must not be able to rewrite what the next command starts through.
       expect(profile.write).not.toContain(launcher.prefix);
