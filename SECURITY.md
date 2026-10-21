@@ -98,7 +98,7 @@ their own repositories. The parts most worth your attention:
 What is true today, without containers. Nothing here is an OS-level sandbox
 except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-shell.md) says so.
 
-- **Planners, research subagents and the supervisor only read.** They read the
+- **Planners, research subagents and the supervisor read, and write no file.** They read the
   workspace and the output their own runner saved for them this session, inside
   the exploration envelope. Web reads go through the web-read policy; anything
   else outside the envelope is asked about in Guarded and refused in Full. They
@@ -117,6 +117,20 @@ except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-s
   written reaching the workspace. A `!` exclusion and a command you denied
   are still refused
   ([ADR-0036](docs/adr/planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md)).
+  The one effect a planner performs itself is a script task (next item).
+- **Script tasks run as you, with no model.** A script task is a list of
+  commands, or a script, that the planner writes into the plan and Ordewell runs
+  in your checkout with your workspace's environment. It is outside the
+  planner's sandbox and nothing at the OS or network layer bounds it. You
+  consent to the body as written: the approval card shows it verbatim, and a
+  body that changes needs consent again. A card you do not answer is a denial.
+  Autorun in Full, and an Act supervisor, run one without asking. So does your
+  **effect allowlist** (`ordewell.effectAllowlist`, or `ORDEWELL_EFFECT_ALLOW`),
+  which covers a script task only when every command in it matches a rule
+  exactly, flags included. It is a user-level setting only: a workspace's
+  settings and environment files cannot set it, it has no built-in entries, and
+  it never covers a shell script or a program named by its path
+  ([ADR-0035](docs/adr/supervision/0035-effects-are-consented-and-recorded.md)).
 - **Change and ops tasks run as you**, with the runner's own native tools, in
   the mode their plan assigned
   ([ADR-0020](docs/adr/isolation/0020-ops-tasks-and-merge-gates.md)). They can read and
@@ -135,8 +149,11 @@ In practice:
 - Use **Guarded** for repositories you do not trust.
 - Review the plan before it runs. Approving it is the consent point; the
   tasks then do what it says.
-- Ops tasks are where effects on the outside world happen: pushes, deploys,
-  cloud commands.
+- Ops tasks and script tasks are where effects on the outside world happen:
+  pushes, deploys, cloud commands.
+- Write effect allowlist rules narrowly, and leave out any that run the
+  repository's own code (`npm run deploy`, `make release`): such a rule runs
+  whatever the repository holds when it runs.
 
 Planned, not yet built:
 

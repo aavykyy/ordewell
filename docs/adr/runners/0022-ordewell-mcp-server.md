@@ -4,8 +4,6 @@ status: accepted
 
 # 0022 — The Ordewell MCP server: task and planner tools behind per-caller tokens
 
-*Pending:* [ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md) — `run_script` joins the execution tools, and a script task's exit status is its completion evidence.
-
 ## Problem
 
 Task completion and checkpoints need signals bound to the current attempt,
@@ -114,7 +112,11 @@ on the same mechanism.
   for `task_complete` passes the call, with its generation, to
   `VerdictEngine`; it decides nothing itself. A tool call bound to the
   attempt's token is the runner's own explicit signal. No model is asked to
-  judge; verdicts come from evidence.
+  judge; verdicts come from evidence. A script task
+  ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)) has
+  no runner to make the call: its exit status is handed to `VerdictEngine` as
+  the attempt's evidence, the one completion that is not a `task_complete`
+  call.
 - **Only the completion call settles the attempt (V2).** `VerdictEngine` checks
   the generation and invalidates it when the verdict is published. A stale call
   cannot complete another attempt. Evidence held behind an undelivered message
@@ -160,10 +162,13 @@ planner tools are recorded here as an explicit entry against both:
   finished task, exactly as an envelope edit is (ADR-0029).
 - **Execution tools are a further explicit entry (P5).** `run_plan`, `run_task`,
   `stop_task`, `stop_run`, `retry_task`, `message_task`, `answer_approval` (deny
-  or escalate, never allow), `merge_all` and `skip_task` (lands nothing, never
-  marks work complete) change what runs, not files
-  ([ADR-0029](../supervision/0029-the-supervisor.md)). They
-  reach the scheduler only through one core command seam, which checks the
+  or escalate, never allow), `merge_all`, `skip_task` (lands nothing, never
+  marks work complete) and `run_script` change what runs, not files
+  ([ADR-0029](../supervision/0029-the-supervisor.md)). `run_script` adds a
+  script task to the plan and starts it in one step, and answers with its
+  verdict and the end of its output; it is offered to the API planner too, and
+  the user's consent to it is ADR-0035's rule. They
+  all reach the scheduler only through one core command seam, which checks the
   supervisor level, who started the turn and the plan's approval; `task_diff`
   joins the reads. Absent a grant at the seam, the call is refused.
 - **Reads keep today's caps (P3).** `task_query`, `task_output` and `task_diff` share the
@@ -273,3 +278,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-14 — `skip_task` joins the execution tools ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-17 — the live enabled runners (L1) are read from one settings file shared with VS Code, and the planner is told on its next turn what changed ([ADR-0043](../routing/0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md)).
 - 2026-10-18 — `submit_plan` and `edit_plan` report what the assignment resolver adjusted, an edit's own ops included (P2, [ADR-0003](../routing/0003-per-runner-model-allowlist.md)).
+- 2026-10-21 — `run_script` joins the execution tools, and a script task's exit status is its completion evidence, handed to `VerdictEngine` ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
