@@ -1,8 +1,6 @@
 ---
 status: accepted
-implemented: partial
 amends: ["0029", "0034"]
-note: "Core is implemented; the surfaces drawing the round and the planner prompt teaching loops are not yet (#118)."
 ---
 
 # 0045 — A check repeats with its fix until it passes
@@ -157,8 +155,7 @@ before.
 
 Nested loops; a loop whose body is a delegated child plan (#33); declared
 acceptance checks (#39) as the check, until #39 is decided; a manual task as
-check or body. Drawing the round and "runs if #X fails" on the surfaces, and
-teaching the planner when to write a loop, follow this in #118.
+check or body; a user editing a loop's `loop` field by hand from a surface.
 
 ## Considered options
 
@@ -203,8 +200,16 @@ teaching the planner when to write a loop, follow this in #118.
   stay on the integration branch, while the run's record of the task, which
   the handoff lists, is its latest attempt's.
 - Surfaces get `loop` and `loopRound` on every task and on status updates, and
-  `reported` on a verdict, to draw "round *r* of *N*" and "runs if #X fails".
+  `reported` on a verdict, and draw "round *r* of *N*" and "runs if #X fails"
+  from the one row view (`taskRowView`, `row.loop`), which reads the same
+  `planBlocks` the scheduler does: a check between rounds shows as fixing, not
+  as failed. A surface asks before a removal only where core will allow it, and
+  quotes core's refusal of a check's removal (L8) rather than offering it.
+- The conversation planner's prompt teaches a loop under the build and the
+  failure-to-explain strategies, prefers a script check, and has the planner
+  choose `maxRounds`; the one-shot planner's prompt does not.
 
 ## History
 
 - 2026-10-21 — accepted; core implemented (#118).
+- 2026-10-21 — surfaces draw the rounds and the planner prompt teaches loops (#118); implemented.

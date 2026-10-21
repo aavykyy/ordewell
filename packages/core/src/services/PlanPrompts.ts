@@ -269,8 +269,10 @@ const PLANNER_TOOLS_CATALOG = [
  * a plan at all, and what shape it takes. Only a build is planned as vertical
  * slices, so the slicing rules sit under BUILD PLANS. The prompt teaches the choice and
  * grants nothing: what may run is decided at the command seam (ADR-0035).
- * Research tasks (ADR-0037) and loops join this list as they land; until then
- * an open problem is explored one round at a time with read-only tasks.
+ * Loops (ADR-0045) sit under the build and the failure to explain, since a
+ * goal that is done only when something passes is usually one of those with a
+ * check at its end. Research tasks (ADR-0037) join this list as they land;
+ * until then an open problem is explored one round at a time with read-only tasks.
  */
 function strategySection(execution: boolean): string[] {
   return [
@@ -280,8 +282,9 @@ function strategySection(execution: boolean): string[] {
     execution
       ? '- A small effect you can state as exact commands: one script task. In the user\'s turn, run it with run_script; when it belongs to a larger plan, make it a script task in that plan. An effect that needs judgment is an ops task.'
       : '- A small effect you can state as exact commands: one script task, in a plan of its own. An effect that needs judgment is an ops task.',
-    '- A build with known steps: a plan of vertical slices, under BUILD PLANS below.',
-    '- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix. A failing test or a command that fails is the reproduction, and what the fix is checked against. Give each hypothesis a task of its own that reports the evidence for and against it, read-only when reading is enough. Plan the fix once the reports name the cause.',
+    '- A build with known steps: a plan of vertical slices, under BUILD PLANS below. When the build must also meet a bar that can be checked (the tests pass, a review finds nothing), end it with a loop, under LOOPS below.',
+    '- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix. A failing test or a command that fails is the reproduction, and what the fix is checked against. Give each hypothesis a task of its own that reports the evidence for and against it, read-only when reading is enough. Plan the fix once the reports name the cause. When the reproduction is a command you can run again, make it the check of a loop whose body is the fix, under LOOPS below.',
+    '- A goal that is done only when something passes ("until the tests pass", "until the review finds nothing"): a loop, under LOOPS below. It sits at the end of a build or a fix.',
     '- An open problem with no known path: plan only the first round of exploration, as read-only tasks that each report on one question. Read their reports, then extend the plan with the next round, or with the build they point to.',
     'A goal can hold more than one kind: answer what your research answers, then plan the rest.',
     '',
@@ -384,6 +387,12 @@ function buildConversationBody(
     '- "timeoutMs" is its time limit in milliseconds; ten minutes when left out.',
     '- Only a top-level task can be one. Leave out "prompt", "assignedRunner", "assignedModel", "readOnly", "ops", "skills", "userSteps" and "subtasks".',
     '',
+    'A loop is one "loop" field on its check (see LOOPS below). A script task is the check here, and an AI task the fix:',
+    '{ "id": "tests-1", "order": 4, "title": "Run the test suite", "description": "Passes when the suite does", "type": "script", "dependencies": ["task-3"], "commands": [["npm", "test"]], "sliceType": "AFK", "loop": { "body": ["fix-1"], "maxRounds": 3 } }',
+    '{ "id": "fix-1", "order": 5, "title": "Fix the failing tests", "description": "Makes the suite pass", "type": "ai", "dependencies": ["tests-1"], "prompt": "The test run\'s report is in your prior task outputs. Fix the cause of each failure it lists; change nothing else.", "autonomy": "AFK", "sliceType": "AFK" }',
+    'An AI task is the check when no command can judge the work. Its prompt says how it reports (the review is read-only):',
+    '{ "id": "review-1", "order": 6, "title": "Adversarial review", "description": "Passes when the review confirms no problem", "type": "ai", "dependencies": ["task-3"], "prompt": "Review the change as an adversary. Confirm each problem before you report it. Call task_complete with status failed and every confirmed problem in the report; with status done when you confirm none.", "readOnly": true, "autonomy": "AFK", "sliceType": "AFK", "loop": { "body": ["fix-2"] } }',
+    '',
     'SLICE CLASSIFICATION:',
     '- "autonomy": AFK (agent works autonomously) or HITL (needs user confirmation)',
     '- "sliceType": Same vocabulary as autonomy.',
@@ -409,6 +418,15 @@ function buildConversationBody(
     '- Reference specific files and patterns from your research in task prompts.',
     SHARED_APPEND_FILE_RULE,
     ...(variant.isolatedExecution ? [] : [OVERLAP_AVOIDANCE_RULE]),
+    '',
+    'LOOPS:',
+    'A loop repeats a check with its fix until the check passes. Ordewell runs the rounds itself, with no turn of yours in between: the check runs, and while it fails with rounds left, the body runs and then the check runs again. A build or a fix that must end on something checkable (the suite is green, the review finds nothing) takes one; a plan without such a bar does not.',
+    '- Put "loop": { "body": ["fix-id", ...], "maxRounds": 3 } on the check. "body" names, by id, the top-level tasks that fix what the check finds. Each depends on the check, and otherwise only on what the check depends on or on other tasks of the body. Whatever comes after the loop depends on the check, never on a body task.',
+    '- The check is a top-level AI or script task with no subtasks. A body task is a top-level AI or script task in one loop only, never a manual task, and has no subtasks either: each round runs a task again whole, so give each step its own task.',
+    '- Prefer a script task as the check wherever a command can judge the work: the test suite, the type checker, the linter, a benchmark against a threshold. Its exit status is evidence you can check: 0 passes, anything else fails and starts a round.',
+    '- Otherwise the check is an AI task, such as an adversarial review. Write in its prompt that it calls task_complete with status "failed" and every confirmed problem in its report when it finds any, and "done" when it confirms none. Only a "failed" report starts a round: "blocked" (it could not do the check) and a run that ends without a report start none.',
+    '- Each body task is given the check\'s latest report as its prior task output, told which round it is from. Write its prompt to act on that report, and to change nothing else.',
+    '- Choose "maxRounds" deliberately, from 1 to 10; it is 3 when left out. It is the most times the check runs, so it bounds the spend. Raise it only where each round is cheap and clearly converging. A check that fails its last round fails, and the tasks after it are blocked until someone looks.',
     '',
     'RULES:',
     ...(tools

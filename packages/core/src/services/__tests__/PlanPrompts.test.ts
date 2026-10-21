@@ -570,3 +570,70 @@ describe('script tasks in the conversation prompt (ADR-0035)', () => {
     expect(oneShot(LONE_REPO)).not.toMatch(/script task/i);
   });
 });
+
+describe('loops in the conversation prompt (ADR-0045)', () => {
+  const prompt = (harness: boolean, extra: { execution?: boolean } = {}) =>
+    buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, ...extra });
+  const variants = [false, true].flatMap((harness) => [false, true].map((execution) => ({ harness, execution })));
+
+  function section(p: string, header: string): string {
+    const at = p.indexOf(`\n${header}\n`);
+    expect(at).toBeGreaterThan(-1);
+    const end = p.indexOf('\n\n', at + 1);
+    return p.slice(at + 1, end === -1 ? undefined : end);
+  }
+
+  it.each(variants)('places loops under the build and the failure to explain, and as a kind of goal of their own (%o)', ({ harness, execution }) => {
+    const strategy = section(prompt(harness, { execution }), 'STRATEGY:');
+    expect(strategy).toMatch(/- A build with known steps:.*end it with a loop, under LOOPS below\./);
+    expect(strategy).toMatch(/- A failure to explain:.*make it the check of a loop whose body is the fix, under LOOPS below\./);
+    expect(strategy).toMatch(/- A goal that is done only when something passes \("until the tests pass", "until the review finds nothing"\): a loop, under LOOPS below\./);
+  });
+
+  it.each(variants)('teaches the loop field, its check and its body (%o)', ({ harness, execution }) => {
+    const p = prompt(harness, { execution });
+    expect(p.indexOf('\nLOOPS:\n')).toBeGreaterThan(p.indexOf('\nBUILD PLANS:\n'));
+    const loops = section(p, 'LOOPS:');
+    expect(loops).toMatch(/Ordewell runs the rounds itself, with no turn of yours in between/);
+    expect(loops).toContain('"loop": { "body": ["fix-id", ...], "maxRounds": 3 }');
+    expect(loops).toMatch(/Each depends on the check, and otherwise only on what the check depends on or on other tasks of the body/);
+    expect(loops).toMatch(/Whatever comes after the loop depends on the check, never on a body task/);
+    expect(loops).toMatch(/top-level AI or script task with no subtasks/);
+    expect(loops).toMatch(/never a manual task/);
+  });
+
+  it('prefers a script check, and has an AI check report failed with its findings and done without any', () => {
+    const loops = section(prompt(true), 'LOOPS:');
+    expect(loops).toMatch(/Prefer a script task as the check wherever a command can judge the work.*evidence you can check: 0 passes, anything else fails and starts a round/);
+    expect(loops).toMatch(/adversarial review.*task_complete with status "failed" and every confirmed problem in its report when it finds any, and "done" when it confirms none/);
+    expect(loops).toMatch(/Only a "failed" report starts a round: "blocked".*start none/);
+  });
+
+  it('hands the body the check\'s report and has the planner choose the rounds', () => {
+    const loops = section(prompt(false), 'LOOPS:');
+    expect(loops).toMatch(/given the check's latest report as its prior task output, told which round it is from/);
+    expect(loops).toMatch(/Choose "maxRounds" deliberately, from 1 to 10; it is 3 when left out/);
+    expect(loops).toMatch(/A check that fails its last round fails, and the tasks after it are blocked/);
+  });
+
+  it.each([false, true])('teaches the plan JSON for a loop in PLAN FORMAT (harness: %s)', (harness) => {
+    const p = prompt(harness);
+    const format = p.slice(p.indexOf('\nPLAN FORMAT:\n'), p.indexOf('\nSLICE CLASSIFICATION:\n'));
+    expect(format).toContain('"loop": { "body": ["fix-1"], "maxRounds": 3 }');
+    expect(format).toContain('"loop": { "body": ["fix-2"] }');
+    expect(format).toContain('"readOnly": true');
+  });
+
+  it('shows examples the plan\'s own rules accept', () => {
+    const lines = prompt(true).split('\n').filter((line) => /^\{ "id": "(tests-1|fix-1|review-1)"/.test(line)).map((line) => JSON.parse(line));
+    expect(lines.map((t) => t.id)).toEqual(['tests-1', 'fix-1', 'review-1']);
+    const ai = (id: string, over: Record<string, unknown> = {}) => ({ id, title: id, type: 'ai', prompt: 'do it', assignedRunner: 'claude-code', autonomy: 'AFK', sliceType: 'AFK', dependencies: [], ...over });
+    const [tests, fix, review] = lines;
+    expect(validatePlanTasks({ tasks: [ai('task-3'), tests, fix] }, ['claude-code'])).toMatchObject({ ok: true });
+    expect(validatePlanTasks({ tasks: [ai('task-3'), review, ai('fix-2', { dependencies: ['review-1'] })] }, ['claude-code'])).toMatchObject({ ok: true });
+  });
+
+  it('is in the conversation prompt only, not the one-shot planner\'s', () => {
+    expect(oneShot(LONE_REPO)).not.toMatch(/\bLOOPS:|"loop"/);
+  });
+});

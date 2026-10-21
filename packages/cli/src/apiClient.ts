@@ -27,6 +27,7 @@ import type {
   PlannerNotReady,
   SurfacePlan,
   SurfacePlanState,
+  TaskLoop,
   RemoveMessageResponse,
   ResolveConflictResponse,
   RewindTarget,
@@ -100,9 +101,12 @@ export type { SessionMeta };
 export interface TaskStatus {
   id: string;
   status: string;
-  verdict: { outcome: string; reason: string; checks: unknown[] } | null;
+  verdict: { outcome: string; reason: string; checks: unknown[]; reported?: string } | null;
   /** Added after the user approved the plan, so the scheduler leaves it for them (ADR-0035). */
   waitsForApproval?: boolean;
+  /** Set on a loop's check, with its round once past the first (ADR-0045). */
+  loop?: TaskLoop;
+  loopRound?: number;
 }
 
 export interface StatusUpdate {

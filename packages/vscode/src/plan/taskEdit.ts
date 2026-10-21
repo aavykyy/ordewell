@@ -1,4 +1,4 @@
-import { dependentsNotice, dependentsOf, flattenTasks, newTaskFields } from '@ordewell/core';
+import { dependentsNotice, dependentsOf, flattenTasks, loopLeaveNotice, newTaskFields } from '@ordewell/core';
 import type { Task } from '@ordewell/core';
 import type { TaskDraft } from '../shared/protocol';
 
@@ -13,7 +13,7 @@ export function removalPrompt(tasks: readonly Task[], taskId: string): string {
   const all = flattenTasks(tasks);
   const title = all.find((t) => t.id === taskId)?.title;
   const question = title ? `Remove "${title}"?` : 'Remove this task?';
-  const notice = dependentsNotice(dependentsOf(tasks, taskId), tasks);
+  const notice = [dependentsNotice(dependentsOf(tasks, taskId), tasks), loopLeaveNotice(tasks, taskId)].filter(Boolean).join(' ');
   return notice ? `${question}\n\n${notice}` : question;
 }
 

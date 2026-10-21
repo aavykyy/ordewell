@@ -124,6 +124,13 @@ export default function PlanCardGroup({
     index(run.tasks);
     return byId;
   }, [run]);
+  // A body task's card reads its check off the plan tree, and the run holds the check's newest verdict and round (ADR-0045).
+  const withLoopState = (task: Task): Task => {
+    const entry = task.loop && runByTask.get(task.id);
+    if (!entry) return task;
+    return { ...task, loopRound: entry.loopRound, verdict: entry.verdict ? { ...entry.verdict, decidedAt: task.verdict?.decidedAt ?? '' } : task.verdict };
+  };
+  const rowTasks = sorted.map(withLoopState);
   const anyWaitsForApproval = useMemo(() => [...runByTask.values()].some((t) => t.waitsForApproval === true), [runByTask]);
 
   const dependentCountMap = useMemo(() => {
@@ -277,7 +284,7 @@ export default function PlanCardGroup({
                 dependentCount={dependentCountMap.get(task.id) ?? 0}
                 output={taskOutput?.[task.id]}
                 onResolveConflict={onResolveConflict}
-                siblings={sorted}
+                siblings={rowTasks}
                 onDependenciesChange={onDependenciesChange}
                 onRunnerChange={onRunnerChange}
                 onModelChange={onModelChange}
