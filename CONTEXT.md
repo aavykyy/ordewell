@@ -2825,8 +2825,8 @@ command of the planner's shell runs in, beneath the classifier: Seatbelt on
 macOS, bubblewrap on Linux, none on Windows. One profile for every command the
 classifier allowed: the host readable, the session's *scratch directory*
 writable, and the network only for a command that was approved; an `auto` one
-has none, nor the local services that would act for it. A *sealed run* has a
-stricter profile of its own. A `SandboxBackend` (`probe`, `wrap`) turns the *research
+has none, nor the local services that would act for it (on macOS but
+launchd). A *sealed run* has a stricter profile of its own. A `SandboxBackend` (`probe`, `wrap`) turns the *research
 shell* and a `SandboxProfile` into the launcher to spawn, with the command
 appended last, so the string classified is the string that runs; a backend
 refuses a profile it cannot enforce. Probed once per process; where it cannot
@@ -2848,9 +2848,12 @@ command run where it can compute anything and change nothing, so that no
 classifier has to vouch for it: the workspace read-only (a throwaway overlay on
 a bubblewrap that has one), the *scratch directory* writable and its `HOME`,
 nothing else readable but the system's executables, libraries and minimal
-configuration, no network, none of the host's environment beyond `PATH` and the
-locale, a `/tmp` of its own, limits on processes, memory and wall time, and
-dying with its parent. A command runs sealed when the planner passes
+configuration, no network, none of the host's environment beyond `PATH` and
+the locale, a `/tmp` of its own, limits on processes, memory and wall time, and
+dying with its parent. That holds as written on Linux. On macOS three things
+no Seatbelt rule closes stay open to it: what the user's other processes hold
+in their command lines and environments, their launchd jobs, and the shell's
+here-document files (ADR-0036). A command runs sealed when the planner passes
 `sealed: true` to `bash` or `run_command`, or when the envelope would refuse it
 without asking anyone: the classifier's `refuse`, or the `allowlist` approval
 mode's. A research subagent runs sealed what would have asked. A `!` allowlist

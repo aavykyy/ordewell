@@ -53,8 +53,9 @@ directory can be written.** The classifier, its tiers and everything in
 ADR-0008 stay as they are, but for one change a verified sandbox makes:
 a command the envelope would refuse without asking runs sealed instead
 ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md)).
-
-## Key properties
+On macOS two things escape that policy, because no Seatbelt rule gates them:
+a command's reach through the bootstrap port into the user's existing launchd
+jobs, and its reading of other processes' command lines and environments (B4).
 
 - **Underneath the classifier, never instead of it (B1).** `auto` commands, and
   `ask` commands once approved, run sandboxed under this policy. A `refuse`
@@ -82,11 +83,11 @@ a command the envelope would refuse without asking runs sealed instead
   approval mode did. An `auto` command approved only for an outside path it
   names is still `auto`. Research subagents never prompt (ADR-0008 T6), so
   all their commands run without network. Without the network a command also
-  cannot reach the local services that would write on its behalf: on macOS
-  the profile denies unix sockets with the rest of the network, and on Linux,
-  where a socket that is a file survives `--unshare-net`, the user's runtime
-  directory (its session bus), the system bus, the X server's socket
-  directory and the Docker socket are hidden. An approved command keeps them,
+  cannot reach the local services that would write on its behalf, but for
+  launchd on macOS (B4): the profile denies unix sockets with the rest of the
+  network, and on Linux, where a socket that is a file survives
+  `--unshare-net`, the user's runtime directory (its session bus), the system
+  bus, the X server's socket directory and the Docker socket are hidden. An approved command keeps them,
   since its credentials may live behind the session bus. The web fetch tool
   is not a shell command and is unaffected.
 - **Per platform (B4).** Linux: bubblewrap (`--ro-bind / /`, a fresh `/dev`
@@ -101,7 +102,13 @@ a command the envelope would refuse without asking runs sealed instead
   device files a shell needs, the network for an approved command, and of the
   system services only those a read needs, with name resolution, TLS trust
   and the keychain added for an approved command; `defaults write`, for one,
-  is refused, because cfprefsd checks the caller's sandbox. Every path
+  is refused, because cfprefsd checks the caller's sandbox. Loading a launchd
+  job is denied (`job-creation`), since launchd would run it outside the
+  sandbox, as the user. Two things no Seatbelt rule gates stay open: launchd's
+  existing jobs, which a command can read, start, unload and enable or disable
+  through the bootstrap port it inherits, and `sysctl`'s reading of other
+  processes' command lines and environments (ADR-0036 lists them, and the
+  here-document files). Every path
   reaches the launcher as an argument of its own (a `-D` parameter to
   Seatbelt), never as policy text. Windows: no sandbox (see B5).
 - **Probed once, visible when absent (B5).** The first command probes the
@@ -198,8 +205,17 @@ probe's reason. CI's image needs no sandbox.
 - On macOS, setuid programs such as `ps` and `top` cannot start, since the
   kernel will not run one in a sandbox, and macOS's `/bin/sh` (bash 3.2) writes
   a here-document to `/tmp` whatever `TMPDIR` says, so its own temporary file
-  names there are the one write allowed outside the scratch directory. On
-  Linux, a process listing shows only the sandbox's own processes.
+  names there are the one file write allowed outside the scratch directory,
+  and a channel to the user's other processes that use them. On Linux, a
+  process listing shows only the sandbox's own processes.
+- On macOS a command can also read what the user's other processes hold in
+  their command lines and environments, and read, start, unload, enable and
+  disable the user's existing launchd jobs, in the sandbox sealed or not.
+  Neither is gated by a Seatbelt operation, and macOS has no seccomp to
+  filter the call. Linux's PID namespace hides other processes, and launchd
+  is macOS's alone. ADR-0036 states what that does to a
+  sealed run's guarantees; a container or VM backend (#99) and the egress
+  proxy (#88) are what is planned to close or bound them.
 - A tool that has to write to read fails: `cargo metadata` on a crate without
   a committed `Cargo.lock` writes one beside the manifest.
 - An approved command keeps the network, and with it every local service:
@@ -216,3 +232,4 @@ probe's reason. CI's image needs no sandbox.
 - 2026-10-13 — a Codex planner whose own sandbox cannot start has its shell switched off, leaving `run_command` as its only shell ([ADR-0033](0033-codex-planner-without-its-sandbox.md)).
 - 2026-10-20 — implemented (#64): bubblewrap on Linux and Seatbelt, closed by default, on macOS, behind one `SandboxBackend`; a scratch directory per session; local service sockets hidden from commands without the network.
 - 2026-10-21 — a command the envelope would refuse without asking runs sealed under a stricter profile of the same backend, and the notice says loops and scripts are refused where none starts ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md), #109).
+- 2026-10-21 — the macOS backend's residuals recorded: job creation denied, existing launchd jobs and other processes' command lines and environments not gated ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md)).
