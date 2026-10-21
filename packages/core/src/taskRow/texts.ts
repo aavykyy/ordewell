@@ -1,10 +1,12 @@
 import { titledTaskRef, titledTaskRefOf } from '../services/TaskRefs';
+import { checkOf, type TaskLoop } from '../models/Loop';
 
 interface Named {
   id: string;
   order: number;
   title: string;
   subtasks?: readonly Named[];
+  loop?: TaskLoop;
 }
 
 /** Each id as "#N title", subtasks dotted, by the plan's tree; one it no longer holds stays a bare id. */
@@ -21,6 +23,20 @@ export function dependentsNotice(dependents: readonly { id?: string; order: numb
   if (dependents.length === 0) return null;
   const subject = dependents.length === 1 ? '1 task depends' : `${dependents.length} tasks depend`;
   return `${subject} on it and will lose that dependency: ${dependents.map((t) => (t.id ? titledTaskRefOf(tasks, t.id) : undefined) ?? titledTaskRef(t)).join(', ')}.`;
+}
+
+/**
+ * What removing a loop's body task does to its loop (ADR-0045 L8), or null for
+ * a task in none: it leaves the body, and a loop left with no body is dropped.
+ * A check is not here: core refuses its removal (`loopRemovalRefusal`).
+ */
+export function loopLeaveNotice(tasks: readonly Named[], taskId: string): string | null {
+  const check = checkOf(tasks, taskId);
+  if (!check?.loop) return null;
+  const [named] = titledRefs([check.id], tasks);
+  return check.loop.body.length > 1
+    ? `It is in the body of ${named}'s loop, and leaves it.`
+    : `It is the whole body of ${named}'s loop, so the loop is dropped with it.`;
 }
 
 /**

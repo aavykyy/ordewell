@@ -9,7 +9,7 @@ import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
-import { blockedByLabel, dependencyCandidates, capConflictFiles, pausedOnLimit, scriptTaskText, skippedLabel, taskRowView } from '@ordewell/core/plan-utils';
+import { blockedByLabel, dependencyCandidates, capConflictFiles, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind, AssignmentScope } from '@ordewell/core';
 
 export interface RunnerMode {
@@ -108,6 +108,20 @@ export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'bloc
   const badge = STATUS_BADGE[row.status];
   if (row.status === 'skipped') return { ...badge, label: skippedLabel(row.skipReason) };
   return { ...badge, label: row.awaiting ?? (row.blockedBy ? blockedByLabel(row.blockedBy) : badge.label) };
+}
+
+/**
+ * A loop's check says its round, and each body task which check it runs for
+ * (ADR-0045); what the loop waits for or stopped at is in the hover.
+ */
+function LoopBadge({ loop }: { loop: TaskRowView['loop'] }) {
+  if (!loop) return null;
+  const text = loop.role === 'body' ? loop.label : loop.state === 'waiting' || loop.state === 'ended' ? loop.label : `Loop · ${loop.label}`;
+  return (
+    <span className={`task-isolation-badge loop ${loop.role === 'check' ? loop.state : 'body'}`} title={loopRowParts(loop).join('. ')}>
+      {text}
+    </span>
+  );
 }
 
 /** A skip or block reason can run to a sentence: it is cut to the row it
@@ -356,7 +370,8 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
 
   const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
-  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true }, { tasks: siblings, modes: activeModes, runnerScope });
+  // The run's verdict and round are the newer word on a loop's check: they say whether it is between rounds (ADR-0045).
+  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true, ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}) }, { tasks: siblings, modes: activeModes, runnerScope });
   const conflictFiles = isolatedWork?.conflictFiles ?? [];
   const repair = isolatedWork?.repair ?? null;
 
@@ -725,6 +740,8 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
         )}
 
         <AssignmentFlag row={row} />
+
+        <LoopBadge loop={row.loop} />
 
         {row.mergeGate && (
           <span className="task-isolation-badge gate"

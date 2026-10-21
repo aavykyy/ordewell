@@ -53,6 +53,8 @@ export type SerializedTaskStatus = {
    */
   waitsForApproval?: true;
   attemptUsage?: AttemptUsage[];
+  /** Set only on a loop's check, so a stream of statuses alone can say which task is one (ADR-0045). */
+  loop?: TaskLoop;
   /** The round a loop's check is in, past its first (ADR-0045 L5); absent on round 1 and on any other task. */
   loopRound?: number;
 };
@@ -456,6 +458,7 @@ export function serializeTaskStatus(
     ...(mergeGate.length > 0 ? { mergeGate: [...mergeGate] } : {}),
     ...(t.forcedPastGate?.length ? { forcedPastGate: [...t.forcedPastGate] } : {}),
     ...(waitsForApproval ? { waitsForApproval: true as const } : {}),
+    ...(t.loop ? { loop: { body: [...t.loop.body], maxRounds: t.loop.maxRounds } } : {}),
     ...(t.loop && t.loopRound !== undefined ? { loopRound: t.loopRound } : {}),
   };
 }

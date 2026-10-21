@@ -57,6 +57,16 @@ const scriptBodyFields = (t: RunTask): Pick<TaskView, 'commands' | 'script' | 't
   ...(typeof t.timeoutMs === 'number' ? { timeoutMs: t.timeoutMs } : {}),
 });
 
+/** A loop's check (ADR-0045), with the verdict that tells it between rounds from a failure; nothing on any other task. */
+const loopFields = (t: RunTask): Pick<TaskView, 'loop' | 'loopRound' | 'verdict'> => {
+  if (!t.loop || !Array.isArray(t.loop.body)) return {};
+  return {
+    loop: { body: t.loop.body.map((id) => planLabel(id)), maxRounds: t.loop.maxRounds },
+    ...(typeof t.loopRound === 'number' ? { loopRound: t.loopRound } : {}),
+    ...(t.verdict ? { verdict: { outcome: t.verdict.outcome, ...(t.verdict.reported ? { reported: t.verdict.reported } : {}) } } : {}),
+  };
+};
+
 /**
  * One run-view task as the pane's `TaskView`, recursing into subtasks sorted by
  * order so the dotted labels read in plan order.
@@ -94,6 +104,7 @@ function runTaskToView(t: RunTask): TaskView {
     ...(t.waitsForApproval === true ? { waitsForApproval: true } : {}),
     ...(t.ops === true ? { ops: true } : {}),
     ...scriptBodyFields(t),
+    ...loopFields(t),
     ...(Array.isArray(t.skills) && t.skills.length > 0 ? { skills: t.skills.map((name) => planLabel(name)) } : {}),
     ...(t.addedBy ? { addedBy: t.addedBy } : {}),
     ...(Array.isArray(t.mergeGate) && t.mergeGate.length > 0 ? { mergeGate: t.mergeGate.map((title) => planLabel(title)) } : {}),

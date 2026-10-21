@@ -56,6 +56,12 @@ export interface TaskView {
   script?: string;
   /** A script task's time limit; absent where it takes the default. */
   timeoutMs?: number;
+  /** Set on a loop's check (ADR-0045): its body, by task id, and how many rounds it may run. */
+  loop?: { body: string[]; maxRounds: number };
+  /** The round of the check's latest run, past its first. */
+  loopRound?: number;
+  /** What a check's evidence said, so the pane can tell a check between rounds from one that failed outright (ADR-0045 L2). */
+  verdict?: { outcome: string; reported?: string };
   /** Task skills attached by name, put in the runner's prompt at spawn. */
   skills?: string[];
   /** Set on a task an Act supervisor added during a run (ADR-0029). */

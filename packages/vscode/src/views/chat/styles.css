@@ -5856,6 +5856,30 @@ body.vscode-high-contrast-light .pending-message {
   color: var(--orange);
 }
 
+/* A loop's check and body (ADR-0045): progress while it goes on, a failure only
+   when it ends or stops. */
+.task-isolation-badge.loop {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.task-isolation-badge.loop.repeating {
+  background: var(--orange-subtle);
+  color: var(--orange);
+}
+
+.task-isolation-badge.loop.passed {
+  background: var(--green-subtle);
+  color: var(--green);
+}
+
+.task-isolation-badge.loop.stopped,
+.task-isolation-badge.loop.out-of-rounds,
+.task-isolation-badge.loop.failed {
+  background: var(--red-subtle);
+  color: var(--red);
+}
+
 .task-ops-toggle {
   display: flex;
   align-items: center;

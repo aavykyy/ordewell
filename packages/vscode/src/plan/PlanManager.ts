@@ -3,7 +3,7 @@ import { latestTaskCommands } from '../shared/taskCommands';
 import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
-  createEmptyPlan, installedPlannerAnswered, isRunnerApproval, pastGateConfirmation, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
+  createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, pastGateConfirmation, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
   type ExecutionCommand,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit } from '../shared/protocol';
@@ -354,6 +354,13 @@ export async function handleAddTask(draft: TaskDraft, deps: PlanManagerDeps): Pr
 }
 
 export async function handleRemoveTask(taskId: string, deps: PlanManagerDeps): Promise<void> {
+  // Core refuses a loop's check; asking first would promise a removal it will not make (ADR-0045 L8).
+  const target = flattenTasks(deps.session.planTasks).find((t) => t.id === taskId);
+  const refusal = target && loopRemovalRefusal(target);
+  if (refusal) {
+    void vscode.window.showWarningMessage(refusal);
+    return;
+  }
   const confirm = await vscode.window.showWarningMessage(removalPrompt(deps.session.planTasks, taskId), { modal: true }, 'Remove');
   if (confirm !== 'Remove') return;
   await deps.session.removeTask(taskId);

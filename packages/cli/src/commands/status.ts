@@ -2,7 +2,7 @@ import { assignmentFlagText } from '../tui/blocks';
 import { writeFileSync } from 'fs';
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
-import { blockedByLabel, blockingFailures, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, tasksTotalText, usageText, waitsForApproval, type ApprovalRecord, type AssignmentScope } from '@ordewell/core';
+import { blockedByLabel, loopRowParts, planBlocks, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, tasksTotalText, usageText, waitsForApproval, type ApprovalRecord, type AssignmentScope } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type SessionMeta } from '../apiClient';
@@ -90,8 +90,9 @@ function printOneSession(
 ): void {
   const allTasks = allTasksOf(plan);
   const everyTask = flattenTasks(allTasks);
-  const blocked = blockingFailures(everyTask.map((t) => ({ ...t, subtasks: [], dependencies: t.dependencies ?? [] })));
-  const count = (status: string) => everyTask.filter((t) => t.status === status || (status === 'blocked' && blocked.has(t.id))).length;
+  const { blocked, repeating } = planBlocks(everyTask.map((t) => ({ ...t, subtasks: [], dependencies: t.dependencies ?? [] })));
+  // A check between rounds is stored failed, and no failure while its loop goes on (ADR-0045 L3).
+  const count = (status: string) => everyTask.filter((t) => (t.status === status && !(status === 'failed' && repeating.has(t.id))) || (status === 'blocked' && blocked.has(t.id))).length;
 
   console.log(`Session:  ${sessionId}`);
   console.log(`Goal:     ${meta.goal}`);
@@ -108,15 +109,16 @@ function printOneSession(
     ? `${row.waitsForApproval}: \`ordewell force-start ${ref}\` approves it, \`ordewell run\` approves all`
     : null);
   for (const t of allTasks) {
-    const icon = iconFor(blocked.has(t.id) ? 'blocked' : t.status);
     const model = t.assignedModel ? ` (${t.assignedModel.modelLabel})` : '';
     const shortId = (t.id ?? '').slice(-8);
     const row = taskRowView({ ...t, dependencies: t.dependencies ?? [], waitsForApproval: waitsForApproval(t, record) }, { tasks: allTasks, runnerScope });
+    const icon = iconFor(blocked.has(t.id) ? 'blocked' : repeating.has(t.id) ? 'pending' : t.status);
     console.log(`  ${taskOrderLabel(t).padStart(2)}. ${icon} [${shortId}]${row.kind === 'script' ? ' [SCR]' : ''} ${t.title}${model}`);
     const waiting = approval(row, taskOrderLabel(t));
     if (waiting) console.log(`      ${waiting}`);
     if (row.assignmentFlag) console.log(`      ⚠ ${assignmentFlagText(row)}`);
     if (row.blockedBy) console.log(`      ${blockedByLabel(row.blockedBy)}`);
+    if (row.loop) console.log(`      ↻ ${loopRowParts(row.loop).join(' · ')}`);
     if (row.status === 'skipped') console.log(`      ${skippedLabel(row.skipReason)}`);
     const usage = row.usage && usageText(row.usage);
     if (usage) console.log(`      ${usage}`);

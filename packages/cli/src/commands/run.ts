@@ -2,10 +2,31 @@ import { flag, hasFlag, readLastSession } from '../utils';
 import { handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
 import { iconFor } from '../utils/output';
 import type { ApiClient, TaskStatus } from '../apiClient';
-import { SCRIPT_RUNNER, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL } from '@ordewell/core';
+import { loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, SCRIPT_RUNNER, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL } from '@ordewell/core';
 import { connect } from './shared';
 
 const inLine = (label: string): string => label.charAt(0).toLowerCase() + label.slice(1);
+
+/** A task as the line names it: the stream carries no order, so its id's tail. */
+const refOf = (id: string): string => `#${id.slice(-4)}`;
+
+/**
+ * What a loop's check or body task says of its place in the loop (ADR-0045),
+ * read off the statuses the stream has sent; null for a task in no loop.
+ * `repeating` is whether a check between rounds goes on, which a body task
+ * that failed or was skipped stops.
+ */
+function loopNote(task: TaskStatus, all: readonly TaskStatus[]): { text: string; repeating: boolean } | null {
+  if (task.loop) {
+    const check = { id: task.id, status: task.status, loop: task.loop, loopRound: task.loopRound, ...(task.verdict ? { verdict: task.verdict } : {}) };
+    const halted = task.loop.body.some((id) => ['failed', 'skipped'].includes(all.find((t) => t.id === id)?.status ?? ''));
+    const state = loopCheckState(check, !halted);
+    return { text: loopCheckLabel(check, state), repeating: state === 'repeating' };
+  }
+  const check = all.find((t) => t.loop?.body.includes(task.id));
+  if (!check?.loop) return null;
+  return { text: loopBodyLabel(refOf(check.id), loopBodyRound({ status: check.status, loopRound: check.loopRound }, task.status), check.loop.maxRounds), repeating: false };
+}
 
 /**
  * Resolve the session every execution command acts on: `--session-id`, else the
@@ -55,13 +76,15 @@ export async function followExecution(
     const entries = Array.from(taskStates.values());
     const lines: string[] = [];
     for (const t of entries) {
-      const icon = iconFor(t.status);
+      const loop = loopNote(t, entries);
+      // Between rounds a check is stored failed, and no failure while its fix runs.
+      const icon = iconFor(loop?.repeating ? 'pending' : t.status);
       const verdict = t.verdict
         ? `: ${t.verdict.outcome.toUpperCase()}: ${t.verdict.reason.slice(0, 60)}`
         : '';
       // Nothing starts it on its own (ADR-0035), so a line that only said "pending" would read as next in line.
       const waits = t.waitsForApproval ? `: ${inLine(WAITS_FOR_APPROVAL_LABEL)}: \`ordewell force-start <id>\` approves it, \`ordewell run\` approves all` : '';
-      lines.push(`  ${icon} #${t.id.slice(-4)}${scriptTasks.has(t.id) ? ' [SCR]' : ''} ${t.status}${verdict}${waits}`);
+      lines.push(`  ${icon} ${refOf(t.id)}${scriptTasks.has(t.id) ? ' [SCR]' : ''} ${t.status}${verdict}${waits}${loop ? ` · ↻ ${inLine(loop.text)}` : ''}`);
     }
     const output = lines.join('\n');
     if (output !== lastPrinted && output.trim()) {

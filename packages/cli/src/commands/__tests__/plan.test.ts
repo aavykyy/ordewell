@@ -199,6 +199,27 @@ describe('handlePlan', () => {
     srv.close();
   });
 
+  it('prints a loop\'s check and body with the rounds and the link between them (ADR-0045)', async () => {
+    const withLoop = {
+      tasks: [
+        { id: 't1', order: 1, title: 'Build', type: 'ai' },
+        { id: 't2', order: 2, title: 'Run the tests', type: 'script', dependencies: ['t1'], commands: [['npm', 'test']], loop: { body: ['t3'], maxRounds: 4 } },
+        { id: 't3', order: 3, title: 'Fix the failures', type: 'ai', dependencies: ['t2'] },
+      ],
+      runners: ['claude-code'],
+    };
+    const srv = await planServer({ '/converse/start': { plan: withLoop } }, []);
+    const { handlePlan } = await import('../plan');
+    const { stdout } = await capture(() =>
+      handlePlan(['--goal', 'get the tests passing', '--workspace', '/tmp'], { api: new ApiClient(srv.port) }),
+    );
+
+    expect(stdout).toContain('        ↻ Loop of up to 4 rounds · Runs #3 if it fails');
+    expect(stdout).toContain('        ↻ Runs if #2 fails');
+    expect(stdout.match(/↻/g)).toHaveLength(2);
+    srv.close();
+  });
+
   it('forwards the planner environment to a daemon that was already running', async () => {
     // The daemon inherits its environment once, at spawn. Without this the
     // documented `AI_PROVIDER=codex ordewell plan …` planned with whatever the

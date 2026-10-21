@@ -1,5 +1,5 @@
 import { codexSandboxNotice } from '@ordewell/core';
-import { dependentsNotice, dependentsOf, pastGateConfirmation, titledRefs, resolveUserTaskRef } from '@ordewell/core/plan-utils';
+import { dependentsNotice, dependentsOf, loopLeaveNotice, loopRemovalRefusal, pastGateConfirmation, titledRefs, resolveUserTaskRef } from '@ordewell/core/plan-utils';
 import { findTask, refFor, titledRefFor, type ModelView, type TaskView, type TuiState } from '../state';
 import { assignedModelFor, effortsForTask, modesForTask, runnerAccepts } from '../taskAssignment';
 import { picker, pickerItemsFor } from './pickers';
@@ -27,12 +27,15 @@ export function openTaskRunnerPicker(state: TuiState, task: TaskView): Step {
 }
 
 export function confirmRemoveTask(state: TuiState, task: TaskView): Step {
+  // Core refuses a loop's check; asking first would promise a removal it will not make (ADR-0045 L8).
+  const refusal = loopRemovalRefusal(task);
+  if (refusal) return fail(state, refusal);
   return step({
     ...state,
     overlay: {
       kind: 'confirm',
       title: `Remove ${titledRefFor(state, task)}?`,
-      message: dependentsNotice(dependentsOf(state.tasks, task.id), state.tasks) ?? 'This cannot be undone.',
+      message: [dependentsNotice(dependentsOf(state.tasks, task.id), state.tasks), loopLeaveNotice(state.tasks, task.id)].filter(Boolean).join(' ') || 'This cannot be undone.',
       action: { kind: 'remove-task', taskId: task.id },
     },
   });

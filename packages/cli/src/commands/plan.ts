@@ -5,7 +5,7 @@ import { ApiClient } from '../apiClient';
 import { createApprovalHandler } from '../approvals';
 import { createStepLog, type LogLine } from './researchLog';
 import type { SerializedTask, DiscoveredModel } from '@ordewell/core';
-import { mintSessionId, scriptTaskText, taskOrderLabel } from '@ordewell/core';
+import { loopRowParts, mintSessionId, scriptTaskText, taskOrderLabel, taskRowView } from '@ordewell/core';
 import type { PlanBody, WsEvent } from '../apiClient';
 import { fail, headlessPlannerRefusal } from './shared';
 
@@ -141,6 +141,8 @@ function printPlan(plan: PlanBody, sessionId: string, runners: string[], models:
     if (t.type === 'script') {
       for (const line of scriptTaskText({ ...t, type: 'script' }).split('\n')) console.log(line ? `        ${line.replace(/\t/g, '    ')}` : '');
     }
+    const loop = taskRowView({ id: t.id, order: t.order, status: t.status ?? 'pending', type: t.type === 'user' || t.type === 'script' ? t.type : 'ai', dependencies: t.dependencies ?? [], loop: t.loop, loopRound: t.loopRound }, { tasks }).loop;
+    if (loop) console.log(`        ↻ ${loopRowParts(loop).join(' · ')}`);
     for (const sub of t.subtasks || []) {
       const subTypeIcon = sub.type === 'user' ? '[MAN]' : '[ AI]';
       const subDeps = sub.dependencies?.length ? ` ← ${sub.dependencies.join(', ')}` : '';

@@ -10,7 +10,7 @@ import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { approvalLabel, scriptTaskText, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, skippedLabel, hasHiddenDetail, resumeLabel, resumeTime, runnerForProvider, taskRowView, tasksTotalText, taskUsageSummary, plannerContextFill, usageText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
+import { approvalLabel, scriptTaskText, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeLabel, resumeTime, runnerForProvider, taskRowView, tasksTotalText, taskUsageSummary, plannerContextFill, usageText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -948,6 +948,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   // Runner and model hang under the title. Warnings and the expanded sheet
   // keep the shallower `bodyPad`: they need the room more than the alignment.
   if (metaText) lines.push(style.grey(truncate(`${continuation}${metaText}`, cols)));
+  if (row.loop) lines.push(...loopLines(row.loop, cols, bodyPad));
   // The one isolation state that needs the user; every other stays out of the
   // row and shows only in the expanded detail below.
   if (row.conflict) {
@@ -1060,6 +1061,27 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
  * pane's edge: it says what the user can do, and the end of it is the part
  * they act on.
  */
+const LOOP_PAINT: Record<LoopCheckState, (text: string) => string> = {
+  waiting: style.grey,
+  running: style.grey,
+  repeating: style.yellow,
+  stopped: style.red,
+  passed: style.green,
+  'out-of-rounds': style.red,
+  failed: style.red,
+  ended: style.grey,
+};
+
+/**
+ * A loop's check and body are linked by the same glyph and the check's
+ * reference (ADR-0045): the check says its round and which tasks run if it
+ * fails, and each of those says which check it runs for.
+ */
+function loopLines(loop: TaskRowLoop, cols: number, pad: string): string[] {
+  const paint = loop.role === 'body' ? style.cyan : LOOP_PAINT[loop.state];
+  return statusLines(paint, '↻', loopRowParts(loop).map(inRow).join(' · '), cols, pad);
+}
+
 function statusLines(paint: (text: string) => string, glyph: string, text: string, cols: number, pad: string): string[] {
   const lead = `${pad}${glyph} `;
   const room = Math.max(1, cols - width(lead));
