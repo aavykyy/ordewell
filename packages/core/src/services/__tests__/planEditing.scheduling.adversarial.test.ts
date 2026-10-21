@@ -40,7 +40,7 @@ function session() {
 describe('a direct edit is held to the plan\'s rules', () => {
   it('refuses an ops task on its runner\'s read-only mode', async () => {
     await expect(session().updateTask('t1', { ops: true, taskMode: 'plan' }))
-      .rejects.toThrow(/read-only mode/);
+      .rejects.toThrow(/read-only profile/);
   });
 });
 
@@ -48,7 +48,7 @@ describe('a hand-added task', () => {
   it('is refused when it breaks a rule the plan\'s tasks keep together', async () => {
     const made = session();
     await expect(made.addTask({ title: 'Ops', prompt: 'deploy', ops: true, taskMode: 'plan' }))
-      .rejects.toThrow(/read-only mode/);
+      .rejects.toThrow(/read-only profile/);
     await expect(made.addTask({
       title: 'Mixed',
       prompt: 'x',

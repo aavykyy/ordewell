@@ -115,7 +115,7 @@ function sameAssignment(a: TaskModelAssignment | undefined, b: TaskModelAssignme
   return a?.modelId === b?.modelId && a?.thinkingEffort === b?.thinkingEffort;
 }
 
-/** Whether `mode` is the mode `runner`'s manifest tags read-only. */
+/** Whether `mode` selects Ordewell's read-only profile on this runner (ADR-0046). */
 function readOnlyOn(mode: string | undefined, runner: RunnerId, catalog: AssignmentCatalog): boolean {
   return mode !== undefined && mode === taggedReadOnlyMode(catalog.runnerModes?.[runner]);
 }

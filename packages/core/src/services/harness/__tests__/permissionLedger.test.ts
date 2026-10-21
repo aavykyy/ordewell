@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { ApprovalDecision } from '../../../interfaces/IApproval';
 import type { AgentEvent } from '../AgentAdapter';
 import { PermissionLedger, type LedgerStance, type RaisedRequest } from '../permissionLedger';
@@ -31,6 +31,18 @@ const TASK: LedgerStance = { role: 'task', autoApprove: false };
 const AUTO_TASK: LedgerStance = { role: 'task', autoApprove: true };
 
 describe('PermissionLedger', () => {
+  it('never opens a user override when a read-only decision cannot be delivered', async () => {
+    const events: AgentEvent[] = [];
+    const permissions = new PermissionLedger<string>(
+      async () => { throw new Error('server gone'); },
+      () => ({ role: 'task', autoApprove: true, decide: () => ({ decision: 'deny' }) }),
+    );
+    permissions.raise(request('r1'), 'h1', (event) => events.push(event));
+    await vi.waitFor(() => expect(events.some((e) => e.type === 'error')).toBe(true));
+    expect(events.some((e) => e.type === 'permission_request')).toBe(false);
+    expect(permissions.answer('r1', { decision: 'allow' })).toBe(false);
+  });
+
   it.each([['planner', PLANNER], ['task', TASK], ['auto-approving task', AUTO_TASK]])(
     'allows an Ordewell tool at once for a %s, and shows it decided',
     (_label, stance) => {

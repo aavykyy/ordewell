@@ -133,6 +133,34 @@ function basic(password: string): string {
 }
 
 describe('OpenCodeAdapter task mode — start', () => {
+  it('uses Ordewell permissions for a read-only task, with project config off and its task tools allowed', async () => {
+    const server = fakeServer();
+    const mcp = mcpClientConfig({ token: 'read-only-test', url: 'http://127.0.0.1:4555/mcp', readOnly: true });
+    const { adapter, env } = await startTask(server, taskStart({ mode: 'plan', workspaceRoot: '/workspace', flags: { readOnly: true, permissionMode: 'build', modeSettings: {} }, mcp }), {
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: { '*': 'allow', shell: 'allow' } }),
+    });
+    try {
+      expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe('1');
+      const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT!) as { lsp: boolean; permission: Record<string, unknown> };
+      expect(config.lsp).toBe(false);
+      for (const tool of ['*', 'edit', 'write', 'patch', 'apply_patch', 'multiedit', 'bash', 'shell', 'task', 'subagent', 'webfetch', 'websearch', 'codesearch', 'execute']) expect(config.permission[tool]).toBe('deny');
+      for (const tool of ['read', 'grep', 'glob', 'list', 'ordewell_run_command', 'ordewell_checkpoint', 'ordewell_task_complete']) expect(config.permission[tool]).toBe('allow');
+      expect(config.permission.external_directory).toMatchObject({ '*': 'deny', '/workspace/*': 'allow' });
+      const events: AgentEvent[] = [];
+      const turn = adapter.send('Review', (e) => events.push(e));
+      const stream = await server.stream();
+      stream.push({ type: 'permission.asked', properties: { id: 'ro-outside', sessionID: 'ses_task', permission: 'external_directory', patterns: ['/outside/*'] } });
+      await until(() => server.requests.some((r) => r.path === '/permission/ro-outside/reply'));
+      expect(server.requests.find((r) => r.path === '/permission/ro-outside/reply')?.body).toMatchObject({ reply: 'reject' });
+      expect(events.find((e) => e.type === 'permission_request')).toMatchObject({ decided: { decision: 'deny' } });
+      stream.push(status('busy'));
+      stream.push(status('idle'));
+      await turn;
+      const prompt = server.requests.find((r) => r.path.endsWith('/prompt_async'));
+      expect(prompt?.body).toMatchObject({ agent: 'build', model: { providerID: 'anthropic', modelID: 'claude-sonnet-4' }, tools: { bash: false, edit: false } });
+    } finally { adapter.dispose(); }
+  });
+
   it('serves the worktree behind a per-task password, sent on every request', async () => {
     const server = fakeServer();
     const { adapter, spawned, env } = await startTask(server);

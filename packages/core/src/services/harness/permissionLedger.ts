@@ -24,6 +24,8 @@ export interface RaisedRequest {
 
 export interface LedgerStance {
   role: 'planner' | 'task';
+  /** A read-only task answers native requests itself, without opening a user card (ADR-0046). */
+  decide?: (request: RaisedRequest) => ApprovalDecision;
   /** A task whose mode's manifest sets `approvals: auto`, answered as the runner's own auto mode would (ADR-0001). */
   autoApprove: boolean;
 }
@@ -56,22 +58,27 @@ export class PermissionLedger<Handle> {
    */
   raise(request: RaisedRequest, handle: Handle, onEvent: OnEvent): void {
     const { ordewell, suggestions, ask, ...shown } = request;
-    const { role, autoApprove } = this.stance();
+    const { role, autoApprove, decide } = this.stance();
     const pending: AgentEvent = role === 'task'
       ? { type: 'permission_request', ...shown, suggestions: suggestions ?? [] }
       : { type: 'permission_request', ...shown, ...(ask ? { ask } : {}) };
-    if (ordewell || (role === 'task' && autoApprove)) {
-      const sent = this.reply(handle, ALLOW);
+    const decision = ordewell ? ALLOW : decide?.(request) ?? (role === 'task' && autoApprove ? ALLOW : undefined);
+    if (decision) {
+      const sent = this.reply(handle, decision);
       if (sent instanceof Promise) {
         const open = { handle, onEvent };
         this.open.set(request.id, open);
         this.answering.add(request.id);
         void this.awaitReply(request.id, open, sent).then((delivered) => {
-          if (delivered) onEvent({ type: 'permission_request', ...shown, decided: ALLOW });
+          if (delivered) onEvent({ type: 'permission_request', ...shown, decided: decision });
         }, () => {
-          if (this.open.get(request.id) === open) onEvent(pending);
+          if (this.open.get(request.id) !== open) return;
+          if (decide) {
+            this.open.delete(request.id);
+            onEvent({ type: 'error', message: 'Could not deliver the read-only tool decision. This task cannot ask a person to override it.' });
+          } else onEvent(pending);
         });
-      } else onEvent({ type: 'permission_request', ...shown, decided: ALLOW });
+      } else onEvent({ type: 'permission_request', ...shown, decided: decision });
       return;
     }
     this.open.set(request.id, { handle, onEvent });

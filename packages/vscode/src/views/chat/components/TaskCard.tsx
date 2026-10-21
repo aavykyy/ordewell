@@ -336,7 +336,7 @@ export function TaskMessageBox({ taskId, onSend, onSendNow, working = false, res
 
 const DEFAULT_MODES: RunnerMode[] = [
   { id: 'build', label: 'Build', description: 'Edit files and run commands' },
-  { id: 'plan', label: 'Plan', description: 'Read-only analysis' },
+  { id: 'plan', label: 'Read-only', description: 'Ordewell commands; lands nothing' },
 ];
 
 /**

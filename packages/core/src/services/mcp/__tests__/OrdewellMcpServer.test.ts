@@ -59,6 +59,29 @@ describe('OrdewellMcpServer', () => {
     ]);
   });
 
+  it("gives run_command to a read-only task's token alone, and routes its calls to that attempt's shell (ADR-0046)", async () => {
+    const server = newServer();
+    const runCommand = vi.fn(async ({ command }: { command: string }, _context: McpToolContext): Promise<McpToolReply> => ({ text: `ran ${command}` }));
+    const credential = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1, readOnly: true }, { runCommand });
+    const writer = await server.issueTaskToken({ sessionId: 's1', taskId: 't2', attempt: 1 }, { runCommand });
+    const readOnly = await connect(credential);
+    const change = await connect(writer);
+
+    expect(credential.readOnly).toBe(true);
+    expect(mcpClientConfig(credential).readOnly).toBe(true);
+    expect(writer.readOnly).toBeUndefined();
+    expect(mcpClientConfig(writer).readOnly).toBeUndefined();
+    const tools = (await readOnly.listTools()).tools;
+    expect(tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'run_command', 'task_complete']);
+    // The hint names what lands, even when a command changes its disposable worktree.
+    expect(tools.find((t) => t.name === 'run_command')?.annotations?.readOnlyHint).toBe(true);
+    expect((await change.listTools()).tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'task_complete']);
+
+    expect(await readOnly.callTool({ name: 'run_command', arguments: { command: 'npm test' } })).toMatchObject({ content: [{ type: 'text', text: 'ran npm test' }], isError: false });
+    await expect(change.callTool({ name: 'run_command', arguments: { command: 'npm test' } })).rejects.toThrow(/Unknown tool/);
+    expect(runCommand).toHaveBeenCalledTimes(1);
+  });
+
   // Claude Code in plan mode refuses any MCP tool not marked read-only, even
   // one pre-allowed with --allowedTools (verified against 2.1.289). The
   // execution tools change what runs, and say so (ADR-0029).

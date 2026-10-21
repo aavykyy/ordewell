@@ -789,6 +789,114 @@ describe.skipIf(!hasGit)('WorktreeIsolation.release', () => {
   });
 });
 
+describe.skipIf(!hasGit)("WorktreeIsolation for a read-only task (ADR-0046)", () => {
+  /** Real git, recording the directory each command ran in. */
+  function recording(): { exec: GitExecFn; cwds: string[] } {
+    const cwds: string[] = [];
+    const exec: GitExecFn = async (file, args, opts) => {
+      cwds.push(opts.cwd ?? '');
+      const { stdout, stderr } = await execFileAsync(file, args, { cwd: opts.cwd, env: opts.env });
+      return { stdout: String(stdout), stderr: String(stderr) };
+    };
+    return { exec, cwds };
+  }
+
+  it.each([true, false])('removes its worktree whole when released (keep: %s), and keeps nothing of it on a branch', async (keep) => {
+    const root = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const tip = git(root, 'rev-parse', run.repos[0].integrationBranch);
+    const { cwd, branch } = await iso.prepare(task(1, 'Review'), run, 'fresh', { readOnly: true });
+    expect(run.tasks['task-1'].readOnly).toBe(true);
+    writeFileSync(join(cwd, 'tried-fix.ts'), 'export const fixed = true;\n');
+    git(cwd, 'add', '-A');
+    git(cwd, 'commit', '-q', '-m', 'a fix it tried');
+    writeFileSync(join(cwd, 'README.md'), 'edited, never committed\n');
+
+    expect(await iso.release(run, 'task-1', { keep })).toEqual({ preserved: [], refused: [] });
+
+    expect(existsSync(cwd)).toBe(false);
+    expect(worktreePaths(root)).not.toContain(cwd);
+    expect(branches(root)).not.toContain(branch);
+    expect(branches(root, 'ordewell-preserved/*')).toEqual([]);
+    expect(run.tasks['task-1']).toBeUndefined();
+    expect(git(root, 'rev-parse', run.repos[0].integrationBranch)).toBe(tip);
+  });
+
+  it('never integrates what it changed', async () => {
+    const root = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const tip = git(root, 'rev-parse', run.repos[0].integrationBranch);
+    const t = task(1, 'Review');
+    const { cwd } = await iso.prepare(t, run, 'fresh', { readOnly: true });
+    writeFileSync(join(cwd, 'tried-fix.ts'), 'export const fixed = true;\n');
+
+    expect(await iso.integrate(t, run)).toBe('failed');
+
+    expect(run.tasks['task-1'].landingError).toBe('a read-only task lands nothing');
+    expect(git(root, 'rev-parse', run.repos[0].integrationBranch)).toBe(tip);
+  });
+
+  it('runs no git inside its worktree to remove it, so a .git file it rewrote leads nowhere', async () => {
+    const root = repo();
+    const { exec, cwds } = recording();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }), execFileImpl: exec });
+    const run = await iso.startRun(root);
+    const { cwd } = await iso.prepare(task(1, 'Review'), run, 'fresh', { readOnly: true });
+    // What a sealed command could leave: a gitdir of its own, whose config runs a program for git.
+    mkdirSync(join(cwd, 'fake-git'));
+    writeFileSync(join(cwd, 'fake-git', 'config'), `[core]\n\tfsmonitor = touch ${join(root, 'ran-outside')}\n`);
+    writeFileSync(join(cwd, '.git'), 'gitdir: fake-git\n');
+    cwds.length = 0;
+
+    await iso.release(run, 'task-1', { keep: false });
+
+    expect(cwds.filter((dir) => dir === cwd || dir.startsWith(`${cwd}/`))).toEqual([]);
+    expect(existsSync(join(root, 'ran-outside'))).toBe(false);
+    expect(existsSync(cwd)).toBe(false);
+  });
+
+  it("is removed whole by a crash-recovery prune, without being taken for another host's work", async () => {
+    const root = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const { cwd } = await iso.prepare(task(1, 'Review'), run, 'fresh', { readOnly: true });
+    writeFileSync(join(cwd, 'tried-fix.ts'), 'export const fixed = true;\n');
+
+    const pruned = await iso.pruneOrphans(run);
+
+    expect(pruned.kept).toEqual([]);
+    expect(pruned.preserved).toEqual([]);
+    expect(existsSync(cwd)).toBe(false);
+    expect(run.tasks['task-1']).toBeUndefined();
+  });
+
+  it('does not follow a link put in place of a directory on the way to a mirrored install', async () => {
+    const root = repo({
+      '.gitignore': 'node_modules/\n',
+      'package.json': JSON.stringify({ name: 'mono', private: true, workspaces: ['packages/*'] }),
+      'packages/b/package.json': '{"name":"b"}\n',
+    });
+    mkdirSync(join(root, 'packages', 'b', 'node_modules', 'only-b'), { recursive: true });
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-wt-outside-')));
+    roots.push(outside);
+    mkdirSync(join(outside, 'b', 'node_modules'), { recursive: true });
+    symlinkSync(join(root, 'README.md'), join(outside, 'b', 'node_modules', 'theirs'));
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const { cwd } = await iso.prepare(task(1, 'Review'), run, 'fresh', { readOnly: true });
+    expect(run.tasks['task-1'].repos['.'].linked).toContain('packages/b/node_modules');
+    rmSync(join(cwd, 'packages'), { recursive: true, force: true });
+    symlinkSync(outside, join(cwd, 'packages'));
+
+    await iso.release(run, 'task-1', { keep: false });
+
+    expect(lexists(join(outside, 'b', 'node_modules', 'theirs'))).toBe(true);
+    expect(existsSync(cwd)).toBe(false);
+  });
+});
+
 describe.skipIf(!hasGit)('WorktreeIsolation never deletes work that has not landed', () => {
   const preserved = (root: string) => branches(root, 'ordewell-preserved/*');
 

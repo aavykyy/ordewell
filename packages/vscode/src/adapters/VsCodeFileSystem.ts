@@ -274,7 +274,7 @@ export class VsCodeFileSystem extends BaseFileSystem {
     }
   }
 
-  protected async execBashImpl(command: string, shell: ShellLaunch, signal?: AbortSignal): Promise<ToolOutcome> {
+  protected async execBashImpl(command: string, shell: ShellLaunch, signal: AbortSignal | undefined, cwd: string): Promise<ToolOutcome> {
     // `file: null` means "host default", i.e. the `shell: true` this always
     // did, where no sandbox runs. A resolved file is the sandbox launcher
     // around the POSIX shell, or the POSIX shell found on a Windows box:
@@ -282,8 +282,8 @@ export class VsCodeFileSystem extends BaseFileSystem {
     // classified it under.
     const { file, args, env, wallTimeMs } = shell;
     const result = file === null
-      ? await run(command, [], { cwd: this.getWorkspaceRoot(), timeout: BASH_TIMEOUT_MS, shell: true, env, signal })
-      : await run(file, [...args, command], { cwd: this.getWorkspaceRoot(), timeout: wallTimeMs ?? BASH_TIMEOUT_MS, env, signal, sealed: wallTimeMs !== undefined });
+      ? await run(command, [], { cwd, timeout: BASH_TIMEOUT_MS, shell: true, env, signal })
+      : await run(file, [...args, command], { cwd, timeout: wallTimeMs ?? BASH_TIMEOUT_MS, env, signal, sealed: wallTimeMs !== undefined });
     const out = (result.stdout || '').trim();
     const err = (result.stderr || '').trim();
 

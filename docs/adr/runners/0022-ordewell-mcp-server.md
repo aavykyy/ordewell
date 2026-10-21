@@ -27,7 +27,7 @@ text markers have no role.
 
 | token | bound to | tools |
 |---|---|---|
-| **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, reason?})`, `checkpoint({question})` |
+| **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, reason?})`, `checkpoint({question})`; a read-only task's also `run_command({command})`, its only shell ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)) |
 | **Planner token** | one session's planner conversation | `list_runners()`, `list_models({runner})`, `submit_plan({tasks})`, `edit_plan({ops})`, `task_query({...})`, `task_output({task, attempt?, kinds?, ...})`, `task_diff({task, repo?, path?, ...})`, `load_skill({name})` (a model-invocable planner skill's instructions; [ADR-0024](../planner/0024-unified-skills.md)) |
 
 #37's runner-facing tools (`board_post`, `report`, …) join the task side later,
@@ -286,3 +286,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-18 — `submit_plan` and `edit_plan` report what the assignment resolver adjusted, an edit's own ops included (P2, [ADR-0003](../routing/0003-per-runner-model-allowlist.md)).
 - 2026-10-21 — `run_script` joins the execution tools, and a script task's exit status is its completion evidence, handed to `VerdictEngine` ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
 - 2026-10-21 — S2: a task runner the server never reaches while its process runs is held with a reason instead of failing and blocking its dependents; a `failed` report still fails it, and a planner turn still fails either way.
+- 2026-10-21 — a read-only task's token serves `run_command`, and says so in the runner's configuration (ADR-0046).

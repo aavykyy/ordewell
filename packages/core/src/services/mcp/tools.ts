@@ -1,6 +1,7 @@
 import { z } from 'zod/v4';
 import { TASK_QUERY_TASK_FIELDS, OUTPUT_LINES_MAX } from '../TaskQuery';
 import { TASK_LOG_KINDS } from '../taskLogRead';
+import type { ToolOutcome } from '../../interfaces/IFileSystem';
 
 /**
  * The tools of the Ordewell MCP server, per token role (ADR-0022), and the
@@ -41,6 +42,10 @@ export const SEALED_PARAM = 'Run it sealed, without asking anyone: for local com
 const runCommandInput = z.object({
   command: z.string().min(1).describe('One shell command line, run from the workspace root.'),
   sealed: z.boolean().optional().describe(SEALED_PARAM),
+});
+
+const taskRunCommandInput = z.object({
+  command: z.string().min(1).describe("One shell command line, run from this task's working directory."),
 });
 
 const fetchInput = z.object({
@@ -184,6 +189,7 @@ export type ListRunnersArgs = z.infer<typeof listRunnersInput>;
 export type ListModelsArgs = z.infer<typeof listModelsInput>;
 export type LoadSkillArgs = z.infer<typeof loadSkillInput>;
 export type RunCommandArgs = z.infer<typeof runCommandInput>;
+export type TaskRunCommandArgs = z.infer<typeof taskRunCommandInput>;
 export type FetchArgs = z.infer<typeof fetchInput>;
 export type WebSearchArgs = z.infer<typeof webSearchInput>;
 export type SubmitPlanArgs = z.infer<typeof submitPlanInput>;
@@ -215,6 +221,11 @@ export type CheckpointAnswer =
   | { kind: 'rejected'; reason: string }
   | { kind: 'withdrawn'; why: string };
 
+/** A command's outcome as `run_command` answers it, the planner's and a read-only task's alike. */
+export function commandReply(outcome: ToolOutcome): McpToolReply {
+  return { text: outcome.output || (outcome.success ? '(no output)' : 'The command failed with no output.'), ...(outcome.success ? {} : { isError: true }) };
+}
+
 /** The checkpoint call's result: the answer as the runner reads it (ADR-0022, V5). */
 export function checkpointReply(answer: CheckpointAnswer): McpToolReply {
   switch (answer.kind) {
@@ -234,6 +245,8 @@ type Run<A> = (args: A, context: McpToolContext) => Promise<McpToolReply>;
 export interface TaskToolHandler {
   taskComplete?: Run<TaskCompleteArgs>;
   checkpoint?: Run<CheckpointArgs>;
+  /** A read-only task's shell (ADR-0046); only its token lists `run_command`. */
+  runCommand?: Run<TaskRunCommandArgs>;
 }
 
 export interface PlannerToolHandler {
@@ -321,6 +334,17 @@ export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
  * only send a GET (ADR-0027).
  */
 const PLANNER_READ_ONLY = { readOnlyHint: true };
+
+/**
+ * A read-only task's tools (ADR-0046): the task tools, and `run_command`, its
+ * only shell. Its hint describes its landing effects: nothing it changes
+ * reaches the plan's branches.
+ */
+export const READ_ONLY_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
+  ...TASK_TOOLS,
+  tool('run_command', "Run a shell command: git, the project's tests and scripts, anything you need to look at or try. Nothing you change lands: this task's own worktree, when it has one, is thrown away when the task ends, and only your task_complete summary comes back. Read-only commands, and those the user's allowlist covers, run at once; anything else runs sealed instead, and nobody is ever asked: no network, no home directory or credentials, nothing writable but $TMPDIR (which is also $HOME) and the task's own worktree, so you can try a fix or add a failing test and run the suite there. git can read the repository but not record anything in it. Where this machine has no sandbox, a command that would run sealed is refused. Use it instead of a shell of your own.",
+    taskRunCommandInput, (h) => h.runCommand?.bind(h), PLANNER_READ_ONLY),
+];
 
 /**
  * The execution tools (ADR-0029) change what runs, so they say so. Every

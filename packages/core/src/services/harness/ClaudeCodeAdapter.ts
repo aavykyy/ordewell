@@ -17,6 +17,7 @@ import { ReplyRuns } from './replyRuns';
 import { settleWithin } from './settleWithin';
 import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState, type OrdewellToolRole } from './ordewellBinding';
 import { claudeLocalServers } from './claudeRepoConfig';
+import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 
 /**
  * Native plan mode permits Bash writes to its plan file, and saved allow rules
@@ -144,7 +145,7 @@ const ASYNC_LAUNCH_MARKER = 'Async agent launched successfully';
  */
 const FOLLOW_ON_TURN_GRACE_MS = 5000;
 
-const MODEL_PIN_TIMEOUT_MS = 10_000;
+const INITIALIZE_TIMEOUT_MS = 10_000;
 const MCP_STATUS_POLL_MS = 100;
 
 /** A denial's `message` is required by the CLI; this stands in when nobody wrote a note. */
@@ -400,8 +401,9 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private interruptRequested = false;
   private readonly permissions = new PermissionLedger<ClaudeAskHandle>(
     (handle, decision) => this.writeLine({ type: 'control_response', response: { subtype: 'success', request_id: handle.id, response: canUseToolAnswer(handle, decision) } }),
-    () => ({ role: this.role, autoApprove: false }),
+    () => ({ role: this.role, autoApprove: false, decide: readOnlyTaskPolicy(this.readOnlySite) }),
   );
+  private readOnlySite: TaskStartOptions | null = null;
 
   /** This turn's runs of reply text, each a text block named `<message id>:<block index>`. */
   private replyRuns = new ReplyRuns();
@@ -537,21 +539,24 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
 
   /**
    * A task's run: the manifest decides what its mode and effort mean
-   * (ADR-0001), and this adds only the protocol around them. No tool list and
-   * system prompt beyond the completion contract — the task's prompt is its
+   * (ADR-0001). Read-only tasks withhold native writes and shell tools
+   * (ADR-0046); other tasks keep the runner's native tools. The prompt is its
    * first turn, and the contract is where the CLI's own compaction cannot
    * summarise it away. `--permission-prompt-tool stdio` routes the questions the mode
    * leaves open to the control channel, where the adapter must answer them;
    * without it `-p` refuses them silently and nothing can ever surface one.
    */
   private taskSpawnSpec(opts: TaskStartOptions): SpawnSpec {
-    this.requestedMode = opts.flags.permissionMode;
+    const readOnly = readOnlyTask(opts);
+    this.readOnlySite = readOnly ? opts : null;
+    this.requestedMode = readOnly ? PLANNER_PERMISSION_MODE : opts.flags.permissionMode;
     this.followedModel = opts.model;
     const args = [
       ...TASK_PROTOCOL_ARGS,
       '--permission-prompt-tool', 'stdio',
-      '--permission-mode', opts.flags.permissionMode,
-      '--disallowedTools', TASK_DISALLOWED_TOOLS.join(','),
+      '--permission-mode', this.requestedMode,
+      '--disallowedTools', [...TASK_DISALLOWED_TOOLS, ...(readOnly ? DISALLOWED_TOOLS : [])].join(','),
+      ...(readOnly ? ['--setting-sources', 'user', '--settings', PLANNER_SETTINGS] : []),
       ...(opts.flags.effort ? claudeThinkingArgs(opts.flags.effort) : []),
     ];
     if (opts.model) args.push('--model', opts.model);
@@ -560,7 +565,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       this.countFrom(opts.resumeSessionId, opts.resumeCost);
       this.pendingResume = opts.resumeSessionId;
     }
-    if (opts.mcp) args.push('--append-system-prompt', TASK_COMPLETION_CONTRACT, ...this.ordewellServerArgs(opts.mcp, 'task'));
+    if (opts.mcp) args.push('--append-system-prompt', TASK_COMPLETION_CONTRACT, ...this.ordewellServerArgs(opts.mcp, readOnly ? 'readOnlyTask' : 'task'));
     return { command: 'claude', args, env: NO_AUTO_MEMORY };
   }
 
@@ -593,22 +598,13 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     this.mcpConfig = null;
   }
 
-  /**
-   * Under `--permission-mode plan` the CLI runs Sonnet for the `haiku` alias,
-   * though it runs a full id as given: a read-only task would silently run a
-   * dearer model than its plan names (ADR-0001). The CLI's own list says what
-   * the alias resolves to now; that id is pinned before the first turn.
-   */
-  protected override async handshake(opts: AgentStartOptions): Promise<void> {
+  protected override async handshake(): Promise<void> {
     // Before the first turn, `initialize` is the one place the CLI lists its
     // commands with their descriptions and argument hints (checked on
     // 2.1.299); `init` names them only.
-    const initialized = (await this.control({ subtype: 'initialize' }, MODEL_PIN_TIMEOUT_MS))?.response;
+    const initialized = (await this.control({ subtype: 'initialize' }, INITIALIZE_TIMEOUT_MS))?.response;
     this.listedCommands = initialized?.commands ?? [];
     this.listedModels = initialized?.models ?? [];
-    if (opts.kind !== 'task' || opts.flags.permissionMode !== 'plan' || !opts.model) return;
-    const resolved = initialized?.models?.find((m) => m.value === opts.model)?.resolvedModel;
-    if (resolved && resolved !== opts.model) await this.control({ subtype: 'set_model', model: resolved }, MODEL_PIN_TIMEOUT_MS);
   }
 
   /**
@@ -688,7 +684,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   }
 
   /** Send a control request and wait for its answer; null when none came in time or the process ended. */
-  private control(request: { subtype: string; model?: string }, timeoutMs: number): Promise<ControlResponse | null> {
+  private control(request: { subtype: string }, timeoutMs: number): Promise<ControlResponse | null> {
     if (!this.process) return Promise.resolve(null);
     this.controlCount += 1;
     const requestId = `ordewell-${request.subtype}-${this.controlCount}`;
@@ -822,7 +818,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
           input,
           suggestions,
           ...(msg.request.tool_use_id ? { toolUseId: msg.request.tool_use_id } : {}),
-          ...(this.role === 'planner' ? { ask: plannerAsk(name, input, msg.request.mcp_server?.name) } : {}),
+          ...(this.role === 'planner' || this.readOnlySite ? { ask: plannerAsk(name, input, msg.request.mcp_server?.name) } : {}),
           ordewell: this.givenOrdewell && CLAUDE_ORDEWELL.isOrdewellAsk(name),
         }, { id, input, suggestions }, emit);
         return;

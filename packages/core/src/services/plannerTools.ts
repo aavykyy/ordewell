@@ -12,7 +12,7 @@ import {
 import type { TaskOp } from './TaskOps';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
 import type { PlanChange, ToolRead } from './PlannerConversation';
-import type { McpToolReply, PlannerToolHandler } from './mcp';
+import { commandReply, type McpToolReply, type PlannerToolHandler } from './mcp/tools';
 import type { TaskLogEvent } from '../models/TaskLog';
 import { renderTaskLog } from './taskLogRead';
 import { taskReadPage } from './taskReadPage';
@@ -131,8 +131,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     },
 
     async runCommand({ command, sealed }, { signal }) {
-      const outcome = await (sealed ? host.runCommand(command, signal, { sealed }) : host.runCommand(command, signal));
-      return { text: outcome.output || (outcome.success ? '(no output)' : 'The command failed with no output.'), ...(outcome.success ? {} : { isError: true }) };
+      return commandReply(await (sealed ? host.runCommand(command, signal, { sealed }) : host.runCommand(command, signal)));
     },
 
     async fetch({ url }) {

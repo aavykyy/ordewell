@@ -51,7 +51,7 @@ const ACTION_LABELS: Record<TaskRowAction, string> = {
 
 const DEFAULT_MODES: RunnerMode[] = [
   { id: 'build', label: 'Build', description: 'Edit files and run commands' },
-  { id: 'plan', label: 'Plan', description: 'Read-only analysis' },
+  { id: 'plan', label: 'Read-only', description: 'Ordewell commands; lands nothing' },
 ];
 
 export default function SubTaskCard({ task, parentTask, tasks, models, modes, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, run, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {

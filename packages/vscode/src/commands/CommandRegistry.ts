@@ -169,7 +169,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
           }
         } else {
           const modePick = await vscode.window.showQuickPick(
-            [{ label: 'Build', description: 'Edits files and runs commands' }, { label: 'Plan', description: 'Read-only analysis' }],
+            [{ label: 'Build', description: 'Edits files and runs commands' }, { label: 'Read-only', description: 'Ordewell commands; lands nothing' }],
             { placeHolder: 'Task mode' },
           );
           if (modePick) taskMode = modePick.label === 'Build' ? 'build' : 'plan';

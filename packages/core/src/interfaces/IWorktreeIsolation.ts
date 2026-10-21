@@ -115,6 +115,12 @@ export interface IsolationTaskRecord {
    */
   repairedFiles?: string[];
   /**
+   * A read-only task's (ADR-0046): never integrated, and removed whole
+   * whenever it is released, whatever its worktrees hold, with nothing kept
+   * on a branch and no git run inside them.
+   */
+  readOnly?: true;
+  /**
    * Set once the task's landed work is in the checked-out HEAD of every repo
    * it changed — merged into the user's branch, by Merge all or by hand — or
    * can no longer be merged there, its integration branch gone. What a merge
@@ -439,8 +445,9 @@ export interface IWorktreeIsolation {
    * the Runner into. Fresh attempts start clean from the tips. A `restore`
    * puts the previous attempt's preserved work on top of them, falling back
    * to the tips in every repo when any restoration conflicts (ADR-0018).
+   * `readOnly` marks the record as a read-only task's (ADR-0046).
    */
-  prepare(task: Task, run: IsolationRun, intent?: PrepareIntent): Promise<PreparedTask>;
+  prepare(task: Task, run: IsolationRun, intent?: PrepareIntent, opts?: { readOnly?: boolean }): Promise<PreparedTask>;
 
   /**
    * Hand a conflicted task's kept workspace to a conflict repair (ADR-0015)
@@ -468,7 +475,8 @@ export interface IWorktreeIsolation {
    * tasks waiting at once the lowest plan order goes first. On anything but
    * `merged` the worktrees and refs stay, and nothing is resolved here: a
    * conflict is repaired, if at all, by a new attempt of the task in its own
-   * worktree (ADR-0015), never inside this queue.
+   * worktree (ADR-0015), never inside this queue. A read-only task's record
+   * is never merged: it is `failed` (ADR-0046).
    *
    * `persist` is called once `run.landing` is set and before the first
    * merge; the caller saves the run there, synchronously, which is what
@@ -483,9 +491,10 @@ export interface IWorktreeIsolation {
    * worktree and branch exactly as they are
    * for inspection — a failed verdict, a stop, a cancel — and only moves the task off `active`,
    * so a crash-recovery prune does not sweep it away; a repair it ends leaves
-   * the task `conflict`, as it was before the repair. Takes the run rather than
-   * a bare task id: ids are only unique within one plan, and one daemon serves
-   * many (ADR-0025 D2).
+   * the task `conflict`, as it was before the repair. A read-only task's
+   * record goes whole either way, with nothing kept (ADR-0046). Takes the run
+   * rather than a bare task id: ids are only unique within one plan, and one
+   * daemon serves many (ADR-0025 D2).
    */
   release(run: IsolationRun, taskId: string, opts: { keep: boolean }): Promise<IsolationRemoval>;
 

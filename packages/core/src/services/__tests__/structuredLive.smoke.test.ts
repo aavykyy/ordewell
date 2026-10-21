@@ -88,8 +88,7 @@ describe.runIf(live)('structured transport — live smoke', () => {
     }
   }, TIMEOUT_MS);
 
-  // The CLI runs Sonnet for the `haiku` alias under `--permission-mode plan`;
-  // a read-only task on Haiku must still be answered by Haiku (ADR-0001).
+  // Ordewell's read-only profile keeps the plan's model (ADR-0046).
   it.runIf(model === 'haiku')('runs a read-only task on the haiku alias as Haiku', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-'));
     writeFileSync(join(dir, 'README.md'), 'hello\n');

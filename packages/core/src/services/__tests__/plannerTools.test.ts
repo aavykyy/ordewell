@@ -487,17 +487,17 @@ describe('list_runners and list_models', () => {
   });
 });
 
-/** A host where Codex's sandbox cannot start: its read-only and Guarded modes are off (ADR-0033). */
+/** Guarded needs Codex's sandbox; Ordewell's read-only profile does not (ADR-0046). */
 function codexWithoutSandbox(): RunnerRegistry {
   const registry = new RunnerRegistry();
-  registry.setUnavailableModes('codex', { agent: CODEX_SANDBOX_MODE_REASON, plan: CODEX_SANDBOX_MODE_REASON });
+  registry.setUnavailableModes('codex', { agent: CODEX_SANDBOX_MODE_REASON });
   return registry;
 }
 
 describe('a Codex whose sandbox cannot start', () => {
   const bothRunners = { enabledRunners: ['claude-code', 'codex'] };
 
-  it('is listed without a read-only mode, so a read-only task is not offered to it', async () => {
+  it('keeps read-only support in list_runners when its native sandbox is unavailable', async () => {
     let answer: unknown;
     const { session } = plannerSession(fakeClaude({
       turn: async (mcp) => {
@@ -508,10 +508,10 @@ describe('a Codex whose sandbox cannot start', () => {
 
     await session.startPlanning('add a cache', ['claude-code', 'codex']);
 
-    expect(answer).toEqual({ autonomy: 'Full', runners: [{ id: 'claude-code', readOnly: true }, { id: 'codex', readOnly: false }] });
+    expect(answer).toEqual({ autonomy: 'Full', runners: [{ id: 'claude-code', readOnly: true }, { id: 'codex', readOnly: true }] });
   });
 
-  it('refuses a submitted read-only task on Codex, naming the other runner and the reason', async () => {
+  it('accepts a read-only task on Codex without its native sandbox', async () => {
     let submitted: { isError: boolean; body: unknown } | undefined;
     const { session } = plannerSession(fakeClaude({
       turn: async (mcp) => {
@@ -522,14 +522,11 @@ describe('a Codex whose sandbox cannot start', () => {
 
     await session.startPlanning('add a cache', ['claude-code', 'codex']);
 
-    expect(submitted?.isError).toBe(true);
-    const message = JSON.stringify(submitted?.body);
-    expect(message).toContain('one of: claude-code');
-    expect(message).toContain('sandbox cannot start on this host');
-    expect(session.planTasks).toEqual([]);
+    expect(submitted?.isError).toBe(false);
+    expect(session.planTasks[0]).toMatchObject({ assignedRunner: 'codex', taskMode: 'plan' });
   });
 
-  it('refuses a planner edit that moves a read-only task onto it, and leaves the plan as it was', async () => {
+  it('keeps a task read-only when an edit moves it to Codex without its native sandbox', async () => {
     let edited: { isError: boolean; body: unknown } | undefined;
     let planned = false;
     const { session } = plannerSession(fakeClaude({
@@ -546,9 +543,8 @@ describe('a Codex whose sandbox cannot start', () => {
 
     await session.continueConversation('EDIT NOW');
 
-    expect(edited?.isError).toBe(true);
-    expect(JSON.stringify(edited?.body)).toContain('sandbox cannot start on this host');
-    expect(session.planTasks[0]).toMatchObject({ assignedRunner: 'claude-code', taskMode: 'plan' });
+    expect(edited?.isError).toBe(false);
+    expect(session.planTasks[0]).toMatchObject({ assignedRunner: 'codex', taskMode: 'plan' });
   });
 });
 

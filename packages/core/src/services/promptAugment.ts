@@ -223,6 +223,9 @@ function keptWorkLines(preserved: readonly PreservedWork[], whose: string): stri
  * What a continued session is told became of the edits it remembers
  * (ADR-0018, K1). Absent work is in the checkout, where it was left.
  */
+/** What a read-only task's continue is told of its earlier attempt's files: they went with its worktree (ADR-0046). */
+export const READ_ONLY_CONTINUED_NOTE = 'This task is read-only, so nothing your earlier attempt changed was kept: check the working tree before relying on files you remember.';
+
 export function continuedWorkNote(work: PreviousWork | undefined): string {
   if (!work) return 'Your previous changes are in the working tree (shared workspace).';
   if (work.outcome === 'restored') return 'Your previous changes are in the working tree.';

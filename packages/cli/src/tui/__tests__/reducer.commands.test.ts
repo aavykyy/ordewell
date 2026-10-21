@@ -462,7 +462,7 @@ describe('a runner mode this host cannot run', () => {
     expect(state.overlay).toMatchObject({
       kind: 'picker',
       picker: {
-        hint: expect.stringContaining('Codex sandbox unavailable on this host: read-only and Guarded modes are off'),
+        hint: expect.stringContaining('Codex sandbox unavailable on this host: Guarded mode is off'),
         items: [
           expect.objectContaining({ id: 'agent', disabled: true }),
           expect.objectContaining({ id: 'plan', disabled: true }),

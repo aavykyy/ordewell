@@ -28,9 +28,9 @@ describe('CodexSandboxAvailability', () => {
 
     await availability.refresh();
 
-    expect(unavailableIds(registry)).toEqual(['agent', 'plan']);
+    expect(unavailableIds(registry)).toEqual(['agent']);
     const plan = codexModes(registry).find((m) => m.id === 'plan');
-    expect(plan?.unavailable).toMatch(/sandbox/i);
+    expect(plan?.unavailable).toBeUndefined();
     expect(codexModes(registry).find((m) => m.id === 'fullAccess')?.unavailable).toBeUndefined();
   });
 
@@ -49,7 +49,7 @@ describe('CodexSandboxAvailability', () => {
     await availability.ensure();
     await availability.ensure();
     expect(probes()).toHaveLength(2); // bubblewrap, then the Landlock fallback — one probe round
-    expect(unavailableIds(registry)).toEqual(['agent', 'plan']);
+    expect(unavailableIds(registry)).toEqual(['agent']);
 
     broken = false;
     await availability.refresh();

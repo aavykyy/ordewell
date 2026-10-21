@@ -2,7 +2,7 @@ import { realpathSync } from 'fs';
 import type { ApprovalDecision, IApproval } from '../../interfaces/IApproval';
 import type { IWebFetcher } from '../../interfaces/IWebFetcher';
 import { grantScopeFor, resolveWithin } from '../pathScope';
-import type { PlannerAsk } from './AgentAdapter';
+import type { AgentStartOptions, PlannerAsk, TaskStartOptions } from './AgentAdapter';
 import { NOT_APPROVED_HINT } from '../effectRoute';
 
 /**
@@ -46,6 +46,26 @@ function readTarget(root: string, target: string): { abs: string; inside: boolea
   const written = resolveWithin(root, target);
   const real = onDisk(written.abs);
   return real === undefined ? written : resolveWithin(onDisk(root) ?? root, real);
+}
+
+/** ADR-0046: the manifest selects the profile; the credential also identifies its task tools. */
+export function readOnlyTask(opts: AgentStartOptions | null | undefined): boolean {
+  return opts?.kind === 'task' && (opts.flags.readOnly === true || opts.mcp?.readOnly === true);
+}
+
+/** No native tool may write or ask a person on a read-only task (ADR-0046). */
+export function decideReadOnlyTaskPermission(ask: PlannerAsk | undefined, site: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>): ApprovalDecision {
+  if (ask?.kind === 'path') {
+    const target = resolveWithin(site.cwd, ask.path).abs;
+    if ([site.cwd, site.workspaceRoot].some((root) => root !== undefined && readTarget(root, target).inside)) return ALLOW;
+    return deny('This read is outside the task worktree and workspace. Nobody can approve it here.');
+  }
+  return deny('This native tool is unavailable on a read-only task. Use Ordewell run_command for commands; nobody can approve native tools here.');
+}
+
+export function readOnlyTaskPolicy(opts: AgentStartOptions | null | undefined): ((request: { ask?: PlannerAsk }) => ApprovalDecision) | undefined {
+  if (opts?.kind !== 'task' || !readOnlyTask(opts)) return undefined;
+  return (request) => decideReadOnlyTaskPermission(request.ask, opts);
 }
 
 export async function decidePlannerPermission(

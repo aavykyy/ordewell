@@ -1,8 +1,9 @@
+import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 import { realpathSync } from 'fs';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, PlannerStartOptions, TaskStartOptions } from './AgentAdapter';
 import { TASK_COMPLETION_CONTRACT } from '../mcp';
-import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
+import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, readOnlySessionRules, OPENCODE_SEARCH_OFF, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
 import { hunksOf } from './fileDiff';
 import { heldServersNote } from './projectServers';
 import type { ProjectMcpServer } from './repoConfig';
@@ -31,9 +32,9 @@ const SEARCH_OFF_RULES: SessionRule[] = Object.entries(OPENCODE_SEARCH_OFF)
  * A planner's session denies it outright.
  */
 const CODE_MODE_OFF_RULES: SessionRule[] = [{ action: 'execute', resource: '*', effect: 'deny' }];
-function codeModeOnly(version: string | undefined): string {
-  return `OpenCode${version ? ` ${version}` : ''} cannot run the planner safely: it can only offer Ordewell's tools inside code mode, which runs code the planner writes without asking. `
-    + 'The planner needs an OpenCode version that can list MCP tools outside code mode. Update OpenCode, or choose another planner runner.';
+function codeModeOnly(version: string | undefined, role: 'planner' | 'task'): string {
+  return `OpenCode${version ? ` ${version}` : ''} cannot run the ${role} safely: it can only offer Ordewell's tools inside code mode, which runs code the model writes without asking. `
+    + `This ${role} needs an OpenCode version that can list MCP tools outside code mode. Update OpenCode, or choose another runner.`;
 }
 /** Why an approved project server's tools are missing, when this OpenCode cannot list them as tools of their own. */
 const UNUSABLE = 'not usable on this OpenCode version: its tools are only reachable through code mode\'s `execute`, which the planner may not use';
@@ -232,7 +233,7 @@ export class OpenCodeV2 {
   private readonly saved = new Set<string>();
   private readonly permissions = openCodePermissions(
     (id, sessionId, decision) => this.replyPermission(id, sessionId, decision),
-    () => ({ role: this.role, autoApprove: this.opts.kind === 'task' && autoApproves(this.opts) }),
+    () => ({ role: this.role, autoApprove: this.opts.kind === 'task' && autoApproves(this.opts), decide: readOnlyTaskPolicy(this.opts) }),
   );
 
   constructor(
@@ -260,7 +261,7 @@ export class OpenCodeV2 {
       const existing = await this.host.json<{ data?: { id?: string; permissions?: unknown } }>('GET', `/api/session/${resume}`).catch(() => null);
       // Its rules are the ones it was created with, which no route changes: a planner session from before
       // `execute` was denied would keep running the planner's code unasked, so it is treated as stale.
-      const resumable = this.role === 'task' || rulesDeny(existing?.data?.permissions, 'execute');
+      const resumable = !readOnlyTask(this.opts) && (this.role === 'task' || rulesDeny(existing?.data?.permissions, 'execute'));
       if (existing?.data?.id && resumable) {
         this.sessionId = existing.data.id;
         // The instructions follow its rules too.
@@ -281,7 +282,7 @@ export class OpenCodeV2 {
     const created = await this.host.json<{ data?: { id?: string } }>('POST', '/api/session', {
       agent: this.agent,
       ...(this.model ? { model: this.model } : {}),
-      permissions: [...(this.role === 'planner' ? [...PLANNER_RULES, ...(this.ownSearch ? [] : SEARCH_OFF_RULES), ...CODE_MODE_OFF_RULES] : TASK_RULES), ...this.ordewellRules()],
+      permissions: [...(this.opts.kind === 'task' && readOnlyTask(this.opts) ? readOnlySessionRules(this.opts) : this.role === 'planner' ? [...PLANNER_RULES, ...(this.ownSearch ? [] : SEARCH_OFF_RULES), ...CODE_MODE_OFF_RULES] : TASK_RULES), ...this.ordewellRules()],
     });
     if (!created?.data?.id) throw new Error(`The OpenCode ${this.role} server did not return a session id.`);
     this.sessionId = created.data.id;
@@ -304,8 +305,8 @@ export class OpenCodeV2 {
    */
   private async exposeServers(): Promise<void> {
     const mcp = this.opts.mcp;
-    if (mcp && !await this.expose(mcp.name, { type: 'remote', url: mcp.url, headers: mcp.headers }) && this.role === 'planner') {
-      throw new Error(codeModeOnly(this.host.version));
+    if (mcp && !await this.expose(mcp.name, { type: 'remote', url: mcp.url, headers: mcp.headers }) && (this.role === 'planner' || readOnlyTask(this.opts))) {
+      throw new Error(codeModeOnly(this.host.version, this.role));
     }
     const project = this.opts.kind === 'planner' ? this.opts.projectServers ?? [] : [];
     for (const server of project) {
@@ -321,7 +322,7 @@ export class OpenCodeV2 {
 
   /** Allow the Ordewell server's tools, so a call never waits on a person (ADR-0022, S3). */
   private ordewellRules(): SessionRule[] {
-    return this.opts.mcp ? OPENCODE_ORDEWELL.sessionRules(this.opts.mcp, this.role) : [];
+    return this.opts.mcp ? OPENCODE_ORDEWELL.sessionRules(this.opts.mcp, readOnlyTask(this.opts) ? 'readOnlyTask' : this.role) : [];
   }
 
   /**
@@ -660,7 +661,7 @@ export class OpenCodeV2 {
   private onPermissionAsked(ask: NonNullable<V2Frame['data']>, session: string, state: TurnState, onEvent: (e: AgentEvent) => void): void {
     const request = this.permissionRequest(ask);
     if (!request) return;
-    if (this.role !== 'task') {
+    if (this.role !== 'task' || readOnlyTask(this.opts)) {
       // `/api/mcp` may have been read before OpenCode listed the approved servers; they are known from the start.
       // An unusable one is running too, but what reaches its tools is `execute`, and the planner was told it has none.
       const listed = (this.host.mcpServers?.() ?? []).filter((name) => !this.unusable.some((server) => server.name === name));
