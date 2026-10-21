@@ -15,7 +15,7 @@ import { CLAUDE_ORDEWELL } from './claudeOrdewell';
 import { PermissionLedger } from './permissionLedger';
 import { ReplyRuns } from './replyRuns';
 import { settleWithin } from './settleWithin';
-import { awaitAttach, type OrdewellToolRole } from './ordewellBinding';
+import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState, type OrdewellToolRole } from './ordewellBinding';
 import { claudeLocalServers } from './claudeRepoConfig';
 import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 
@@ -145,12 +145,6 @@ const ASYNC_LAUNCH_MARKER = 'Async agent launched successfully';
  */
 const FOLLOW_ON_TURN_GRACE_MS = 5000;
 
-/**
- * How long a planner's Ordewell server has to connect. The CLI connects its
- * MCP servers as it starts, before any turn; a loopback server that is not up
- * by then is not coming, and the planner falls back to the envelopes.
- */
-const MCP_ATTACH_TIMEOUT_MS = 10_000;
 const INITIALIZE_TIMEOUT_MS = 10_000;
 const MCP_STATUS_POLL_MS = 100;
 
@@ -638,12 +632,20 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     });
   }
 
-  /** Asks the CLI itself, which reports `pending` until its connection attempt settles. */
-  async mcpAttached(): Promise<boolean> {
-    if (!this.mcpConfig) return false;
+  /**
+   * Asks the CLI itself, which reports `pending` until its connection attempt
+   * settles. A process that exited ends the wait at once: its report is gone
+   * with it, and no answer would ever come.
+   */
+  async mcpAttached(): Promise<AttachState> {
+    if (!this.mcpConfig) return 'failed';
     return awaitAttach(async (left) => {
+      if (this.exited) return 'failed';
       const answer = await this.control({ subtype: 'mcp_status' }, left);
-      return CLAUDE_ORDEWELL.attachState(answer?.response?.mcpServers?.find((s) => s.name === ORDEWELL_MCP_SERVER_NAME)?.status);
+      if (this.exited) return 'failed';
+      if (!answer) return 'pending';
+      const server = answer.response?.mcpServers?.find((s) => s.name === ORDEWELL_MCP_SERVER_NAME);
+      return server ? CLAUDE_ORDEWELL.attachState(server.status) : 'pending';
     }, MCP_ATTACH_TIMEOUT_MS, MCP_STATUS_POLL_MS);
   }
 

@@ -1064,8 +1064,8 @@ one only after a retry or a skip.
 **Start rule** (`startWaits`, `StartWait`, `services/readiness.ts`) — whether a
 task can start now and, if not, every reason it waits, in a fixed order whose
 first is *the* reason (ADR-0034): it has started; Mark complete is landing it;
-it has no prompt; it is outside the user's approval record; it is on hold; it
-is blocked; it is in a *Loop*'s body whose check has not failed this round
+it has no prompt; it is outside the user's approval record; it is on hold, with
+that reason shown on every surface; it is blocked; it is in a *Loop*'s body whose check has not failed this round
 (`loop-check`, "runs if #X fails"); its dependencies are not met, or, queued
 by a force start, are still under way; a Merge all is under way and it is an ops task; its runner
 waits on a usage limit's reset; a planner turn holds new starts; it is at its

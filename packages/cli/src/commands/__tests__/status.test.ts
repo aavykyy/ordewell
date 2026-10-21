@@ -117,6 +117,29 @@ describe('handleStatus --output', () => {
     srv.close();
   });
 
+  it('says why a live session holds a task, so it does not read as merely unstarted', async () => {
+    const session = {
+      ...SESSION,
+      plan: { pendingTasks: [{ id: 't1', order: 1, title: 'One', status: 'pending' }] },
+      run: {
+        tasks: [{ id: 't1', order: 1, title: 'One', status: 'pending', holdReason: 'could not connect to Ordewell\'s tools; start it again' }],
+        runMerge: null,
+        handoff: null,
+        mergeResult: null,
+      },
+    };
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(session));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() =>
+      handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)),
+    );
+    expect(stdout).toContain('On hold: could not connect to Ordewell\'s tools; start it again');
+    srv.close();
+  });
+
   // A running session's finished tasks come back in a flat execution log, a
   // finished subtask both on its own and inside its parent.
   it('lists each task once, at its own depth, when finished ones come from the execution log', async () => {

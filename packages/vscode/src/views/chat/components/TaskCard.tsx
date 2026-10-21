@@ -9,7 +9,7 @@ import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
-import { blockedByLabel, dependencyCandidates, capConflictFiles, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRowView } from '@ordewell/core/plan-utils';
+import { blockedByLabel, dependencyCandidates, capConflictFiles, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind, AssignmentScope } from '@ordewell/core';
 
 export interface RunnerMode {
@@ -50,7 +50,9 @@ interface TaskCardProps {
    * runner approvals, isolation and merge gate. Absent before the host has
    * folded the run, in which case the plan's own fields are all there is.
    */
-  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval'>;
+  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason'>;
+  /** Every task's run entry, keyed by id, so a subtask card can read its own hold. */
+  runsByTask?: ReadonlyMap<string, RunTask>;
   /** Opt in to resolving this task's merge conflict as an AI task. */
   onResolveConflict?: (taskId: string) => void;
   dependentCount?: number;
@@ -103,11 +105,13 @@ const STATUS_BADGE: Record<TaskStatusKind, { label: string; cls: string }> = {
   awaiting: { label: 'Awaiting User', cls: 'status-blocked' },
 };
 
-/** The status badge: what an awaiting task waits on, the failure a blocked one waits on, or why one was skipped, outranks the generic word. */
-export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'blockedBy' | 'skipReason'>): { label: string; cls: string } {
+/** The status badge: what an awaiting task waits on, why it is held, the failure a blocked one waits on, or why one was skipped, outranks the generic word. */
+export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'blockedBy' | 'skipReason' | 'holdReason'>): { label: string; cls: string } {
   const badge = STATUS_BADGE[row.status];
   if (row.status === 'skipped') return { ...badge, label: skippedLabel(row.skipReason) };
-  return { ...badge, label: row.awaiting ?? (row.blockedBy ? blockedByLabel(row.blockedBy) : badge.label) };
+  if (row.awaiting) return { ...badge, label: row.awaiting };
+  if (row.holdReason) return { ...badge, label: holdLabel(row.holdReason) };
+  return { ...badge, label: row.blockedBy ? blockedByLabel(row.blockedBy) : badge.label };
 }
 
 /**
@@ -347,7 +351,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, run, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, planActions, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, planActions, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -371,7 +375,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
   const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
   // The run's verdict and round are the newer word on a loop's check: they say whether it is between rounds (ADR-0045).
-  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true, ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}) }, { tasks: siblings, modes: activeModes, runnerScope });
+  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate, holdReason: run?.holdReason, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true, ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}) }, { tasks: siblings, modes: activeModes, runnerScope });
   const conflictFiles = isolatedWork?.conflictFiles ?? [];
   const repair = isolatedWork?.repair ?? null;
 
@@ -694,7 +698,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
                     <SubTaskCard key={sub.id} task={sub} parentTask={task} tasks={siblings} models={subModels}
                       modes={subModes} runners={runners} runnerScope={runnerScope} effectiveRunner={subRunner}
                       configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
-                      isExecuting={isExecuting}
+                      isExecuting={isExecuting} run={runsByTask?.get(sub.id)}
                       onRunnerChange={onRunnerChange}
                       onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
                       taskSkills={taskSkills} onSkillsChange={onSkillsChange}
@@ -798,8 +802,9 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
 
         {/* The awaiting reason is a badge in its own right (ADR-0018, W1): a
             task held for the user must read as such whether or not a run is
-            still being drawn as active — and so must one a failure blocks. */}
-        {(isExecuting || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
+            still being drawn as active — and so must one a failure blocks,
+            one on hold, or a skipped one. */}
+        {(isExecuting || row.holdReason || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
           <StatusBadge status={status} />
         )}
         {planActions}

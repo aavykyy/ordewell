@@ -347,7 +347,7 @@ describe('checkpointing through the checkpoint tool (ADR-0022, V5)', () => {
 });
 
 describe('a task whose MCP tools cannot attach', () => {
-  it('records one failed attempt after two spawns, warns once, and never sends the task', async () => {
+  function cannotAttach(report: 'pending' | 'failed') {
     const server = fakeMcpServer();
     const issue = server.issueTaskToken.bind(server);
     const scopes: Array<{ taskId: string; attempt: number }> = [];
@@ -363,7 +363,7 @@ describe('a task whose MCP tools cannot attach', () => {
       return {
         agentId: 'claude-code', exited: false, start: async () => {}, send,
         nativeSessionId: () => null, dispose: () => { disposed.push(id); },
-        mcpAttached: async () => false, interrupt: async () => false,
+        mcpAttached: async () => report, interrupt: async () => false,
         answerPermission: () => false, onProcessExit: () => {},
       };
     } });
@@ -374,20 +374,49 @@ describe('a task whose MCP tools cannot attach', () => {
       onIsolationNotice: ({ message }) => notices.push(message),
       onTaskSettled: ({ taskId }) => settled.push(taskId),
     });
-    orchestrator.loadPlan([createTask({ id: 't1', title: 'Only', prompt: 'Do it', taskMode: 'acceptEdits' })]);
+    orchestrator.loadPlan([
+      createTask({ id: 't1', order: 1, title: 'Only', prompt: 'Do it', taskMode: 'acceptEdits' }),
+      createTask({ id: 't2', order: 2, title: 'After', prompt: 'Then it', taskMode: 'acceptEdits', dependencies: ['t1'] }),
+    ]);
+    return { orchestrator, runner, send, disposed, scopes, notices, settled, spawns: () => spawns };
+  }
 
-    await orchestrator.forceStartTask('t1');
+  it('holds the task with a reason when the respawn never connects, so its dependents are not blocked', async () => {
+    const env = cannotAttach('pending');
 
-    expect(spawns).toBe(2);
-    expect(new Set(disposed)).toEqual(new Set(['1', '2']));
-    expect(send).not.toHaveBeenCalled();
-    expect(scopes.map(({ taskId, attempt }) => ({ taskId, attempt }))).toEqual([
+    await env.orchestrator.forceStartTask('t1');
+
+    expect(env.spawns()).toBe(2);
+    expect(new Set(env.disposed)).toEqual(new Set(['1', '2']));
+    expect(env.send).not.toHaveBeenCalled();
+    expect(env.scopes.map(({ taskId, attempt }) => ({ taskId, attempt }))).toEqual([
       { taskId: 't1', attempt: 1 }, { taskId: 't1', attempt: 1 },
     ]);
-    expect(orchestrator.storeInstance.get('t1')?.status).toBe('failed');
-    expect(orchestrator.storeInstance.get('t1')?.outputSummary?.logTail).toContain('MCP server connected');
-    expect(notices.filter((message) => message.includes('respawning once'))).toHaveLength(1);
-    expect(settled).toEqual(['t1']);
-    expect(runner.activeCount).toBe(0);
+    expect(env.orchestrator.storeInstance.get('t1')?.status).toBe('pending');
+    expect(env.orchestrator.holdReason('t1')).toBe('could not connect to Ordewell\'s tools; start it again');
+    expect(serializeTaskStatus(env.orchestrator.storeInstance.get('t1')!, null, null, [], 0, [], '', false, env.orchestrator.holdReason('t1')))
+      .toMatchObject({ holdReason: 'could not connect to Ordewell\'s tools; start it again' });
+    expect(env.orchestrator.startWaits(env.orchestrator.storeInstance.get('t1')!).find((wait) => wait.kind === 'on-hold'))
+      .toEqual({ kind: 'on-hold', reason: 'could not connect to Ordewell\'s tools; start it again' });
+    // A failure would block this one (ADR-0034); a hold leaves it waiting on
+    // work that can still start rather than on one that never will.
+    expect(env.orchestrator.storeInstance.get('t2')?.status).toBe('pending');
+    expect(env.orchestrator.getBlockedBy('t2')).toEqual([]);
+    expect(env.notices.filter((message) => message.includes('respawning once'))).toHaveLength(1);
+    expect(env.settled).toEqual(['t1']);
+    expect(env.runner.activeCount).toBe(0);
+  });
+
+  it('fails the task when the runner reports the server failed, a configuration problem', async () => {
+    const env = cannotAttach('failed');
+
+    await env.orchestrator.forceStartTask('t1');
+
+    expect(env.spawns()).toBe(2);
+    expect(env.send).not.toHaveBeenCalled();
+    expect(env.orchestrator.storeInstance.get('t1')?.status).toBe('failed');
+    expect(env.orchestrator.holdReason('t1')).toBeNull();
+    expect(env.orchestrator.storeInstance.get('t1')?.outputSummary?.logTail).toContain('MCP server connected');
+    expect(env.runner.activeCount).toBe(0);
   });
 });

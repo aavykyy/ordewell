@@ -49,6 +49,8 @@ export interface TaskView {
   awaitingApproval?: number;
   /** Added after the user approved the plan, so the scheduler leaves it for them (ADR-0035). */
   waitsForApproval?: boolean;
+  /** Why it is held out of the scheduler; absent when it is not held. */
+  holdReason?: string;
   /** An ops task (ADR-0020): it runs in the user's checkout, never a worktree. */
   ops?: boolean;
   /** A script task's body (ADR-0035): argument vectors run in order, or one script. Kept raw: the pane shows it with unseen characters spelled out. */

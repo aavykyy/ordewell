@@ -27,8 +27,8 @@ export type StartWait =
   | { kind: 'no-prompt' }
   /** Outside the user's approval record (ADR-0035). */
   | { kind: 'unapproved' }
-  /** Pulled out of the scheduler: cancelled, marked not done, or a spawn that failed. */
-  | { kind: 'on-hold' }
+  /** Pulled out of the scheduler: cancelled, marked not done, or a start that could not reach its runner. */
+  | { kind: 'on-hold'; reason?: string }
   /** The failed tasks it waits on through its dependencies (ADR-0034). */
   | { kind: 'blocked'; failed: string[] }
   /** In a loop's body, whose check has not found the work wanting this round: it runs only if `check` fails (ADR-0045 L4). */
@@ -64,8 +64,8 @@ export type ForcedStart = { queued: false } | { queued: true; pastGate: readonly
 /** What the start rule reads: the plan, the holds, and the open isolated run. */
 export interface StartRuleInput {
   store: Pick<PlanStore, 'allTasks' | 'get' | 'isCompleted' | 'isSkipped' | 'isOps' | 'resolveTaskRunner'>;
-  /** Task ids pulled out of the scheduler (cancelled, marked not done, or a spawn that failed). */
-  onHold: Pick<ReadonlySet<string>, 'has'>;
+  /** Task ids pulled out of the scheduler (cancelled, marked not done, or a start that could not reach its runner), with why when the caller has it. */
+  onHold: Pick<ReadonlySet<string>, 'has'> & Partial<Pick<ReadonlyMap<string, string>, 'get'>>;
   /** The user's approval record (ADR-0035). */
   approved: (taskId: string) => boolean;
   /**
@@ -183,7 +183,10 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   if (input.completing.has(task.id)) waits.push({ kind: 'completing' });
   if (task.type === 'ai' ? !task.prompt : task.type === 'script' && !scriptBodyOf(task)) waits.push({ kind: 'no-prompt' });
   if (!input.approved(task.id)) waits.push({ kind: 'unapproved' });
-  if (!forced && input.onHold.has(task.id)) waits.push({ kind: 'on-hold' });
+  if (!forced && input.onHold.has(task.id)) {
+    const reason = input.onHold.get?.(task.id);
+    waits.push({ kind: 'on-hold', ...(reason ? { reason } : {}) });
+  }
   const failed = forced ? [] : plan.blocked().get(task.id) ?? [];
   if (failed.length > 0) waits.push({ kind: 'blocked', failed });
   // A body runs only for its check: until the check fails this round, that is
