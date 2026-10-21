@@ -2,7 +2,7 @@
 status: accepted
 implemented: none
 amends: ["0009", "0029"]
-note: "starting one without approval waits for #104"
+note: "starting one without approval waits for ADR-0046's per-runner part"
 ---
 
 # 0037 — Research that outlives a planner turn is a research task, and its report wakes the planner
@@ -37,8 +37,12 @@ harness subagents stay as they are, awaited before the turn ends.**
 - **What it is (R1).** A read-only AI task (ADR-0031) marked `research: true`,
   with a self-contained brief: what to find out, where to start, and what the
   report must contain. Its report is its `task_complete` summary (ADR-0022,
-  V4). It lands nothing. Where it reads, a worktree or the workspace itself,
-  follows read-only tasks (#104).
+  V4). Like every read-only task
+  ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md))
+  it lands nothing: it works in a worktree of its own where the run isolates,
+  which its sealed commands may write and which is thrown away when it ends,
+  and in the workspace, which its commands cannot write, where the run does
+  not.
 - **Its end wakes the planner (R2).** A research task that passes, fails or is
   blocked opens a planner turn with a run update carrying its report, or the
   reason it did not pass. Reports from tasks that end close together are
@@ -51,7 +55,7 @@ harness subagents stay as they are, awaited before the turn ends.**
   wake-up turn acts at the supervisor's level. The report itself is untrusted
   content, like everything the planner reads.
 - **Starting one (R4).** Until read-only means one thing on every runner
-  (#104), a research task follows the approval rule of any task the planner
+  (ADR-0046), a research task follows the approval rule of any task the planner
   adds (ADR-0029, ADR-0030), including the scheduler rule of
   [ADR-0035](0035-effects-are-consented-and-recorded.md). Once it does, a
   research task starts without approval: it changes nothing, and approving
@@ -82,7 +86,7 @@ harness subagents stay as they are, awaited before the turn ends.**
 - **Wake the planner on every pass.** Rejected for ADR-0029's reason: passes
   ride along. A research task's report wakes it because the planner asked for
   that report.
-- **Research tasks that always wait for approval.** Rejected once #104 lands:
+- **Research tasks that always wait for approval.** Rejected once ADR-0046 is implemented on every runner:
   they change nothing, and approving each one stops the conversation they keep
   going. Until then they wait, since read-only is only as good as each
   runner's own mode.
@@ -104,3 +108,4 @@ harness subagents stay as they are, awaited before the turn ends.**
 ## History
 
 - 2026-10-15 — accepted. Not yet implemented.
+- 2026-10-21 — where a research task works, and what it may write, follow read-only tasks as ADR-0046 defines them (R1).

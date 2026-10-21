@@ -7,11 +7,14 @@ import {
   FindSymbolOptions,
   ToolOutcome,
   GREP_DEFAULT_HEAD_LIMIT,
+  type TaskShell,
+  type TaskShellSite,
 } from '../interfaces/IFileSystem';
-import { IApproval, DENY_ALL, type ApprovalRequest } from '../interfaces/IApproval';
+import { IApproval, DENY_ALL, type ApprovalRequest, type StandingDecision } from '../interfaces/IApproval';
 import { cdUnfollowed, classifyCommand, excludedBy, innerCommandScopes, pathRefs, type CommandPolicyOptions } from './commandPolicy';
 import { resolveResearchShell, researchShellWarning, researchPolicyOptions, type ResearchShell, type ShellLaunch } from './researchShell';
-import { PlannerShellSandbox, SEALED_FAILURE_NOTE, sandboxedFailureNote, sealedRunHeader } from './sandbox/plannerSandbox';
+import { PlannerShellSandbox, SEALED_FAILURE_NOTE, TASK_SEALED_FAILURE_NOTE, sandboxedFailureNote, sealedRunHeader, type SealedRunOptions } from './sandbox/plannerSandbox';
+import { parseAllowlist } from './plannerAllowlist';
 import { resolveWithin, resolveRef, grantScopeFor, isInertDevice } from './pathScope';
 import { definitionPattern, referencePattern, languageForId, includeGlobFor } from './symbolPatterns';
 import { resolveAll, vetEgress, type ResolveAll } from './egressGuard';
@@ -26,6 +29,55 @@ const CD_HINT = ' A "cd" is followed only on a line joined by "&&" alone, so aft
 
 function refusal(output: string): ToolOutcome {
   return { success: false, output, truncated: false };
+}
+
+/**
+ * Where one command runs and who answers for it: the planner's workspace, or
+ * a read-only task's working directory, where nobody is asked (ADR-0046).
+ */
+interface ShellSite {
+  /** Paths are confined to it, and commands start in it. */
+  root: string;
+  approval: IApproval;
+  sandbox: PlannerShellSandbox;
+  /** What a sealed run reads, and the one directory beyond scratch it may write. */
+  sealed: SealedRunOptions;
+  /** A read-only task's: what its results say is said to its runner, not the planner. */
+  task?: { worktree: boolean };
+}
+
+/** Why a read-only task's command did not run where the planner's would have asked or run sealed (ADR-0046). */
+const TASK_UNSEALED = 'A read-only task asks nobody, so this command could only run sealed, and this machine has no sandbox to seal it in.';
+const TASK_CONTINUE = 'Continue without it, and say in your report if what it would have shown matters.';
+
+/** Why a read-only task's command was not run, from the decision that stood. */
+function taskRefusal(standing: StandingDecision | undefined): string {
+  if (standing?.decision === 'deny' && standing.source === 'excluded') return 'The allowlist excludes it.';
+  if (standing?.decision === 'deny' && standing.source === 'remembered') return 'The user denied it this session.';
+  return TASK_UNSEALED;
+}
+
+/**
+ * The session's approvals as a read-only task's shell sees them (ADR-0046):
+ * nobody is asked. The allowlist's standing approvals stand, and so do an
+ * `!` exclusion and a denial the user gave on the card (ADR-0036 S3).
+ * Anything else is the approval mode refusing without asking, which a
+ * sandbox turns into a sealed run. A grant the user gave on the card was
+ * given to the planner's command, and stays the planner's.
+ */
+function allowlistOnly(session: () => IApproval): IApproval {
+  const peek = (req: ApprovalRequest): StandingDecision => {
+    const standing = session().peek?.(req);
+    if (standing?.decision === 'deny' && standing.source !== 'mode') return standing;
+    if (standing?.decision === 'allow' && standing.source === 'pre-approved') return standing;
+    return { decision: 'deny', source: 'mode' };
+  };
+  return {
+    request: async (req) => peek(req).decision === 'allow',
+    allowlist: () => session().allowlist?.() ?? parseAllowlist([]),
+    commandPolicy: () => ({ ...session().commandPolicy?.(), approvalMode: 'deny' }),
+    peek,
+  };
 }
 
 /**
@@ -84,8 +136,12 @@ export abstract class BaseFileSystem implements IFileSystem {
   protected abstract globImpl(pattern: string, absRoot: string, headLimit: number): Promise<ToolOutcome>;
   protected abstract grepImpl(pattern: string, absRoot: string, opts: GrepOptions): Promise<ToolOutcome>;
   protected abstract listDirImpl(absPath: string, depth: number): Promise<ToolOutcome>;
-  /** Run `command` through `shell`, appending it after `shell.args`; `shell.file: null` is `shell: true`. */
-  protected abstract execBashImpl(command: string, shell: ShellLaunch, signal?: AbortSignal): Promise<ToolOutcome>;
+  /**
+   * Run `command` through `shell` from `cwd`, appending it after
+   * `shell.args`; `shell.file: null` is `shell: true`. `cwd` is the workspace
+   * root, or a read-only task's working directory (ADR-0046).
+   */
+  protected abstract execBashImpl(command: string, shell: ShellLaunch, signal: AbortSignal | undefined, cwd: string): Promise<ToolOutcome>;
 
   /**
    * Resolve `p` and confirm the planner may touch it. In-workspace paths pass
@@ -215,8 +271,7 @@ export abstract class BaseFileSystem implements IFileSystem {
    * closes for `readFile`/`glob`/`grep`. Each escaping path is scoped to its
    * containing directory, one entry per distinct scope.
    */
-  private outsidePaths(command: string): Array<{ abs: string; scope: string }> {
-    const root = this.getWorkspaceRoot();
+  private outsidePaths(command: string, root: string): Array<{ abs: string; scope: string }> {
     const found = new Map<string, string>();
     for (const ref of pathRefs(command, this.policyOptions())) {
       const { abs, inside } = resolveRef(root, ref);
@@ -229,6 +284,11 @@ export abstract class BaseFileSystem implements IFileSystem {
 
   private policyOptions(): CommandPolicyOptions {
     return researchPolicyOptions(this.researchShell);
+  }
+
+  private plannerSite(): ShellSite {
+    const root = this.getWorkspaceRoot();
+    return { root, approval: this.approval, sandbox: this.sandbox, sealed: { workspace: root } };
   }
 
   /**
@@ -245,14 +305,38 @@ export abstract class BaseFileSystem implements IFileSystem {
    * directory the next command names.
    */
   async bash(command: string, signal?: AbortSignal, opts: BashOptions = {}): Promise<ToolOutcome> {
+    return this.runIn(this.plannerSite(), command, signal, opts);
+  }
+
+  /**
+   * A read-only task's `run_command` (ADR-0046): the planner's classifier,
+   * path confinement, allowlist and exclusions, at the task's working
+   * directory, asking nobody. What the allowlist or the read-only tier runs
+   * runs as the planner's command would; what would ask or be refused runs
+   * sealed, the workspace readable and the task's worktree writable, or is
+   * refused where no sandbox can seal it. Its scratch directory is its own.
+   */
+  taskShell({ cwd, writable }: TaskShellSite): TaskShell {
+    const sandbox = this.sandbox.withOwnScratch();
+    const site: ShellSite = {
+      root: cwd,
+      approval: allowlistOnly(() => this.approval),
+      sandbox,
+      sealed: { workspace: this.getWorkspaceRoot(), ...(writable ? { writable } : {}) },
+      task: { worktree: writable !== undefined },
+    };
+    return { run: (command, signal) => this.runIn(site, command, signal), end: () => sandbox.end() };
+  }
+
+  private async runIn(site: ShellSite, command: string, signal?: AbortSignal, opts: BashOptions = {}): Promise<ToolOutcome> {
     command = disableWebCommandStartup(command, this.researchShell.dialect);
-    const allow = this.approval.allowlist?.();
+    const { approval, root } = site;
+    const allow = approval.allowlist?.();
     const { tier, scope, reason, allowedBy, perInvocation, scopes: commandScopes, webUrls, webOutboundTexts } = classifyCommand(command, {
-      ...this.policyOptions(), ...this.approval.commandPolicy?.(), ...(allow ? { allow } : {}),
+      ...this.policyOptions(), ...approval.commandPolicy?.(), ...(allow ? { allow } : {}),
     });
 
-    const root = this.getWorkspaceRoot();
-    const outside = this.outsidePaths(command);
+    const outside = this.outsidePaths(command, root);
     const asks = tier === 'ask';
     const scopes = [...(asks ? commandScopes ?? [scope] : []), ...outside.map((o) => o.scope)];
     const touched = outside.map((o) => o.abs).join(', ');
@@ -269,11 +353,11 @@ export abstract class BaseFileSystem implements IFileSystem {
     };
 
     if (opts.sealed) {
-      if (!(await this.sandbox.canSeal())) return refusal(`Command refused: this machine has no sandbox to run a command sealed in. Run it without "sealed", and Ordewell's command rules judge it as they do every command.`);
-      return this.runSealed(command, request, 'asked', signal);
+      if (!(await site.sandbox.canSeal())) return refusal(`Command refused: this machine has no sandbox to run a command sealed in. Run it without "sealed", and Ordewell's command rules judge it as they do every command.`);
+      return this.runSealed(site, command, request, 'asked', signal);
     }
 
-    if (tier === 'refuse') return this.sealedInstead(command, request, refusal(`Command refused: ${reason}`), signal);
+    if (tier === 'refuse') return this.sealedInstead(site, command, request, refusal(`Command refused: ${reason}${site.task ? `\n${TASK_UNSEALED} ${TASK_CONTINUE}` : ''}`), signal);
 
     if (webUrls?.length && carriesSecret([...(webOutboundTexts ?? []), ...webUrls.map((url) => url.href)], [...this.outboundSecrets(), ...sensitiveEnvValues(process.env)])) {
       return refusal('Command refused: a web command contains what looks like a secret. Fetch the page with your web fetch tool, without credentials.');
@@ -287,25 +371,28 @@ export abstract class BaseFileSystem implements IFileSystem {
     }
 
     if (request) {
-      const denied = refusal(outside.length > 0
-        ? `Access denied: "${command}" touches ${touched}, outside the workspace root (${root}), and was not approved. Keep research inside the workspace, or ask the user to approve this location.${cdUnfollowed(command, this.policyOptions()) ? CD_HINT : ''}`
-        : `Command not approved: ${command}\nIt is outside the auto-allowed read-only set and the planner allowlist (${scope}). ${NOT_APPROVED_HINT}${/(^| )g?sed( |$)/.test(scope) ? SED_HINT : ''}`);
       // The approval mode refuses without asking anyone, so where a sealed run
       // can start that is what runs (S2). Elsewhere the request goes in, and
-      // the mode's refusal is recorded as it always was.
-      const standing = this.approval.peek?.(request);
-      if (standing?.decision === 'deny' && standing.source === 'mode' && await this.sandbox.canSeal()) return this.runSealed(command, request, 'refused', signal);
-      if (!(await this.approval.request(request))) return denied;
+      // the mode's refusal is recorded as it always was. A read-only task's
+      // mode refuses whatever would ask (ADR-0046).
+      const standing = approval.peek?.(request);
+      if (standing?.decision === 'deny' && standing.source === 'mode' && await site.sandbox.canSeal()) return this.runSealed(site, command, request, 'refused', signal);
+      if (!(await approval.request(request))) {
+        if (site.task) return refusal(`Command not run: ${command}\n${taskRefusal(standing)} ${TASK_CONTINUE}`);
+        return refusal(outside.length > 0
+          ? `Access denied: "${command}" touches ${touched}, outside the workspace root (${root}), and was not approved. Keep research inside the workspace, or ask the user to approve this location.${cdUnfollowed(command, this.policyOptions()) ? CD_HINT : ''}`
+          : `Command not approved: ${command}\nIt is outside the auto-allowed read-only set and the planner allowlist (${scope}). ${NOT_APPROVED_HINT}${/(^| )g?sed( |$)/.test(scope) ? SED_HINT : ''}`);
+      }
     }
 
     if (webUrls?.length) {
-      const latest = classifyCommand(command, { ...this.policyOptions(), ...this.approval.commandPolicy?.(), allow: this.approval.allowlist?.() });
+      const latest = classifyCommand(command, { ...this.policyOptions(), ...approval.commandPolicy?.(), allow: approval.allowlist?.() });
       if (latest.tier === 'refuse') return refusal(`Command refused: ${latest.reason}`);
     }
 
     for (const probe of wgetVersionCommands(command, this.researchShell.dialect)) {
       if (!probe) return refusal(`Command refused: the wget executable cannot be checked in an uncertain working directory. ${READ_REFUSAL_HINT}`);
-      const version = await this.runShell(probe, false, signal);
+      const version = await this.runShell(site, probe, false, signal);
       if (!version.success || !/^GNU Wget 1\./.test(version.output)) {
         return refusal(`Command refused: only GNU Wget 1.x is supported; wget2 can write persistent databases. ${READ_REFUSAL_HINT}`);
       }
@@ -314,14 +401,14 @@ export abstract class BaseFileSystem implements IFileSystem {
     const pinned = pinWebCommandAddresses(command, vettedAddresses, this.researchShell.dialect);
     command = pinned.command;
     if (webUrls?.length) {
-      const latest = classifyCommand(command, { ...this.policyOptions(), ...this.approval.commandPolicy?.(), allow: this.approval.allowlist?.(), trustedWebResolves: pinned.resolves });
+      const latest = classifyCommand(command, { ...this.policyOptions(), ...approval.commandPolicy?.(), allow: approval.allowlist?.(), trustedWebResolves: pinned.resolves });
       if (latest.tier === 'refuse') return refusal(`Command refused: ${latest.reason}`);
     }
     // The network follows the tier (ADR-0011 B3): an `ask` command got here
     // approved, by the user, a standing grant, the allowlist or the mode, and
     // keeps it. An `auto` one, including one approved only for the paths it
     // names, has none.
-    return this.runShell(command, tier === 'ask', signal);
+    return this.runShell(site, command, tier === 'ask', signal);
   }
 
   /**
@@ -331,19 +418,19 @@ export abstract class BaseFileSystem implements IFileSystem {
    * under its own scope, so wrapping a denied command never routes around the
    * denial.
    */
-  private deniedInnerScope(command: string): string | undefined {
-    const peek = this.approval.peek;
+  private deniedInnerScope(approval: IApproval, command: string): string | undefined {
+    const peek = approval.peek;
     if (!peek) return undefined;
     for (const scope of innerCommandScopes(command, this.policyOptions())) {
-      const standing = peek.call(this.approval, { kind: 'shell_command', subject: command, scope });
+      const standing = peek.call(approval, { kind: 'shell_command', subject: command, scope });
       if (standing.decision === 'deny' && standing.source === 'remembered') return scope;
     }
     return undefined;
   }
 
   /** A refusal the envelope reached without asking anyone, run sealed where this host can (ADR-0036 S2), or `refused` as it was (S6). */
-  private async sealedInstead(command: string, request: ApprovalRequest | undefined, refused: ToolOutcome, signal?: AbortSignal): Promise<ToolOutcome> {
-    return (await this.sandbox.canSeal()) ? this.runSealed(command, request, 'refused', signal) : refused;
+  private async sealedInstead(site: ShellSite, command: string, request: ApprovalRequest | undefined, refused: ToolOutcome, signal?: AbortSignal): Promise<ToolOutcome> {
+    return (await site.sandbox.canSeal()) ? this.runSealed(site, command, request, 'refused', signal) : refused;
   }
 
   /**
@@ -352,11 +439,12 @@ export abstract class BaseFileSystem implements IFileSystem {
    * a `!` exclusion naming the command or a path it touches, and a denial
    * given on the card this session.
    */
-  private async runSealed(command: string, request: ApprovalRequest | undefined, why: 'asked' | 'refused', signal?: AbortSignal): Promise<ToolOutcome> {
-    const allow = this.approval.allowlist?.();
+  private async runSealed(site: ShellSite, command: string, request: ApprovalRequest | undefined, why: 'asked' | 'refused', signal?: AbortSignal): Promise<ToolOutcome> {
+    const { approval } = site;
+    const allow = approval.allowlist?.();
     const rule = allow ? excludedBy(command, allow, this.policyOptions()) : undefined;
     if (rule) return refusal(`Command refused: the planner allowlist excludes it ("${rule}"), and an exclusion holds for a sealed run too.`);
-    const standing = request ? this.approval.peek?.(request) : undefined;
+    const standing = request ? approval.peek?.(request) : undefined;
     if (request && standing?.decision === 'deny' && standing.source === 'excluded') {
       return refusal(`Command refused: the planner allowlist excludes ${request.subject === command ? 'it' : `"${request.subject}"`}, and an exclusion holds for a sealed run too.`);
     }
@@ -368,32 +456,33 @@ export abstract class BaseFileSystem implements IFileSystem {
     // it carries a command the user said no to (S3). Only the person's denial
     // ('remembered'); a scope the approval mode alone would refuse is what a
     // sealed run is for (S2).
-    const denied = this.deniedInnerScope(command);
+    const denied = this.deniedInnerScope(approval, command);
     if (denied) return refusal(`Command not approved: ${command}\nThe user denied "${denied}" this session, and a denial holds for a sealed run too. Continue without it.`);
 
     let shell: ShellLaunch;
     try {
-      shell = await this.sandbox.launchSealed(this.researchShell, { workspace: this.getWorkspaceRoot() });
+      shell = await site.sandbox.launchSealed(this.researchShell, site.sealed);
     } catch (err) {
       return refusal(`Command not run: its sealed sandbox could not be prepared (${err instanceof Error ? err.message : String(err)}).`);
     }
-    const outcome = await this.execBashImpl(command, shell, signal);
+    const outcome = await this.execBashImpl(command, shell, signal, site.root);
     if (signal?.aborted) return outcome;
-    const output = `${sealedRunHeader(why)}\n${outcome.output}${outcome.success ? '' : `\n\n[${SEALED_FAILURE_NOTE}]`}`;
+    const failed = site.task ? TASK_SEALED_FAILURE_NOTE : SEALED_FAILURE_NOTE;
+    const output = `${sealedRunHeader(why, site.task)}\n${outcome.output}${outcome.success ? '' : `\n\n[${failed}]`}`;
     return { ...outcome, output };
   }
 
   /** Every command the planner's shell starts goes through here, inside the sandbox where this host has one (ADR-0011 B1, B6). */
-  private async runShell(command: string, network: boolean, signal?: AbortSignal): Promise<ToolOutcome> {
+  private async runShell(site: ShellSite, command: string, network: boolean, signal?: AbortSignal): Promise<ToolOutcome> {
     let shell: ShellLaunch;
     let sandboxed: boolean;
     try {
-      ({ launch: shell, sandboxed } = await this.sandbox.launch(this.researchShell, { network }));
+      ({ launch: shell, sandboxed } = await site.sandbox.launch(this.researchShell, { network }));
     } catch (err) {
       // The sandbox runs on this host, so running the command outside it is not a fallback.
       return { success: false, output: `Command not run: the planner's sandbox could not be prepared (${err instanceof Error ? err.message : String(err)}).`, truncated: false };
     }
-    const outcome = await this.execBashImpl(command, shell, signal);
+    const outcome = await this.execBashImpl(command, shell, signal, site.root);
     if (outcome.success) return outcome;
 
     // A command that failed under cmd.exe most likely failed because the tool
@@ -402,7 +491,7 @@ export abstract class BaseFileSystem implements IFileSystem {
     // "exited 1" into something the model can act on — and, per the
     // fail-visibly contract, keeps a limit of the shell from reading as a
     // repository that simply had no answer.
-    const warning = sandboxed ? sandboxedFailureNote(outcome.output, network) : researchShellWarning(this.researchShell);
+    const warning = sandboxed ? sandboxedFailureNote(outcome.output, network, site.task !== undefined) : researchShellWarning(this.researchShell);
     return warning ? { ...outcome, output: `${outcome.output}\n\n[${warning}]` } : outcome;
   }
 }

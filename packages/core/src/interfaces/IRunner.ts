@@ -6,6 +6,7 @@ import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import type { RunnerSessionCost } from '../models/Usage';
 import type { ScriptBody } from '../models/ScriptTask';
+import type { TaskShell } from './IFileSystem';
 /** How a structured turn ended. `failed` carries the agent's own words in the preceding `error` event. */
 export type StructuredTurnEnd = 'completed' | 'interrupted' | 'failed';
 /**
@@ -242,6 +243,11 @@ export interface IRunner {
     onNotice?: (message: string) => void;
     /** A script task's body (ADR-0035): only the script runner reads it, and it runs nothing else. */
     script?: ScriptBody;
+    /**
+     * A read-only attempt's shell (ADR-0046): its token serves `run_command`
+     * from it, and only an attempt that has one is given that tool.
+     */
+    shell?: TaskShell;
   }): Promise<IRunnerSession>;
 
   /** Wind one session down ({@link IRunnerSession.stop}); resolves once its process is gone. */

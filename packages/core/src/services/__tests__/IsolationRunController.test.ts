@@ -86,8 +86,18 @@ describe('IsolationRunController', () => {
       const { runs } = setup();
       await runs.decide(async () => undefined);
 
-      expect(await runs.attemptCwd(task('t1', 1), 'fresh')).toEqual({ cwd: '/fake-worktrees/run1/1-t1', worktree: true });
+      expect(await runs.attemptCwd(task('t1', 1), 'fresh')).toEqual({ cwd: '/fake-worktrees/run1/1-t1', worktree: true, workspace: '/fake-worktrees/run1/1-t1' });
       expect(runs.taskIsolation('t1')).toMatchObject({ state: 'active' });
+    });
+
+    it("prepares a read-only task's worktree as one that lands nothing (ADR-0046)", async () => {
+      const { runs } = setup();
+      await runs.decide(async () => undefined);
+
+      expect(await runs.attemptCwd(task('t1', 1), 'readOnly')).toMatchObject({ cwd: '/fake-worktrees/run1/1-t1', worktree: true });
+      expect(runs.current!.tasks.t1.readOnly).toBe(true);
+      await runs.attemptCwd(task('t2', 2), 'fresh');
+      expect(runs.current!.tasks.t2.readOnly).toBeUndefined();
     });
 
     it('gives an attempt in a shared run the workspace root', async () => {

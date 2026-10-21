@@ -1,4 +1,4 @@
-import { ORDEWELL_MCP_SERVER_NAME, PLANNER_TOOLS, TASK_TOOLS, type McpCredential } from '../mcp';
+import { ORDEWELL_MCP_SERVER_NAME, PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, type McpCredential } from '../mcp';
 import type { PlannerStartOptions } from './AgentAdapter';
 
 export class McpAttachError extends Error {
@@ -20,8 +20,8 @@ export class RunnerStartupExit extends Error {
   }
 }
 
-/** Which token's tools a runner is handed (ADR-0022, A1). */
-export type OrdewellToolRole = 'task' | 'planner';
+/** Which token's tools a runner is handed (ADR-0022, A1); a read-only task's add `run_command` (ADR-0046). */
+export type OrdewellToolRole = 'task' | 'readOnlyTask' | 'planner';
 
 /** A runner's report on the Ordewell server's connection, in one vocabulary for every runner. */
 export type AttachState = 'connected' | 'pending' | 'failed';
@@ -63,11 +63,12 @@ export interface OrdewellToolBinding<Ask = never> {
 
 /** The tools of a role, by their names on the server, less `hidden`. */
 export function ordewellToolNames(role: OrdewellToolRole, hidden: readonly string[] = []): string[] {
-  return (role === 'task' ? TASK_TOOLS : PLANNER_TOOLS).map((tool) => tool.name).filter((tool) => !hidden.includes(tool));
+  const tools = role === 'task' ? TASK_TOOLS : role === 'readOnlyTask' ? READ_ONLY_TASK_TOOLS : PLANNER_TOOLS;
+  return tools.map((tool) => tool.name).filter((tool) => !hidden.includes(tool));
 }
 
-/** Every tool the server serves, under either role, by its name on the server. */
-export const ORDEWELL_TOOL_NAMES: readonly string[] = [...new Set([...TASK_TOOLS, ...PLANNER_TOOLS].map((tool) => tool.name))];
+/** Every tool the server serves, under any role, by its name on the server. */
+export const ORDEWELL_TOOL_NAMES: readonly string[] = [...new Set([...TASK_TOOLS, ...READ_ONLY_TASK_TOOLS, ...PLANNER_TOOLS].map((tool) => tool.name))];
 
 /** The naming half of a binding for a runner that names a server's tool `<prefix><tool>`. */
 export function prefixedToolNames(prefix: string): Pick<OrdewellToolBinding, 'toolName' | 'toolNames'> & { isToolName(name: string): boolean } {

@@ -22,7 +22,7 @@ export const PLANNER_SANDBOX_DOCS = 'https://github.com/ordewell/ordewell/blob/m
 /** Where a sealed run starts: the workspace it reads, and the one other directory, if any, it may write (ADR-0036 S1). */
 export interface SealedRunOptions {
   workspace: string;
-  /** None by default, so the workspace stays read-only. A read-only task passes its own throwaway worktree (#104). */
+  /** None by default, so the workspace stays read-only. A read-only task passes its own throwaway worktree (ADR-0046). */
   writable?: string;
 }
 
@@ -392,6 +392,11 @@ export class PlannerShellSandbox {
     this.notice = notice;
   }
 
+  /** The same host's sandbox for another caller, with a scratch directory of its own: a read-only task's (ADR-0046). */
+  withOwnScratch(): PlannerShellSandbox {
+    return new PlannerShellSandbox(this.resolve);
+  }
+
   /**
    * The launch for one command (B6): the research shell wrapped in the
    * sandbox, with the network as the caller's tier allows (B3), or the shell
@@ -473,8 +478,9 @@ const SANDBOX_DENIAL = /Operation not permitted|Read-only file system|Could not 
  * sandbox's doing, so the planner reads "the sandbox stopped this" rather
  * than "the repository is broken", and does not retry it.
  */
-export function sandboxedFailureNote(output: string, network: boolean): string | null {
+export function sandboxedFailureNote(output: string, network: boolean, forTask = false): string | null {
   if (!SANDBOX_DENIAL.test(output)) return null;
+  if (forTask) return `The command ran sandboxed: it could write only its scratch directory ($TMPDIR)${network ? '' : ', with no network'}.`;
   return `The planner's shell is sandboxed: it cannot write outside its scratch directory ($TMPDIR)${network ? '' : ', and a command that runs without asking has no network'}. A change belongs in the plan as a task.`;
 }
 
@@ -483,9 +489,18 @@ export function sandboxedFailureNote(output: string, network: boolean): string |
  * sealed and what that means, so a loop of cloud calls that fails on the
  * network is understood rather than retried.
  */
-export function sealedRunHeader(why: 'asked' | 'refused'): string {
-  return `${SEALED_RUN_MARK} ${why === 'asked' ? 'as asked' : 'instead of being refused'}: no network, no home directory, and nothing it writes reaches the workspace. $HOME and $TMPDIR are this session's scratch directory, the one place it can write, which later commands can read.]`;
+export function sealedRunHeader(why: 'asked' | 'refused', task?: { worktree: boolean }): string {
+  const how = `${SEALED_RUN_MARK} ${why === 'asked' ? 'as asked' : 'instead of being refused'}`;
+  if (!task) return `${how}: no network, no home directory, and nothing it writes reaches the workspace. $HOME and $TMPDIR are this session's scratch directory, the one place it can write, which later commands can read.]`;
+  // A worktree's `.git` is a file pointing into the repository's own, which stays read-only (ADR-0046).
+  const where = task.worktree
+    ? "This task's worktree is writable and is thrown away when the task ends. git can read the repository but not record anything in it: a commit, an add or a stash fails, or is gone when the command ends."
+    : 'The workspace is read-only: this task has no worktree of its own.';
+  return `${how}: no network and no home directory. ${where} $HOME and $TMPDIR are this task's scratch directory, which later commands can read.]`;
 }
+
+/** A read-only task's {@link SEALED_FAILURE_NOTE}: it has nowhere to send the work but its report (ADR-0046). */
+export const TASK_SEALED_FAILURE_NOTE = "A sealed run cannot reach the network, the user's credentials or their files outside the workspace, and writes nothing but this task's worktree and scratch directory, so running it again fails the same way. If what it could not do matters, say so in your report.";
 
 /** Appended to a sealed run that failed: what it could never have done, and what to do in place of a retry. */
 export const SEALED_FAILURE_NOTE = "A sealed run cannot reach the network, the user's credentials or their files outside the workspace, and cannot change the workspace, so running it sealed again fails the same way. To read something it could not, run each command on its own, without a loop or inline code, so Ordewell's command rules can judge it; a change belongs in the plan as a task.";

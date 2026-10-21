@@ -6,6 +6,7 @@ import type { IsolationRunController } from './IsolationRunController';
 import { changedReposOf, integrationBranchNameOf, SELF_REPO } from './isolationRecord';
 import { capConflictFiles } from './conflictFiles';
 import { buildConflictRepairPrompt, buildConflictResolutionPrompt } from './PlanPrompts';
+import { landsNothing, type AttemptKind } from './attemptKind';
 
 /** Which repair of a task an attempt is, of the most `conflictRepairAttempts` allows. */
 export interface RepairAttempt {
@@ -27,8 +28,9 @@ export interface LandingMessage {
  * merge has happened or not, and the run record says so.
  *
  * - `landed`: the work is on the integration branch of every repo it changed.
- * - `nothing-to-land`: the attempt ran in the workspace root, or the task
- *   holds no unlanded work; it is done as it stands.
+ * - `nothing-to-land`: the attempt ran in the workspace root, the task
+ *   holds no unlanded work, or it is read-only and lands nothing (ADR-0046);
+ *   it is done as it stands.
  * - `repair-needed`: the landing conflicted and the task is owed `repair`
  *   (ADR-0015), in the worktree kept for it.
  * - `awaiting_user`: the work did not land and waits on the user, worktree
@@ -81,9 +83,12 @@ export class Landing {
 
   /**
    * Land a passed attempt's work. One whose worktree has no unlanded record
-   * behind it any more — the run was discarded under it — cannot land.
+   * behind it any more — the run was discarded under it — cannot land. A
+   * read-only attempt's worktree goes instead, whatever it changed: its
+   * report is its result (ADR-0046).
    */
-  async landPassed(task: Task, attempt: { worktree: boolean }): Promise<LandingOutcome> {
+  async landPassed(task: Task, attempt: { worktree: boolean; kind: AttemptKind }): Promise<LandingOutcome> {
+    if (landsNothing(attempt.kind)) return this.discard(task, attempt.worktree);
     if (!attempt.worktree) return NOTHING_TO_LAND;
     if (!this.hasUnlandedWork(task.id)) return this.unmerged(task, 'failed');
     const landing = await this.runs.integrate(task);
@@ -92,6 +97,7 @@ export class Landing {
 
   /** Mark complete is a passed verdict the user vouches for: what the task holds unlanded lands the same way. */
   async landVouched(task: Task): Promise<LandingOutcome> {
+    if (this.runs.current?.tasks[task.id]?.readOnly) return this.discard(task, true);
     if (!this.hasUnlandedWork(task.id)) return NOTHING_TO_LAND;
     const landing = await this.runs.integrate(task);
     return landing === 'merged' ? { kind: 'landed', messages: [] } : this.unmerged(task, landing);
@@ -176,7 +182,13 @@ export class Landing {
 
   private hasUnlandedWork(taskId: string): boolean {
     const record = this.runs.current?.tasks[taskId];
-    return !!record && record.status !== 'merged';
+    return !!record && record.status !== 'merged' && !record.readOnly;
+  }
+
+  /** A read-only task's worktree goes with whatever is in it, and nothing lands (ADR-0046). */
+  private async discard(task: Task, worktree: boolean): Promise<LandingOutcome> {
+    if (worktree) await this.runs.release(task.id, { keep: false });
+    return NOTHING_TO_LAND;
   }
 
   private unmerged(task: Readonly<Task>, landing: Exclude<IsolationOutcome, 'merged'>): UnlandedOutcome {

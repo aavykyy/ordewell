@@ -1,5 +1,5 @@
 import { execFile, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -49,9 +49,9 @@ class HostFileSystem extends BaseFileSystem {
   protected async grepImpl(): Promise<ToolOutcome> { throw new Error('not used'); }
   protected async listDirImpl(): Promise<ToolOutcome> { throw new Error('not used'); }
 
-  protected async execBashImpl(command: string, shell: ShellLaunch): Promise<ToolOutcome> {
+  protected async execBashImpl(command: string, shell: ShellLaunch, _signal: AbortSignal | undefined, cwd: string): Promise<ToolOutcome> {
     this.runs += 1;
-    const { code, out } = await run(shell, command, this.root);
+    const { code, out } = await run(shell, command, cwd);
     return { success: code === 0, output: code === 0 ? out : `Command exited ${code}:\n${out}`, truncated: false };
   }
 }
@@ -240,6 +240,60 @@ describe('sealed runs', async () => {
         expect(wrapped.output).toContain('The user denied "npm test" this session');
         expect(fs.runs).toBe(0);
         expect(asks).toBe(1);
+      });
+    });
+
+    describe("through a read-only task's shell (ADR-0046)", () => {
+      let repo: string;
+      let worktree: string;
+      const git = (cwd: string, ...args: string[]) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+
+      beforeAll(() => {
+        repo = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-sealed-repo-')));
+        writeFileSync(join(repo, 'a.md'), 'one\n');
+        git(repo, 'init', '-q');
+        git(repo, 'add', 'a.md');
+        git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
+        worktree = join(repo, '.ordewell', 'worktrees', 'run', '1-review');
+        git(repo, 'worktree', 'add', '-q', '-b', 'ordewell/run/1-review', worktree);
+      });
+
+      afterAll(() => {
+        rmSync(repo, { recursive: true, force: true });
+      });
+
+      it('writes its own worktree, sealed, and nothing of the checkout it was cut from', async () => {
+        const fs = new HostFileSystem(repo, sandbox);
+        const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+        try {
+          const tried = await shell.run('echo fixed > a.md && printf "test\\n" > added.test && cat a.md added.test');
+          expect(tried.output).toMatch(/^\[Ran sealed instead of being refused: /);
+          expect(tried.output).toContain('fixed\ntest');
+          expect(existsSync(join(worktree, 'added.test'))).toBe(true);
+
+          const escaped = await shell.run(`echo changed > '${join(repo, 'a.md')}'`);
+          expect(escaped.success).toBe(false);
+          expect(readFileSync(join(repo, 'a.md'), 'utf8')).toBe('one\n');
+        } finally {
+          shell.end();
+        }
+      });
+
+      it('reads the repository through git, and cannot record anything in it', async () => {
+        const fs = new HostFileSystem(repo, sandbox);
+        const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+        const head = git(repo, 'rev-parse', 'ordewell/run/1-review').stdout;
+        try {
+          const log = await shell.run('git log --oneline -1 | cat');
+          expect(log.output).toContain('base');
+
+          const commit = await shell.run('git add -A && git -c user.name=t -c user.email=t@t commit -qm task');
+          expect(commit.success).toBe(false);
+          expect(commit.output).toContain('git can read the repository but not record anything in it');
+          expect(git(repo, 'rev-parse', 'ordewell/run/1-review').stdout).toBe(head);
+        } finally {
+          shell.end();
+        }
       });
     });
   });

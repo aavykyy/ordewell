@@ -225,7 +225,7 @@ export class PoolFileSystem extends BaseFileSystem {
     }
   }
 
-  protected async execBashImpl(command: string, shell: ShellLaunch, signal?: AbortSignal): Promise<ToolOutcome> {
+  protected async execBashImpl(command: string, shell: ShellLaunch, signal: AbortSignal | undefined, cwd: string): Promise<ToolOutcome> {
     // `shell: true` is required now that approved commands may legitimately
     // contain pipes; the tier classifier in core (not string filtering here)
     // is what decides whether this command was allowed to reach the shell.
@@ -236,8 +236,8 @@ export class PoolFileSystem extends BaseFileSystem {
     // in the dialect `BaseFileSystem` classified it under.
     const { file, args, env, wallTimeMs } = shell;
     const result = file === null
-      ? await run(command, [], { cwd: this.workspaceRoot, timeout: BASH_TIMEOUT_MS, shell: true, env, signal })
-      : await run(file, [...args, command], { cwd: this.workspaceRoot, timeout: wallTimeMs ?? BASH_TIMEOUT_MS, env, signal, sealed: wallTimeMs !== undefined });
+      ? await run(command, [], { cwd, timeout: BASH_TIMEOUT_MS, shell: true, env, signal })
+      : await run(file, [...args, command], { cwd, timeout: wallTimeMs ?? BASH_TIMEOUT_MS, env, signal, sealed: wallTimeMs !== undefined });
     const out = (result.stdout || '').trim();
     const err = (result.stderr || '').trim();
 

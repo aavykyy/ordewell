@@ -97,6 +97,20 @@ function isInside(parent: string, child: string): boolean {
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
+/**
+ * Whether `p`, below `base`, is where its name says, with no link on the way
+ * down from `base`: a path the record or a package.json names may run
+ * through a link a task put in its worktree, or in place of one. A path that
+ * no longer exists has nothing left to unlink.
+ */
+function resolvesAsNamed(base: string, p: string): boolean {
+  try {
+    return fs.realpathSync(p) === path.join(fs.realpathSync(base), path.relative(base, p));
+  } catch {
+    return false;
+  }
+}
+
 function firstLine(text: string): string {
   return text.split(/\r?\n/, 1)[0].trim();
 }
@@ -370,7 +384,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return shared;
   }
 
-  prepare(task: Task, run: IsolationRun, intent: PrepareIntent = 'fresh'): Promise<PreparedTask> {
+  prepare(task: Task, run: IsolationRun, intent: PrepareIntent = 'fresh', opts: { readOnly?: boolean } = {}): Promise<PreparedTask> {
     const prepare = () => this.admin(run.workspaceRoot, async () => {
       const previous = run.tasks[task.id];
       const replaced = previous ? await this.removeTask(run, previous, { dropRecord: true, intent }) : noRemoval();
@@ -384,7 +398,10 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
 
       const { branch, dir } = this.namesFor(run, task);
       ensureStateDirIgnored(run.workspaceRoot);
-      const record: IsolationTaskRecord = { taskId: task.id, order: task.order, title: task.title, branch, workspace: dir, status: 'active', repos: {} };
+      const record: IsolationTaskRecord = {
+        taskId: task.id, order: task.order, title: task.title, branch, workspace: dir, status: 'active', repos: {},
+        ...(opts.readOnly ? { readOnly: true } : {}),
+      };
       let cwd = dir;
       const copied: string[] = [];
       const setupFailed: SetupFailure[] = [];
@@ -554,6 +571,13 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   integrate(task: Task, run: IsolationRun, persist: () => void = () => undefined): Promise<IsolationOutcome> {
+    const record = run.tasks[task.id];
+    if (record?.readOnly) {
+      // Whatever a read-only task changed was never meant to land (ADR-0046).
+      record.status = 'failed';
+      record.landingError = 'a read-only task lands nothing';
+      return Promise.resolve('failed');
+    }
     return new Promise((settle) => {
       this.waiting.push({ task, run, persist, settle });
       // Deferred a microtask so verdicts landing in the same tick queue up
@@ -569,7 +593,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return this.admin(run.workspaceRoot, async () => {
       const record = run.tasks[taskId];
       if (!record) return noRemoval();
-      const removal = opts.keep ? noRemoval() : await this.removeTask(run, record, { dropRecord: true });
+      // A read-only task's worktree is never kept for inspection: nothing in it is work (ADR-0046).
+      const removal = opts.keep && !record.readOnly ? noRemoval() : await this.removeTask(run, record, { dropRecord: true });
       if (opts.keep || removal.refused.length > 0) {
         // Off `active` so a crash-recovery prune does not mistake a kept attempt for an orphan.
         if (record.status === 'active') record.status = 'kept';
@@ -599,7 +624,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const kept: IsolationPruneResult['kept'] = [];
       const removal = noRemoval();
       for (const record of Object.values(run.tasks)) {
-        if (record.status === 'active') {
+        if (record.readOnly) absorbRemoval(removal, await this.removeTask(run, record, { dropRecord: true }));
+        else if (record.status === 'active') {
           // Adopting a plan is not proof its runner died: another host may
           // have adopted the same record mid-run. Deleting an active worktree
           // that still holds work would take the runner's commits and edits
@@ -1154,12 +1180,15 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * never work that has not landed: that is kept on a branch first
    * ({@link preserve}), and a task whose work cannot be kept in every repo
    * loses nothing, record included. `preserve: false` is only for what a
-   * failed `prepare` made a moment ago, which holds no work yet.
+   * failed `prepare` made a moment ago, which holds no work yet. A read-only
+   * task's holds none either (ADR-0046), and keeping it would mean running
+   * git, as the user, in a worktree its sealed commands wrote, `.git` file
+   * and all.
    */
   private async removeTask(run: IsolationRun, record: IsolationTaskRecord, opts: { dropRecord: boolean; preserve?: boolean; intent?: PrepareIntent }): Promise<IsolationRemoval> {
     const task = { taskId: record.taskId, order: record.order, title: record.title };
     const removal = noRemoval();
-    for (const repo of opts.preserve === false ? [] : run.repos) {
+    for (const repo of opts.preserve === false || record.readOnly ? [] : run.repos) {
       const entry = record.repos[repo.path];
       const target: RemovalTarget = { worktree: entry?.worktree, linked: entry?.linked ?? [], branch: record.branch, name: path.basename(record.workspace), title: record.title };
       try {
@@ -1301,13 +1330,17 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   private async removeWorktreeDir(run: IsolationRun, repo: IsolationRepo, dir: string, linked: string[]): Promise<void> {
     // Links first, so no removal path can ever walk through one into the main
     // worktree's node_modules. A mirrored install is a real directory of links;
-    // it is found again from package.json when no record names it.
+    // it is found again from package.json when no record names it. Only
+    // where the way to it is still the run's own directories: a link a task
+    // put in place of one would lead the unlinking into a directory of the
+    // user's.
     for (const name of new Set([...linked, ...installDirs(dir)])) {
       const target = path.join(dir, name);
+      if (!resolvesAsNamed(this.runRoot(run), path.dirname(target))) continue;
       this.unlinkIfLink(target);
       this.unlinkLinksUnder(target);
     }
-    for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+    for (const name of resolvesAsNamed(this.runRoot(run), dir) ? fs.readdirSync(dir) : []) {
       if (LINKED_ARTIFACTS.has(name) || isEnvFile(name)) this.unlinkIfLink(path.join(dir, name));
     }
     await this.tryGit(repo.root, ['worktree', 'remove', '--force', dir]);

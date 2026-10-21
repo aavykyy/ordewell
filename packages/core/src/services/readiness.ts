@@ -196,7 +196,7 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   const deps = (forced || queued ? underWay(task, store, runs, plan) : unmetDependencies(task, store, runs)).filter((id) => !forCheck || id !== check.id);
   const waiting = [...deps, ...bodyAtWork(task, store, runs)];
   if (waiting.length > 0) waits.push(queued ? { kind: 'queued', waiting } : { kind: 'dependencies', waiting });
-  if (input.merging && mergeExcludes(classifyAttempt(opsOf(task, store)))) waits.push({ kind: 'merging' });
+  if (input.merging && mergeExcludes(classifyAttempt(opsOf(task, store) ? 'ops' : 'change'))) waits.push({ kind: 'merging' });
   // A script task runs on no runner, so no runner's limit holds it (ADR-0035).
   if (!forced && task.type === 'ai') {
     const runner = store.resolveTaskRunner(task);

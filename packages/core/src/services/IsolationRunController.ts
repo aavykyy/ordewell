@@ -33,8 +33,12 @@ import type { SkillLayout } from './taskSkills';
 
 export type IsolationNoticeLevel = 'info' | 'warn' | 'error';
 
-/** How an attempt that may run in a worktree gets one: fresh, the kept one for a repair, or restoring the previous attempt's work. */
-export type AttemptIntent = 'fresh' | 'repair' | PrepareIntent;
+/**
+ * How an attempt that may run in a worktree gets one: fresh, the kept one for
+ * a repair, restoring the previous attempt's work, or fresh and thrown away
+ * whatever it changes, for a read-only task (ADR-0046).
+ */
+export type AttemptIntent = 'fresh' | 'repair' | 'readOnly' | PrepareIntent;
 
 /**
  * What adopting a persisted run found: nothing to change, landed work git
@@ -46,6 +50,8 @@ export type AdoptOutcome = 'unchanged' | 'changed' | 'cleared';
 export interface AttemptWorkspace {
   cwd: string;
   worktree: boolean;
+  /** The task workspace holding the attempt's worktrees, which `cwd` is in; set with `worktree` when it was prepared. */
+  workspace?: string;
   /** Set for a `restore` in a worktree; absent in the checkout, where the previous attempt's edits remain. */
   previousWork?: PreviousWork;
 }
@@ -392,7 +398,7 @@ export class IsolationRunController {
   attemptCwd(task: Task, intent: AttemptIntent): Promise<AttemptWorkspace> {
     if (intent === 'repair' && this.run) return this.reopenCwd(task, this.run);
     if (!this.isolating || !this.run) return this.workspaceCwd(task);
-    return this.prepareCwd(task, this.run, intent === 'restore' ? intent : 'fresh');
+    return this.prepareCwd(task, this.run, intent === 'restore' ? intent : 'fresh', intent === 'readOnly');
   }
 
   /** The workspace root, for an attempt that runs outside any worktree. */
@@ -408,14 +414,16 @@ export class IsolationRunController {
     return { cwd, worktree: true };
   }
 
-  private async prepareCwd(task: Task, run: IsolationRun, intent: PrepareIntent): Promise<AttemptWorkspace> {
-    const { cwd, copied, setupFailed, preserved, restoration } = await this.isolation.prepare(task, run, intent);
+  private async prepareCwd(task: Task, run: IsolationRun, intent: PrepareIntent, readOnly: boolean): Promise<AttemptWorkspace> {
+    const { cwd, copied, setupFailed, preserved, restoration } = await this.isolation.prepare(task, run, intent, readOnly ? { readOnly } : {});
     this.reportCopies(copied);
     this.reportSetupFailures(setupFailed ?? []);
     if (preserved) this.report({ preserved, refused: [] });
-    if (!restoration) return { cwd, worktree: true };
+    const workspace = run.tasks[task.id]?.workspace;
+    const prepared = { cwd, worktree: true, ...(workspace ? { workspace } : {}) };
+    if (!restoration) return prepared;
     const previousWork: PreviousWork = restoration === 'fallback' ? { outcome: 'fallback', preserved: preserved ?? [] } : { outcome: 'restored' };
-    return { cwd, worktree: true, previousWork };
+    return { ...prepared, previousWork };
   }
 
   /**
