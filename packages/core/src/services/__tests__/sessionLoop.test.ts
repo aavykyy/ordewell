@@ -82,6 +82,21 @@ describe('a loop under supervision (ADR-0045)', () => {
     env.session.destroy();
   });
 
+  it('sends the report a check owes once a failing body task stops its loop, at any level', async () => {
+    const tasks = looped(3);
+    tasks[0] = { ...tasks[0], reportTo: { actor: 'planner-turn', consent: { by: 'card' } } };
+    const env = await supervised(tasks, { settings: { supervisorLevel: 'off' } });
+
+    await finish(env, 'review', 1, 'failed', 'Round one finding.');
+    await finish(env, 'fix', 1, 'failed', 'Could not fix it.');
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS * 3);
+
+    await until(() => env.planner.calls.length === 1);
+    expect(env.planner.calls[0].message).toContain('Round one finding.');
+    expect(taskOf(env.session, 'review')?.reportTo).toBeUndefined();
+    env.session.destroy();
+  });
+
   it('refuses the user\'s removal of a loop\'s check, and takes a removed body task out of its loop', async () => {
     const env = await supervised(looped(3), { execute: false });
 

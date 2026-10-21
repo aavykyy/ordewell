@@ -215,4 +215,23 @@ describe('a loop\'s check whose result a planner turn asked for (ADR-0045 L3, L6
     expect(host.deliver).toHaveBeenCalledTimes(1);
     expect(host.deliver).toHaveBeenCalledWith(expect.stringContaining('Its loop ran out of rounds: it failed all 3. It failed: two tests fail'), 'user');
   });
+
+  it('owes its report once a failing body task stops the loop', async () => {
+    vi.useFakeTimers();
+    const { supervision, tasks, host } = harness({ supervisorLevel: 'off' });
+    supervision.runStarted('user');
+    tasks[0] = owed(1);
+    tasks.push(task('t2', 2, { dependencies: ['t1'] }));
+    supervision.taskSettled(tasks[0]);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(host.reported).not.toHaveBeenCalled();
+
+    tasks[1] = { ...tasks[1], status: 'failed', verdict: { outcome: 'fail', reason: 'could not fix it', checks: [], decidedAt: '2026-10-13T00:00:00Z', reported: 'failed' } };
+    supervision.taskSettled(tasks[1]);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(host.reported).toHaveBeenCalledTimes(1);
+    expect(host.reported).toHaveBeenCalledWith('t1', expect.anything());
+    expect(host.deliver).toHaveBeenCalledWith(expect.stringContaining('two tests fail'), 'user');
+  });
 });

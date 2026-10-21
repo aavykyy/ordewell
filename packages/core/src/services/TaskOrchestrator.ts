@@ -1505,7 +1505,7 @@ export class TaskOrchestrator {
 
     if (completesTask(landing)) {
       this.store.markCompleted(taskId);
-      this.closeLoop(task, 'not needed: its check was marked complete');
+      this.closeLoop(task, LOOP_CHECK_MARKED_COMPLETE);
     } else this.settleUnlanded(task, landing, admission);
     this.store.setTaskVerdict(taskId, verdict);
     this.store.setTaskOutputSummary(taskId, summarizeOutput(verdict.reason, ''));
@@ -1561,7 +1561,7 @@ export class TaskOrchestrator {
       const ended = this.endAttempt(taskId, 'skip');
       this.verifier.clear(task);
       this.store.markSkipped(taskId, reason?.trim() || undefined);
-      this.closeLoop(task, 'not needed: its check was skipped');
+      this.closeLoop(task, LOOP_CHECK_SKIPPED);
       this.onHold.delete(taskId);
       this.notifications.info(`Task "${task.title}" skipped: none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done.`);
       this.emit('onTaskChanged');
@@ -1986,7 +1986,7 @@ export class TaskOrchestrator {
     const waiting = (waitOf(waits, 'dependencies') ?? waitOf(waits, 'queued'))?.waiting ?? [];
     if (waiting.length === 0) return null;
     this.onHold.delete(task.id);
-    if (!this.isScheduling || this.getBlockedBy(task.id).length > 0) this.queuedStarts.set(task.id, { pastGate: this.getMergeGate(task.id) });
+    if (!this.leftToScheduler(task)) this.queuedStarts.set(task.id, { pastGate: this.getMergeGate(task.id) });
     const names = waiting.map((id) => `task "${this.store.get(id)?.title ?? id}"`);
     const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
     const idle = this.isScheduling || waiting.some((id) => this.attempts.has(id)) ? '' : ' Nothing is running now: run the plan to start them.';
@@ -1994,6 +1994,16 @@ export class TaskOrchestrator {
     this.tell('info', queued);
     this.emit('onTaskChanged');
     return queued;
+  }
+
+  /**
+   * A force start the scheduler driving the run makes for itself once its
+   * dependencies finish: a task not started yet that nothing blocks. A failed
+   * one, such as a loop's check forced mid-round, it would never start again,
+   * so the force start stays queued.
+   */
+  private leftToScheduler(task: Readonly<Task>): boolean {
+    return this.isScheduling && (task.status === 'pending' || task.status === 'approved') && this.getBlockedBy(task.id).length === 0;
   }
 
   /**
@@ -2012,7 +2022,7 @@ export class TaskOrchestrator {
       }
       const waits = this.startWaits(task, { queued: true, pastGate: queued.pastGate });
       if (waits.some((w) => QUEUED_WAITS.has(w.kind))) continue;
-      if (this.isScheduling && this.getBlockedBy(id).length === 0 && queued.pastGate.length === 0) {
+      if (this.leftToScheduler(task) && queued.pastGate.length === 0) {
         this.queuedStarts.delete(id);
         continue;
       }
@@ -2215,17 +2225,19 @@ export class TaskOrchestrator {
    * integration tip, so it builds on what earlier rounds landed, and true says
    * the failure is the round's, not the task's. Approval is not spent by a
    * run, so the plan's approval of the body covers every round. Out of
-   * rounds, the body still to run will not run.
+   * rounds, the body still to run will not run. A body task the user skipped
+   * has stopped the loop (L7): no round starts, and the skip stands.
    */
   private startRound(checkId: string): boolean {
     const check = this.store.get(checkId);
     if (!check?.loop) return false;
     if (outOfRounds(check)) {
-      this.closeLoop(check, 'not run: the loop ran out of rounds');
+      this.closeLoop(check, LOOP_OUT_OF_ROUNDS);
       return false;
     }
     if (!betweenRounds(check)) return false;
     const body = check.loop.body.flatMap((id) => this.store.get(id) ?? []);
+    if (body.some((t) => t.status === 'skipped' && !LOOP_SKIPS.has(t.skipReason ?? ''))) return false;
     for (const task of body.filter((t) => !this.attempts.has(t.id) && REPEATABLE.has(t.status))) {
       this.store.retry(task.id);
       this.onHold.delete(task.id);
@@ -2776,8 +2788,14 @@ export class TaskOrchestrator {
 
 const LIMIT_RESET_MESSAGE = 'Your usage limit has reset. Carry on with the task from where you stopped.';
 
-/** Why a loop's body that did not run ends skipped once its check passes (ADR-0045 L6). */
+/** Why a loop's body that did not run ends skipped once its loop is over (ADR-0045 L6). */
 const LOOP_PASSED = 'not needed: its check passed';
+const LOOP_OUT_OF_ROUNDS = 'not run: the loop ran out of rounds';
+const LOOP_CHECK_MARKED_COMPLETE = 'not needed: its check was marked complete';
+const LOOP_CHECK_SKIPPED = 'not needed: its check was skipped';
+
+/** The skips a loop made itself, which a new set of rounds undoes; any other is the user's, and stops the loop (L7). */
+const LOOP_SKIPS: ReadonlySet<string> = new Set([LOOP_PASSED, LOOP_OUT_OF_ROUNDS, LOOP_CHECK_MARKED_COMPLETE, LOOP_CHECK_SKIPPED]);
 
 /** A body task a round runs again: not at work, and not waiting on the user. */
 const REPEATABLE: ReadonlySet<Task['status']> = new Set<Task['status']>(['pending', 'approved', 'completed', 'failed', 'skipped']);

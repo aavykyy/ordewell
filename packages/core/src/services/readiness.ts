@@ -2,7 +2,7 @@ import { runsAsOps, type Task } from '../models/Task';
 import type { PlanStore } from './PlanStore';
 import type { IsolationRunController } from './IsolationRunController';
 import { classifyAttempt, mergeExcludes } from './attemptKind';
-import { blockingFailures, planBlocks } from './blocking';
+import { planBlocks } from './blocking';
 import { scriptBodyOf } from '../models/ScriptTask';
 import { betweenRounds, checkOf, loopRoundOf } from '../models/Loop';
 
@@ -193,7 +193,8 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   const forCheck = !!check && UNDECIDED.has(check.status);
   if (forCheck) waits.push({ kind: 'loop-check', check: check.id });
   // A forced start goes past a failure, so only what is still under way holds it.
-  const waiting = (forced || queued ? underWay(task, store, runs, plan) : unmetDependencies(task, store, runs)).filter((id) => !forCheck || id !== check.id);
+  const deps = (forced || queued ? underWay(task, store, runs, plan) : unmetDependencies(task, store, runs)).filter((id) => !forCheck || id !== check.id);
+  const waiting = [...deps, ...bodyAtWork(task, store, runs)];
   if (waiting.length > 0) waits.push(queued ? { kind: 'queued', waiting } : { kind: 'dependencies', waiting });
   if (input.merging && mergeExcludes(classifyAttempt(opsOf(task, store)))) waits.push({ kind: 'merging' });
   // A script task runs on no runner, so no runner's limit holds it (ADR-0035).
@@ -208,6 +209,20 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   if (unmerged.length > 0) waits.push({ kind: 'merge-gate', unmerged });
   if (byHand) waits.push({ kind: 'by-hand' });
   return waits;
+}
+
+/**
+ * A check's body still at work, or passed and not landed yet: a check started
+ * again mid-round — a retry, a force start — waits for it, so that it checks
+ * that fix rather than racing it and passing with the fix landing after it
+ * unchecked (ADR-0045 L5, L7). The loop's own next round waits for its whole
+ * body to land already, so this holds only a start of the check from outside.
+ */
+function bodyAtWork(task: Readonly<Task>, store: Pick<PlanStore, 'get' | 'isCompleted'>, runs: Pick<IsolationRunController, 'openRecord'>): string[] {
+  return (task.loop?.body ?? []).filter((id) => {
+    const status = store.get(id)?.status;
+    return status === 'in_progress' || status === 'awaiting_user' || (status === 'completed' && !landed(id, store, runs));
+  });
 }
 
 /** A check's statuses before it has found anything this round: not run yet, under way, or waiting on the user. */
@@ -254,26 +269,32 @@ export function unmetDependencies(
  * way or yet to run that it waits on is still waited for, through it.
  */
 function underWay(task: Readonly<Task>, store: DependencyStore, runs: Pick<IsolationRunController, 'openRecord'>, plan: PlanJudgement): string[] {
-  return waitingBehind(heldTo(task, store), store, runs, { pastFailures: true, blocked: plan.blocked });
+  return waitingBehind(heldTo(task, store), store, runs, { pastFailures: true, plan: () => ({ blocked: plan.blocked(), repeating: plan.repeating() }) });
 }
+
+/** The blocked rule's reading of the plan a dependency walk needs. */
+type JudgedBlocks = { blocked: ReadonlyMap<string, string[]>; repeating: ReadonlySet<string> };
 
 /**
  * Breadth first, so a task that is also a direct dependency is judged as one.
  * A skipped task is walked through to what it waited on, behind which a
  * failed or blocked task is a dead end. `pastFailures` makes a failed task a
- * dead end anywhere, and walks through a blocked one to what it waits on.
+ * dead end anywhere, and walks through a blocked one to what it waits on. A
+ * loop's check between rounds whose loop goes on is no failure: it is work
+ * under way (ADR-0045 L3).
  */
 function waitingBehind(
   depIds: readonly string[],
   store: DependencyStore,
   runs: Pick<IsolationRunController, 'openRecord'>,
-  opts: { pastFailures: boolean; blocked?: () => ReadonlyMap<string, string[]> },
+  opts: { pastFailures: boolean; plan?: () => JudgedBlocks },
 ): string[] {
   const seen = new Set<string>();
   const waiting: string[] = [];
   // Only a walk through a skip or past a failure needs it, and most never take one.
-  let blocked: ReadonlyMap<string, string[]> | undefined;
-  const isBlocked = (id: string): boolean => (blocked ??= opts.blocked?.() ?? blockingFailures(store.allTasks)).has(id);
+  let blocks: JudgedBlocks | undefined;
+  const judged = () => (blocks ??= opts.plan?.() ?? planBlocks(store.allTasks));
+  const isBlocked = (id: string): boolean => judged().blocked.has(id);
   const dependenciesOf = (id: string, behindSkip: boolean) => (store.get(id)?.dependencies ?? []).map((dep) => ({ id: dep, behindSkip }));
   const queue = depIds.map((id) => ({ id, behindSkip: false }));
   for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
@@ -285,7 +306,7 @@ function waitingBehind(
       queue.push(...dependenciesOf(id, true));
       continue;
     }
-    const failed = store.get(id)?.status === 'failed';
+    const failed = store.get(id)?.status === 'failed' && !judged().repeating.has(id);
     if (!behindSkip && !opts.pastFailures) waiting.push(id);
     else if (!failed && !isBlocked(id)) waiting.push(id);
     else if (opts.pastFailures && !behindSkip && !failed) queue.push(...dependenciesOf(id, false));

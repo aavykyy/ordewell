@@ -331,6 +331,78 @@ describe('a loop: a check that repeats with its fix until it passes (ADR-0045)',
     await h.pass('ship');
   });
 
+  it('queues a force start of a check\'s dependent between rounds behind the check, as behind work under way', async () => {
+    const h = setup(reviewed());
+    await h.orchestrator.approveReview();
+    await h.pass('build');
+    await h.fail('review', 1);
+    await vi.waitFor(() => expect(h.spawns('fix')).toHaveLength(1));
+
+    const queued = await h.orchestrator.forceStartTask('ship');
+
+    expect(queued).toContain('starts once task "Task review" finishes');
+    expect(h.spawns('ship')).toHaveLength(0);
+    await h.pass('fix');
+    await h.pass('review', 2);
+    await h.pass('ship');
+  });
+
+  it('keeps the user\'s skip of a body task made before the check fails: the loop is stopped, and the fix does not run', async () => {
+    const h = setup(reviewed());
+    await h.orchestrator.approveReview();
+    await h.pass('build');
+    await vi.waitFor(() => expect(h.spawns('review')).toHaveLength(1));
+    await h.orchestrator.skipTask('fix', 'not needed');
+
+    await h.fail('review', 1);
+
+    await vi.waitFor(() => expect(h.executionComplete).toHaveBeenCalled());
+    expect(h.spawns('fix')).toHaveLength(0);
+    expect(h.get('fix')).toMatchObject({ status: 'skipped', skipReason: 'not needed' });
+    expect(h.orchestrator.getBlockedBy('ship')).toEqual(['review']);
+    expect(h.notifications.error).toHaveBeenCalledWith(expect.stringContaining('Task "Task review" failed verification'));
+  });
+
+  it('runs the body skipped by a loop that closed again when a retried check fails', async () => {
+    const h = setup(reviewed());
+    await h.orchestrator.approveReview();
+    await h.pass('build');
+    await h.pass('review');
+    expect(h.get('fix')).toMatchObject({ status: 'skipped', skipReason: 'not needed: its check passed' });
+    await h.pass('ship');
+    await vi.waitFor(() => expect(h.executionComplete).toHaveBeenCalled());
+
+    await h.orchestrator.retryTask('review');
+    await h.orchestrator.start();
+    await h.fail('review', 2);
+
+    await vi.waitFor(() => expect(h.spawns('fix')).toHaveLength(1));
+  });
+
+  it.each([
+    ['retried', (h: ReturnType<typeof setup>) => h.orchestrator.retryTask('review')],
+    ['force-started', (h: ReturnType<typeof setup>) => h.orchestrator.forceStartTask('review')],
+  ])('runs a check %s mid-round only once the body at work has finished and landed', async (_, restart) => {
+    const h = setup(reviewed());
+    await h.orchestrator.approveReview();
+    await h.pass('build');
+    await h.fail('review', 1);
+    await vi.waitFor(() => expect(h.spawns('fix')).toHaveLength(1));
+
+    await restart(h);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(h.spawns('review')).toHaveLength(1);
+
+    await h.pass('fix');
+    await vi.waitFor(() => expect(h.spawns('review')).toHaveLength(2));
+    // Its rounds start over (L7): this is round 1 of a new set, not the loop's round 2.
+    expect(h.get('review').loopRound).toBeUndefined();
+    await h.pass('review', 2);
+    await h.pass('ship');
+    await vi.waitFor(() => expect(h.executionComplete).toHaveBeenCalled());
+    expect(h.spawns('fix')).toHaveLength(1);
+  });
+
   it('runs the check again only once its body has landed on the integration branch', async () => {
     const isolation = new FakeWorktreeIsolation();
     const h = setup(reviewed(), { isolation });
