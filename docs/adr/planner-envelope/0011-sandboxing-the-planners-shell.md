@@ -155,7 +155,11 @@ platform with the platform and the probe injected, the way
 is tested on the host: on macOS, and on Linux where bubblewrap starts, the
 tests write outside the scratch directory, reach a local socket with and
 without the network, and run the read commands; elsewhere they skip, naming the
-probe's reason. CI's image needs no sandbox.
+probe's reason. CI installs bubblewrap on its Linux runner and lifts Ubuntu's
+user-namespace restriction the way
+[troubleshooting](../../troubleshooting.md#planner-shell-not-sandboxed) tells a
+user to, then runs those suites with `ORDEWELL_REQUIRE_SANDBOX=1`, so a host
+that still cannot start the sandbox fails the build instead of skipping.
 
 ## Considered options
 
@@ -233,3 +237,4 @@ probe's reason. CI's image needs no sandbox.
 - 2026-10-20 — implemented (#64): bubblewrap on Linux and Seatbelt, closed by default, on macOS, behind one `SandboxBackend`; a scratch directory per session; local service sockets hidden from commands without the network.
 - 2026-10-21 — a command the envelope would refuse without asking runs sealed under a stricter profile of the same backend, and the notice says loops and scripts are refused where none starts ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md), #109).
 - 2026-10-21 — the macOS backend's residuals recorded: job creation denied, existing launchd jobs and other processes' command lines and environments not gated ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md)).
+- 2026-10-21 — CI runs the real-sandbox suites on Linux with bubblewrap installed and Ubuntu's user-namespace restriction lifted, failing rather than skipping where the probe cannot start.

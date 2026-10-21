@@ -29,14 +29,28 @@ function run(launch: ShellLaunch, command: string, cwd: string): Promise<{ code:
   });
 }
 
+/**
+ * CI sets this on a host that is meant to run the sandbox, so a probe that
+ * fails there fails the suite: a green run must mean the real sandbox ran,
+ * not that every test skipped again.
+ */
+const REQUIRE_SANDBOX = process.env.ORDEWELL_REQUIRE_SANDBOX === '1';
+
 // The probe is asynchronous and the skip is decided when the suite is collected, so the outer suite awaits it.
 describe("the planner's sandbox", async () => {
   const availability = await resolvePlannerSandbox();
   const title = availability.available
     ? `on this host (${availability.backend.name})`
-    : `skipped: ${availability.notice.split('\n')[0]}`;
+    : `${REQUIRE_SANDBOX ? 'required' : 'skipped'}: ${availability.notice.split('\n')[0]}`;
 
-  describe.skipIf(!availability.available)(title, () => {
+  describe.skipIf(!availability.available && !REQUIRE_SANDBOX)(title, () => {
+    if (!availability.available) {
+      it('has a sandbox on this host (ORDEWELL_REQUIRE_SANDBOX=1)', () => {
+        throw new Error(availability.notice);
+      });
+      return;
+    }
+
     let workspace: string;
     const sandbox = new PlannerShellSandbox();
 

@@ -56,13 +56,29 @@ class HostFileSystem extends BaseFileSystem {
   }
 }
 
+/**
+ * CI sets this on a host that is meant to run the sandbox, so a probe that
+ * fails there fails the suite: a green run must mean the real sealed run
+ * happened, not that every test skipped again.
+ */
+const REQUIRE_SANDBOX = process.env.ORDEWELL_REQUIRE_SANDBOX === '1';
+
 // The probe is asynchronous and the skip is decided when the suite is collected, so the outer suite awaits it.
 describe('sealed runs', async () => {
   const availability = await resolvePlannerSandbox();
   const reason = !availability.available ? availability.notice : !availability.sealed.available ? availability.sealed.notice : undefined;
-  const title = !reason && availability.available ? `on this host (${availability.backend.name})` : `skipped: ${(reason ?? '').split('\n')[0]}`;
+  const title = !reason && availability.available
+    ? `on this host (${availability.backend.name})`
+    : `${REQUIRE_SANDBOX ? 'required' : 'skipped'}: ${(reason ?? '').split('\n')[0]}`;
 
-  describe.skipIf(reason !== undefined)(title, () => {
+  describe.skipIf(reason !== undefined && !REQUIRE_SANDBOX)(title, () => {
+    if (reason !== undefined) {
+      it('has a sealed run on this host (ORDEWELL_REQUIRE_SANDBOX=1)', () => {
+        throw new Error(reason);
+      });
+      return;
+    }
+
     let workspace: string;
     let elsewhere: string;
     const sandbox = new PlannerShellSandbox();
@@ -288,8 +304,12 @@ describe('sealed runs', async () => {
           expect(log.output).toContain('base');
 
           const commit = await shell.run('git add -A && git -c user.name=t -c user.email=t@t commit -qm task');
-          expect(commit.success).toBe(false);
-          expect(commit.output).toContain('git can read the repository but not record anything in it');
+          // A throwaway overlay takes the commit and drops it with the run (S1);
+          // without one the repository is read-only and refuses it outright.
+          const overlaid = availability.available && availability.sealed.available
+            && (availability.sealed.profile({ workspace: repo }).throwaway?.length ?? 0) > 0;
+          if (commit.success) expect(overlaid).toBe(true);
+          else expect(commit.output).toContain('git can read the repository but not record anything in it');
           expect(git(repo, 'rev-parse', 'ordewell/run/1-review').stdout).toBe(head);
         } finally {
           shell.end();
