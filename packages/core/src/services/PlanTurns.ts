@@ -12,6 +12,7 @@ import type { SkillInvocation } from './skillInvocation';
 export const START_HOLD_TIMEOUT_MS = 5 * 60_000;
 
 export interface PlanTurnInput {
+  budgetStarted?: true;
   source: PlanTurnSource;
   text: string;
   skills?: readonly SkillLoad[];
@@ -39,6 +40,8 @@ export interface TurnPrompt extends SkillInvocation {
 }
 
 export interface PlanTurnsHost {
+  /** Charge the message's budget before sending: report turns and usage-limit resends are not new user messages (ADR-0037 R4). */
+  turnStarting?(inputs: readonly PendingPlanTurn[]): void;
   plan(): LegacyPlanState | null;
   /** A planner turn this module did not open holds the conversation: an opening, a compaction, plan generation. */
   conversationBusy(): boolean;
@@ -270,6 +273,7 @@ export class PlanTurns {
       ...(input.skills && input.skills.length > 0 ? { skills: [...input.skills] } : {}),
       ...(forced ? { forced: true } : {}),
       ...(input.report ? { report: input.report } : {}),
+      ...(input.budgetStarted ? { budgetStarted: true } : {}),
     };
   }
 
@@ -393,8 +397,10 @@ export class PlanTurns {
     if (live[0]?.forced) return [live[0]];
     if (live.some((t) => t.source === 'user')) return live;
     if (this.quiet) return [];
-    const authorities = [...new Set(live.map(authorityOf))];
-    return authorities.map((authority) => live.filter((t) => authorityOf(t) === authority)).find((group) => this.mayOpen(group)) ?? [];
+    // An exhausted report budget holds reports for the user's next message, even beside a supervisor input (ADR-0037 R4).
+    const eligible = this.host.mayReport() ? live : live.filter((t) => t.report === undefined);
+    const authorities = [...new Set(eligible.map(authorityOf))];
+    return authorities.map((authority) => eligible.filter((t) => authorityOf(t) === authority)).find((group) => this.mayOpen(group)) ?? [];
   }
 
   /** A report the planner asked for opens a turn at every level (ADR-0037, R2); the supervisor's own wake-ups only while it watches. */
@@ -413,6 +419,7 @@ export class PlanTurns {
     const signals = batch.flatMap((t) => this.waiters.get(t.id)?.signal ?? []);
     let outcome: { ok: true; plan: LegacyPlanState } | { ok: false; err: unknown };
     try {
+      this.host.turnStarting?.(batch);
       const landed = await this.host.run(turnPrompt(batch), {
         taken: () => this.take(plan, ids),
         signal: signals.length > 0 ? AbortSignal.any(signals) : undefined,

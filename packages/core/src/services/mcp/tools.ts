@@ -96,6 +96,7 @@ const planTask = z.looseObject({
   script: z.string().optional().describe('A script task\'s script, run by the research shell. Exactly one of commands or script.'),
   timeoutMs: z.number().optional().describe('A script task\'s time limit in milliseconds; ten minutes when left out.'),
   // ADR-0045. Loose like the rest: the plan's rules judge the body and the rounds.
+  research: z.boolean().optional().describe('A top-level read-only AI task whose report wakes the planner (ADR-0037 R1). Never in a loop body.'),
   loop: z.looseObject({
     body: z.array(z.string()).describe('The ids of the top-level tasks that fix what this check finds; each depends on this task.'),
     maxRounds: z.number().optional().describe('The most times this check runs, 1 to 10; 3 when left out.'),

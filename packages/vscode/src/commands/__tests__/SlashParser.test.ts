@@ -295,6 +295,8 @@ describe('conversation-editing slash commands', () => {
     };
 
     it.each([
+      ['/research parallel 1', { researchMaxParallel: 1 }],
+      ['/research per-message 3', { researchMaxPerMessage: 3 }],
       ['/supervisor watch', { supervisorLevel: 'watch' }],
       ['/supervisor off', { supervisorLevel: 'off' }],
       ['/supervisor retries 3', { supervisorRetryLimit: 3 }],
@@ -323,7 +325,7 @@ describe('conversation-editing slash commands', () => {
       expect(change).toHaveBeenCalledWith(changes);
     });
 
-    it.each(['/supervisor boss', '/supervisor reads 0', '/supervisor retries many', '/automerge maybe', '/autorun yes'])('%s warns with the usage and changes nothing', async (line) => {
+    it.each(['/research parallel 0', '/research per-message -1', '/research maybe 3', '/supervisor boss', '/supervisor reads 0', '/supervisor retries many', '/automerge maybe', '/autorun yes'])('%s warns with the usage and changes nothing', async (line) => {
       const { change, deps } = settingsWith();
       mocked('showWarningMessage').mockReset();
       await handleSlashCommand(line, deps);

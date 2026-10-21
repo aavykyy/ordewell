@@ -44,6 +44,14 @@ describe('run settings in the TUI (ADR-0030)', () => {
     expect(typed(plan(), '/supervisor boss').effects).toEqual([]);
   });
 
+  it('/research changes the saved live limits, refusing zero and invalid arguments', () => {
+    expect(typed(plan(), '/research parallel 1').effects).toEqual([{ type: 'setRunSettings', changes: { researchMaxParallel: 1 }, sessionId: 's1' }]);
+    expect(typed(plan(), '/research per-message 3').effects).toEqual([{ type: 'setRunSettings', changes: { researchMaxPerMessage: 3 }, sessionId: 's1' }]);
+    expect(typed(plan(), '/research parallel 0').effects).toEqual([]);
+    expect(typed(plan(), '/research maybe 2').effects).toEqual([]);
+    expect(said(typed(plan(), '/research'))).toContain('Research: 2 at once, 4 tasks and report turns per message');
+  });
+
   it('a bare /supervisor, /automerge or /autorun says what it is and changes nothing', () => {
     const state = loaded(plan(), { supervisorLevel: 'act', supervisorRetryLimit: 1, mergeAtGatesAutomatically: true });
     const supervisor = typed(state, '/supervisor');

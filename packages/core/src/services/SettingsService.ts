@@ -16,6 +16,10 @@ export interface GlobalRunSettings {
   supervisorRetryLimit: number;
   /** Reads a wake-up turn may make, in place of a user message's caps. */
   wakeUpReadBudget: number;
+  /** Research attempts that may run together (ADR-0037 R4). */
+  researchMaxParallel: number;
+  /** Research starts and automatic report turns allowed per user message (ADR-0037 R4). */
+  researchMaxPerMessage: number;
 }
 
 export const RUN_SETTINGS_DEFAULTS: Readonly<GlobalRunSettings> = {
@@ -24,6 +28,8 @@ export const RUN_SETTINGS_DEFAULTS: Readonly<GlobalRunSettings> = {
   autorun: false,
   supervisorRetryLimit: DEFAULT_SUPERVISOR_RETRY_LIMIT,
   wakeUpReadBudget: DEFAULT_WAKE_UP_READ_BUDGET,
+  researchMaxParallel: 2,
+  researchMaxPerMessage: 4,
 };
 
 export class RunSettingsError extends Error {
@@ -57,6 +63,14 @@ const RUN_SETTING_CHECKS: { [K in keyof GlobalRunSettings]: { valid: (v: unknown
     valid: (v): v is number => Number.isInteger(v) && (v as number) >= 1,
     refusal: 'The wake-up read budget must be a whole number of reads, 1 or more.',
   },
+  researchMaxParallel: {
+    valid: (v): v is number => Number.isSafeInteger(v) && (v as number) >= 1,
+    refusal: 'The research parallel limit must be a whole number, 1 or more.',
+  },
+  researchMaxPerMessage: {
+    valid: (v): v is number => Number.isSafeInteger(v) && (v as number) >= 1,
+    refusal: 'The research per-message limit must be a whole number, 1 or more.',
+  },
 };
 
 const RUN_SETTING_KEYS = Object.keys(RUN_SETTING_CHECKS) as (keyof GlobalRunSettings)[];
@@ -77,6 +91,8 @@ export interface UserSettings {
   autorun?: boolean;
   supervisorRetryLimit?: number;
   wakeUpReadBudget?: number;
+  researchMaxParallel?: number;
+  researchMaxPerMessage?: number;
 }
 
 /**

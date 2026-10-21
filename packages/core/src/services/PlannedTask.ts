@@ -236,6 +236,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   // otherwise get write access the planner said the work must not have.
   const asked = typeof raw.readOnly === 'boolean' ? raw.readOnly : undefined;
   const readOnly = ai && !ops && (asked ?? from?.readOnly ?? parent?.readOnly ?? false);
+  if (raw.research !== undefined && typeof raw.research !== 'boolean') errors.push({ taskId: id, field: 'research', message: `${where}: "research" must be a boolean` });
 
   const assignedModel = ai ? modelOf(raw, base.assignedModel) : undefined;
   const slice = (value: unknown): 'AFK' | 'HITL' | undefined => (value === 'AFK' || value === 'HITL' ? value : undefined);
@@ -274,6 +275,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
     sliceType,
     userStoriesCovered: Array.isArray(raw.userStoriesCovered) ? raw.userStoriesCovered.map(String) : base.userStoriesCovered,
     ops: script ? undefined : ops,
+    research: typeof raw.research === 'boolean' ? raw.research : base.research,
     skills: script ? undefined : from ? inheritedSkills(raw.skills, base.skills) : skillNames(raw.skills),
     ...body.fields,
     ...('loop' in loop && loop.loop ? { loop: loop.loop } : {}),
@@ -322,11 +324,19 @@ export function checkPlanInvariants(
   const rows = flattenTasksWithParents(tasks);
   const errors: PlanTaskError[] = [];
   const seen = new Set<string>();
+  const body = new Set(tasks.flatMap((t) => t.loop?.body ?? []));
   for (const { task: t, parent } of rows) {
     const where = taskWhere(t.title, parent?.title);
     const fail = (field: string, message: string) => errors.push({ taskId: t.id, field, message });
     if (seen.has(t.id)) fail('id', `${where} has id "${t.id}", which another task in the plan has too: every task, subtasks included, needs an id of its own`);
     seen.add(t.id);
+    if (t.research !== undefined && typeof t.research !== 'boolean') fail('research', `${where}: "research" must be a boolean`);
+    // Research's approval exception is safe only under the shared read-only profile (ADR-0037 R1, R4).
+    const readOnly = runnerModes ? taggedReadOnlyMode(runnerModes[t.assignedRunner]) : 'plan';
+    if (t.research && (t.type !== 'ai' || parent !== null || t.ops || body.has(t.id)
+      || readOnly === undefined || t.taskMode !== readOnly)) {
+      fail('research', `${where}: research is only for top-level read-only AI tasks, never a loop's body`);
+    }
     if (t.autonomy === 'AFK' && t.userSteps && t.userSteps.length > 0) {
       fail('userSteps', `${where} has autonomy "AFK" but contains userSteps. AFK tasks must not have user touchpoints.`);
     }

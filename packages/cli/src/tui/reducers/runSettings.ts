@@ -1,5 +1,5 @@
 import type { GlobalRunSettings } from '@ordewell/core';
-import { ACT_RISK, AUTORUN_RISK, automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary } from '@ordewell/core';
+import { ACT_RISK, AUTORUN_RISK, researchSummary, researchSettingsChange, RESEARCH_USAGE, automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary } from '@ordewell/core';
 import type { TuiState } from '../state';
 import { say } from '../transcript';
 import { fail, step, type Effect, type Step } from './shared';
@@ -75,4 +75,10 @@ function confirmAutorun(state: TuiState): Step {
       action: { kind: 'autorun-on' },
     },
   });
+}
+
+export function researchCommand(state: TuiState, args: string[]): Step {
+  if (args.length === 0) return step(say(state, 'system', `${researchSummary(state.runSettings)}. ${RESEARCH_USAGE}`));
+  const changes = researchSettingsChange(args);
+  return changes ? step(state, [runSettingsEffect(state, changes)]) : fail(state, RESEARCH_USAGE);
 }

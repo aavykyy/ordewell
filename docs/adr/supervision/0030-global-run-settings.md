@@ -44,7 +44,8 @@ on one machine can disagree.
 ## Decision
 
 **Full/Guarded, the supervisor level, merge at gates automatically, autorun,
-the retry limit and the wake-up read budget are machine-wide user settings,
+the retry limit, the wake-up read budget and the research limits are
+machine-wide user settings,
 saved in `settings.json` and changed with chat commands. A change applies at
 once to the session it is made in, and to every other session from its next
 run. Autorun, a new setting, starts the plan when the planner submits it.**
@@ -78,6 +79,8 @@ There is no per-plan value and no per-workspace override.
 | autorun | on, off | off |
 | supervisor retry limit | whole number ≥ 0 | 2 |
 | wake-up read budget | whole number ≥ 1 | 12 |
+| research tasks at once | whole number ≥ 1 | 2 |
+| research tasks and report turns per message | whole number ≥ 1 | 4 |
 
 Watch becomes the default because it only reads and writes notes to the user:
 it never acts, and it makes the planner's watching of a run something a new
@@ -97,6 +100,8 @@ bare command reports the value; an argument sets it.
 | `/supervisor reads <n>` | wake-up read budget |
 | `/automerge [on\|off]` | merge at gates automatically |
 | `/autorun [on\|off]` | autorun |
+| `/research parallel <n>` | concurrent research attempts |
+| `/research per-message <n>` | research starts and automatic report turns per user message |
 
 `/supervisor act` and `/autorun on` ask to confirm and say what they allow,
 ops tasks on real systems included. The plan pane's `G`, `W` and `L` and VS
@@ -290,7 +295,7 @@ the daemon reads it from there at generation.
 
 ## Consequences
 
-- `UserSettings` gains the six values; the plan loses four fields and keeps
+- `UserSettings` holds these values; the plan loses four fields and keeps
   `runSettings`, which one module owns (`RunSupervision`): it copies them at
   a run the user starts, keeps them for a run that continues, and applies the
   user's change to the run under way (`Session.applyRunSettings`). The
@@ -334,3 +339,5 @@ the daemon reads it from there at generation.
 - 2026-10-14 — the status row the badge shares speaks only for the chat on
   screen; what the run waits on moved to the plan pane's title.
 - 2026-10-21 — with autorun on in Full, the planner's `run_script` and the script tasks it writes in the user's turn run without asking; under Guarded autorun approves the rest of what the planner writes, but not a script task unless the effect allowlist covers it ([ADR-0035](0035-effects-are-consented-and-recorded.md)).
+
+- 2026-10-21 — research limits use the global store and live run copy, with chat commands and VS Code Run settings (ADR-0037 R4).

@@ -30,6 +30,7 @@ import { completesTask, Landing, type LandingMessage, type LandingOutcome, type 
 import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import { RELAPSE_MS, RESUME_MARGIN_MS, UsageLimitWaits } from './UsageLimitWaits';
 import { landed, selectReadyTasks, startWaits, waitOf, type ForcedStart, type Readiness, type StartRuleInput, type StartWait, type StartWaitKind } from './readiness';
+import type { ResearchSchedule } from './ResearchTasks';
 import { blockingFailures, planBlocks, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 import {
@@ -248,7 +249,7 @@ interface QueuedStart {
 }
 
 /** What keeps a queued force start waiting, with nothing to say: it starts once these clear. */
-const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued', 'completing', 'merging', 'start-hold']);
+const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued', 'completing', 'merging', 'start-hold', 'unapproved', 'research-parallel', 'research-message']);
 
 /** A force start the user made now: their own act, past the whole merge gate they confirmed. */
 const FORCED_NOW: ForcedStart = { queued: false };
@@ -299,6 +300,7 @@ export interface TaskAttemptSnapshot {
  * one place defaults live.
  */
 export interface TaskOrchestratorDeps {
+  research?: ResearchSchedule;
   config: IConfig;
   notifications: INotification;
   runner: IRunner;
@@ -346,6 +348,7 @@ export interface TaskOrchestratorDeps {
  * resolved wiring the orchestrator itself runs on.
  */
 export interface TaskOrchestratorOptions {
+  research?: ResearchSchedule;
   config: IConfig;
   notifications: INotification;
   runner: IRunner;
@@ -454,8 +457,10 @@ export class TaskOrchestrator {
   private runSettings: () => SchedulerRunSettings | undefined;
   private isApproved: (taskId: string) => boolean;
   private taskShell: (site: TaskShellSite) => TaskShell | undefined;
+  private readonly research: ResearchSchedule | undefined;
 
   constructor(deps: TaskOrchestratorDeps) {
+    this.research = deps.research;
     this.config = deps.config;
     this.notifications = deps.notifications;
     this.runner = deps.runner;
@@ -545,6 +550,7 @@ export class TaskOrchestrator {
       lastLoggedAttempt: options.lastLoggedAttempt ?? (() => 0),
       runSettings: options.runSettings ?? (() => undefined),
       isApproved: options.isApproved ?? (() => true),
+      research: options.research,
       ...(options.taskShell ? { taskShell: options.taskShell } : {}),
     });
     return orchestrator;
@@ -973,6 +979,7 @@ export class TaskOrchestrator {
       store: this.store,
       onHold: this.onHold,
       approved: this.isApproved,
+      research: this.research,
       runs: this.runs,
       merging: this.merging,
       startsHeld: this.startHolds > 0,
@@ -1945,6 +1952,13 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task || task.type === 'user') return;
     if (this.attempts.has(taskId)) return;
+    const research = this.research?.wait(task);
+    if (research) {
+      this.startAtGate(taskId);
+      return research.kind === 'research-message'
+        ? `Task "${task.title}" waits for your next message: the research limit of ${research.limit} for this message has been reached.`
+        : `Task "${task.title}" waits for a research slot: ${research.limit} research tasks may run at once.`;
+    }
     this.refuseOpsDuringMerge(taskId, FORCED_NOW);
     const queued = this.queueBehindDependencies(task);
     if (queued) return queued;
@@ -2047,7 +2061,8 @@ export class TaskOrchestrator {
         this.queuedStarts.delete(id);
         continue;
       }
-      const waits = this.startWaits(task, { queued: true, pastGate: queued.pastGate });
+      const waits = this.startWaits(task, task.research ? undefined : { queued: true, pastGate: queued.pastGate });
+      if (task.research && (waits.length > 0 || this.attempts.size >= this.config.maxParallelSessions)) continue;
       if (waits.some((w) => QUEUED_WAITS.has(w.kind))) continue;
       if (this.leftToScheduler(task) && queued.pastGate.length === 0) {
         this.queuedStarts.delete(id);
@@ -2060,7 +2075,8 @@ export class TaskOrchestrator {
       }
       this.queuedStarts.delete(id);
       try {
-        await this.startForced(id, 'user', { queued: true, pastGate: queued.pastGate });
+        const origin = task.research && (task.reportTo ?? task.researchOrigin)?.actor === 'supervisor' ? 'supervisor' : 'user';
+        await this.startForced(id, origin, { queued: true, pastGate: queued.pastGate });
       } catch (err) {
         this.tell('warn', `Task "${task.title}" did not start once its dependencies finished: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -2361,6 +2377,10 @@ export class TaskOrchestrator {
     if (!task) return `There is no task "${taskId}" in this plan any more.`;
     if (this.completing.has(taskId)) return `Task "${task.title}" is being marked complete: its work is landing.`;
     if (!this.isApproved(taskId)) return `Task "${task.title}" waits for the user's approval: they approve it by starting it, or by executing the plan.`;
+    const research = this.research?.wait(task);
+    if (research) return research.kind === 'research-message'
+      ? `Task "${task.title}" waits for your next message: the research limit of ${research.limit} for this message has been reached.`
+      : `Task "${task.title}" waits for a research slot: ${research.limit} research tasks may run at once.`;
     const live = this.attempts.size;
     if (live >= this.config.maxParallelSessions) {
       return `${live} ${live === 1 ? 'task is' : 'tasks are'} already running, the most this session runs at once. Wait for one to finish, or stop one first.`;
@@ -2422,6 +2442,7 @@ export class TaskOrchestrator {
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.attempts.set(task.id, attempt);
+    this.research?.started(task);
     // A script spends nothing a ledger counts: no model, no tokens (ADR-0035).
     if (!script) this.store.startAttemptUsage(task.id, attempt.attempt, attempt.runner, attempt.startedAt);
     this.store.markInProgress(task.id);

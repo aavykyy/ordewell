@@ -38,7 +38,7 @@ export type TaskOp =
 /** Fields the planner may change on an existing task. Everything else (id, status, verdict…) is system-owned. */
 export const UPDATABLE_FIELDS: (keyof Task)[] = [
   'title', 'description', 'prompt', 'dependencies', 'assignedRunner', 'assignedModel', 'taskMode', 'type', 'userSteps', 'autonomy', 'sliceType', 'ops', 'skills',
-  'commands', 'script', 'timeoutMs', 'loop',
+  'commands', 'script', 'timeoutMs', 'loop', 'research',
 ];
 
 /**
@@ -514,6 +514,7 @@ export function applyTaskOps(
     if (readOnly === true && (changes.type ?? target.type) === 'user') return { error: `${label}: ${MANUAL_NOT_READ_ONLY}` };
     if ((changes.ops ?? target.ops) && (readOnly ?? isReadOnly(target, catalog))) return { error: `${label}: ${OPS_NOT_READ_ONLY}` };
     const landed: Partial<Task> = { ...changes };
+    if (readOnly === false && target.research && op.changes?.research !== true) landed.research = false;
     const written = { ...target, ...changes };
     // A runner not allowed has nothing to resolve against; the plan's rules refuse it once the op is applied.
     if (written.type !== 'ai' || runners.includes(written.assignedRunner)) {

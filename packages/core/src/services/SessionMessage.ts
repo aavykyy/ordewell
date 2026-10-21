@@ -95,6 +95,7 @@ export type SerializedTask = {
   skipReason?: string;
   /** Set only on an ops task (ADR-0020). */
   ops?: true;
+  research?: boolean;
   /** Task skills attached by name; absent when none. */
   skills?: string[];
   /** Set only on a task an Act supervisor added (ADR-0029). */
@@ -418,6 +419,7 @@ export function serializeTask(t: SurfaceTask): SerializedTask {
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && t.resumeAt ? { resumeAt: t.resumeAt } : {}),
     ...(t.status === 'skipped' && t.skipReason ? { skipReason: t.skipReason } : {}),
     ...(t.ops ? { ops: true as const } : {}),
+    ...(t.research !== undefined ? { research: t.research } : {}),
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(t.skills?.length ? { skills: [...t.skills] } : {}),
     ...(t.addedBy ? { addedBy: t.addedBy } : {}),

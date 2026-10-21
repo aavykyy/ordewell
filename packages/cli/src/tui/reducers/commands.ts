@@ -17,7 +17,7 @@ import {
 } from './taskEdits';
 import { stopPlanning } from './turnQueue';
 import { withRun } from './incoming';
-import { automergeCommand, autorunCommand, supervisorCommand } from './runSettings';
+import { automergeCommand, autorunCommand, researchCommand, supervisorCommand } from './runSettings';
 import { openSettings } from './settings';
 import { fail, step, withSession, type Effect, type Step, type TaskAction } from './shared';
 
@@ -66,6 +66,8 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
       return runners(state, args);
     case 'auto':
       return setAutonomous(state, args[0]);
+    case 'research':
+      return researchCommand(state, args);
     case 'supervisor':
       return supervisorCommand(state, args);
     case 'automerge':

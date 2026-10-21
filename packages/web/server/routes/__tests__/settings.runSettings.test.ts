@@ -36,15 +36,15 @@ describe('run settings over /api/settings', () => {
   it('answers the run settings, each at its default until the user sets it', async () => {
     const body = await (await app.request('/api/settings')).json() as SettingsResponse;
 
-    expect(body.run).toEqual({ supervisorLevel: 'watch', mergeAtGatesAutomatically: false, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12 });
+    expect(body.run).toEqual({ supervisorLevel: 'watch', mergeAtGatesAutomatically: false, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12, researchMaxParallel: 2, researchMaxPerMessage: 4 });
   });
 
   it('saves a change for every session and answers the settings as they now stand', async () => {
-    const res = await patch({ run: { supervisorLevel: 'act', autorun: true } });
+    const res = await patch({ run: { supervisorLevel: 'act', autorun: true, researchMaxParallel: 1, researchMaxPerMessage: 3 } });
 
     expect(res.status).toBe(200);
-    expect((await res.json() as SettingsResponse).run).toMatchObject({ supervisorLevel: 'act', autorun: true });
-    expect(new SettingsService().getRunSettings()).toMatchObject({ supervisorLevel: 'act', autorun: true });
+    expect((await res.json() as SettingsResponse).run).toMatchObject({ supervisorLevel: 'act', autorun: true, researchMaxParallel: 1, researchMaxPerMessage: 3 });
+    expect(new SettingsService().getRunSettings()).toMatchObject({ supervisorLevel: 'act', autorun: true, researchMaxParallel: 1, researchMaxPerMessage: 3 });
   });
 
   it('applies the change to the named session\'s run at once', async () => {
