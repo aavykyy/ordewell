@@ -24,8 +24,11 @@ coding-agent session, both task runners and coding-agent planners.**
 
 - Check the runner's MCP attach state after spawn, before sending its task or
   planning prompt. If attachment fails, dispose the process and its token and
-  respawn once with a fresh token. If that attempt also fails, fail the task or
-  planner turn with the attach error. Never send the prompt without tools.
+  respawn once with a fresh token. A task whose runner stays alive and still
+  reports `pending` is held with that reason after the wait's generous cap,
+  not failed, so its dependents stay on the plan; a runner that reports the
+  server `failed` still fails the task. A coding-agent planner turn fails
+  either way. Never send the prompt without tools.
 - Completion evidence is only a `task_complete` call bound to the attempt's
   token. `VerdictEngine` checks the current generation; only `done` passes.
   `blocked` and `failed` end without a pass and carry a reason. A process exit,
@@ -176,7 +179,8 @@ its supported access path and applicable terms need checking before adoption.
     convenience on top, not a requirement for the pipeline to run.
 - **Keep markers as the no-tools fallback.** Previously adopted; rejected
   because an attach failure would silently downgrade completion, checkpoints
-  and planner tools. Respawn once, then fail visibly.
+  and planner tools. Respawn once, then hold the task (or fail the planner
+  turn) visibly.
 - **Keep plugin runners but refuse to run them.** Rejected because installation,
   registry entries and pickers would advertise an unusable choice. Ignore old
   manifests with a notice instead.
@@ -204,3 +208,4 @@ tmux; the TUI remains unverified on native Windows (ADR-0010).
 - 2026-10-09 — accepted and implemented; supersedes ADR-0007.
 - 2026-10-10 — the TUI task-log surface corrected to Enter on a task in the plan pane.
 - 2026-10-17 — ADR-0007 folded in under Considered options; D1 and D2, the two rules other ADRs cited to it, are Key properties here (D2 was its T7).
+- 2026-10-21 — a task whose runner never reports the server connected is held with a reason instead of failed, while a `failed` report still fails it; a planner turn fails either way.

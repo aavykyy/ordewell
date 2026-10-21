@@ -4,7 +4,6 @@ status: accepted
 
 # 0009 — Coding agents as planners: the harness planner backend
 
-*Pending:* [ADR-0037](../supervision/0037-research-tasks-wake-the-planner.md) — research that outlives a turn is a research task, which is why harness subagents are still awaited within it.
 
 ## Problem
 
@@ -182,7 +181,10 @@ model's behalf, which is precisely what a coding agent replaces.
   survives on a subscription: plan with Haiku, execute with Opus.
 - **Research subagents are inert on this backend (T8).** `spawn_research_agent`
   is a Ordewell-executed tool with no meaning when the agent owns its own
-  subagent mechanism. It is hidden rather than silently ignored.
+  subagent mechanism. It is hidden rather than silently ignored. A harness's
+  own subagents are awaited before the turn ends (`MAX_AGENT_WAITS`); research
+  that outlives a turn is a read-only research task in the plan whose report
+  returns to the planner ([ADR-0037](../supervision/0037-research-tasks-wake-the-planner.md), R1, R5).
 - **An unusable agent fails before the goal is typed (T9).** `RunnerInstallation`
   probes the binary and credentials; a planner picker offers only the agents
   that are usable, and states what to install when none is. A turn
@@ -350,3 +352,5 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-17 — a planner switch is shown at once and no longer waits on the target's model discovery; a failed discovery is remembered briefly instead of re-run on every switch ([ADR-0040](../routing/0040-a-slow-model-discovery-never-gates-the-planner-pick.md)).
 - 2026-10-18 — reply text arrives in runs under the runner's own ids, with no paragraph break inside the text; consumers join runs themselves.
 - 2026-10-21 — the planner performs an exact effect itself as a script task through `run_script`, a further execution tool; T1 now says repository files are the runners' alone ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
+
+- 2026-10-21 — research that outlives a turn uses research tasks; harness subagents stay awaited inside the turn (ADR-0037 R5).

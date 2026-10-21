@@ -34,6 +34,8 @@ export interface TaskRowSubject {
   awaitingApproval?: number;
   /** Added after the user approved the plan, and not approved since (ADR-0035). */
   waitsForApproval?: boolean;
+  /** Why it is held out of the scheduler; absent when it is not held. */
+  holdReason?: string | null;
   isolation?: TaskRowIsolation | null;
   mergeGate?: readonly string[];
   forcedPastGate?: readonly string[];
@@ -140,6 +142,8 @@ export interface TaskRowView {
   approvals: string | null;
   /** That it waits for the user's approval to start, in sentence case; null once it started, or when it needs none. */
   waitsForApproval: string | null;
+  /** Why it is held out of the scheduler, in sentence case; null when it is not held. */
+  holdReason: string | null;
   /** Why the task's runner or model is one the user has since moved away from, in sentence case; null when it is not. The task still runs. */
   assignmentFlag: string | null;
   /** What the flag means for this task as it stands (a failed one runs again only if retried); set exactly when `assignmentFlag` is. */
@@ -262,6 +266,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     resumes: resumeLabel(task, context.now),
     approvals: approvalLabel(task.awaitingApproval),
     waitsForApproval: task.waitsForApproval && NOT_STARTED.has(task.status) ? WAITS_FOR_APPROVAL_LABEL : null,
+    holdReason: task.holdReason?.trim() || null,
     ...flagOf(task, context.runnerScope),
     autonomous: task.type === 'ai' && context.modes?.find((m) => m.id === task.taskMode)?.autonomous === true,
     repos: namedRepos(isolation?.repos),

@@ -3,6 +3,7 @@ import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
 import {
   ACT_RISK, AUTORUN_RISK, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary,
+  RESEARCH_USAGE, researchSettingsChange, researchSummary,
 } from '@ordewell/core';
 import { connect, fail } from './shared';
 
@@ -18,6 +19,20 @@ const AUTORUN_USAGE = 'Usage: ordewell autorun [on|off]';
 
 async function save(api: ApiClient, changes: Partial<GlobalRunSettings>): Promise<void> {
   await api.updateRunSettings(changes);
+}
+
+export async function handleResearch(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
+  const args = positionals(subArgs);
+  const usage = RESEARCH_USAGE.replace('/research', 'ordewell research');
+  const changes = researchSettingsChange(args);
+  if (args.length > 0 && !changes) fail(usage);
+  const api = await connect(subArgs, injectedApi);
+  if (!changes) {
+    console.log(`${researchSummary((await api.getSettings()).run)}. ${usage}`);
+    return;
+  }
+  await save(api, changes);
+  console.log(researchSummary((await api.getSettings()).run));
 }
 
 export async function handleSupervisor(subArgs: string[], injectedApi?: ApiClient): Promise<void> {

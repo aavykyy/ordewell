@@ -276,7 +276,7 @@ export * from './utils/taskLogStore';
 export { mintSessionId } from './utils/sessionId';
 export { extractPrdBlock, savePrdMarkdown, sanitizeSlug } from './utils/prdStore';
 export type { PrdBlock } from './utils/prdStore';
-export { ACT_RISK, AUTORUN_RISK, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary } from './services/runSettingsText';
+export { ACT_RISK, AUTORUN_RISK, SUPERVISOR_LEVEL_LABEL, researchSummary, researchSettingsChange, RESEARCH_USAGE, automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary } from './services/runSettingsText';
 export { SettingsService, getSettingsPath, runSettingsOf, RUN_SETTINGS_DEFAULTS, RunSettingsError, type GlobalRunSettings, type UserSettings } from './services/SettingsService';
 export {
   PlannerModelMemory,

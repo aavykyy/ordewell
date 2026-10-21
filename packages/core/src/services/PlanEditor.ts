@@ -17,6 +17,7 @@ import { createTask, opsFlag, skillNames, updateTaskInPlan, type DiscoveredModel
 import type { RunnerModelRef } from '../models/RunnerCommand';
 import { clearedBodyFields } from '../models/ScriptTask';
 import { loopRemovalRefusal, loopSpec } from '../models/Loop';
+import { taggedReadOnlyMode } from './ModeResolver';
 
 /** The fields that decide what a task runs on: an edit that touches none of them leaves the assignment as it stands. */
 const ASSIGNMENT_FIELDS = ['assignedRunner', 'assignedModel', 'taskMode', 'type'] as const satisfies readonly (keyof Task)[];
@@ -208,6 +209,8 @@ export class PlanEditor {
       if (outcome.task.taskMode !== written.taskMode) edit.taskMode = outcome.task.taskMode;
       adjustments = outcome.adjustments;
     }
+    if (before.research && changes.research !== true && edit.taskMode !== undefined
+      && edit.taskMode !== taggedReadOnlyMode(catalog.runnerModes?.[edit.assignedRunner ?? before.assignedRunner])) edit.research = false;
     this.refuseBreach(taskId, edit, catalog);
     return { edit, adjustments };
   }

@@ -1,5 +1,5 @@
 import { taggedReadOnlyMode, unavailableTaskModeMessage } from './ModeResolver';
-import { McpAttachError, RunnerStartupExit } from './harness/ordewellBinding';
+import { McpAttachError, McpAttachTimeout, RunnerStartupExit } from './harness/ordewellBinding';
 import * as path from 'path';
 import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasksWithParents, pausedOnLimit, waitsForReset, type RunSettings } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
@@ -30,6 +30,7 @@ import { completesTask, Landing, type LandingMessage, type LandingOutcome, type 
 import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import { RELAPSE_MS, RESUME_MARGIN_MS, UsageLimitWaits } from './UsageLimitWaits';
 import { landed, selectReadyTasks, startWaits, waitOf, type ForcedStart, type Readiness, type StartRuleInput, type StartWait, type StartWaitKind } from './readiness';
+import type { ResearchSchedule } from './ResearchTasks';
 import { blockingFailures, planBlocks, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 import {
@@ -248,7 +249,7 @@ interface QueuedStart {
 }
 
 /** What keeps a queued force start waiting, with nothing to say: it starts once these clear. */
-const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued', 'completing', 'merging', 'start-hold']);
+const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued', 'completing', 'merging', 'start-hold', 'unapproved', 'research-parallel', 'research-message']);
 
 /** A force start the user made now: their own act, past the whole merge gate they confirmed. */
 const FORCED_NOW: ForcedStart = { queued: false };
@@ -299,6 +300,7 @@ export interface TaskAttemptSnapshot {
  * one place defaults live.
  */
 export interface TaskOrchestratorDeps {
+  research?: ResearchSchedule;
   config: IConfig;
   notifications: INotification;
   runner: IRunner;
@@ -346,6 +348,7 @@ export interface TaskOrchestratorDeps {
  * resolved wiring the orchestrator itself runs on.
  */
 export interface TaskOrchestratorOptions {
+  research?: ResearchSchedule;
   config: IConfig;
   notifications: INotification;
   runner: IRunner;
@@ -415,12 +418,13 @@ export class TaskOrchestrator {
   /** What the workspace env has already warned about, so a run says it once, not per task. */
   private envWarnings = new Set<string>();
   /**
-   * Tasks pulled out of auto-scheduling (user-cancelled or failed to spawn).
-   * They stay 'pending' — "not executed" — but the scheduler skips them until
-   * the user retries or force-starts, which would otherwise loop forever on a
-   * task whose spawn always throws.
+   * Tasks pulled out of auto-scheduling (user-cancelled, marked not done, or a
+   * start that could not reach its runner), each with the reason the surfaces
+   * show. They stay 'pending' — "not executed" — but the scheduler skips them
+   * until the user retries or force-starts, which would otherwise loop forever
+   * on a task whose spawn always throws.
    */
-  private onHold = new Set<string>();
+  private onHold = new Map<string, string>();
   /**
    * Force starts queued behind dependencies the scheduler will not start them
    * after: outside a run it drives, or past a failed dependency, which it
@@ -454,8 +458,10 @@ export class TaskOrchestrator {
   private runSettings: () => SchedulerRunSettings | undefined;
   private isApproved: (taskId: string) => boolean;
   private taskShell: (site: TaskShellSite) => TaskShell | undefined;
+  private readonly research: ResearchSchedule | undefined;
 
   constructor(deps: TaskOrchestratorDeps) {
+    this.research = deps.research;
     this.config = deps.config;
     this.notifications = deps.notifications;
     this.runner = deps.runner;
@@ -545,6 +551,7 @@ export class TaskOrchestrator {
       lastLoggedAttempt: options.lastLoggedAttempt ?? (() => 0),
       runSettings: options.runSettings ?? (() => undefined),
       isApproved: options.isApproved ?? (() => true),
+      research: options.research,
       ...(options.taskShell ? { taskShell: options.taskShell } : {}),
     });
     return orchestrator;
@@ -958,6 +965,11 @@ export class TaskOrchestrator {
     return waitOf(this.startWaits(task), 'merge-gate')?.unmerged ?? [];
   }
 
+  /** Why a task is held out of auto-scheduling, as the surfaces show it; null when it is not held. */
+  holdReason(taskId: string): string | null {
+    return this.onHold.get(taskId) ?? null;
+  }
+
   /**
    * Every reason a task cannot start now, from the one start rule
    * (ADR-0034); none when it can. `forced` judges a start the user forced.
@@ -973,6 +985,7 @@ export class TaskOrchestrator {
       store: this.store,
       onHold: this.onHold,
       approved: this.isApproved,
+      research: this.research,
       runs: this.runs,
       merging: this.merging,
       startsHeld: this.startHolds > 0,
@@ -1480,7 +1493,7 @@ export class TaskOrchestrator {
     if (!this.attempts.has(taskId) && task.status !== 'in_progress') return;
     const ended = this.endAttempt(taskId, 'cancel');
     this.store.markPending(taskId);
-    this.onHold.add(taskId);
+    this.onHold.set(taskId, 'cancelled; retry or force start to run it again');
     this.emit('onTaskChanged');
     await this.runs.release(taskId, worktree, ended?.integration);
     await this.tick();
@@ -1564,7 +1577,7 @@ export class TaskOrchestrator {
     this.verifier.clear(task);
     this.store.retry(taskId);
     this.store.removeFromLog(taskId);
-    this.onHold.add(taskId);
+    this.onHold.set(taskId, 'marked not done; retry or force start to run it again');
 
     this.notifications.info(`Task "${task.title}" marked not done.`);
     this.emit('onTaskChanged');
@@ -1945,6 +1958,13 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task || task.type === 'user') return;
     if (this.attempts.has(taskId)) return;
+    const research = this.research?.wait(task);
+    if (research) {
+      this.startAtGate(taskId);
+      return research.kind === 'research-message'
+        ? `Task "${task.title}" waits for your next message: the research limit of ${research.limit} for this message has been reached.`
+        : `Task "${task.title}" waits for a research slot: ${research.limit} research tasks may run at once.`;
+    }
     this.refuseOpsDuringMerge(taskId, FORCED_NOW);
     const queued = this.queueBehindDependencies(task);
     if (queued) return queued;
@@ -2047,7 +2067,8 @@ export class TaskOrchestrator {
         this.queuedStarts.delete(id);
         continue;
       }
-      const waits = this.startWaits(task, { queued: true, pastGate: queued.pastGate });
+      const waits = this.startWaits(task, task.research ? undefined : { queued: true, pastGate: queued.pastGate });
+      if (task.research && (waits.length > 0 || this.attempts.size >= this.config.maxParallelSessions)) continue;
       if (waits.some((w) => QUEUED_WAITS.has(w.kind))) continue;
       if (this.leftToScheduler(task) && queued.pastGate.length === 0) {
         this.queuedStarts.delete(id);
@@ -2060,7 +2081,8 @@ export class TaskOrchestrator {
       }
       this.queuedStarts.delete(id);
       try {
-        await this.startForced(id, 'user', { queued: true, pastGate: queued.pastGate });
+        const origin = task.research && (task.reportTo ?? task.researchOrigin)?.actor === 'supervisor' ? 'supervisor' : 'user';
+        await this.startForced(id, origin, { queued: true, pastGate: queued.pastGate });
       } catch (err) {
         this.tell('warn', `Task "${task.title}" did not start once its dependencies finished: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -2361,6 +2383,10 @@ export class TaskOrchestrator {
     if (!task) return `There is no task "${taskId}" in this plan any more.`;
     if (this.completing.has(taskId)) return `Task "${task.title}" is being marked complete: its work is landing.`;
     if (!this.isApproved(taskId)) return `Task "${task.title}" waits for the user's approval: they approve it by starting it, or by executing the plan.`;
+    const research = this.research?.wait(task);
+    if (research) return research.kind === 'research-message'
+      ? `Task "${task.title}" waits for your next message: the research limit of ${research.limit} for this message has been reached.`
+      : `Task "${task.title}" waits for a research slot: ${research.limit} research tasks may run at once.`;
     const live = this.attempts.size;
     if (live >= this.config.maxParallelSessions) {
       return `${live} ${live === 1 ? 'task is' : 'tasks are'} already running, the most this session runs at once. Wait for one to finish, or stop one first.`;
@@ -2422,6 +2448,7 @@ export class TaskOrchestrator {
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.attempts.set(task.id, attempt);
+    this.research?.started(task);
     // A script spends nothing a ledger counts: no model, no tokens (ADR-0035).
     if (!script) this.store.startAttemptUsage(task.id, attempt.attempt, attempt.runner, attempt.startedAt);
     this.store.markInProgress(task.id);
@@ -2540,6 +2567,9 @@ export class TaskOrchestrator {
       // Each way out settles the task's status before it awaits anything, so
       // no tick in between finds it in progress with no attempt.
       const refusal = err instanceof Error ? err.message : String(err);
+      // A missed attach is a hold for a start or a continue: nothing ran, so
+      // the task is not failed and its saved session stays for a retry.
+      const attachTimeout = err instanceof McpAttachTimeout;
       // A script has no runner whose account a limit could stop (ADR-0035).
       if (attempt.kind.kind !== 'repair' && !attempt.script && classifyRunnerStop(refusal) === 'usage-limit') {
         // The limit refused the turn Ordewell was starting: a pause, as one
@@ -2552,7 +2582,7 @@ export class TaskOrchestrator {
         await this.tick();
         return false;
       }
-      if (attempt.kind.kind === 'continuation') {
+      if (attempt.kind.kind === 'continuation' && !attachTimeout) {
         // A runner that exits while starting on a saved session has refused it.
         const refused = err instanceof RunnerStartupExit;
         const reason = refused
@@ -2571,6 +2601,20 @@ export class TaskOrchestrator {
       if (attempt.kind.kind === 'repair') {
         this.store.markAwaitingUser(task.id, 'conflict');
         this.settleUnlanded(task, await this.landing.unrepaired(task, `could not start: ${err instanceof Error ? err.message : String(err)}`), attempt.admission);
+        this.emit('onTaskSettled', { taskId: task.id });
+        this.emit('onTaskChanged');
+        await this.tick();
+        return false;
+      }
+      if (attachTimeout) {
+        // The runner stayed up but never connected. Nothing was sent to it
+        // and no verdict exists, so the task is held with a reason rather
+        // than failed: its dependents stay on the plan, and a later start
+        // can still run it (ADR-0022, S2).
+        this.store.markPending(task.id);
+        this.onHold.set(task.id, 'could not connect to Ordewell\'s tools; start it again');
+        await this.runs.release(task.id, { keep: false });
+        this.tell('warn', `Task "${task.title}" is on hold: could not connect to Ordewell's tools. Start it again.`);
         this.emit('onTaskSettled', { taskId: task.id });
         this.emit('onTaskChanged');
         await this.tick();
@@ -2603,7 +2647,7 @@ export class TaskOrchestrator {
       // Couldn't spawn — the task was never executed, so it stays "to do".
       // Held out of auto-scheduling to avoid a spawn-throw retry loop.
       this.store.markPending(task.id);
-      this.onHold.add(task.id);
+      this.onHold.set(task.id, `could not start: ${err instanceof Error ? err.message : String(err)}; start it again`);
       await this.runs.release(task.id, { keep: false });
       this.tell('error', `Failed to start task "${task.title}": ${err}`);
       this.emit('onTaskChanged');

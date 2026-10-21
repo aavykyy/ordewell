@@ -1573,6 +1573,7 @@ function waitNote(waits: readonly StartWait[], refs: (ids: readonly string[]) =>
     case 'repeating': return ` waits:repeating(round ${wait.round} of ${wait.maxRounds})${wait.waiting.length > 0 ? refs(wait.waiting) : ''}`;
     case 'loop-check': return ` waits:loop-check${refs([wait.check])}`;
     case 'usage-limit': return ` waits:usage-limit[${wait.runner}]`;
+    case 'on-hold': return ` waits:on-hold${wait.reason ? `(${wait.reason.replace(/\s+/g, ' ')})` : ''}`;
     default: return ` waits:${wait.kind}`;
   }
 }

@@ -1,8 +1,7 @@
 ---
 status: accepted
-implemented: none
+implemented: full
 amends: ["0009", "0029"]
-note: "starting one without approval waits for ADR-0046's per-runner part"
 ---
 
 # 0037 — Research that outlives a planner turn is a research task, and its report wakes the planner
@@ -54,15 +53,23 @@ harness subagents stay as they are, awaited before the turn ends.**
   as the user's turns do (ADR-0029, ADR-0030); one started in a supervisor's
   wake-up turn acts at the supervisor's level. The report itself is untrusted
   content, like everything the planner reads.
-- **Starting one (R4).** Until read-only means one thing on every runner
-  (ADR-0046), a research task follows the approval rule of any task the planner
-  adds (ADR-0029, ADR-0030), including the scheduler rule of
-  [ADR-0035](0035-effects-are-consented-and-recorded.md). Once it does, a
-  research task starts without approval: it changes nothing, and approving
-  each one would stop the conversation it exists to keep going. Run settings
-  bound it instead: how many run at once, and how many one user message may
-  lead to, counted across the report turns that follow it. Each one counts
-  against its runner's usage like any task.
+- **Starting one (R4).** A research task the planner adds is approved as it
+  lands and starts without asking, under ADR-0046's shared read-only profile.
+  Removing research or lifting read-only withdraws that approval. Run settings
+  bound it: `researchMaxParallel` defaults to 2 concurrent research attempts,
+  and `researchMaxPerMessage` defaults to 4 research starts per user message,
+  counted across the report turns that follow it. The same per-message value
+  also caps automatic report turns, including reports from `run_script`:
+  each turn counts once, even when it batches several reports. These are two
+  counters under the same limit; a research report does not spend a second
+  research start. Excess tasks wait with a readiness reason; excess reports
+  stay pending for the user's next message. Both counters persist across runs
+  and reloads. A real user message opens a new budget; a report turn or a
+  usage-limit resend does not. The settings are global, saved and live
+  (ADR-0030), with `/research parallel <n>` and `/research per-message <n>`
+  and the VS Code Run settings. Each task counts against its runner's usage
+  like any task. The per-turn context-and-budgets block states how many
+  research tasks remain for this message.
 - **Harness subagents stay in the turn (R5).** A harness's own subagents are
   still awaited before the turn ends (ADR-0009). #24 draws a line at the task
   boundary: inside a task the harness decides, and across tasks Ordewell does.
@@ -101,11 +108,12 @@ harness subagents stay as they are, awaited before the turn ends.**
 - This is delegation one level deep: a task whose report returns to the node
   that started it. Delegated tasks (#33) extend it to child plans.
 - Research costs runner sessions. Run settings bound it, and the plan shows it.
-- When this is implemented, CONTEXT.md gains *Research task*, and ADR-0009's
-  wait rule and ADR-0029's "a pass never wakes it" are rewritten to name
-  research tasks.
+- CONTEXT.md defines *Research task*. ADR-0009 keeps harness subagents inside
+  their turn; ADR-0029 distinguishes research reports from ordinary passes.
 
 ## History
 
 - 2026-10-15 — accepted. Not yet implemented.
 - 2026-10-21 — where a research task works, and what it may write, follow read-only tasks as ADR-0046 defines them (R1).
+
+- 2026-10-21 — implemented the core lifecycle, authority, approval and persisted message limits; surface marks and planner guidance follow separately.

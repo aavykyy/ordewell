@@ -1,7 +1,7 @@
 import { createAiService, type IAiService } from './AiService';
 import { PlannerBackend } from './PlannerBackend';
 import { applyTaskOps, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
-import { carryPlannedModes } from './ModeResolver';
+import { carryPlannedModes, taggedReadOnlyMode } from './ModeResolver';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
 import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome } from './plannerTools';
@@ -45,7 +45,7 @@ import { rewrittenScripts } from '../models/ScriptTask';
 import { SessionWindows, withContextWindows } from './ContextWindowFill';
 import { PlannerUsageLedger } from './PlannerUsage';
 import { plannerContextFill } from '../models/Usage';
-import { TurnBudgets, contextLine, taskReadsLine, webReadsLine } from './PlannerBudgets';
+import { TurnBudgets, contextLine, taskReadsLine, webReadsLine, researchTasksLine } from './PlannerBudgets';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
 import { approvalRecordOf, flattenTasks, keepExecutionState, stampOrigin, waitsForApproval, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
@@ -66,6 +66,7 @@ import { PlanEditError } from './PlanEditError';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { ExecutionCommands, mergeStopped, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
 import { REPORT_TAIL_LINES, reportEnded } from './taskReport';
+import { ResearchTasks, researchReportTo } from './ResearchTasks';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
 import { TurnEffects } from './TurnEffects';
 
@@ -247,6 +248,7 @@ export function createSession(deps: SessionDeps): Session {
     () => contextLine(plannerContextFill(usage.snapshot())),
     () => taskReadsLine(conversation?.readsLeft),
     () => webReadsLine(webReads.remaining()),
+    () => researchTasksLine(session.researchTasksLeft),
   ]);
   const backend = new PlannerBackend(deps.aiService
     ? { pinned: deps.aiService, busy }
@@ -309,6 +311,10 @@ export function createSession(deps: SessionDeps): Session {
     lastLoggedAttempt: (taskId) => session.taskLogAttempts(taskId).at(-1) ?? 0,
     runSettings: () => session.planState?.runSettings,
     isApproved: (taskId) => session.isApproved(taskId),
+    research: {
+      wait: (task) => session.research.wait(task),
+      started: (task) => session.research.started(task),
+    },
     // The planner's command rules, at the read-only task's own working directory (ADR-0046).
     taskShell: (site) => deps.fsAdapter.taskShell?.(site),
   });
@@ -455,6 +461,14 @@ export interface SessionParts {
  * (setModels, setRunnerList, …) stay on the host; Session never emits them.
  */
 export class Session {
+  readonly research = new ResearchTasks({
+    plan: () => this.plan,
+    settings: () => ({ ...this.userRunSettings(), ...this.plan?.runSettings }),
+    active: () => this.store.allTasks.filter((t) => t.research && this.orchestrator.getAttempt(t.id)).length,
+    owe: (id, to) => { this.store.update(id, { reportTo: to, researchOrigin: to }); },
+  });
+
+  get researchTasksLeft(): number { return this.research.left; }
   private readonly backend: PlannerBackend;
   private readonly usage: PlannerUsageLedger;
   private readonly windows: SessionWindows;
@@ -586,8 +600,8 @@ export class Session {
       assignmentScope: () => this.catalog.scope(),
       autorun: () => this.userRunSettings().autorun,
       tasks: () => this.store.planTasks,
-      // Before the user approves the plan, nothing of it starts: every task would say so.
-      startWaits: (task) => (this.plan?.approved ? this.orchestrator.startWaits(task) : []),
+      // Before plan approval, only research has start rules to explain (ADR-0037 R4).
+      startWaits: (task) => (this.plan?.approved || task.research ? this.orchestrator.startWaits(task) : []),
       liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
       isExecuting: () => this.isExecuting,
       mutate: (op, notify) => this.mutatePlan(op, notify),
@@ -616,10 +630,17 @@ export class Session {
     });
 
     this.turns = new PlanTurns({
+      turnStarting: (inputs) => {
+        const users = inputs.filter((t) => t.source === 'user');
+        if (users.some((t) => !t.budgetStarted)) this.research.userMessage();
+        for (const input of users) input.budgetStarted = true;
+        if (users.length === 0 && inputs.some((t) => t.report !== undefined)) this.research.reportTurn();
+        this.persist();
+      },
       plan: () => (this.closed ? null : this.plan),
       conversationBusy: () => this.conversation.isTurnInFlight,
       mayWake: () => this.supervision.mayWake(),
-      mayReport: () => this.supervision.mayReport(),
+      mayReport: () => this.supervision.mayReport() && this.research.mayReport(),
       persist: () => this.persist(),
       announce: () => {
         this.persist();
@@ -657,7 +678,7 @@ export class Session {
       reportTail: (taskId) => this.reportTail(taskId),
       reported: (taskId, to) => {
         this.store.update(taskId, { reportTo: undefined });
-        this.commands.scriptEnded(taskId, to);
+        if (!to.research) this.commands.scriptEnded(taskId, to);
       },
       systemNote: (text) => this.systemNote(text),
       supervisorNote: (text) => this.supervisorNote(text),
@@ -1186,6 +1207,15 @@ export class Session {
    */
   private persist(): void {
     if (!this.plan) return;
+    // Removing research or its read-only profile ends its unasked approval on every edit route (ADR-0037 R4).
+    const unsafe = (this.plan.researchApprovals ?? []).filter((id) => {
+      const task = this.store.get(id);
+      const modes = task && this.catalog.edit().runnerModes?.[task.assignedRunner];
+      return !task?.research || task.type !== 'ai' || (modes !== undefined && task.taskMode !== taggedReadOnlyMode(modes));
+    });
+    this.withdrawApprovals(unsafe);
+    for (const id of unsafe) if (this.store.get(id)?.researchOrigin) this.store.update(id, { reportTo: undefined, researchOrigin: undefined });
+    this.plan.researchApprovals = this.plan.researchApprovals?.filter((id) => !unsafe.includes(id));
     this.syncPlanTasks();
     this.plan.isolation = this.runs.planIsolation ?? undefined;
     this.plan.plannerUsage = this.usage.snapshot();
@@ -1427,7 +1457,7 @@ export class Session {
     this.beginFreshPlan({ keepGrants: true });
     const chosenRunners = this.chosenRunners(runners);
 
-    return this.conversation.hold(options?.signal, async (turn) => {
+    const generated = await this.conversation.hold(options?.signal, async (turn) => {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
       const settings = this.settingsFn();
       const modes = { ...plannerModesFrom(this.config.autonomousMode), isolatedExecution: await this.runs.plannerLayout(), taskSkills: this.workspaceSkills() };
@@ -1458,11 +1488,14 @@ export class Session {
         this.conversation.recordSkillWarnings(skillWarnings, plan.generatedAt);
         this.orchestrator.loadPlan(plan.tasks, plan.runners);
         this.store.resetForRun({ preserveCompleted: false });
+        this.adoptResearch([]);
         return true;
       });
       for (const warning of skillWarnings) this.notice('warn', warning);
       return plan;
     });
+    if (this.orchestrator.startsPending) await this.withSave(() => this.orchestrator.tick());
+    return generated;
   }
 
   /**
@@ -1502,10 +1535,11 @@ export class Session {
     try {
       const { landed, effects } = await opened;
       this.autorunSubmitted(effects);
+      if (this.orchestrator.startsPending) await this.withSave(() => this.orchestrator.tick());
       return landed;
     } catch (err) {
       if (!(err instanceof PlannerUsageLimitError) || !this.plan) throw err;
-      this.turns.waitOnLimit({ source: 'user', ...this.resolveSkillInvocation(goal) });
+      this.turns.waitOnLimit({ source: 'user', ...this.resolveSkillInvocation(goal), budgetStarted: true });
       return this.plan;
     } finally {
       if (this.opening === pending) this.opening = null;
@@ -1745,7 +1779,23 @@ export class Session {
     if (bySupervisor) this.approve(added);
     // With autorun on the user said they need not approve what the planner writes in their turn; read as it lands, so turning it off first holds the task.
     else if (this.turnActor().kind === 'planner-turn' && this.userRunSettings().autorun) this.approve(this.commands.autorunApproves(writtenTasks(before, coerced)));
+    this.adoptResearch(before);
     return coerced.length;
+  }
+
+  private adoptResearch(before: readonly Task[]): void {
+    const known = new Map(flattenTasks(before).map((t) => [t.id, t]));
+    for (const task of this.store.planTasks) {
+      if (!task.research || known.get(task.id)?.research) continue;
+      const to = researchReportTo(this.turnActor());
+      this.store.update(task.id, { reportTo: to, researchOrigin: to });
+      if (!this.isApproved(task.id)) {
+        this.approve([task.id]);
+      }
+      this.plan!.researchApprovals = [...new Set([...(this.plan!.researchApprovals ?? []), task.id])];
+      // Queue only as it lands: re-queuing on each turn would undo the user's Stop (ADR-0037 R4).
+      this.orchestrator.startAtGate(task.id);
+    }
   }
 
   private preparePlannerTaskUpdates(tasks: Task[]): Task[] {
@@ -1782,6 +1832,10 @@ export class Session {
     this.supervision.apply(changes);
     // The scheduler reads the setting as it decides; a gate already reached merges now, not at the next event.
     if (changes.mergeAtGatesAutomatically) this.orchestrator.runSettingsChanged();
+    if (changes.researchMaxParallel !== undefined || changes.researchMaxPerMessage !== undefined) {
+      this.turns.pump();
+      void this.reschedule();
+    }
   }
 
   private idlePlan(): LegacyPlanState {

@@ -6,6 +6,14 @@ import { fitTail } from './TaskQuery';
 export const REPORT_TAIL_LINES = 30;
 const REPORT_TAIL_CHARS = 2_000;
 
+/** Research's result is the complete task_complete summary, never an output tail (ADR-0037 R1, R2). */
+export function researchReport(task: Pick<Task, 'status' | 'verdict' | 'outputSummary'>, tail: string | undefined): string {
+  const verdict = task.status === 'completed' ? 'It passed.'
+    : `${task.verdict?.reported === 'blocked' ? 'It was blocked' : 'It failed'}: ${task.verdict?.reason ?? 'no reason was given'}`;
+  const report = task.outputSummary?.report ?? task.outputSummary?.logTail ?? tail;
+  return `${verdict}\n${report || 'It supplied no report.'}`;
+}
+
 /**
  * Whether a task's attempt is over in a way a report can tell: it passed, it
  * failed, or it passed but waits on the user for what it left in their

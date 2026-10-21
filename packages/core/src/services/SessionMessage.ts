@@ -52,6 +52,8 @@ export type SerializedTaskStatus = {
    * scheduler leaves it for them (ADR-0035). Absent for any other task.
    */
   waitsForApproval?: true;
+  /** Why a task is held out of auto-scheduling, in the user's words; absent when it is not held. */
+  holdReason?: string;
   attemptUsage?: AttemptUsage[];
   /** Set only on a loop's check, so a stream of statuses alone can say which task is one (ADR-0045). */
   loop?: TaskLoop;
@@ -95,6 +97,7 @@ export type SerializedTask = {
   skipReason?: string;
   /** Set only on an ops task (ADR-0020). */
   ops?: true;
+  research?: boolean;
   /** Task skills attached by name; absent when none. */
   skills?: string[];
   /** Set only on a task an Act supervisor added (ADR-0029). */
@@ -361,7 +364,7 @@ export type PlanSnapshot = { type: 'plan_snapshot'; plan: SurfacePlan | SurfaceP
 /** What only the status stream says about a task; a plan refresh keeps these as they were. */
 export type RunTaskStatus = Partial<Pick<
   SerializedTaskStatus,
-  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval'
+  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason'
 >>;
 
 /** A task in the run view: the plan's fields, then the status stream's. */
@@ -418,6 +421,7 @@ export function serializeTask(t: SurfaceTask): SerializedTask {
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && t.resumeAt ? { resumeAt: t.resumeAt } : {}),
     ...(t.status === 'skipped' && t.skipReason ? { skipReason: t.skipReason } : {}),
     ...(t.ops ? { ops: true as const } : {}),
+    ...(t.research !== undefined ? { research: t.research } : {}),
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(t.skills?.length ? { skills: [...t.skills] } : {}),
     ...(t.addedBy ? { addedBy: t.addedBy } : {}),
@@ -438,6 +442,7 @@ export function serializeTaskStatus(
   mergeGate: readonly string[] = [],
   checkpoint = '',
   waitsForApproval = false,
+  holdReason: string | null = null,
 ): SerializedTaskStatus {
   return {
     id: t.id,
@@ -458,6 +463,7 @@ export function serializeTaskStatus(
     ...(mergeGate.length > 0 ? { mergeGate: [...mergeGate] } : {}),
     ...(t.forcedPastGate?.length ? { forcedPastGate: [...t.forcedPastGate] } : {}),
     ...(waitsForApproval ? { waitsForApproval: true as const } : {}),
+    ...(holdReason ? { holdReason } : {}),
     ...(t.loop ? { loop: { body: [...t.loop.body], maxRounds: t.loop.maxRounds } } : {}),
     ...(t.loop && t.loopRound !== undefined ? { loopRound: t.loopRound } : {}),
   };

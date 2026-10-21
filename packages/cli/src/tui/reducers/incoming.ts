@@ -102,6 +102,7 @@ function runTaskToView(t: RunTask): TaskView {
     continuable: t.continuable === true,
     awaitingApproval: t.awaitingApproval,
     ...(t.waitsForApproval === true ? { waitsForApproval: true } : {}),
+    ...(typeof t.holdReason === 'string' && t.holdReason.trim() ? { holdReason: sanitize(t.holdReason) } : {}),
     ...(t.ops === true ? { ops: true } : {}),
     ...scriptBodyFields(t),
     ...loopFields(t),

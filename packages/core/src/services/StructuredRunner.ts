@@ -286,7 +286,7 @@ export class StructuredSession extends AbstractRunnerSession {
    * Start the runner with the attempt's tools attached and send the task's
    * prompt as its first turn. `task_complete` is the only way a task reports
    * it is done, so a runner without the tools is never sent the task: it is
-   * killed and respawned once, and a second failure fails the start.
+   * killed and respawned once, and a second miss is a timeout the task holds.
    */
   async start(prompt: string): Promise<void> {
     await this.startAttached(this.launch.startOptions);

@@ -71,6 +71,11 @@ describe('a task card, pinned before its rules move to core', () => {
     expect(badge()?.textContent).toBe('Skipped');
   });
 
+  it('reads a held task with its reason, so it does not look merely unstarted', () => {
+    render(<TaskCard task={makeTask()} models={[]} run={{ holdReason: 'could not connect to Ordewell\'s tools; start it again' }} />);
+    expect(badge()?.textContent).toBe('On hold: could not connect to Ordewell\'s tools; start it again');
+  });
+
   it('unfolds a skip reason cut to its row on a click, and folds it back', () => {
     const observed = vi.fn();
     vi.stubGlobal('ResizeObserver', class { constructor(private cb: () => void) {} observe() { observed(); this.cb(); } disconnect() {} });
@@ -297,5 +302,10 @@ describe('a subtask card, pinned before its rules move to core', () => {
   it('labels itself by its dotted order', () => {
     render(<SubTaskCard task={makeTask({ id: 's1', order: 1 })} parentTask={parent} models={[]} />);
     expect(document.querySelector('.subtask-order')?.textContent).toBe('2.1.');
+  });
+
+  it('shows its own hold reason, so it does not read as merely unstarted', () => {
+    render(<SubTaskCard task={makeTask({ id: 's1' })} parentTask={parent} models={[]} run={{ holdReason: 'could not connect to Ordewell\'s tools; start it again' }} />);
+    expect(badge()?.textContent).toBe('On hold: could not connect to Ordewell\'s tools; start it again');
   });
 });
