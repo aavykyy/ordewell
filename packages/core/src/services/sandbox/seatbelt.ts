@@ -33,6 +33,14 @@ export const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
  */
 const BASE_PROFILE = `(version 1)
 (deny default)
+; A command inherits the task's bootstrap port, which reaches launchd, and
+; launchd runs a job it loads outside this sandbox, as the user. The default
+; deny does not cover loading one, so this does: launchctl submit, bootstrap
+; and the other job-creation routes fail, and a misclassified or sealed
+; command cannot turn the bootstrap port into code that runs unsandboxed.
+; Reading launchd's existing jobs over that port is gated by no Seatbelt
+; operation and remains a residual (ADR-0011, ADR-0036).
+(deny job-creation)
 (allow process-exec process-fork)
 (allow signal (target same-sandbox))
 (allow sysctl-read)
@@ -141,12 +149,14 @@ set -m
 "$@" </dev/null 3<&- &
 pid=$!
 set +m
-if [ $watch = 1 ]; then { /bin/cat >/dev/null; reap; } <&3 >/dev/null 2>&1 & fi
-watcher=$!
+if [ $watch = 1 ]; then { /bin/cat >/dev/null; reap; } <&3 >/dev/null 2>&1 & watcher=$!; fi
 exec 3<&-
 wait $pid
 status=$?
-kill -KILL $watcher 2>/dev/null
+# Reap the watcher with its own wait, so monitor mode does not print a stray
+# "Killed" line to the command's output that reads as a crash, and only when
+# one was started: otherwise $! is the command itself, already waited for.
+if [ $watch = 1 ]; then kill -KILL $watcher 2>/dev/null; wait $watcher 2>/dev/null; fi
 reap
 exit $status`;
 }

@@ -388,6 +388,35 @@ export function excludedBy(command: string, allow: PlannerAllowlist, opts: Comma
 }
 
 /**
+ * The command scope each segment the lexer finds would be remembered under,
+ * one per distinct non-auto segment (ADR-0036 S3). A denial on the card is
+ * keyed on these scopes, so a sealed run must check them, not only the whole
+ * command string: `npm test` denied once also refuses `for f in *; do npm
+ * test; done`, which the classifier refuses unread and which would otherwise
+ * run sealed under a request that names the whole loop. Read-only segments
+ * carry no scope and are left out, as they are never asked about.
+ */
+export function innerCommandScopes(command: string, opts: CommandPolicyOptions = {}): string[] {
+  const dialect = dialectFor(opts.dialect);
+  const { segments } = lexAll(command.trim(), dialect, opts.cdpathSet);
+  const scopes = new Set<string>();
+  for (const seg of segments) {
+    // The lexer keeps a compound-command opener as the segment's first word and
+    // the command it heads among the words after it (`do npm test` is one
+    // segment). Step past the openers, then unwrap any runner, so the command a
+    // loop body runs is scoped under the same name a denial on the card is
+    // remembered as — the scope its own classification produced.
+    let binary = seg.binary;
+    let args = seg.args;
+    while (SHELL_KEYWORDS.includes(binary) && args.length > 0) [binary, ...args] = args;
+    if (SHELL_KEYWORDS.includes(binary)) continue;
+    const { seg: inner, runner } = unwrap({ ...seg, binary, args, binaryPath: undefined }, dialect);
+    if (runner !== undefined || !isAuto(inner, opts)) scopes.add(scopeFor(inner));
+  }
+  return [...scopes];
+}
+
+/**
  * A literal `cd` that `followCd` left unfollowed, so the paths after it were
  * judged from the workspace root: worth saying in a refusal, since the model
  * otherwise sees a path it never meant.
