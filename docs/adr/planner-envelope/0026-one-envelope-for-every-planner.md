@@ -5,8 +5,6 @@ amends: ["0008", "0009"]
 
 # 0026 — One envelope for every planner
 
-*Pending:* [ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md) — sealed runs, and a harness's own shell as a user's opt-in.
-
 ## Problem
 
 ADR-0008 gave the API planner a research envelope: read-only commands run,
@@ -52,13 +50,24 @@ ops task when it needs judgment
   path confinement and approval seam, and, once it lands,
   [ADR-0011](0011-sandboxing-the-planners-shell.md)'s sandbox. The harness
   never classifies a planner's command.
-- Harness shells are withheld: Claude's `Bash`, OpenCode's `bash` (and its
-  `task` subagents, which would run with whatever permission their agent
-  has). Codex's shell stays, inside its read-only, network-less sandbox; its
-  instructions point it at `run_command`, as a task's point it at its tools.
-  Where that sandbox cannot start, Codex's shell is switched off and
-  `run_command` is its only one
+- Harness shells are withheld: Claude's `Bash` and `Monitor`, OpenCode's
+  `bash` and `shell` (and its `task` subagents, which would run with whatever
+  permission their agent has). Codex's shell stays, inside its read-only,
+  network-less sandbox; its instructions point it at `run_command`, as a
+  task's point it at its tools. Where that sandbox cannot start, Codex's shell
+  is switched off and `run_command` is its only one
   ([ADR-0033](0033-codex-planner-without-its-sandbox.md)).
+- A user may let a harness planner use its own shell instead
+  ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md), N1–N6).
+  The opt-in is off by default, user-level only, and offered only for the
+  harness versions checked live: Claude Code's `Bash` and `Monitor`, and
+  OpenCode 2.x's `bash` and `shell`. Each command then runs through Ordewell's
+  launcher in the sealed profile, with the workspace read-only, a scratch
+  folder writable, no home directory and no credential stores, and reaches the
+  research timeline as a `bash` step. The harness keeps whatever network it
+  gives its shell (N3); the planner's process starts without the user's
+  credential variables (N2.2). Codex is unchanged, and OpenCode 1.x and Linux
+  are not offered the opt-in.
 - Every harness pre-authorizes the Ordewell server's tools (ADR-0022), so all
   three planners have `run_command`. It runs in Ordewell's process, so a
   network command works once it is approved.
@@ -81,16 +90,19 @@ the request remains answerable, including one that was allowed automatically.
 | another MCP tool | kind `mcp_tool`, scoped to the tool's full name |
 | a fetch or a search | the web-read policy ([ADR-0027](0027-web-reads-in-the-planner-envelope.md)): exclusion, budget, approval, then the SSRF guard |
 | a read outside the workspace | kind `external_path`, scoped as ADR-0008 scopes a path |
+| a harness's own shell, when the opt-in is on | kind `native-shell`, allowed by the opt-in (ADR-0036 N1) |
 | anything else | denied |
 
 How each runner raises them, checked live (Claude Code 2.1.296, codex-cli
 0.162.0, OpenCode 1.18.35 and 2.0.26):
 
 - **Claude Code** runs in `default` mode with `--permission-prompt-tool
-  stdio`. `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Bash`, `PowerShell`,
-  `KillShell` and the plan-mode transitions stay disallowed; a disallowed tool
-  is gone for subagents too. An MCP tool, `WebFetch` and an out-of-workspace
-  `Read` each arrive as `can_use_tool`, a subagent's on the same channel.
+  stdio`. `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Bash`, `Monitor`,
+  `PowerShell`, `KillShell` and the plan-mode transitions stay disallowed; a
+  disallowed tool is gone for subagents too. With the native-shell opt-in,
+  `Bash` and `Monitor` are asked and run through Ordewell's launcher instead
+  (ADR-0036 N2, N6). An MCP tool, `WebFetch` and an out-of-workspace `Read`
+  each arrive as `can_use_tool`, a subagent's on the same channel.
 - **Codex** runs with `approvalPolicy: on-request`. A user's MCP tool arrives
   as an `mcpServer/elicitation/request` with `codex_approval_kind:
   mcp_tool_call`; the server is named, the tool is in the question or the
@@ -98,14 +110,16 @@ How each runner raises them, checked live (Claude Code 2.1.296, codex-cli
   requests are still declined at once.
 - **OpenCode** gets Ordewell's whole permission policy for the planner's
   server, replacing any it inherited: a catch-all `ask`, its own read tools
-  allowed, every write, shell, subagent and question tool denied. Then a
-  user's MCP tool, `webfetch` and `external_directory` each arrive as
+  allowed, every write, subagent and question tool denied, and its shell
+  denied too unless the native-shell opt-in is on, when `bash` and `shell`
+  ask and run through Ordewell's launcher (ADR-0036 N2). Then a user's MCP
+  tool, `webfetch` and `external_directory` each arrive as
   `permission.asked`. A request counts as an MCP tool only when its name
   starts with a server OpenCode listed, so a built-in added later is never
   taken for one a person could approve. 2.x layers rules the same way, last
   match winning, and its session is created with the same rules; it renamed
   `bash` to `shell` and `task` to `subagent` and added `browser`, so the
-  policy denies both spellings. 2.x can call MCP tools from code inside its
+  policy covers both spellings. 2.x can call MCP tools from code inside its
   `execute` tool, which raises no request of its own, so a planner's session
   denies `execute`; Ordewell's own server is replaced at start with
   `codemode: false`, so `run_command` and the completion tools are tools of
@@ -192,8 +206,11 @@ refused from a workspace's environment files (ADR-0016). The effect allowlist
 
 ## Key properties
 
-- **One rule for every planner.** What a planner may run no longer depends on
-  which CLI is planning.
+- **One rule for every planner.** What a planner may run through Ordewell no
+  longer depends on which CLI is planning. The native-shell opt-in is the one
+  user-level addition: it lets the harness's own shell read beside
+  `run_command`, under the same sealed limit, and never widens what
+  `run_command` runs.
 - **External effects are approved or allowlisted; file writes are refused.**
   The allowlist and the approval card are the guard against an instruction
   injected into what the planner read, which is why rules are narrow and
@@ -215,11 +232,15 @@ refused from a workspace's environment files (ADR-0016). The effect allowlist
 - **The user's saved allow rules still apply** to the Claude planner, for the
   tools it is allowed to have, except `WebFetch`, `WebSearch`, MCP tools and
   the path tools, which always ask, and a repository's rules do not load at
-  all ([ADR-0028](0028-planners-never-run-repository-config.md)); the shell and edit tools are disallowed outright, and a
-  disallowed tool wins over an allow rule. An OpenCode planner's policy is
-  Ordewell's alone.
+  all ([ADR-0028](0028-planners-never-run-repository-config.md)); the edit
+  tools are disallowed outright, and a disallowed tool wins over an allow
+  rule. The shell tools are disallowed outright too unless the native-shell
+  opt-in is on, in which case `Bash` and `Monitor` ask and run under
+  Ordewell's sealed profile (ADR-0036 N2, N6); a saved allow rule cannot skip
+  that ask. An OpenCode planner's policy is Ordewell's alone.
 - **A command's output is research.** `run_command` renders as the planner's
-  `bash` step in every surface.
+  `bash` step in every surface, and so does a command the opt-in lets through
+  the harness's own shell (ADR-0036 N2.3).
 
 ## Considered options
 
@@ -290,3 +311,4 @@ refused from a workspace's environment files (ADR-0016). The effect allowlist
 - 2026-10-18 — the permission ledger waits for HTTP reply delivery and retains failed answers for retry.
 - 2026-10-20 — every planner command, `run_command`'s included, runs in ADR-0011's OS sandbox where the host has one.
 - 2026-10-21 — the planner performs an exact effect itself as a script task, so the `allowlist` mode's refusal points at `run_script` and an ops task, and the effect allowlist is a separate list ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
+- 2026-10-21 — a user may opt in to Claude Code's or OpenCode 2.x's own shell, held in Ordewell's sealed profile, while both stay withheld by default (ADR-0036 N1–N6).

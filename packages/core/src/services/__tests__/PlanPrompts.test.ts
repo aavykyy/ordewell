@@ -172,6 +172,13 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
     expect(harness).toMatch(/do NOT edit, create, or delete any file/i);
   });
 
+  it('says the harness\'s own shell is available only when the native-shell setting is on', () => {
+    const prompt = (nativeShell: boolean) => buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: true, nativeShell });
+    expect(prompt(true)).toContain('The native-shell setting is on');
+    expect(prompt(false)).not.toContain('The native-shell setting is on');
+    expect(prompt(false)).not.toContain('your own shell is available too');
+  });
+
   // A harness planner that backgrounds its exploration agents ends its turn on
   // "I'll report back once they land" — and the report, arriving after the turn
   // closed, reaches no one. The API planner runs its own agents inside the turn

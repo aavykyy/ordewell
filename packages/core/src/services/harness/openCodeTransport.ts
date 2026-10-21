@@ -34,14 +34,24 @@ const OPENCODE_BUILTINS = new Set([
   'shell', 'subagent', 'browser', 'execute', 'search', 'opencode_read_mcp_resource', 'opencode_list_mcp_resources',
 ]);
 
-/** What a planner's OpenCode permission request is for (ADR-0026). `servers` are the MCP servers `/mcp` lists. */
+/**
+ * What a planner's OpenCode permission request is for (ADR-0026). `servers`
+ * are the MCP servers `/mcp` lists. `nativeShell` is on only where the
+ * opt-in put the launcher around this server's shell (ADR-0036 N2): then a
+ * `bash` or `shell` request is the user's grant being exercised, not an
+ * unknown tool.
+ */
 export function openCodePlannerAsk(
   permission: string,
   details: { metadata?: Record<string, unknown>; patterns?: readonly string[] },
   servers: readonly string[],
+  nativeShell = false,
 ): PlannerAsk {
   const meta = details.metadata ?? {};
   const pattern = details.patterns?.[0];
+  if (nativeShell && (permission === 'bash' || permission === 'shell')) {
+    return { kind: 'native-shell', tool: permission, ...(pattern ? { command: pattern } : {}) };
+  }
   // `webfetch` is denied in the planner's policy and never asks, so it is left to `other`.
   if (permission === 'websearch' || permission === 'codesearch') {
     const query = typeof meta.query === 'string' ? meta.query : pattern;
