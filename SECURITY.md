@@ -121,6 +121,25 @@ their own repositories. The parts most worth your attention:
   beside it (a dev server started with a token, a shell that exports a key):
   keep them in a file only you can read, the keychain or a credential helper,
   prefer tokens that are short-lived or narrowly scoped, and use Guarded.
+- **The native shell, when you opt in.** By default a harness planner's own
+  shell is withheld and its commands go through `run_command`. A user setting
+  (`ordewell.plannerNativeShell`, or `ORDEWELL_PLANNER_NATIVE_SHELL`) lets
+  Claude Code's `Bash` and `Monitor`, or OpenCode 2.x's `bash` and `shell`, run
+  too. Ordewell puts its own launcher in front of each command and holds it to
+  the sealed profile with the network: the workspace is read-only, one scratch
+  directory is writable, there is no home directory, the keychain is withheld,
+  and the planner process starts without your credential variables, keeping
+  only the harness's own login (ADR-0036 N1–N6). A way for such a command to
+  write outside scratch, read a credential store, reach the keychain, or run in
+  a shell other than Ordewell's launcher is in scope; so is a way to make the
+  setting come from a workspace or a repository. The opt-in is off by default
+  and offered only for the versions checked live. Its commands are not
+  classified — the opt-in is the consent — so it is a second way to read,
+  never a second route to an effect. **Residual:** the shell keeps whatever
+  network its harness gives it, so an injected instruction can send workspace
+  contents to an address it chose until the egress proxy
+  ([#88](https://github.com/ordewell/ordewell/issues/88)) lands; the three
+  macOS gaps under Sealed runs apply to it too.
 - **The local API server.** `@ordewell/web` binds `127.0.0.1` and, since
   `0.4.8`, authenticates every request against a bearer token minted at daemon
   startup and written to an owner-readable file; browser `Origin` headers are
@@ -161,7 +180,10 @@ except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-s
   written reaching the workspace, and on macOS but for the residuals under
   Sealed runs above. A `!` exclusion and a command you denied are still refused
   ([ADR-0036](docs/adr/planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md)).
-  The one effect a planner performs itself is a script task (next item).
+  With the native-shell opt-in, a Claude Code or OpenCode 2.x planner may also
+  run commands through its harness's own shell, under the same sealed profile
+  with the network (see the native-shell item above). The one effect a planner
+  performs itself is a script task (next item).
 - **Script tasks run as you, with no model.** A script task is a list of
   commands, or a script, that the planner writes into the plan and Ordewell runs
   in your checkout with your workspace's environment. It is outside the

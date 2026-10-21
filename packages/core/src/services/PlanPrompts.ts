@@ -108,7 +108,7 @@ function sealedGuide(tool: 'bash' | 'run_command'): string {
  * forked prompt would mean each future block gets written twice, or silently
  * works on one backend only.
  */
-function researchPhaseBlock(harnessMode: boolean): string {
+function researchPhaseBlock(harnessMode: boolean, nativeShell = false): string {
   const shared = [
     'RESEARCH PHASE:',
     '- Start by reading README.md and any agent config files (AGENTS.md, CLAUDE.md)',
@@ -118,6 +118,7 @@ function researchPhaseBlock(harnessMode: boolean): string {
       '- Explore the repository with your own tools until you understand its architecture',
       '- You are planning, not implementing: do NOT edit, create, or delete any file, and do not run commands that change the workspace',
       '- Run commands — git, gh, cloud CLIs, the project\'s own tooling — with the run_command tool, not a shell of your own. MCP tools the user configured (issue trackers, todo lists) are yours to read from too. Reads run at once; anything else is approved or refused by the user\'s settings. When something the plan needs to change is refused, add it to the plan instead: a script task when you can state the exact commands, an ops task when it needs judgment',
+      ...(nativeShell ? ['- The native-shell setting is on: where this harness passed its checks, your own shell is available too, under Ordewell\'s sandbox, with the workspace read-only and only a scratch folder writable. Its commands reach the timeline as bash steps, and it keeps whatever network your harness gives it, so reach the network and the user\'s credentials through run_command.'] : []),
       `- ${sealedGuide('run_command')}`,
       '- If you delegate exploration to your own agents, WAIT for their results inside this reply. Do NOT launch them in the background or async and end your turn saying you will report back later: your turn ending is what hands the conversation back to the user, and anything you say after it never reaches them.',
     ]
@@ -158,6 +159,8 @@ export interface ConversationVariant {
    * tools (ADR-0022). An API planner speaks the JSON envelopes instead.
    */
   harness?: boolean;
+  /** The user's native-shell setting (ADR-0036 N1): the harness's own shell, where its checks passed, is available beside `run_command`. */
+  nativeShell?: boolean;
   /** The skill catalog: task skills it can attach on every path, planner skills it can load only with tools. */
   skills?: readonly SkillInfo[];
   /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order; of every repo of a group (ADR-0014). */
@@ -360,7 +363,7 @@ function buildConversationBody(
     '4. When the strategy calls for a plan and you have enough context, produce a prose outline — a short list describing each task in order.',
     autorun ? `5. Write the outline in your reply, then ${submit} in the same reply.` : `5. After the user confirms the outline, ${submit}.`,
     '',
-    researchPhaseBlock(tools),
+    researchPhaseBlock(tools, variant.nativeShell ?? false),
     '',
     ...(tools ? ['Ordewell skills load only through load_skill; do not use the native Skill tool or read skill files directly.', ...plannerSkillsBlock(variant.skills ?? []), ''] : []),
     ...strategySection(variant.execution ?? false),

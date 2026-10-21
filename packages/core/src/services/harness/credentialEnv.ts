@@ -17,6 +17,8 @@ const HARNESS_LOGIN = new Set([
   'ANTHROPIC_AUTH_TOKEN',
   'CLAUDE_CODE_OAUTH_TOKEN',
   'ANTHROPIC_BASE_URL',
+  // OpenCode's own login, for the same reason: its shell cannot run without it.
+  'OPENCODE_API_KEY',
   // Provider selection and the non-secret locals a selected provider reads.
   'CLAUDE_CODE_USE_BEDROCK',
   'CLAUDE_CODE_USE_VERTEX',

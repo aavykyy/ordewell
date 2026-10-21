@@ -2893,6 +2893,23 @@ which the research timeline turns into a mark on the row. *Avoid:* "safe mode",
 "dry run" — the command really runs, against the real workspace, and only its
 reach is cut.
 
+**Native shell** (`services/sandbox/nativeShellLauncher.ts`, ADR-0036 N1–N6) —
+a harness planner's own shell, let through only by the user's opt-in
+(`ordewell.plannerNativeShell` / `ORDEWELL_PLANNER_NATIVE_SHELL`): Claude
+Code's `Bash` and `Monitor`, or OpenCode 2.x's `bash` and `shell`. Ordewell
+names its launcher in the harness's own spelling — `CLAUDE_CODE_SHELL_PREFIX`,
+or `SHELL` plus the config layer's `shell` — and every command runs through it
+in the *sealed run* profile with the network (N3), so the workspace stays
+read-only and the keychain and the user's credential files stay out of reach;
+the planner's process starts without the user's credential variables (N2.2)
+and keeps the harness's own login (N3). Each command is a `bash` step, and an
+OpenCode `shell.created` that names another shell fails its call. Off by
+default and never a repository setting; offered only on versions checked live
+(Claude Code 2.1.304–2.1.x and OpenCode 2.0.32–2.0.x, on macOS), so OpenCode
+1.x and Linux keep `run_command` alone, and Codex already has its own shell.
+*Avoid:* "sandboxed shell" for the harness's own shell tool — the shell is the
+harness's, and Ordewell only puts its launcher and profile around it.
+
 **Kill tree** (`utils/processTree.ts`) — the one way an agent process is stopped.
 On POSIX a runner is spawned as the leader of its own process group
 (`spawnInOwnGroup`), and SIGTERM → SIGKILL goes to the whole group: signalling

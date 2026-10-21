@@ -300,7 +300,7 @@ export class CliAgentAiService implements IAiService {
       req.modelsByRunner,
       req.runners,
       req.runnerModes,
-      { harness: true, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun },
+      { harness: true, nativeShell: this.config.plannerNativeShell, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun },
     );
 
     const fetcher = req.fetcher;

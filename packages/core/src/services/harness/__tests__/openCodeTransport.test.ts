@@ -457,6 +457,13 @@ describe('openCodePlannerAsk', () => {
       expect(openCodePlannerAsk(name, {}, servers), name).toEqual({ kind: 'other' });
     }
   });
+
+  it('reads bash and shell as the native shell only when the opt-in put the launcher around them (ADR-0036 N2)', () => {
+    expect(openCodePlannerAsk('shell', { patterns: ['for f in *; do echo "$f"; done'] }, servers, true))
+      .toEqual({ kind: 'native-shell', tool: 'shell', command: 'for f in *; do echo "$f"; done' });
+    expect(openCodePlannerAsk('bash', { patterns: ['ls'] }, servers, true)).toEqual({ kind: 'native-shell', tool: 'bash', command: 'ls' });
+    expect(openCodePlannerAsk('shell', { patterns: ['ls'] }, servers)).toEqual({ kind: 'other' });
+  });
 });
 
 describe('an OpenCode planner\'s web reads (ADR-0027)', () => {
