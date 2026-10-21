@@ -3,6 +3,7 @@ import type { UsageLine } from '../models/Usage';
 import type { MessageBlock, MessageRole, PlanMarkerStatus, SkillLoadBlock, SubagentBlock, ToolBlock, ToolStatus, UsageBlock } from './blocks';
 import { diffStat, outputLines, toolHeadline } from './format';
 import { isFileEditTool } from '../services/harness/agentTools';
+import { ranSealed, withoutSealedMark } from '../services/researchStepSummary';
 
 /*
  * How the session's records — messages, research steps, subagents, transcript
@@ -85,7 +86,10 @@ const STATUS_OF_OUTCOME: Record<ResearchStepOutcome, ToolStatus> = {
 
 export function finishedTool(call: ToolBlock, output: string, outcome: ResearchStepOutcome): ToolBlock {
   const diff = outcome === 'success' && isFileEditTool(call.toolLabel ?? call.tool) ? diffStat(output) : null;
-  return { ...call, status: STATUS_OF_OUTCOME[outcome], outcome, output, outputLineCount: outputLines(output).length, ...(diff ? { diff } : {}) };
+  // The model reads that a command ran sealed from its first line (ADR-0036 S4); a surface marks the row instead.
+  const sealed = call.tool === 'bash' && ranSealed(output);
+  const shown = sealed ? withoutSealedMark(output) : output;
+  return { ...call, status: STATUS_OF_OUTCOME[outcome], outcome, output: shown, outputLineCount: outputLines(shown).length, ...(diff ? { diff } : {}), ...(sealed ? { sealed } : {}) };
 }
 
 export function settledTool(call: ToolBlock, step: ResearchStep): ToolBlock {

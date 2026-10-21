@@ -77,7 +77,8 @@ Codex runs with no sandbox at all.
 ## Planner shell not sandboxed
 
 Ordewell says **The planner's shell runs without an OS sandbox on this
-machine**, once per planning session.
+machine**, or **Sealed runs are unavailable on this machine**, once per
+planning session.
 
 ### Cause
 
@@ -95,6 +96,15 @@ command rules alone, and planning goes on. The notice names the cause:
   AppArmor restriction, or a container, as for
   [Codex's sandbox](#codex-sandbox-unavailable-on-this-host).
 - macOS, when Ordewell itself runs inside another sandbox.
+
+Without a sandbox there are no sealed runs either: a command the command rules
+refuse, such as a loop, a here-document or a script piped into `python3`, is
+refused rather than run sealed
+([ADR-0036](adr/planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md)).
+**Sealed runs are unavailable** means the sandbox starts but its stricter
+sealed profile does not: its read list, or its limits on processes and
+memory, which a shell prelude sets with `ulimit` before the sandbox starts.
+The notice quotes what failed.
 
 ### Check it
 
@@ -120,6 +130,10 @@ process.
   sandbox's own processes.
 - A tool that must write to read fails, such as `cargo metadata` on a crate
   without a committed `Cargo.lock`. The planner is told the sandbox stopped it.
+- A sealed run sees only the workspace and the system's own files: a tool
+  installed under your home directory (`~/.nvm`, `~/.cargo/bin`) does not
+  start in one, and nothing it needs from the network or your accounts works.
+  It has 60 seconds, and its result says it ran sealed.
 
 ## Merge all refused: not on the base branch
 

@@ -1,5 +1,6 @@
 import {
   IFileSystem,
+  BashOptions,
   ReadFileOpts,
   GrepOptions,
   GlobOptions,
@@ -7,10 +8,10 @@ import {
   ToolOutcome,
   GREP_DEFAULT_HEAD_LIMIT,
 } from '../interfaces/IFileSystem';
-import { IApproval, DENY_ALL } from '../interfaces/IApproval';
-import { cdUnfollowed, classifyCommand, pathRefs, type CommandPolicyOptions } from './commandPolicy';
+import { IApproval, DENY_ALL, type ApprovalRequest } from '../interfaces/IApproval';
+import { cdUnfollowed, classifyCommand, excludedBy, pathRefs, type CommandPolicyOptions } from './commandPolicy';
 import { resolveResearchShell, researchShellWarning, researchPolicyOptions, type ResearchShell, type ShellLaunch } from './researchShell';
-import { PlannerShellSandbox, sandboxedFailureNote } from './sandbox/plannerSandbox';
+import { PlannerShellSandbox, SEALED_FAILURE_NOTE, sandboxedFailureNote, sealedRunHeader } from './sandbox/plannerSandbox';
 import { resolveWithin, resolveRef, grantScopeFor, isInertDevice } from './pathScope';
 import { definitionPattern, referencePattern, languageForId, includeGlobFor } from './symbolPatterns';
 import { resolveAll, vetEgress, type ResolveAll } from './egressGuard';
@@ -22,6 +23,10 @@ export { AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMANDS, classifyComm
 
 const SED_HINT = ` To read lines of a file, "head", "tail" and "sed -n '10,40p' FILE" run without approval.`;
 const CD_HINT = ' A "cd" is followed only on a line joined by "&&" alone, so after ";", "||", "&" or a newline every path is judged from the workspace root. Join the commands with "&&", or give paths from the root.';
+
+function refusal(output: string): ToolOutcome {
+  return { success: false, output, truncated: false };
+}
 
 /**
  * The policy half of the planner's filesystem: path confinement, the tiered
@@ -67,6 +72,10 @@ export abstract class BaseFileSystem implements IFileSystem {
 
   endSession(): void {
     this.sandbox.end();
+  }
+
+  canSeal(): Promise<boolean> {
+    return this.sandbox.canSeal();
   }
 
   abstract getWorkspaceRoot(): string;
@@ -226,72 +235,79 @@ export abstract class BaseFileSystem implements IFileSystem {
    * Three tiers (see `commandPolicy.ts`): read-only inspection runs silently,
    * anything else asks once and is remembered, and writes are refused outright
    * because a planner that mutates the workspace has stopped being a planner.
+   * Where the sandbox can seal a command, what the envelope would refuse
+   * without asking anyone runs sealed instead (ADR-0036 S2): the classifier's
+   * refusal, and the approval mode's. A person's denial still refuses.
    *
    * Everything a command needs — its own approval and every outside directory
    * it touches — is one request, so one command is one prompt. Each scope is
    * still granted separately: approving the pair does not approve another
    * directory the next command names.
    */
-  async bash(command: string, signal?: AbortSignal): Promise<ToolOutcome> {
+  async bash(command: string, signal?: AbortSignal, opts: BashOptions = {}): Promise<ToolOutcome> {
     command = disableWebCommandStartup(command, this.researchShell.dialect);
     const allow = this.approval.allowlist?.();
     const { tier, scope, reason, allowedBy, perInvocation, scopes: commandScopes, webUrls, webOutboundTexts } = classifyCommand(command, {
       ...this.policyOptions(), ...this.approval.commandPolicy?.(), ...(allow ? { allow } : {}),
     });
 
-    if (tier === 'refuse') {
-      return { success: false, output: `Command refused: ${reason}`, truncated: false };
+    const root = this.getWorkspaceRoot();
+    const outside = this.outsidePaths(command);
+    const asks = tier === 'ask';
+    const scopes = [...(asks ? commandScopes ?? [scope] : []), ...outside.map((o) => o.scope)];
+    const touched = outside.map((o) => o.abs).join(', ');
+    const request: ApprovalRequest | undefined = scopes.length === 0 ? undefined : {
+      kind: asks ? 'shell_command' : 'external_path',
+      ...(perInvocation ? { perInvocation } : {}),
+      subject: asks ? command : outside[0].abs,
+      scope: scopes[0],
+      ...(scopes.length > 1 ? { scopes } : {}),
+      ...(asks && allowedBy ? { allowedBy } : {}),
+      detail: outside.length > 0
+        ? `Planner research wants to run "${command}", which touches ${touched}, outside the workspace (${root}).`
+        : `Planner research wants to run: ${command}`,
+    };
+
+    if (opts.sealed) {
+      if (!(await this.sandbox.canSeal())) return refusal(`Command refused: this machine has no sandbox to run a command sealed in. Run it without "sealed", and Ordewell's command rules judge it as they do every command.`);
+      return this.runSealed(command, request, 'asked', signal);
     }
 
+    if (tier === 'refuse') return this.sealedInstead(command, request, refusal(`Command refused: ${reason}`), signal);
+
     if (webUrls?.length && carriesSecret([...(webOutboundTexts ?? []), ...webUrls.map((url) => url.href)], [...this.outboundSecrets(), ...sensitiveEnvValues(process.env)])) {
-      return { success: false, output: 'Command refused: a web command contains what looks like a secret. Fetch the page with your web fetch tool, without credentials.', truncated: false };
+      return refusal('Command refused: a web command contains what looks like a secret. Fetch the page with your web fetch tool, without credentials.');
     }
 
     const vettedAddresses = new Map<string, string>();
     for (const url of webUrls ?? []) {
       const check = await vetEgress(url.hostname, url.port, this.resolveWebHost);
-      if (!check.ok) return { success: false, output: `Command refused: Blocked host: ${check.reason}. ${READ_REFUSAL_HINT}`, truncated: false };
+      if (!check.ok) return refusal(`Command refused: Blocked host: ${check.reason}. ${READ_REFUSAL_HINT}`);
       vettedAddresses.set(url.origin, check.addresses[0]);
     }
 
-    const outside = this.outsidePaths(command);
-    const asks = tier === 'ask';
-    if (asks || outside.length > 0) {
-      const root = this.getWorkspaceRoot();
-      const scopes = [...(asks ? commandScopes ?? [scope] : []), ...outside.map((o) => o.scope)];
-      const touched = outside.map((o) => o.abs).join(', ');
-      const granted = await this.approval.request({
-        kind: asks ? 'shell_command' : 'external_path',
-        ...(perInvocation ? { perInvocation } : {}),
-        subject: asks ? command : outside[0].abs,
-        scope: scopes[0],
-        ...(scopes.length > 1 ? { scopes } : {}),
-        ...(asks && allowedBy ? { allowedBy } : {}),
-        detail: outside.length > 0
-          ? `Planner research wants to run "${command}", which touches ${touched}, outside the workspace (${root}).`
-          : `Planner research wants to run: ${command}`,
-      });
-      if (!granted) {
-        return {
-          success: false,
-          output: outside.length > 0
-            ? `Access denied: "${command}" touches ${touched}, outside the workspace root (${root}), and was not approved. Keep research inside the workspace, or ask the user to approve this location.${cdUnfollowed(command, this.policyOptions()) ? CD_HINT : ''}`
-            : `Command not approved: ${command}\nIt is outside the auto-allowed read-only set and the planner allowlist (${scope}). ${NOT_APPROVED_HINT}${/(^| )g?sed( |$)/.test(scope) ? SED_HINT : ''}`,
-          truncated: false,
-        };
-      }
+    if (request) {
+      const denied = refusal(outside.length > 0
+        ? `Access denied: "${command}" touches ${touched}, outside the workspace root (${root}), and was not approved. Keep research inside the workspace, or ask the user to approve this location.${cdUnfollowed(command, this.policyOptions()) ? CD_HINT : ''}`
+        : `Command not approved: ${command}\nIt is outside the auto-allowed read-only set and the planner allowlist (${scope}). ${NOT_APPROVED_HINT}${/(^| )g?sed( |$)/.test(scope) ? SED_HINT : ''}`);
+      // The approval mode refuses without asking anyone, so where a sealed run
+      // can start that is what runs (S2). Elsewhere the request goes in, and
+      // the mode's refusal is recorded as it always was.
+      const standing = this.approval.peek?.(request);
+      if (standing?.decision === 'deny' && standing.source === 'mode' && await this.sandbox.canSeal()) return this.runSealed(command, request, 'refused', signal);
+      if (!(await this.approval.request(request))) return denied;
     }
 
     if (webUrls?.length) {
       const latest = classifyCommand(command, { ...this.policyOptions(), ...this.approval.commandPolicy?.(), allow: this.approval.allowlist?.() });
-      if (latest.tier === 'refuse') return { success: false, output: `Command refused: ${latest.reason}`, truncated: false };
+      if (latest.tier === 'refuse') return refusal(`Command refused: ${latest.reason}`);
     }
 
     for (const probe of wgetVersionCommands(command, this.researchShell.dialect)) {
-      if (!probe) return { success: false, output: `Command refused: the wget executable cannot be checked in an uncertain working directory. ${READ_REFUSAL_HINT}`, truncated: false };
+      if (!probe) return refusal(`Command refused: the wget executable cannot be checked in an uncertain working directory. ${READ_REFUSAL_HINT}`);
       const version = await this.runShell(probe, false, signal);
       if (!version.success || !/^GNU Wget 1\./.test(version.output)) {
-        return { success: false, output: `Command refused: only GNU Wget 1.x is supported; wget2 can write persistent databases. ${READ_REFUSAL_HINT}`, truncated: false };
+        return refusal(`Command refused: only GNU Wget 1.x is supported; wget2 can write persistent databases. ${READ_REFUSAL_HINT}`);
       }
     }
 
@@ -299,13 +315,48 @@ export abstract class BaseFileSystem implements IFileSystem {
     command = pinned.command;
     if (webUrls?.length) {
       const latest = classifyCommand(command, { ...this.policyOptions(), ...this.approval.commandPolicy?.(), allow: this.approval.allowlist?.(), trustedWebResolves: pinned.resolves });
-      if (latest.tier === 'refuse') return { success: false, output: `Command refused: ${latest.reason}`, truncated: false };
+      if (latest.tier === 'refuse') return refusal(`Command refused: ${latest.reason}`);
     }
     // The network follows the tier (ADR-0011 B3): an `ask` command got here
     // approved, by the user, a standing grant, the allowlist or the mode, and
     // keeps it. An `auto` one, including one approved only for the paths it
     // names, has none.
     return this.runShell(command, tier === 'ask', signal);
+  }
+
+  /** A refusal the envelope reached without asking anyone, run sealed where this host can (ADR-0036 S2), or `refused` as it was (S6). */
+  private async sealedInstead(command: string, request: ApprovalRequest | undefined, refused: ToolOutcome, signal?: AbortSignal): Promise<ToolOutcome> {
+    return (await this.sandbox.canSeal()) ? this.runSealed(command, request, 'refused', signal) : refused;
+  }
+
+  /**
+   * One sealed run (S1): no network, no home, nothing it writes reaching the
+   * workspace, and nobody asked. What the user said no to stays refused (S3):
+   * a `!` exclusion naming the command or a path it touches, and a denial
+   * given on the card this session.
+   */
+  private async runSealed(command: string, request: ApprovalRequest | undefined, why: 'asked' | 'refused', signal?: AbortSignal): Promise<ToolOutcome> {
+    const allow = this.approval.allowlist?.();
+    const rule = allow ? excludedBy(command, allow, this.policyOptions()) : undefined;
+    if (rule) return refusal(`Command refused: the planner allowlist excludes it ("${rule}"), and an exclusion holds for a sealed run too.`);
+    const standing = request ? this.approval.peek?.(request) : undefined;
+    if (request && standing?.decision === 'deny' && standing.source === 'excluded') {
+      return refusal(`Command refused: the planner allowlist excludes ${request.subject === command ? 'it' : `"${request.subject}"`}, and an exclusion holds for a sealed run too.`);
+    }
+    if (standing?.decision === 'deny' && standing.source === 'remembered') {
+      return refusal(`Command not approved: ${command}\nThe user denied it this session, and a denial holds for a sealed run too. Continue without it.`);
+    }
+
+    let shell: ShellLaunch;
+    try {
+      shell = await this.sandbox.launchSealed(this.researchShell, { workspace: this.getWorkspaceRoot() });
+    } catch (err) {
+      return refusal(`Command not run: its sealed sandbox could not be prepared (${err instanceof Error ? err.message : String(err)}).`);
+    }
+    const outcome = await this.execBashImpl(command, shell, signal);
+    if (signal?.aborted) return outcome;
+    const output = `${sealedRunHeader(why)}\n${outcome.output}${outcome.success ? '' : `\n\n[${SEALED_FAILURE_NOTE}]`}`;
+    return { ...outcome, output };
   }
 
   /** Every command the planner's shell starts goes through here, inside the sandbox where this host has one (ADR-0011 B1, B6). */

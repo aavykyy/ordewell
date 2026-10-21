@@ -174,6 +174,7 @@ export function CommandRow({ block, expanded }: { block: ToolBlock; expanded: bo
           <span className={`cmd-row-arg${path ? ' path' : ''}`} title={path ? keyArg : undefined}><bdi>{keyArg}</bdi></span>
           <span className="cmd-row-name">)</span>
         </code>
+        {block.sealed && <span className="cmd-row-sealed" title="Ran sealed: no network, no home directory, and nothing it wrote reached the workspace">sealed</span>}
         {label && <span className="cmd-row-outcome">{label}</span>}
       </div>
       {diff ? <DiffView output={block.output} diff={diff} expanded={expanded} /> : expanded ? (

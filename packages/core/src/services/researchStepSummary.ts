@@ -87,6 +87,21 @@ export function summarizeToolCall(tool: string, argsJson: string, toolLabel?: st
   return display;
 }
 
+/** How a sealed run's result starts (ADR-0036 S4), for the model and for the timeline that marks the step. */
+export const SEALED_RUN_MARK = '[Ran sealed';
+
+/** Whether a command's result is a sealed run's: the planner's `bash` or `run_command`, or a subagent's. */
+export function ranSealed(output: string): boolean {
+  return output.startsWith(SEALED_RUN_MARK);
+}
+
+/** A sealed run's output without the line that says so, for a surface that marks the row instead. */
+export function withoutSealedMark(output: string): string {
+  if (!ranSealed(output)) return output;
+  const end = output.indexOf('\n');
+  return end < 0 ? '' : output.slice(end + 1);
+}
+
 /**
  * Classify a tool outcome from its result text and success flag, so a surface
  * can render a refused `rm` or a denied `npm test` distinctly from a

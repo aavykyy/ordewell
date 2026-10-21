@@ -98,25 +98,25 @@ function nonPromptingFs(fs: IFileSystem): IFileSystem {
     grep: (pattern, opts) => (withinWorkspace(opts?.path) ? fs.grep(pattern, opts) : Promise.resolve(outsideRefusal(opts!.path!))),
     findSymbol: (symbol, opts) => (withinWorkspace(opts?.path) ? fs.findSymbol(symbol, opts) : Promise.resolve(outsideRefusal(opts!.path!))),
     listDir: (p, depth) => (withinWorkspace(p) ? fs.listDir(p, depth) : Promise.resolve(outsideRefusal(p))),
-    bash: async (command, signal) => {
+    bash: async (command, signal, opts) => {
       const policy = researchPolicyOptions(resolveResearchShell());
       const { tier, reason } = classifyCommand(command, policy);
-      if (tier !== 'auto') {
-        return refused(
-          tier === 'refuse'
-            ? `Command refused: ${reason}`
-            : `"${command}" needs user approval, and research agents run in the background where nothing can be approved. Use the read-only research tools, and note in your digest that this command would answer the question.`,
-        );
-      }
       // An `auto` binary (cat, find, rg, …) is only auto because reading is
       // read-only — its arguments can still name a path outside the
       // workspace, and a subagent can never prompt to approve one.
       // Named as resolved: after a `cd`, the path as written says nothing about where it points.
       const escaping = pathRefs(command, policy).map((ref) => resolveRef(fs.getWorkspaceRoot(), ref)).find((r) => !r.inside);
-      if (escaping) return outsideRefusal(escaping.abs);
-      // Only `auto` reaches the shell, so every command a subagent runs runs
-      // without the network (ADR-0011 B3): nothing it could ask for was approved.
-      return fs.bash(command, signal);
+      // Only `auto` reaches the shell unsealed, so every command a subagent
+      // runs runs without the network (ADR-0011 B3): nothing it could ask for
+      // was approved.
+      if (tier === 'auto' && !escaping && !opts?.sealed) return fs.bash(command, signal);
+      // A sealed run asks nobody, so what would have asked or been refused
+      // runs sealed where the host can seal it (ADR-0036 S5); an exclusion or
+      // a denial still refuses it there.
+      if (opts?.sealed || await fs.canSeal?.()) return fs.bash(command, signal, { sealed: true });
+      if (tier === 'refuse') return refused(`Command refused: ${reason}`);
+      if (tier === 'auto' && escaping) return outsideRefusal(escaping.abs);
+      return refused(`"${command}" needs user approval, and research agents run in the background where nothing can be approved. Use the read-only research tools, and note in your digest that this command would answer the question.`);
     },
   };
 }

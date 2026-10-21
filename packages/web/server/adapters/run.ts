@@ -13,6 +13,9 @@ export interface ExecResult {
  */
 export const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 
+/** How long a sealed run's output may trail its exit. */
+const SEALED_OUTPUT_GRACE_MS = 1_000;
+
 /**
  * The single primitive every search/inspection adapter in this package is
  * built on: spawn a child, never reject. Kept in its own module so the
@@ -32,17 +35,20 @@ export const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 export function run(
   file: string,
   args: string[],
-  opts: { cwd?: string; timeout: number; shell?: boolean; env?: NodeJS.ProcessEnv; signal?: AbortSignal },
+  opts: { cwd?: string; timeout: number; shell?: boolean; env?: NodeJS.ProcessEnv; signal?: AbortSignal; sealed?: boolean },
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     try {
-      execFile(file, args, {
+      const child = execFile(file, args, {
         cwd: opts.cwd,
         timeout: opts.timeout,
         maxBuffer: MAX_OUTPUT_BYTES,
         encoding: 'utf8',
         shell: opts.shell,
         env: opts.env,
+        // A sealed run's wall-time limit is a kill, not a request it may trap
+        // (ADR-0036 S1); the sandbox takes the processes it started down with it.
+        ...(opts.sealed ? { killSignal: 'SIGKILL' as const } : {}),
         // Node kills the child when this aborts, and calls back with an
         // ABORT_ERR — which lands on the `code: 1` branch below, i.e. a
         // failed tool call, exactly like any other command that did not
@@ -53,6 +59,9 @@ export function run(
         const code = err && typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : err ? 1 : 0;
         resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code });
       });
+      // A process that left a sealed run's process group can hold its output
+      // open after the run has ended: the result is what arrived by then.
+      if (opts.sealed) child.once('exit', () => setTimeout(() => { child.stdout?.destroy(); child.stderr?.destroy(); }, SEALED_OUTPUT_GRACE_MS).unref());
     } catch (err) {
       // `code: null` rather than 1 on purpose: the search adapters read 0 and 1
       // as "ran, possibly no matches", so a 1 here would report a confident

@@ -59,6 +59,12 @@ export interface ShellLaunch {
   args: readonly string[];
   /** Undefined inherits the host's environment. */
   env?: NodeJS.ProcessEnv;
+  /**
+   * A sealed run's wall-time limit (ADR-0036 S1): the adapter kills the
+   * launch with SIGKILL once it has run this long, in place of its own
+   * timeout, and stops waiting for output a moment after it exits.
+   */
+  wallTimeMs?: number;
 }
 
 const POSIX_SHELL: ResearchShell = { file: null, args: [], dialect: 'posix', utilsDir: null };

@@ -234,10 +234,10 @@ export class PoolFileSystem extends BaseFileSystem {
     // runs. A resolved file is the sandbox launcher around the POSIX shell, or
     // the POSIX shell found on a Windows box: either way the command goes last,
     // in the dialect `BaseFileSystem` classified it under.
-    const { file, args, env } = shell;
+    const { file, args, env, wallTimeMs } = shell;
     const result = file === null
       ? await run(command, [], { cwd: this.workspaceRoot, timeout: BASH_TIMEOUT_MS, shell: true, env, signal })
-      : await run(file, [...args, command], { cwd: this.workspaceRoot, timeout: BASH_TIMEOUT_MS, env, signal });
+      : await run(file, [...args, command], { cwd: this.workspaceRoot, timeout: wallTimeMs ?? BASH_TIMEOUT_MS, env, signal, sealed: wallTimeMs !== undefined });
     const out = (result.stdout || '').trim();
     const err = (result.stderr || '').trim();
 

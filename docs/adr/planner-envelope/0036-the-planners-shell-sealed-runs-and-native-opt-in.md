@@ -1,8 +1,8 @@
 ---
 status: accepted
-implemented: none
+implemented: partial
 amends: ["0008", "0011", "0026"]
-note: "sealed runs are #109 and the native-shell opt-in #110, both on ADR-0011's sandbox"
+note: "sealed runs are implemented (#109); the native-shell opt-in waits for #110"
 ---
 
 # 0036 — The planner's shell: sealed runs instead of refusals, and the harness's own shell as an opt-in
@@ -51,13 +51,17 @@ reach.**
   writable and set as `TMPDIR` and `HOME`; outside the workspace, only what
   programs need to start (the system's executables, libraries and a minimal
   set of configuration files), and nothing of the user's home or any other
-  repository; no network; a fresh `/dev`, `/proc` and `/tmp`; limits on
+  repository; none of the environment Ordewell runs with beyond what programs
+  need to find themselves and print (`PATH`, the locale), since credentials
+  live there too; no network; a fresh `/dev`, `/proc` and `/tmp`; limits on
   processes, memory and wall time; and it dies with its parent. What it can
   read outside the workspace is fixed by the profile, the same for every
   command, and holds no user data, so no path is asked about. Where the
   platform offers a throwaway overlay, the workspace may be mounted with one
   instead of read-only, so a tool that writes a cache beside the code still
-  runs; nothing written reaches the workspace either way.
+  runs; nothing written reaches the workspace either way. The profile takes
+  one more writable directory as a parameter, none by default, for a
+  read-only task's sealed commands in its own throwaway worktree (#104).
 - **What runs sealed (S2).** A command runs sealed when the planner asks for
   it (`run_command` with `sealed: true`), or when the envelope would refuse it
   without asking: the classifier's `refuse`, or a command the approval mode
@@ -167,6 +171,17 @@ reach.**
 - Research subagents can run what the planner can, sealed.
 - The opt-in needs live checks per harness before it is offered. Until a
   harness passes them, its planner has `run_command` alone.
+- Seatbelt has no PID namespace, so on macOS a sealed run's processes are
+  killed as one process group, at its end, at its wall-time limit and when
+  Ordewell dies. A process that leaves the group with `setsid` outlives the
+  run, still sealed. Its process and memory limits are counted on top of what
+  the user already runs and what every macOS program maps as it starts. A
+  sealed run there can still read the command lines of the user's other
+  processes, which `sysctl` hands out under no rule a Seatbelt profile can
+  deny, though not their environments; Linux's PID namespace hides them.
+- Homebrew's data directories are hidden from a sealed run on macOS; its
+  configuration stays readable, since git and OpenSSL stop on a file the
+  sandbox denies rather than one that is missing.
 - When this is implemented, SECURITY.md's envelope description and "What each
   part can touch" name sealed runs and the opt-in, CONTEXT.md gains *Sealed
   run*, and ADR-0008, ADR-0011 and ADR-0026 are rewritten where they say a
@@ -175,3 +190,4 @@ reach.**
 ## History
 
 - 2026-10-15 — accepted. Not yet implemented; sealed runs need #64 first.
+- 2026-10-21 — sealed runs implemented (#109) on Seatbelt and bubblewrap, for `bash`, `run_command` and research subagents; the native-shell opt-in waits for #110.

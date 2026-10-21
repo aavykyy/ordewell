@@ -4,8 +4,6 @@ status: accepted
 
 # 0011 — Sandboxing the planner's shell
 
-*Pending:* [ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md) — B7 relaxed: a verified sandbox turns a refusal into a sealed run, with no home directory and no network.
-
 ## Problem
 
 `commandPolicy.ts` decides which commands the planner's `bash` tool may run,
@@ -52,14 +50,19 @@ command, with no per-command sandbox rules to derive.
 **Run every command the planner's `bash` tool starts inside an OS sandbox
 where one is available, under one fixed policy: nothing outside a scratch
 directory can be written.** The classifier, its tiers and everything in
-ADR-0008 stay as they are.
+ADR-0008 stay as they are, but for one change a verified sandbox makes:
+a command the envelope would refuse without asking runs sealed instead
+([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md)).
 
 ## Key properties
 
 - **Underneath the classifier, never instead of it (B1).** `auto` commands, and
-  `ask` commands once approved, run sandboxed. `refuse` still refuses. A
-  sandboxed command is not trusted any more than before. The sandbox only
-  bounds what a misclassified one can do.
+  `ask` commands once approved, run sandboxed under this policy. A `refuse`
+  command, and one the approval mode refuses without asking, does not run
+  under it: it runs sealed, under ADR-0036's stricter profile of the same
+  backend (the workspace read-only, no home directory, no network), or, where
+  no sealed run can start, is refused. A sandboxed command is not trusted any
+  more than before. The sandbox only bounds what a misclassified one can do.
 - **One policy, not one per command (B2).** The whole filesystem is mounted
   read-only. One scratch directory per session is writable and set as
   `TMPDIR`: made under the OS temporary directory, private to the user, on
@@ -106,25 +109,32 @@ ADR-0008 stay as they are.
   way `codexSandbox.ts` probes Codex's, and the answer is kept for the
   process. Where it cannot start (no `bwrap`, Ubuntu 24.04's
   `kernel.apparmor_restrict_unprivileged_userns=1`, Windows), commands run on
-  the classifier alone, and the planner surface says so once per session,
-  through the session's notice, with the cause and the fix. Planning is not
-  blocked: the classifier alone is what every platform had before this.
-  Where the sandbox runs but one command cannot be put in it, that command
-  does not run.
+  the classifier alone, refusals stay refusals, and the planner surface says
+  so once per session, through the session's notice, with the cause, the fix
+  and that loops and scripts are refused for that reason. Planning is not
+  blocked: the classifier alone is what every platform had before this. The
+  sealed profile is probed next, with a throwaway overlay over the workspace
+  and then without; where neither starts, the sandbox still runs and the same
+  one notice says sealed runs are unavailable. Where the sandbox runs but one
+  command cannot be put in it, that command does not run.
 - **The seam is `ResearchShell` (B6).** The sandbox wraps the shell
   `resolveResearchShell` returns: the launcher and its policy become the
   `file` and leading `args`, followed by the POSIX shell. `commandPolicy` keeps
   reading `dialect` and classifies exactly the string that runs. Behind it
   sits one `SandboxBackend` (`services/sandbox/`), which turns a shell and a
-  `SandboxProfile` (what may be written and read, the network, the
-  environment, resource limits) into what to spawn. A backend refuses a
+  `SandboxProfile` (what may be written and read, a throwaway overlay, the
+  network, the environment and what is kept of the host's, resource limits)
+  into what to spawn. A backend refuses a
   profile it cannot enforce rather than run under less. A sandbox shares no
   state with another and needs no daemon, so a container, microVM or hosted
   backend is another implementation of the interface.
-- **It does not widen anything (B7).** A sandboxed shell is not a reason for
-  fewer prompts or more `auto` commands. Relaxing the classifier because a
-  sandbox exists would widen ADR-0008's envelope, and that needs its own ADR,
-  which would also have to account for the platforms where B5 applies.
+- **It widens one thing, and nothing about the tiers (B7).** A sandboxed
+  shell is not a reason for fewer prompts or more `auto` commands: what the
+  classifier allows or asks about runs under this policy, asked about as it
+  would be without a sandbox. The one change a verified sandbox makes is
+  ADR-0036's: a command the envelope would refuse without asking runs sealed
+  rather than refused, and a `!` exclusion or a person's denial still
+  refuses. Where B5 applies, a refusal is a refusal.
 - **Scope (B8).** This covers the shell behind the API planner's `bash` tool,
   its research subagents, and the harness planners' `run_command`, which is the
   same shell ([ADR-0026](0026-one-envelope-for-every-planner.md)). Runners are
@@ -205,3 +215,4 @@ probe's reason. CI's image needs no sandbox.
   phase 2 ([ADR-0027](0027-web-reads-in-the-planner-envelope.md)).
 - 2026-10-13 — a Codex planner whose own sandbox cannot start has its shell switched off, leaving `run_command` as its only shell ([ADR-0033](0033-codex-planner-without-its-sandbox.md)).
 - 2026-10-20 — implemented (#64): bubblewrap on Linux and Seatbelt, closed by default, on macOS, behind one `SandboxBackend`; a scratch directory per session; local service sockets hidden from commands without the network.
+- 2026-10-21 — a command the envelope would refuse without asking runs sealed under a stricter profile of the same backend, and the notice says loops and scripts are refused where none starts ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md), #109).

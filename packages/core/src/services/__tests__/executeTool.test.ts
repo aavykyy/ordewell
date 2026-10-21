@@ -26,6 +26,17 @@ function fakeFetcher(overrides?: Partial<IWebFetcher>): IWebFetcher {
 }
 
 describe('executeTool', () => {
+  describe('bash', () => {
+    it('asks for a sealed run only when the call says sealed is true (ADR-0036 S2)', async () => {
+      const bash = vi.fn().mockResolvedValue({ success: true, output: 'ok', truncated: false });
+      const fs = fakeFs({ bash });
+      await executeTool('bash', { command: 'ls', sealed: true }, fs);
+      await executeTool('bash', { command: 'ls', sealed: 'true' }, fs);
+      await executeTool('bash', { command: 'ls' }, fs);
+      expect(bash.mock.calls.map((call) => call.slice(2))).toEqual([[{ sealed: true }], [], []]);
+    });
+  });
+
   describe('fetch', () => {
     it('returns an error when no fetcher is provided', async () => {
       const result = await executeTool('fetch', { url: 'https://example.com' }, fakeFs());

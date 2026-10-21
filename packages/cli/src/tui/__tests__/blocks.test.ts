@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { MessageBlock } from '@ordewell/core';
+import type { MessageBlock, ToolBlock } from '@ordewell/core';
 import { stripAnsi, style } from '../ansi';
 import { conversationLines } from '../blocks';
 
@@ -116,5 +116,26 @@ describe('a task\'s runner commands in its log (#66)', () => {
       '     built-in: /compact /model',
       '     MCP servers: docs-server (pending)',
     ]);
+  });
+});
+
+describe('a command that ran sealed (ADR-0036 S4)', () => {
+  const sealedRun = (over: Partial<ToolBlock> = {}): ToolBlock => ({
+    type: 'tool', id: 'b1', tool: 'bash', headline: { name: 'Bash', keyArg: 'for f in *.md; do wc -l "$f"; done' },
+    args: '{"command":"for f in *.md; do wc -l \\"$f\\"; done"}', status: 'ok', outcome: 'success',
+    output: '3 README.md', outputLineCount: 1, sealed: true, ...over,
+  });
+  const plainRows = (block: ToolBlock, cols = 80, detailAll = false) =>
+    conversationLines([block], cols, detailAll).map(stripAnsi).filter((row) => row !== '');
+
+  it('says so after the command, and still closes it when the row is short', () => {
+    expect(plainRows(sealedRun())).toEqual(['● Bash(for f in *.md; do wc -l "$f"; done) · sealed', '  ⎿  3 README.md']);
+    expect(plainRows(sealedRun(), 30)[0]).toBe('● Bash(for f in *.m…) · sealed');
+    expect(plainRows(sealedRun(), 80, true)[0]).toBe('● Bash(for f in *.md; do wc -l "$f"; done) · sealed');
+  });
+
+  it('leads a failure with its own reason', () => {
+    const failed = sealedRun({ status: 'error', outcome: 'failure', output: 'Command exited 6:\ncurl: (6) Could not resolve host' });
+    expect(plainRows(failed)[1]).toBe('  ⎿  Error: Command exited 6:');
   });
 });

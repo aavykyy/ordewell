@@ -10,6 +10,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- **Sealed runs.** Where the planner's sandbox runs, a command its command
+  rules would refuse without asking (a loop over files, a here-document, a few
+  lines of Python over a command's output) runs sealed instead: the workspace
+  read-only, no home directory, no network, none of your credentials, and
+  limits on processes, memory and time. A planner can also ask for one with
+  `sealed: true` on `bash` or `run_command`, and research subagents run sealed
+  what they would have had to ask about. An allowlist exclusion and a command
+  you denied are still refused, and the research timeline marks a sealed step.
+  Without a sandbox, refusals stay as they were, and the planner's one notice
+  says why.
 - **The planner's shell runs in an OS sandbox on macOS and Linux.** Every
   command a planner runs, through `bash`, a research subagent or
   `run_command`, can write nothing outside a scratch directory of its

@@ -97,6 +97,13 @@ describe('ThinkingBlock', () => {
 });
 
 describe('CommandRow', () => {
+  it('marks a command that ran sealed, and no other (ADR-0036 S4)', () => {
+    const sealed = render(<CommandRow block={tool({ sealed: true })} expanded={false} />);
+    expect(sealed.container.querySelector('.cmd-row-sealed')!.textContent).toBe('sealed');
+    const plain = render(<CommandRow block={tool()} expanded={false} />);
+    expect(plain.container.querySelector('.cmd-row-sealed')).toBeNull();
+  });
+
   it('heads the row with the tool and its main argument, in monospace', () => {
     const { container } = render(<CommandRow block={tool()} expanded={false} />);
     const head = container.querySelector('code.cmd-row-head')!;

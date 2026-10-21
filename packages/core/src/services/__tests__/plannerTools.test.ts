@@ -1926,3 +1926,43 @@ describe('a task without saved logs', () => {
     expect(answer).toEqual({ isError: true, body: { ok: false, error: 'No saved task log is available for this task.', attempts: [] } });
   });
 });
+
+describe('run_command, sealed (ADR-0036)', () => {
+  const context = { signal: new AbortController().signal };
+  const runCommand = vi.fn(async () => ({ success: true, output: '[Ran sealed as asked: …]\n3', truncated: false }));
+  const handler = plannerToolHandler({
+    skills: () => [],
+    turnId: () => 'turn-1',
+    recordSkillLoad: () => false,
+    liveCatalog: async () => ({ runners: ['claude-code'], models: {}, modes: {}, autonomousDefault: true }),
+    adjustments: () => [],
+    submitPlan: () => true,
+    editPlan: async () => ({ ok: true as const, summary: [], queued: false }),
+    tasks: () => [],
+    read: async (_signature, answerRead) => ({ status: 'answered', value: await answerRead(), landNow: false }),
+    liveOutput: () => null,
+    lastAttempt: () => null,
+    taskLogAttempts: () => [],
+    taskLog: () => [],
+    taskDiff: async () => ({ available: false, reason: 'not available' }),
+    runCommand,
+    fetchUrl: async () => ({ success: true, output: '', truncated: false }),
+    webSearch: async () => undefined,
+    execute: async () => ({ ok: true, message: '' }),
+    editsRefused: () => undefined,
+    taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [], uncommitted: async () => new Map() }),
+  });
+
+  it('hands a sealed run to the session only when the planner asks for one, and returns what it said', async () => {
+    expect(await handler.runCommand!({ command: 'for f in *; do :; done', sealed: true }, context)).toEqual({ text: '[Ran sealed as asked: …]\n3' });
+    await handler.runCommand!({ command: 'git status' }, context);
+    expect(runCommand.mock.calls.map((call: unknown[]) => call.slice(2))).toEqual([[{ sealed: true }], []]);
+  });
+
+  it('offers `sealed` and says what a sealed run is, for every harness planner', () => {
+    const tool = PLANNER_TOOLS.find((t) => t.name === 'run_command')!;
+    expect(tool.description).toContain('runs sealed instead: no network, no home directory or credentials');
+    expect(Object.keys(tool.inputSchema.properties as Record<string, unknown>)).toEqual(['command', 'sealed']);
+    expect(tool.inputSchema.required).toEqual(['command']);
+  });
+});

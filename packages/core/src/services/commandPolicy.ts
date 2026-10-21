@@ -47,7 +47,7 @@ import { SHELL_STATE_COMMANDS, dialectFor, lexAll, literalCdTarget, type Segment
 import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
 import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, takesNextToken, valueFlagIn } from './flagPolicy';
 import { AWK_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
-import { commandAllowedBy, scopeExcluded, type PlannerAllowlist } from './plannerAllowlist';
+import { commandAllowedBy, commandExcludedBy, scopeExcluded, type PlannerAllowlist } from './plannerAllowlist';
 import { EFFECT_REFUSAL_HINT, READ_REFUSAL_HINT, webCommand, wgetVersionCommands } from './webCommands';
 import { EFFECT_ROUTE } from './effectRoute';
 
@@ -370,6 +370,21 @@ export function pathRefs(command: string, opts: CommandPolicyOptions = {}): Path
       .flatMap(pathIn)
       .map((path) => ({ path, cwd }));
   });
+}
+
+/**
+ * The `!` allowlist entry naming a command on this line, read from every word
+ * of every segment the lexer finds, or undefined (ADR-0036 S3). Not a
+ * classification: a line the classifier refuses unread can still run sealed,
+ * and the user's exclusion holds for it all the same.
+ */
+export function excludedBy(command: string, allow: PlannerAllowlist, opts: CommandPolicyOptions = {}): string | undefined {
+  const { segments } = lexAll(command.trim(), dialectFor(opts.dialect), opts.cdpathSet);
+  for (const seg of segments) {
+    const rule = commandExcludedBy(allow, [seg.binary, ...seg.args]);
+    if (rule) return rule;
+  }
+  return undefined;
 }
 
 /**

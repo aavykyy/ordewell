@@ -60,6 +60,15 @@ export const SEARCH_EXCLUSIONS = [
   'vendor', 'coverage', '.turbo', '.cache', '.gradle', 'Pods', '.terraform',
 ];
 
+export interface BashOptions {
+  /**
+   * Run the command sealed (ADR-0036 S2): no network, no home directory,
+   * nothing written reaching the workspace, and nobody asked. Refused where
+   * the host has no sandbox to seal it in.
+   */
+  sealed?: boolean;
+}
+
 export interface IFileSystem {
   readFile(path: string, opts?: ReadFileOpts): Promise<ToolOutcome>;
   readFiles(paths: string[]): Promise<ToolOutcome>;
@@ -72,7 +81,7 @@ export interface IFileSystem {
    * tools here are short enough that the loop's between-call abort check is
    * indistinguishable from cancelling them mid-flight; a `bash` call is not.
    */
-  bash(command: string, signal?: AbortSignal): Promise<ToolOutcome>;
+  bash(command: string, signal?: AbortSignal, opts?: BashOptions): Promise<ToolOutcome>;
   /** Definition-first lookup for one symbol. See `symbolPatterns.ts`. */
   findSymbol(symbol: string, opts?: FindSymbolOptions): Promise<ToolOutcome>;
   getWorkspaceRoot(): string;
@@ -87,4 +96,6 @@ export interface IFileSystem {
   setNotice?(notice: (message: string) => void): void;
   /** The session ended: its scratch directory is removed, and the next command starts a fresh one (ADR-0011 B2). */
   endSession?(): void;
+  /** Whether a command can run sealed on this host (ADR-0036 S6); where it cannot, the session's one notice says so. */
+  canSeal?(): Promise<boolean>;
 }

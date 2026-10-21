@@ -191,7 +191,7 @@ describe('a loop\'s check whose result a planner turn asked for (ADR-0045 L3, L6
     status: 'failed',
     loop: { body: ['t2'], maxRounds: 3 },
     loopRound,
-    verdict: { taskId: 't1', outcome: 'fail', reason: 'two tests fail', checks: [], decidedAt: '2026-10-13T00:00:00Z', reported: 'failed' },
+    verdict: { outcome: 'fail', reason: 'two tests fail', checks: [], decidedAt: '2026-10-13T00:00:00Z', reported: 'failed' },
   });
   const owed = (loopRound: number): Task => ({ ...task('t1', 1, failedRound(loopRound)), reportTo: { actor: 'planner-turn', consent: { by: 'autorun' } } });
 

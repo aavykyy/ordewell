@@ -2,19 +2,38 @@ import * as fsSync from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { ResearchShell, ShellLaunch } from '../researchShell';
+import { SEALED_RUN_MARK } from '../researchStepSummary';
 import { BubblewrapBackend, findBubblewrap } from './bubblewrap';
 import { SANDBOX_EXEC, SeatbeltBackend } from './seatbelt';
-import { execProbe, type ProbeExec, type SandboxBackend, type SandboxProfile } from './SandboxBackend';
+import { execProbe, type ProbeExec, type SandboxBackend, type SandboxInvocation, type SandboxLimits, type SandboxProfile } from './SandboxBackend';
 
 /**
  * The planner's shell inside an OS sandbox (ADR-0011): every command the
  * planner's `bash` tool, its research subagents and a harness planner's
  * `run_command` start runs where nothing outside one scratch directory per
  * session can be written. It sits underneath the classifier and changes
- * nothing about which commands are `auto`, `ask` or `refuse` (B1, B7).
+ * nothing about which commands are `auto`, `ask` or `refuse` (B1). Where it
+ * runs, a command the envelope would refuse without asking can run sealed
+ * instead, under a stricter profile of its own (ADR-0036 S1, S2).
  */
 
 export const PLANNER_SANDBOX_DOCS = 'https://github.com/ordewell/ordewell/blob/main/docs/troubleshooting.md#planner-shell-not-sandboxed';
+
+/** Where a sealed run starts: the workspace it reads, and the one other directory, if any, it may write (ADR-0036 S1). */
+export interface SealedRunOptions {
+  workspace: string;
+  /** None by default, so the workspace stays read-only. A read-only task passes its own throwaway worktree (#104). */
+  writable?: string;
+}
+
+export type SealedAvailability =
+  | {
+    available: true;
+    /** The sealed profile on this host; without a scratch directory, nothing is writable. */
+    profile: (opts: SealedRunOptions & { scratch?: string }) => SandboxProfile;
+  }
+  /** The session's one notice where the sandbox runs but cannot start a sealed run (S6). */
+  | { available: false; notice: string };
 
 export type PlannerSandboxAvailability =
   | {
@@ -22,12 +41,15 @@ export type PlannerSandboxAvailability =
     backend: SandboxBackend;
     /** The planner's profile on this host; without a scratch directory, nothing is writable. */
     profile: (opts: { scratch?: string; network: boolean }) => SandboxProfile;
+    sealed: SealedAvailability;
   }
   /** The one notice the planner surface shows a session (B5). */
   | { available: false; notice: string };
 
 export interface PlannerSandboxDeps {
   platform?: NodeJS.Platform;
+  /** An existing directory a sealed probe can mount as its workspace. */
+  probeWorkspace?: string;
   env?: NodeJS.ProcessEnv;
   exists?: (file: string) => boolean;
   /** An existing path's canonical form and whether it is a directory, or null. */
@@ -112,8 +134,76 @@ export function plannerShellProfile(
   };
 }
 
+/**
+ * What a sealed run may read outside the workspace (S1): what programs need
+ * to start, and none of the user's files. Linux's are named where programs
+ * look for them, links included (`/bin`, `/lib64`), since bubblewrap mounts
+ * each where it is named; macOS's are canonical, as Seatbelt matches them.
+ * Those not on this host are left out.
+ */
+const SEALED_READS: Partial<Record<NodeJS.Platform, readonly string[]>> = {
+  linux: [
+    '/usr', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/libx32',
+    '/etc/alternatives', '/etc/ld.so.cache', '/etc/ld.so.conf', '/etc/ld.so.conf.d',
+    '/etc/passwd', '/etc/group', '/etc/nsswitch.conf', '/etc/localtime',
+    // NixOS keeps every program in its store.
+    '/nix/store', '/run/current-system',
+  ],
+  darwin: [
+    '/System', '/usr', '/bin', '/sbin', '/dev', '/private/etc',
+    // Apple's `/usr/bin` shims (`git`, `python3`) find their tools through these.
+    '/private/var/select', '/private/var/db/xcode_select_link', '/Library/Developer/CommandLineTools',
+    '/private/var/db/timezone', '/Library/Frameworks', '/opt/homebrew',
+  ],
+};
+
+/**
+ * Inside those, where Homebrew keeps the data of the services the user runs
+ * with it. Its `etc` stays readable: git and OpenSSL stop on a configuration
+ * file the sandbox denies rather than one that is missing.
+ */
+const SEALED_MASKS: Partial<Record<NodeJS.Platform, readonly string[]>> = {
+  darwin: ['/usr/local/var', '/opt/homebrew/var'],
+};
+
+/**
+ * The host variables a sealed run keeps: where programs are, and how to
+ * print. None holds a credential, which a sealed run must not have (S1); its
+ * `HOME` is the scratch directory.
+ */
+const SEALED_ENV: readonly string[] = [
+  'PATH', 'LANG', 'LANGUAGE', 'LC_ALL', 'LC_COLLATE', 'LC_CTYPE', 'LC_MESSAGES', 'LC_MONETARY', 'LC_NUMERIC', 'LC_TIME',
+  'TZ', 'TERM', 'USER', 'LOGNAME', '__CF_USER_TEXT_ENCODING',
+];
+
+/** Enough for a loop over a repository's files, a pipeline or a short script; not for a build. */
+export const SEALED_LIMITS: SandboxLimits = { processes: 256, memoryBytes: 4 * 1024 ** 3, wallTimeMs: 60_000 };
+
+/**
+ * A sealed run's profile (S1): the workspace read-only, or a throwaway
+ * overlay over it where the host has one; the scratch directory writable and
+ * its `HOME`; outside the workspace only {@link SEALED_READS}; no network, a
+ * /tmp of its own, and limits.
+ */
+export function sealedShellProfile(
+  host: { platform: NodeJS.Platform; reads: readonly string[]; masked: readonly string[]; overlay: boolean },
+  opts: SealedRunOptions & { scratch?: string },
+): SandboxProfile {
+  return {
+    write: [opts.scratch, opts.writable].filter((p): p is string => !!p),
+    read: [...host.reads, opts.workspace],
+    ...(host.overlay ? { throwaway: [opts.workspace] } : {}),
+    masked: host.masked,
+    network: false,
+    privateTmp: true,
+    env: opts.scratch ? { ...scratchEnv(opts.scratch, host.platform), HOME: opts.scratch } : {},
+    inheritEnv: SEALED_ENV,
+    limits: SEALED_LIMITS,
+  };
+}
+
 const LEAD = "The planner's shell runs without an OS sandbox on this machine";
-const STILL = "Its commands are still held to Ordewell's command rules, as everywhere, but nothing at the OS level stops one that gets past them from writing.";
+const STILL = "Its commands are still held to Ordewell's command rules, as everywhere, but nothing at the OS level stops one that gets past them from writing, and a command those rules refuse, such as a loop or a script for an interpreter, is refused rather than run sealed.";
 const RESTART = 'then restart Ordewell: the sandbox is checked once per process.';
 
 function unavailable(cause: string, fix?: string): PlannerSandboxAvailability {
@@ -135,13 +225,13 @@ async function detect(deps: PlannerSandboxDeps): Promise<PlannerSandboxAvailabil
 
   let backend: SandboxBackend;
   let services: string[] = [];
+  const stat = deps.stat ?? defaultStat;
   if (platform === 'darwin') {
     if (!exists(SANDBOX_EXEC)) return unavailable(`${SANDBOX_EXEC} is missing`);
     backend = new SeatbeltBackend(exec);
   } else if (platform === 'linux') {
     const bwrap = findBubblewrap(env, exists);
     if (!bwrap) return unavailable('bubblewrap (bwrap) is not installed', `Install it (for example \`sudo apt install bubblewrap\`), ${RESTART}`);
-    const stat = deps.stat ?? defaultStat;
     backend = new BubblewrapBackend(bwrap, { exec, isDirectory: (p) => stat(p)?.directory ?? false });
     services = localServices(env, stat, 'uid' in deps ? deps.uid : process.getuid?.());
   } else {
@@ -151,7 +241,7 @@ async function detect(deps: PlannerSandboxDeps): Promise<PlannerSandboxAvailabil
   const profile = (opts: { scratch?: string; network: boolean }) => plannerShellProfile({ platform, services }, opts);
   // The stricter of the two profiles, so a host that can start one can start both.
   const probe = await backend.probe(profile({ network: false }));
-  if (probe.ok) return { available: true, backend, profile };
+  if (probe.ok) return { available: true, backend, profile, sealed: await detectSealed(backend, platform, stat, deps.probeWorkspace) };
 
   const detail = firstLine(probe.detail);
   if (platform === 'linux' && USERNS_FAILURE.test(probe.detail)) {
@@ -161,6 +251,43 @@ async function detect(deps: PlannerSandboxDeps): Promise<PlannerSandboxAvailabil
     );
   }
   return unavailable(`${backend.name} could not start (${detail})`);
+}
+
+/**
+ * Whether this host's sandbox can also hold a sealed run, probed with the
+ * sealed profile itself: its read list, its limits, and an overlay over the
+ * workspace, then without the overlay where that one cannot start.
+ */
+async function detectSealed(
+  backend: SandboxBackend,
+  platform: NodeJS.Platform,
+  stat: NonNullable<PlannerSandboxDeps['stat']>,
+  probeWorkspace = os.tmpdir(),
+): Promise<SealedAvailability> {
+  const existing = (paths: readonly string[] | undefined) => (paths ?? []).filter((p) => stat(p) !== null);
+  // Seatbelt matches the path the kernel resolves, a link as the link itself; bubblewrap mounts a link where it is named.
+  const named = (paths: readonly string[]) => (platform === 'darwin'
+    ? paths.map((p) => path.posix.join(stat(path.posix.dirname(p))?.canonical ?? path.posix.dirname(p), path.posix.basename(p)))
+    : paths);
+  const developerDir = platform === 'darwin' ? stat('/private/var/select/developer_dir')?.canonical : undefined;
+  const reads = [...new Set([...named(existing(SEALED_READS[platform])), ...(developerDir ? [developerDir] : [])])];
+  const masked = named(existing(SEALED_MASKS[platform]));
+  const workspace = stat(probeWorkspace)?.canonical ?? probeWorkspace;
+
+  let detail = '';
+  for (const overlay of [true, false]) {
+    const profile = (opts: SealedRunOptions & { scratch?: string }) => sealedShellProfile({ platform, reads, masked, overlay }, opts);
+    const probe = await backend.probe(profile({ workspace }));
+    if (probe.ok) return { available: true, profile };
+    detail = firstLine(probe.detail);
+  }
+  return {
+    available: false,
+    notice: [
+      `Sealed runs are unavailable on this machine: ${backend.name} could not start one (${detail}). The planner's commands still run in the sandbox, but one Ordewell's command rules refuse, such as a loop or a script for an interpreter, is refused rather than run sealed.`,
+      PLANNER_SANDBOX_DOCS,
+    ].join('\n\n'),
+  };
 }
 
 let cached: Promise<PlannerSandboxAvailability> | null = null;
@@ -252,7 +379,7 @@ export interface PlannerShellLaunch {
 /**
  * One session's view of the sandbox: its scratch directory, made on the first
  * command and removed when the session ends, and its one notice when the
- * sandbox cannot run here.
+ * sandbox, or a sealed run in it, cannot run here.
  */
 export class PlannerShellSandbox {
   private scratch: string | null = null;
@@ -275,20 +402,40 @@ export class PlannerShellSandbox {
   async launch(shell: ResearchShell, opts: { network: boolean }): Promise<PlannerShellLaunch> {
     const availability = await this.resolve();
     if (!availability.available) {
-      if (!this.noticed) {
-        this.noticed = true;
-        this.notice(availability.notice);
-      }
+      this.say(availability.notice);
       return { launch: shell, sandboxed: false };
     }
-    // Wrapping puts the command in a POSIX shell, and a command classified as cmd.exe must never run in one.
-    if (shell.dialect !== 'posix') throw new Error(`the sandbox runs a POSIX shell, and this one is ${shell.dialect}`);
+    if (!availability.sealed.available) this.say(availability.sealed.notice);
     const launch = availability.backend.wrap(
-      // `file: null` is Node's `shell: true`, which on POSIX is `/bin/sh -c`.
-      { shell: shell.file ?? '/bin/sh', shellArgs: shell.file === null ? ['-c'] : shell.args, env: process.env },
+      this.invocation(shell),
       availability.profile({ scratch: this.scratchDir(), network: opts.network }),
     );
     return { launch, sandboxed: true };
+  }
+
+  /** Whether a command can run sealed here (ADR-0036 S6). Where it cannot, the session's one notice says so. */
+  async canSeal(): Promise<boolean> {
+    const availability = await this.resolve();
+    if (!availability.available) this.say(availability.notice);
+    else if (!availability.sealed.available) this.say(availability.sealed.notice);
+    return availability.available && availability.sealed.available;
+  }
+
+  /**
+   * The launch for one sealed run (S1), in this session's scratch directory.
+   * Throws where sealed runs are unavailable, which {@link canSeal} answers
+   * first, and for a shell the sandbox cannot wrap.
+   */
+  async launchSealed(shell: ResearchShell, opts: SealedRunOptions): Promise<ShellLaunch> {
+    const availability = await this.resolve();
+    if (!availability.available || !availability.sealed.available) throw new Error('sealed runs are unavailable on this machine');
+    // Canonical, because Seatbelt matches the path the kernel resolves, and the workspace is where the command starts.
+    const canonical = (p: string) => fsSync.realpathSync(p);
+    return availability.backend.wrap(this.invocation(shell), availability.sealed.profile({
+      scratch: this.scratchDir(),
+      workspace: canonical(opts.workspace),
+      ...(opts.writable ? { writable: canonical(opts.writable) } : {}),
+    }));
   }
 
   /** The session ended: its scratch directory goes, and a next session starts with a fresh one and its own notice. */
@@ -296,6 +443,19 @@ export class PlannerShellSandbox {
     if (this.scratch) removeScratch(this.scratch);
     this.scratch = null;
     this.noticed = false;
+  }
+
+  private say(notice: string): void {
+    if (this.noticed) return;
+    this.noticed = true;
+    this.notice(notice);
+  }
+
+  private invocation(shell: ResearchShell): SandboxInvocation {
+    // Wrapping puts the command in a POSIX shell, and a command classified as cmd.exe must never run in one.
+    if (shell.dialect !== 'posix') throw new Error(`the sandbox runs a POSIX shell, and this one is ${shell.dialect}`);
+    // `file: null` is Node's `shell: true`, which on POSIX is `/bin/sh -c`.
+    return { shell: shell.file ?? '/bin/sh', shellArgs: shell.file === null ? ['-c'] : shell.args, env: process.env };
   }
 
   private scratchDir(): string {
@@ -317,3 +477,15 @@ export function sandboxedFailureNote(output: string, network: boolean): string |
   if (!SANDBOX_DENIAL.test(output)) return null;
   return `The planner's shell is sandboxed: it cannot write outside its scratch directory ($TMPDIR)${network ? '' : ', and a command that runs without asking has no network'}. A change belongs in the plan as a task.`;
 }
+
+/**
+ * The line a sealed run's result starts with (ADR-0036 S4): that it ran
+ * sealed and what that means, so a loop of cloud calls that fails on the
+ * network is understood rather than retried.
+ */
+export function sealedRunHeader(why: 'asked' | 'refused'): string {
+  return `${SEALED_RUN_MARK} ${why === 'asked' ? 'as asked' : 'instead of being refused'}: no network, no home directory, and nothing it writes reaches the workspace. $HOME and $TMPDIR are this session's scratch directory, the one place it can write, which later commands can read.]`;
+}
+
+/** Appended to a sealed run that failed: what it could never have done, and what to do in place of a retry. */
+export const SEALED_FAILURE_NOTE = "A sealed run cannot reach the network, the user's credentials or their files outside the workspace, and cannot change the workspace, so running it sealed again fails the same way. To read something it could not, run each command on its own, without a loop or inline code, so Ordewell's command rules can judge it; a change belongs in the plan as a task.";

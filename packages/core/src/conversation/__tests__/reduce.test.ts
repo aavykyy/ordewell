@@ -153,6 +153,21 @@ describe('reduceConversation', () => {
       ]);
     });
 
+    it('marks a command that ran sealed and shows its output without the line the model reads that from (ADR-0036 S4)', () => {
+      const result = '[Ran sealed as asked: no network, no home directory, and nothing it writes reaches the workspace.]\n3 files\n2 dirs';
+      const view = play([
+        { type: 'research_step', tool: 'bash', args: '{"command":"for f in *; do :; done","sealed":true}', toolCallId: 'c1' },
+        { type: 'research_step_done', step: { id: 'rs-1', tool: 'bash', args: '{"command":"for f in *; do :; done","sealed":true}', result, success: true, outcome: 'success', toolCallId: 'c1', timestamp: '2026-10-21T10:00:00.000Z' } },
+        { type: 'research_step', tool: 'read_file', args: '{"path":"x"}', toolCallId: 'c2' },
+        { type: 'research_step_done', step: { id: 'rs-2', tool: 'read_file', args: '{"path":"x"}', result, success: true, outcome: 'success', toolCallId: 'c2', timestamp: '2026-10-21T10:00:00.000Z' } },
+      ]);
+
+      const [bash, read] = unkeyed(view.blocks).filter((b) => b.type === 'tool');
+      expect(bash).toMatchObject({ sealed: true, output: '3 files\n2 dirs', outputLineCount: 2 });
+      expect(read).not.toHaveProperty('sealed');
+      expect(read).toMatchObject({ output: result });
+    });
+
     it('falls back to the tool name for calls announced without an id', () => {
       const view = play([
         { type: 'research_step', tool: 'grep', args: '{"pattern":"a"}' },

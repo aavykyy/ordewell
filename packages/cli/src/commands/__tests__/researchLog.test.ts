@@ -62,6 +62,11 @@ describe('formatStepLine', () => {
     expect(loud.length).toBeGreaterThan(quiet.length);
   });
 
+  it('tags a sealed run, and previews what it printed rather than the line that says so (ADR-0036 S4)', () => {
+    const sealed = { tool: 'bash' as ResearchStep['tool'], args: '{"command":"for f in *; do :; done"}', result: '[Ran sealed as asked: no network.]\n3 files' };
+    expect(formatStepLine(done(sealed))).toBe('✓ Bash(for f in *; do :; done) [sealed] → 3 files');
+  });
+
   it('indents a settled subagent call too', () => {
     expect(formatStepLine(done({ result: '' }, { subagentId: 'sub-1' }))).toBe('  ↳ ✓ Read(src/auth.ts)');
   });

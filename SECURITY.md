@@ -31,7 +31,11 @@ their own repositories. The parts most worth your attention:
   to make the planner mutate the workspace, or silently reach outside it, is a
   vulnerability. The design is in
   [ADR-0008](docs/adr/planner-envelope/0008-planner-exploration-envelope.md) and the classifier
-  is `packages/core/src/services/commandPolicy.ts`.
+  is `packages/core/src/services/commandPolicy.ts`. Where the planner's sandbox
+  runs, a command the envelope would refuse without asking anyone runs sealed
+  instead
+  ([ADR-0036](docs/adr/planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md)),
+  so for those the sandbox, not the classifier, is the barrier.
 - **Command policy bypass.** Prompt content that gets a would-be-refused command
   classified as safe.
 
@@ -60,6 +64,19 @@ their own repositories. The parts most worth your attention:
   ran without asking, is in scope. A command the user approved keeps the
   network and the local services it reaches through it (ADR-0011 lists them);
   that is what the approval grants.
+- **Sealed runs.** A sealed run executes a command no classifier vouched for,
+  so its profile is the whole guarantee: the workspace read-only (or under a
+  throwaway overlay), the session's scratch directory its only writable place
+  and its home, no network, nothing of yours outside the workspace readable,
+  none of the credentials in Ordewell's environment, and limits on processes,
+  memory and time. A way for one to change the workspace, read your home
+  directory or another repository, reach the network or a local service, see
+  a credential, or outlive its limits is in scope, as is a way to run a
+  command sealed that a `!` allowlist exclusion names or that you denied. On
+  macOS, a process that leaves the run's process group (`setsid`) is not
+  killed with it, though it keeps the sealed profile, and a sealed run can
+  read the command lines (not the environments) of your other processes,
+  which Seatbelt does not filter; keep secrets out of command lines.
 - **The local API server.** `@ordewell/web` binds `127.0.0.1` and, since
   `0.4.8`, authenticates every request against a bearer token minted at daemon
   startup and written to an owner-readable file; browser `Origin` headers are
@@ -94,7 +111,12 @@ except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-s
   [ADR-0032](docs/adr/planner-envelope/0032-runner-state-outside-the-workspace.md)).
   Their shell commands run in ADR-0011's OS sandbox where the host has one:
   nothing outside a scratch directory can be written, and a command that runs
-  without asking has no network.
+  without asking has no network. There, a command the envelope would refuse
+  without asking runs sealed instead: no network, no home directory, nothing
+  readable outside the workspace but the system's own files, and nothing
+  written reaching the workspace. A `!` exclusion and a command you denied
+  are still refused
+  ([ADR-0036](docs/adr/planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md)).
 - **Change and ops tasks run as you**, with the runner's own native tools, in
   the mode their plan assigned
   ([ADR-0020](docs/adr/isolation/0020-ops-tasks-and-merge-gates.md)). They can read and

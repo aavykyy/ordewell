@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyCommand } from '../commandPolicy';
+import { classifyCommand, excludedBy } from '../commandPolicy';
 import { DEFAULT_PLANNER_ALLOWLIST, parseAllowlist, scopeAllowed, toolAllowed } from '../plannerAllowlist';
 
 /**
@@ -154,4 +154,32 @@ it('matches each curl origin after safe flags and requires coverage of every URL
   expect(allowedBy('curl -s https://docs.example/a https://evil.test/b', list)).toBeUndefined();
   expect(scopeAllowed(list, 'curl https://docs.example/*')).toBe(true);
   expect(scopeAllowed(list, 'curl https://evil.test/*')).toBe(false);
+});
+
+/**
+ * An exclusion is the user's never, and a sealed run's line may be one the
+ * classifier refused unread, so the excluded command is looked for at every
+ * word of every segment (ADR-0036 S3).
+ */
+describe('an exclusion a sealed run still honours', () => {
+  const list = parseAllowlist(['!kubectl *secret*', '!* --output-file*', 'kubectl get *']);
+
+  it.each([
+    ['kubectl get secrets', '!kubectl *secret*'],
+    ['for n in a b; do kubectl get secret "$n"; done', '!kubectl *secret*'],
+    ['env K=1 /usr/local/bin/kubectl get SECRETS', '!kubectl *secret*'],
+    ['xargs kubectl get secret < names', '!kubectl *secret*'],
+    ['echo "$(kubectl get secret x)" | python3 -c "print(1)"', '!kubectl *secret*'],
+    ['gh run download --output-file=x', '!* --output-file*'],
+  ])('finds the one naming `%s`', (command, rule) => {
+    expect(excludedBy(command, list)).toBe(rule);
+  });
+
+  it.each([
+    'kubectl get pods',
+    'for f in *.md; do wc -l "$f"; done',
+    'python3 -c "print(1)"',
+  ])('finds none in `%s`', (command) => {
+    expect(excludedBy(command, list)).toBeUndefined();
+  });
 });

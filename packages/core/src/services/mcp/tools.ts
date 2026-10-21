@@ -29,8 +29,18 @@ const listModelsInput = z.object({
   runner: z.string().min(1).describe('A runner id from list_runners.'),
 });
 
+/**
+ * What a sealed run is, said where the model chooses the tool (ADR-0036 S4)
+ * and shared with the API planner's `bash`, so a sealed failure on the
+ * network reads as the sandbox's doing rather than one to retry.
+ */
+export const SEALED_RUNS = 'Where this machine has a sandbox, a command that would be refused without asking (a loop, a here-document, a pipe into python3) runs sealed instead: no network, no home directory or credentials, and nothing it writes reaches the workspace; $TMPDIR, which is also $HOME, is a scratch directory kept for this session. Its result starts with "[Ran sealed".';
+
+export const SEALED_PARAM = 'Run it sealed, without asking anyone: for local computation over the workspace, such as a loop over files or a pipeline into python3. Never for a command that needs the network or the user\'s accounts; it fails sealed. An allowlist exclusion and a command the user denied are refused either way.';
+
 const runCommandInput = z.object({
   command: z.string().min(1).describe('One shell command line, run from the workspace root.'),
+  sealed: z.boolean().optional().describe(SEALED_PARAM),
 });
 
 const fetchInput = z.object({
@@ -306,7 +316,8 @@ export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
  * read-only, pre-allowed or not. True of the workspace for every planner tool
  * but the execution tools: `submit_plan` and `edit_plan` write only Ordewell's plan, through the same
  * validation as the envelopes (ADR-0022, P1/P2), `run_command` refuses
- * every write the classifier sees (ADR-0026), and `fetch` and `web_search`
+ * every write the classifier sees (ADR-0026) or runs it sealed, where it
+ * cannot write the workspace (ADR-0036), and `fetch` and `web_search`
  * only send a GET (ADR-0027).
  */
 const PLANNER_READ_ONLY = { readOnlyHint: true };
@@ -361,7 +372,7 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     taskOutputInput, (h) => h.taskOutput?.bind(h), PLANNER_READ_ONLY),
   tool('task_diff', 'Read what a task changed since it started: file stats with repository paths, or a single file patch with path and repo. Paged by since/nextOffset. Shared runs without recorded changes report not available.',
     taskDiffInput, (h) => h.taskDiff?.bind(h), PLANNER_READ_ONLY),
-  tool('run_command', 'Run a shell command for research: git, gh, az, kubectl, the project\'s own tooling, anything you need to look at. Read-only commands run at once; others ask the user, once per command family; commands that write files are refused. Use it instead of a shell of your own.',
+  tool('run_command', `Run a shell command for research: git, gh, az, kubectl, the project's own tooling, anything you need to look at. Read-only commands run at once; others ask the user, once per command family; commands that write files never change anything. ${SEALED_RUNS} Use it instead of a shell of your own.`,
     runCommandInput, (h) => h.runCommand?.bind(h), PLANNER_READ_ONLY),
   // Fallbacks (ADR-0027): a runner's own fetch or search, where it has one, is
   // decided by the same policy and carries the provider's own summaries, so
