@@ -1,8 +1,7 @@
 ---
 status: accepted
-implemented: partial
-amends: ["0001", "0013", "0022", "0036", "0037"]
-note: "the core is built (#104); withholding each runner's own writes and shell, and telling the planner, wait for the per-runner change"
+implemented: full
+amends: ["0001", "0013", "0022", "0027", "0028", "0033", "0036", "0037"]
 ---
 
 # 0046 — A read-only task is Ordewell's: its runner's reads, a sealed shell, and nothing lands
@@ -76,6 +75,36 @@ nothing.
   the user can, and confining it by path cannot see that. Withholding them
   keeps every write a read-only task makes inside the OS sandbox.
 
+- **Claude Code** uses `default`, its stdio permission prompt, user setting
+  sources only and hooks disabled, as the planner does (ADR-0028). `Read`,
+  `Grep`, `Glob` and `LS` are decided automatically by Ordewell against the
+  task worktree and session workspace, with symlinks resolved. A read outside
+  both is refused, never asked. Edit, write, notebook, shell and plan-mode
+  transition tools are withheld. Ordewell's three task tools are pre-allowed.
+  The assigned model runs directly; native plan mode's model pin is gone.
+- **OpenCode 1.x and 2.x** use the `build` agent under Ordewell's read-only
+  permission profile. Native reads are allowed, external directories denied
+  except the task worktree and session workspace, and writes, shells,
+  delegation, browser, LSP and code-mode execution denied. Project config is
+  disabled and LSP startup off, as for the planner (ADR-0028). Ordewell's
+  three task tools are allowed by exact name. 2.x must expose MCP tools
+  outside code mode or the task cannot start. A read-only attempt never
+  resumes a session with old permissions.
+- **Codex** keeps its read-only sandbox setting and declines native file
+  changes, with `features.shell_tool = false` and `features.unified_exec =
+  false` (ADR-0033). Its code-mode tool discovery and MCP tools remain;
+  file reads and repository searches that would use its shell instead go
+  through `run_command`. The profile needs no native sandbox probe, so it
+  stays available on hosts where Guarded is unavailable. Project config is
+  untrusted, as for the planner. No model is replaced.
+- **Native web tools are refused.** ADR-0027's unasked web reads require the
+  web policy's outbound-secret checks, exclusions, budget and decision log.
+  A task has no planner web-policy channel, and nobody to approve an
+  unchecked native fetch or search. Claude's `WebFetch` and `WebSearch` are
+  denied at the permission gate, OpenCode's fetch and searches in its policy,
+  and Codex's `web_search` is disabled. A task may still run an allowlisted
+  network command through its task shell under the existing command rules.
+
 ### Nothing lands
 
 - **A pass lands nothing.** A read-only attempt (`AttemptKind` `readOnly`, and
@@ -134,9 +163,9 @@ nothing.
 - A read-only task can run the project's tests, try a fix and add a failing
   test, and none of it reaches the plan's branches; its report is the result.
 - Native read tools still run as the user, outside the sandbox, as far as each
-  runner's own read rules let them, and a link a sealed command makes in the
-  worktree can name a file outside it. What such a read finds reaches the model
-  and its report; it writes nothing.
+  runner's own read rules let them, with Claude's resolved-path gate and
+  OpenCode's native directory permission checks. These reads are not an OS
+  sandbox; what a runner's read finds reaches the model and its report.
 - On macOS a read-only task's sealed runs keep the three residuals ADR-0036
   records (other processes' command lines and environments, existing launchd
   jobs, the shared here-document files), and a process that leaves a sealed
@@ -146,10 +175,12 @@ nothing.
   at, and no worktree.
 - Where no sandbox runs, a read-only task runs only the classifier's read-only
   commands and what the allowlist covers.
-- Once the per-runner part is implemented, research tasks may start without
-  approval (ADR-0037 R4), and the planner is told a read-only task can run
-  commands.
+- Research tasks can build on this profile for their start without approval
+  (ADR-0037 R4); their lifecycle is separate. The planner is told a read-only
+  task can run commands.
 
 ## History
 
 - 2026-10-21 — accepted; implemented in core, the per-runner part pending.
+
+- 2026-10-21 — implemented on every built-in runner; native plan modes replaced, native web tools refused without a task web-policy channel, and the planner told commands can run.

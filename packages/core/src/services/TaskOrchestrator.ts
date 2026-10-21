@@ -2657,6 +2657,7 @@ export class TaskOrchestrator {
       attempt: attempt.attempt,
       ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
       ...(shell ? { shell } : {}),
+      workspaceRoot: this.workspaceRootFn(),
       onNotice: (message) => this.tell('warn', `Task "${task.title}": ${message}`),
     });
   }

@@ -227,9 +227,9 @@ function oneShot(isolatedExecution: false | RepoGroupLayout) {
 }
 
 describe('read-only guidance (ADR-0031)', () => {
-  it('keeps read-only off a task that must run commands, an ops task included', () => {
+  it('lets read-only tasks run commands in a disposable worktree, and keeps ops tasks separate', () => {
     for (const p of [conversation(false), oneShot(LONE_REPO)]) {
-      expect(p).toMatch(/"readOnly".*never on a task that must run commands.*tests, scripts, builds.*ops task/i);
+      expect(p).toMatch(/"readOnly".*land nothing.*tests, scripts and builds.*run_command.*ops task/i);
     }
   });
 });

@@ -1209,7 +1209,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
     });
 
     // Planner-only: a task, an ops task above all (ADR-0020), keeps the user's own search setting.
-    it.each(modeIds(CODEX_MANIFEST))('leaves a %s task thread with no search setting of Ordewell\'s, fresh or resumed', async (mode) => {
+    it.each(modeIds(CODEX_MANIFEST).filter((mode) => mode !== 'plan'))('leaves a %s task thread with no search setting of Ordewell\'s, fresh or resumed', async (mode) => {
       const { spawned, processDeps } = deps([...handshake(), ...handshake()]);
       const opened: RpcLine[] = [];
       for (const resumeSessionId of [undefined, 'thr-task-1']) {

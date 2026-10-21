@@ -65,7 +65,7 @@ export function parseAutonomyLevel(arg: string | undefined): boolean | null {
 }
 
 /**
- * The mode a manifest tags `readOnly` — never found by id, so a runner with no
+ * The profile a manifest tags `readOnly` (ADR-0046) — never found by id, so a runner with no
  * tag has none. A mode this host cannot run is still the runner's read-only
  * mode: it is how a task already on it is recognized, and why a move of that
  * task is refused rather than made writable.
@@ -74,7 +74,7 @@ export function taggedReadOnlyMode(modes: readonly RunnerModeInfo[] | undefined)
   return modes?.find((m) => m.readOnly)?.id;
 }
 
-/** The read-only mode a task can be given on this host: the tagged one, unless it is unavailable here. */
+/** The read-only profile a task can be given here; built-ins do not need the runner's native sandbox (ADR-0046). */
 export function readOnlyMode(modes: readonly RunnerModeInfo[] | undefined): string | undefined {
   const mode = modes?.find((m) => m.readOnly);
   return mode && !mode.unavailable ? mode.id : undefined;

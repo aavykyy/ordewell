@@ -204,6 +204,8 @@ export interface IRunner {
     modelVariants?: string[];
     mode?: string;
     cwd: string;
+    /** The session workspace, also readable by an isolated read-only task (ADR-0046). */
+    workspaceRoot?: string;
     registry?: RunnerRegistry;
     /** Task order and title — surfaces use these to label task_started/output events. */
     order?: number;

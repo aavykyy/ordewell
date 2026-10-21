@@ -156,7 +156,7 @@ describe('ClaudeCodeAdapter task argv for every effort and mode', () => {
   const modes: Array<[string, string]> = [
     ['default', 'default'],
     ['acceptEdits', 'acceptEdits'],
-    ['plan', 'plan'],
+    ['plan', 'default'],
     ['bypassPermissions', 'bypassPermissions'],
     ['build', 'acceptEdits'],
   ];
@@ -184,7 +184,8 @@ describe('ClaudeCodeAdapter task argv for every effort and mode', () => {
       '--replay-user-messages',
       '--permission-prompt-tool', 'stdio',
       '--permission-mode', permissionMode,
-      '--disallowedTools', 'AskUserQuestion',
+      '--disallowedTools', mode === 'plan' ? 'AskUserQuestion,Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,PowerShell,EnterPlanMode,ExitPlanMode' : 'AskUserQuestion',
+      ...(mode === 'plan' ? ['--setting-sources', 'user', '--settings', '{"disableAllHooks":true,"permissions":{"ask":["WebFetch","WebFetch(domain:*)","WebSearch","mcp__*","Read","Grep","Glob","LS"]}}'] : []),
       ...thinkingArgs,
       ...(model ? ['--model', model] : []),
     ]);
@@ -1203,14 +1204,12 @@ describe('ClaudeCodeAdapter: a read-only task on a model alias', () => {
       .map((msg) => msg.request);
   }
 
-  // Under `--permission-mode plan` the CLI runs Sonnet for the `haiku` alias,
-  // and only for the alias: a full id is run as given.
-  it('pins the id the CLI resolves the alias to, before its first turn', async () => {
+  it('keeps the planned alias without a native plan-mode model pin', async () => {
     const { spawned, processDeps } = deps([]);
     const adapter = new ClaudeCodeAdapter(processDeps);
-    await adapter.start(taskIn('plan', { model: 'haiku' }));
+    await adapter.start(taskStart({ mode: 'plan', model: 'haiku', flags: resolveTaskRunnerFlags(CLAUDE_CODE_MANIFEST, { mode: 'plan' }) }));
 
-    expect(controlRequests(spawned.processes[0].written)).toEqual([{ subtype: 'initialize' }, { subtype: 'set_model', model: 'claude-haiku-5-5' }]);
+    expect(controlRequests(spawned.processes[0].written)).toEqual([{ subtype: 'initialize' }]);
     adapter.dispose();
   });
 

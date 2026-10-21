@@ -69,8 +69,8 @@ export const MODE_NOT_THE_PLANNERS = '"taskMode" is the user\'s to choose: set "
 /** A manual task runs in no mode, so it cannot be read-only. */
 export const MANUAL_NOT_READ_ONLY = '"readOnly" is for AI tasks: a manual task runs in no mode';
 
-/** An ops task acts — runs commands — in the session's mode (ADR-0020); a read-only mode refuses that. */
-export const OPS_NOT_READ_ONLY = '"readOnly" is not for an ops task: it runs commands, in the session\'s mode, and a read-only mode refuses them';
+/** An ops task acts in the workspace (ADR-0020); a read-only task lands nothing (ADR-0046). */
+export const OPS_NOT_READ_ONLY = '"readOnly" is not for an ops task: it acts in the workspace, while a read-only task lands nothing';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -344,7 +344,7 @@ export function checkPlanInvariants(
     }
     for (const e of scriptBodyErrors(t)) fail(e.field, `${where} ${e.message}`);
     if (t.ops && t.taskMode !== undefined && t.taskMode === taggedReadOnlyMode(runnerModes?.[t.assignedRunner])) {
-      fail('taskMode', `${where} is an ops task, which runs commands, so it cannot run in its runner's read-only mode`);
+      fail('taskMode', `${where} is an ops task, which acts in the workspace, so it cannot use the read-only profile`);
     }
     if (runners && t.type === 'ai' && !runners.includes(t.assignedRunner)) {
       fail('assignedRunner', `${where} has invalid assignedRunner "${t.assignedRunner}". Expected one of: ${runners.join(', ')}`);

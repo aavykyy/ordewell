@@ -19,7 +19,7 @@ import { createTask, type Verdict } from '../../models/Task';
  *
  * Every task runs in a throwaway directory under `build`, on a cheap model
  * unless ORDEWELL_LIVE_MODEL says otherwise, at its lowest variant. The
- * Ordewell tool cases (ADR-0022) run under `plan`, which is not the
+ * Ordewell tool cases (ADR-0022) run under Ordewell's read-only profile, not the
  * `approvals: auto` mode, so a prompt-free call there is the rule at work.
  */
 

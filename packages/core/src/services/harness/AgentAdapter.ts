@@ -203,6 +203,8 @@ export interface PlannerStartOptions extends AgentStartCommon {
  * The adapter adds only its protocol flags around these.
  */
 export interface TaskRunnerFlags {
+  /** Ordewell's read-only profile, independent of the runner's native modes (ADR-0046). */
+  readOnly?: true;
   /** The runner's own permission-mode value for the task's mode. */
   permissionMode: string;
   /** The task's raw effort id, present only alongside a model. Each adapter maps it to its own protocol. */
@@ -214,6 +216,8 @@ export interface TaskRunnerFlags {
 /** A plan task driven over the runner's programmatic protocol (ADR-0018, C1). */
 export interface TaskStartOptions extends AgentStartCommon {
   kind: 'task';
+  /** The session workspace, also readable when cwd is an isolated task worktree (ADR-0046). */
+  workspaceRoot?: string;
   /** The task's runner mode id, as the plan names it. */
   mode: string;
   flags: TaskRunnerFlags;
