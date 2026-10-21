@@ -997,7 +997,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
     const [threadStart] = sentNamed(spawned.processes[0].written, 'thread/start');
     expect(threadStart.params).not.toHaveProperty('config');
     expect(Object.keys(spawned.lastEnv()).filter((name) => name.startsWith('ORDEWELL_MCP'))).toEqual([]);
-    expect(await adapter.mcpAttached()).toBe(false);
+    expect(await adapter.mcpAttached()).toBe('failed');
     adapter.dispose();
   });
 
@@ -1072,7 +1072,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       const adapter = new CodexAdapter(processDeps);
       await adapter.start(taskStart('agent', { mcp }));
       spawned.processes[0].emitStdout(startup('starting') + startup('ready'));
-      expect(await adapter.mcpAttached()).toBe(true);
+      expect(await adapter.mcpAttached()).toBe('connected');
       adapter.dispose();
     });
 
@@ -1084,7 +1084,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       const attached = adapter.mcpAttached();
       await tick();
       spawned.processes[0].emitStdout(startup('ready'));
-      expect(await attached).toBe(true);
+      expect(await attached).toBe('connected');
       adapter.dispose();
     });
 
@@ -1093,7 +1093,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       const adapter = new CodexAdapter(processDeps);
       await adapter.start(taskStart('agent', { mcp }));
       spawned.processes[0].emitStdout(startup(status));
-      expect(await adapter.mcpAttached()).toBe(false);
+      expect(await adapter.mcpAttached()).toBe('failed');
       adapter.dispose();
     });
 
@@ -1103,7 +1103,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       await adapter.start(taskStart('agent', { mcp }));
       const attached = adapter.mcpAttached();
       spawned.processes[0].exit(1);
-      expect(await attached).toBe(false);
+      expect(await attached).toBe('failed');
     });
 
     it('ignores another server\'s report', async () => {
@@ -1111,7 +1111,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       const adapter = new CodexAdapter(processDeps);
       await adapter.start(taskStart('agent', { mcp }));
       spawned.processes[0].emitStdout(line({ method: 'mcpServer/startupStatus/updated', params: { name: 'linear', status: 'ready' } }) + startup('failed'));
-      expect(await adapter.mcpAttached()).toBe(false);
+      expect(await adapter.mcpAttached()).toBe('failed');
       adapter.dispose();
     });
   });

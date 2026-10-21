@@ -1729,6 +1729,7 @@ export class Session {
       fs: this.fsAdapter,
       fetcher: this.fetcher,
       approval: this.approvalPolicy,
+      notice: (level, message) => this.notice(level, message),
       plannerTools: { sessionId: this.sessionId, handler: this.plannerTools },
       skills: this.workspaceSkills().listSkills(),
     };

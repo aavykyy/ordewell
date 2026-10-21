@@ -198,7 +198,7 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
   it.each(roles)('reports a %s whose server did not attach as not attached, and still delivers the marker', async (_role, start) => {
     const { fake, adapter, events } = await opened(runner, start(), { attach: 'failed' });
 
-    expect(await adapter.mcpAttached!()).toBe(false);
+    expect(await adapter.mcpAttached!()).toBe('failed');
     fake.say('Done. <<<ORDEWELL_DONE_mk-1>>>');
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(events.some((e) => (e.type === 'assistant_text' || e.type === 'assistant_text_delta') && e.text.includes('<<<ORDEWELL_DONE_mk-1>>>'))).toBe(true);
@@ -208,7 +208,7 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
   it('reports a server that attached as attached', async () => {
     const { adapter } = await opened(runner, taskStart(runner));
 
-    expect(await adapter.mcpAttached!()).toBe(true);
+    expect(await adapter.mcpAttached!()).toBe('connected');
     adapter.dispose();
   });
 

@@ -5,7 +5,7 @@ import { randomBytes } from 'crypto';
 import { RunnerProcess } from './runnerProcess';
 import { OpenCodeV2 } from './OpenCodeV2';
 import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV, OPENCODE_READ_ONLY_PERMISSION } from './openCodeOrdewell';
-import { awaitAttach } from './ordewellBinding';
+import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
 import { TASK_COMPLETION_CONTRACT, type McpClientConfig } from '../mcp';
 import type { ProjectMcpServer } from './repoConfig';
 import { hunksOf, markedLines } from './fileDiff';
@@ -26,8 +26,6 @@ const RECOVERY_TIMEOUT_MS = 900000;
 const STATUS_POLL_INTERVAL_MS = 1000;
 /** The Basic-auth username `serve` defaults to. Set explicitly so a host's own `OPENCODE_SERVER_USERNAME` cannot win. */
 const SERVER_USERNAME = 'opencode';
-/** How long a planner waits for the Ordewell server to show as connected, and how often it asks. */
-const MCP_ATTACH_TIMEOUT_MS = 10_000;
 const MCP_STATUS_POLL_MS = 200;
 
 /**
@@ -264,6 +262,8 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
 
   private process: ChildProcess | null = null;
   private baseUrl: string | null = null;
+  /** The server's version from `/api/info`; null on 1.x, which does not report one (ADR-0036 N2). */
+  private serverVersion: string | null = null;
   /** Sent on every request to a task's server, which a per-task password secures. */
   private authorization: string | null = null;
   private sessionId: string | null = null;
@@ -387,6 +387,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     }
 
     const version = await this.v2Version();
+    this.serverVersion = version;
     if (version !== null) {
       this.v2 = new OpenCodeV2({
         version,
@@ -1076,15 +1077,17 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
 
   nativeSessionId(): string | null { return this.sessionId; }
 
+  version(): string | null { return this.serverVersion; }
+
   unusableProjectServers(): ProjectMcpServer[] { return this.v2?.unusableProjectServers() ?? []; }
 
   /** 2.x only: a 1.x server's saved output was never checked, so it is asked about as any outside read. */
   savedOutput(abs: string): boolean { return this.v2?.savedOutput(abs) ?? false; }
 
   /** Asks the server, which lists every MCP server it has with the state of its connection. */
-  async mcpAttached(): Promise<boolean> {
+  async mcpAttached(): Promise<AttachState> {
     const ordewell = this.ordewell;
-    if (!ordewell || !this.baseUrl) return false;
+    if (!ordewell || !this.baseUrl) return 'failed';
     return awaitAttach(async () => {
       if (this.exited) return 'failed';
       const servers = this.v2 ? await this.v2McpStatus() : await this.json<Record<string, { status?: string } | undefined>>('GET', '/mcp').catch(() => null);

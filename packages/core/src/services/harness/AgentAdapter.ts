@@ -5,6 +5,7 @@ import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { McpClientConfig } from '../mcp';
 import type { ProjectMcpServer } from './repoConfig';
 import type { RunnerCommand, RunnerMcpServer, RunnerModelRef } from '../../models/RunnerCommand';
+import type { AttachState } from './ordewellBinding';
 
 
 /**
@@ -190,6 +191,12 @@ export interface PlannerStartOptions extends AgentStartCommon {
    */
   nativeSearch?: boolean;
   /**
+   * Whether the user let this planner use its harness's own shell beside
+   * Ordewell's tools (ADR-0036 N1). The adapter offers it only for a version
+   * that passed N2's live checks (see `nativeShellOffer`); absent means off.
+   */
+  nativeShell?: boolean;
+  /**
    * The repository's own MCP servers this planner may start, as approved
    * (ADR-0028). The runner is launched without the repository's config, so
    * these are the only ones it gets, and each is handed over as parsed.
@@ -269,6 +276,14 @@ export interface AgentAdapter {
   /** The agent's native session id once it has announced one. Resumption hint only. */
   nativeSessionId(): string | null;
 
+  /**
+   * The installed version the agent reported, once it has (ADR-0036 N2):
+   * Claude Code's `claude_code_version` on its first `init`, an OpenCode 2.x
+   * server's `/api/info`. Null while unknown, and on OpenCode 1.x, which does
+   * not report one.
+   */
+  version?(): string | null;
+
   /** What has been counted of the session's running cost, for a runner that reports one; null while unknown. */
   sessionCost?(): RunnerSessionCost | null;
 
@@ -282,8 +297,11 @@ export interface AgentAdapter {
    * Whether the Ordewell MCP server passed in the start options' `mcp` is
    * connected, as the runner itself reports it (ADR-0022, S4). Absent on an
    * adapter that cannot inject the server at all, which cannot run tasks.
+   * `false` is the old boolean answer for "not attached"; a real adapter says
+   * `pending` while its process is still starting, or `failed` when the
+   * runner reports the server cannot connect.
    */
-  mcpAttached?(): Promise<boolean>;
+  mcpAttached?(): Promise<boolean | AttachState>;
 
   /**
    * The approved project servers (ADR-0028) this runner started but cannot
@@ -311,7 +329,7 @@ export interface AgentAdapter {
 
 /** What an adapter adds to run a task rather than a planner (ADR-0018). */
 export interface TaskModeAgentAdapter extends AgentAdapter {
-  mcpAttached(): Promise<boolean>;
+  mcpAttached(): Promise<boolean | AttachState>;
   /**
    * Ask the running turn to stop, keeping the process and its session. Resolves
    * true once the agent acknowledged it; the turn then ends with

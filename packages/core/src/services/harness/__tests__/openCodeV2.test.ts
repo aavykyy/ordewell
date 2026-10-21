@@ -189,6 +189,8 @@ describe('OpenCode 2.x — start', () => {
     expect(server.requests.some((r) => r.path === '/session')).toBe(false);
     for (const request of server.requests) expect(request.authorization).toBe(basic(password!));
     expect(adapter.nativeSessionId()).toBe(SES);
+    // The native-shell check reads it (ADR-0036 N2).
+    expect(adapter.version()).toBe('2.0.22');
     adapter.dispose();
   });
 
@@ -744,7 +746,7 @@ describe('OpenCode 2.x — MCP servers', () => {
   it('takes a planner request for an approved project server\'s tool as that tool, before /api/mcp lists the server', async () => {
     const server = fakeServer({ 'GET /api/mcp': () => ({ data: [{ name: 'ordewell', status: { status: 'connected' } }] }) });
     const { adapter } = await start(server, plannerStart({ mcp: ORDEWELL, projectServers: [PROBE] }));
-    expect(await adapter.mcpAttached()).toBe(true);
+    expect(await adapter.mcpAttached()).toBe('connected');
 
     const events: AgentEvent[] = [];
     void adapter.send('go', (e) => events.push(e));
@@ -763,7 +765,7 @@ describe('OpenCode 2.x — MCP servers', () => {
       'GET /api/mcp': () => ({ data: [{ name: 'ordewell', status: { status: 'connected' } }, { name: 'todoist', status: { status: 'connected' } }] }),
     });
     const { adapter } = await start(server, plannerStart({ mcp: { name: 'ordewell', url: 'http://127.0.0.1:1/mcp', headers: {} } }));
-    expect(await adapter.mcpAttached()).toBe(true);
+    expect(await adapter.mcpAttached()).toBe('connected');
 
     const events: AgentEvent[] = [];
     void adapter.send('go', (e) => events.push(e));

@@ -61,6 +61,8 @@ export const SETTINGS_ENV_REFUSED: readonly string[] = [
   'ORDEWELL_APPROVAL_DEFAULTS',
   'ORDEWELL_WEB_READ_BUDGET',
   'ORDEWELL_EFFECT_ALLOW',
+  // The native-shell opt-in (ADR-0036 N1): the user's alone, never a workspace's or a daemon update's.
+  'ORDEWELL_PLANNER_NATIVE_SHELL',
   // Where settings are persisted.
   'ORDEWELL_SETTINGS_PATH',
   // Runtime options and dynamic loaders.

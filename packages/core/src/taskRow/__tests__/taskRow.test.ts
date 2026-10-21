@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, markRequestFor, opsEditable,
-  titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, blockedByLabel, skippedLabel, type TaskRowSubject, type TaskRowAction,
+  titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, blockedByLabel, holdLabel, skippedLabel, type TaskRowSubject, type TaskRowAction,
 } from '..';
 import { taskRef, titledTaskRef } from '../../services/TaskRefs';
 
@@ -161,7 +161,7 @@ describe('the row view, every status against every annotation', () => {
   const isolated = { branch: 'b', worktree: 'w', repos: ['.'] };
   const annotations: [string, Partial<TaskRowSubject>, (view: ReturnType<typeof taskRowView>, status: string) => void][] = [
     ['nothing', {}, (v) => {
-      expect(v).toMatchObject({ conflict: null, repairing: null, repaired: null, mergeGate: null, opsChangedFiles: false, forcedPastGate: null, approvals: null, autonomous: false, waitsForApproval: null });
+      expect(v).toMatchObject({ conflict: null, repairing: null, repaired: null, mergeGate: null, opsChangedFiles: false, forcedPastGate: null, approvals: null, autonomous: false, waitsForApproval: null, holdReason: null });
     }],
     ['a conflict in a named repo', { isolation: { ...isolated, state: 'conflict', conflictRepo: 'api', conflictFiles: ['a', 'b', 'c', 'd', 'e', 'f'] } }, (v) => {
       expect(v.conflict).toEqual({ repo: 'api', files: 'a, b, c, d, e, +1 more' });
@@ -209,6 +209,10 @@ describe('the row view, every status against every annotation', () => {
     ['a start that waits for the user\'s approval', { waitsForApproval: true }, (v, status) => {
       expect(v.waitsForApproval).toBe(status === 'pending' || status === 'approved' || status === 'blocked' ? 'Waits for your approval' : null);
       expect(v.approvals).toBeNull();
+    }],
+    ['a hold with its reason', { holdReason: 'could not connect to Ordewell\'s tools; start it again' }, (v) => {
+      expect(v.holdReason).toBe('could not connect to Ordewell\'s tools; start it again');
+      expect(holdLabel(v.holdReason!)).toBe('On hold: could not connect to Ordewell\'s tools; start it again');
     }],
     ['dependencies', { dependencies: ['t1', 'ghost'] }, (v) => {
       expect(v.dependencies).toEqual(['#1', 'ghost']);

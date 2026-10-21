@@ -45,6 +45,11 @@ export function blockedByLabel(refs: readonly string[]): string {
   return `Blocked by ${refs.join(', ')}`;
 }
 
+/** "On hold: could not connect to Ordewell's tools; start it again": why a task is out of the scheduler. */
+export function holdLabel(reason: string): string {
+  return `On hold: ${reason}`;
+}
+
 /** "Skipped: no GPU on this host", or "Skipped" when no reason was given. */
 export function skippedLabel(reason: string | null): string {
   return reason ? `Skipped: ${reason}` : 'Skipped';

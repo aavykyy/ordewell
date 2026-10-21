@@ -284,6 +284,10 @@ export class VsCodeConfig extends BaseConfig {
     const configured = this.config.get<number>('plannerWebReadBudget', DEFAULT_WEB_READ_BUDGET);
     return Number.isInteger(configured) && configured >= 0 ? configured : DEFAULT_WEB_READ_BUDGET;
   }
+  get plannerNativeShell() {
+    if (process.env.ORDEWELL_PLANNER_NATIVE_SHELL !== undefined) return super.plannerNativeShell;
+    return this.config.get<boolean>('plannerNativeShell', false);
+  }
   get worktreeIsolation() {
     if (process.env.ORDEWELL_WORKTREE_ISOLATION !== undefined) return super.worktreeIsolation;
     return this.config.get<boolean>('worktreeIsolation', true);

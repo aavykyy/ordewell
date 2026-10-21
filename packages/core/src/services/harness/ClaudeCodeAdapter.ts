@@ -15,7 +15,7 @@ import { CLAUDE_ORDEWELL } from './claudeOrdewell';
 import { PermissionLedger } from './permissionLedger';
 import { ReplyRuns } from './replyRuns';
 import { settleWithin } from './settleWithin';
-import { awaitAttach, type OrdewellToolRole } from './ordewellBinding';
+import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState, type OrdewellToolRole } from './ordewellBinding';
 import { claudeLocalServers } from './claudeRepoConfig';
 import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 
@@ -145,12 +145,6 @@ const ASYNC_LAUNCH_MARKER = 'Async agent launched successfully';
  */
 const FOLLOW_ON_TURN_GRACE_MS = 5000;
 
-/**
- * How long a planner's Ordewell server has to connect. The CLI connects its
- * MCP servers as it starts, before any turn; a loopback server that is not up
- * by then is not coming, and the planner falls back to the envelopes.
- */
-const MCP_ATTACH_TIMEOUT_MS = 10_000;
 const INITIALIZE_TIMEOUT_MS = 10_000;
 const MCP_STATUS_POLL_MS = 100;
 
@@ -247,6 +241,8 @@ interface ClaudeLine {
   session_id?: string;
   /** `init`: the mode the CLI actually started in. */
   permissionMode?: string;
+  /** `init`: the CLI's own version, named before the first tool call. */
+  claude_code_version?: string;
   /** `init`: the model the turn runs on, as the id it resolved to. */
   model?: string;
   result?: string;
@@ -415,6 +411,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private replyRuns = new ReplyRuns();
   /** The model answering the planner's current message, and the message's id, as its `message_start` named them. */
   private plannerModel: string | undefined;
+  /** The CLI's version, from its first `init`; the native-shell check reads it (ADR-0036 N2). */
+  private installedVersion: string | null = null;
   /**
    * The id the turn runs as, as `init` names it. A `[1m]` variant is the
    * selected id, while a message names the API's canonical id without it.
@@ -522,6 +520,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     if (!sessionId || this.reportedCostUsd === undefined) return null;
     return { sessionId, usd: this.reportedCostUsd, modelUsd: Object.fromEntries(this.reportedModelCostUsd) };
   }
+
+  version(): string | null { return this.installedVersion; }
 
   /**
    * A cleared conversation's totals start again from zero, so what follows is
@@ -632,12 +632,20 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     });
   }
 
-  /** Asks the CLI itself, which reports `pending` until its connection attempt settles. */
-  async mcpAttached(): Promise<boolean> {
-    if (!this.mcpConfig) return false;
+  /**
+   * Asks the CLI itself, which reports `pending` until its connection attempt
+   * settles. A process that exited ends the wait at once: its report is gone
+   * with it, and no answer would ever come.
+   */
+  async mcpAttached(): Promise<AttachState> {
+    if (!this.mcpConfig) return 'failed';
     return awaitAttach(async (left) => {
+      if (this.exited) return 'failed';
       const answer = await this.control({ subtype: 'mcp_status' }, left);
-      return CLAUDE_ORDEWELL.attachState(answer?.response?.mcpServers?.find((s) => s.name === ORDEWELL_MCP_SERVER_NAME)?.status);
+      if (this.exited) return 'failed';
+      if (!answer) return 'pending';
+      const server = answer.response?.mcpServers?.find((s) => s.name === ORDEWELL_MCP_SERVER_NAME);
+      return server ? CLAUDE_ORDEWELL.attachState(server.status) : 'pending';
     }, MCP_ATTACH_TIMEOUT_MS, MCP_STATUS_POLL_MS);
   }
 
@@ -899,6 +907,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         if (subagentId && (msg.subtype === 'init' || msg.subtype === 'compact_boundary')) return;
         if (msg.subtype === 'init') {
           this.clearFollowOnTimer();
+          if (msg.claude_code_version) this.installedVersion = msg.claude_code_version;
           if (this.refuseOtherMode(msg, emit)) return;
           if (msg.model && msg.model !== '<synthetic>') this.sessionModel = msg.model;
           this.readLoaded(msg, emit);
