@@ -15,6 +15,7 @@ const complete: Event = { type: 'execution_complete', summary: { total: 1, compl
 
 function streaming(extra: Partial<ApiClient>): ApiClient {
   return {
+    getSession: vi.fn().mockResolvedValue({ meta: {}, plan: { pendingTasks: [] } }),
     streamExecution: vi.fn((_id: string, onEvent: (e: Event) => void, onReady?: (error?: Error) => void) => new Promise<void>((resolve) => {
       setTimeout(() => onReady?.(), 0);
       setTimeout(() => { onEvent(complete); resolve(); }, 5);

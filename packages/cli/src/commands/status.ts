@@ -2,7 +2,7 @@ import { assignmentFlagText } from '../tui/blocks';
 import { writeFileSync } from 'fs';
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
-import { blockedByLabel, holdLabel, loopRowParts, planBlocks, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, tasksTotalText, usageText, waitsForApproval, walkPlan, type ApprovalRecord, type AssignmentScope, type RunView } from '@ordewell/core';
+import { blockedByLabel, holdLabel, loopRowParts, planBlocks, scriptTaskText, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, tasksTotalText, usageText, waitsForApproval, walkPlan, type ApprovalRecord, type AssignmentScope, type RunView } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type SessionMeta } from '../apiClient';
@@ -120,6 +120,10 @@ function printOneSession(
     const row = taskRowView({ ...t, dependencies: t.dependencies ?? [], waitsForApproval: waitsForApproval(t, record), holdReason: holds.get(t.id) }, { tasks: allTasks, runnerScope });
     const icon = iconFor(blocked.has(t.id) ? 'blocked' : repeating.has(t.id) ? 'pending' : t.status);
     console.log(`  ${taskOrderLabel(t).padStart(2)}. ${icon} [${shortId}]${row.kind === 'script' ? ' [SCR]' : row.research ? ' [RES]' : ''} ${t.title}${model}`);
+    // What the user approves and what runs: the body as the plan holds it, not a summary (ADR-0035).
+    if (t.type === 'script') {
+      for (const line of scriptTaskText(t).split('\n')) console.log(line ? `      ${line.replace(/\t/g, '    ')}` : '');
+    }
     const waiting = approval(row, taskOrderLabel(t));
     if (waiting) console.log(`      ${waiting}`);
     if (row.holdReason) console.log(`      ${holdLabel(row.holdReason)}`);

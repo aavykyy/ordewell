@@ -14,6 +14,8 @@ import { blockingFailures } from './blocking';
 
 export type SerializedTaskStatus = {
   id: string;
+  /** The task's type, so a status-only surface can tag a script task (ADR-0035); absent from an older daemon. */
+  type?: Task['type'];
   status: Task['status'];
   /** `reported` tells a loop's check between rounds from one that failed (ADR-0045 L2). */
   verdict: { outcome: 'pass' | 'fail'; reason: string; checks: Verdict['checks']; reported?: Verdict['reported'] } | null;
@@ -448,6 +450,7 @@ export function serializeTaskStatus(
 ): SerializedTaskStatus {
   return {
     id: t.id,
+    type: t.type,
     status: t.status,
     verdict: t.verdict
       ? { outcome: t.verdict.outcome, reason: t.verdict.reason, checks: t.verdict.checks || [], ...(t.verdict.reported ? { reported: t.verdict.reported } : {}) }

@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { LegacyPlanState, PlanState } from '../models/Task';
-import { migratePlanState, migrateLoadedTasks } from '../models/Task';
+import { dropRetiredPlanFields, migratePlanState, migrateLoadedTasks } from '../models/Task';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
 import type { SessionMeta, SessionData } from '../models/Session';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
@@ -104,6 +104,7 @@ export function saveSession(plan: LegacyPlanState, goal: string, baseDir?: strin
     meta,
     plan: JSON.parse(JSON.stringify(plan)),
   };
+  dropRetiredPlanFields(session.plan);
 
   const filename = sessionFilename(meta);
   const filePath = path.join(sessionsDir, filename);
@@ -175,6 +176,7 @@ export function loadSession(sessionId: string, baseDir?: string, logger: ILogger
       }
       migratePlanStateIsolation(plan);
       migrateLoadedTasks(plan.tasks);
+      dropRetiredPlanFields(plan);
       return { meta: session.meta, plan };
     }
   } catch (err: unknown) {

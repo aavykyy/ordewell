@@ -655,7 +655,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ),
     setupRow('Autonomy', state.autonomous ? style.yellow('Full') : 'Guarded', '', cols),
     setupRow('Run', runSettingsValue(state), '/settings', cols),
-    setupRow('Research', 'runs within the Parallel limit', '/settings', cols),
+    setupRow('Research', 'runs within the Parallel limit', '', cols),
     '',
   ];
   // Only once nothing usable was found: a key reaches the welcome with the catalog, after the probe.

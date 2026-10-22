@@ -287,6 +287,30 @@ describe('handleStatus --output', () => {
     srv.close();
   });
 
+  it('shows a script task\'s body and time limit, as `ordewell plan` does (ADR-0035)', async () => {
+    const session = {
+      meta: SESSION.meta,
+      plan: {
+        pendingTasks: [
+          {
+            id: 't1', order: 1, type: 'script', title: 'Tag the release', status: 'pending', dependencies: [],
+            commands: [['git', 'tag', 'v1.2.3']], timeoutMs: 90_000,
+          },
+        ],
+      },
+    };
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(session));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
+
+    expect(stdout).toContain('git tag v1.2.3');
+    expect(stdout).toContain('Time limit: 90 seconds.');
+    srv.close();
+  });
+
   it('tags a script task [SCR] in the task list (ADR-0035)', async () => {
     const session = {
       meta: SESSION.meta,

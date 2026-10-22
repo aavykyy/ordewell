@@ -45,6 +45,7 @@ import type {
   TaskLogResponse,
   TaskMessageResponse,
   TaskStartResponse,
+  TaskType,
 } from '@ordewell/core';
 
 const DEFAULT_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
@@ -100,10 +101,16 @@ export type { SessionMeta };
 
 export interface TaskStatus {
   id: string;
+  /** The daemon sends it so a status-only surface can tag a script task (ADR-0035); absent from an older daemon. */
+  type?: TaskType;
   status: string;
   verdict: { outcome: string; reason: string; checks: unknown[]; reported?: string } | null;
   /** Added after the user approved the plan, so the scheduler leaves it for them (ADR-0035). */
   waitsForApproval?: boolean;
+  /** Why a held task is out of auto-scheduling, in the user's words (ADR-0022). */
+  holdReason?: string;
+  /** Why a task was skipped; set only while its status is `skipped`. */
+  skipReason?: string;
   /** Set only on a research task, so a stream of statuses alone can say which task is one (ADR-0037). */
   research?: true;
   /** Set on a loop's check, with its round once past the first (ADR-0045). */

@@ -192,6 +192,24 @@ describe('research starts (ADR-0037 R4)', () => {
     expect(taskOf(env.session, r.id)?.research).toBe(false);
   });
 
+  it('wakes the planner after reload with a report already queued behind a turn', async () => {
+    const env = await supervised([], { execute: false, settings: { supervisorLevel: 'off' }, plan: {
+      pendingTurns: [{ id: 'report', source: 'supervisor', text: 'Run update: the queued research report', report: 'user', timestamp: NOW.toISOString() }],
+    } });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await until(() => env.planner.calls.length === 1);
+    expect(env.planner.calls[0].message).toContain('the queued research report');
+  });
+
+  it('keeps a queued report idle after reload while a planner usage-limit wait is saved', async () => {
+    const env = await supervised([], { execute: false, settings: { supervisorLevel: 'off' }, plan: {
+      plannerResend: { runner: 'claude-code', at: new Date(NOW.getTime() + 3_600_000).toISOString() },
+      pendingTurns: [{ id: 'report', source: 'supervisor', text: 'Run update: the queued research report', report: 'user', timestamp: NOW.toISOString() }],
+    } });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(env.planner.calls).toHaveLength(0);
+  });
+
   it('reloads research tasks and an undelivered report', async () => {
     const env = await supervised([], { execute: false, settings: { supervisorLevel: 'off' } });
     await userTurn(env);
