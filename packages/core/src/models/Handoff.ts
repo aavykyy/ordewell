@@ -1,6 +1,6 @@
 import { flattenTasks, type Task } from './Task';
 import { checkOf } from './Loop';
-import { resolveTaskRef, titledTaskRefOf } from '../services/TaskRefs';
+import { resolveTaskRef, taskRefOf, titledTaskRefOf } from '../services/TaskRefs';
 
 /*
  * A task's handoff (ADR-0047): what it tells the tasks that read it, as its
@@ -105,6 +105,16 @@ export function handoffDigest(handoff: StoredHandoff): HandoffDigest {
 /** How a task is named in a handoff's text: the plan's reference for its id, or the id where the plan has none. */
 export type HandoffTaskName = (taskId: string) => string | undefined;
 
+/** A handoff with the tasks it cites named by their references in `plan`, as a reader names them. */
+export function namedHandoff<H extends HandoffDigest>(plan: readonly Task[], handoff: H): H {
+  const named = (refs: readonly HandoffEvidence[]) => refs.map((r) => (r.kind === 'task' ? { ...r, task: taskRefOf(plan, r.task) ?? r.task } : r));
+  return {
+    ...handoff,
+    findings: handoff.findings.map((f) => (f.evidence ? { ...f, evidence: named(f.evidence) } : f)),
+    ...(handoff.artifacts ? { artifacts: named(handoff.artifacts) } : {}),
+  };
+}
+
 function referenceText(ref: HandoffEvidence, taskName: HandoffTaskName): string {
   switch (ref.kind) {
     case 'file': return ref.line !== undefined ? `${ref.path}:${ref.line}` : ref.path;
@@ -114,6 +124,20 @@ function referenceText(ref: HandoffEvidence, taskName: HandoffTaskName): string 
   }
 }
 
+/** One finding as text: its id, severity and title, then its detail and evidence under it. */
+export function findingLines(f: HandoffFinding, taskName: HandoffTaskName = () => undefined): string[] {
+  return [
+    `- ${f.id} [${f.severity}] ${f.title}`,
+    ...(f.detail ? f.detail.split('\n').map((l) => `  ${l}`) : []),
+    ...(f.evidence?.length ? [`  Evidence: ${f.evidence.map((e) => referenceText(e, taskName)).join('; ')}`] : []),
+  ];
+}
+
+/** A handoff's artifacts as one line, or none when it lists none. */
+export function artifactLines(handoff: HandoffDigest, taskName: HandoffTaskName = () => undefined): string[] {
+  return handoff.artifacts?.length ? [`Artifacts: ${handoff.artifacts.map((a) => referenceText(a, taskName)).join('; ')}`] : [];
+}
+
 /**
  * A handoff as text, for a reader with no structure to render it from: the
  * summary, every finding it holds with its id, severity, detail and evidence,
@@ -121,17 +145,11 @@ function referenceText(ref: HandoffEvidence, taskName: HandoffTaskName): string 
  */
 export function handoffLines(handoff: HandoffDigest | StoredHandoff, taskName: HandoffTaskName = () => undefined): string[] {
   const lines = [handoff.summary];
-  if (handoff.findings.length > 0) {
-    lines.push('', 'Findings:');
-    for (const f of handoff.findings) {
-      lines.push(`- ${f.id} [${f.severity}] ${f.title}`);
-      if (f.detail) lines.push(...f.detail.split('\n').map((l) => `  ${l}`));
-      if (f.evidence?.length) lines.push(`  Evidence: ${f.evidence.map((e) => referenceText(e, taskName)).join('; ')}`);
-    }
-  }
+  if (handoff.findings.length > 0) lines.push('', 'Findings:', ...handoff.findings.flatMap((f) => findingLines(f, taskName)));
   const more = handoff.findingCount - handoff.findings.length;
   if (more > 0) lines.push(`+${more} more finding${more === 1 ? '' : 's'}, in the attempt's log`);
-  if (handoff.artifacts?.length) lines.push('', `Artifacts: ${handoff.artifacts.map((a) => referenceText(a, taskName)).join('; ')}`);
+  const artifacts = artifactLines(handoff, taskName);
+  if (artifacts.length > 0) lines.push('', ...artifacts);
   if ('report' in handoff && handoff.report) lines.push('', 'Report:', handoff.report);
   return lines;
 }

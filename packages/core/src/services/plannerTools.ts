@@ -14,7 +14,7 @@ import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
 import type { PlanChange, ToolRead } from './PlannerConversation';
 import { commandReply, type McpToolReply, type PlannerToolHandler } from './mcp/tools';
 import type { TaskLogEvent } from '../models/TaskLog';
-import type { HandoffDigest, HandoffEvidence } from '../models/Handoff';
+import { namedHandoff } from '../models/Handoff';
 import { renderTaskLog } from './taskLogRead';
 import { taskReadPage } from './taskReadPage';
 import type { TaskDiffRead, TaskDiffResult } from './taskDiffRead';
@@ -296,16 +296,6 @@ function outputSummaryDetail({ outputSummary, handoff }: Task) {
   // A task with a handoff carries its report there (ADR-0047).
   const report = handoff ? undefined : outputSummary.report;
   return { reviewReason, ...(report ? { report } : {}), ...(logTail ? { logTail } : {}) };
-}
-
-/** A handoff with the tasks it cites named by their references, as the planner names them. */
-function namedHandoff<H extends HandoffDigest>(plan: readonly Task[], handoff: H): H {
-  const named = (refs: readonly HandoffEvidence[]) => refs.map((r) => (r.kind === 'task' ? { ...r, task: taskRefOf(plan, r.task) ?? r.task } : r));
-  return {
-    ...handoff,
-    findings: handoff.findings.map((f) => (f.evidence ? { ...f, evidence: named(f.evidence) } : f)),
-    ...(handoff.artifacts ? { artifacts: named(handoff.artifacts) } : {}),
-  };
 }
 
 /** A task's handoff digest, and where the rest is. */
