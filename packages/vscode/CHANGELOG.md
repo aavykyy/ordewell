@@ -59,9 +59,10 @@
 - **A read-only task's sealed runs cannot plant a git repository**: they cannot
   rewrite or replace the worktree's `.git`, nor (on macOS) create a `.git`
   anywhere they may write, a repo group's task workspace included; on Linux
-  one left there is removed when the run ends. So later git never loads a
-  repository with hooks or filters of the run's own, and `task_diff` refuses a
-  read-only task. A `.git` in a subdirectory on Linux is a residual.
+  one left there is removed when the run ends. So on macOS later git never
+  loads a repository with hooks or filters of the run's own, and `task_diff`
+  refuses a read-only task. On Linux a `.git` in a subdirectory, or one at a
+  group's task workspace while its run is still going, is a residual.
 - **An edit to an approved script task's body needs your consent again.**
 
 ## [0.10.10] - 2026-10-19

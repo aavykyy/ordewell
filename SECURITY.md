@@ -239,12 +239,14 @@ except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-s
   scratch directory of its own, the repository's `.git` and the worktree's own
   `.git` file stay read-only, and there is no network and no home directory, so
   none of your credentials. Because the worktree's `.git` cannot be rewritten
-  or replaced, and no `.git` can be planted beneath the worktree on macOS, git
-  run later in the worktree — Ordewell's or the runner's own — loads no
-  repository a sealed run planted; `task_diff` refuses a read-only task
-  outright. On macOS the three gaps listed under Sealed runs stay
-  open to these runs too, and on Linux a `.git` planted in a subdirectory of
-  the worktree is a residual. Where no sandbox runs, what would run sealed is
+  or replaced, and on macOS no `.git` can be planted anywhere a sealed run may
+  write, a repo group's task workspace included, git run later there —
+  Ordewell's or the runner's own — loads no repository a sealed run planted;
+  `task_diff` refuses a read-only task outright. On macOS the three gaps
+  listed under Sealed runs stay open to these runs too. On Linux a `.git` left
+  at a group's task workspace is removed when the run ends, and one planted in
+  a subdirectory, or one at the group's task workspace while its run is still
+  going, is a residual. Where no sandbox runs, what would run sealed is
   refused.
   Native writes and the native shell are withheld on every runner. Claude
   Code decides native reads against the real paths of the task worktree and
