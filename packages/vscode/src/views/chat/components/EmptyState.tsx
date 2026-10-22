@@ -85,8 +85,8 @@ export default function EmptyState({ onLoadSession, runSettings }: EmptyStatePro
       <PlanApprovalNote runSettings={runSettings} />
       {runSettings && (
         <div className="empty-state-setup">
-          <SetupRow label="Autonomy" value={runSettings.autonomous ? 'Full' : 'Guarded'} warn={runSettings.autonomous} command="/auto" />
-          <SetupRow label="Run" value={<RunValue run={runSettings.run} />} command="/supervisor · /automerge · /autorun · /research" />
+          <SetupRow label="Autonomy" value={runSettings.autonomous ? 'Full' : 'Guarded'} warn={runSettings.autonomous} command="/settings" />
+          <SetupRow label="Run" value={<RunValue run={runSettings.run} />} command="/settings" />
         </div>
       )}
       {onLoadSession && (

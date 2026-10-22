@@ -655,7 +655,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ),
     setupRow('Autonomy', state.autonomous ? style.yellow('Full') : 'Guarded', '', cols),
     setupRow('Run', runSettingsValue(state), '/settings', cols),
-    setupRow('Research', `${state.runSettings.researchMaxParallel} at once, ${state.runSettings.researchMaxPerMessage} per message`, '/research', cols),
+    setupRow('Research', `${state.runSettings.researchMaxParallel} at once, ${state.runSettings.researchMaxPerMessage} per message`, '/settings', cols),
     '',
   ];
   // Only once nothing usable was found: a key reaches the welcome with the catalog, after the probe.
@@ -1032,7 +1032,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
       lines.push(...taskText('Forced', `Started before the work of ${row.forcedPastGate.join(', ')} was merged into your branch.`, cols, bodyPad));
     }
     if (row.autonomous) {
-      lines.push(...taskText('Autonomy', 'Runs without permission prompts (Full). Change the level with /auto.', cols, bodyPad));
+      lines.push(...taskText('Autonomy', 'Runs without permission prompts (Full). Change the level with /settings.', cols, bodyPad));
     }
     // The prompt editor is seeded from prompt ?? description ?? title, so only
     // show the static description when it carries information the editor won't.

@@ -10,9 +10,9 @@ describe('parseSlash', () => {
   });
 
   it('splits a command into its name and arguments', () => {
-    expect(parseSlash('  /model set  deepseek/deepseek-v4-flash ')).toEqual({
-      name: 'model',
-      args: ['set', 'deepseek/deepseek-v4-flash'],
+    expect(parseSlash('  /task-model 2 deepseek/deepseek-v4-flash ')).toEqual({
+      name: 'task-model',
+      args: ['2', 'deepseek/deepseek-v4-flash'],
     });
   });
 
@@ -25,11 +25,11 @@ describe('SLASH_COMMANDS', () => {
   // Feature-parity contract with the VS Code extension (issue #24). Every
   // capability the webview exposes must be reachable from the TUI.
   const REQUIRED = [
-    'help', 'model', 'key', 'allowlist', 'refresh',
+    'help', 'planner', 'key', 'allowlist', 'refresh',
     'sessions', 'new', 'save', 'load', 'delete',
-    'runners', 'auto',
+    'runners', 'settings',
     // No 'plan': typing the goal starts planning, so an alias would only
-    // shadow /planner and /planner-effort on completion.
+    // shadow /planner on completion.
     'run', 'stop', 'approve',
     'add-task', 'remove-task', 'complete', 'skip', 'retry', 'cancel', 'force-start',
     // Per-task assignment editors, in the order each choice constrains the next.
@@ -40,6 +40,15 @@ describe('SLASH_COMMANDS', () => {
   it.each(REQUIRED)('exposes /%s', (name) => {
     expect(findCommand(name)).toBeDefined();
   });
+
+  // `/settings` and `/planner` cover these; one command per value only made
+  // the surface larger than the thing it described.
+  it.each(['auto', 'supervisor', 'automerge', 'autorun', 'research', 'parallel', 'model', 'planner-effort'])(
+    'no longer exposes /%s',
+    (name) => {
+      expect(findCommand(name)).toBeUndefined();
+    },
+  );
 
   it('gives every command a usage string and a description', () => {
     for (const cmd of SLASH_COMMANDS) {
@@ -76,7 +85,7 @@ describe('completions', () => {
   });
 
   it('stops suggesting once the command is complete and args are being typed', () => {
-    expect(completions('/model set gpt')).toEqual([]);
+    expect(completions('/task-model 2 gpt')).toEqual([]);
   });
 });
 

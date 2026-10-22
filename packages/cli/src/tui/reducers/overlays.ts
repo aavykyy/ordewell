@@ -11,7 +11,6 @@ import { taskActionEffect } from './planPane';
 import { assignTaskEffort, assignTaskSkills, assignTaskMode, assignTaskModel, assignTaskRunner } from './taskEdits';
 import { say } from '../transcript';
 import { clamp, digitRow, editText, fail, step, type Step } from './shared';
-import { runSettingsEffect } from './runSettings';
 import { answerSaveSettings } from './settings';
 import { handleStepperKey } from './stepper';
 
@@ -81,8 +80,6 @@ function runConfirm(
     if (!state.sessionId) return step(closed);
     return step(closed, [taskActionEffect(closed, state.sessionId, overlay.action.taskId, 'force-start')]);
   }
-  if (overlay.action.kind === 'supervisor-act') return step(closed, [runSettingsEffect(closed, { supervisorLevel: 'act' })]);
-  if (overlay.action.kind === 'autorun-on') return step(closed, [runSettingsEffect(closed, { autorun: true })]);
   if (overlay.action.kind === 'save-settings') return answerSaveSettings(state, overlay.action, true);
   if (overlay.action.kind === 'merge-run' || overlay.action.kind === 'discard-run') {
     return confirmedHandoff(state, overlay.action.kind);
@@ -222,12 +219,6 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
   }
 
   switch (picker.action.kind) {
-    case 'set-model':
-      return step(closed, [{ type: 'setModel', modelId: item.id }]);
-
-    case 'set-planner-effort':
-      return step(closed, [{ type: 'setPlannerEffort', effort: item.id === DEFAULT_EFFORT ? '' : item.id }]);
-
     case 'load-session':
       return step(closed, [{ type: 'loadSession', sessionId: item.id }]);
     case 'rewind':

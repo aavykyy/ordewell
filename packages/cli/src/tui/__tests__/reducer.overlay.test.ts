@@ -23,7 +23,7 @@ function withPicker(over: Partial<PickerState>, state: Partial<TuiState> = {}): 
         multi: false,
         chosen: [],
         filterable: true,
-        action: { kind: 'set-model' },
+        action: { kind: 'delete-session' },
         ...over,
       },
     },
@@ -73,44 +73,44 @@ describe('picker navigation', () => {
 });
 
 describe('fixed-list picker', () => {
-  const planners = (over: Partial<PickerState> = {}) => withPicker({
-    action: { kind: 'set-planner-effort' },
+  const sessions = (over: Partial<PickerState> = {}) => withPicker({
+    action: { kind: 'delete-session' },
     filterable: false,
     items: [
-      { id: 'low', label: 'Low' },
-      { id: 'high', label: 'High' },
-      { id: '', label: 'Max', detail: 'not offered by this model', disabled: true },
+      { id: 'a', label: 'Low' },
+      { id: 'b', label: 'High' },
+      { id: '', label: 'Max', detail: 'not offered here', disabled: true },
     ],
     ...over,
   });
 
   it('a digit chooses its row straight away', () => {
-    const { state, effects } = press(planners(), 'char', '2');
-    expect(effects).toEqual([{ type: 'setPlannerEffort', effort: 'high' }]);
+    const { state, effects } = press(sessions(), 'char', '2');
+    expect(effects).toEqual([{ type: 'deleteSession', sessionId: 'b' }]);
     expect(state.overlay).toBeNull();
   });
 
   it('a digit past the last row does nothing', () => {
-    const { state, effects } = press(planners(), 'char', '7');
+    const { state, effects } = press(sessions(), 'char', '7');
     expect(effects).toEqual([]);
     expect(pickerOf(state).index).toBe(0);
   });
 
   it('a digit on a disabled row keeps the picker open with the reason', () => {
-    const { state, effects } = press(planners(), 'char', '3');
+    const { state, effects } = press(sessions(), 'char', '3');
     expect(effects).toEqual([]);
     expect(pickerOf(state).items).toHaveLength(3);
-    expect(messagesOf(state).at(-1)?.text).toContain('not offered by this model');
+    expect(messagesOf(state).at(-1)?.text).toContain('not offered here');
   });
 
   it('typing does not filter it', () => {
-    const s = press(planners(), 'char', 'c').state;
+    const s = press(sessions(), 'char', 'c').state;
     expect(pickerOf(s).filter).toBe('');
   });
 
   it('a digit toggles a row of a multi-select', () => {
-    const s = press(planners({ action: { kind: 'set-runners' }, multi: true, chosen: [] }), 'char', '2').state;
-    expect(pickerOf(s).chosen).toEqual(['high']);
+    const s = press(sessions({ action: { kind: 'set-runners' }, multi: true, chosen: [] }), 'char', '2').state;
+    expect(pickerOf(s).chosen).toEqual(['b']);
     expect(pickerOf(s).index).toBe(1);
   });
 
@@ -121,15 +121,15 @@ describe('fixed-list picker', () => {
 });
 
 describe('picker selection', () => {
-  it('choosing a model applies it and closes', () => {
+  it('choosing a row applies it and closes', () => {
     const { state, effects } = press(withPicker({ index: 1 }), 'enter');
-    expect(effects).toEqual([{ type: 'setModel', modelId: 'b/2' }]);
+    expect(effects).toEqual([{ type: 'deleteSession', sessionId: 'b/2' }]);
     expect(state.overlay).toBeNull();
   });
 
   it('chooses from the filtered list, not the original one', () => {
     const { effects } = press(withPicker({ filter: 'gam', index: 0 }), 'enter');
-    expect(effects).toEqual([{ type: 'setModel', modelId: 'c/3' }]);
+    expect(effects).toEqual([{ type: 'deleteSession', sessionId: 'c/3' }]);
   });
 
   it('does nothing when the filter matches no items', () => {

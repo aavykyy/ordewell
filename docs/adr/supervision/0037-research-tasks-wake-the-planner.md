@@ -66,8 +66,9 @@ harness subagents stay as they are, awaited before the turn ends.**
   stay pending for the user's next message. Both counters persist across runs
   and reloads. A real user message opens a new budget; a report turn or a
   usage-limit resend does not. The settings are global, saved and live
-  (ADR-0030), with `/research parallel <n>` and `/research per-message <n>`
-  and the VS Code Run settings. Each task counts against its runner's usage
+  (ADR-0030), with the two research values in `/settings` on the TUI and VS
+  Code, or `ordewell research parallel <n>` and
+  `ordewell research per-message <n>` headless. Each task counts against its runner's usage
   like any task. The per-turn context-and-budgets block states how many
   research tasks remain for this message.
 - **Harness subagents stay in the turn (R5).** A harness's own subagents are

@@ -190,8 +190,6 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     handleStartPlanning: (text) => handleStartPlanning(text, managerDeps, state.pendingRunners),
     sendRunnerAndModels: () => discovery.refresh(),
     runApiKeyWizard: (provider) => discovery.runApiKeyWizard(provider),
-    discoverOrchestratorModelOptions: () => discovery.options(),
-    pickModelWithProvider: (...args) => discovery.pickModelWithProvider(...args),
   };
 
   const routerDeps: WebviewRouterDeps = {
@@ -214,12 +212,6 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     return {
       config: {
         orchestratorModel: services.config.orchestratorModel,
-        planningModel: services.config.planningModel,
-        enabledRunners: services.config.enabledRunners,
-        autonomousMode: services.config.autonomousMode,
-        apiKey: services.config.apiKey,
-        openAiBaseUrl: services.config.openAiBaseUrl,
-        configuredProviders: services.config.configuredProviders,
         aiProvider: services.config.aiProvider,
         plannerThinkingEffort: services.config.plannerThinkingEffort,
       },
@@ -231,8 +223,6 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
         modelsForRunners: (runners: string[]) => services.modelResolver.modelsForRunners(runners),
       },
       runnerRegistry: {
-        get: (id: string) => services.runnerRegistry.get(id),
-        getManifest: (id: string) => services.runnerRegistry.getManifest(id),
         list: () => services.runnerRegistry.list(),
       },
       chatProvider: services.chatProvider,
@@ -241,17 +231,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       refreshPlannerState: () => planner.sendState(),
       sendRunnerAndModels: () => discovery.refresh(),
       runApiKeyWizard: (provider) => discovery.runApiKeyWizard(provider),
-      discoverOrchestratorModelOptions: () => discovery.options(),
-      pickModelWithProvider: (...args) => discovery.pickModelWithProvider(...args),
-      updateConfig: async (key, value) => services.config.update(key, value),
-      changePlanner: (change) => planner.pick(change),
       recallPlannerModel: (provider, harnessModels, vendorOptions) => recallPlannerModel(services.plannerModelMemory, provider, harnessModels, vendorOptions),
       applyPlannerChoice: (provider, modelId, effort) => planner.applyChoice(provider, modelId, effort),
-      saveAutonomy,
-      runSettings: {
-        get: () => services.settingsService.getRunSettings(),
-        change: changeRunSettings,
-      },
       log,
     };
   }
@@ -335,25 +316,6 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     }
   }
 
-  /** `/parallel [n]` and "Ordewell: Set Parallel Tasks": how many AI tasks run at once, with no ceiling. */
-  async function setMaxParallel(value?: string): Promise<void> {
-    const current = services.config.maxParallelSessions;
-    const typed = value ?? await vscodeApi.window.showInputBox({
-      title: 'Ordewell: how many AI tasks run at once',
-      prompt: 'Any whole number of 1 or more. Applies to a run already going.',
-      value: String(current),
-      validateInput: (text) => (parseMaxParallel(text) === null ? 'Enter a whole number of 1 or more.' : undefined),
-    });
-    if (typed === undefined) return;
-    const limit = parseMaxParallel(typed);
-    if (limit === null) {
-      vscodeApi.window.showWarningMessage(`"${typed}" is not a number of tasks (1 or more).`);
-      return;
-    }
-    await services.config.update('maxParallelSessions', limit);
-    vscodeApi.window.showInformationMessage(`Up to ${limit} AI task${limit === 1 ? '' : 's'} now run at once.`);
-  }
-
   // Warned once per value: a config change fires for every setting, and the
   // same typo would otherwise re-raise the toast on each one.
   let warnedPlannerSetting: string | undefined;
@@ -383,7 +345,6 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     registerCommands(services.context, commandDeps);
     services.context.subscriptions.push(
       vscodeApi.commands.registerCommand('ordewell.setPlanner', (provider: PlannerBackendId) => planner.apply(provider)),
-      vscodeApi.commands.registerCommand('ordewell.setMaxParallel', (value?: string) => setMaxParallel(value)),
     );
 
     services.context.subscriptions.push(

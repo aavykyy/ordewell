@@ -13,9 +13,7 @@ export type Effect =
   | { type: 'sendMessage'; sessionId: string; message: string }
   /** Send now in the planner chat (ADR-0023, F5): stop the turn in flight and answer `message` next. */
   | { type: 'forceSendPlannerMessage'; sessionId: string; message: string }
-  | { type: 'setModel'; modelId: string }
   | { type: 'setPlanner'; provider: string }
-  | { type: 'setPlannerEffort'; effort: string }
   /** `/planner`'s three answers at once, so the daemon never holds a provider with the old backend's model. */
   | { type: 'setPlannerChoice'; provider: string; modelId: string; effort: string; notice: string }
   | { type: 'setApiKey'; provider: string; key: string }
@@ -23,8 +21,6 @@ export type Effect =
   | { type: 'setRunnerEnabled'; runner: string; enabled: boolean }
   /** The runner picker's whole confirmed set, so one visit reports one result. */
   | { type: 'setRunners'; changes: { runner: string; enabled: boolean }[]; message: string }
-  | { type: 'setAutonomous'; enabled: boolean }
-  | { type: 'setMaxParallel'; limit: number }
   | { type: 'setMouseCapture'; enabled: boolean }
   /** A finished selection, already clipped to its pane and stripped of paint. */
   | { type: 'copyText'; text: string }
@@ -56,9 +52,7 @@ export type Effect =
   /** `watch` asks the runtime to hold the execution stream open for this action — see `taskActionEffect`. */
   | { type: 'taskAction'; sessionId: string; taskId: string; action: TaskAction; watch?: boolean }
   | { type: 'addTask'; sessionId: string; title: string }
-  /** Saves run settings (ADR-0030), and applies them at once to `sessionId`'s run when one is named. */
-  | { type: 'setRunSettings'; changes: Partial<GlobalRunSettings>; sessionId?: string }
-  /** `/settings`: only the changed values, saved the way their own commands save them, then `message` as one notice. */
+  /** `/settings`: only the changed values, saved the way their headless commands save them, then `message` as one notice. */
   | { type: 'saveSettings'; run: Partial<GlobalRunSettings>; autonomous?: boolean; maxParallel?: number; message: string; sessionId?: string }
   | { type: 'updateTask'; sessionId: string; taskId: string; changes: Record<string, unknown>; message: string }
   | { type: 'removeTask'; sessionId: string; taskId: string }

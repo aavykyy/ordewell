@@ -17,15 +17,19 @@ const TUI_ONLY: Record<string, string> = {
   save: 'plans are persisted server-side as they change; there is nothing to flush',
   load: '`ordewell sessions load <id>`',
   delete: '`ordewell sessions delete <id>`',
-  settings: 'a stepped panel over `ordewell auto`, `supervisor`, `automerge`, `autorun` and `parallel`, each a subcommand already',
+  settings: 'a stepped panel over the headless `ordewell auto`, `supervisor`, `automerge`, `autorun`, `research` and `parallel` commands',
   open: 'it opens a task\'s view in the full-screen terminal; a shell has no view to switch to, and `ordewell checkpoint` answers from one',
   mouse: 'it configures the full-screen terminal, which only the TUI holds (ORDEWELL_TUI_MOUSE persists it)',
 };
 
-/** CLI-only commands: a daemon, a wizard or a catalog has no slash equivalent. */
+/** CLI-only commands: a daemon, a wizard or a catalog has no slash equivalent, or the TUI's `/settings` and `/planner` panels cover it. */
 const CLI_ONLY = [
   'web', 'setup', 'models', 'skills', 'tui', 'status',
   'stop-server', 'run-task', 'mark-complete', 'plan',
+  // The headless form of the `/settings` panel's rows.
+  'auto', 'supervisor', 'automerge', 'autorun', 'research', 'parallel',
+  // The headless form of `/planner`'s model and effort steps.
+  'model', 'planner-effort',
 ];
 
 describe('CLI ↔ TUI command parity', () => {

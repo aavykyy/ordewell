@@ -2,7 +2,7 @@
   "name": "ordewell",
   "displayName": "Ordewell",
   "description": "Plan once, run it across Claude Code, Codex and OpenCode, and review one branch.",
-  "version": "0.10.10",
+  "version": "0.10.12",
   "private": true,
   "publisher": "ordewell",
   "license": "Apache-2.0",
@@ -86,10 +86,6 @@
       {
         "command": "ordewell.compactConversation",
         "title": "Ordewell: Compact Conversation"
-      },
-      {
-        "command": "ordewell.setMaxParallel",
-        "title": "Ordewell: Set Parallel Tasks"
       },
       {
         "command": "ordewell.focusChat",
@@ -211,7 +207,7 @@
         "ordewell.orchestratorModel": {
           "type": "string",
           "default": "",
-          "description": "Main planning model (required — type /model set to configure)"
+          "description": "Main planning model (required. Use /planner or the Planner section to choose one)"
         },
         "ordewell.geminiModel": {
           "type": "string",
@@ -330,7 +326,7 @@
     }
   },
   "dependencies": {
-    "@ordewell/core": "^0.10.10",
+    "@ordewell/core": "^0.10.12",
     "uuid": "^11.1.1"
   },
   "devDependencies": {

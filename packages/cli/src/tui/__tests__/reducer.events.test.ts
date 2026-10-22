@@ -292,48 +292,6 @@ describe('loaded data', () => {
     expect(s.allowlist).toEqual({ opencode: ['a/b'] });
   });
 
-  it('fills the orchestrator picker from the cross-provider catalog, naming each provider', () => {
-    const opened = reduce(
-      { ...initialState(), editor: { ...initialState().editor, text: '/model', cursor: 6 } },
-      { type: 'key', key: { name: 'enter' } },
-    ).state;
-    const s = send(opened, {
-      type: 'modelsLoaded',
-      models: [{ id: 'runner/x', label: 'Runner X', provider: 'claude-code' }],
-      orchestratorModels: [
-        { id: 'deepseek/v4', label: 'DeepSeek V4', provider: 'OpenRouter', pricing: '$0.14/0.28/MTok' },
-        { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', provider: 'Google' },
-      ],
-    });
-    // The picker shows the planner catalog (orchestratorModels), not runner models.
-    expect(s.overlay).toMatchObject({
-      kind: 'picker',
-      picker: {
-        items: [
-          { id: 'deepseek/v4', detail: 'OpenRouter · $0.14/0.28/MTok' },
-          { id: 'gemini-2.5-pro', detail: 'Google' },
-        ],
-      },
-    });
-  });
-
-  it('warns in the picker when a configured provider failed, still listing the working ones', () => {
-    const opened = reduce(
-      { ...initialState(), editor: { ...initialState().editor, text: '/model', cursor: 6 } },
-      { type: 'key', key: { name: 'enter' } },
-    ).state;
-    const s = send(opened, {
-      type: 'modelsLoaded',
-      models: [],
-      orchestratorModels: [{ id: 'deepseek/v4', label: 'DeepSeek V4', provider: 'OpenRouter' }],
-      providerErrors: { openai: 'Failed to fetch models: 401 Unauthorized' },
-    });
-    expect(s.overlay).toMatchObject({ kind: 'picker', picker: { items: [{ id: 'deepseek/v4' }] } });
-    const hint = (s.overlay as { picker: { hint?: string } }).picker.hint ?? '';
-    expect(hint).toContain('OpenAI');
-    expect(hint).toContain('Showing working providers only');
-  });
-
   it('remembers which providers have keys, and keeps them when a later load omits the list', () => {
     const s = send(initialState(), { type: 'modelsLoaded', models: [], providers: ['openrouter'] });
     expect(s.configuredProviders).toEqual(['openrouter']);

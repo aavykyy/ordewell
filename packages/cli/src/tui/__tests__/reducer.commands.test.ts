@@ -33,30 +33,21 @@ describe('retired mode toggles', () => {
   });
 });
 
+describe('retired run-setting and planner-step commands', () => {
+  // /settings and /planner are the one place each value is set; the headless
+  // CLI keeps the one-value commands for scripts.
+  it.each([
+    '/auto full', '/supervisor act', '/automerge on', '/autorun on', '/parallel 8',
+    '/model', '/model set sonnet', '/planner-effort high',
+  ])('%s is no longer a command and goes to the planner as typed', (line) => {
+    expect(run(line).effects).toEqual([{ type: 'startConversation', goal: line }]);
+  });
+});
+
 describe('models and providers', () => {
-  it('/model set applies the model directly', () => {
-    expect(run('/model set deepseek/deepseek-v4-flash').effects).toEqual([
-      { type: 'setModel', modelId: 'deepseek/deepseek-v4-flash' },
-    ]);
-  });
-
-  it('/model set refuses a vendor model while a coding agent plans on a cold catalog, pointing at /planner', () => {
-    const { state, effects } = run('/model set openai/gpt-4o', { plannerProvider: 'claude-code' });
-    expect(effects).toEqual([]);
-    expect(lastMessage(state)?.role).toBe('error');
-    expect(lastMessage(state)?.text).toContain('/planner');
-  });
-
-  it('/model set takes an OpenCode provider/model id on a cold catalog', () => {
-    expect(run('/model set anthropic/claude-sonnet-4-5', { plannerProvider: 'opencode' }).effects).toEqual([
-      { type: 'setModel', modelId: 'anthropic/claude-sonnet-4-5' },
-    ]);
-  });
-
-  it('/model with no argument opens a picker and loads the catalog', () => {
-    const { state, effects } = run('/model');
-    expect(state.overlay).toMatchObject({ kind: 'picker', picker: { action: { kind: 'set-model' } } });
-    expect(effects).toEqual([{ type: 'loadModels' }]);
+  it('/planner with no argument opens the planner stepper', () => {
+    const { state } = run('/planner');
+    expect(state.overlay).toMatchObject({ kind: 'stepper' });
   });
 
   it('/key set stores a provider key', () => {
@@ -103,15 +94,7 @@ describe('model allowlist', () => {
   });
 });
 
-describe('runners and autonomy', () => {
-  it('/parallel <n> sets how many tasks run at once; bare /parallel says what it is', () => {
-    expect(run('/parallel 8').effects).toEqual([{ type: 'setMaxParallel', limit: 8 }]);
-    expect(run('/parallel 8').state.maxParallel).toBe(8);
-    expect(lastMessage(run('/parallel', { maxParallel: 2 }).state)?.text).toBe('Up to 2 AI tasks run at once: /parallel <n> changes it.');
-    expect(run('/parallel 0').effects).toEqual([]);
-    expect(run('/parallel many').effects).toEqual([]);
-  });
-
+describe('runners and mouse', () => {
   it('/runners <id> off disables a runner', () => {
     expect(run('/runners opencode off').effects).toEqual([
       { type: 'setRunnerEnabled', runner: 'opencode', enabled: false },
@@ -166,34 +149,9 @@ describe('runners and autonomy', () => {
     expect(state.overlay).toMatchObject({ kind: 'picker', picker: { chosen: chosenBefore } });
   });
 
-  it('/auto full and /auto guarded select the two levels', () => {
-    expect(run('/auto full', { autonomous: false }).effects).toEqual([{ type: 'setAutonomous', enabled: true }]);
-    expect(run('/auto guarded', { autonomous: true }).effects).toEqual([{ type: 'setAutonomous', enabled: false }]);
-  });
-
-  it('on, off and auto are aliases of Full and Guarded', () => {
-    expect(run('/auto on', { autonomous: false }).effects).toEqual([{ type: 'setAutonomous', enabled: true }]);
-    expect(run('/auto off', { autonomous: true }).effects).toEqual([{ type: 'setAutonomous', enabled: false }]);
-    expect(run('/auto auto', { autonomous: true }).effects).toEqual([{ type: 'setAutonomous', enabled: false }]);
-  });
-
-  it('a bare /auto prints the current level and changes nothing', () => {
-    const full = run('/auto', { autonomous: true });
-    expect(full.effects).toEqual([]);
-    expect(full.state.autonomous).toBe(true);
-    expect(lastMessage(full.state)?.text).toContain('Full');
-    expect(lastMessage(run('/auto', { autonomous: false }).state)?.text).toContain('Guarded');
-  });
-
-  it('/auto updates the state so the badge sees the new level', () => {
-    expect(run('/auto guarded', { autonomous: true }).state.autonomous).toBe(false);
-    expect(run('/auto full', { autonomous: false }).state.autonomous).toBe(true);
-  });
-
-  it('/auto with anything else shows the usage with both level names', () => {
-    const { effects, state } = run('/auto maybe');
-    expect(effects).toEqual([]);
-    expect(lastMessage(state)?.text).toBe('Usage: /auto [full|guarded]');
+  it('/auto full and /auto guarded are gone; /settings owns the level', () => {
+    expect(run('/auto full', { autonomous: false }).effects).toEqual([{ type: 'startConversation', goal: '/auto full' }]);
+    expect(run('/auto guarded', { autonomous: true }).effects).toEqual([{ type: 'startConversation', goal: '/auto guarded' }]);
   });
 
   // Capture used to cost the user drag-select outright; now the app does the

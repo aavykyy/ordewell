@@ -37,9 +37,9 @@ describe('plannerPreflightError', () => {
     expect(plannerPreflightError(config('openai_compatible', '', 'llama3'))).toContain('OPENAI_COMPATIBLE_BASE_URL');
   });
 
-  it('still demands a model from a keyed vendor planner, in the chat\'s /model set spelling', () => {
+  it('still demands a model from a keyed vendor planner, in the chat\'s /planner spelling', () => {
     expect(plannerPreflightError(config('openrouter', 'sk-or', '')))
-      .toBe('No planner model selected for OpenRouter. Pick one with /model set, or switch planner with /planner.');
+      .toBe('No planner model selected for OpenRouter. Pick one with /planner.');
   });
 
   it('passes a fully configured vendor planner', () => {

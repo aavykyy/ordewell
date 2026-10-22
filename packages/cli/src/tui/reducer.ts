@@ -292,7 +292,7 @@ function reduceAction(state: TuiState, action: Action): Step {
             providerErrors: action.providerErrors ?? state.providerErrors,
             modesByRunner: action.modesByRunner ?? state.modesByRunner,
           },
-          ['set-model', 'set-task-model', 'set-task-effort', 'set-task-mode'],
+          ['set-task-model', 'set-task-effort', 'set-task-mode'],
         ),
       ));
 

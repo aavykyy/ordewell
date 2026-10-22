@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { plannerNotReady, describePlannerNotReady, TERMINAL_UI_COMMANDS, HEADLESS_CLI_COMMANDS, type PlannerReadinessConfig } from '../plannerReadiness';
+import { plannerNotReady, describePlannerNotReady, TERMINAL_UI_COMMANDS, CHAT_COMMANDS, HEADLESS_CLI_COMMANDS, type PlannerReadinessConfig } from '../plannerReadiness';
 
 function config(over: Partial<PlannerReadinessConfig> & { key?: string }): PlannerReadinessConfig {
   const { key = '', ...rest } = over;
@@ -75,7 +75,8 @@ describe('describePlannerNotReady', () => {
 
   it('tells a model-less vendor to pick a model, in the surface\'s spelling', () => {
     const reason = plannerNotReady(config({ key: 'sk', planningModel: '' }))!;
-    expect(describePlannerNotReady(reason, TERMINAL_UI_COMMANDS)).toBe('No planner model selected for OpenRouter. Pick one with /model, or switch planner with /planner.');
+    expect(describePlannerNotReady(reason, TERMINAL_UI_COMMANDS)).toBe('No planner model selected for OpenRouter. Pick one with /planner.');
+    expect(describePlannerNotReady(reason, CHAT_COMMANDS)).toBe('No planner model selected for OpenRouter. Pick one with /planner.');
     expect(describePlannerNotReady(reason, HEADLESS_CLI_COMMANDS)).toContain('ordewell model set <id>');
   });
 });

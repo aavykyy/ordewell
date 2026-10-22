@@ -46,8 +46,8 @@ conversation, and attach task skills as chips on a task's card. See
 [Writing skills](https://github.com/ordewell/ordewell/blob/main/docs/skills.md).
 
 The Command Palette offers **Ordewell: Rewind Conversation**, **Fork
-Conversation**, **Compact Conversation** and **Set Parallel Tasks**, and isolation
-can be configured under `ordewell.worktreeIsolation` and related settings.
+Conversation** and **Compact Conversation**. Isolation can be configured under
+`ordewell.worktreeIsolation` and related settings.
 
 ## Also available
 

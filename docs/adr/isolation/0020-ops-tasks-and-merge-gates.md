@@ -110,9 +110,9 @@ that depends on.**
   which says so, and it starts on the Merge all that opens the gate, or on
   another force start, which asks again.
 - **Merge at gates automatically is an opt-in global user setting**
-  (`/automerge`; [ADR-0029](../supervision/0029-the-supervisor.md),
+  (merge automatically in `/settings`; [ADR-0029](../supervision/0029-the-supervisor.md),
   [ADR-0030](../supervision/0030-global-run-settings.md)), off by default, with
-  or without a supervisor. A change applies at once to the session it is typed
+  or without a supervisor. A change applies at once to the session it is made
   in, and to other sessions from their next run. When a task waits on nothing
   but its gate — approved, off hold, its dependencies met — Ordewell runs
   Merge all itself through the same queue; a
@@ -242,3 +242,4 @@ it.
 - 2026-10-18 — a merge that leaves the run going no longer clears a surface's isolation marks: the Session announces the run's closing as `run_closed` ([ADR-0013](0013-worktree-isolation.md)).
 - 2026-10-18 — a force start queued behind its dependencies passes only the gate the user confirmed when forcing it, and an automatic merge at a gate is made only for a task nothing else holds back: one the user has not approved no longer triggers it ([ADR-0034](../supervision/0034-a-failed-task-blocks-only-its-dependents.md)'s one start rule).
 - 2026-10-21 — a script task is an ops task Ordewell runs from a literal script with no model, whose evidence is its exit status, and the planner may add and start one; the planner no longer "never carries out an effect itself" ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
+- 2026-10-22: merge automatically is set in `/settings`; `ordewell automerge` stays headless.

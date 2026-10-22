@@ -81,7 +81,7 @@ const AUTONOMY_KEY = 'ORDEWELL_AUTONOMOUS_MODE';
 /**
  * The autonomy level moved from `.env` to the settings file (ADR-0030). Run
  * before {@link loadEnvFile}: a line left there would load as an environment
- * override and hide every later `/auto`. The settings file's own value wins;
+ * override and hide every later `/settings` change. The settings file's own value wins;
  * an older install's line fills it once, and goes either way.
  */
 export function moveAutonomyToSettings(): void {

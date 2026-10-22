@@ -112,7 +112,10 @@ function fakeDaemon() {
       models: [],
       modelsByRunner: {},
       providers: ['openrouter'],
-      orchestratorModels: [{ id: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash', provider: 'OpenRouter' }],
+      orchestratorModels: [
+        { id: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash', provider: 'OpenRouter' },
+        { id: 'qwen/max', label: 'Qwen Max', provider: 'OpenRouter' },
+      ],
       providerErrors: {},
     })),
     streamPlanning: vi.fn((_id: string, onEvent: (event: unknown) => void) => {
@@ -686,19 +689,19 @@ describe('TUI end to end', () => {
     expect(h.daemon.mocks.markTaskComplete).toHaveBeenCalledTimes(1);
   });
 
-  it('/model set persists to the env, the daemon, and the header', async () => {
+  it('/planner <provider> persists the switch to the env, the daemon, and the header', async () => {
     const h = harness();
     await vi.waitFor(() => expect(h.screen()).toContain('deepseek/deepseek-v4-flash'));
 
-    h.type('/model set openrouter/newer-model');
+    h.type('/planner opencode');
     h.type('\r');
 
     await vi.waitFor(() => {
-      expect(h.screen()).toContain('Planner model set to openrouter/newer-model.');
+      expect(h.screen()).toContain('Planning with OpenCode: no API key needed.');
     });
-    expect(h.envWrites.ORCHESTRATOR_MODEL).toBe('openrouter/newer-model');
-    expect(h.daemon.mocks.updateSettings).toHaveBeenCalledWith({ orchestratorModel: 'openrouter/newer-model' });
-    expect(h.screen()).toContain('openrouter/newer-model');
+    expect(h.envWrites.AI_PROVIDER).toBe('opencode');
+    expect(h.daemon.mocks.updateSettings).toHaveBeenCalledWith({ env: { AI_PROVIDER: 'opencode' } });
+    expect(h.screen()).toContain('OpenCode');
   });
 
   it('a failed planner turn reports in the transcript, clears the session, and the TUI keeps working', async () => {

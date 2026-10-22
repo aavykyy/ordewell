@@ -20,62 +20,8 @@ const plan = (over: Partial<TuiState> = {}): TuiState =>
 /** The user's run settings as the daemon answered them (ADR-0030). */
 const loaded = (state: TuiState, run: Partial<GlobalRunSettings>): TuiState =>
   apply(state, { type: 'settingsLoaded', settings: { run: { ...RUN_SETTINGS_DEFAULTS, ...run } } }).state;
-const typed = (state: TuiState, text: string): Step =>
-  reduce({ ...state, focus: 'chat', editor: { ...state.editor, text, cursor: text.length } }, key('enter'));
-const said = (step: Step): string => frame(step.state);
 
 describe('run settings in the TUI (ADR-0030)', () => {
-  it('/supervisor sets the level for this session and every later run, asking before Act', () => {
-    expect(typed(plan(), '/supervisor watch').effects).toEqual([{ type: 'setRunSettings', changes: { supervisorLevel: 'watch' }, sessionId: 's1' }]);
-    expect(typed(plan(), '/supervisor off').effects).toEqual([{ type: 'setRunSettings', changes: { supervisorLevel: 'off' }, sessionId: 's1' }]);
-
-    const asked = typed(plan(), '/supervisor act');
-    expect(asked.effects).toEqual([]);
-    expect(asked.state.overlay).toMatchObject({ kind: 'confirm', title: 'Let the supervisor act?' });
-    expect(frame(asked.state)).toMatch(/ops tasks included/);
-    expect(press(asked.state, 'enter').effects).toEqual([{ type: 'setRunSettings', changes: { supervisorLevel: 'act' }, sessionId: 's1' }]);
-  });
-
-  it('/supervisor retries and reads set the loop guard and the wake-up budget, refusing what is out of range', () => {
-    expect(typed(plan(), '/supervisor retries 3').effects).toEqual([{ type: 'setRunSettings', changes: { supervisorRetryLimit: 3 }, sessionId: 's1' }]);
-    expect(typed(plan(), '/supervisor reads 20').effects).toEqual([{ type: 'setRunSettings', changes: { wakeUpReadBudget: 20 }, sessionId: 's1' }]);
-    expect(typed(plan(), '/supervisor reads 0').effects).toEqual([]);
-    expect(typed(plan(), '/supervisor retries -1').effects).toEqual([]);
-    expect(typed(plan(), '/supervisor boss').effects).toEqual([]);
-  });
-
-  it('/research changes the saved live limits, refusing zero and invalid arguments', () => {
-    expect(typed(plan(), '/research parallel 1').effects).toEqual([{ type: 'setRunSettings', changes: { researchMaxParallel: 1 }, sessionId: 's1' }]);
-    expect(typed(plan(), '/research per-message 3').effects).toEqual([{ type: 'setRunSettings', changes: { researchMaxPerMessage: 3 }, sessionId: 's1' }]);
-    expect(typed(plan(), '/research parallel 0').effects).toEqual([]);
-    expect(typed(plan(), '/research maybe 2').effects).toEqual([]);
-    expect(said(typed(plan(), '/research'))).toContain('Research: 2 at once, 4 tasks and report turns per message');
-  });
-
-  it('a bare /supervisor, /automerge or /autorun says what it is and changes nothing', () => {
-    const state = loaded(plan(), { supervisorLevel: 'act', supervisorRetryLimit: 1, mergeAtGatesAutomatically: true });
-    const supervisor = typed(state, '/supervisor');
-    expect(supervisor.effects).toEqual([]);
-    expect(said(supervisor)).toContain('Supervisor: Act, 1 retry per task, 12 reads per wake-up');
-    expect(said(typed(state, '/automerge'))).toContain('Merge automatically (gates, end of run): on');
-    expect(said(typed(state, '/autorun'))).toContain('Autorun: off');
-  });
-
-  it('/automerge and /autorun switch, and autorun asks before it turns on', () => {
-    expect(typed(plan(), '/automerge on').effects).toEqual([{ type: 'setRunSettings', changes: { mergeAtGatesAutomatically: true }, sessionId: 's1' }]);
-    expect(typed(plan(), '/automerge off').effects).toEqual([{ type: 'setRunSettings', changes: { mergeAtGatesAutomatically: false }, sessionId: 's1' }]);
-    expect(typed(plan(), '/autorun off').effects).toEqual([{ type: 'setRunSettings', changes: { autorun: false }, sessionId: 's1' }]);
-
-    const asked = typed(plan(), '/autorun on');
-    expect(asked.effects).toEqual([]);
-    expect(frame(asked.state)).toMatch(/without review, ops tasks included/);
-    expect(press(asked.state, 'enter').effects).toEqual([{ type: 'setRunSettings', changes: { autorun: true }, sessionId: 's1' }]);
-  });
-
-  it('saves the setting alone when no session is open', () => {
-    expect(typed(initialState({}), '/automerge on').effects).toEqual([{ type: 'setRunSettings', changes: { mergeAtGatesAutomatically: true } }]);
-  });
-
   it('no longer has plan-pane keys for them', () => {
     for (const k of ['G', 'W', 'L']) expect(press(plan({ status: 'executing' }), 'char', k).effects).toEqual([]);
     expect(frame(plan())).not.toMatch(/G Merge at gates|W Supervisor/);
@@ -86,7 +32,7 @@ describe('run settings in the TUI (ADR-0030)', () => {
 
     expect(welcome).toMatch(/Autonomy\s+Full\s*\n/);
     expect(welcome).toMatch(/Run\s+supervisor Act · auto-merge off · autorun on\s+\/settings/);
-    expect(welcome).toMatch(/Research\s+2 at once, 4 per message\s+\/research/);
+    expect(welcome).toMatch(/Research\s+2 at once, 4 per message\s+\/settings/);
   });
 
   it('shows them on the status line, and the run\'s own level where it differs', () => {

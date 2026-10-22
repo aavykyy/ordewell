@@ -32,16 +32,18 @@ Concretely:
   planned — a generated plan or a planner edit; the orchestrator never replaces
   `task.taskMode` at spawn. A user who changes the level after generating sees
   no change to planned tasks until they regenerate. That
-  is deliberate — it is the same rule `/model set` follows.
+  is deliberate: it is the same rule a planner model switch follows, and the plan
+  keeps the model it was planned with.
 - **Two levels, one boolean.** The setting is a boolean (`autonomousMode`,
   `autonomousDefault`, TUI `autonomous`, default on), saved machine-wide in
   `settings.json` ([ADR-0030](../supervision/0030-global-run-settings.md));
   `ORDEWELL_AUTONOMOUS_MODE` is an override Ordewell never writes.
   **Full** is on: each runner's `autonomous`-tagged mode.
-  **Guarded** is off: each runner's `safe`-tagged mode. `/auto full` and
-  `/auto guarded` select them (`ordewell auto full|guarded` likewise); `on`, `off`
-  and `auto` stay as aliases, and a bare `/auto` in the TUI reports the current level
-  instead of flipping it. Read at generation, never at spawn.
+  **Guarded** is off: each runner's `safe`-tagged mode. `/settings` selects them
+  in the TUI and VS Code (`ordewell auto full|guarded` headless); `on`, `off`
+  and `auto` stay aliases the headless command accepts, and the settings panel
+  shows the level in force rather than flipping it. Read at generation, never
+  at spawn.
 - **Manifests declare what autonomy means for that runner.** Core never
   hardcodes mode IDs. Each manifest tags one mode `autonomous: true` and one
   `safe: true`, and its Ordewell read-only profile `readOnly: true` (the built-ins keep
@@ -184,10 +186,10 @@ writing.
   Meanwhile the user thinks in two settings, Full and Guarded, and the planner's
   other picks — Claude's `acceptEdits` or `default` over the level's mode — were
   rare and rarely wanted. The portfolio judgment it kept was rarely used.
-- **The mode is decided when the task starts.** Rejected: `/auto` would then
-  reach tasks already planned, as ADR-0030's run settings do. The user chose
-  the plan as the record of what runs: a plan read under Guarded would run
-  under Full after a later switch.
+- **The mode is decided when the task starts.** Rejected: a one-value autonomy
+  command would then reach tasks already planned, as ADR-0030's run settings do.
+  The user chose the plan as the record of what runs: a plan read under Guarded
+  would run under Full after a later switch.
 - **Dropping the per-task choice altogether.** Rejected: read-only work would
   either run with write access or need a separate task type.
 - **Replacing the dropdown with a read-only toggle.** Rejected: it would take
@@ -293,5 +295,5 @@ writing.
   ([ADR-0041](0041-a-tasks-model-follows-the-runners-own-switch.md)).
 - 2026-10-18 — one assignment resolver derives the mode for every writer: a user's move of a read-only task to a runner without a read-only mode is refused, a manual task the user turns into an AI one gets the level's mode, and a user's edit may not put an ops task on a read-only mode.
 - 2026-10-21 — a read-only task lands nothing: its worktree is thrown away and its runner is given Ordewell's sealed `run_command` (ADR-0046).
-
 - 2026-10-21 — read-only selects Ordewell's profile on every built-in runner (ADR-0046); native plan modes and the Claude model pin are removed.
+- 2026-10-22: the TUI and VS Code set the level in `/settings`; the headless CLI keeps `ordewell auto`, aliases included.

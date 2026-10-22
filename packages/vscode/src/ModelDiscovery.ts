@@ -1,6 +1,6 @@
 import type * as vscode from 'vscode';
 import {
-  codexSandboxNotice, detectInstalledPlanner, getProviderMeta, ModelResolver, PROVIDER_LABEL, PROVIDER_PRIORITY, PROVIDER_SHORT_LABEL, runnerForProvider,
+  codexSandboxNotice, detectInstalledPlanner, getProviderMeta, ModelResolver, PROVIDER_PRIORITY, PROVIDER_SHORT_LABEL, runnerForProvider,
   type AiProvider, type PlannerBackendId, type CodexSandboxAvailability, type DiscoveredModel, type RunnerInstallation, type RunnerRegistry,
 } from '@ordewell/core';
 import type { ChatViewProvider } from './providers/ChatViewProvider';
@@ -27,7 +27,6 @@ export interface ModelDiscoveryDeps {
 }
 
 export type PickerOption = { id: string; label: string; provider: string; apiProvider?: AiProvider; description?: string; pricing?: string };
-type ExtraPick = { label: string; detail?: string; modelId: string };
 
 // Throttle the degraded-discovery toast so a repeated refresh (each ready
 // message, each runner toggle) can't spam it. One warning per ~2 minutes.
@@ -187,67 +186,6 @@ export class ModelDiscovery {
     return options;
   }
 
-  pickModelWithProvider(
-    options: PickerOption[],
-    configuredProviders: ApiProvider[],
-    placeHolder: string,
-    extraItems: ExtraPick[] = [],
-  ): Promise<string | undefined> {
-    const { vscodeApi } = this.deps;
-    return new Promise((resolve) => {
-      if (configuredProviders.length === 0) {
-        vscodeApi.window.showWarningMessage('No API keys configured. Run "Ordewell: Configure API Key" first.');
-        resolve(undefined);
-        return;
-      }
-      type Item = vscode.QuickPickItem & { modelId?: string; providerId?: ApiProvider };
-      const qp = vscodeApi.window.createQuickPick<Item>();
-      qp.ignoreFocusOut = true;
-      let settled = false;
-      const finish = (val?: string) => { settled = true; resolve(val); qp.hide(); };
-      const extras: Item[] = extraItems.map((e) => ({ label: e.label, detail: e.detail, modelId: e.modelId }));
-
-      const showProviderStep = () => {
-        qp.title = 'Select a provider';
-        qp.placeholder = "Which provider's models?";
-        qp.buttons = [];
-        qp.items = [
-          ...extras,
-          ...configuredProviders.map<Item>((p) => ({
-            label: `Use ${PROVIDER_SHORT_LABEL[p] ?? p} models`,
-            detail: p === 'openrouter' ? '200+ models via OpenRouter' : p === 'google' ? 'Native Gemini models' : `${PROVIDER_LABEL[p] ?? p} models`,
-            providerId: p,
-          })),
-        ];
-      };
-
-      const showModelStep = (provider: ApiProvider, withExtras = false) => {
-        qp.title = `Select a model: ${PROVIDER_SHORT_LABEL[provider] ?? provider}`;
-        qp.placeholder = placeHolder;
-        qp.buttons = configuredProviders.length >= 2 ? [vscodeApi.QuickInputButtons.Back] : [];
-        qp.items = [
-          ...(withExtras ? extras : []),
-          ...options.filter((o) => o.apiProvider === provider).map(modelQuickPickItem),
-        ];
-      };
-
-      qp.onDidTriggerButton((btn) => {
-        if (btn === vscodeApi.QuickInputButtons.Back) showProviderStep();
-      });
-      qp.onDidAccept(() => {
-        const sel = qp.selectedItems[0];
-        if (!sel) return;
-        if (sel.providerId) { showModelStep(sel.providerId); return; }
-        if (sel.modelId) finish(sel.modelId);
-      });
-      qp.onDidHide(() => { if (!settled) resolve(undefined); qp.dispose(); });
-
-      if (configuredProviders.length === 1) showModelStep(configuredProviders[0], true);
-      else showProviderStep();
-      qp.show();
-    });
-  }
-
   async runApiKeyWizard(preselected?: ApiProvider): Promise<void> {
     const { vscodeApi } = this.deps;
     const { validateApiKey } = await import('./adapters/ApiKeyValidator');
@@ -323,14 +261,4 @@ export function plannerProviderLabel(
   if (!modelId) return '';
   const apiProvider = options.find((o) => o.id === modelId)?.apiProvider;
   return apiProvider ? PROVIDER_SHORT_LABEL[apiProvider] ?? '' : '';
-}
-
-function modelQuickPickItem(o: PickerOption): vscode.QuickPickItem & { modelId: string } {
-  const via = o.apiProvider ? ` · via ${PROVIDER_SHORT_LABEL[o.apiProvider] ?? o.apiProvider}` : '';
-  return {
-    label: o.label,
-    description: o.id,
-    detail: `${o.description ?? ''}${o.pricing ? ' · $' + o.pricing + '/MTok' : ''}${via}`.trim(),
-    modelId: o.id,
-  };
 }

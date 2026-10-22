@@ -335,7 +335,6 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
 
     expect(h.vscodeApi.api.window.registerWebviewViewProvider).toHaveBeenCalledWith('ordewellChatView', h.chat.provider, expect.anything());
     expect(h.vscodeApi.api.commands.registerCommand).toHaveBeenCalledWith('ordewell.setPlanner', expect.any(Function));
-    expect(h.vscodeApi.api.commands.registerCommand).toHaveBeenCalledWith('ordewell.setMaxParallel', expect.any(Function));
   });
 
   it('replays plan, planner state and models when the webview reconnects', async () => {
@@ -631,7 +630,7 @@ describe("the Settings panel's Run block", () => {
     await vi.waitFor(() => expect(h.config.config.update).toHaveBeenCalledWith('maxParallelSessions', 17));
   });
 
-  it('pushes the parallel limit whenever the configuration changes (/parallel, the command, settings.json)', async () => {
+  it('pushes the parallel limit whenever the configuration changes (the Settings panel, settings.json)', async () => {
     await h.config.config.update('maxParallelSessions', 9);
     for (const listener of h.config.listeners) listener();
 

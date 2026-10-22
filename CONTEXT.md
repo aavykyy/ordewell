@@ -1472,7 +1472,7 @@ There is no gate without isolation.
 *Avoid:* "checkpoint" — that is a task asking the user to approve its work.
 
 **Auto-merge at gates** — the **Run setting** *Merge automatically* (key `mergeAtGatesAutomatically`),
-off by default, set with `/automerge` and independent of the Supervisor level
+off by default, set in `/settings` (or `ordewell automerge` headless) and independent of the Supervisor level
 (ADR-0029, ADR-0030). When a task waits on nothing but its merge gate — the
 *Start rule* gives no other reason — Ordewell runs Merge all
 itself through the same queue and preflight. A conflict or a dirty overlap
@@ -1974,7 +1974,7 @@ what gives the surfaces' icon/label switches their exhaustiveness checking.
 
 **runnerId / runnerLabel** — the runner whose catalog listed a model, stamped once at `ModelDiscovery.discover` (the only place that knows both the output and the agent that produced it). Model pickers group on the pair — `OpenCode · openrouter`, `Claude Code · anthropic` — so the header names the agent that runs the model and the backend that serves it. `runnerProvider` alone answered neither question in a flat cross-runner list.
 
-**Planner model & effort** — the harness planner's own model and thinking effort (ADR-0009, stories 7–9), distinct from the per-task assignments the plan carries. Stored as `orchestratorModel` + `plannerThinkingEffort`; the candidates are the *runner's* `DiscoveredModel[]` and the selected model's own `variants`, never a fixed low/medium/high the agent may not declare. One stepped control per surface: `/planner` in the TUI and in VS Code walks Harness › Model › Effort (effort is skipped when the model declares no variants). The TUI saves each step on enter, with the later steps at their pre-selection, so the planner never holds one backend with another's model; VS Code saves once, at the last step, and cancelling there applies nothing. `/planner <provider>`, `/model` and `/planner-effort` remain as shortcuts, and VS Code's planner bar keeps its backend pills and model/effort selector. Each backend's last pick is remembered per planner backend id under the settings file's `plannerModels` key — the same file as `modelAllowlist`, so the TUI, CLI and VS Code extension share one memory. Switching back to a backend restores the model (and effort, when that model still declares the variant) it remembers; with nothing remembered it falls back to the first model in that backend's catalog, and only a catalog that discovers no models leaves the planner model unset. Clearing a model always clears its effort — an effort is a variant of a specific model, and one that outlives its model reaches the agent as a level it never offered. `BaseConfig.resolvePlanner` resolves provider, model and effort together and says where they came from. A model picked in this session for the planner in effect (`/model`, a `/planner` pick — held by the daemon or the extension host, not saved as such) and a vendor's configured model plan with the configured model and effort; a model picked for another planner is not this one's, which plans with its remembered model and effort, otherwise its own default. A coding agent the user named (AI_PROVIDER, VS Code's `aiProvider`, a `/planner` switch) keeps the configured model unless it is plainly a vendor's — the shape test below, or for OpenCode, whose own ids are `provider/model`, a slug its discovered catalog does not list — and is then treated the same way. A request's own model (`modelOverride`) wins for that request and is never saved. An agent that plans only because detection found it never chose the *inherited* model — `ORCHESTRATOR_MODEL` from the environment or `.env`, or VS Code's `orchestratorModel` — so it keeps that model, with the effort beside it, only when the model is one of its stable aliases (`canonicalAliases`); otherwise it plans with its remembered model and effort, otherwise its own default. A remembered model that is plainly a vendor's (`openai:…`, or an OpenRouter `org/model` slug for an agent whose ids are not `provider/model`) is read past, never deleted. Nothing derived this way is written to `plannerModels` or the configured settings. `ordewell plan` forwards the model and effort it inherited as `inherited`, which the daemon applies without judging a pick.
+**Planner model & effort**: the harness planner's own model and thinking effort (ADR-0009, stories 7–9), distinct from the per-task assignments the plan carries. Stored as `orchestratorModel` + `plannerThinkingEffort`; the candidates are the *runner's* `DiscoveredModel[]` and the selected model's own `variants`, never a fixed low/medium/high the agent may not declare. One stepped control per surface: `/planner` in the TUI and in VS Code walks Harness › Model › Effort (effort is skipped when the model declares no variants). The TUI saves each step on enter, with the later steps at their pre-selection, so the planner never holds one backend with another's model; VS Code saves once, at the last step, and cancelling there applies nothing. `/planner <provider>` remains a shortcut, and VS Code's planner bar keeps its backend pills and model/effort selector; the headless CLI keeps `ordewell model` and `ordewell planner-effort`, but the TUI and VS Code have no separate model or effort command. Each backend's last pick is remembered per planner backend id under the settings file's `plannerModels` key, the same file as `modelAllowlist`, so the TUI, CLI and VS Code extension share one memory. Switching back to a backend restores the model (and effort, when that model still declares the variant) it remembers; with nothing remembered it falls back to the first model in that backend's catalog, and only a catalog that discovers no models leaves the planner model unset. Clearing a model always clears its effort: an effort is a variant of a specific model, and one that outlives its model reaches the agent as a level it never offered. `BaseConfig.resolvePlanner` resolves provider, model and effort together and says where they came from. A model picked in this session for the planner in effect (a `/planner` model pick, held by the daemon or the extension host, not saved as such) and a vendor's configured model plan with the configured model and effort; a model picked for another planner is not this one's, which plans with its remembered model and effort, otherwise its own default. A coding agent the user named (AI_PROVIDER, VS Code's `aiProvider`, a `/planner` switch) keeps the configured model unless it is plainly a vendor's (the shape test below, or for OpenCode, whose own ids are `provider/model`, a slug its discovered catalog does not list), and is then treated the same way. A request's own model (`modelOverride`) wins for that request and is never saved. An agent that plans only because detection found it never chose the *inherited* model (`ORCHESTRATOR_MODEL` from the environment or `.env`, or VS Code's `orchestratorModel`), so it keeps that model, with the effort beside it, only when the model is one of its stable aliases (`canonicalAliases`); otherwise it plans with its remembered model and effort, otherwise its own default. A remembered model that is plainly a vendor's (`openai:…`, or an OpenRouter `org/model` slug for an agent whose ids are not `provider/model`) is read past, never deleted. Nothing derived this way is written to `plannerModels` or the configured settings. `ordewell plan` forwards the model and effort it inherited as `inherited`, which the daemon applies without judging a pick.
 *Avoid:* "orchestrator model" in user-facing text — it collides with the `TaskOrchestrator`; say *planner model*. The `orchestratorModel` setting key and the `ORCHESTRATOR_MODEL` env var keep their names.
 
 **Planner selection** (`selectPlanner`, core) — the one rule for any change of who plans, with which model and effort. It takes the current provider/model/effort, the change (any of the three), the memory and the catalog of the provider in effect afterwards, and returns the next state, the pick to remember, and — for a switch that filled in its own model — the recall the surface words its notice from. It stores nothing. Reselecting the backend already in use changes nothing. A switch with no model of its own (or the blank one legacy clients send) recalls; a switch with a model is a pick, and never inherits the old backend's effort. A new model within the same backend keeps the current effort unless the catalog lists that model with variants that lack the level, and an explicit effort is held to the same test; a cold catalog, a hand-typed id or a vendor model (which declares no variants) leaves the user's word standing. An effort on its own is remembered only with a model that is the user's own — configured, or the backend's remembered pick — never with a detected agent's inherited model or with none, and it never rewrites the configured model. The daemon (`OrchestratorPool.updateSettings`) and VS Code (`PlannerSelection`) are its callers, each with only its storage — `process.env` and the extension's configuration, both remembering through `PlannerModelMemory`; the CLI and TUI send the change to the daemon and persist to `.env` what it answers.
@@ -2009,8 +2009,9 @@ the global autonomy toggle — two named levels, **Full** (the
 `autonomous`-tagged mode) and **Guarded** (the `safe`-tagged mode), saved
 machine-wide in `settings.json` (ADR-0030), carried as
 the boolean `autonomousMode` (`autonomousDefault`, TUI `autonomous`) and named for
-users by `autonomyLevelLabel`; `/auto full|guarded` selects one, with `on`/`off` and `auto` as
-aliases (`parseAutonomyLevel`). Its operations: `resolveDefaultMode` (the
+users by `autonomyLevelLabel`; `/settings` selects one in the TUI and VS Code, and the
+headless `ordewell auto full|guarded` sets it from a shell, with `on`/`off` and `auto`
+as aliases (`parseAutonomyLevel`). Its operations: `resolveDefaultMode` (the
 level's mode for a runner), `readOnlyMode` (the runner's `readOnly`-tagged
 mode, if any) and `plannedMode` (the mode a planned task lands on — the plan
 parser and the planner's edits both call it). The planner never names a mode;
@@ -2406,9 +2407,10 @@ note in the transcript; `runSettings.unsupervised` says why).
 "autopilot".
 
 **Supervisor level** — the **Run setting** **Off** / **Watch** / **Act**,
-Watch by default, set with `/supervisor` (ADR-0029, ADR-0030). Off: the planner
-speaks when the user writes or a task reports a result the planner asked for
-(ADR-0037 R2). Watch: wake-up turns read and suggest;
+Watch by default, set in `/settings` (or `ordewell supervisor` headless;
+ADR-0029, ADR-0030). Off: the planner speaks when the user writes or a task
+reports a result the planner asked for (ADR-0037 R2). Watch: wake-up turns read
+and suggest;
 execution tools and plan edits are refused, with a note telling it to suggest
 the action to the user. Act: wake-up turns may also run, stop, retry and skip
 tasks (`skip_task`, with a reason; never Mark complete), message runners, deny
@@ -2419,8 +2421,8 @@ guards**; a task it adds is approved to run, ops tasks included
 conversation). A run holds its own copy,
 `runSettings.supervisorLevel`, which the Command seam reads at each call. A
 tripped wake-up-rate guard or a failed supervisor lowers it for the rest of the
-run; the user's `/supervisor` sets it, up or down, at once in the session it is
-typed in, lifting such a lowering with the guards' memory kept. A run the
+run; the user's `/settings` sets it, up or down, at once in the session it is
+changed in, lifting such a lowering with the guards' memory kept. A run the
 supervisor restarts itself, or a usage-limit reset resumes, keeps the level the
 run had; a start of the user's copies the global value afresh (see **Run
 origin**). A slim precursor of the mandate (#23): Watch is `observe`, Act
@@ -2433,8 +2435,9 @@ setting; a Guarded session can have an Act supervisor. *Avoid:* "mandate" until
 **Run settings** — the machine-wide user settings that say how a run is
 started, watched and merged: **Supervisor level**, **Auto-merge at gates**,
 **Autorun**, the supervisor's retry limit, the wake-up read budget, and the
-research concurrency and per-message limits (ADR-0030, ADR-0037 R4). Saved in `settings.json`, changed only by the user's chat commands
-(`/supervisor`, `/automerge`, `/autorun`, `/research`) or `PATCH /api/settings`, never by the
+research concurrency and per-message limits (ADR-0030, ADR-0037 R4). Saved in
+`settings.json`, changed only by the user through `/settings` (or the headless
+commands behind it) or `PATCH /api/settings`, never by the
 planner. A change applies at once to the session it is made in; another
 session's run under way keeps its values until it ends. A run's own copy is
 `runSettings` on the plan, which only **Run supervision** writes; the plan
@@ -2485,8 +2488,8 @@ continue the run before. Never inferred from what else is in flight: the user's
 Execute while a supervisor's `merge_all` still merges is the user's.
 
 **Autorun** — the **Run setting** that starts a plan when the planner submits
-it, approved as if the user had pressed Execute; off by default, set with
-`/autorun` (ADR-0030). The planner skips the outline gate but still asks
+it, approved as if the user had pressed Execute; off by default, set in
+`/settings` (or `ordewell autorun` headless; ADR-0030). The planner skips the outline gate but still asks
 clarifying questions. It fires on a submission only — never on a session's load
 or on the switch being turned on while a plan waits — and starts ops tasks too.
 Independent of the Supervisor level and of Full/Guarded. Recorded as `run_plan`

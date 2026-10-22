@@ -6,9 +6,10 @@ export function printHelp(): void {
   console.log(`
 Ordewell: task orchestration for coding agents
 
-Run "ordewell" with no arguments for the TUI. Every command below has a TUI
-slash command of the same name, where each one opens a picker instead of taking
-an id.
+Run "ordewell" with no arguments for the TUI. Where a command has a slash
+command, both take the same name. The headless run-setting and planner-step
+commands marked "(headless)" are set in /settings and /planner in the TUI and
+VS Code.
 
 Planning:
   ordewell                        Full-screen terminal UI (everything the VS Code extension does)
@@ -49,18 +50,18 @@ Per-task assignment (omit the value to list the options):
 
 Planner, models and runners:
   ordewell planner [<provider>]   Choose who plans: an API provider or a coding agent (no API key)
-  ordewell model [set <id>]       Show or set the planner model (applies without a restart)
-  ordewell planner-effort [lvl]   Thinking effort for a coding-agent planner
+  ordewell model [set <id>]       (headless) Show or set the planner model; /planner covers it in the TUI and VS Code
+  ordewell planner-effort [lvl]   (headless) Thinking effort for a coding-agent planner; /planner covers it
   ordewell key [set <p> <key>]    Show which providers have a key, or store one
   ordewell runners [<id> on|off]  Enable or disable runners (${runnerIdList()})
   ordewell allowlist set|clear|show       Limit which models a runner may use
-  ordewell auto [full|guarded]    Autonomy level for new plans: Full or Guarded
-  ordewell supervisor [off|watch|act]  Whether the planner watches or acts on your runs (default watch);
-                                  also: supervisor retries <n>, supervisor reads <n>
-  ordewell automerge [on|off]     Merge into your branch by itself at merge gates and at the end of a run (default off)
-  ordewell research [parallel <n>|per-message <n>]  Research and report-turn limits (defaults 2 at once, 4 per message)
-  ordewell autorun [on|off]       Start each plan the planner submits, without review (default off)
-  ordewell parallel [<n>]         How many AI tasks run at once (default 5; applies to a live run)
+  ordewell auto [full|guarded]    (headless) Autonomy level for new plans, Full or Guarded; /settings covers it
+  ordewell supervisor [off|watch|act]  (headless) Whether the planner watches or acts on your runs;
+                                  also: supervisor retries <n>, supervisor reads <n>; /settings covers it
+  ordewell automerge [on|off]     (headless) Merge at merge gates and at the end of a run; /settings covers it
+  ordewell research [parallel <n>|per-message <n>]  (headless) Research and report-turn limits (defaults 2 at once, 4 per message); /settings covers it
+  ordewell autorun [on|off]       (headless) Start each plan the planner submits, without review; /settings covers it
+  ordewell parallel [<n>]         (headless) How many AI tasks run at once, a live run included; /settings covers it
   ordewell refresh                Re-discover runners and model catalogs
   ordewell models                 List every provider's catalog (works without a server)
 

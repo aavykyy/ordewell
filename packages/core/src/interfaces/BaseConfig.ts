@@ -67,8 +67,8 @@ export interface ResolvedPlanner extends ResolvedChoice {
 export interface ConfiguredPlanner extends PlannerChoice {
   setting?: string;
   /**
-   * The planner a `/model` or `/planner` pick in this session made the model
-   * for. A pick belongs to that planner alone: once routing moves (its key
+   * The planner a `/planner` pick in this session made the model for. A pick
+   * belongs to that planner alone: once routing moves (its key
    * removed), the model is configuration left for when it comes back, not a
    * choice the planner now in effect made.
    */

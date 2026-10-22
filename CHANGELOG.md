@@ -52,8 +52,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   planner. Its end, passed, failed or blocked, opens a planner turn with the
   report at every supervisor level, Off included, and you can talk to the
   planner while it runs. Research tasks start without asking, two at once and
-  four for each message you send unless you change it with `/research` or
-  VS Code's Run settings; the same limit caps the report turns one message
+  four for each message you send unless you change it in `/settings`; the same
+  limit caps the report turns one message
   opens, and further reports wait for your next message. Surfaces mark a
   research row, say which limit holds one, and show its report in the run
   update that delivered it
@@ -170,6 +170,43 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   it into another type of task, takes it out of the approved set. Autorun in
   Guarded never approves one, and a denied or unanswered card leaves it
   unapproved.
+## [0.10.12] - 2026-10-22
+
+### Fixed
+
+- **A forced message no longer discards a completion before it is read.** If
+  the user sends now and then takes the message back, or the turn fails before
+  the runner reads it, the task's `task_complete` report still counts. A forced
+  message that is read, or that opens the next turn, still replaces the report.
+- **A completion still wins over the exit verdict when a `message_undelivered`
+  listener sends a reply.** The session now treats its exit as final before
+  releasing the queue, so a reply queued from that notice cannot hold the
+  report behind the exit.
+
+## [0.10.11] - 2026-10-22
+
+### Changed
+
+- **The TUI and VS Code set run settings and planner steps in one place each.**
+  `/settings` covers autonomy, supervisor, merging, autorun and parallel tasks;
+  `/planner` covers harness, model and effort. The one-value slash commands
+  (`/auto`, `/supervisor`, `/automerge`, `/autorun`, `/parallel`, `/model`,
+  `/planner-effort`) are gone from both, and the VS Code "Set Parallel Tasks"
+  palette command with them. The headless CLI keeps `ordewell auto`,
+  `supervisor`, `automerge`, `autorun`, `parallel`, `model` and
+  `planner-effort` for scripts, and `ordewell --help` marks them as such.
+- **The VS Code Marketplace listing is rewritten**, and the README states the
+  approval promise in its opening paragraph and links the first-run Discussion.
+
+### Fixed
+
+- **A task that reports `task_complete` now shows that call as a success, not a
+  rejection.** Ordewell used to interrupt the open turn the moment the report
+  landed, before the tool reply reached the runner, so Claude Code recorded
+  "The user doesn't want to proceed with this tool use" as the task's last
+  call. The report is now held until that turn closes, or until the same
+  interrupt grace runs out, so the tool reply reaches the runner before the
+  verdict stops it.
 
 ## [0.10.10] - 2026-10-19
 

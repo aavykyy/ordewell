@@ -655,7 +655,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             {!isExecuting && task.type === 'ai' && onModeChange && (
               <div className="model-selector" style={{ marginTop: '8px' }}>
                 <label htmlFor={`task-mode-${task.id}`}
-                  title={row.autonomous ? 'Full: runs without permission prompts. /auto changes the level' : undefined}>
+                  title={row.autonomous ? 'Full: runs without permission prompts. /settings changes the level' : undefined}>
                   Mode{row.autonomous && ' ⚡'}
                 </label>
                 <select id={`task-mode-${task.id}`} value={task.taskMode ?? activeModes[0]?.id ?? 'build'}
