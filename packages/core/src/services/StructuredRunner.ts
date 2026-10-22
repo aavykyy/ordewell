@@ -259,6 +259,8 @@ export class StructuredSession extends AbstractRunnerSession {
   private interrupting: Promise<void> | null = null;
   /** The wind-down once {@link stop} was asked for: the same for every caller, and nothing new is sent meanwhile. */
   private stopping: Promise<void> | null = null;
+  /** The process is handling its exit: nothing new may be queued, so a held report can still publish. */
+  private exiting = false;
   private lastSessionId: string | null = null;
   private lastSessionCost: RunnerSessionCost | null = null;
   private readonly structuredEmitter = new EventEmitter();
@@ -361,8 +363,11 @@ export class StructuredSession extends AbstractRunnerSession {
   }
 
   protected override baseHandleExit(code: number): void {
-    // Nothing can read the queue now. Releasing it first lets a completion the
-    // verdict engine held behind a queued message publish before exit wins.
+    // Nothing can read the queue now. Set before releasing it, so a listener
+    // that answers the notice is undelivered rather than queued ahead of the
+    // report. Releasing first lets a completion the verdict engine held behind
+    // a queued message publish before exit wins.
+    this.exiting = true;
     this.undeliverQueued();
     this.flushCompletion();
     this.ended.abort();
@@ -478,7 +483,7 @@ export class StructuredSession extends AbstractRunnerSession {
     this.messageCount += 1;
     const id = `msg-${this.messageCount}`;
     const sender = opening.from ? { from: opening.from } : {};
-    if (this.exited || this.stopping) this.emitEvent({ type: 'message_undelivered', messageId: id, text, ...sender });
+    if (this.exited || this.exiting || this.stopping) this.emitEvent({ type: 'message_undelivered', messageId: id, text, ...sender });
     else if (this.state === 'idle' && this.adapterStarted && !this.sending) this.deliver(text, opening);
     else {
       this.state = 'working';
@@ -526,7 +531,6 @@ export class StructuredSession extends AbstractRunnerSession {
    * "waiting for input" between the two (F3).
    */
   private force(message: PendingMessage): void {
-    this.discardCompletion();
     message.forced = true;
     const at = this.queue.findIndex((m) => !m.forced);
     this.queue.splice(at < 0 ? this.queue.length : at, 0, message);
@@ -540,7 +544,7 @@ export class StructuredSession extends AbstractRunnerSession {
   }
 
   private runningTurn(): boolean {
-    return !this.exited && !this.stopping && this.adapter !== null && this.turn !== null && !this.turn.ended;
+    return !this.exited && !this.exiting && !this.stopping && this.adapter !== null && this.turn !== null && !this.turn.ended;
   }
 
   /** No runner can recall a message once offered to it, so only a queued one comes back. */
@@ -735,7 +739,7 @@ export class StructuredSession extends AbstractRunnerSession {
   private offerNext(): void {
     const adapter = this.adapter;
     const turn = this.turn;
-    if (!adapter?.steer || !turn || turn.ended || turn.steerRefused || this.interrupting || this.exited || this.stopping) return;
+    if (!adapter?.steer || !turn || turn.ended || turn.steerRefused || this.interrupting || this.exited || this.exiting || this.stopping) return;
     if (this.queue.some((m) => m.stage === 'steering')) return;
     const next = this.queue.find((m) => m.stage === 'queued');
     // A command handed into the turn would be read as text; it and whatever
@@ -911,7 +915,7 @@ export class StructuredSession extends AbstractRunnerSession {
    * back in Ordewell's hands: while it is on offer or owed, nothing overtakes it.
    */
   private deliverNext(): void {
-    if (this.exited || this.stopping || this.sending || (this.turn && !this.turn.ended)) return;
+    if (this.exited || this.exiting || this.stopping || this.sending || (this.turn && !this.turn.ended)) return;
     const head = this.queue[0];
     if (!head || this.queue.some((message) => message.stage !== 'queued')) return;
     this.queue.shift();

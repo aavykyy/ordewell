@@ -8,6 +8,19 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.10.12] - 2026-10-22
+
+### Fixed
+
+- **A forced message no longer discards a completion before it is read.** If
+  the user sends now and then takes the message back, or the turn fails before
+  the runner reads it, the task's `task_complete` report still counts. A forced
+  message that is read, or that opens the next turn, still replaces the report.
+- **A completion still wins over the exit verdict when a `message_undelivered`
+  listener sends a reply.** The session now treats its exit as final before
+  releasing the queue, so a reply queued from that notice cannot hold the
+  report behind the exit.
+
 ## [0.10.11] - 2026-10-22
 
 ### Changed

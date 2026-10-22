@@ -174,6 +174,8 @@ describe('TaskLogRecorder', () => {
     const tools = replayTaskLog(file.saved).blocks.filter((b) => b.type === 'tool');
     expect(tools).toHaveLength(1);
     expect(tools[0]).toMatchObject({ status: 'ok', output: 'Recorded. End your turn now.' });
+    const types = file.saved.map((event) => event.type);
+    expect(types.indexOf('tool_result')).toBeLessThan(types.indexOf('turn_end'));
   });
 
   it('keeps streaming when the log cannot be saved', async () => {

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.10.12] - 2026-10-22
+
+### Fixed
+
+- **A task's completion report survives a forced message that is taken back or
+  never read.** A forced message that is read, or that opens the next turn,
+  still replaces the report as before.
+
 ## [0.10.11] - 2026-10-22
 
 ### Changed

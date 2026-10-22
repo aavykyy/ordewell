@@ -600,22 +600,92 @@ describe('the Ordewell task tools (ADR-0022)', () => {
     session.kill();
   });
 
+  it('keeps a completion when a forced message is taken back before it is read', async () => {
+    const { runner, adapters } = served(() => {}, 1_000);
+    const session = await runner.spawn(options());
+    const engine = new VerdictEngine();
+    const verdicts: Verdict[] = [];
+    engine.onVerdict((_id, verdict) => verdicts.push(verdict));
+    engine.watch(createTask({ id: session.taskId }), session);
+    await until(() => adapters[0].sent.length === 1);
+    const client = await connect(servedConfig(adapters[0]));
+
+    await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Done.' } });
+    const forced = session.forceSend('Also add tests');
+    expect(session.removeQueued(forced)).toBe(true);
+    await until(() => verdicts.length === 1);
+    expect(verdicts[0].outcome).toBe('pass');
+    engine.reset();
+    session.kill();
+  });
+
+  it('keeps a completion when a forced message is dropped by a failed turn', async () => {
+    const { runner, adapters } = served((adapter) => { adapter.interruptAnswer = 'ignore'; }, 1_000);
+    const session = await runner.spawn(options());
+    const engine = new VerdictEngine();
+    const verdicts: Verdict[] = [];
+    engine.onVerdict((_id, verdict) => verdicts.push(verdict));
+    engine.watch(createTask({ id: session.taskId }), session);
+    await until(() => adapters[0].sent.length === 1);
+    const client = await connect(servedConfig(adapters[0]));
+
+    await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Done.' } });
+    session.forceSend('Also add tests');
+    adapters[0].emit({ type: 'error', message: 'the turn failed' });
+    await until(() => verdicts.length === 1);
+    expect(verdicts[0].outcome).toBe('pass');
+    engine.reset();
+    session.kill();
+  });
+
+  it('lets a forced message replace a completion when the turn ends with it queued', async () => {
+    const { runner, adapters } = served((adapter) => { adapter.interruptAnswer = 'ignore'; }, 1_000);
+    const session = await runner.spawn(options());
+    const engine = new VerdictEngine();
+    const verdicts: Verdict[] = [];
+    engine.onVerdict((_id, verdict) => verdicts.push(verdict));
+    engine.watch(createTask({ id: session.taskId }), session);
+    await until(() => adapters[0].sent.length === 1);
+    const client = await connect(servedConfig(adapters[0]));
+
+    await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Done.' } });
+    session.forceSend('Also add tests');
+    adapters[0].endTurn();
+    await until(() => adapters[0].sent.length === 2);
+    expect(adapters[0].sent).toEqual(['Do the task', 'Also add tests']);
+    expect(verdicts).toEqual([]);
+    engine.reset();
+    session.kill();
+  });
+
   it('publishes a completion held behind a queued message when the runner exits', async () => {
     const { runner, adapters } = served(() => {}, 1_000);
     const session = await runner.spawn(options());
-    const reports: unknown[] = [];
+    const engine = new VerdictEngine();
+    const verdicts: Verdict[] = [];
+    engine.onVerdict((_id, verdict) => verdicts.push(verdict));
+    engine.watch(createTask({ id: session.taskId }), session);
     const undelivered: string[] = [];
-    session.onTaskComplete((report) => reports.push(report));
-    session.onEvent((event) => { if (event.type === 'message_undelivered') undelivered.push(event.messageId); });
+    let replied = false;
+    session.onEvent((event) => {
+      if (event.type !== 'message_undelivered') return;
+      undelivered.push(event.messageId);
+      // A listener may answer the notice; it must not queue ahead of the report.
+      if (!replied) {
+        replied = true;
+        session.sendMessage('One more thing');
+      }
+    });
     await until(() => adapters[0].sent.length === 1);
     session.sendMessage('Also add tests');
     const client = await connect(servedConfig(adapters[0]));
 
     await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Original work' } });
     adapters[0].exit(0);
-    await until(() => reports.length === 1);
-    expect(reports).toEqual([{ status: 'done', summary: 'Original work' }]);
-    expect(undelivered).toHaveLength(1);
+    await until(() => verdicts.length === 1);
+    expect(verdicts[0].outcome).toBe('pass');
+    expect(undelivered).toHaveLength(2);
+    engine.reset();
   });
 
   it('delivers a queued final-turn message before settling, with the same task token valid for the next report', async () => {
