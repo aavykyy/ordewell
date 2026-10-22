@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import TaskHandoff from './TaskHandoff';
 import type {
   CommandBlock, RunnerLoadedBlock,
   ApprovalBlock, ApprovalDecision, ApprovalKind, ApprovalSource, DisplayBlock, MessageBlock, PlanBlock, SkillLoadBlock, SubagentBlock, SubagentStatus,
@@ -406,6 +407,8 @@ function Block({
   onAnswerApproval: (id: string, decision: ApprovalDecision) => void;
 }) {
   switch (block.type) {
+    case 'handoff':
+      return <TaskHandoff handoff={block.handoff} expanded={expanded} />;
     case 'command':
       return <RunnerCommandRow block={block} expanded={expanded} />;
     case 'runner_loaded':

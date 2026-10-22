@@ -5,11 +5,12 @@ import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import ModelSelector from './ModelSelector';
 import DependencyPicker from './DependencyPicker';
 import SkillChips from './SkillChips';
+import TaskHandoff, { HandoffPeek } from './TaskHandoff';
 import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
-import { blockedByLabel, dependencyCandidates, capConflictFiles, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRowView } from '@ordewell/core/plan-utils';
+import { blockedByLabel, dependencyCandidates, capConflictFiles, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind, AssignmentScope } from '@ordewell/core';
 
 export interface RunnerMode {
@@ -50,7 +51,7 @@ interface TaskCardProps {
    * runner approvals, isolation and merge gate. Absent before the host has
    * folded the run, in which case the plan's own fields are all there is.
    */
-  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason'>;
+  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound'>;
   /** Every task's run entry, keyed by id, so a subtask card can read its own hold. */
   runsByTask?: ReadonlyMap<string, RunTask>;
   /** Opt in to resolving this task's merge conflict as an AI task. */
@@ -371,11 +372,12 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
   const awaitingApproval = run?.awaitingApproval ?? 0;
   const isolation = run?.isolation ?? null;
   const mergeGate = run?.mergeGate;
+  const handoff = run ? run.handoff : task.handoff;
 
   const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
   // The run's verdict and round are the newer word on a loop's check: they say whether it is between rounds (ADR-0045).
-  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate, holdReason: run?.holdReason, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true, ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}) }, { tasks: siblings, modes: activeModes, runnerScope });
+  const row = taskRowView({ ...task, handoff, idleSince, awaitingApproval, isolation, mergeGate, holdReason: run?.holdReason, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true, ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}) }, { tasks: siblings, modes: activeModes, runnerScope });
   const conflictFiles = isolatedWork?.conflictFiles ?? [];
   const repair = isolatedWork?.repair ?? null;
 
@@ -459,6 +461,8 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
           </div>
         </div>
 
+        {!expanded && <HandoffPeek handoff={row.handoff} />}
+
         {/* Collapsed, the newest line is the whole signal — "which test is it on"
             without having to open the card. */}
         {!expanded && output && (
@@ -470,6 +474,9 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
         {expanded && (
           <div className="task-card-body">
             <p className="task-description">{task.description}</p>
+
+            {handoff && <TaskHandoff handoff={handoff} taskName={(id) => taskRefOf(siblings ?? [], id)}
+              onReadFull={onOpenLog ? () => onOpenLog(task.id) : undefined} />}
 
             {/* Worktrees are an implementation detail unless something needs the
                 user's attention (US34) — so the branch and path live in the

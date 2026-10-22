@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import SkillChips from './SkillChips';
 import ModelSelector from './ModelSelector';
 import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
-import { pausedOnLimit, taskRowView } from '@ordewell/core/plan-utils';
+import TaskHandoff, { HandoffPeek } from './TaskHandoff';
+import { pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope, RunTask } from '@ordewell/core';
 import { AssignmentFlag, StatusBadge, TaskActions, TaskCheck, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
@@ -23,7 +24,7 @@ interface SubTaskCardProps {
   modelApiMapping?: Record<string, ('openrouter' | 'google' | 'openai_compatible')[]>;
   isExecuting?: boolean;
   /** This subtask's own run entry: its hold reason, when it has one. */
-  run?: Pick<RunTask, 'holdReason'>;
+  run?: Pick<RunTask, 'holdReason' | 'handoff'>;
   onRunnerChange?: (taskId: string, runner: string) => void;
   onModelChange?: (taskId: string, assignment: TaskModelAssignment) => void;
   onModelsRefreshNeeded?: () => void;
@@ -60,7 +61,8 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
 
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
   const runnerOptions = runnerOptionsFor(runners, task.assignedRunner);
-  const row = taskRowView({ ...task, holdReason: run?.holdReason }, { parent: parentTask, placement: 'subtask', tasks, runnerScope });
+  const handoff = run ? run.handoff : task.handoff;
+  const row = taskRowView({ ...task, handoff, holdReason: run?.holdReason }, { parent: parentTask, placement: 'subtask', tasks, runnerScope });
   const status = statusBadge(row);
 
   const handlePromptSave = () => {
@@ -100,8 +102,13 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
           )}
         </div>
 
+        {!expanded && <HandoffPeek handoff={row.handoff} />}
+
         {expanded && (
           <div className="subtask-card-body">
+            {handoff && <TaskHandoff handoff={handoff} taskName={(id) => taskRefOf(tasks ?? [], id)}
+              onReadFull={onOpenLog ? () => onOpenLog(task.id) : undefined} />}
+
             {!isExecuting && task.type === 'ai' && task.prompt && (
               editingPrompt === null ? (
                 <div className="subtask-prompt subtask-prompt-editable" onClick={(e) => { e.stopPropagation(); setEditingPrompt(task.prompt ?? ''); }} title="Click to edit prompt">
