@@ -13,6 +13,7 @@ import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import { listTaskLogAttempts, openTaskLog, readTaskLog, type TaskLogFile } from '../../utils/taskLogStore';
 import { FakeRunnerSession } from '../../testing';
+import { renderTaskLog } from '../taskLogRead';
 import { fakeSpawn, fixture } from './harnessTestKit';
 import { makeSession, memoryTaskLogs, saves, taskOf } from './sessionTestKit';
 
@@ -77,6 +78,20 @@ describe('TaskLogRecorder', () => {
     recorder.note('s1', 't1', note);
     expect(first.saved).toHaveLength(4);
     expect(second.saved).toEqual([]);
+  });
+
+  it('opens a log of its own for a note made with no session, as a user task\'s completion is, and sends it', () => {
+    const file = memoryFile(3);
+    const open = vi.fn(() => file);
+    const sent: SessionMessage[] = [];
+    const recorder = new TaskLogRecorder({ broadcast: (m) => sent.push(m), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open });
+    const note: TaskLogEvent = { type: 'handoff', handoff: { summary: 'Completed by the user', findings: [], findingCount: 0 } };
+
+    recorder.note(undefined, 'u1', note);
+
+    expect(open).toHaveBeenCalledWith({ baseDir: '/ws', sessionId: 'sess' }, 'u1', undefined);
+    expect(file.saved).toEqual([note]);
+    expect(taskLogs(sent)).toEqual([{ type: 'task_log', taskId: 'u1', attempt: 3, events: [note] }]);
   });
 
   it('opens each attempt\'s log with the skills that attempt was given, shown as one line', async () => {
@@ -337,6 +352,51 @@ describe('a session’s task logs', () => {
     expect(taskLogs(sent).flatMap((m) => m.events).filter((e) => e.type === 'handoff')).toHaveLength(1);
     expect(taskOf(session, 't1')?.handoff).toEqual(handoff);
     await vi.waitFor(() => expect(saves(session).mock.calls.at(-1)?.[0].tasks[0].handoff).toEqual(handoff));
+  });
+
+  it('writes the handoff of a user task into a log of its own, the one a reader of task logs finds', async () => {
+    const files = memoryTaskLogs();
+    const session = makeSession({ openTaskLog: files });
+    const userPlan: LegacyPlanState = {
+      ...plan(),
+      tasks: [createTask({ id: 'u1', order: 1, title: 'Rotate the key', type: 'user', userSteps: [{ order: 1, instruction: 'Create the new key', completed: false }] })],
+    };
+    session.loadPlan(userPlan, 'Goal', '/repo');
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+
+    await session.execute({ command: 'mark_complete', task: 'u1' }, { kind: 'user' });
+
+    const handoff = { summary: 'Completed by the user', findings: [], findingCount: 0, report: '1. [x] Create the new key' };
+    expect(files.files.get('u1')).toEqual([[{ type: 'handoff', handoff }]]);
+    expect(renderTaskLog(files.files.get('u1')![0], ['handoff'])).toBe('[1 handoff] Completed by the user\n\nReport:\n1. [x] Create the new key\n');
+    expect(taskOf(session, 'u1')?.handoff).toEqual({ summary: 'Completed by the user', findings: [], findingCount: 0 });
+  });
+
+  it('writes the handoff of a script task into the log of the attempt that ran it, once it has settled', async () => {
+    const files = memoryTaskLogs();
+    const scripts: FakeRunnerSession[] = [];
+    const scriptRunner: IRunner = {
+      spawn: vi.fn(async (opts: RunnerSpawnOptions) => {
+        const script = new FakeRunnerSession('sc1', opts.taskId);
+        scripts.push(script);
+        return script;
+      }),
+      stop: vi.fn(), stopAll: vi.fn(), activeCount: 0,
+    };
+    const session = makeSession({ scriptRunner, openTaskLog: files });
+    session.loadPlan({ ...plan(), tasks: [createTask({ id: 's1', order: 1, title: 'Build', type: 'script', commands: [['make']] })] }, 'Goal', '/repo');
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(scripts).toHaveLength(1));
+    scripts[0].emitEvent({ type: 'script_run', argv: ['make'] });
+    scripts[0].emitOutput('built\n');
+    scripts[0].emitEvent({ type: 'script_exit', durationMs: 2500, code: 0, signal: null });
+    scripts[0].reportScriptExit({ outcome: 'passed' });
+    scripts[0].emitExit(0);
+
+    await vi.waitFor(() => expect(taskOf(session, 's1')?.status).toBe('completed'));
+    const logged = files.files.get('s1')!.flat();
+    expect(logged.map((e) => e.type)).toEqual(['script_run', 'script_exit', 'runner_ended', 'handoff']);
+    expect(logged[3]).toEqual({ type: 'handoff', handoff: { summary: 'exited 0 in 2.5 s', findings: [], findingCount: 0, report: 'built' } });
   });
 
   it('opens an attempt log even when the runner emits only plain output', async () => {

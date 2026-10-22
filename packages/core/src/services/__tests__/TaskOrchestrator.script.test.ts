@@ -11,6 +11,7 @@ import { fakeNotification } from './sessionTestKit';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { endedByExit } from '../VerdictEngine';
 import type { WorkspaceEnv } from '../workspaceEnv';
+import type { StoredHandoff } from '../../models/Handoff';
 
 /**
  * A script task in the scheduler (ADR-0035): an ops task in everything about
@@ -34,12 +35,14 @@ function setup(isolation = new FakeWorktreeIsolation()) {
   const agents = recording();
   const scripts = recording();
   const notifications = fakeNotification();
+  const handoffs: Array<{ sessionId: string | undefined; taskId: string; handoff: StoredHandoff }> = [];
   const orchestrator = TaskOrchestrator.compose({
     config: fakeConfig(),
     notifications,
     runner: agents.runner,
     scriptRunner: scripts.runner,
     output: new BufferedTaskOutputSource(),
+    recordHandoff: (sessionId, taskId, handoff) => { handoffs.push({ sessionId, taskId, handoff }); },
     isolation,
     workspaceRoot: () => '/repo',
     workspaceEnv: async () => env,
@@ -48,12 +51,14 @@ function setup(isolation = new FakeWorktreeIsolation()) {
   orchestrator.subscribe({ onIsolationNotice: ({ message }) => notices.push(message) });
   const spawned = (taskId: string) => [...agents.spawn.mock.calls, ...scripts.spawn.mock.calls].filter(([o]) => o.taskId === taskId).map(([o]) => o);
   const latest = (taskId: string) => [...agents.sessions, ...scripts.sessions].filter((s) => s.taskId === taskId).at(-1)!;
-  const end = (taskId: string, exit: ScriptExit) => {
+  const end = (taskId: string, exit: ScriptExit, durationMs = 1200) => {
+    // The session emits each step's exit before it hands the end on.
+    latest(taskId).emitEvent({ type: 'script_exit', durationMs, code: exit.outcome === 'passed' ? 0 : 1, signal: null });
     latest(taskId).reportScriptExit(exit);
     latest(taskId).emitExit(exit.outcome === 'passed' ? 0 : 1);
   };
   const status = (taskId: string) => orchestrator.storeInstance.get(taskId)!.status;
-  return { orchestrator, isolation, agents, scripts, spawned, latest, end, status, notices, notifications };
+  return { orchestrator, isolation, agents, scripts, spawned, latest, end, status, notices, notifications, handoffs };
 }
 
 const change = (id: string, order: number, over: Partial<Task> = {}) =>
@@ -90,6 +95,76 @@ describe('TaskOrchestrator: script tasks (ADR-0035)', () => {
     const task = e.orchestrator.storeInstance.get('s1')!;
     expect(task.verdict).toMatchObject({ outcome: 'pass', checks: [{ name: 'script_exit', passed: true }] });
     expect(task.attemptUsage).toBeUndefined();
+  });
+
+  it('hands over a passing script as its exit and how long it took, with the output as the report (ADR-0047)', async () => {
+    const e = setup();
+    e.orchestrator.loadPlan([script('s1', 1)]);
+    await e.orchestrator.approveReview();
+    e.latest('s1').emitOutput('Everything up-to-date\n');
+
+    e.end('s1', PASSED, 1200);
+
+    await vi.waitFor(() => expect(e.status('s1')).toBe('completed'));
+    const expected = { summary: 'exited 0 in 1.2 s', findings: [], findingCount: 0, report: 'Everything up-to-date' };
+    expect(e.orchestrator.storeInstance.get('s1')!.handoff).toEqual({ summary: 'exited 0 in 1.2 s', findings: [], findingCount: 0 });
+    expect(e.handoffs).toEqual([{ sessionId: e.latest('s1').id, taskId: 's1', handoff: expected }]);
+  });
+
+  it('hands over a passing script that printed nothing as a summary alone', async () => {
+    const e = setup();
+    e.orchestrator.loadPlan([script('s1', 1)]);
+    await e.orchestrator.approveReview();
+
+    e.end('s1', PASSED, 300);
+
+    await vi.waitFor(() => expect(e.status('s1')).toBe('completed'));
+    expect(e.handoffs.map((h) => h.handoff)).toEqual([{ summary: 'exited 0 in 0.3 s', findings: [], findingCount: 0 }]);
+  });
+
+  it('hands over a failed script as its exit code with one blocker carrying the end of its output', async () => {
+    const e = setup();
+    e.orchestrator.loadPlan([script('s1', 1)]);
+    await e.orchestrator.approveReview();
+    e.latest('s1').emitOutput('To origin\n ! [rejected] main -> main (non-fast-forward)\n');
+
+    e.end('s1', { outcome: 'failed', command: 'git push origin main', status: { code: 1, signal: null }, errorTail: 'rejected' }, 800);
+
+    await vi.waitFor(() => expect(e.status('s1')).toBe('failed'));
+    const output = 'To origin\n ! [rejected] main -> main (non-fast-forward)';
+    const digest = { summary: 'exited 1 in 0.8 s', findings: [{ id: 'F1', severity: 'blocker', title: 'Script exited 1', detail: output }], findingCount: 1 };
+    expect(e.handoffs.map((h) => h.handoff)).toEqual([{ ...digest, report: output }]);
+    expect(e.orchestrator.storeInstance.get('s1')!.handoff).toEqual(digest);
+  });
+
+  it('hands over a script its time limit ended as timed out, and one a signal ended by the signal', async () => {
+    const e = setup();
+    e.orchestrator.loadPlan([script('s1', 1), script('s2', 2)]);
+    await e.orchestrator.approveReview();
+
+    e.end('s1', { outcome: 'timed-out', command: 'git push origin main', timeoutMs: 600_000, errorTail: '' }, 600_100);
+    e.end('s2', { outcome: 'failed', status: { code: null, signal: 'SIGKILL' }, errorTail: '' }, 2000);
+
+    await vi.waitFor(() => expect(e.handoffs).toHaveLength(2));
+    const [timedOut, killed] = e.handoffs.map((h) => h.handoff);
+    expect(timedOut).toEqual({ summary: 'timed out in 600.1 s', findings: [{ id: 'F1', severity: 'blocker', title: 'Script timed out' }], findingCount: 1 });
+    expect(killed).toEqual({ summary: 'ended by SIGKILL in 2 s', findings: [{ id: 'F1', severity: 'blocker', title: 'Script ended by SIGKILL' }], findingCount: 1 });
+  });
+
+  it('hands over nothing for a script that was stopped, and clears the one before it', async () => {
+    const e = setup();
+    e.orchestrator.loadPlan([script('s1', 1)]);
+    await e.orchestrator.approveReview();
+    e.end('s1', { outcome: 'failed', status: { code: 2, signal: null }, errorTail: '' });
+    await vi.waitFor(() => expect(e.status('s1')).toBe('failed'));
+    await e.orchestrator.retryTask('s1');
+    await vi.waitFor(() => expect(e.spawned('s1')).toHaveLength(2));
+
+    e.end('s1', { outcome: 'stopped' });
+
+    await vi.waitFor(() => expect(e.orchestrator.storeInstance.get('s1')!.verdict?.reason).toContain('did not finish'));
+    expect(e.handoffs).toHaveLength(1);
+    expect(e.orchestrator.storeInstance.get('s1')!.handoff).toBeUndefined();
   });
 
   it('fails with the status and the tail of the error output, and never reads limit words as a usage-limit pause', async () => {
@@ -276,7 +351,7 @@ describe('TaskOrchestrator: a script task run for real', () => {
 
   const node = (code: string) => [process.execPath, '-e', code];
 
-  it('completes a body every step of which exits 0, its output as the task\'s summary', async () => {
+  it('completes a body every step of which exits 0, its output in the task\'s handoff report', async () => {
     const r = real();
     r.orchestrator.loadPlan([script('s1', 1, { commands: [node("console.log('pushed main')")] })]);
 
@@ -284,7 +359,8 @@ describe('TaskOrchestrator: a script task run for real', () => {
 
     await vi.waitFor(() => expect(r.task('s1').status).toBe('completed'));
     expect(r.task('s1').verdict!.checks.map((c) => c.name)).toEqual(['script_exit']);
-    expect(r.task('s1').outputSummary!.logTail).toContain('pushed main');
+    expect(r.task('s1').outputSummary!.report).toContain('pushed main');
+    expect(r.task('s1').handoff).toMatchObject({ summary: expect.stringMatching(/^exited 0 in \d/), findingCount: 0 });
   });
 
   it('fails a script that exits otherwise, with the end of its error output in the reason', async () => {
