@@ -139,6 +139,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   Code's plan mode could write its plan file outside the workspace. Its
   runner's own web fetch and search are refused, since a task has no web
   policy to check them.
+- **Once a read-only task has run a command sealed, all its later commands run
+  sealed too**, allowlisted ones included, with no network. A sealed run can
+  rewrite a script or config file in the task's worktree, such as the `test`
+  script an allowlisted `npm test` runs, and that command would otherwise have
+  run it with the network and your files readable
+  ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
 - **Consent to a script task is consent to what it runs.** An edit that
   changes an approved script task's commands, script or time limit, or turns
   it into another type of task, takes it out of the approved set. Autorun in

@@ -555,18 +555,35 @@ export function sandboxedFailureNote(output: string, network: boolean, forTask =
 }
 
 /**
+ * Why a command ran sealed: the planner asked, the envelope would have
+ * refused it or asked about it, or a read-only task's shell already ran one
+ * sealed, after which all its commands are (ADR-0046).
+ */
+export type SealedRunReason = 'asked' | 'refused' | 'after';
+
+const SEALED_RUN_REASONS: Record<SealedRunReason, string> = {
+  asked: ' as asked',
+  refused: ' instead of being refused',
+  after: ', as every command of this task is after its first sealed run',
+};
+
+/**
  * The line a sealed run's result starts with (ADR-0036 S4): that it ran
  * sealed and what that means, so a loop of cloud calls that fails on the
  * network is understood rather than retried.
  */
-export function sealedRunHeader(why: 'asked' | 'refused', task?: { worktree: boolean }): string {
-  const how = `${SEALED_RUN_MARK} ${why === 'asked' ? 'as asked' : 'instead of being refused'}`;
+export function sealedRunHeader(why: SealedRunReason, task?: { worktree: boolean; first: boolean }): string {
+  const how = `${SEALED_RUN_MARK}${SEALED_RUN_REASONS[why]}`;
   if (!task) return `${how}: no network, no home directory, and nothing it writes reaches the workspace. $HOME and $TMPDIR are this session's scratch directory, the one place it can write, which later commands can read.]`;
   // A worktree's `.git` is a file pointing into the repository's own, which stays read-only (ADR-0046).
   const where = task.worktree
     ? "This task's worktree is writable and is thrown away when the task ends. git can read the repository but not record anything in it: a commit, an add or a stash fails, or is gone when the command ends."
     : 'The workspace is read-only: this task has no worktree of its own.';
-  return `${how}: no network and no home directory. ${where} $HOME and $TMPDIR are this task's scratch directory, which later commands can read.]`;
+  // Said once, by the run that sealed the task's shell; later headers name it (ADR-0046).
+  const onward = task.first
+    ? ` It may have written this task's ${task.worktree ? 'worktree' : 'scratch directory'}, so every later command of this task runs sealed too, without the network.`
+    : '';
+  return `${how}: no network and no home directory. ${where} $HOME and $TMPDIR are this task's scratch directory, which later commands can read.${onward}]`;
 }
 
 /** A read-only task's {@link SEALED_FAILURE_NOTE}: it has nowhere to send the work but its report (ADR-0046). */

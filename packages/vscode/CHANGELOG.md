@@ -53,6 +53,9 @@
   network.
 - **A read-only task can no longer write outside the sandbox**: its runner's
   own edit, write, shell and web tools are withheld.
+- **Once a read-only task has run a command sealed, all its later commands run
+  sealed too**, allowlisted ones included, so none can run a script a sealed
+  run rewrote with the network and your files in reach.
 - **An edit to an approved script task's body needs your consent again.**
 
 ## [0.10.10] - 2026-10-19

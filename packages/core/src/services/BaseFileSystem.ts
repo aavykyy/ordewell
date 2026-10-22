@@ -13,7 +13,7 @@ import {
 import { IApproval, DENY_ALL, type ApprovalRequest, type StandingDecision } from '../interfaces/IApproval';
 import { cdUnfollowed, classifyCommand, excludedBy, innerCommandScopes, pathRefs, type CommandPolicyOptions } from './commandPolicy';
 import { resolveResearchShell, researchShellWarning, researchPolicyOptions, type ResearchShell, type ShellLaunch } from './researchShell';
-import { PlannerShellSandbox, SEALED_FAILURE_NOTE, TASK_SEALED_FAILURE_NOTE, TASK_SEALED_LIMITS, sandboxedFailureNote, sealedRunHeader, sealedTimeLimitNote, type SealedRunOptions } from './sandbox/plannerSandbox';
+import { PlannerShellSandbox, SEALED_FAILURE_NOTE, TASK_SEALED_FAILURE_NOTE, TASK_SEALED_LIMITS, sandboxedFailureNote, sealedRunHeader, sealedTimeLimitNote, type SealedRunOptions, type SealedRunReason } from './sandbox/plannerSandbox';
 import { parseAllowlist } from './plannerAllowlist';
 import { resolveWithin, resolveRef, grantScopeFor, isInertDevice } from './pathScope';
 import { definitionPattern, referencePattern, languageForId, includeGlobFor } from './symbolPatterns';
@@ -43,8 +43,11 @@ interface ShellSite {
   sandbox: PlannerShellSandbox;
   /** What a sealed run reads, and the one directory beyond scratch it may write. */
   sealed: SealedRunOptions;
-  /** A read-only task's: what its results say is said to its runner, not the planner. */
-  task?: { worktree: boolean };
+  /**
+   * A read-only task's: what its results say is said to its runner, not the
+   * planner. `sealed` once a sealed run has started in the attempt's shell.
+   */
+  task?: { worktree: boolean; sealed: boolean };
 }
 
 /** Why a read-only task's command did not run where the planner's would have asked or run sealed (ADR-0046). */
@@ -313,10 +316,11 @@ export abstract class BaseFileSystem implements IFileSystem {
   /**
    * A read-only task's `run_command` (ADR-0046): the planner's classifier,
    * path confinement, allowlist and exclusions, at the task's working
-   * directory, asking nobody. What the allowlist or the read-only tier runs
-   * runs as the planner's command would; what would ask or be refused runs
-   * sealed, the workspace readable and the task's worktree writable, or is
-   * refused where no sandbox can seal it. Its scratch directory is its own.
+   * directory, asking nobody. What would ask or be refused runs sealed, the
+   * workspace readable and the task's worktree writable, or is refused where
+   * no sandbox can seal it. What the allowlist or the read-only tier runs
+   * runs as the planner's command would, until the shell's first sealed run;
+   * from then on every command runs sealed. Its scratch directory is its own.
    */
   taskShell({ cwd, writable }: TaskShellSite): TaskShell {
     const sandbox = this.sandbox.withOwnScratch();
@@ -325,7 +329,7 @@ export abstract class BaseFileSystem implements IFileSystem {
       approval: allowlistOnly(() => this.approval),
       sandbox,
       sealed: { workspace: this.getWorkspaceRoot(), ...(writable ? { writable } : {}), limits: TASK_SEALED_LIMITS },
-      task: { worktree: writable !== undefined },
+      task: { worktree: writable !== undefined, sealed: false },
     };
     // One command at a time: an unsealed one must never read the worktree
     // while a sealed one is still writing it, before its links are checked.
@@ -366,6 +370,13 @@ export abstract class BaseFileSystem implements IFileSystem {
       if (!(await site.sandbox.canSeal())) return refusal(`Command refused: this machine has no sandbox to run a command sealed in. Run it without "sealed", and Ordewell's command rules judge it as they do every command.`);
       return this.runSealed(site, command, request, 'asked', signal);
     }
+
+    // A sealed run may have written what a later command reads: a script the
+    // allowlisted `npm test` runs, a tool's config, a cache in scratch. Run
+    // outside the sealed profile, that command would read the whole host, and
+    // an allowlisted one would have the network, so once a sealed run has
+    // started every later command of the attempt runs sealed (ADR-0046).
+    if (site.task?.sealed) return this.runSealed(site, command, request, 'after', signal);
 
     if (tier === 'refuse') return this.sealedInstead(site, command, request, refusal(`Command refused: ${reason}${site.task ? `\n${TASK_UNSEALED} ${TASK_CONTINUE}` : ''}`), signal);
 
@@ -449,7 +460,7 @@ export abstract class BaseFileSystem implements IFileSystem {
    * a `!` exclusion naming the command or a path it touches, and a denial
    * given on the card this session.
    */
-  private async runSealed(site: ShellSite, command: string, request: ApprovalRequest | undefined, why: 'asked' | 'refused', signal?: AbortSignal): Promise<ToolOutcome> {
+  private async runSealed(site: ShellSite, command: string, request: ApprovalRequest | undefined, why: SealedRunReason, signal?: AbortSignal): Promise<ToolOutcome> {
     const { approval } = site;
     const allow = approval.allowlist?.();
     const rule = allow ? excludedBy(command, allow, this.policyOptions()) : undefined;
@@ -475,6 +486,10 @@ export abstract class BaseFileSystem implements IFileSystem {
     } catch (err) {
       return refusal(`Command not run: its sealed sandbox could not be prepared (${err instanceof Error ? err.message : String(err)}).`);
     }
+    // As the run starts, not once it succeeds: one that fails, times out or is
+    // aborted may still have written.
+    const first = site.task !== undefined && !site.task.sealed;
+    if (site.task) site.task.sealed = true;
     const outcome = await this.execBashImpl(command, shell, signal, site.root);
     const removed = site.task && site.sealed.writable ? await removeOutwardLinks(site.sealed.writable, [site.sealed.writable, site.sealed.workspace]) : [];
     const swept = removed.length > 0 ? `\n\n[${OUTWARD_LINKS_REMOVED} ${removed.join(', ')}]` : '';
@@ -482,7 +497,7 @@ export abstract class BaseFileSystem implements IFileSystem {
     const failed = outcome.timedOut && shell.wallTimeMs !== undefined
       ? sealedTimeLimitNote(shell.wallTimeMs, site.task !== undefined)
       : site.task ? TASK_SEALED_FAILURE_NOTE : SEALED_FAILURE_NOTE;
-    const output = `${sealedRunHeader(why, site.task)}\n${outcome.output}${outcome.success ? '' : `\n\n[${failed}]`}${swept}`;
+    const output = `${sealedRunHeader(why, site.task && { worktree: site.task.worktree, first })}\n${outcome.output}${outcome.success ? '' : `\n\n[${failed}]`}${swept}`;
     return { ...outcome, output };
   }
 
