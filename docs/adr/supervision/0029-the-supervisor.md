@@ -108,12 +108,15 @@ An ordinary pass never wakes it. Passes ride along as "since last time: tasks
 2, 3, 4 passed". A research task's end, passed, failed or blocked, is an
 attention event at every level, Off included: the run update carries its whole
 report or its reason. It uses the report path shared with `run_script`, and
-acts with the authority of the turn that started it. Automatic report turns
-from either kind of task are bounded per user message; excess reports wait
-for the next user message ([ADR-0037](0037-research-tasks-wake-the-planner.md),
-R2–R4). Events close together — within five seconds of the first — are merged
-into one wake-up; the run's end is delivered at once. The policy is code,
-not prompt text, so when the supervisor speaks is testable without a model.
+acts with the authority of the turn that started it. A report turn may start
+further research, whose report opens the next turn with no user message in
+between: the chain is deliberately not bounded per user message
+([ADR-0037](0037-research-tasks-wake-the-planner.md), R4). What bounds it is
+the planner's judgement, the run's Parallel limit for concurrency, `mayReport`
+after two consecutive failed automatic turns, and the user's Stop. Events
+close together — within five seconds of the first — are merged into one
+wake-up; the run's end is delivered at once. The policy is code, not prompt
+text, so when the supervisor speaks is testable without a model.
 
 A due batch reaches the conversation as a **run update**: one line per event,
 naming its task and a short detail — the verdict's reason and the tasks the
@@ -587,3 +590,4 @@ until #30 exists.
 - 2026-10-21 — `run_script` joins the execution tools: the planner performs an exact effect itself as a script task, consented to by the card, the effect allowlist, autorun in Full or Act, and refused at Watch ([ADR-0035](0035-effects-are-consented-and-recorded.md)).
 - 2026-10-21 — research reports wake the planner at every level under the originating authority; all automatic report turns share the persisted message limit (ADR-0037 R2, R3, R4).
 - 2026-10-22: the level and its guards are set in `/settings` in the TUI and VS Code; the one-value slash commands are gone there, and `ordewell supervisor` stays headless.
+- 2026-10-22 — automatic report turns are not bounded per user message: a report turn may start further research, whose report opens the next turn, and the chain is held only by the planner's judgement, the run's Parallel limit, `mayReport` and the user's Stop (ADR-0037 R4).

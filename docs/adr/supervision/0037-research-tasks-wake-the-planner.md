@@ -55,15 +55,20 @@ harness subagents stay as they are, awaited before the turn ends.**
   content, like everything the planner reads.
 - **Starting one (R4).** A research task the planner adds is approved as it
   lands and starts without asking, under ADR-0046's shared read-only profile.
-  Removing research or lifting read-only withdraws that approval. How many a
-  message starts is the planner's judgement: it starts a research task for each
-  independent thread worth running in the background, and in a report turn
-  starts another only when the report opens a genuinely new question. There is
-  no per-message budget. The run's Parallel limit (`maxParallelSessions`,
-  ADR-0030) bounds what runs at once: research tasks and every other task share
-  the same slots, and one beyond the limit waits for a slot like any other. A
-  research report does not spend a separate allowance. Each task counts against
-  its runner's usage like any task.
+  Removing research or lifting read-only withdraws that approval. How many
+  research tasks a message starts is the planner's judgement: it starts a
+  research task for each independent thread worth running in the background,
+  and in a report turn starts another when the report opens a genuinely new
+  question. That research's own report opens the next planner turn, so a
+  report → research → report chain continues with no user message in between.
+  **The chain is deliberately not bounded per message.**
+  Its bounds are the planner's judgement, the run's Parallel limit
+  (`maxParallelSessions`, ADR-0030) for what runs at once — research tasks and
+  every other task share the same slots, and one beyond the limit waits for a
+  slot like any other — `mayReport` (two consecutive automatically opened
+  turns failed), which holds reports for the user's next message, and the
+  user's Stop. A research report does not spend a separate allowance. Each
+  task counts against its runner's usage like any task.
 - **Harness subagents stay in the turn (R5).** A harness's own subagents are
   still awaited before the turn ends (ADR-0009). #24 draws a line at the task
   boundary: inside a task the harness decides, and across tasks Ordewell does.
@@ -75,7 +80,8 @@ harness subagents stay as they are, awaited before the turn ends.**
   free slot like any other task. Its report is drawn in the conversation as the
   run update that delivered it: whole when short, folded after a few lines when
   long with the lines left out counted, and opened by the conversation's one
-  detail switch.
+  detail switch. A chain continues in the conversation as its reports arrive,
+  so the user can follow it and stop it at any point.
 
 ## Considered options
 
@@ -117,3 +123,4 @@ harness subagents stay as they are, awaited before the turn ends.**
 - 2026-10-21 — implemented the core lifecycle, authority, approval and persisted message limits.
 - 2026-10-21 — implemented the surfaces (R6): the research mark and the report block on the TUI, VS Code and the CLI commands, and the planner's guidance (R5).
 - 2026-10-22 — the per-message research budget and its two run settings are gone: the planner decides how many a message starts, bounded by the run's Parallel limit, and a research task waits for a slot like any other (R4, R6).
+- 2026-10-22 — the report chain is deliberately unbounded per message: a report turn may start further research whose report wakes the planner again, and its only bounds are the planner's judgement, the run's Parallel limit, `mayReport` and the user's Stop (R4, R6).
