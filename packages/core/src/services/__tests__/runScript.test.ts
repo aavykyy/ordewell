@@ -314,7 +314,10 @@ describe('run_script: a script still running after a minute, and its report', ()
 
     const told = await reported(env);
 
-    expect(told).toContain('Run update:\n- task #2 "Push main", whose result you asked for, has ended. It passed.\n  The end of its output:\n  Everything up-to-date');
+    expect(told).toContain('Run update:\n- task #2 "Push main", whose result you asked for, has ended. It passed.\n  exited 0 in 0 s');
+    // The handoff replaces the report: the output waits in the attempt's log.
+    expect(told).toContain('The report, if the task wrote one, is in the attempt\'s log: read it with task_output.');
+    expect(told).not.toContain('Everything up-to-date');
     expect(told).toContain('You act as in that turn');
     // Drawn as the planner's own turn, not the supervisor's.
     expect(turnStarts(env).at(-1)).not.toHaveProperty('supervisor');

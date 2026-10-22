@@ -1,0 +1,79 @@
+import { describe, expect, it } from 'vitest';
+import { researchReport, runUpdateReport, taskReport } from '../taskReport';
+import type { HandoffDigest } from '../../models/Handoff';
+
+const handoff: HandoffDigest = {
+  summary: 'The cache key omits the tenant.',
+  findings: [
+    { id: 'F1', severity: 'blocker', title: 'The cache key omits the tenant', detail: 'A second tenant reads the first one\'s entry.' },
+    { id: 'F2', severity: 'major', title: 'No regression test' },
+  ],
+  findingCount: 2,
+  artifacts: [{ kind: 'file', path: 'src/cache.ts', line: 42 }],
+};
+
+const passed = { status: 'completed' as const, verdict: { outcome: 'pass' as const, reason: 'said so', checks: [], decidedAt: '' }, handoff };
+const report = 'The long report, which a wake-up never carries.';
+
+describe('a run update carrying a task\'s result (ADR-0029, ADR-0047)', () => {
+  it('carries the handoff summary and findings, and points at the report in the log instead of pushing it', () => {
+    const text = runUpdateReport({ ...passed, handoff: { ...handoff, summary: `${handoff.summary}\n${report}` } }, 'the output tail');
+
+    expect(text).toContain('It passed.');
+    expect(text).toContain('The cache key omits the tenant.');
+    expect(text).toContain('- F1 [blocker] The cache key omits the tenant');
+    expect(text).toContain('  A second tenant reads the first one\'s entry.');
+    expect(text).toContain('- F2 [major] No regression test');
+    expect(text).toContain('Artifacts: src/cache.ts:42');
+    expect(text).toContain('The report, if the task wrote one, is in the attempt\'s log: read it with task_output.');
+    expect(text).not.toContain('the output tail');
+  });
+
+  it('says how many findings the wake-up left out, and where they are', () => {
+    const many = { ...handoff, findings: [{ ...handoff.findings[0] }, { ...handoff.findings[1] }, { ...handoff.findings[0], id: 'F3', title: 'Third' }, { ...handoff.findings[0], id: 'F4', title: 'Fourth' }], findingCount: 4 };
+
+    const text = runUpdateReport({ ...passed, handoff: many }, undefined);
+
+    expect(text).toContain('+1 more finding, in the attempt\'s log');
+    expect(text).toContain('Finding F4 and the report are in the attempt\'s log: read them with task_output.');
+  });
+
+  it('names a task a finding cites by its reference in the plan', () => {
+    const citing = {
+      ...handoff,
+      findings: [{ id: 'F1', severity: 'major' as const, title: 'Needs the setup', evidence: [{ kind: 'task' as const, task: 't2' }] }],
+      findingCount: 1,
+    };
+
+    expect(runUpdateReport({ ...passed, handoff: citing }, undefined, (id) => (id === 't2' ? '#2' : undefined))).toContain('Evidence: task #2');
+  });
+
+  it('keeps the end of the output for a task that left no handoff', () => {
+    expect(runUpdateReport({ ...passed, handoff: undefined }, 'Everything up-to-date')).toBe('It passed.\nThe end of its output:\nEverything up-to-date');
+  });
+});
+
+describe('a research task\'s report (ADR-0037)', () => {
+  it('carries the handoff summary and findings, and leaves the report in the log', () => {
+    const stored = { ...handoff, report };
+    const text = researchReport({ status: 'completed', verdict: passed.verdict, handoff: stored, outputSummary: { reviewReason: '', report, logTail: '', capturedAt: '' } }, undefined);
+
+    expect(text).toContain('It passed.');
+    expect(text).toContain('The cache key omits the tenant.');
+    expect(text).toContain('- F1 [blocker] The cache key omits the tenant');
+    expect(text).toContain('The report, if the task wrote one, is in the attempt\'s log: read it with task_output.');
+    expect(text).not.toContain(report);
+  });
+
+  it('keeps the report for a plan saved before handoffs', () => {
+    const text = researchReport({ status: 'completed', verdict: passed.verdict, outputSummary: { reviewReason: '', report, logTail: '', capturedAt: '' } }, undefined);
+
+    expect(text).toBe('It passed.\nThe long report, which a wake-up never carries.');
+  });
+});
+
+describe('a command\'s answer (run_script)', () => {
+  it('is unchanged: it prints the end of the output even when the task left a handoff', () => {
+    expect(taskReport({ status: 'completed', verdict: passed.verdict }, 'Everything up-to-date')).toBe('It passed.\nThe end of its output:\nEverything up-to-date');
+  });
+});

@@ -11,8 +11,9 @@ import { SUPERVISOR_LEVEL_LABEL } from './runSettingsText';
 import { executionSummary } from './SessionMessage';
 import { blockingFailures, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
-import { reportEnded, researchReport, taskReport } from './taskReport';
+import { reportEnded, researchReport, runUpdateReport } from './taskReport';
 import { researchReportTo } from './ResearchTasks';
+import { taskRefOf } from './TaskRefs';
 
 /** Supervisor levels, lowest first: an automatic lowering only ever goes down. */
 const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 };
@@ -203,7 +204,8 @@ export class RunSupervision {
     const authority: TurnAuthority = to.actor === 'supervisor' ? 'supervisor' : 'user';
     const rounds = outOfRoundsNote(task);
     const tail = this.host.reportTail(task.id);
-    const text = to.research ? researchReport(task, tail) : taskReport(task, tail);
+    const named = (id: string) => taskRefOf([...this.host.tasks()], id);
+    const text = to.research ? researchReport(task, tail, named) : runUpdateReport(task, tail, named);
     return { authority, text: rounds ? `${rounds.charAt(0).toUpperCase()}${rounds.slice(1)} ${text}` : text, passed: task.status === 'completed' };
   }
 

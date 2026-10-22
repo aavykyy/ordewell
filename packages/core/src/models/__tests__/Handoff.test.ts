@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { handoffReferenceText, readableTaskIds, severityLabel, worstSeverity } from '../Handoff';
+import { handoffPreviewLines, handoffReferenceText, handoffWakeLines, readableTaskIds, severityLabel, worstSeverity, type HandoffDigest } from '../Handoff';
 import { createTask } from '../Task';
 
 describe('the tasks a task may read (ADR-0047)', () => {
@@ -42,5 +42,48 @@ describe('a handoff as a surface words it', () => {
     expect(handoffReferenceText({ kind: 'commit', sha: 'abc123', repo: 'api' })).toBe('commit abc123 in api');
     expect(handoffReferenceText({ kind: 'task', task: 't2', finding: 'F1' }, (id) => (id === 't2' ? '#2' : undefined))).toBe('task #2 F1');
     expect(handoffReferenceText({ kind: 'url', url: 'https://example.com/pr/1' })).toBe('https://example.com/pr/1');
+  });
+});
+
+describe('a handoff a headless surface prints (ADR-0047)', () => {
+  const handoff: HandoffDigest = {
+    summary: 'The cache key omits the tenant.',
+    findings: [
+      { id: 'F1', severity: 'blocker', title: 'The cache key omits the tenant', detail: 'A second tenant reads the first one\'s entry.', evidence: [{ kind: 'file', path: 'src/cache.ts', line: 42 }] },
+      { id: 'F2', severity: 'major', title: 'No regression test' },
+    ],
+    findingCount: 4,
+    artifacts: [{ kind: 'file', path: 'src/cache.ts', line: 42 }, { kind: 'url', url: 'https://example.com/pr/7' }],
+  };
+
+  it('gives the summary, each finding\'s title line, the ones the digest left out and the artifacts', () => {
+    expect(handoffPreviewLines(handoff)).toEqual([
+      'The cache key omits the tenant.',
+      'F1 [blocker] The cache key omits the tenant',
+      'F2 [major] No regression test',
+      '+2 more findings, in the attempt\'s log',
+      'Artifacts: src/cache.ts:42; https://example.com/pr/7',
+    ]);
+  });
+
+  it('stops at a finding budget and counts the rest from the whole handoff', () => {
+    expect(handoffPreviewLines(handoff, { maxFindings: 1 })).toEqual([
+      'The cache key omits the tenant.',
+      'F1 [blocker] The cache key omits the tenant',
+      '+3 more findings, in the attempt\'s log',
+      'Artifacts: src/cache.ts:42; https://example.com/pr/7',
+    ]);
+  });
+
+  it('gives a wake-up the top findings whole, detail and evidence included', () => {
+    expect(handoffWakeLines(handoff).slice(0, 6)).toEqual([
+      'The cache key omits the tenant.',
+      '',
+      'Findings:',
+      '- F1 [blocker] The cache key omits the tenant',
+      '  A second tenant reads the first one\'s entry.',
+      '  Evidence: src/cache.ts:42',
+    ]);
+    expect(handoffWakeLines(handoff)).toContain('+2 more findings, in the attempt\'s log');
   });
 });

@@ -163,6 +163,53 @@ export function artifactLines(handoff: HandoffDigest, taskName: HandoffTaskName 
 }
 
 /**
+ * Findings a wake-up carries whole before it counts the rest (ADR-0029): a
+ * digest names the top of a handoff, and the reader pulls the whole of it.
+ */
+export const WAKE_FINDINGS = 3;
+
+export interface HandoffPreviewOptions {
+  /** How many findings to list; the rest are counted. Default: every finding the digest holds. */
+  maxFindings?: number;
+  /** How to name a task a reference cites; the plan's reference when given. */
+  taskName?: HandoffTaskName;
+}
+
+/**
+ * A handoff as a compact surface prints it (ADR-0047): the summary, each
+ * finding's title line (`F1 [blocker] Title`), how many the digest left out,
+ * and the artifacts. The detail and evidence stay in the attempt's log.
+ */
+export function handoffPreviewLines(handoff: HandoffDigest, options: HandoffPreviewOptions = {}): string[] {
+  const limit = Math.max(0, options.maxFindings ?? handoff.findings.length);
+  const shown = handoff.findings.slice(0, limit);
+  const more = handoff.findingCount - shown.length;
+  const summary = handoff.summary.trim();
+  return [
+    ...(summary ? summary.split('\n') : []),
+    ...shown.map((f) => `${f.id} [${f.severity}] ${f.title}`),
+    ...(more > 0 ? [`+${more} more finding${more === 1 ? '' : 's'}, in the attempt's log`] : []),
+    ...artifactLines(handoff, options.taskName),
+  ];
+}
+
+/**
+ * A handoff as a wake-up carries it (ADR-0029, ADR-0037): the summary, its top
+ * findings whole, how many are left out, and the artifacts. The report is
+ * never pushed; it waits in the attempt's log.
+ */
+export function handoffWakeLines(handoff: HandoffDigest, taskName: HandoffTaskName = () => undefined): string[] {
+  // Built as a digest rather than spread, so a caller holding the stored handoff cannot push its report.
+  const digest: HandoffDigest = {
+    summary: handoff.summary,
+    findings: handoff.findings.slice(0, WAKE_FINDINGS),
+    findingCount: handoff.findingCount,
+    ...(handoff.artifacts ? { artifacts: handoff.artifacts } : {}),
+  };
+  return handoffLines(digest, taskName);
+}
+
+/**
  * A handoff as text, for a reader with no structure to render it from: the
  * summary, every finding it holds with its id, severity, detail and evidence,
  * how many the digest left out, the artifacts, and the report when it has one.
