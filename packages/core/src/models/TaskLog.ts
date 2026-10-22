@@ -275,9 +275,14 @@ export function scriptRunText(run: ScriptRun): string {
   return lines.length > 1 ? `${lines[0]} … (${lines.length} lines)` : lines[0];
 }
 
+/** A duration as a reader says it: seconds to a tenth. */
+export function secondsText(ms: number): string {
+  return `${Math.round(ms / 100) / 10} s`;
+}
+
 /** How a script step ended, as a reader says it. */
 export function scriptExitText(exit: Omit<Extract<TaskLogEvent, { type: 'script_exit' }>, 'type'>): string {
-  const seconds = `${Math.round(exit.durationMs / 100) / 10} s`;
+  const seconds = secondsText(exit.durationMs);
   if (exit.error !== undefined) return `could not start: ${exit.error}`;
   const how = exit.signal ? `ended by ${exit.signal}` : `exited ${exit.code ?? 'unknown'}`;
   return `${how} after ${seconds}${exit.timedOut ? ': the time limit ran out' : ''}`;

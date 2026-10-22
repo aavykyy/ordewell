@@ -60,10 +60,27 @@ export class TaskLogRecorder {
    * An entry the session did not emit, written into the log of the attempt
    * that runs `sessionId` and sent at once: what Ordewell made of one of its
    * events once that settled. Dropped once the task's next attempt started.
+   * With no session — a user task's completion has none — the entry opens an
+   * attempt log of its own, so a reader of the task's logs finds it like any other.
    */
-  note(sessionId: string, taskId: string, entry: TaskLogEvent): void {
+  note(sessionId: string | undefined, taskId: string, entry: TaskLogEvent): void {
+    if (sessionId === undefined) {
+      this.writeAlone(taskId, entry);
+      return;
+    }
     const attempt = this.latest.get(taskId);
     if (attempt?.sessionId === sessionId) attempt.note(entry);
+  }
+
+  private writeAlone(taskId: string, entry: TaskLogEvent): void {
+    let file: TaskLogFile | null = null;
+    try {
+      file = this.open(this.deps.location(), taskId, undefined);
+      file.append([entry]);
+    } catch (err: unknown) {
+      this.logger.warn('taskLog', `could not write the log of task ${taskId}; the entry is sent but not saved`, err);
+    }
+    this.deps.broadcast({ type: 'task_log', taskId, attempt: file?.attempt ?? 0, events: taskLogForSurface([entry]) });
   }
 
   /** Start a new attempt's log for `session`, opening with the skills it was given, and keep it until the session exits. */
