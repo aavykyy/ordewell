@@ -341,7 +341,7 @@ the daemon reads it from there at generation.
 - 2026-10-14 — the status row the badge shares speaks only for the chat on
   screen; what the run waits on moved to the plan pane's title.
 - 2026-10-21 — with autorun on in Full, the planner's `run_script` and the script tasks it writes in the user's turn run without asking; under Guarded autorun approves the rest of what the planner writes, but not a script task unless the effect allowlist covers it ([ADR-0035](0035-effects-are-consented-and-recorded.md)).
-- 2026-10-21 — research limits use the global store and live run copy, with the `/settings` panel and its headless commands (ADR-0037 R4).
+- 2026-10-21 — research limits lived in the global store and the live run copy, set from the `/settings` panel (ADR-0037 R4).
 - 2026-10-22: the TUI and VS Code set every value in `/settings`; the
   one-value slash commands are gone from both, and the headless CLI keeps them
   for scripts. The panel was already the one place a user saw them together,

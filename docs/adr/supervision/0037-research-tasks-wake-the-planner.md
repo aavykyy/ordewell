@@ -115,5 +115,5 @@ harness subagents stay as they are, awaited before the turn ends.**
 - 2026-10-21 — where a research task works, and what it may write, follow read-only tasks as ADR-0046 defines them (R1).
 
 - 2026-10-21 — implemented the core lifecycle, authority, approval and persisted message limits.
-- 2026-10-21 — implemented the surfaces (R6): the research mark, the limit it waits for and the report block on the TUI, VS Code and the CLI commands, and the planner's guidance (R5).
+- 2026-10-21 — implemented the surfaces (R6): the research mark and the report block on the TUI, VS Code and the CLI commands, and the planner's guidance (R5).
 - 2026-10-22 — the per-message research budget and its two run settings are gone: the planner decides how many a message starts, bounded by the run's Parallel limit, and a research task waits for a slot like any other (R4, R6).
