@@ -150,11 +150,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   cannot write, replace, rename or remove the worktree's own `.git` file, nor —
   on macOS — create a `.git` anywhere in what it may write, a repo group's task
   workspace included, where the group's runner starts its git. On Linux a
-  `.git` left at a group's task workspace is removed when the run ends. So git
-  run later outside the sandbox, Ordewell's own or the runner's, never loads a
-  repository the run planted with its own hooks or filters, and `task_diff`
-  refuses a read-only task. On Linux, a `.git` planted in a subdirectory
-  remains a residual
+  `.git` left at a group's task workspace is removed when the run ends. So on
+  macOS git run later outside the sandbox, Ordewell's own or the runner's,
+  never loads a repository the run planted with its own hooks or filters, and
+  `task_diff` refuses a read-only task on every platform. On Linux two
+  residuals remain: a `.git` planted in a subdirectory, which git run there
+  could load, and one at a group's task workspace while the run that planted
+  it is still going
   ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
 - **Consent to a script task is consent to what it runs.** An edit that
   changes an approved script task's commands, script or time limit, or turns
