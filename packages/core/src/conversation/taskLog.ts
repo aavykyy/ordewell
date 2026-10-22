@@ -1,6 +1,7 @@
 import type { QueuedTaskMessage, StructuredTurnEnd, TaskMessageFrom } from '../interfaces/IRunner';
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import { scriptExitText, type TaskLogEvent } from '../models/TaskLog';
+import type { StoredHandoff } from '../models/Handoff';
 import { commandLine } from '../models/ScriptTask';
 import { addPlannerUsage, isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
 import { sameMessage } from '../utils/sameMessage';
@@ -375,6 +376,25 @@ function endScriptStep(view: TaskLogView, event: Event<'script_exit'>): TaskLogV
   return { ...ended, blocks: replaceAt(view.blocks, i, finishedTool(block, output, passed ? 'success' : 'failure')) };
 }
 
+/** The log holds one handoff; a live copy of the one a reload already folded is the same handoff. */
+function sameHandoff(a: StoredHandoff, b: StoredHandoff): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * The attempt's handoff at its end (ADR-0047), before the usage line. Written
+ * once, but a reload and the live stream can deliver it twice; the second copy
+ * leaves the view alone, and a newer one replaces the block rather than adding
+ * a second.
+ */
+function showHandoff(view: TaskLogView, { handoff }: Event<'handoff'>): TaskLogView {
+  const i = findLastIndex(view.blocks, (b) => b.type === 'handoff');
+  const block = view.blocks[i];
+  if (block?.type !== 'handoff') return appendStep(view, (id) => ({ type: 'handoff', id, handoff }));
+  if (sameHandoff(block.handoff, handoff)) return view;
+  return { ...view, blocks: replaceAt(view.blocks, i, { ...block, handoff }) };
+}
+
 function endCall<B extends SubagentChild>(block: B): B {
   return block.type === 'tool' && block.status === 'pending' ? finishedTool(block, '', 'not_executed') as B : block;
 }
@@ -433,6 +453,7 @@ export function reduceTaskLog(view: TaskLogView, event: TaskLogEvent): TaskLogVi
     case 'script_run': return runScriptStep(view, event);
     case 'script_output': return scriptStepOutput(view, event);
     case 'script_exit': return endScriptStep(view, event);
+    case 'handoff': return showHandoff(view, event);
     case 'runner_ended': return closeOpenBlocks({ ...endOpenCalls(view), working: false, streams: {}, latestText: undefined }, 'stopped');
     default: return view;
   }

@@ -27,7 +27,7 @@ text markers have no role.
 
 | token | bound to | tools |
 |---|---|---|
-| **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, reason?})`, `checkpoint({question})`; a read-only task's also `run_command({command})`, its only shell ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)) |
+| **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, findings?, artifacts?, report?, reason?})`, `checkpoint({question})`, `read_task({task, attempt?, include_report?})`; a read-only task's also `run_command({command})`, its only shell ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)) |
 | **Planner token** | one session's planner conversation | `list_runners()`, `list_models({runner})`, `submit_plan({tasks})`, `edit_plan({ops})`, `task_query({...})`, `task_output({task, attempt?, kinds?, ...})`, `task_diff({task, repo?, path?, ...})`, `load_skill({name})` (a model-invocable planner skill's instructions; [ADR-0024](../planner/0024-unified-skills.md)) |
 
 #37's runner-facing tools (`board_post`, `report`, …) join the task side later,
@@ -131,9 +131,15 @@ on the same mechanism.
   a pass and carry their `reason` on the verdict, so the user — and later the
   supervisor (#28) — sees why the runner stopped instead of a generic
   "no completion call".
-- **The summary is delivered (V4).** `summary` becomes the durable output
-  handed to dependent tasks, ahead of the plain output tail, and is
-  the seed of upward reports (#34).
+- **The handoff is delivered (V4).** `task_complete` carries a summary of
+  at most 1,500 characters, optional findings and artifacts, and an optional
+  report of at most 20,000 ([ADR-0047](../supervision/0047-structured-task-handoffs.md)).
+  The plan keeps a bounded digest; the attempt log keeps the full handoff.
+  Dependents get the summary and whole findings within 4,000 characters per
+  dependency. `read_task` pulls the rest for the task itself, its transitive
+  dependencies and its loop's other end; it exposes no transcript or diff.
+  The planner reads the digest with `task_query` and the full handoff with
+  `task_output`, under its existing read budget.
 - **`checkpoint` waits for the answer (V5).** The call stays open until the
   checkpoint is answered through the existing checkpoint path, and the answer
   is its result. The task is `awaiting_user` with reason `checkpoint` while it
@@ -287,3 +293,5 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-21 — `run_script` joins the execution tools, and a script task's exit status is its completion evidence, handed to `VerdictEngine` ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
 - 2026-10-21 — S2: a task runner the server never reaches while its process runs is held with a reason instead of failing and blocking its dependents; a `failed` report still fails it, and a planner turn still fails either way.
 - 2026-10-21 — a read-only task's token serves `run_command`, and says so in the runner's configuration (ADR-0046).
+- 2026-10-22 — decided, not built: `task_complete` carries a handoff and the task token gains `read_task` ([ADR-0047](../supervision/0047-structured-task-handoffs.md), #120).
+- 2026-10-22 — implemented the handoff envelope and task-scoped `read_task` (V4; ADR-0047, #120).

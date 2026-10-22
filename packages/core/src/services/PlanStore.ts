@@ -6,6 +6,7 @@ import {
 import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type RunnerSessionCost, type UsageRecord } from '../models/Usage';
 import { sessionOwner } from './continuation';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
+import { handoffDigest, type StoredHandoff } from '../models/Handoff';
 
 /** Deep copy of a task tree, down to the arrays the store rewrites. */
 function cloneTasks(tasks: ReadonlyArray<Readonly<Task>>): Task[] {
@@ -190,6 +191,8 @@ export class PlanStore {
       if (preserveCompleted && betweenRounds(t)) continue;
       // A failed check runs again as a retry would run it: its rounds start over (ADR-0045 L7).
       if (!preserveCompleted || t.status === 'failed') delete t.loopRound;
+      delete t.handoff;
+      delete t.outputSummary;
       t.status = 'approved';
       delete t.awaitingReason;
       delete t.resumeAt;
@@ -249,6 +252,7 @@ export class PlanStore {
       this.setStatus(id, 'pending');
       task.verdict = undefined;
       task.outputSummary = undefined;
+      delete task.handoff;
       delete task.forcedPastGate;
       delete task.carriedFrom;
       if (!opts.sameRound) delete task.loopRound;
@@ -295,9 +299,17 @@ export class PlanStore {
     if (task) task.verdict = verdict;
   }
 
-  setTaskOutputSummary(id: string, summary: Task['outputSummary']): void {
+  /**
+   * How the task's latest attempt ended, and the handoff it left (ADR-0047),
+   * kept as its digest. An attempt that left no handoff clears the one before
+   * it: the plan holds the latest attempt's, as it does the summary.
+   */
+  setTaskOutputSummary(id: string, summary: Task['outputSummary'], handoff?: StoredHandoff): void {
     const task = this._taskMap.get(id);
-    if (task) task.outputSummary = summary;
+    if (!task) return;
+    task.outputSummary = summary;
+    if (handoff) task.handoff = handoffDigest(handoff);
+    else delete task.handoff;
   }
 
   /** The owner is saved with the session it belongs to, and dropped with it. */

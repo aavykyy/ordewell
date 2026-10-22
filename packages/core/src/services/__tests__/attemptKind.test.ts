@@ -120,6 +120,7 @@ describe('attemptPrompt', () => {
       skills: [{ name: 'tdd', source: 'global', path: '/g/tdd/SKILL.md', content: 'RED then GREEN.' }],
       repairPrompt: vi.fn(() => 'MERGE THE INTEGRATION BRANCH'),
       previousAttempt: vi.fn(() => 'created resource group rg-dev'),
+      previousHandoff: () => undefined,
     };
   }
 
@@ -147,6 +148,33 @@ describe('attemptPrompt', () => {
     for (const source of ['repairPrompt', 'previousAttempt'] as const) {
       expect(src[source].mock.calls.length > 0, source).toBe(expected.reads.includes(source));
     }
+  });
+
+  it('composes the next round of an AI check between rounds from its previous handoff', () => {
+    const check = createTask({ id: 'check', prompt: 'Review again.', status: 'failed', loop: { body: ['fix'], maxRounds: 3 },
+      verdict: { outcome: 'fail', reported: 'failed', reason: 'Holes', checks: [], decidedAt: 'x' },
+    });
+    const previousHandoff = vi.fn(() => ({ summary: 'A hole.', findings: [{ id: 'F1', severity: 'major' as const, title: 'Comma lost' }], findingCount: 1 }));
+
+    const prompt = attemptPrompt({ kind: 'readOnly' }, { ...sources(), task: check, plan: [check], previousHandoff });
+
+    expect(prompt).toContain('You are the check, round 2 of 3.');
+    expect(prompt).toContain('F1 [major] Comma lost');
+    expect(previousHandoff).toHaveBeenCalledWith('check');
+  });
+
+  it('keeps a legacy check report when resuming between rounds without a handoff', () => {
+    const check = createTask({ id: 'check', prompt: 'Review again.', status: 'failed', loop: { body: ['fix'], maxRounds: 3 },
+      verdict: { outcome: 'fail', reported: 'failed', reason: 'Holes', checks: [], decidedAt: 'x' },
+      outputSummary: { reviewReason: 'Holes', report: 'A missing comma breaks parsing.', logTail: '', capturedAt: 'x' },
+    });
+
+    const prompt = attemptPrompt({ kind: 'readOnly' }, { ...sources(), task: check, plan: [check] });
+
+    expect(prompt).toContain('You are the check, round 2 of 3.');
+    expect(prompt).toContain('Your previous findings are not structured.');
+    expect(prompt).toContain('A missing comma breaks parsing.');
+    expect(prompt).not.toContain('(no previous report captured)');
   });
 
   it('tells a carried-over attempt its files come from the runner it left, in a fresh session', () => {

@@ -5,6 +5,7 @@ import type { ApiClient, TaskStatus } from '../apiClient';
 import { holdLabel, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, scriptTaskText, skippedLabel, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { connect } from './shared';
+import { taskHandoffLines } from './taskHandoff';
 
 const inLine = (label: string): string => label.charAt(0).toLowerCase() + label.slice(1);
 
@@ -86,6 +87,8 @@ export async function followExecution(
       lines.push(`  ${icon} ${refOf(t.id)}${t.type === 'script' ? ' [SCR]' : t.research ? ' [RES]' : ''} ${t.status}${verdict}${waits}${loop ? ` · ↻ ${inLine(loop.text)}` : ''}`);
       if (t.holdReason) lines.push(`      ${holdLabel(t.holdReason)}`);
       if (t.status === 'skipped') lines.push(`      ${skippedLabel(t.skipReason ?? null)}`);
+      // How it ended, before the next task's line: the same block `status` prints (ADR-0047).
+      if (t.handoff && (t.status === 'completed' || t.status === 'failed')) lines.push(...taskHandoffLines(t.handoff, '      '));
     }
     const output = lines.join('\n');
     if (output !== lastPrinted && output.trim()) {

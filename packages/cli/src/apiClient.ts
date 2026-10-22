@@ -16,6 +16,7 @@ import type {
   ExecuteResponse,
   ForceSendResponse,
   GeneratePlanResponse,
+  HandoffDigest,
   IsolationDiffResponse,
   IsolationMergeResponse,
   MergeGateEntry,
@@ -116,6 +117,11 @@ export interface TaskStatus {
   /** Set on a loop's check, with its round once past the first (ADR-0045). */
   loop?: TaskLoop;
   loopRound?: number;
+  /**
+   * The latest attempt's handoff, as the plan keeps it (ADR-0047); absent from
+   * an older daemon and from an attempt that left none.
+   */
+  handoff?: HandoffDigest;
 }
 
 export interface StatusUpdate {

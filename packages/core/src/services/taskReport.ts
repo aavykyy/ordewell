@@ -1,15 +1,37 @@
 import type { ScriptResult } from '../models/Execution';
 import type { Task } from '../models/Task';
+import { handoffWakeLines, type HandoffDigest, type HandoffTaskName } from '../models/Handoff';
 import { fitTail } from './TaskQuery';
 
 /** How much of a task's output a report carries: enough to read what happened by, never the log, which `task_output` pages. */
 export const REPORT_TAIL_LINES = 30;
 const REPORT_TAIL_CHARS = 2_000;
 
-/** Research's result is the complete task_complete summary, never an output tail (ADR-0037 R1, R2). */
-export function researchReport(task: Pick<Task, 'status' | 'verdict' | 'outputSummary'>, tail: string | undefined): string {
+/** How a task ended, as every report opens. */
+function endedText(task: Pick<Task, 'status' | 'awaitingReason' | 'verdict'>): string {
+  const reason = task.verdict?.reason?.trim() ?? '';
+  switch (scriptResultOf(task)) {
+    case 'passed': return 'It passed.';
+    case 'failed': return `It failed: ${reason || 'no reason was given.'}`;
+    case 'changed-files': return task.awaitingReason === 'conflict'
+      ? 'It passed, but its work conflicts and could not land: it waits for the user.'
+      : 'It passed, but changed tracked files in the user\'s checkout: nothing was committed, and it waits for the user to look at the changes, then mark it complete or retry it.';
+    default: return 'It was stopped before it ended, so it has no verdict.';
+  }
+}
+
+/** A handoff as a run update carries it: the summary, its top findings whole, and where the rest waits. */
+function handoffWakeText(handoff: HandoffDigest, taskName?: HandoffTaskName): string {
+  const lines = handoffWakeLines(handoff, taskName);
+  while (lines[0] === '') lines.shift();
+  return lines.join('\n');
+}
+
+/** Research's result is its handoff, never the report (ADR-0037 R1, R2; ADR-0047). */
+export function researchReport(task: Pick<Task, 'status' | 'verdict' | 'outputSummary' | 'handoff'>, tail: string | undefined, taskName?: HandoffTaskName): string {
   const verdict = task.status === 'completed' ? 'It passed.'
     : `${task.verdict?.reported === 'blocked' ? 'It was blocked' : 'It failed'}: ${task.verdict?.reason ?? 'no reason was given'}`;
+  if (task.handoff) return `${verdict}\n${handoffWakeText(task.handoff, taskName)}`;
   const report = task.outputSummary?.report ?? task.outputSummary?.logTail ?? tail;
   return `${verdict}\n${report || 'It supplied no report.'}`;
 }
@@ -32,6 +54,18 @@ export function scriptResultOf(task: Pick<Task, 'status' | 'awaitingReason'>): S
 }
 
 /**
+ * What a run update is told of a task whose result the planner asked for
+ * (ADR-0029, ADR-0037, R2; ADR-0047): its handoff's summary and top findings
+ * when it left one, and the report only in the attempt's log. A plan saved
+ * before handoffs, or an attempt that left none, reads the end of its output
+ * as it always did.
+ */
+export function runUpdateReport(task: Pick<Task, 'status' | 'awaitingReason' | 'verdict' | 'handoff'>, tail: string | undefined, taskName?: HandoffTaskName): string {
+  if (!task.handoff) return taskReport(task, tail);
+  return `${endedText(task)}\n${handoffWakeText(task.handoff, taskName)}`;
+}
+
+/**
  * What a planner turn is told of a task whose result it asked for (ADR-0035,
  * ADR-0037, R2): how it ended, and the end of what it printed — the same
  * whether the call that started it is still waiting or a later turn hears it.
@@ -39,16 +73,7 @@ export function scriptResultOf(task: Pick<Task, 'status' | 'awaitingReason'>): S
  */
 export function taskReport(task: Pick<Task, 'status' | 'awaitingReason' | 'verdict'>, tail: string | undefined): string {
   const reason = task.verdict?.reason?.trim() ?? '';
-  const ended = (() => {
-    switch (scriptResultOf(task)) {
-      case 'passed': return 'It passed.';
-      case 'failed': return `It failed: ${reason || 'no reason was given.'}`;
-      case 'changed-files': return task.awaitingReason === 'conflict'
-        ? 'It passed, but its work conflicts and could not land: it waits for the user.'
-        : 'It passed, but changed tracked files in the user\'s checkout: nothing was committed, and it waits for the user to look at the changes, then mark it complete or retry it.';
-      default: return 'It was stopped before it ended, so it has no verdict.';
-    }
-  })();
+  const ended = endedText(task);
   const output = fitTail((tail ?? '').trim(), REPORT_TAIL_CHARS).text;
   // A failure's reason already ends with its error output; the same lines twice tell the planner nothing more.
   if (task.status === 'failed' && (!output || reason.includes(output))) return ended;

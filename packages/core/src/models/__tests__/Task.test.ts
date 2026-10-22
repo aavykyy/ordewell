@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createTask, createEmptyPlan, migratePlanState, taskOrderLabel, flattenTasksWithParents, keepExecutionState, isAwaitingReason } from '../Task';
-import { serializeTaskStatus } from '../../services/SessionMessage';
+import { serializeTask, serializeTaskStatus, surfaceTask } from '../../services/SessionMessage';
 import type { LegacyPlanState, PlanState, Message, TaskSnapshot } from '../Task';
 
 describe('LegacyPlanState conversation fields', () => {
@@ -364,6 +364,15 @@ describe('keepExecutionState', () => {
     ]);
   });
 
+  it('keeps the handoff of a failed task the rewrite restates, as it keeps its output summary', () => {
+    const handoff = { summary: 'The schema is missing.', findings: [{ id: 'F1', severity: 'blocker' as const, title: 'No schema' }], findingCount: 1 };
+    const failed = { ...todo('a', 1), status: 'failed' as const, handoff };
+
+    const [result] = keepExecutionState([failed], [todo('a', 1)]);
+
+    expect(result.handoff).toEqual(handoff);
+  });
+
   it('keeps the runner a task\'s saved session belongs to, with the session', () => {
     const stopped = { ...todo('a', 1), runnerSessionId: 'sess-1', runnerSessionOwner: 'claude-code' };
 
@@ -419,6 +428,33 @@ describe('the ops flag on a new task (ADR-0020)', () => {
     expect(createTask({ ops: 'true' as unknown as boolean })).not.toHaveProperty('ops');
     expect(createTask({ ops: false })).not.toHaveProperty('ops');
     expect(createTask({ ops: true, type: 'user' })).not.toHaveProperty('ops');
+  });
+});
+
+describe('a task\'s handoff on the wire (ADR-0047)', () => {
+  const handoff = {
+    summary: 'The cache key omits the tenant.',
+    findings: [{ id: 'F1', severity: 'blocker' as const, title: 'Cache key leaks across tenants' }],
+    findingCount: 2,
+    artifacts: [{ kind: 'file' as const, path: 'src/cache.ts', line: 42 }],
+  };
+
+  it('goes out with the plan and with a status update, and is absent when the attempt left none', () => {
+    const task = { ...createTask({ id: 't1', order: 1, title: 'Fix the cache' }), handoff };
+
+    expect(serializeTask(surfaceTask(task)).handoff).toEqual(handoff);
+    expect(serializeTaskStatus(task).handoff).toEqual(handoff);
+    expect(serializeTask(surfaceTask(createTask({ id: 't2', order: 2 })))).not.toHaveProperty('handoff');
+    expect(serializeTaskStatus(createTask({ id: 't2', order: 2 }))).not.toHaveProperty('handoff');
+  });
+
+  it('is copied, so a surface cannot change the plan it was sent', () => {
+    const task = { ...createTask({ id: 't1', order: 1 }), handoff };
+    const sent = serializeTaskStatus(task);
+
+    sent.handoff!.findings[0].title = 'changed';
+
+    expect(task.handoff.findings[0].title).toBe('Cache key leaks across tenants');
   });
 });
 

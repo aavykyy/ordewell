@@ -10,7 +10,7 @@ import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { approvalLabel, scriptTaskText, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeLabel, resumeTime, runnerForProvider, taskRowView, tasksTotalText, taskUsageSummary, plannerContextFill, usageText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
+import { approvalLabel, scriptTaskText, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeLabel, resumeTime, runnerForProvider, severityLabel, taskRowView, tasksTotalText, taskUsageSummary, plannerContextFill, usageText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -953,6 +953,15 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   // keep the shallower `bodyPad`: they need the room more than the alignment.
   if (metaText) lines.push(style.grey(truncate(`${continuation}${metaText}`, cols)));
   if (row.loop) lines.push(...loopLines(row.loop, cols, bodyPad));
+  // What it handed over (ADR-0047): one compact row, its count first so a long
+  // summary can be cut without taking what a reader scans for with it.
+  if (row.handoff) {
+    const summary = sanitize(row.handoff.summary).split('\n').map((line) => line.trim()).find((line) => line !== '') ?? '';
+    const findings = row.handoff.findingCount === 0
+      ? 'no findings'
+      : `${row.handoff.findingCount} finding${row.handoff.findingCount === 1 ? '' : 's'}${row.handoff.severity ? ` · ${inRow(severityLabel(row.handoff.severity))}` : ''}`;
+    lines.push(style.grey(truncate(`${bodyPad}↳ handed over · ${findings}${summary ? ` · ${summary}` : ''}`, cols)));
+  }
   // The one isolation state that needs the user; every other stays out of the
   // row and shows only in the expanded detail below.
   if (row.conflict) {

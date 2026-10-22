@@ -756,7 +756,7 @@ export function applyTaskOps(
         if ('error' in prep) { errors.push(prep.error); break; }
         const { target, changes, fields, check } = prep;
         // A re-armed check starts its rounds over, as a retry does (ADR-0045 L7).
-        tasks = updateTaskInPlan(tasks, target.id, { ...changes, status: 'pending', verdict: undefined, outputSummary: undefined, awaitingReason: undefined, resumeAt: undefined, skipReason: undefined, loopRound: undefined });
+        tasks = updateTaskInPlan(tasks, target.id, { ...changes, status: 'pending', verdict: undefined, outputSummary: undefined, handoff: undefined, awaitingReason: undefined, resumeAt: undefined, skipReason: undefined, loopRound: undefined });
         const clearedNote = check.clear?.length ? `; cleared ${check.clear.join(', ')}` : '';
         const changedNote = fields.length ? ` (${fields.join(', ')})` : '';
         summary.push(`Re-armed "${target.title}"${changedNote}${clearedNote}`);

@@ -274,7 +274,7 @@ carries what *Merge all* did, blocked repos and all, to every surface;
 per-call progress override; the broadcast seam is the only channel.
 
 **Research task** (`Task.research`, `ResearchTasks`; ADR-0037) — a top-level
-read-only AI task whose `task_complete` report is addressed to the planner.
+read-only AI task whose `task_complete` handoff is addressed to the planner.
 It cannot be a loop body task. The planner approves it as it lands, and its
 end (passed, failed or blocked) joins the shared report wake-up path at Off,
 Watch and Act, with the authority of the turn that started it. Nothing lands
@@ -585,7 +585,7 @@ approval" is derived from the task's pending approvals.
 
 **Completion reminder** (ADR-0018, W1) — the one message Ordewell sends a
 runner whose turn ended cleanly without a `task_complete` call, telling it to
-call the tool with `done` and its full report, or `blocked` and the reason, or
+call the tool with `done` and its handoff, or `blocked` and the reason, or
 to say what it needs from the user. Once per attempt, for every task kind; not
 after a failed or interrupted turn, a usage limit, or while a user message is
 queued or owed. It goes through the task message seam marked `from: 'ordewell'`,
@@ -874,8 +874,9 @@ token decides the role), "MCP bridge", "plugin".
 
 **Task token** — the credential that binds one structured task attempt to the
 *Ordewell MCP server*: one session, one task, one attempt generation (the
-generations `VerdictEngine` tracks). It lists only `task_complete` and
-`checkpoint`, is revoked when the attempt ends, and a call carrying it after
+generations `VerdictEngine` tracks). It lists `task_complete`, `checkpoint`
+and `read_task`; a read-only task also gets `run_command`, its only shell.
+It is revoked when the attempt ends, and a call carrying it after
 that is refused. It reaches the runner only in the injected MCP configuration,
 as an HTTP header — never in a prompt and never on a command line.
 *Avoid:* "session token" (*Session* is the plan's lifecycle module, and the
@@ -956,34 +957,77 @@ session, the planner's and its research subagents' together
 *Avoid:* "per-planner budget" (it is per session and turn, shared with
 subagents), "query budget" (that is the *Task query* read budget).
 
-**Completion call** — a `task_complete({status, summary, reason?})` call made
-with a task's *task token*: the only runner completion evidence. It is handed
+**Completion call** — a `task_complete` call carrying `status`, `summary`
+and optional `findings`, `artifacts`, `report` and `reason`, made with a task's
+*task token*: the only runner completion evidence. It is handed
 to `VerdictEngine`, which alone produces the verdict after checking the current
 generation. Evidence held behind an undelivered message is superseded when
 that message is read. Only `done` passes; `blocked` and `failed` carry their
 reason, and the verdict keeps which (`Verdict.reported`): only `failed` starts
-a *Loop*'s round. The
-`summary` is the task's *Report*.
+a *Loop*'s round. The `summary` is the short opening of the task's *Handoff*.
 *Avoid:* "self-report" or "the model says it's done" (it is the runner's
 explicit signal bound to the attempt, not a judgement anyone weighs), and
 "tool verdict" (the tool produces no verdict).
 
-**Report** — the `summary` of the completion call that settled a task's
-attempt, kept whole with its verdict as `outputSummary.report` (cut at 20,000
-characters, saying so in what is kept). It is the task's result as its
-readers get it: `task_query` and `task_output` return it ahead of any log
-tail, and a dependent's *Prior task outputs* carry it in place of the tail,
-cut to 4,000 characters per dependency. A call superseded by a later turn or
-a message read mid-turn leaves no report. The **output summary**
-(`outputSummary`) is what a task's end left behind: the verdict reason, the
-report, and a `logTail` of the last turn's text only when there is no report
-— an attempt that ended without a completion call, or a session saved before
-reports were kept. The task prompt tells a runner the report is its whole
-result, a read-only task's findings included, and never to write it to a
-file instead.
-*Avoid:* "log tail" for the report (the tail is a cut of the screen; the
-report is what the runner chose to say), "task output" (that is the live
-`output` read).
+**Report** — the optional long form of a task's *Handoff*, at most 20,000
+characters, stored in its attempt's *Task log*. It is pulled with `read_task`
+(`include_report: true`) or the planner's `task_output`, never pushed into a
+dependent's prompt or a wake-up. A completion call superseded by a later turn
+or a message read mid-turn leaves no report. Older saved tasks keep their
+freeform completion summary in `outputSummary.report`; readers use it only
+when no handoff exists. The **output summary** (`outputSummary`) keeps the
+verdict reason and the last turn's `logTail`, or a legacy report. A read-only
+task's handoff is its result; it must be authored in the completion call, never written to a file instead.
+*Avoid:* "log tail" for the report (the tail is a cut of the screen),
+"task output" (that is the live `output` read), "summary" (the handoff's
+short opening).
+
+**Handoff** (ADR-0047) — what a task tells its readers
+when an attempt ends: a `summary` of at most 1,500 characters, optional
+*Findings* and *Artifacts*, and an optional long `report` of at most 20,000.
+An AI task authors it in its *Completion call*; Ordewell derives one for a
+script task (the exit status and the end of its output) and a user task (that
+the user marked it complete, and their note). The full handoff is one `handoff`
+event at the end of the attempt's *Task log*; the plan keeps a bounded digest
+(the summary, the first 25 findings, the artifacts, `findingCount`). A
+dependent's *Prior task outputs* carry at most 4,000 characters of it per
+direct dependency: the summary, then findings whole in the producer's order,
+stopping before one that would not fit, then `+N more findings; read task #x`.
+A task reads the rest with `read_task` — the full handoff, and the report when
+asked, of itself, its transitive dependencies, and its loop's check or body —
+never a transcript. A handoff is not a *Report* (the report is its long form,
+stored and never pushed), and not a *Verdict*: the verdict is what
+`VerdictEngine` derives from the completion call's status, and a finding's
+severity is advice to a reader that reaches it nowhere. A task saved without
+one is rendered from `outputSummary.report`.
+*Avoid:* a bare "handoff" where the *Isolation handoff* (the end of an isolated
+run, for the user to merge) could be meant; "result" or "output" for it;
+"summary" for the whole (the summary is its first field).
+
+**Finding** (ADR-0047) — one atomic item of a *Handoff*: a `severity`
+(`blocker`, `major`, `minor` or `info`), a one-line title, a `detail` of at most
+2,000 characters and optional *Evidence reference*s. Ordewell assigns its id
+`F1` … `Fn` in the order the author gave, so it is cited as "F3 of task 12"; it
+is never cut when rendered, only left out and counted. Severity is advice, not
+evidence.
+*Avoid:* "issue" (that is a GitHub issue), "check" (a verdict's *Check* or a
+*Loop check*), "error".
+
+**Artifact** (ADR-0047) — a typed reference in a *Handoff* to something the
+task produced, of the same four kinds as an *Evidence reference*. It is in the
+digest and on the surfaces, not in the budgeted text a dependent is given.
+*Avoid:* "output", and "artifact" for a file the task wrote that the handoff
+does not name.
+
+**Evidence reference** (ADR-0047) — how a *Finding* points at what supports it:
+a `file` (a repository path, optional line), a `commit` (a sha, the repo
+optional), a `task` (a task reference, optional finding id) or a `url` (`http`
+or `https` only). A `task` reference must resolve to a task the producer may
+read and is refused at the call otherwise, and so is any other URL scheme; a
+`file` or `commit` is a claim about a tree, resolved lazily when read and shown
+unresolved, not refused, when it cannot be.
+*Avoid:* "proof" or "citation" — a reader weighs a reference, and it settles
+nothing about a verdict.
 
 **Spawn toolkit** — the shared process policy behind the runner adapters:
 `planDirectLaunch` (`utils/launch.ts`), runner environment cleanup
@@ -1565,7 +1609,8 @@ added task that merges the branch by hand and through whose landing the
 conflicted task lands, if it is still conflicted by then (a retry in the
 meantime replaces the conflict with a new attempt).
 *Avoid:* "result", "output branch" for the handoff — it is a branch to review,
-not an outcome.
+not an outcome; and a bare "handoff" for a task's end, which is a task's
+*Handoff* (ADR-0047).
 Under ADR-0014 the handoff covers every repo of the group: one *Merge all*, and a
 review diff with one section per repo that has changes, each headed by the repo's
 path and with its paths rooted at the workspace (a repo that is the workspace
@@ -1853,7 +1898,8 @@ read lands mid-run like any other turn's (it mutates nothing). One field reads e
 answer's next offset) returns the clean-rendered tail of a task that is
 running right now, from `TaskOrchestrator.getLiveOutput` through the
 conversation host — the planner's way to diagnose a stuck task mid-execution.
-An ended task is pointed at its `outputSummary`/`verdict` instead. The answer
+An ended task is pointed at its `handoff`/`verdict` instead, with
+`outputSummary` as the legacy fallback. The answer
 is kept within a character budget, trimming the tail's oldest lines and saying
 so. Budgeted per user turn: three reads before every answer also nudges the
 model to land the turn, six before the loop stops answering and returns a
@@ -2023,7 +2069,7 @@ purpose: ModeResolver resolves *runner modes*; ModelResolver resolves *models*.
 plan parser, even though the parser calls `plannedMode`.
 
 **Read-only task** — an AI task that lands nothing (ADR-0046): a review, an
-audit, an analysis whose result is its `task_complete` report. The planner
+audit, an analysis whose result is its `task_complete` handoff. The planner
 marks it `readOnly: true` (ADR-0031), and the task stores that as its runner's
 `readOnly`-tagged mode (`plan` on every built-in runner), at either level. It
 works in a worktree of its own where the run isolates, which is thrown away

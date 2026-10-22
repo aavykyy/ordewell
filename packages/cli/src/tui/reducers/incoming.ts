@@ -105,6 +105,9 @@ function runTaskToView(t: RunTask): TaskView {
     ...(typeof t.holdReason === 'string' && t.holdReason.trim() ? { holdReason: sanitize(t.holdReason) } : {}),
     ...(t.ops === true ? { ops: true } : {}),
     ...(t.research === true ? { research: true } : {}),
+    // Drawn through the same sanitize/wrap as any other plan text; keeping the
+    // digest whole means a task view can show its findings without a log read.
+    ...(t.handoff ? { handoff: t.handoff } : {}),
     ...scriptBodyFields(t),
     ...loopFields(t),
     ...(Array.isArray(t.skills) && t.skills.length > 0 ? { skills: t.skills.map((name) => planLabel(name)) } : {}),

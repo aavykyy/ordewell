@@ -13,7 +13,7 @@ import type {
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import type { RunnerSessionCost } from '../models/Usage';
-import { checkpointReply, commandReply, type CheckpointAnswer, type TaskCompleteArgs } from './mcp/tools';
+import { checkpointReply, commandReply, type CheckpointAnswer, type McpToolReply, type ReadTaskArgs, type TaskCompleteArgs } from './mcp/tools';
 import { sharedMcpServer, type OrdewellMcpServer, type TaskTokenScope } from './mcp/OrdewellMcpServer';
 import { mcpClientConfig } from './mcp/clientConfig';
 import type { ResearchToolType } from '../models/Task';
@@ -25,6 +25,7 @@ import { mapAgentTool, normalizeAgentArgs } from './harness/agentTools';
 import { createTaskAdapter } from './harness/connectors';
 import { settleWithin } from './harness/settleWithin';
 import { sameMessage } from '../utils/sameMessage';
+import { checkHandoff, type HandoffCheck } from '../models/Handoff';
 
 /**
  * How long a soft interrupt may take before the runner is killed and resumed
@@ -224,6 +225,8 @@ interface SessionLaunch {
   interruptGraceMs: number;
   /** Where this attempt's task tools are served (ADR-0022), and a read-only attempt's shell (ADR-0046). */
   tools: { server: OrdewellMcpServer; scope: TaskTokenScope; shell?: TaskShell };
+  checkHandoff: (completion: TaskCompleteArgs) => HandoffCheck<TaskCompleteArgs>;
+  readTask?: (args: ReadTaskArgs) => McpToolReply;
   onNotice?: (message: string) => void;
 }
 
@@ -328,7 +331,9 @@ export class StructuredSession extends AbstractRunnerSession {
       create: () => this.launch.createAdapter(this.launch.runner, this.launch.deps),
       issueToken: () => server.issueTaskToken(scope, {
         taskComplete: async (report) => {
-          this.completionReport = report;
+          const checked = this.launch.checkHandoff(report);
+          if (!checked.ok) return { text: checked.refusal, isError: true };
+          this.completionReport = checked.handoff;
           // The runner ends its turn on this reply. One that keeps it open has
           // its report published at the same grace; the verdict then stops it.
           if (this.completionTimer) clearTimeout(this.completionTimer);
@@ -339,6 +344,7 @@ export class StructuredSession extends AbstractRunnerSession {
           if (!this.checkpointHandler) return { text: 'checkpoint is not available in this session.', isError: true };
           return checkpointReply(await this.checkpointHandler(question, signal));
         },
+        ...(this.launch.readTask ? { readTask: async (args) => this.launch.readTask!(args) } : {}),
         // The call's signal aborts when the token is revoked, so a command still running ends with the attempt.
         ...(shell ? { runCommand: async ({ command }, { signal }) => commandReply(await shell.run(command, signal)) } : {}),
       }),
@@ -997,6 +1003,8 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
         scope: { sessionId: opts.planSessionId ?? '', taskId: opts.taskId, attempt: opts.attempt ?? 1, ...(opts.shell || opts.mode !== undefined && opts.mode === taggedReadOnlyMode(manifest.modes) ? { readOnly: true } : {}) },
         ...(opts.shell ? { shell: opts.shell } : {}),
       },
+      checkHandoff: opts.checkHandoff ?? ((completion) => checkHandoff(completion, opts.taskId, [])),
+      ...(opts.readTask ? { readTask: opts.readTask } : {}),
       onNotice: opts.onNotice,
     });
 

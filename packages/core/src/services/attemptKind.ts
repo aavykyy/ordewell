@@ -1,5 +1,7 @@
 import type { PreviousWork } from '../interfaces/IWorktreeIsolation';
 import type { RunnerId, Task, TaskSkillSnapshot } from '../models/Task';
+import type { StoredHandoff } from '../models/Handoff';
+import { betweenRounds, loopRoundOf } from '../models/Loop';
 import type { AttemptWorkspace, IsolationRunController } from './IsolationRunController';
 import type { RepairAttempt } from './Landing';
 import { composeAugmentedPrompt, composeContinuationPrompt, continuedWorkNote, READ_ONLY_CONTINUED_NOTE } from './promptAugment';
@@ -146,6 +148,10 @@ export interface AttemptPromptSources {
   repairPrompt: (task: Task) => string;
   /** What an ops task's last attempt did. */
   previousAttempt: (taskId: string) => string | undefined;
+  /** The last attempt's authored handoff, read before this attempt opens its log. */
+  previousHandoff: (taskId: string) => StoredHandoff | undefined;
+  /** The legacy report captured while the check was between rounds, before repeat cleared it. */
+  previousRound?: { round: number; report?: string };
 }
 
 /**
@@ -156,6 +162,17 @@ export interface AttemptPromptSources {
  */
 export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): string {
   const { task, plan, planMapEnabled } = src;
+  // At spawn the check is already in progress: repeat counted the round on
+  // after betweenRounds held, and cleared the previous verdict and report.
+  const between = betweenRounds(task);
+  const round = loopRoundOf(task) + (between ? 1 : 0);
+  const loop = task.type === 'ai' && task.loop && round > 1 && takesSkills(kind)
+    ? {
+      round,
+      previousHandoff: src.previousHandoff(task.id),
+      previousReport: between ? task.outputSummary?.report : src.previousRound?.round === round - 1 ? src.previousRound.report : undefined,
+    }
+    : undefined;
   switch (kind.kind) {
     case 'continuation': {
       const where = kind.work === 'readOnly' ? READ_ONLY_CONTINUED_NOTE : continuedWorkNote(src.previousWork);
@@ -167,11 +184,11 @@ export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): str
     case 'ops':
       // Its effects outlive a failed attempt and are never rolled back, so
       // the next one is told what the last one did.
-      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, previousAttempt: src.previousAttempt(task.id) });
+      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, previousAttempt: src.previousAttempt(task.id), loop });
     case 'change':
     case 'readOnly':
-      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills });
+      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, loop });
     case 'carryOver':
-      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, carriedOver: { from: kind.from, work: src.previousWork } });
+      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, carriedOver: { from: kind.from, work: src.previousWork }, loop });
   }
 }

@@ -1,3 +1,4 @@
+import { resolveHandoffReferences } from './handoffReferences';
 import { createAiService, type IAiService } from './AiService';
 import { PlannerBackend } from './PlannerBackend';
 import { applyTaskOps, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
@@ -307,6 +308,11 @@ export function createSession(deps: SessionDeps): Session {
     workspaceRoot: deps.workspaceRoot,
     skillsAt: (roots) => (deps.skillsService ?? new SkillsService(roots)).forRoot(roots),
     previousAttemptFromLog: (taskId) => lastAttemptDigest(session.taskLogLocation, taskId),
+    previousHandoffFromLog: (taskId) => {
+      const attempt = session.taskLogAttempts(taskId).at(-1);
+      if (attempt === undefined) return undefined;
+      return session.taskLog(taskId, attempt).filter((e): e is Extract<TaskLogEvent, { type: 'handoff' }> => e.type === 'handoff').at(-1)?.handoff;
+    },
     lastLoggedAttempt: (taskId) => session.taskLogAttempts(taskId).at(-1) ?? 0,
     runSettings: () => session.planState?.runSettings,
     isApproved: (taskId) => session.isApproved(taskId),
@@ -315,6 +321,8 @@ export function createSession(deps: SessionDeps): Session {
     },
     // The planner's command rules, at the read-only task's own working directory (ADR-0046).
     taskShell: (site) => deps.fsAdapter.taskShell?.(site),
+    recordHandoff: (sessionId, taskId, handoff) => taskLogs.note(sessionId, taskId, { type: 'handoff', handoff }),
+    taskLog: { attempts: (taskId) => session.taskLogAttempts(taskId), events: (taskId, attempt) => session.taskLog(taskId, attempt) },
   });
   const usage = new PlannerUsageLedger(windows);
   const events = new SessionEventRelay({
@@ -1098,7 +1106,8 @@ export class Session {
 
   /** One attempt's saved log, for `replayTaskLog` — what a reopened task view shows. */
   taskLog(taskId: string, attempt: number): TaskLogEvent[] {
-    return readTaskLog(this.taskLogLocation, taskId, attempt);
+    return readTaskLog(this.taskLogLocation, taskId, attempt).map((event) => event.type === 'handoff'
+      ? { ...event, handoff: resolveHandoffReferences(event.handoff, this.workspace) } : event);
   }
 
   get executionLog(): ReadonlyArray<TaskSnapshot> { return this.store.getExecutionLog(); }

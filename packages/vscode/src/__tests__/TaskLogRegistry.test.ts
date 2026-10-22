@@ -4,6 +4,7 @@ import { createTask, type AttemptUsage, type CommandOutcome, type ExecutionActor
 import { TaskLogRegistry } from '../providers/TaskLogRegistry';
 import type { HostToTaskLog } from '../shared/taskLogProtocol';
 import { __panels, __resetPanels } from '../test/vscode.mock';
+import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks } from '../shared/conversationPatch';
 
 const createWebviewPanel = vscode.window.createWebviewPanel as unknown as ReturnType<typeof vi.fn>;
 
@@ -45,6 +46,37 @@ describe('the task-log registry (ADR-0018, V1)', () => {
   beforeEach(() => {
     __resetPanels();
     createWebviewPanel.mockClear();
+  });
+
+  it('round-trips full handoffs through init and live patches, keeping each attempt separate', () => {
+    const handoff = {
+      summary: 'Boundary checked', findingCount: 1,
+      findings: [{ id: 'F1', severity: 'major' as const, title: 'Needs a fix', detail: 'Keep this detail', evidence: [{ kind: 'file' as const, path: 'a.ts', line: 7 }] }],
+      artifacts: [{ kind: 'commit' as const, sha: 'abc123' }],
+      report: Array.from({ length: 12 }, (_, i) => `Full report line ${i}`).join('\n'),
+    };
+    const h = harness({ 1: [{ type: 'handoff', handoff }], 2: attemptTwo });
+    h.registry.open('t1');
+    __panels[0].__receive({ type: 'ready' });
+    __panels[0].__receive({ type: 'selectAttempt', attempt: 1 });
+    const initial = JSON.parse(JSON.stringify(posted(__panels[0]).at(-1))) as HostToTaskLog;
+    if (initial.type !== 'init') throw new Error('Expected init');
+    expect(initial.status.attempt).toBe(1);
+    let view = applyConversationPatch(EMPTY_PATCHED_VIEW, { type: 'conversationPatch', order: initial.blocks.map((b) => b.id), changed: initial.blocks });
+    expect(patchedBlocks(view).filter((b) => b.type === 'handoff')).toEqual([expect.objectContaining({ handoff })]);
+
+    __panels[0].__receive({ type: 'selectAttempt', attempt: 2 });
+    const next = posted(__panels[0]).at(-1);
+    if (next?.type !== 'init') throw new Error('Expected attempt init');
+    expect(next.blocks.some((b) => b.type === 'handoff')).toBe(false);
+    view = applyConversationPatch(EMPTY_PATCHED_VIEW, { type: 'conversationPatch', order: next.blocks.map((b) => b.id), changed: next.blocks });
+    __panels[0].webview.postMessage.mockClear();
+    const latest = { ...handoff, summary: 'Fixed in attempt two', findings: [], findingCount: 0 };
+    h.registry.receive({ type: 'task_log', taskId: 't1', attempt: 2, events: [{ type: 'handoff', handoff: latest }] });
+    const patch = JSON.parse(JSON.stringify(posted(__panels[0])[0])) as HostToTaskLog;
+    if (patch.type !== 'patch') throw new Error('Expected patch');
+    view = applyConversationPatch(view, { ...patch, type: 'conversationPatch' });
+    expect(patchedBlocks(view).filter((b) => b.type === 'handoff')).toEqual([expect.objectContaining({ handoff: latest })]);
   });
 
   it('discovers commands from the latest attempt and invokes them through the Session', () => {

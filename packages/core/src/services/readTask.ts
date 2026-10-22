@@ -1,0 +1,87 @@
+import { flattenTasks, type Task } from '../models/Task';
+import type { TaskLogEvent } from '../models/TaskLog';
+import { handoffLines, readableTaskIds, type HandoffDigest, type HandoffTaskName, type StoredHandoff } from '../models/Handoff';
+import type { McpToolReply, ReadTaskArgs } from './mcp/tools';
+import { listed } from './harness/ordewellBinding';
+import { resolveTaskRef, taskRefOf, titledTaskRefOf } from './TaskRefs';
+
+/** The session's saved task logs, as `read_task` reads them (ADR-0018, P1). */
+export interface TaskLogReader {
+  /** The attempts of a task that have a saved log, oldest first. */
+  attempts(taskId: string): number[];
+  events(taskId: string, attempt: number): readonly TaskLogEvent[];
+}
+
+/**
+ * A task's `read_task` call (ADR-0047): the whole handoff of one attempt of a
+ * task in `plan`, from that attempt's log, with its report only when asked.
+ * Only a task in the reader's readable set is read, so the plan's own graph
+ * scopes what one task learns of another's work. It reads a handoff and
+ * nothing else: no transcript, no tool calls, no output.
+ */
+export function readTask(args: ReadTaskArgs, readerId: string, plan: readonly Task[], log: TaskLogReader): McpToolReply {
+  const target = resolveTaskRef(plan, String(args.task));
+  if (!target) return { isError: true, text: `${JSON.stringify(String(args.task))} names no task in the plan: give its "#order", its id or its title.` };
+  const named = (id: string) => titledTaskRefOf(plan, id) ?? id;
+  const name = named(target.id);
+  const readable = readableTaskIds(plan, readerId);
+  if (!readable.has(target.id)) {
+    const allowed = flattenTasks(plan).filter((t) => readable.has(t.id)).map((t) => named(t.id));
+    return { isError: true, text: `${name} is not a task this one may read. It may read itself, the tasks it depends on, directly or not, and its loop's other end: ${listed(allowed)}.` };
+  }
+  const attempts = log.attempts(target.id);
+  if (args.attempt !== undefined && !attempts.includes(args.attempt)) {
+    return { isError: true, text: `${name} has no saved attempt ${args.attempt}: ${attempts.length > 0 ? `its saved attempts are ${listed(attempts.map(String))}` : 'it has none'}.` };
+  }
+  const latest = attempts.at(-1);
+  const attempt = args.attempt ?? latest;
+  const of = `attempt ${attempt} of ${attempts.length}`;
+  const taskName: HandoffTaskName = (id) => taskRefOf(plan, id);
+  const logged = attempt === undefined ? undefined : loggedHandoff(log.events(target.id, attempt));
+  if (logged) return { text: [`${name}, ${of}:`, '', ...storedLines(logged, args.include_report === true, taskName)].join('\n') };
+  // What the plan keeps is the latest attempt's, so it stands in for no other.
+  if (attempt !== latest) return { text: `${name} has no handoff from ${of}: it ended without a task_complete call, or ran before handoffs.` };
+  // A forked session has the plan's digests and none of the logs behind them.
+  if (target.handoff) return { text: [`${name}: no saved log of this session holds its handoff, so this is what the plan keeps of it.`, '', ...digestLines(target.handoff, taskName)].join('\n') };
+  return { text: noHandoff(target, name, attempt === undefined ? undefined : of) };
+}
+
+/** The handoff an attempt ended with: the last one its log holds. */
+function loggedHandoff(events: readonly TaskLogEvent[]): StoredHandoff | undefined {
+  return events.filter((e): e is Extract<TaskLogEvent, { type: 'handoff' }> => e.type === 'handoff').at(-1)?.handoff;
+}
+
+/** A logged handoff whole, its report only when asked for and otherwise named, so the reader knows to ask. */
+function storedLines(handoff: StoredHandoff, includeReport: boolean, taskName: HandoffTaskName): string[] {
+  const { report, ...rest } = handoff;
+  const lines = handoffLines(includeReport ? handoff : rest, taskName);
+  if (!report || includeReport) return lines;
+  return [...lines, '', `It also wrote a report of ${report.length} characters, left out here: call read_task again with include_report: true to read it.`];
+}
+
+/** The plan's digest, saying what it does not hold rather than pointing at a log there is not. */
+function digestLines(digest: HandoffDigest, taskName: HandoffTaskName): string[] {
+  const more = digest.findingCount - digest.findings.length;
+  const lines = handoffLines({ ...digest, findingCount: digest.findings.length }, taskName);
+  return more > 0 ? [...lines, '', `Its other ${more} finding${more === 1 ? '' : 's'}, and any report, were not kept in the plan.`] : lines;
+}
+
+/**
+ * A task with no handoff to read: one still running, or saved before
+ * handoffs, whose output summary's report is what it said it did. The end
+ * of its output is not a handoff, so it is not read.
+ */
+function noHandoff(task: Task, name: string, attempt: string | undefined): string {
+  const why = task.status === 'in_progress' ? 'it is still running'
+    : attempt ? 'it ended without a task_complete call, or ran before handoffs'
+    : 'no attempt of it has ended with one';
+  const said = `${name} has no handoff ${attempt ? `from ${attempt}` : 'yet'}: ${why}.`;
+  const { reviewReason, report } = task.outputSummary ?? {};
+  if (!reviewReason && !report) return said;
+  return [
+    `${said} Its output summary, as the plan keeps it:`,
+    '',
+    ...(reviewReason ? [`Review: ${reviewReason}`] : []),
+    ...(report ? ['Report:', report] : []),
+  ].join('\n');
+}

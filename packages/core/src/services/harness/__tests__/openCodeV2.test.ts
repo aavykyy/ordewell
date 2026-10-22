@@ -247,8 +247,8 @@ describe('OpenCode 2.x — start', () => {
       const { adapter } = await start(server, taskStart({ mcp: ORDEWELL_SERVER, ...(resumeSessionId ? { resumeSessionId } : {}) }));
 
       const value = (server.requests.find((r) => r.method === 'PUT' && r.path === entry)?.body as { value?: string } | undefined)?.value ?? '';
-      expect(value).toContain('call the `task_complete` tool with status `done` and a summary of what you did');
-      expect(value).toContain('The `task_complete` summary is this task\'s report');
+      expect(value).toContain('call the `task_complete` tool with status `done` and your handoff');
+      expect(value).toContain('Its `summary` is this task\'s handoff to the next task');
       expect(value).not.toContain('tok-secret');
       adapter.dispose();
     }
@@ -272,7 +272,7 @@ const ordewellAllow = [
   'list_runners', 'list_models', 'submit_plan', 'edit_plan', 'task_query', 'task_output', 'task_diff', 'run_command', 'fetch', 'web_search', 'load_skill',
   'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'merge_all', 'run_script',
 ].map((tool) => ({ action: `ordewell_${tool}`, resource: '*', effect: 'allow' }));
-const taskAllow = ['task_complete', 'checkpoint'].map((tool) => ({ action: `ordewell_${tool}`, resource: '*', effect: 'allow' }));
+const taskAllow = ['task_complete', 'checkpoint', 'read_task'].map((tool) => ({ action: `ordewell_${tool}`, resource: '*', effect: 'allow' }));
 const document = (info: Record<string, unknown>) => ({ type: 'document', path: '/home/u/.config/opencode/opencode.jsonc', info });
 
 // 2.0.26's `websearch` with no provider chosen asks the user to pick one through `question`, which a planner is denied.

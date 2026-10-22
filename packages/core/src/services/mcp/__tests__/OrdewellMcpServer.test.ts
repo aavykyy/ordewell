@@ -52,7 +52,7 @@ describe('OrdewellMcpServer', () => {
     const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }));
 
     const names = async (client: Client) => (await client.listTools()).tools.map((t) => t.name).sort();
-    expect(await names(task)).toEqual(['checkpoint', 'task_complete']);
+    expect(await names(task)).toEqual(['checkpoint', 'read_task', 'task_complete']);
     expect(await names(planner)).toEqual([
       'answer_approval', 'edit_plan', 'fetch', 'list_models', 'list_runners', 'load_skill', 'merge_all', 'message_task', 'retry_task', 'run_command',
       'run_plan', 'run_script', 'run_task', 'skip_task', 'stop_run', 'stop_task', 'submit_plan', 'task_diff', 'task_output', 'task_query', 'web_search',
@@ -72,10 +72,10 @@ describe('OrdewellMcpServer', () => {
     expect(writer.readOnly).toBeUndefined();
     expect(mcpClientConfig(writer).readOnly).toBeUndefined();
     const tools = (await readOnly.listTools()).tools;
-    expect(tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'run_command', 'task_complete']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'read_task', 'run_command', 'task_complete']);
     // The hint names what lands, even when a command changes its disposable worktree.
     expect(tools.find((t) => t.name === 'run_command')?.annotations?.readOnlyHint).toBe(true);
-    expect((await change.listTools()).tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'task_complete']);
+    expect((await change.listTools()).tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'read_task', 'task_complete']);
 
     expect(await readOnly.callTool({ name: 'run_command', arguments: { command: 'npm test' } })).toMatchObject({ content: [{ type: 'text', text: 'ran npm test' }], isError: false });
     await expect(change.callTool({ name: 'run_command', arguments: { command: 'npm test' } })).rejects.toThrow(/Unknown tool/);
@@ -85,7 +85,7 @@ describe('OrdewellMcpServer', () => {
   // Claude Code in plan mode refuses any MCP tool not marked read-only, even
   // one pre-allowed with --allowedTools (verified against 2.1.289). The
   // execution tools change what runs, and say so (ADR-0029).
-  it('marks every planner read and plan write read-only, the execution tools not, and no task tool', async () => {
+  it('marks every planner read and plan write read-only, the execution tools not, and of the task tools only read_task', async () => {
     const server = newServer();
     const task = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 }));
     const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }));
@@ -94,7 +94,7 @@ describe('OrdewellMcpServer', () => {
     const executing = ['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'merge_all', 'run_script'];
     for (const [name, hint] of Object.entries(hints)) expect(hint, name).toBe(!executing.includes(name));
     expect(Object.keys(hints)).toHaveLength(21);
-    expect((await task.listTools()).tools.map((t) => t.annotations?.readOnlyHint)).toEqual([undefined, undefined]);
+    expect((await task.listTools()).tools.map((t) => [t.name, t.annotations?.readOnlyHint])).toEqual([['task_complete', undefined], ['checkpoint', undefined], ['read_task', true]]);
   });
 
   it('answers an unknown or revoked token with 401, and the SDK client cannot connect with it', async () => {
@@ -175,6 +175,23 @@ describe('OrdewellMcpServer', () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toMatch(/Invalid task_complete arguments/);
     expect(taskComplete).not.toHaveBeenCalled();
+  });
+
+  it('refuses oversized reference strings by field and leaves the token open for a corrected completion', async () => {
+    const server = newServer();
+    const taskComplete = vi.fn(async () => ({ text: 'ok' }));
+    const task = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 }, { taskComplete }));
+    const long = 'x'.repeat(200_000);
+    for (const ref of [{ kind: 'file', path: long }, { kind: 'commit', sha: 'abcd', repo: long }, { kind: 'url', url: `https://example.com/${long}` }, { kind: 'task', task: long }, { kind: 'task', task: 't1', finding: `F1${'0'.repeat(200_000)}` }]) {
+      for (const extra of [{ artifacts: [ref] }, { findings: [{ severity: 'major', title: 'Check', evidence: [ref] }] }]) {
+        const result = await task.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Short', ...extra } });
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result.content)).toContain('2000');
+      }
+    }
+    expect(taskComplete).not.toHaveBeenCalled();
+    expect((await task.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Short', artifacts: [{ kind: 'file', path: 'src/a.ts' }] } })).isError).toBeFalsy();
+    expect(taskComplete).toHaveBeenCalledTimes(1);
   });
 
   it('aborts a waiting call when its token is revoked', async () => {

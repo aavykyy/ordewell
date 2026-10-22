@@ -27,4 +27,16 @@ describe('hidden detail in a task log', () => {
     expect(hasHiddenDetail([{ type: 'runner_loaded', id: 'b1', commands: [], mcpServers: [] }])).toBe(true);
     expect(hasHiddenDetail([{ type: 'compaction', id: 'b1', trigger: 'manual' }])).toBe(false);
   });
+
+  it('is there when a handoff carries a report longer than the folded preview (ADR-0047)', () => {
+    const handoff = (report: string) => ({
+      type: 'handoff' as const, id: 'b1',
+      handoff: { summary: 'Done.', findings: [], findingCount: 0, report },
+    });
+    const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n');
+
+    expect(hasHiddenDetail([handoff(lines(8))])).toBe(false);
+    expect(hasHiddenDetail([handoff(lines(9))])).toBe(true);
+    expect(hasHiddenDetail([{ type: 'handoff', id: 'b1', handoff: { summary: 'Done.', findings: [], findingCount: 0 } }])).toBe(false);
+  });
 });

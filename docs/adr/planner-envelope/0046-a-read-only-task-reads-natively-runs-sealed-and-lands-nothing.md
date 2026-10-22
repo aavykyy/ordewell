@@ -29,9 +29,9 @@ its runner's native read tools; its only shell is Ordewell's `run_command`,
 which runs sealed whatever the planner's envelope would ask about or refuse,
 and every command once one has run sealed, with the task's own worktree
 writable and nobody asked; and it lands nothing:
-its worktree is thrown away when it ends, and its `task_complete` report is
-its result.** The plan flag stays `readOnly`, and means a task that lands
-nothing.
+its worktree is thrown away when it ends, and its `task_complete` handoff is
+its result ([ADR-0047](../supervision/0047-structured-task-handoffs.md)).**
+The plan flag stays `readOnly`, and means a task that lands nothing.
 
 ### Its shell
 
@@ -161,15 +161,16 @@ nothing.
   `Grep`, `Glob` and `LS` are decided automatically by Ordewell against the
   task worktree and session workspace, with symlinks resolved. A read outside
   both is refused, never asked. Edit, write, notebook, shell and plan-mode
-  transition tools are withheld. Ordewell's three task tools are pre-allowed.
+  transition tools are withheld. Ordewell's task tools, including `read_task`,
+  are pre-allowed.
   The assigned model runs directly; native plan mode's model pin is gone.
 - **OpenCode 1.x and 2.x** use the `build` agent under Ordewell's read-only
   permission profile. Native reads are allowed, external directories denied
   except the task worktree and session workspace, and writes, shells,
   delegation, browser, LSP and code-mode execution denied. Project config is
   disabled and LSP startup off, as for the planner (ADR-0028). Ordewell's
-  three task tools are allowed by exact name. 2.x must expose MCP tools
-  outside code mode or the task cannot start. A read-only attempt never
+  task tools, including `read_task`, are allowed by exact name. 2.x must
+  expose MCP tools outside code mode or the task cannot start. A read-only attempt never
   resumes a session with old permissions.
 - **Codex** keeps its read-only sandbox setting and declines native file
   changes, with `features.shell_tool = false` and `features.unified_exec =
@@ -288,7 +289,7 @@ nothing.
 ## Consequences
 
 - A read-only task can run the project's tests, try a fix and add a failing
-  test, and none of it reaches the plan's branches; its report is the result.
+  test, and none of it reaches the plan's branches; its handoff is the result.
 - Native read tools still run as the user, outside the sandbox, as far as each
   runner's own read rules let them, with Claude's resolved-path gate and
   OpenCode's native directory permission checks. These reads are not an OS
@@ -344,3 +345,4 @@ nothing.
 - 2026-10-22 — a sealed run can no longer rename or remove its worktree root, and every `.git` entry the checkout brought is held by the profile and checked for identity, content and hooks after every run; a repo group's root is described as not persistently writable where bubblewrap overlays it.
 
 - 2026-10-22 — the group-root consequence names the refusal where the root is bound read-only, and the testing decisions say which host proves which rule: macOS for Seatbelt, Linux CI for the bind mount, the group-root overlay and the read-only binds.
+- 2026-10-22 — handoffs carry read-only results and `read_task` joins the allowed task tools (ADR-0047, #120).

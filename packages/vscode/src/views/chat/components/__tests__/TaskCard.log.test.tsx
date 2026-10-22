@@ -14,6 +14,19 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 }
 
 describe('task log access', () => {
+  it('draws a subtask handoff and clears it when its run entry no longer holds one', () => {
+    const handoff = { summary: 'Subtask finished', findings: [], findingCount: 0 };
+    const onOpenLog = vi.fn();
+    const task = makeTask({ handoff });
+    const { rerender } = render(<SubTaskCard task={task} models={[]} onOpenLog={onOpenLog} />);
+    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Handed over · no findings · Subtask finished');
+    fireEvent.click(screen.getByText('Test task'));
+    fireEvent.click(screen.getByRole('button', { name: 'Read full handoff' }));
+    expect(onOpenLog).toHaveBeenCalledWith('t1');
+    rerender(<SubTaskCard task={task} models={[]} run={{ handoff: undefined }} onOpenLog={onOpenLog} />);
+    expect(document.querySelector('.task-handoff')).toBeNull();
+  });
+
   it.each(['pending', 'in_progress', 'completed', 'failed'] as const)('offers Open log for a %s task without transport info', (status) => {
     render(<TaskCard task={makeTask({ status })} models={[]} isExecuting onOpenLog={() => {}} />);
     expect(screen.getByRole('button', { name: 'Open log' })).toBeTruthy();

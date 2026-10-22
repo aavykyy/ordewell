@@ -1,5 +1,5 @@
 import type { AgentEvent } from '../services/harness/AgentAdapter';
-import type { CheckpointAnswer, TaskCompleteArgs } from '../services/mcp/tools';
+import type { CheckpointAnswer, McpToolReply, ReadTaskArgs, TaskCompleteArgs } from '../services/mcp/tools';
 import type { ApprovalDecision } from './IApproval';
 import type { TaskSkillSnapshot } from '../models/Task';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
@@ -7,6 +7,7 @@ import type { RunnerCommand } from '../models/RunnerCommand';
 import type { RunnerSessionCost } from '../models/Usage';
 import type { ScriptBody } from '../models/ScriptTask';
 import type { TaskShell } from './IFileSystem';
+import type { HandoffCheck } from '../models/Handoff';
 /** How a structured turn ended. `failed` carries the agent's own words in the preceding `error` event. */
 export type StructuredTurnEnd = 'completed' | 'interrupted' | 'failed';
 /**
@@ -250,6 +251,17 @@ export interface IRunner {
      * from it, and only an attempt that has one is given that tool.
      */
     shell?: TaskShell;
+    /**
+     * Checks a `task_complete` call's handoff against the plan as the call
+     * arrives (ADR-0047): a refusal is the call's result, and nothing is
+     * recorded. Without one, a `task` reference resolves against no plan.
+     */
+    checkHandoff?: (completion: TaskCompleteArgs) => HandoffCheck<TaskCompleteArgs>;
+    /**
+     * Answers the attempt's `read_task` calls (ADR-0047), against the plan
+     * and the session's task logs. Without one the call says it is not available.
+     */
+    readTask?: (args: ReadTaskArgs) => McpToolReply;
   }): Promise<IRunnerSession>;
 
   /** Wind one session down ({@link IRunnerSession.stop}); resolves once its process is gone. */

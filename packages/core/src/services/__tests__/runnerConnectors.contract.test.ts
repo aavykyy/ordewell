@@ -103,9 +103,9 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
   it('gives a task the completion contract in its instructions, not only in the first message', async () => {
     const { fake, adapter } = await opened(runner, taskStart(runner));
 
-    expect(fake.instructions()).toContain('call the `task_complete` tool with status `done` and a summary of what you did');
+    expect(fake.instructions()).toContain('call the `task_complete` tool with status `done` and your handoff');
     expect(fake.instructions()).toContain('`blocked` or `failed` and the reason');
-    expect(fake.instructions()).toContain('The `task_complete` summary is this task\'s report');
+    expect(fake.instructions()).toContain('Its `summary` is this task\'s handoff to the next task');
     expect(fake.commandLine()).not.toContain('tok-secret');
     adapter.dispose();
   });

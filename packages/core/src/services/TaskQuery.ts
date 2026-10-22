@@ -5,6 +5,7 @@ import type { LiveTail, LiveTailOptions } from '../interfaces/TaskOutputSource';
 import { resolveTaskRef, taskRefOf } from './TaskRefs';
 import { commandLine, scriptBodyOf } from '../models/ScriptTask';
 import { betweenRounds, checkOf, loopRoundOf } from '../models/Loop';
+import { handoffLines, type HandoffDigest } from '../models/Handoff';
 
 /**
  * The planner's read channel: a `{"taskQuery":{...}}` reply asking Ordewell to
@@ -23,13 +24,21 @@ import { betweenRounds, checkOf, loopRoundOf } from '../models/Loop';
 
 /** The long fields a query may ask for. Everything else is already in the plan block. */
 export const TASK_QUERY_FIELDS = [
-  'description', 'prompt', 'userSteps', 'verdict', 'outputSummary', 'userStoriesCovered', 'skills', 'output',
+  'description', 'prompt', 'userSteps', 'verdict', 'outputSummary', 'handoff', 'userStoriesCovered', 'skills', 'output',
 ] as const;
 
 export type TaskQueryField = typeof TASK_QUERY_FIELDS[number];
 
 /** What `task_query` reads: every field but `output`, which has its own tool (ADR-0022). */
 export const TASK_QUERY_TASK_FIELDS = TASK_QUERY_FIELDS.filter((f): f is Exclude<TaskQueryField, 'output'> => f !== 'output');
+
+/** Where a handoff's digest sends a planner for what it leaves out (ADR-0047): the attempt's log, read with `task_output`. */
+export function handoffRest(handoff: HandoffDigest): string {
+  const shown = handoff.findings.length;
+  return handoff.findingCount > shown
+    ? `Findings F${shown + 1} to F${handoff.findingCount} and the report are in the attempt's log: read them with task_output.`
+    : 'The report, if the task wrote one, is in the attempt\'s log: read it with task_output.';
+}
 
 /** Lines a `output` read returns when the query sets no count. */
 export const OUTPUT_LINES_DEFAULT = 80;
@@ -188,7 +197,7 @@ export const TASK_QUERY_PROTOCOL: string[] = [
   `  {"${TASK_QUERY_ENVELOPE_KEY}":{"tasks":["<id or #order>", "..."],"fields":[${TASK_QUERY_FIELDS.map((f) => `"${f}"`).join(', ')}],"catalog":true}}`,
   '- "tasks": one or more task references. Ask for everything you need in ONE query — each query costs a round-trip.',
   '- "fields": optional. Omit it to get every field above.',
-  '- "fields" may include "output": the recent clean output of a task that is running right now — the way to diagnose a task that looks stuck mid-execution. "outputLines" (default 80, at most 400) sets how many lines; "outputSince" resumes a previous read at the offset its answer reported. A task that is not running answers with a pointer to its outputSummary and verdict instead.',
+  '- "fields" may include "output": the recent clean output of a task that is running right now — the way to diagnose a task that looks stuck mid-execution. "outputLines" (default 80, at most 400) sets how many lines; "outputSince" resumes a previous read at the offset its answer reported. A task that is not running answers with a pointer to its outputSummary, handoff and verdict instead.',
   '- "catalog": optional. Set it to true for the full runner and model catalog — every model id with its label and thinking-effort variants, and whether each runner takes read-only tasks. It works before any task exists, and may be used on its own.',
   'Ordewell answers immediately with the detail and changes nothing. Then reply again with your taskOps JSON, or with prose for the user.',
   'Three queries per user message; after that every answer also tells you to land the turn. Do not ask the same question twice.',
@@ -201,8 +210,8 @@ export const TASK_QUERY_PROTOCOL: string[] = [
 export const TASK_READ_TOOLS_PROTOCOL: string[] = [
   'READING A TASK BEFORE YOU EDIT IT:',
   'The plan block you are shown each turn carries only short fields — it never contains a task\'s prompt, its user steps, or a completed task\'s verdict. Never rewrite a field you have not read. Read with these tools; they change nothing:',
-  '- task_query: "tasks" are one or more task references ("<id or #order>"). Ask for everything you need in ONE call. "fields" is optional (omit it to get description, prompt, userSteps, verdict, outputSummary, userStoriesCovered and skills). "catalog": true also returns every runner with its models, thinking-effort variants and modes.',
-  '- task_output: the recent output of a task that is running right now — the way to diagnose a task that looks stuck mid-execution. "lines" (default 80, at most 400) sets how many; pass an answer\'s "nextOffset" back as "since" to read only what follows. A task that is not running answers with its verdict, output summary and a digest of its last attempt. Supply "attempt" (a saved attempt number) or "kinds" (TaskLogEvent types such as tool_call, tool_result, error, text, approval_requested, approval_decided, usage) to read its structured log; attempt defaults to latest. Continue truncated entries with since/nextOffset.',
+  '- task_query: "tasks" are one or more task references ("<id or #order>"). Ask for everything you need in ONE call. "fields" is optional (omit it to get description, prompt, userSteps, verdict, outputSummary, handoff, userStoriesCovered and skills). A handoff is what a task told the tasks after it: a summary, findings F1, F2, … and artifacts. "catalog": true also returns every runner with its models, thinking-effort variants and modes.',
+  '- task_output: the recent output of a task that is running right now — the way to diagnose a task that looks stuck mid-execution. "lines" (default 80, at most 400) sets how many; pass an answer\'s "nextOffset" back as "since" to read only what follows. A task that is not running answers with its verdict, output summary, its whole handoff, its findings and report, and a digest of its last attempt. Supply "attempt" (a saved attempt number) or "kinds" (TaskLogEvent types such as tool_call, tool_result, error, text, approval_requested, approval_decided, usage) to read its structured log; attempt defaults to latest. Continue truncated entries with since/nextOffset.',
   '- task_diff: changes since a task started, with repo paths and file stats. Pass "path" for one file patch and "repo" to select a repository. Page with since/nextOffset. Shared runs without task-specific records report not available.',
   'Three reads per user message; after that every answer also tells you to land the turn, and after six they are refused. Do not ask the same question twice.',
   'Once a plan exists, change it with edit_plan — every turn shows you its operations. Never reply with taskOps or taskQuery JSON.',
@@ -210,11 +219,11 @@ export const TASK_READ_TOOLS_PROTOCOL: string[] = [
 
 /** The one-line reminder the per-turn plan block carries, so the protocol has a single owner. */
 export const TASK_QUERY_REMINDER =
-  `- To READ a task in full (prompt, user steps, verdict, output, user stories) or the whole model/mode catalog before editing, reply with ONLY {"${TASK_QUERY_ENVELOPE_KEY}":{"tasks":["<id or #order>"],"catalog":true}} — it changes nothing, and you then reply again with your ops.`;
+  `- To READ a task in full (prompt, user steps, verdict, output, handoff, user stories) or the whole model/mode catalog before editing, reply with ONLY {"${TASK_QUERY_ENVELOPE_KEY}":{"tasks":["<id or #order>"],"catalog":true}} — it changes nothing, and you then reply again with your ops.`;
 
 /** {@link TASK_QUERY_REMINDER} for a planner that has Ordewell's tools. */
 export const TASK_READ_TOOLS_REMINDER =
-  '- To READ a task in full (prompt, user steps, verdict, user stories), a running task\'s output, or the whole model/mode catalog before editing, call task_query, task_output or task_diff — they change nothing — and then call edit_plan with your ops.';
+  '- To READ a task in full (prompt, user steps, verdict, handoff, user stories), a running task\'s output, or the whole model/mode catalog before editing, call task_query, task_output or task_diff — they change nothing — and then call edit_plan with your ops.';
 
 /**
  * Where an `output` read is answered from: the orchestrator's live capture of
@@ -251,7 +260,7 @@ export function fitTail(text: string, budget: number): { text: string; trimmed: 
 function renderLiveOutput(taskId: string, ctx: OutputRenderContext): string[] {
   const tail = ctx.liveOutput?.(taskId, { maxLines: ctx.outputLines, sinceOffset: ctx.outputSince }) ?? null;
   if (!tail) return ['output: (no captured output — the task has not run in this session)'];
-  if (!tail.running) return ['output: (not running — read "outputSummary" and "verdict" for how it ended)'];
+  if (!tail.running) return ['output: (not running — read "outputSummary", "handoff" and "verdict" for how it ended)'];
   if (!tail.text) return [`output: (running; nothing new past offset ${tail.nextOffset})`];
   const budget = Math.max(0, TASK_QUERY_ANSWER_MAX_CHARS - ctx.used - ANSWER_TAIL_RESERVE);
   const fitted = fitTail(tail.text, budget);
@@ -262,7 +271,7 @@ function renderLiveOutput(taskId: string, ctx: OutputRenderContext): string[] {
   ];
 }
 
-function renderField(task: Task, field: TaskQueryField, ctx: OutputRenderContext): string[] {
+function renderField(task: Task, field: TaskQueryField, ctx: OutputRenderContext, tasks: readonly Task[]): string[] {
   switch (field) {
     case 'description':
       return [`description: ${task.description || '(none)'}`];
@@ -283,7 +292,14 @@ function renderField(task: Task, field: TaskQueryField, ctx: OutputRenderContext
     case 'outputSummary': {
       const o = task.outputSummary;
       if (!o) return ['outputSummary: (none)'];
-      return [`outputSummary: ${o.reviewReason}`, ...(o.report ? ['report:', o.report] : []), ...(o.logTail ? ['log tail:', o.logTail] : [])];
+      // A task with a handoff carries its report there.
+      const report = task.handoff ? undefined : o.report;
+      return [`outputSummary: ${o.reviewReason}`, ...(report ? ['report:', report] : []), ...(o.logTail ? ['log tail:', o.logTail] : [])];
+    }
+    case 'handoff': {
+      const h = task.handoff;
+      if (!h) return ['handoff: (none)'];
+      return ['handoff:', ...handoffLines(h, (id) => taskRefOf(tasks, id)), '(The whole handoff, report and all, is in the attempt\'s log.)'];
     }
     case 'userStoriesCovered': {
       const stories = task.userStoriesCovered ?? [];
@@ -325,7 +341,7 @@ function renderTask(task: Task, ref: string, fields: readonly TaskQueryField[], 
   const lines = [
     `${ref} id=${task.id} "${task.title}" [${task.status}] type:${TYPE_LABELS[task.type]}`,
     ...loopLines(task, tasks),
-    ...fields.filter((f) => f !== 'output').flatMap((f) => renderField(task, f, ctx)),
+    ...fields.filter((f) => f !== 'output').flatMap((f) => renderField(task, f, ctx, tasks)),
     ...(fields.includes('output') ? renderLiveOutput(task.id, ctx) : []),
     '',
   ];

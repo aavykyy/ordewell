@@ -48,6 +48,9 @@ import type { RunMergeView } from './SessionMessage';
 import { resumeTime } from '../taskRow/status';
 import { scriptBodyOf } from '../models/ScriptTask';
 import { SCRIPT_RUNNER, ScriptRunner } from './ScriptRunner';
+import { checkHandoff, type StoredHandoff } from '../models/Handoff';
+import { userTaskHandoff } from '../models/DerivedHandoff';
+import { readTask, type TaskLogReader } from './readTask';
 
 /** What ran an automatic Merge all: a task reaching its merge gate, or the run settling with landed work unmerged. */
 export type AutoMergeTrigger = { kind: 'gate'; taskId: string } | { kind: 'run_end' };
@@ -167,7 +170,7 @@ const CONTROL_WORDS = {
 } as const;
 
 /** What Ordewell tells a runner whose turn ended without a `task_complete` call (ADR-0018, W1). */
-const COMPLETION_REMINDER = 'Your turn ended without calling `task_complete`. If the task is done, call `task_complete` with status `done` and your full report as the summary. If you are blocked, call it with status `blocked` and the reason. If you need something from the user, say exactly what and end your turn.';
+const COMPLETION_REMINDER = 'Your turn ended without calling `task_complete`. If the task is done, call `task_complete` with status `done` and a summary of at most 1,500 characters for the next reader. Put atomic findings in findings and the long form in report (at most 20,000 characters). If you are blocked, call it with status `blocked` and the reason. If you need something from the user, say exactly what and end your turn.';
 
 /**
  * One run of one task, from the moment the scheduler claims it until its
@@ -322,6 +325,7 @@ export interface TaskOrchestratorDeps {
   skillsAt: (roots: readonly string[]) => SkillLookup;
   /** What the task's last saved attempt did, or null when it left no log (ADR-0020). */
   previousAttemptFromLog: (taskId: string) => string | null;
+  previousHandoffFromLog: (taskId: string) => StoredHandoff | undefined;
   /**
    * The newest attempt the task has a saved log for, 0 for none. An attempt's
    * log is saved under its number, so a new one is numbered past a log kept
@@ -341,6 +345,13 @@ export interface TaskOrchestratorDeps {
   isApproved: (taskId: string) => boolean;
   /** A read-only attempt's shell (ADR-0046); absent, its runner is given no `run_command`. */
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
+  /**
+   * Write an attempt's whole handoff into the log of the attempt `sessionId`
+   * ran (ADR-0047). A task that ran no session, a user task, gets a log of its own.
+   */
+  recordHandoff: (sessionId: string | undefined, taskId: string, handoff: StoredHandoff) => void;
+  /** The session's saved task logs, which a task's `read_task` reads handoffs from (ADR-0047). */
+  taskLog: TaskLogReader;
 }
 
 /**
@@ -363,11 +374,14 @@ export interface TaskOrchestratorOptions {
   workspaceEnv?: (cwd: string) => Promise<WorkspaceEnv>;
   skillsAt?: (roots: readonly string[]) => SkillLookup;
   previousAttemptFromLog?: (taskId: string) => string | null;
+  previousHandoffFromLog?: (taskId: string) => StoredHandoff | undefined;
   lastLoggedAttempt?: (taskId: string) => number;
   runSettings?: () => SchedulerRunSettings | undefined;
   /** Every task is approved unless a Session supplies its record: an orchestrator on its own has no user to ask. */
   isApproved?: (taskId: string) => boolean;
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
+  recordHandoff?: (sessionId: string | undefined, taskId: string, handoff: StoredHandoff) => void;
+  taskLog?: TaskLogReader;
 }
 
 /**
@@ -456,10 +470,14 @@ export class TaskOrchestrator {
   private observers: OrchestratorObserver[] = [];
   private skillsAt: (roots: readonly string[]) => SkillLookup;
   private previousAttemptFromLog: (taskId: string) => string | null;
+  private previousHandoffFromLog: (taskId: string) => StoredHandoff | undefined;
+  private previousRounds = new Map<string, { round: number; report?: string }>();
   private lastLoggedAttempt: (taskId: string) => number;
   private runSettings: () => SchedulerRunSettings | undefined;
   private isApproved: (taskId: string) => boolean;
   private taskShell: (site: TaskShellSite) => TaskShell | undefined;
+  private recordHandoff: (sessionId: string | undefined, taskId: string, handoff: StoredHandoff) => void;
+  private taskLog: TaskLogReader;
   private readonly research: Pick<ResearchTasks, 'started'> | undefined;
 
   constructor(deps: TaskOrchestratorDeps) {
@@ -477,10 +495,13 @@ export class TaskOrchestrator {
     this.workspaceEnv = deps.workspaceEnv;
     this.skillsAt = deps.skillsAt;
     this.previousAttemptFromLog = deps.previousAttemptFromLog;
+    this.previousHandoffFromLog = deps.previousHandoffFromLog;
     this.lastLoggedAttempt = deps.lastLoggedAttempt;
     this.runSettings = deps.runSettings;
     this.isApproved = deps.isApproved;
     this.taskShell = deps.taskShell ?? (() => undefined);
+    this.recordHandoff = deps.recordHandoff;
+    this.taskLog = deps.taskLog;
 
     this.store.onMutate = () => this.emit('onTaskChanged');
     this.verifier.onVerdict((taskId, verdict) => { void this.deliverVerdict(taskId, verdict); });
@@ -550,11 +571,14 @@ export class TaskOrchestrator {
       workspaceEnv: options.workspaceEnv ?? ((cwd) => resolveWorkspaceEnv(cwd)),
       skillsAt: options.skillsAt ?? ((roots) => new SkillsService(roots)),
       previousAttemptFromLog: options.previousAttemptFromLog ?? (() => null),
+      previousHandoffFromLog: options.previousHandoffFromLog ?? (() => undefined),
       lastLoggedAttempt: options.lastLoggedAttempt ?? (() => 0),
       runSettings: options.runSettings ?? (() => undefined),
       isApproved: options.isApproved ?? (() => true),
       research: options.research,
       ...(options.taskShell ? { taskShell: options.taskShell } : {}),
+      recordHandoff: options.recordHandoff ?? (() => undefined),
+      taskLog: options.taskLog ?? { attempts: () => [], events: () => [] },
     });
     return orchestrator;
   }
@@ -1028,6 +1052,7 @@ export class TaskOrchestrator {
     this.reviewApproved = false;
     this.retryCounts.clear();
     this.spawnCounts.clear();
+    this.previousRounds.clear();
     this.onHold.clear();
     this.queuedStarts = new Map(queued.filter(([id]) => this.store.get(id)));
     this.recoverOrphans();
@@ -1295,13 +1320,14 @@ export class TaskOrchestrator {
     await Promise.resolve();
     if (this.attempts.get(taskId) !== attempt) return;
     const summary = this.output.finalText(taskId);
-    const report = this.output.report(taskId);
+    const handoff = this.output.handoff(taskId);
     const landing = verdict.outcome === 'pass' ? await this.land(attempt, () => this.landing.landPassed(task, attempt)) : null;
     const changedFiles = landing && checksTree(attempt.kind) ? await this.runs.filesChangedSince(attempt.snapshot) : [];
     const unresumedReason = this.unresumed(attempt) ? unresumedMessage(task, `${attempt.runner} could not find its saved session`) : null;
     if (this.attempts.get(taskId) !== attempt) return;
     this.endAttempt(taskId, 'verdict');
     this.store.setTaskVerdict(taskId, verdict);
+    this.handOver(taskId, summarizeOutput(unresumedReason ?? verdict.reason, handoff ? '' : summary), handoff, attempt.session?.id);
     console.error(`[TaskOrchestrator] Output summary:\n${summary || '(empty: no output captured)'}`);
     if (changedFiles.length > 0) {
       // The evidence the ops rule rests on: a runner cannot be kept from
@@ -1323,10 +1349,18 @@ export class TaskOrchestrator {
       if (attempt.worktree) await this.runs.release(taskId, { keep: true });
     }
 
-    this.store.setTaskOutputSummary(taskId, summarizeOutput(unresumedReason ?? verdict.reason, summary, report));
-
     this.logAndArchive(task, verdict);
     await this.afterVerdict(taskId);
+  }
+
+  /**
+   * How a task's latest attempt ended and the handoff it left (ADR-0047): the
+   * plan keeps the digest and the attempt's log the whole of it. One path for
+   * an attempt a runner or a script ran, and for the completion a user marked.
+   */
+  private handOver(taskId: string, summary: Task['outputSummary'], handoff: StoredHandoff | undefined, sessionId?: string): void {
+    this.store.setTaskOutputSummary(taskId, summary, handoff);
+    if (handoff) this.recordHandoff(sessionId, taskId, handoff);
   }
 
   private async afterVerdict(taskId: string): Promise<void> {
@@ -1350,9 +1384,12 @@ export class TaskOrchestrator {
    * never a failed task, so never one that blocks its dependents.
    */
   private async settleRepair(task: Task, attempt: TaskAttempt, verdict: Verdict): Promise<void> {
+    const summary = this.output.finalText(task.id);
+    const handoff = this.output.handoff(task.id);
     const outcome = await this.land(attempt, () => this.landing.settleRepair(task, verdict, () => this.attempts.get(task.id) === attempt));
     if (this.attempts.get(task.id) !== attempt) return;
     this.endAttempt(task.id, 'verdict');
+    this.handOver(task.id, summarizeOutput(verdict.reason, handoff ? '' : summary), handoff, attempt.session?.id);
     await this.applyLanding(task, outcome, attempt.admission, () => {
       this.logAndArchive(task, task.verdict ?? verdict);
     });
@@ -1573,7 +1610,9 @@ export class TaskOrchestrator {
       this.closeLoop(task, LOOP_CHECK_MARKED_COMPLETE);
     } else this.settleUnlanded(task, landing, admission);
     this.store.setTaskVerdict(taskId, verdict);
-    this.store.setTaskOutputSummary(taskId, summarizeOutput(verdict.reason, ''));
+    // A user task has no attempt to have written a handoff: the user's act is its.
+    const handoff = task.type === 'user' ? userTaskHandoff(task.userSteps) : undefined;
+    this.handOver(taskId, summarizeOutput(verdict.reason, ''), handoff);
     this.logAndArchive(task, verdict);
     if (completesTask(landing)) {
       this.onHold.delete(taskId);
@@ -2341,6 +2380,7 @@ export class TaskOrchestrator {
     for (const id of repeatingChecks(this.store.planTasks)) {
       const check = this.store.get(id);
       if (!check?.loop || this.attempts.has(id) || !check.loop.body.every((b) => landed(b, this.store, this.runs))) continue;
+      this.previousRounds.set(id, { round: loopRoundOf(check), report: check.outputSummary?.report });
       this.store.repeat(id);
       this.onHold.delete(id);
       repeated = true;
@@ -2465,6 +2505,7 @@ export class TaskOrchestrator {
     this.research?.started(task);
     // A script spends nothing a ledger counts: no model, no tokens (ADR-0035).
     if (!script) this.store.startAttemptUsage(task.id, attempt.attempt, attempt.runner, attempt.startedAt);
+    this.store.setTaskOutputSummary(task.id, undefined);
     this.store.markInProgress(task.id);
     this.emit('onTaskChanged');
     return { spawned: this.runClaimed(task, attempt, continuation) };
@@ -2692,6 +2733,8 @@ export class TaskOrchestrator {
       skills: attempt.skills,
       repairPrompt: (t) => this.landing.repairPrompt(t),
       previousAttempt: (taskId) => this.opsPreviousAttempt(taskId),
+      previousHandoff: this.previousHandoffFromLog,
+      previousRound: this.previousRounds.get(task.id),
     });
     const env = await this.envForTask(cwd);
     if (landsNothing(kind)) {
@@ -2720,6 +2763,8 @@ export class TaskOrchestrator {
       attempt: attempt.attempt,
       ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
       ...(shell ? { shell } : {}),
+      checkHandoff: (completion) => checkHandoff(completion, task.id, this.store.planTasks),
+      readTask: (args) => readTask(args, task.id, this.store.planTasks, this.taskLog),
       workspaceRoot: this.workspaceRootFn(),
       onNotice: (message) => this.tell('warn', `Task "${task.title}": ${message}`),
     });

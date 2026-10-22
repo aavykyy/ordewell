@@ -5,7 +5,6 @@ amends: ["0009", "0013", "0020", "0022"]
 
 # 0029 — The supervisor: levels, live planner turns, execution tools and auto-merge
 
-
 **Amends:** ADR-0009 and ADR-0022 — the planner gains execution tools, a further
 explicit exception to harness planners being read-only; ADR-0013 — "never
 merged for the user" now has two exits the user opts into; ADR-0020 — the
@@ -106,8 +105,8 @@ built. The attention events are:
 
 An ordinary pass never wakes it. Passes ride along as "since last time: tasks
 2, 3, 4 passed". A research task's end, passed, failed or blocked, is an
-attention event at every level, Off included: the run update carries its whole
-report or its reason. It uses the report path shared with `run_script`, and
+attention event at every level, Off included: the run update carries its
+handoff or its reason. It uses the report path shared with `run_script`, and
 acts with the authority of the turn that started it. A report turn may start
 further research, whose report opens the next turn with no user message in
 between: the chain is deliberately not bounded per user message
@@ -123,7 +122,11 @@ naming its task and a short detail — the verdict's reason and the tasks the
 failure blocks as the update goes out
 ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)), the question,
 the request, the resume time — and the passes since the last one; the run's end
-counts what completed, failed and is blocked. Never a log: the
+counts what completed, failed and is blocked. A finished task's handoff is
+rendered as its summary and whole findings within 4,000 characters, including
+omission and pull pointers; artifacts sit outside that text budget. The long
+report stays in the attempt log, read with `task_output`
+([ADR-0047](0047-structured-task-handoffs.md)). Never a log: the
 supervisor reads more with `task_output` and `task_diff`. The run update is
 the supervisor's input (`kind: 'wake_up'`), and what it says in the turn is
 its note (`kind: 'supervisor'`). The rules of its level are told to it after
@@ -591,3 +594,5 @@ until #30 exists.
 - 2026-10-21 — research reports wake the planner at every level under the originating authority; all automatic report turns share the persisted message limit (ADR-0037 R2, R3, R4).
 - 2026-10-22: the level and its guards are set in `/settings` in the TUI and VS Code; the one-value slash commands are gone there, and `ordewell supervisor` stays headless.
 - 2026-10-22 — automatic report turns are not bounded per user message: a report turn may start further research, whose report opens the next turn, and the chain is held only by the planner's judgement, the run's Parallel limit, `mayReport` and the user's Stop (ADR-0037 R4).
+- 2026-10-22 — decided, not built: run updates carry a task's handoff ([ADR-0047](0047-structured-task-handoffs.md), #120).
+- 2026-10-22 — implemented handoffs in run updates, with whole findings and a pull pointer (ADR-0047, #120).

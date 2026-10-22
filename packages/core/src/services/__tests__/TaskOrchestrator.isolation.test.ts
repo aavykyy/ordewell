@@ -1524,7 +1524,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     sessions[0].reportComplete({ status: 'done', summary: 'answer from the worktree' });
 
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
-    expect(orchestrator.storeInstance.get('t1')!.outputSummary?.report).toBe('answer from the worktree');
+    expect(orchestrator.storeInstance.get('t1')!.handoff?.summary).toBe('answer from the worktree');
   });
   describe('the agent a finished task leaves behind', () => {
     it('stops on its verdict, so none is left in a worktree Merge all removes', async () => {

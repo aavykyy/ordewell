@@ -43,7 +43,7 @@ describe('queued task messages before settlement', () => {
     expect(orchestrator.storeInstance.get('t1')?.status).toBe('in_progress');
     session.reportComplete({ status: 'done', summary: 'Work with tests' });
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')?.status).toBe('completed'));
-    expect(orchestrator.storeInstance.get('t1')?.outputSummary?.report).toBe('Work with tests');
+    expect(orchestrator.storeInstance.get('t1')?.handoff?.summary).toBe('Work with tests');
   });
 
   it('delivers several queued messages in order without a status flicker', async () => {
@@ -60,7 +60,7 @@ describe('queued task messages before settlement', () => {
     session.reportComplete({ status: 'failed', summary: 'Final failure', reason: 'Tests failed' });
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')?.status).toBe('failed'));
     expect(orchestrator.storeInstance.get('t1')?.verdict?.reason).toContain('Tests failed');
-    expect(orchestrator.storeInstance.get('t1')?.outputSummary?.report).toBe('Final failure');
+    expect(orchestrator.storeInstance.get('t1')?.handoff?.summary).toBe('Final failure');
   });
 
   it.each(['blocked', 'failed'] as const)('supersedes a %s report after a queued message', async (status) => {
@@ -73,7 +73,7 @@ describe('queued task messages before settlement', () => {
     expect(orchestrator.storeInstance.get('t1')?.status).toBe('in_progress');
     session.reportComplete({ status: 'done', summary: 'Fixed' });
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')?.status).toBe('completed'));
-    expect(orchestrator.storeInstance.get('t1')?.outputSummary?.report).toBe('Fixed');
+    expect(orchestrator.storeInstance.get('t1')?.handoff?.summary).toBe('Fixed');
   });
 
   it('requires fresh evidence when the follow-up turn ends without a report', async () => {
@@ -99,7 +99,7 @@ describe('queued task messages before settlement', () => {
     session.emitTurnEnd('completed');
     session.reportComplete({ status: 'done', summary: 'Work with tests' });
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')?.status).toBe('completed'));
-    expect(orchestrator.storeInstance.get('t1')?.outputSummary?.report).toBe('Work with tests');
+    expect(orchestrator.storeInstance.get('t1')?.handoff?.summary).toBe('Work with tests');
   });
 
   it('does not deliver a removed message, and settles the held evidence at turn end', async () => {

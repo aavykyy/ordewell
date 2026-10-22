@@ -32,6 +32,71 @@ describe('the task log tab (ADR-0018, V1)', () => {
     api.postMessage.mockClear();
   });
 
+  it('draws a handoff from the attempt log and expands its full report with the shared detail switch', () => {
+    const report = Array.from({ length: 12 }, (_, i) => `Report line ${i + 1}`).join('\n');
+    const view = replayTaskLog([{ type: 'handoff', handoff: {
+      summary: 'Check the token boundary.', findingCount: 2,
+      findings: [
+        { id: 'F1', severity: 'blocker', title: 'Token escapes', detail: 'A sibling can read it.', evidence: [
+          { kind: 'file', path: 'src/token.ts', line: 42 },
+          { kind: 'commit', sha: 'abc123', repo: 'core', resolved: true },
+          { kind: 'task', task: '#3', finding: 'F2' },
+          { kind: 'url', url: 'https://example.com/evidence' },
+        ] },
+        { id: 'F2', severity: 'info', title: 'Checked the fallback' },
+      ], artifacts: [{ kind: 'file', path: 'docs/result.md' }], report,
+    } }]);
+    render(<TaskLogApp />);
+    init({ planStatus: 'completed' }, [...view.blocks]);
+    expect(screen.getByText('Handoff · 2 findings · Blocker')).toBeTruthy();
+    expect(screen.getByText('Check the token boundary.')).toBeTruthy();
+    expect(screen.getByText('F1 · Blocker · Token escapes')).toBeTruthy();
+    expect(screen.getByText('A sibling can read it.')).toBeTruthy();
+    expect(screen.getByText(/src\/token.ts:42 \(unresolved\)/)).toBeTruthy();
+    expect(screen.getByText(/commit abc123 in core/)).toBeTruthy();
+    expect(screen.getByText(/commit abc123 in core/)).not.toHaveTextContent('commit abc123 in core (unresolved)');
+    expect(screen.getByText(/task #3 F2/)).toBeTruthy();
+    expect(screen.getByText(/https:\/\/example.com\/evidence/)).toBeTruthy();
+    expect(screen.getByText('docs/result.md (unresolved)')).toBeTruthy();
+    expect(document.querySelector('.task-handoff-report')).toHaveTextContent('Report line 8');
+    expect(document.querySelector('.task-handoff-report')).not.toHaveTextContent('Report line 9');
+    expect(screen.getByText('+4 lines of the report')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(document.querySelector('.task-handoff-report')?.textContent).toBe(report);
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }));
+    expect(document.querySelector('.task-handoff-report')).not.toHaveTextContent('Report line 9');
+    expect(screen.getByText('Done')).toBeTruthy();
+  });
+
+  it.each(['script', 'user'])('draws a %s handoff with no findings and no detail toggle for a short report', (kind) => {
+    render(<TaskLogApp />);
+    const view = replayTaskLog([{ type: 'handoff', handoff: {
+      summary: `${kind} finished`, findings: [], findingCount: 0, report: 'Short report',
+    } }]);
+    init({ planStatus: 'completed' }, [...view.blocks]);
+    expect(screen.getByText('Handoff · no findings')).toBeTruthy();
+    expect(screen.getByText(`${kind} finished`)).toBeTruthy();
+    expect(screen.getByText('Short report')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Expand all' })).toBeNull();
+  });
+
+  it('replaces a live handoff through a patch and drops it when switching attempts', () => {
+    render(<TaskLogApp />);
+    init();
+    const block: DisplayBlock = { type: 'handoff', id: 'handoff', handoff: {
+      summary: '<script>author text</script>', findings: [], findingCount: 3,
+    } };
+    send({ type: 'patch', order: [block.id], changed: [block] });
+    expect(screen.getByText('<script>author text</script>')).toBeTruthy();
+    expect(document.querySelector('.task-handoff script')).toBeNull();
+    expect(screen.getByText("+3 more findings, in the attempt's log")).toBeTruthy();
+    send({ type: 'patch', order: [block.id], changed: [{ ...block, handoff: { summary: 'Restated', findings: [], findingCount: 0 } }] });
+    expect(document.querySelectorAll('.task-handoff')).toHaveLength(1);
+    expect(screen.queryByText('<script>author text</script>')).toBeNull();
+    init({ attempt: 2, attempts: [1, 2] }, []);
+    expect(screen.queryByText('Restated')).toBeNull();
+  });
+
   it('offers no interrupt or send-now on a settled task with a stale open turn', () => {
     render(<TaskLogApp />);
     init({ planStatus: 'completed', working: true });

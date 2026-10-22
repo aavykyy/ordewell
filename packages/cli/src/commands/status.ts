@@ -7,6 +7,7 @@ import { allTasksOf } from '../utils/tasks';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type SessionMeta } from '../apiClient';
 import { handoffBase, isolationOfPlan } from '../isolation';
+import { taskHandoffLines } from './taskHandoff';
 
 export async function handleStatus(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   const sessionId = flag(subArgs, '--session-id');
@@ -133,6 +134,9 @@ function printOneSession(
     if (row.status === 'skipped') console.log(`      ${skippedLabel(row.skipReason)}`);
     const usage = row.usage && usageText(row.usage);
     if (usage) console.log(`      ${usage}`);
+    if (t.handoff && (t.status === 'completed' || t.status === 'failed')) {
+      for (const line of taskHandoffLines(t.handoff, '      ')) console.log(line);
+    }
     for (const sub of t.subtasks || []) {
       const subIcon = iconFor(blocked.has(sub.id) ? 'blocked' : sub.status);
       const subModel = sub.assignedModel ? ` (${sub.assignedModel.modelLabel})` : '';
@@ -147,6 +151,9 @@ function printOneSession(
       if (subRow.status === 'skipped') console.log(`        ${skippedLabel(subRow.skipReason)}`);
       const subUsage = subRow.usage && usageText(subRow.usage);
       if (subUsage) console.log(`        ${subUsage}`);
+      if (sub.handoff && (sub.status === 'completed' || sub.status === 'failed')) {
+        for (const line of taskHandoffLines(sub.handoff, '        ')) console.log(line);
+      }
     }
   }
 }
