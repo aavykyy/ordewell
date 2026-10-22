@@ -246,7 +246,7 @@ describe('compact', () => {
     await compactConversation(deps);
 
     expect(chatProvider.showError).toHaveBeenCalledWith(
-      'Could not condense the conversation: No planner model selected for OpenRouter. Pick one with /model set, or switch planner with /planner. Nothing was changed.',
+      'Could not condense the conversation: No planner model selected for OpenRouter. Pick one with /planner. Nothing was changed.',
     );
   });
 

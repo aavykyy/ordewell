@@ -17,19 +17,16 @@ export function picker(
 }
 
 /**
- * A picker opened before its data arrived (`/model`, `/sessions`) shows an
- * empty list; refill it in place when the fetch lands so the user does not have
- * to close and reopen it.
+ * A picker opened before its data arrived (`/sessions`, a task's model) shows
+ * an empty list; refill it in place when the fetch lands so the user does not
+ * have to close and reopen it.
  */
 export function refillPicker(state: TuiState, kinds: PickerState['action']['kind'][]): TuiState {
   const overlay = state.overlay;
   if (overlay?.kind !== 'picker' || !kinds.includes(overlay.picker.action.kind)) return state;
 
   const items = pickerItemsFor(state, overlay.picker.action);
-  // The model picker's hint carries any provider-fetch failures; recompute it
-  // on refill so it appears (or clears) the moment the catalog lands.
-  const hint = overlay.picker.action.kind === 'set-model' ? providerErrorHint(state) : overlay.picker.hint;
-  return { ...state, overlay: { kind: 'picker', picker: { ...overlay.picker, items, hint, index: 0 } } };
+  return { ...state, overlay: { kind: 'picker', picker: { ...overlay.picker, items, index: 0 } } };
 }
 
 /**
@@ -53,18 +50,6 @@ function modelDetail(m: ModelView): string | undefined {
 }
 
 /**
- * A one-line warning naming any configured provider whose catalog fetch failed,
- * or undefined when every provider loaded. The picker still lists the models
- * from providers that did work — this just explains what is missing and why.
- */
-export function providerErrorHint(state: TuiState): string | undefined {
-  const failed = Object.keys(state.providerErrors ?? {});
-  if (failed.length === 0) return undefined;
-  const names = failed.map((p) => getProviderMeta(p)?.label ?? p);
-  return `⚠ Unavailable (key or fetch failed): ${names.join(', ')}. Showing working providers only.`;
-}
-
-/**
  * The planner-model catalog for `provider` (ADR-0009), with `selectedId`
  * marked. A harness planner runs a coding agent, so the only models it can
  * serve are that agent's own — offering it the cross-provider vendor catalog
@@ -74,7 +59,19 @@ export function providerErrorHint(state: TuiState): string | undefined {
 export function plannerModelItems(state: TuiState, provider: string, selectedId: string): PickerItem[] {
   const runner = runnerForProvider(provider);
   if (!runner) {
-    return state.orchestratorModels.map((m) => ({ id: m.id, label: m.label, detail: modelDetail(m), selected: m.id === selectedId }));
+    const failed = Object.entries(state.providerErrors ?? {});
+    const unavailable: PickerItem[] = failed.length === 0
+      ? []
+      : [{
+        id: '',
+        label: 'Some providers are unavailable',
+        detail: `⚠ ${failed.map(([id]) => getProviderMeta(id)?.label ?? id).join(', ')}: key or fetch failed`,
+        disabled: true,
+      }];
+    return [
+      ...unavailable,
+      ...state.orchestratorModels.map((m) => ({ id: m.id, label: m.label, detail: modelDetail(m), selected: m.id === selectedId })),
+    ];
   }
 
   const items = state.models
@@ -108,7 +105,7 @@ export function plannerEffortItems(state: TuiState, provider: string, modelId: s
   }
   const model = plannerHarnessModel(state, provider, modelId);
   if (!model) {
-    return [{ id: '', label: 'No planner model selected', detail: 'pick one with /model', disabled: true }];
+    return [{ id: '', label: 'No planner model selected', detail: 'pick one with /planner', disabled: true }];
   }
   const variants = model.variants ?? [];
   if (variants.length === 0) {
@@ -121,12 +118,6 @@ export function plannerEffortItems(state: TuiState, provider: string, modelId: s
 }
 
 export function pickerItemsFor(state: TuiState, action: PickerState['action']): PickerItem[] {
-  if (action.kind === 'set-model') {
-    return plannerModelItems(state, state.plannerProvider, state.orchestratorModel);
-  }
-  if (action.kind === 'set-planner-effort') {
-    return plannerEffortItems(state, state.plannerProvider, state.orchestratorModel, state.plannerEffort);
-  }
   if (action.kind === 'rewind') {
     if (state.rewindTargets === null) return [];
     if (state.rewindTargets.length === 0) {

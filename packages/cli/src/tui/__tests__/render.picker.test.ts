@@ -24,7 +24,7 @@ function pickerScreen(over: Partial<PickerState>, state: Partial<TuiState> = {})
         multi: false,
         chosen: [],
         filterable: false,
-        action: { kind: 'set-planner-effort' },
+        action: { kind: 'delete-session' },
         ...over,
       },
     },
@@ -69,7 +69,7 @@ describe('picker rows', () => {
 
   it('says how many rows are above and below instead of clipping them', () => {
     const items = Array.from({ length: 30 }, (_, i) => ({ id: `m${i}`, label: `model-${i}` }));
-    const out = pickerScreen({ items, index: 15, filterable: true, action: { kind: 'set-model' } });
+    const out = pickerScreen({ items, index: 15, filterable: true, action: { kind: 'delete-session' } });
     const up = out.find((l) => l.includes('↑'));
     const down = out.find((l) => l.includes('↓'));
     expect(up?.trim()).toMatch(/^↑ … \+\d+ more$/);
@@ -82,7 +82,7 @@ describe('picker rows', () => {
 
   it('shows no marker at the top of a list that starts on screen', () => {
     const items = Array.from({ length: 30 }, (_, i) => ({ id: `m${i}`, label: `model-${i}` }));
-    const out = pickerScreen({ items, filterable: true, action: { kind: 'set-model' } });
+    const out = pickerScreen({ items, filterable: true, action: { kind: 'delete-session' } });
     expect(out.some((l) => l.includes('↑'))).toBe(false);
     expect(out.some((l) => l.includes('↓'))).toBe(true);
   });
@@ -93,7 +93,7 @@ describe('picker rows', () => {
       items: [{ id: 'gpt-5', label: 'GPT-5' }, { id: 'o3', label: 'o3' }],
       filter: 'g',
       filterable: true,
-      action: { kind: 'set-model' },
+      action: { kind: 'delete-session' },
     });
     expect(out).toContain(' filter: g▏');
     expect(out).toContain(' ❯ GPT-5');

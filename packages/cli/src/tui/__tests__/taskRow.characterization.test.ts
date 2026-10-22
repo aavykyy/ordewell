@@ -157,7 +157,7 @@ describe('a plan row, pinned before its rules move to core', () => {
     expect(out).toContain('    awaiting user');
     expect(out).toContain('Runs in your checkout, not a worktree, once the work it depends on is merged. O makes it a change task.');
     expect(out).toContain('Started before the work of Fix the parser was merged into your branch.');
-    expect(out).toContain('Runs without permission prompts (Full). Change the level with /auto.');
+    expect(out).toContain('Runs without permission prompts (Full). Change the level with /settings.');
     expect(out).toMatch(/Depends on\n.*#1, ghost/);
   });
 });

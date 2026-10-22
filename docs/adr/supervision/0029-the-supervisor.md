@@ -61,11 +61,12 @@ prompt, and the run never depends on it.**
   tasks, message runners, deny approvals, edit the plan and merge, inside the
   loop guards below.
 
-The level is a global user setting, Watch by default, set with `/supervisor`
+The level is a global user setting, Watch by default, set in `/settings` (or
+with `ordewell supervisor` headless)
 ([ADR-0030](0030-global-run-settings.md)). A change applies at once, in either
-direction, to the session it is typed in, and to other sessions from their next
+direction, to the session it is made in, and to other sessions from their next
 run. A tripped wake-up-rate guard or a failed supervisor also lowers the level
-for the rest of the run, with a notice; the user's command lifts that lowering,
+for the rest of the run, with a notice; the user's change lifts that lowering,
 the guards' memory kept. A lowering takes effect at once, in the wake-up turn
 under way too: what that turn calls or edits next is checked against the lowered
 level.
@@ -164,8 +165,9 @@ a user message during a wake-up turn is held as a queued prompt.
   diff on request. A supervisor deciding whether to retry needs what the task
   did, not only what it said.
 - **In a wake-up turn the per-message read cap is replaced by a per-turn read
-  budget**, a global setting of 12 reads unless changed with
-  `/supervisor reads <n>` ([ADR-0030](0030-global-run-settings.md)). The user's
+  budget**, a global setting of 12 reads unless changed in `/settings`
+  (`ordewell supervisor reads <n>` headless)
+  ([ADR-0030](0030-global-run-settings.md)). The user's
   turns keep today's caps
   (`MAX_TASK_QUERIES`, ADR-0022 P3). A wake-up has no user message to bound it,
   and a supervisor reading three things before it must land would miss the one
@@ -324,8 +326,9 @@ daemon worded it.
 
 Checked at the seam, where the action executes:
 
-- **Retries per task**: a global setting, 2 unless changed with
-  `/supervisor retries <n>` ([ADR-0030](0030-global-run-settings.md)). Past it,
+- **Retries per task**: a global setting, 2 unless changed in `/settings`
+  (`ordewell supervisor retries <n>` headless)
+  ([ADR-0030](0030-global-run-settings.md)). Past it,
   `retry_task` is refused.
 - **No identical retry**: a retry after a failure with the same prompt and
   model as the failed attempt is refused. Something has to change.
@@ -407,7 +410,8 @@ for the user.
 
 ### Merge at gates automatically
 
-A global user setting, `/automerge` ([ADR-0030](0030-global-run-settings.md)),
+A global user setting, merge automatically in `/settings`
+(`ordewell automerge` headless) ([ADR-0030](0030-global-run-settings.md)),
 **usable with the supervisor Off.** When a task reaches a merge gate with
 nothing else holding it back — approved, off hold, its dependencies met — Ordewell
 runs Merge all itself, through the same queue as landings and the user's Merge
@@ -430,8 +434,7 @@ either:
   "auto-merged" timeline entry, a notice and the `isolation_merge` broadcast.
   If that merge stops (conflict, dirty overlap, failure) the run is handed off
   to the user, and a supervisor that is watching gets an `auto_merge_stopped`
-  event. The command is `/automerge` and the settings key is
-  `mergeAtGatesAutomatically`.
+  event. The settings key is `mergeAtGatesAutomatically`.
 - **Surfaces do not open the handoff while a merge is coming,** so the overlay
   never asks about a merge Ordewell or the supervisor is about to make. With
   auto-merge on, no handoff is sent unless the automatic merge stops. With the
@@ -582,5 +585,5 @@ until #30 exists.
 - 2026-10-18 — loading a session keeps saved planner inputs and supervisor batches idle, without rearming the supervisor debounce.
 - 2026-10-21 — a loop's check failing a round with rounds left is no attention event and no failure the guards remember; it wakes the supervisor once, when its loop runs out of rounds, and the supervisor neither starts nor skips it between rounds ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md)).
 - 2026-10-21 — `run_script` joins the execution tools: the planner performs an exact effect itself as a script task, consented to by the card, the effect allowlist, autorun in Full or Act, and refused at Watch ([ADR-0035](0035-effects-are-consented-and-recorded.md)).
-
 - 2026-10-21 — research reports wake the planner at every level under the originating authority; all automatic report turns share the persisted message limit (ADR-0037 R2, R3, R4).
+- 2026-10-22: the level and its guards are set in `/settings` in the TUI and VS Code; the one-value slash commands are gone there, and `ordewell supervisor` stays headless.

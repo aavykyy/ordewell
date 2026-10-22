@@ -78,6 +78,7 @@ describe('VerdictEngine over a Claude Code task given the Ordewell server (ADR-0
     const config = runnerConfig(spawned.lastArgs());
     const client = await connect(config);
     await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Did it.' } });
+    spawned.processes[0].emitStdout('{"type":"result","subtype":"success","is_error":false,"session_id":"s1"}\n');
 
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(verdicts).toHaveLength(1);

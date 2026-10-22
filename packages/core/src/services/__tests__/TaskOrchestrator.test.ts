@@ -1747,6 +1747,7 @@ describe('what a runner reports while it winds down', () => {
     session.cost = { sessionId: 'native-1', usd: 0.5, modelUsd: { opus: 0.5 } };
 
     session.reportComplete({ status: 'done', summary: 'Done.' });
+    session.emitTurnEnd('completed');
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t')!.status).toBe('completed'));
     expect(session.stopped).toBe(true);
     session.emitEvent(lastCall);
@@ -1774,9 +1775,10 @@ describe('what a runner reports while it winds down', () => {
     const open = isolation.holdIntegration('t');
 
     runner.sessions[0].reportComplete({ status: 'done', summary: 'Done.' });
+    expect(runner.sessions[0].stopped).toBe(true);
+    runner.sessions[0].emitTurnEnd('completed');
     await vi.waitFor(() => expect(isolation.taskIdsFor('integrate')).toEqual(['t']));
 
-    expect(runner.sessions[0].stopped).toBe(true);
     expect(orchestrator.storeInstance.get('t')!.status).toBe('in_progress');
     runner.sessions[0].emitEvent(turnCost);
     open();
@@ -1894,6 +1896,7 @@ describe('what a runner reports while it winds down', () => {
     const session = runner.sessions[0];
     session.cost = { sessionId: 'native-1', usd: 0.5, modelUsd: { opus: 0.5 } };
     session.reportComplete({ status: 'done', summary: 'Done.' });
+    session.emitTurnEnd('completed');
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t')!.status).toBe('completed'));
 
     const continuing = orchestrator.continueTask('t', 'Also cover the empty case');

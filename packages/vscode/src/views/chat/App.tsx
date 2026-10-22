@@ -85,7 +85,6 @@ export default function App() {
   /** A first Esc during a planner turn: one more within `STOP_ARM_MS` stops it. */
   const [stopArmed, setStopArmed] = useState(false);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
-  const [showModelInfo, setShowModelInfo] = useState(false);
   const [slashOutput, setSlashOutput] = useState('');
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
   const [setupCollapsed, setSetupCollapsed] = useState(false);
@@ -173,10 +172,6 @@ export default function App() {
   }, []);
 
   const handleSend = useCallback((text: string) => {
-    if (text.trim() === '/model') {
-      setShowModelInfo((prev) => !prev);
-      return;
-    }
     if (text === '/new') {
       const hasContent = blocksRef.current.length > 0 || planRef.current !== null;
       if ((hasContent || processingRef.current) && !showNewSessionConfirm) {
@@ -204,7 +199,6 @@ export default function App() {
       return;
     }
 
-    setShowModelInfo(false);
     setSlashOutput('');
     clearTimeout(helpTimerRef.current);
     setShowNewSessionConfirm(false);
@@ -542,13 +536,6 @@ export default function App() {
     [planner.runner, modelsByRunner, vendorModels],
   );
 
-  const harnessPlannerModels = useMemo(
-    () => (planner.runner
-      ? orchestratorModels.map((m) => ({ id: m.modelId, label: m.modelLabel, provider: planner.runner as string }))
-      : undefined),
-    [planner.runner, orchestratorModels],
-  );
-
   const orchestratorModelApiMapping = useMemo<Record<string, AiProvider[]>>(() => {
     const mapping: Record<string, AiProvider[]> = {};
     for (const opt of modelOptions) {
@@ -609,8 +596,6 @@ export default function App() {
   // (ADR-0009).
   const agentNames = planner.backends.filter((b) => b.kind === 'harness').map((b) => b.label);
   const offeredBackends = planner.backends.filter((b) => b.usable);
-
-  const plannerIsHarness = planner.backends.find((b) => b.id === planner.provider)?.kind === 'harness';
 
   const runnerLabelMap = useMemo<Record<string, string>>(() => {
     const m: Record<string, string> = {};
@@ -910,33 +895,6 @@ export default function App() {
         </div>
       )}
 
-      {showModelInfo && (
-        <div className="model-info-panel">
-          <div className="model-info-title">Model Configuration</div>
-          {/* Only a vendor planner is blocked by an unset model. A harness
-              planner falls back to the coding agent's own default, so the same
-              state is a working setup there — not a warning. */}
-          {!modelConfig?.orchestrator && (
-            plannerIsHarness ? (
-              <div className="model-info-row">
-                <span className="model-info-key">Model</span>
-                <span className="model-info-val"><em>the agent's default</em></span>
-              </div>
-            ) : (
-              <div className="model-info-warning">
-                No planner model selected. Type <code>/model set</code> to pick one, or plans cannot be generated.
-              </div>
-            )
-          )}
-          <div className="model-info-row">
-            <span className="model-info-key">Orchestrator</span>
-            <span className="model-info-val">{modelConfig?.orchestrator || <em>not set</em>}</span>
-            {modelConfig?.orchestratorProvider && <span className="model-info-provider">via {modelConfig.orchestratorProvider}</span>}
-          </div>
-          <div className="model-info-footer">/model set to change · /key set to set an API key · /model to close</div>
-        </div>
-      )}
-
       {slashOutput && (
         <div className="slash-output">{slashOutput}</div>
       )}
@@ -1020,9 +978,6 @@ export default function App() {
         disabled={conversationBusy}
         disabledReason={conversationBusy ? 'Compacting the conversation...' : undefined}
         placeholder={getPlaceholder()}
-        modelOptions={modelOptions}
-        harnessPlannerModels={harnessPlannerModels}
-        configuredProviders={configuredProviders}
         isTurnRunning={isResearchActive}
         unsent={unsent}
         skills={skills}

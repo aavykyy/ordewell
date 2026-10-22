@@ -1,21 +1,13 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import type { AiProvider } from '@ordewell/core';
 import { aheadOfDraft } from '@ordewell/core/plan-utils';
 import { SLASH_COMMANDS, isBuiltinSlashCommand } from '../../../commands/slashCommands';
 import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
-
-// Core owns the union; a hand-copied duplicate diverged the moment ADR-0009
-// added the three harness planners.
-type ApiProvider = AiProvider;
 
 interface SlashSuggestion {
   label: string;
   detail: string;
   insertText: string;
-  id?: string;
-  provider?: string;
-  kind?: 'provider' | 'back' | 'hint' | 'model' | 'skill';
-  providerId?: ApiProvider;
+  kind?: 'skill';
 }
 
 export interface SkillEntry {
@@ -24,23 +16,10 @@ export interface SkillEntry {
   appliesTo?: 'planner' | 'task';
 }
 
-interface ModelOption {
-  id: string;
-  label: string;
-  provider: string;
-  apiProvider?: ApiProvider;
-  description?: string;
-  pricing?: string;
-}
-
 interface ChatInputProps {
   onSend: (text: string) => void;
   disabled: boolean;
   placeholder?: string;
-  modelOptions?: ModelOption[];
-  /** Set while a coding agent plans: `/model set` then lists only that agent's models, not the API catalog. */
-  harnessPlannerModels?: ModelOption[];
-  configuredProviders?: ApiProvider[];
   /** A planner turn is in flight: with nothing typed the button stops it; with text typed, Enter queues it and Ctrl+Enter sends it now. A run is not the composer's to stop. */
   isTurnRunning?: boolean;
   /** Send now (ADR-0023, F5), on Ctrl+Enter; with no turn running the host sends it as a plain message. */
@@ -56,68 +35,7 @@ interface ChatInputProps {
   skills?: SkillEntry[];
 }
 
-const PROVIDER_LABELS: Record<ApiProvider, string> = {
-  openrouter: 'OpenRouter',
-  google: 'Gemini',
-  openai_compatible: 'Custom',
-  openai: 'OpenAI',
-  xai: 'xAI',
-  groq: 'Groq',
-  deepseek: 'DeepSeek',
-  together: 'Together',
-  mistral: 'Mistral',
-  anthropic: 'Anthropic',
-  fireworks: 'Fireworks',
-  perplexity: 'Perplexity',
-  zhipu: 'Zhipu',
-  kimi: 'Kimi',
-  cerebras: 'Cerebras',
-  deepinfra: 'DeepInfra',
-  doubao: 'Doubao',
-  qwen: 'Qwen',
-  hunyuan: 'Hunyuan',
-  baichuan: 'Baichuan',
-  minimax: 'MiniMax',
-  yi: 'Yi',
-  stepfun: 'StepFun',
-  siliconflow: 'SiliconFlow',
-  cohere: 'Cohere',
-  novita: 'Novita',
-};
-
-
-
-function groupByProvider(items: SlashSuggestion[]): Map<string, SlashSuggestion[]> {
-  const grouped = new Map<string, SlashSuggestion[]>();
-  for (const item of items) {
-    const provider = item.provider || 'Other';
-    if (!grouped.has(provider)) grouped.set(provider, []);
-    grouped.get(provider)!.push(item);
-  }
-  return grouped;
-}
-
 const COMMAND_SUGGESTIONS: readonly SlashSuggestion[] = SLASH_COMMANDS;
-
-function toModelSuggestion(opt: ModelOption): SlashSuggestion {
-  // Always surface the serving API so collisions (same model on both APIs) are
-  // unambiguous in the dropdown.
-  const via = opt.apiProvider ? ` · via ${PROVIDER_LABELS[opt.apiProvider]}` : '';
-  return {
-    label: opt.label,
-    detail: `${opt.id}${opt.pricing ? ' · $' + opt.pricing + '/MTok' : ''}${via}`,
-    insertText: opt.label,
-    id: opt.id,
-    provider: opt.provider,
-    providerId: opt.apiProvider,
-    kind: 'model',
-  };
-}
-
-function matchesSearch(s: SlashSuggestion, term: string): boolean {
-  if (!term) return true;
-  return s.label.toLowerCase().includes(term) || s.detail.toLowerCase().includes(term);
-}
 
 function toSkillSuggestion(skill: SkillEntry): SlashSuggestion {
   return { label: `/${skill.name}`, detail: skill.appliesTo === 'task' ? `task skill · ${skill.description}` : skill.description, insertText: `/${skill.name}`, kind: 'skill' };
@@ -254,9 +172,6 @@ export default function ChatInput({
   onSend,
   disabled,
   placeholder,
-  modelOptions,
-  harnessPlannerModels,
-  configuredProviders = [],
   isTurnRunning = false,
   onSendNow,
   onStop,
@@ -280,26 +195,11 @@ export default function ChatInput({
   // ends up by default.
   const pendingCursorRef = useRef<number | null>(null);
   const [selectedIdx, setSelectedIdx] = useState(0);
-  // The API provider chosen in step 1 of the two-step picker (null = step 1).
-  const [pickerProvider, setPickerProvider] = useState<ApiProvider | null>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
-  // Whether the user has actively chosen an item in the suggestion list (arrow keys / hover).
-  // Used to decide, on Enter, between applying the highlighted model and opening the picker.
-  const navigatedRef = useRef(false);
   // True only when the selection changed via the keyboard, so we auto-scroll the
   // highlighted row into view for arrow-key navigation but NOT on mouse hover
   // (hovering a row that's already under the cursor must never move the list).
   const scrollOnSelectRef = useRef(false);
-
-  const isModelCommand = text.startsWith('/model set');
-
-  // Filter text typed after the command word, e.g. "sonnet" in "/model set sonnet".
-  const modelFilterTerm = isModelCommand ? text.trim().split(/\s+/).slice(2).join(' ') : '';
-
-  // Reset the picker's provider context whenever we leave a model command.
-  useEffect(() => {
-    if (!isModelCommand) setPickerProvider(null);
-  }, [isModelCommand]);
 
   // The `/word` the caret is actively composing when it is *not* at the very
   // start of the message — e.g. "explain this bug /gri" with the caret right
@@ -320,51 +220,9 @@ export default function ChatInput({
     }
     const lower = text.toLowerCase();
 
-    if (isModelCommand && harnessPlannerModels) {
-      const searchTerm = modelFilterTerm.toLowerCase();
-      return harnessPlannerModels
-        .map((o): SlashSuggestion => ({ label: o.label, detail: o.id, insertText: o.label, id: o.id, provider: o.provider, kind: 'model' }))
-        .filter((s) => matchesSearch(s, searchTerm));
-    }
-
-    if (isModelCommand) {
-      const searchTerm = modelFilterTerm.toLowerCase();
-      const allModels = (modelOptions ?? []).map(toModelSuggestion);
-
-      if (configuredProviders.length === 0) {
-        return [{ label: 'No API keys configured', detail: 'Run "Configure API Key" first', insertText: text, kind: 'hint' }];
-      }
-
-      // One provider → skip step 1 entirely. Two providers → use the chosen one.
-      const effective = pickerProvider ?? (configuredProviders.length === 1 ? configuredProviders[0] : null);
-
-      // Step 1: no provider chosen yet — offer the configured providers.
-      if (!effective) {
-        return configuredProviders.map<SlashSuggestion>((p) => ({
-          label: `Use ${PROVIDER_LABELS[p]} models`,
-          detail: p === 'openrouter' ? '200+ models via OpenRouter' : 'Native Gemini models',
-          insertText: text,
-          kind: 'provider',
-          providerId: p,
-        }));
-      }
-
-      // Step 2: models for the chosen provider, with a back affordance when
-      // there was a real choice to go back to.
-      const models = allModels
-        .filter((s) => s.providerId === effective)
-        .filter((s) => matchesSearch(s, searchTerm));
-      const list: SlashSuggestion[] = [];
-      if (configuredProviders.length >= 2) {
-        list.push({ label: '← Back to providers', detail: '', insertText: text, kind: 'back' });
-      }
-      list.push(...models);
-      return list;
-    }
-
     const all = [...COMMAND_SUGGESTIONS, ...skills.map(toSkillSuggestion)];
     return all.filter((s) => s.label.toLowerCase().startsWith(lower));
-  }, [text, midToken, isModelCommand, modelFilterTerm, modelOptions, harnessPlannerModels, configuredProviders, pickerProvider, skills]);
+  }, [text, midToken, skills]);
 
   // Command names (without the leading slash) plus discovered skill names —
   // the set the leading `/word` of the input is checked against to decide
@@ -381,25 +239,10 @@ export default function ChatInput({
     [text, knownNames, skillNames],
   );
 
-  // Special entries (provider picks, back, hints) render flat above the model
-  // list; only actual model rows get grouped under their model-provider header.
-  const specialEntries = useMemo(
-    () => suggestions.filter((s) => s.kind === 'provider' || s.kind === 'back' || s.kind === 'hint'),
-    [suggestions],
-  );
-  const groupedSuggestions = useMemo(() => {
-    if (!isModelCommand) return null;
-    return groupByProvider(suggestions.filter((s) => s.kind === 'model'));
-  }, [suggestions, isModelCommand]);
-
   const showSuggestions = suggestions.length > 0 && (text.startsWith('/') || midToken !== null);
 
   useEffect(() => {
-    // Default-highlight the first actionable row, skipping a leading "back"
-    // entry so step 2 lands on a model rather than the way out.
-    const firstActionable = suggestions.findIndex((s) => s.kind !== 'back' && s.kind !== 'hint');
-    setSelectedIdx(firstActionable >= 0 ? firstActionable : 0);
-    navigatedRef.current = false;
+    setSelectedIdx(0);
   }, [suggestions]);
 
   useEffect(() => {
@@ -408,8 +251,6 @@ export default function ChatInput({
     if (!scrollOnSelectRef.current) return;
     scrollOnSelectRef.current = false;
     if (showSuggestions && suggestionsRef.current && selectedIdx >= 0) {
-      // Query the actually-selected row: children of the container are the
-      // header, group wrappers, and footer — not a flat index of model rows.
       const el = suggestionsRef.current.querySelector('.slash-suggestion-item.selected');
       el?.scrollIntoView({ block: 'nearest' });
     }
@@ -479,11 +320,6 @@ export default function ChatInput({
     setText('');
   };
 
-  const applyModel = (id: string) => {
-    onSend(`/model set ${id}`);
-    setText('');
-  };
-
   // Splices a chosen skill into the token being composed mid-prompt, leaving
   // the rest of the message untouched and keeping the message open for more
   // typing — unlike a leading command, there is no "whole message" to send yet.
@@ -494,27 +330,12 @@ export default function ChatInput({
     setText(spliced);
   };
 
-  // Acts on a suggestion: provider entries advance to step 2, the back entry
-  // returns to step 1, model rows send the command, command rows are sent as-is.
+  // Acts on a suggestion: a mid-prompt skill is spliced in, and a command or
+  // leading skill is sent as typed.
   const selectSuggestion = (s: SlashSuggestion | undefined) => {
     if (!s) return;
     if (midToken) {
       applyMidPromptSkill(s);
-      return;
-    }
-    if (s.kind === 'provider') {
-      setPickerProvider(s.providerId ?? null);
-      navigatedRef.current = false;
-      return;
-    }
-    if (s.kind === 'back') {
-      setPickerProvider(null);
-      navigatedRef.current = false;
-      return;
-    }
-    if (s.kind === 'hint') return;
-    if (s.id) {
-      applyModel(s.id);
       return;
     }
     onSend(s.insertText);
@@ -525,16 +346,6 @@ export default function ChatInput({
   // stops on click, but Enter comes here and must not send an empty prompt.
   const handleSubmit = () => {
     if (disabled || !text.trim()) return;
-    if (isModelCommand) {
-      // Models can only be SET by selecting from the list (applyModel), never by
-      // committing free-typed text. Any typed text is just a filter; submitting
-      // the command opens the picker so the user picks a real entry.
-      const parts = text.split(/\s+/);
-      const cmd = parts.slice(0, 2).join(' ');
-      onSend(cmd);
-      setText('');
-      return;
-    }
     onSend(text.trim());
     setText('');
   };
@@ -543,14 +354,12 @@ export default function ChatInput({
     if (showSuggestions) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        navigatedRef.current = true;
         scrollOnSelectRef.current = true;
         setSelectedIdx((prev) => Math.min(suggestions.length - 1, prev + 1));
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        navigatedRef.current = true;
         scrollOnSelectRef.current = true;
         setSelectedIdx((prev) => Math.max(0, prev - 1));
         return;
@@ -564,20 +373,7 @@ export default function ChatInput({
           applyMidPromptSkill(sel);
           return;
         }
-        // Provider / back / hint entries always act on their own (advancing or
-        // returning a step), regardless of navigation state.
-        if (sel && (sel.kind === 'provider' || sel.kind === 'back' || sel.kind === 'hint')) {
-          selectSuggestion(sel);
-          return;
-        }
-        // Bare model command highlighting a model row with no filter typed and
-        // no explicit selection: submit the command so the extension opens the
-        // picker, rather than silently applying whichever model is highlighted.
-        if (isModelCommand && !modelFilterTerm && !navigatedRef.current && (!sel || sel.kind === 'model')) {
-          handleSubmit();
-        } else if (sel?.id) {
-          applyModel(sel.id);
-        } else if (sel && sel.insertText !== text) {
+        if (sel && sel.insertText !== text) {
           setText(sel.insertText);
         } else {
           handleSubmit();
@@ -589,13 +385,7 @@ export default function ChatInput({
         const sel = suggestions[selectedIdx];
         if (midToken && sel) {
           applyMidPromptSkill(sel);
-        } else if (sel && (sel.kind === 'provider' || sel.kind === 'back')) {
-          selectSuggestion(sel);
-        } else if (sel?.id) {
-          // A model row only ever surfaces behind `/model set`, so that's the
-          // only prefix a Tab-filled model id is ever completed onto.
-          setText(`/model set ${sel.id}`);
-        } else if (sel && sel.kind !== 'hint') {
+        } else if (sel) {
           setText(sel.insertText);
         }
         return;
@@ -629,75 +419,32 @@ export default function ChatInput({
     return placeholder || 'Type / for commands or describe what you want to build...';
   };
 
-  const renderSuggestionRow = (s: SlashSuggestion, flatIdx: number) => (
+  const renderedSuggestions = () => suggestions.map((s, i) => (
     <div
       key={s.label}
-      className={`slash-suggestion-item ${s.kind ?? ''} ${flatIdx === selectedIdx ? 'selected' : ''}`}
-      onMouseEnter={() => { navigatedRef.current = true; setSelectedIdx(flatIdx); }}
+      className={`slash-suggestion-item ${s.kind ?? ''} ${i === selectedIdx ? 'selected' : ''}`}
+      onMouseEnter={() => setSelectedIdx(i)}
       onMouseDown={(e) => {
         e.preventDefault();
         selectSuggestion(s);
         if (textareaRef.current) textareaRef.current.focus();
       }}
     >
-      <span className="slash-suggestion-label">{s.label}</span>
+      <span className="slash-suggestion-label">{s.insertText}</span>
       <span className="slash-suggestion-detail">{s.detail}</span>
     </div>
-  );
-
-  const renderedSuggestions = () => {
-    if (isModelCommand) {
-      const hasGroups = groupedSuggestions && groupedSuggestions.size > 0;
-      if (specialEntries.length === 0 && !hasGroups) return null;
-      return (
-        <>
-          {specialEntries.map((s) => renderSuggestionRow(s, suggestions.indexOf(s)))}
-          {hasGroups && Array.from(groupedSuggestions!.entries()).map(([provider, items]) => (
-            <div key={provider} className="slash-suggestions-group">
-              <div className="slash-suggestions-group-header">{provider}</div>
-              {items.map((s) => renderSuggestionRow(s, suggestions.indexOf(s)))}
-            </div>
-          ))}
-        </>
-      );
-    }
-
-    return suggestions.map((s, i) => (
-      <div
-        key={s.label}
-        className={`slash-suggestion-item ${s.kind ?? ''} ${i === selectedIdx ? 'selected' : ''}`}
-        onMouseEnter={() => { navigatedRef.current = true; setSelectedIdx(i); }}
-        onMouseDown={(e) => {
-          e.preventDefault();
-          if (midToken) {
-            applyMidPromptSkill(s);
-          } else if (s.id) {
-            applyModel(s.id);
-          } else {
-            onSend(s.insertText);
-            setText('');
-          }
-          if (textareaRef.current) textareaRef.current.focus();
-        }}
-      >
-        <span className="slash-suggestion-label">{isModelCommand ? s.label : s.insertText}</span>
-        <span className="slash-suggestion-detail">{s.detail}</span>
-      </div>
-    ));
-  };
+  ));
 
   return (
     <div className={`chat-input ${disabled ? 'disabled' : ''}`}>
       {showSuggestions && (
         <div className="slash-suggestions" ref={suggestionsRef}>
           <div className="slash-suggestions-header">
-            {isModelCommand
-              ? 'Select a model: type to filter, Enter to pick'
-              : midToken ? 'Skills: type / to filter' : 'Commands: type / to filter'}
+            {midToken ? 'Skills: type / to filter' : 'Commands: type / to filter'}
           </div>
           {renderedSuggestions()}
           <div className="slash-suggestions-footer">
-            ↑↓ navigate  {isModelCommand ? 'Enter apply · Tab fill' : midToken ? 'Tab · Enter insert' : 'Tab complete · Enter run'}  Esc cancel
+            ↑↓ navigate  {midToken ? 'Tab · Enter insert' : 'Tab complete · Enter run'}  Esc cancel
           </div>
         </div>
       )}

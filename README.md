@@ -59,13 +59,12 @@ freely within one plan.
   see which tasks passed, failed or need you, and can read each one's log live.
 - **A supervisor for the run.** The planner keeps watching after you approve a
   plan: at Watch it writes you a note when a task fails or gets stuck, and at Act
-  it may retry, stop or edit tasks itself, within limits. `/supervisor` sets the
-  level, and `/settings` the rest of your run settings, such as merging
-  automatically.
+  it may retry, stop or edit tasks itself, within limits. `/settings` sets the
+  supervisor level, merging automatically and the rest of your run settings.
 - **Read-only tasks.** A review or an audit runs without write access, so it
   cannot change your repository.
 - **Research tasks.** A read-only task can be research: its report goes back to
-  the planner, which wakes to read it while you keep talking. `/research` bounds
+  the planner, which wakes to read it while you keep talking. `/settings` bounds
   how many run.
 - **A planner that cannot write.** It reads, asks, and plans. Commands that would
   change your repository are refused, and an effect such as a push reaches the
@@ -128,8 +127,8 @@ Tried it? [Tell us how your first run went](https://github.com/ordewell/ordewell
 1. **Describe your goal.** The planner explores your workspace without modifying
    it and asks clarifying questions.
 2. **Review the plan.** Read the tasks and their dependencies. Edit prompts, agent
-   assignments and models before running. To skip this step, `/autorun on` starts
-   each plan as soon as the planner submits it.
+   assignments and models before running. To skip this step, turn autorun on in
+   `/settings` and each plan starts as soon as the planner submits it.
 3. **Run the tasks.** Each task starts a fresh coding agent session. Independent
    tasks run in parallel; dependent tasks wait for the work they need. Code changes
    stay on separate branches, and you can follow each task's progress.

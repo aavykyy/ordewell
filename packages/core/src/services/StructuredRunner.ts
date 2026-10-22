@@ -249,6 +249,9 @@ export class StructuredSession extends AbstractRunnerSession {
   private readonly text: PlainTextChannel;
   private state: 'working' | 'idle' = 'idle';
   private turn: OpenTurn | null = null;
+  /** A `task_complete` report waiting for its turn to close; the verdict is published then. */
+  private completionReport: TaskCompleteArgs | null = null;
+  private completionTimer: ReturnType<typeof setTimeout> | null = null;
   /** A terminal event ends the turn before the adapter releases its send. */
   private sending: OpenTurn | null = null;
   private turnCount = 0;
@@ -257,6 +260,8 @@ export class StructuredSession extends AbstractRunnerSession {
   private interrupting: Promise<void> | null = null;
   /** The wind-down once {@link stop} was asked for: the same for every caller, and nothing new is sent meanwhile. */
   private stopping: Promise<void> | null = null;
+  /** The process is handling its exit: nothing new may be queued, so a held report can still publish. */
+  private exiting = false;
   private lastSessionId: string | null = null;
   private lastSessionCost: RunnerSessionCost | null = null;
   private readonly structuredEmitter = new EventEmitter();
@@ -323,7 +328,11 @@ export class StructuredSession extends AbstractRunnerSession {
       create: () => this.launch.createAdapter(this.launch.runner, this.launch.deps),
       issueToken: () => server.issueTaskToken(scope, {
         taskComplete: async (report) => {
-          this.structuredEmitter.emit('taskComplete', report);
+          this.completionReport = report;
+          // The runner ends its turn on this reply. One that keeps it open has
+          // its report published at the same grace; the verdict then stops it.
+          if (this.completionTimer) clearTimeout(this.completionTimer);
+          this.completionTimer = setTimeout(() => this.flushCompletion(), this.launch.interruptGraceMs);
           return { text: 'Recorded. End your turn now.' };
         },
         checkpoint: async ({ question }, { signal }) => {
@@ -360,6 +369,13 @@ export class StructuredSession extends AbstractRunnerSession {
   }
 
   protected override baseHandleExit(code: number): void {
+    // Nothing can read the queue now. Set before releasing it, so a listener
+    // that answers the notice is undelivered rather than queued ahead of the
+    // report. Releasing first lets a completion the verdict engine held behind
+    // a queued message publish before exit wins.
+    this.exiting = true;
+    this.undeliverQueued();
+    this.flushCompletion();
     this.ended.abort();
     this.revokeTools();
     this.undeliverQueued();
@@ -473,7 +489,7 @@ export class StructuredSession extends AbstractRunnerSession {
     this.messageCount += 1;
     const id = `msg-${this.messageCount}`;
     const sender = opening.from ? { from: opening.from } : {};
-    if (this.exited || this.stopping) this.emitEvent({ type: 'message_undelivered', messageId: id, text, ...sender });
+    if (this.exited || this.exiting || this.stopping) this.emitEvent({ type: 'message_undelivered', messageId: id, text, ...sender });
     else if (this.state === 'idle' && this.adapterStarted && !this.sending) this.deliver(text, opening);
     else {
       this.state = 'working';
@@ -534,7 +550,7 @@ export class StructuredSession extends AbstractRunnerSession {
   }
 
   private runningTurn(): boolean {
-    return !this.exited && !this.stopping && this.adapter !== null && this.turn !== null && !this.turn.ended;
+    return !this.exited && !this.exiting && !this.stopping && this.adapter !== null && this.turn !== null && !this.turn.ended;
   }
 
   /** No runner can recall a message once offered to it, so only a queued one comes back. */
@@ -678,6 +694,7 @@ export class StructuredSession extends AbstractRunnerSession {
   /** `message` is what opened the turn: a queued one has an id, one delivered straight from idle only its sender. */
   private openTurn(text: string, message?: Opening): OpenTurn {
     this.turnCount += 1;
+    this.discardCompletion();
     const turn: OpenTurn = { id: this.turnCount, abort: new AbortController(), ended: false, reason: 'completed', steerRefused: false };
     this.turn = turn;
     this.state = 'working';
@@ -728,7 +745,7 @@ export class StructuredSession extends AbstractRunnerSession {
   private offerNext(): void {
     const adapter = this.adapter;
     const turn = this.turn;
-    if (!adapter?.steer || !turn || turn.ended || turn.steerRefused || this.interrupting || this.exited || this.stopping) return;
+    if (!adapter?.steer || !turn || turn.ended || turn.steerRefused || this.interrupting || this.exited || this.exiting || this.stopping) return;
     if (this.queue.some((m) => m.stage === 'steering')) return;
     const next = this.queue.find((m) => m.stage === 'queued');
     // A command handed into the turn would be read as text; it and whatever
@@ -779,6 +796,9 @@ export class StructuredSession extends AbstractRunnerSession {
     } else if (event.type === 'permission_request') this.openPermission(adapter, event);
     else if (event.type === 'permission_cancelled') this.cancelPermission(adapter, event.id);
     else if (event.type === 'message_delivered') {
+      // What the runner reported before reading a new message no longer counts
+      // (ADR-0023, D6), including a completion still waiting for its turn.
+      this.discardCompletion();
       const message = this.delivered(event.id);
       if (message) this.emitEvent({ type: 'message_delivered', messageId: message.id, text: message.text, ...(message.from ? { from: message.from } : {}) });
     } else if (event.type === 'message_dropped') {
@@ -856,6 +876,26 @@ export class StructuredSession extends AbstractRunnerSession {
     this.emitEvent(event);
   }
 
+  /** Publish a `task_complete` report whose turn has closed, or that waited out the grace. */
+  private flushCompletion(): void {
+    if (this.completionTimer) {
+      clearTimeout(this.completionTimer);
+      this.completionTimer = null;
+    }
+    const report = this.completionReport;
+    this.completionReport = null;
+    if (report) this.structuredEmitter.emit('taskComplete', report);
+  }
+
+  /** A message the runner reads, or a turn it opens, voids a report made before it (ADR-0023, D6). */
+  private discardCompletion(): void {
+    if (this.completionTimer) {
+      clearTimeout(this.completionTimer);
+      this.completionTimer = null;
+    }
+    this.completionReport = null;
+  }
+
   /**
    * A queued message goes out as the turn closes, and the state never passes
    * through `idle` on the way, so a listener told the turn ended can already
@@ -868,6 +908,8 @@ export class StructuredSession extends AbstractRunnerSession {
     turn.ended = true;
     this.text.endTurn();
     this.emitEvent({ type: 'turn_end', reason });
+    // The report waits for the turn to close, so its tool reply lands first.
+    this.flushCompletion();
     if (reason === 'failed') this.undeliverQueued();
     this.state = !this.exited && this.queue.length ? 'working' : 'idle';
     this.structuredEmitter.emit('turnEnd', reason);
@@ -879,7 +921,7 @@ export class StructuredSession extends AbstractRunnerSession {
    * back in Ordewell's hands: while it is on offer or owed, nothing overtakes it.
    */
   private deliverNext(): void {
-    if (this.exited || this.stopping || this.sending || (this.turn && !this.turn.ended)) return;
+    if (this.exited || this.exiting || this.stopping || this.sending || (this.turn && !this.turn.ended)) return;
     const head = this.queue[0];
     if (!head || this.queue.some((message) => message.stage !== 'queued')) return;
     this.queue.shift();

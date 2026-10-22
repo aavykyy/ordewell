@@ -15,6 +15,6 @@ export interface HostRunSettings {
 export default function PlanApprovalNote({ runSettings }: { runSettings?: HostRunSettings | null }) {
   if (!runSettings) return null;
   return runSettings.run.autorun
-    ? <p className="warn">Autorun is on. A plan starts as soon as the planner submits it. Change it in /autorun.</p>
+    ? <p className="warn">Autorun is on. A plan starts as soon as the planner submits it. Change it in /settings.</p>
     : <p>Nothing runs until you approve the plan.</p>;
 }

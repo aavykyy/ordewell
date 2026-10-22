@@ -19,17 +19,21 @@ on Windows, run the terminal UI under WSL.
 
 Run `ordewell` in your project to open the terminal UI: the conversation on the
 left, the live plan on the right. The first run lets you pick a planner and runners
-with `/planner` (Harness › Model › Effort, saved at the end) and `/runners`, and no API key is needed if you plan with a coding
+with `/planner` (Harness › Model › Effort, each step saved as you go) and `/runners`, and no API key is needed if you plan with a coding
 agent you already use.
 The welcome screen says it plainly: nothing runs until you approve the plan (unless autorun is on).
 
-`/settings` walks autonomy, supervisor, merge automatically, autorun and parallel
-in one panel and saves only what you changed. `/model` and `/planner-effort` set
-the planner model and effort on their own. Press `?` in the plan pane for the
-full key sheet; the footer shows only the keys that apply to the selected task.
+`/settings` walks autonomy, supervisor, merge automatically, autorun, parallel
+and the research limits in one panel and saves only what you changed. `/planner` walks harness, model and
+effort in one flow, so there is no separate model or effort command. Press `?` in
+the plan pane for the full key sheet; the footer shows only the keys that apply
+to the selected task.
 
-Every command in the terminal UI is also a subcommand, except `/settings`, whose
-settings each have their own:
+Every command in the terminal UI is also a subcommand, except `/settings`: it is
+a panel over headless commands that remain for scripts (`ordewell auto`,
+`supervisor`, `automerge`, `autorun`, `research` and `parallel`). `/planner` has its own
+`ordewell planner`, and its model and effort steps are `ordewell model` and
+`ordewell planner-effort`.
 
 ```bash
 export AI_PROVIDER=claude-code      # plan with Claude Code, Codex or OpenCode
