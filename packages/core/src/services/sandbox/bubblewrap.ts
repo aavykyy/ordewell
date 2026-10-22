@@ -97,6 +97,7 @@ export class BubblewrapBackend implements SandboxBackend {
   wrap(invocation: SandboxInvocation, profile: SandboxProfile): SandboxLaunch {
     // A mount grants a directory whole; refusing one kind of file in it would take a seccomp filter.
     if (profile.linkless?.length) throw new SandboxUnsupportedError(this.name, 'a writable directory without links');
+    if (profile.gitless?.length) throw new SandboxUnsupportedError(this.name, 'a writable directory where no .git may be created');
     // Sharing the host's network namespace shares its loopback; keeping one without the other needs a network of its own.
     if (profile.network && profile.localNetwork === false) throw new SandboxUnsupportedError(this.name, "the network without this machine's own services");
     assertProfilePaths(this.name, profile);
@@ -116,8 +117,7 @@ export class BubblewrapBackend implements SandboxBackend {
     for (const p of shallowFirst(profile.write)) args.push('--bind', p, p);
     // After the writable binds that cover them: a worktree's `.git` file stays
     // the repository's, so git outside the sandbox cannot be made to load one
-    // the command rewrote. Creating a `.git` beneath the worktree would take a
-    // seccomp filter and is left a residual (ADR-0046).
+    // the command rewrote. Refusing a new `.git` would take a seccomp filter (ADR-0046).
     for (const worktree of profile.gitWorktrees ?? []) {
       const gitFile = path.posix.join(worktree, '.git');
       args.push('--ro-bind', gitFile, gitFile);

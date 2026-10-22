@@ -234,6 +234,8 @@ export function sealedShellProfile(
     ...(opts.writable && host.platform === 'darwin' ? { linkless: [opts.writable] } : {}),
     // Keep each worktree's `.git` the repository's, so git run outside the sandbox never loads one a sealed run planted (ADR-0046).
     ...(worktrees.length ? { gitWorktrees: worktrees } : {}),
+    // The whole writable directory, since a repo group's runner starts its git at the task workspace's root, which holds no worktree's `.git`.
+    ...(opts.writable && host.platform === 'darwin' ? { gitless: [opts.writable] } : {}),
     read: [...host.reads, opts.workspace],
     ...(host.overlay ? { throwaway: [opts.workspace] } : {}),
     masked: host.masked,

@@ -1,5 +1,5 @@
 import { execFile, spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -319,10 +319,17 @@ describe('sealed runs', async () => {
           await shell.run(`mkdir "$TMPDIR/d" && ln -s '${elsewhere}' "$TMPDIR/d/leak" && mv "$TMPDIR/d" moved`);
           expect(existsSync(join(worktree, 'moved'))).toBe(true);
           expect(() => lstatSync(join(worktree, 'moved', 'leak'))).toThrow();
+
+          // Nor one in a directory left traversable but not listable, which a read naming the path still follows.
+          await shell.run(`mkdir "$TMPDIR/h" && ln -s '${elsewhere}' "$TMPDIR/h/key" && mv "$TMPDIR/h" hidden && chmod 111 hidden`);
+          expect(existsSync(join(worktree, 'hidden'))).toBe(true);
+          expect(() => readFileSync(join(worktree, 'hidden', 'key', 'secret.txt'))).toThrow();
         } finally {
           shell.end();
           rmSync(join(worktree, 'leak'), { force: true });
           rmSync(join(worktree, 'moved'), { recursive: true, force: true });
+          if (existsSync(join(worktree, 'hidden'))) chmodSync(join(worktree, 'hidden'), 0o700);
+          rmSync(join(worktree, 'hidden'), { recursive: true, force: true });
         }
       });
 
@@ -404,6 +411,29 @@ describe('sealed runs', async () => {
         } finally {
           rmSync(join(worktree, 'sub'), { recursive: true, force: true });
           rmSync(join(worktree, 'moved-git'), { recursive: true, force: true });
+        }
+      });
+
+      it("leaves no .git at a repo group's task workspace, where the runner's own git starts (ADR-0046)", async () => {
+        const group = join(repo, '.ordewell', 'worktrees', 'run', '2-group');
+        const alpha = join(group, 'alpha');
+        git(repo, 'worktree', 'add', '-q', '-b', 'ordewell/run/2-group', alpha);
+        const fs = new HostFileSystem(repo, sandbox);
+        const shell = fs.taskShell({ cwd: group, writable: group, worktrees: [alpha] });
+        try {
+          const planted = await shell.run(`git init -q --bare .git && printf '[core]\\n\\tfsmonitor = %s/evil.sh\\n' "$PWD" >> .git/config && printf '#!/bin/sh\\ntouch CANARY\\n' > evil.sh && chmod +x evil.sh`);
+          expect(ranSealed(planted.output)).toBe(true);
+          await shell.run('mkdir .GIT');
+          // On macOS, whose file system ignores case, `.GIT` is the `.git` git looks for.
+          expect(existsSync(join(group, '.git'))).toBe(false);
+
+          // What the runner runs where it starts, as the user and outside the sandbox.
+          git(group, 'status');
+          expect(existsSync(join(group, 'CANARY'))).toBe(false);
+        } finally {
+          shell.end();
+          git(repo, 'worktree', 'remove', '--force', alpha);
+          rmSync(group, { recursive: true, force: true });
         }
       });
     });

@@ -31,15 +31,18 @@ export interface SandboxProfile {
   linkless?: readonly string[];
   /**
    * Of `write`, the worktree roots whose own `.git` a command may neither
-   * write, replace, rename nor remove, and — where the backend can — beneath
-   * which it may not create a new `.git` either (ADR-0046). A worktree's `.git`
-   * is a file pointing into its repository; a command that rewrote it, or
-   * planted a `.git` of its own, would make git load that repository when it
-   * runs outside the sandbox, as the user. A backend that cannot refuse
-   * creating one beneath the worktree protects the existing file and leaves
-   * the rest a residual.
+   * write, replace, rename nor remove (ADR-0046). A worktree's `.git` is a
+   * file pointing into its repository; a command that rewrote it would make
+   * git load a repository of the command's own when it runs there outside the
+   * sandbox, as the user.
    */
   gitWorktrees?: readonly string[];
+  /**
+   * Of `write`, directories in which a command may not create a `.git`, at
+   * their root or beneath it, for the same reason (ADR-0046). A backend that
+   * cannot refuse a name being created refuses the profile.
+   */
+  gitless?: readonly string[];
   /**
    * What the command may read besides `write`. `'host'` is the whole
    * filesystem: the planner's reads are confined by ADR-0008's path check,
@@ -148,7 +151,7 @@ export class SandboxUnsupportedError extends Error {
  * an option.
  */
 export function assertProfilePaths(backend: string, profile: SandboxProfile): void {
-  const paths = [...profile.write, ...(profile.linkless ?? []), ...(profile.gitWorktrees ?? []), ...(profile.read === 'host' ? [] : profile.read), ...(profile.throwaway ?? []), ...(profile.masked ?? [])];
+  const paths = [...profile.write, ...(profile.linkless ?? []), ...(profile.gitWorktrees ?? []), ...(profile.gitless ?? []), ...(profile.read === 'host' ? [] : profile.read), ...(profile.throwaway ?? []), ...(profile.masked ?? [])];
   for (const p of paths) {
     if (!path.posix.isAbsolute(p) || p.includes('\0')) throw new SandboxUnsupportedError(backend, `the path ${JSON.stringify(p)}`);
   }

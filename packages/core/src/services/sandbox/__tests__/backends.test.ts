@@ -136,19 +136,26 @@ describe('SeatbeltBackend.wrap', () => {
       expect(profileText(seatbelt.wrap(SH, sealed()).args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1))).not.toContain('LINKLESS');
     });
 
-    it("protects a writable worktree's .git and, on macOS, refuses creating one beneath it, after the writable allow (ADR-0046)", () => {
+    it("protects a writable worktree's .git, after the writable allow (ADR-0046)", () => {
       const launch = seatbelt.wrap(SH, sealed({ write: [SCRATCH, '/work/repo/wt'], gitWorktrees: ['/work/repo/wt'] }));
       const text = profileText(launch.args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1));
       const write = '(deny file-write* (literal (param "GIT_0")))';
-      const create = '(deny file-write-create (require-all (regex #"/\\.git$") (require-any (subpath (param "GITROOT_0")))))';
       expect(text).toContain(write);
-      expect(text).toContain(create);
-      // Both after the rule that made the worktree writable, so the last-match-wins deny stands.
+      // After the rule that made the worktree writable, so the last-match-wins deny stands.
       expect(text.indexOf(write)).toBeGreaterThan(text.indexOf('(param "WRITABLE_1")'));
-      expect(text.indexOf(create)).toBeGreaterThan(text.indexOf('(param "WRITABLE_1")'));
       expect(launch.args).toContain('GIT_0=/work/repo/wt/.git');
-      expect(launch.args).toContain('GITROOT_0=/work/repo/wt');
       expect(profileText(seatbelt.wrap(SH, sealed()).args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1))).not.toContain('GIT_0=');
+    });
+
+    it('refuses creating a .git anywhere in a gitless directory, its own root included, after the writable allow (ADR-0046)', () => {
+      // A repo group's task workspace: the runner's own git starts at its root, where no worktree's .git is.
+      const launch = seatbelt.wrap(SH, sealed({ write: [SCRATCH, '/work/ws'], gitWorktrees: ['/work/ws/alpha'], gitless: ['/work/ws'] }));
+      const text = profileText(launch.args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1));
+      const create = '(deny file-write-create (require-all (regex #"/\\.git$") (require-any (subpath (param "GITLESS_0")))))';
+      expect(text).toContain(create);
+      expect(text.indexOf(create)).toBeGreaterThan(text.indexOf('(param "WRITABLE_1")'));
+      expect(launch.args).toContain('GITLESS_0=/work/ws');
+      expect(profileText(seatbelt.wrap(SH, sealed({ gitWorktrees: ['/work/ws/alpha'] })).args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1))).not.toContain('GITLESS');
     });
 
     it('keeps a hostile path out of the profile text in the read list too', () => {
@@ -245,6 +252,7 @@ describe('BubblewrapBackend.wrap', () => {
     ['a relative path', { masked: ['run/user'] }],
     ['a relative throwaway directory', { throwaway: ['repo'] }],
     ['a writable directory without links, which a mount cannot hold to (ADR-0046)', { write: ['/work/repo/wt'], linkless: ['/work/repo/wt'] }],
+    ['a writable directory where no .git may be created, which a mount cannot hold to (ADR-0046)', { write: ['/work/repo/wt'], gitless: ['/work/repo/wt'] }],
   ])('refuses %s rather than enforce less than it was asked', (_what, overrides) => {
     expect(() => bwrap().wrap(SH, profile(overrides))).toThrow(SandboxUnsupportedError);
   });

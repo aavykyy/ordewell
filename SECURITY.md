@@ -78,14 +78,18 @@ their own repositories. The parts most worth your attention:
   read-only task's sealed runs may also write its own worktree
   ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)),
   but not its `.git`: a sealed run cannot write, replace, rename or remove the
-  worktree's own `.git` file, nor (on macOS) create a `.git` beneath the
-  worktree, so git run later in that worktree outside the sandbox loads no
-  repository the run planted. A way for one to write anywhere else, for
+  worktree's own `.git` file, nor (on macOS) create a `.git` anywhere it may
+  write, a repo group's task workspace included (on Linux one left there is
+  removed when the run ends), so git run later there outside the sandbox loads
+  no repository the run planted. Nor may it leave a link leading out of the
+  worktree and the workspace, a link in a directory it closed to you
+  included. A way for one to write anywhere else, for
   anything a read-only task changed to land, for a command of the task to run
   outside the sealed profile once one of its commands has run sealed, or for a
   sealed run to make git outside the sandbox load a repository it planted, is
   in scope. On Linux, creating a `.git` in a subdirectory of the worktree is a
-  known residual (ADR-0046).
+  known residual, as is a native read or the runner's git racing a sealed run
+  still in progress (ADR-0046).
 
   On Linux that profile is the whole guarantee: the PID namespace leaves a
   sealed run no other process to look at. **On macOS, three things no Seatbelt

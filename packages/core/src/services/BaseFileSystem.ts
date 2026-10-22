@@ -21,7 +21,7 @@ import { resolveAll, vetEgress, type ResolveAll } from './egressGuard';
 import { carriesSecret, sensitiveEnvValues } from './outboundSecrets';
 import { READ_REFUSAL_HINT, disableWebCommandStartup, pinWebCommandAddresses, wgetVersionCommands } from './webCommands';
 import { NOT_APPROVED_HINT } from './effectRoute';
-import { removeOutwardLinks } from './outwardLinks';
+import { removeOutwardLinks, removePlantedGit } from './outwardLinks';
 
 export { AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMANDS, classifyCommand, pathLikeArgs } from './commandPolicy';
 
@@ -54,6 +54,7 @@ interface ShellSite {
 const TASK_UNSEALED = 'A read-only task asks nobody, so this command could only run sealed, and this machine has no sandbox to seal it in.';
 const TASK_CONTINUE = 'Continue without it, and say in your report if what it would have shown matters.';
 const OUTWARD_LINKS_REMOVED = 'Removed, since a read-only task may leave no link leading out of its worktree and the workspace:';
+const PLANTED_GIT_REMOVED = 'Removed the .git this command left in the task workspace, since a read-only task may leave no .git for git outside the sandbox to load.';
 
 /** Why a read-only task's command was not run, from the decision that stood. */
 function taskRefusal(standing: StandingDecision | undefined): string {
@@ -491,8 +492,10 @@ export abstract class BaseFileSystem implements IFileSystem {
     const first = site.task !== undefined && !site.task.sealed;
     if (site.task) site.task.sealed = true;
     const outcome = await this.execBashImpl(command, shell, signal, site.root);
-    const removed = site.task && site.sealed.writable ? await removeOutwardLinks(site.sealed.writable, [site.sealed.writable, site.sealed.workspace]) : [];
-    const swept = removed.length > 0 ? `\n\n[${OUTWARD_LINKS_REMOVED} ${removed.join(', ')}]` : '';
+    const { writable, workspace, worktrees } = site.sealed;
+    const removed = site.task && writable ? await removeOutwardLinks(writable, [writable, workspace]) : [];
+    const planted = site.task && writable ? await removePlantedGit(writable, worktrees ?? [writable]) : false;
+    const swept = `${removed.length > 0 ? `\n\n[${OUTWARD_LINKS_REMOVED} ${removed.join(', ')}]` : ''}${planted ? `\n\n[${PLANTED_GIT_REMOVED}]` : ''}`;
     if (signal?.aborted) return { ...outcome, output: `${outcome.output}${swept}` };
     const failed = outcome.timedOut && shell.wallTimeMs !== undefined
       ? sealedTimeLimitNote(shell.wallTimeMs, site.task !== undefined)

@@ -214,6 +214,13 @@ describe('sealedShellProfile (ADR-0036 S1)', () => {
     expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/work/repo' }).gitWorktrees).toBeUndefined();
   });
 
+  it('refuses a .git created anywhere in its writable directory where Seatbelt can, a group\'s task workspace root included (ADR-0046)', () => {
+    const darwin = { ...host, platform: 'darwin' as NodeJS.Platform };
+    expect(sealedShellProfile(darwin, { scratch: '/tmp/s', workspace: '/ws', writable: '/ws', worktrees: ['/ws/alpha', '/ws/beta'] }).gitless).toEqual(['/ws']);
+    expect(sealedShellProfile(darwin, { scratch: '/tmp/s', workspace: '/work/repo' }).gitless).toBeUndefined();
+    expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/ws', writable: '/ws', worktrees: ['/ws/alpha'] }).gitless).toBeUndefined();
+  });
+
   it('keeps its network off unless a native shell asks for the harness\'s own (N3)', () => {
     expect(sealedShellProfile(host, { workspace: '/w' }).network).toBe(false);
     expect(sealedShellProfile(host, { workspace: '/w', network: true }).network).toBe(true);

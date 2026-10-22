@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -441,6 +441,60 @@ describe("a read-only task's shell (ADR-0046)", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  it('removes a link out hidden in a directory a sealed run left unreadable', async () => {
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-task-shell-outside-')));
+    const hidden = join(worktree, 'hide');
+    try {
+      const fs = session();
+      fs.effect = ({ sealed }) => {
+        if (!sealed) return;
+        mkdirSync(join(hidden, 'deeper'), { recursive: true });
+        symlinkSync(outside, join(hidden, 'key'));
+        symlinkSync(outside, join(hidden, 'deeper', 'key'));
+        mkdirSync(join(worktree, 'kept'));
+        symlinkSync(outside, join(worktree, 'kept', 'key'));
+        // Listed but not written, traversed but not listed, then neither: a walk that gives up where it is refused leaves every link.
+        chmodSync(join(worktree, 'kept'), 0o555);
+        chmodSync(join(hidden, 'deeper'), 0o000);
+        chmodSync(hidden, 0o111);
+      };
+      const linked = await fs.taskShell({ cwd: worktree, writable: worktree }).run('npm test');
+
+      expect(linked.output).toContain('may leave no link leading out of its worktree');
+      for (const gone of ['hide/key', 'hide/deeper/key', 'kept/key']) {
+        expect(linked.output).toContain(gone);
+        expect(() => lstatSync(join(worktree, gone))).toThrow();
+      }
+    } finally {
+      for (const dir of [join(worktree, 'kept'), hidden, join(hidden, 'deeper')]) if (existsSync(dir)) chmodSync(dir, 0o700);
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("removes a .git a sealed run left at a repo group's task workspace, where the runner's own git starts, and says so", async () => {
+    const alpha = join(worktree, 'alpha');
+    mkdirSync(alpha);
+    writeFileSync(join(alpha, '.git'), 'gitdir: /repo/.git/worktrees/alpha\n');
+    const fs = session();
+    fs.effect = ({ sealed }) => {
+      if (!sealed) return;
+      mkdirSync(join(worktree, '.git', 'hooks'), { recursive: true });
+      writeFileSync(join(worktree, '.git', 'config'), '[core]\n\tfsmonitor = ./evil.sh\n');
+    };
+    const planted = await fs.taskShell({ cwd: worktree, writable: worktree, worktrees: [alpha] }).run('git init --bare .git');
+
+    expect(existsSync(join(worktree, '.git'))).toBe(false);
+    expect(planted.output).toContain('may leave no .git');
+    // A worktree's own `.git` is the repository's, not one the run planted.
+    expect(existsSync(join(alpha, '.git'))).toBe(true);
+
+    const lone = session();
+    writeFileSync(join(worktree, '.git'), 'gitdir: /repo/.git/worktrees/1-review\n');
+    lone.effect = () => undefined;
+    await lone.taskShell({ cwd: worktree, writable: worktree }).run('npm test');
+    expect(existsSync(join(worktree, '.git'))).toBe(true);
   });
 
   it('runs one command at a time, so none reads the worktree while a sealed run still writes it', async () => {

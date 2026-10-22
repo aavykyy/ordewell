@@ -148,11 +148,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **A read-only task's sealed runs cannot plant a git repository for later git
   to load.** A sealed run can write the task's worktree, but not its `.git`: it
   cannot write, replace, rename or remove the worktree's own `.git` file, nor —
-  on macOS — create a `.git` beneath the worktree. So git run later in the
-  worktree outside the sandbox, Ordewell's own or the runner's, never loads a
+  on macOS — create a `.git` anywhere in what it may write, a repo group's task
+  workspace included, where the group's runner starts its git. On Linux a
+  `.git` left at a group's task workspace is removed when the run ends. So git
+  run later outside the sandbox, Ordewell's own or the runner's, never loads a
   repository the run planted with its own hooks or filters, and `task_diff`
-  refuses a read-only task. On Linux, a `.git` planted in a subdirectory of the
-  worktree remains a residual
+  refuses a read-only task. On Linux, a `.git` planted in a subdirectory
+  remains a residual
   ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
 - **Consent to a script task is consent to what it runs.** An edit that
   changes an approved script task's commands, script or time limit, or turns
