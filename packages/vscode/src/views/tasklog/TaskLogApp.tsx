@@ -173,7 +173,7 @@ export default function TaskLogApp() {
           <span className="task-log-spacer" />
           {hasDetail && (
             <button type="button" className="task-log-detail" aria-pressed={detailAll}
-              onClick={() => setDetailAll((v) => !v)} title="Show or hide the full thinking, command and subagent detail">
+              onClick={() => setDetailAll((v) => !v)} title="Show or hide the full thinking, command, subagent and handoff report detail">
               {detailAll ? 'Collapse all' : 'Expand all'}
             </button>
           )}
