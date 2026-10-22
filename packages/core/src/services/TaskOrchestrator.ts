@@ -49,6 +49,7 @@ import { resumeTime } from '../taskRow/status';
 import { scriptBodyOf } from '../models/ScriptTask';
 import { SCRIPT_RUNNER, ScriptRunner } from './ScriptRunner';
 import { checkHandoff, handoffLines, type StoredHandoff } from '../models/Handoff';
+import { userTaskHandoff } from '../models/DerivedHandoff';
 
 /** What ran an automatic Merge all: a task reaching its merge gate, or the run settling with landed work unmerged. */
 export type AutoMergeTrigger = { kind: 'gate'; taskId: string } | { kind: 'run_end' };
@@ -342,8 +343,11 @@ export interface TaskOrchestratorDeps {
   isApproved: (taskId: string) => boolean;
   /** A read-only attempt's shell (ADR-0046); absent, its runner is given no `run_command`. */
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
-  /** Write an attempt's whole handoff into the log of the attempt `sessionId` ran (ADR-0047). */
-  recordHandoff: (sessionId: string, taskId: string, handoff: StoredHandoff) => void;
+  /**
+   * Write an attempt's whole handoff into the log of the attempt `sessionId`
+   * ran (ADR-0047). A task that ran no session, a user task, gets a log of its own.
+   */
+  recordHandoff: (sessionId: string | undefined, taskId: string, handoff: StoredHandoff) => void;
 }
 
 /**
@@ -371,7 +375,7 @@ export interface TaskOrchestratorOptions {
   /** Every task is approved unless a Session supplies its record: an orchestrator on its own has no user to ask. */
   isApproved?: (taskId: string) => boolean;
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
-  recordHandoff?: (sessionId: string, taskId: string, handoff: StoredHandoff) => void;
+  recordHandoff?: (sessionId: string | undefined, taskId: string, handoff: StoredHandoff) => void;
 }
 
 /**
@@ -464,7 +468,7 @@ export class TaskOrchestrator {
   private runSettings: () => SchedulerRunSettings | undefined;
   private isApproved: (taskId: string) => boolean;
   private taskShell: (site: TaskShellSite) => TaskShell | undefined;
-  private recordHandoff: (sessionId: string, taskId: string, handoff: StoredHandoff) => void;
+  private recordHandoff: (sessionId: string | undefined, taskId: string, handoff: StoredHandoff) => void;
   private readonly research: Pick<ResearchTasks, 'started'> | undefined;
 
   constructor(deps: TaskOrchestratorDeps) {
@@ -1332,11 +1336,20 @@ export class TaskOrchestrator {
       if (attempt.worktree) await this.runs.release(taskId, { keep: true });
     }
 
-    this.store.setTaskOutputSummary(taskId, summarizeOutput(unresumedReason ?? verdict.reason, summary, report), handoff);
-    if (handoff && attempt.session) this.recordHandoff(attempt.session.id, taskId, handoff);
+    this.handOver(taskId, summarizeOutput(unresumedReason ?? verdict.reason, summary, report), handoff, attempt.session?.id);
 
     this.logAndArchive(task, verdict);
     await this.afterVerdict(taskId);
+  }
+
+  /**
+   * How a task's latest attempt ended and the handoff it left (ADR-0047): the
+   * plan keeps the digest and the attempt's log the whole of it. One path for
+   * an attempt a runner or a script ran, and for the completion a user marked.
+   */
+  private handOver(taskId: string, summary: Task['outputSummary'], handoff: StoredHandoff | undefined, sessionId?: string): void {
+    this.store.setTaskOutputSummary(taskId, summary, handoff);
+    if (handoff) this.recordHandoff(sessionId, taskId, handoff);
   }
 
   private async afterVerdict(taskId: string): Promise<void> {
@@ -1583,7 +1596,9 @@ export class TaskOrchestrator {
       this.closeLoop(task, LOOP_CHECK_MARKED_COMPLETE);
     } else this.settleUnlanded(task, landing, admission);
     this.store.setTaskVerdict(taskId, verdict);
-    this.store.setTaskOutputSummary(taskId, summarizeOutput(verdict.reason, ''));
+    // A user task has no attempt to have written a handoff: the user's act is its.
+    const handoff = task.type === 'user' ? userTaskHandoff(task.userSteps) : undefined;
+    this.handOver(taskId, summarizeOutput(verdict.reason, '', handoff && handoffLines(handoff).join('\n')), handoff);
     this.logAndArchive(task, verdict);
     if (completesTask(landing)) {
       this.onHold.delete(taskId);
