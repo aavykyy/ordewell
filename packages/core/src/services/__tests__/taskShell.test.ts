@@ -1,7 +1,7 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BaseFileSystem } from '../BaseFileSystem';
 import { ApprovalPolicy } from '../ApprovalPolicy';
 import { ranSealed } from '../researchStepSummary';
@@ -497,6 +497,58 @@ describe("a read-only task's shell (ADR-0046)", () => {
     expect(existsSync(join(worktree, '.git'))).toBe(true);
   });
 
+  it('removes a .git a sealed run planted in a subfolder, and says so, while a repository that was there before stays', async () => {
+    mkdirSync(join(worktree, 'vendor', 'lib'), { recursive: true });
+    writeFileSync(join(worktree, 'vendor', 'lib', '.git'), 'gitdir: /repo/.git/modules/lib\n');
+    mkdirSync(join(worktree, 'vendor', 'tool', '.git'), { recursive: true });
+    writeFileSync(join(worktree, 'vendor', 'tool', '.git', 'HEAD'), 'ref: refs/heads/main\n');
+    const fs = session();
+    fs.effect = ({ sealed }) => {
+      if (!sealed) return;
+      mkdirSync(join(worktree, 'sub', '.git', 'hooks'), { recursive: true });
+      writeFileSync(join(worktree, 'sub', '.git', 'config'), '[core]\n\tfsmonitor = ./evil.sh\n');
+    };
+    const planted = await fs.taskShell({ cwd: worktree, writable: worktree }).run('git init sub');
+
+    expect(planted.output).toContain('may leave no .git');
+    expect(planted.output).toContain('sub/.git');
+    expect(existsSync(join(worktree, 'sub', '.git'))).toBe(false);
+    // A submodule's `.git` file and a vendored repository were the checkout's, not the run's.
+    expect(readFileSync(join(worktree, 'vendor', 'lib', '.git'), 'utf8')).toBe('gitdir: /repo/.git/modules/lib\n');
+    expect(readFileSync(join(worktree, 'vendor', 'tool', '.git', 'HEAD'), 'utf8')).toBe('ref: refs/heads/main\n');
+  });
+
+  it('stops the task shell when a .git a sealed run planted cannot be removed', async () => {
+    const fs = session();
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      const sub = join(worktree, 'sub');
+      // A non-empty directory where the sweep renames the .git aside, so even
+      // a retry after giving the directory back its write cannot move it.
+      const aside = join(sub, `.removed-git-${process.pid}-${now}`);
+      fs.effect = ({ sealed }) => {
+        if (!sealed) return;
+        mkdirSync(join(sub, '.git'), { recursive: true });
+        mkdirSync(aside, { recursive: true });
+        writeFileSync(join(aside, 'keep'), 'x');
+      };
+      const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+
+      const planted = await shell.run('git init sub');
+      expect(planted.output).toContain('sub/.git');
+
+      const next = await shell.run('git status');
+      expect(next.success).toBe(false);
+      expect(next.output).toContain('a repository a sealed run planted could not be removed (sub/.git)');
+      expect(next.output).toContain("this task's shell is stopped");
+      // The refused command never ran, and the `.git` is still where git would find it.
+      expect(fs.ran.map((r) => r.command)).toEqual(['git init sub']);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('runs one command at a time, so none reads the worktree while a sealed run still writes it', async () => {
     const fs = session();
     let release!: () => void;
@@ -506,7 +558,8 @@ describe("a read-only task's shell (ADR-0046)", () => {
 
     const writing = shell.run('npm test');
     const reading = shell.run('cat a.md');
-    await new Promise((resolve) => setImmediate(resolve));
+    // The first command's snapshot of the `.git` entries runs before it does.
+    await vi.waitFor(() => expect(fs.ran.map((r) => r.command)).toEqual(['npm test']));
     expect(fs.ran.map((r) => r.command)).toEqual(['npm test']);
 
     release();

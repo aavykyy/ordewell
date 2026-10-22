@@ -201,6 +201,14 @@ describe('sealedShellProfile (ADR-0036 S1)', () => {
     expect(sealedShellProfile(host, { workspace: '/work/repo' }).write).toEqual([]);
   });
 
+  it("writes a repo group's worktrees instead of its task workspace root, which holds no worktree's .git (ADR-0046)", () => {
+    const group = sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/ws', writable: '/ws', worktrees: ['/ws/alpha', '/ws/beta'] });
+    expect(group.write).toEqual(['/tmp/s', '/ws/alpha', '/ws/beta']);
+    // One repo, whose worktrees are left out or name the writable directory itself, stays as it was.
+    expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/work/repo', writable: '/work/repo' }).write).toEqual(['/tmp/s', '/work/repo']);
+    expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/work/repo', writable: '/work/repo', worktrees: ['/work/repo'] }).write).toEqual(['/tmp/s', '/work/repo']);
+  });
+
   it('refuses links in that directory where Seatbelt can, and leaves bubblewrap a profile it can start (ADR-0046)', () => {
     const darwin = { ...host, platform: 'darwin' as NodeJS.Platform };
     expect(sealedShellProfile(darwin, { scratch: '/tmp/s', workspace: '/work/repo', writable: '/work/tree' }).linkless).toEqual(['/work/tree']);

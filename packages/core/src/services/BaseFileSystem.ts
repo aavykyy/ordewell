@@ -21,7 +21,7 @@ import { resolveAll, vetEgress, type ResolveAll } from './egressGuard';
 import { carriesSecret, sensitiveEnvValues } from './outboundSecrets';
 import { READ_REFUSAL_HINT, disableWebCommandStartup, pinWebCommandAddresses, wgetVersionCommands } from './webCommands';
 import { NOT_APPROVED_HINT } from './effectRoute';
-import { removeOutwardLinks, removePlantedGit } from './outwardLinks';
+import { removeOutwardLinks, removePlantedGit, snapshotGitEntries } from './outwardLinks';
 
 export { AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMANDS, classifyCommand, pathLikeArgs } from './commandPolicy';
 
@@ -47,14 +47,22 @@ interface ShellSite {
    * A read-only task's: what its results say is said to its runner, not the
    * planner. `sealed` once a sealed run has started in the attempt's shell.
    */
-  task?: { worktree: boolean; sealed: boolean };
+  task?: {
+    worktree: boolean;
+    sealed: boolean;
+    /** The `.git` entries the writable directory held before the first sealed run (ADR-0046). */
+    gitBefore?: Set<string>;
+    /** Why every later command is refused: a repository a sealed run planted could not be removed (ADR-0046). */
+    stopped?: string;
+  };
 }
 
 /** Why a read-only task's command did not run where the planner's would have asked or run sealed (ADR-0046). */
 const TASK_UNSEALED = 'A read-only task asks nobody, so this command could only run sealed, and this machine has no sandbox to seal it in.';
 const TASK_CONTINUE = 'Continue without it, and say in your report if what it would have shown matters.';
 const OUTWARD_LINKS_REMOVED = 'Removed, since a read-only task may leave no link leading out of its worktree and the workspace:';
-const PLANTED_GIT_REMOVED = 'Removed the .git this command left in the task workspace, since a read-only task may leave no .git for git outside the sandbox to load.';
+const PLANTED_GIT_REMOVED = 'Removed, since a read-only task may leave no .git for git outside the sandbox to load:';
+const PLANTED_GIT_STUCK = "Could not remove a .git this command planted, so this task's shell is stopped, and every later command is refused:";
 
 /** Why a read-only task's command was not run, from the decision that stood. */
 function taskRefusal(standing: StandingDecision | undefined): string {
@@ -344,6 +352,7 @@ export abstract class BaseFileSystem implements IFileSystem {
   }
 
   private async runIn(site: ShellSite, command: string, signal?: AbortSignal, opts: BashOptions = {}): Promise<ToolOutcome> {
+    if (site.task?.stopped) return refusal(`Command not run: ${site.task.stopped}.\n${TASK_CONTINUE}`);
     command = disableWebCommandStartup(command, this.researchShell.dialect);
     const { approval, root } = site;
     const allow = approval.allowlist?.();
@@ -481,6 +490,12 @@ export abstract class BaseFileSystem implements IFileSystem {
     const denied = this.deniedInnerScope(approval, command);
     if (denied) return refusal(`Command not approved: ${command}\nThe user denied "${denied}" this session, and a denial holds for a sealed run too. Continue without it.`);
 
+    // What the writable directory held before the first sealed run, so the
+    // sweep can tell a repository the checkout brought from one a run planted
+    // (ADR-0046). Taken lazily, here, before the first run can write.
+    const { writable, workspace, worktrees } = site.sealed;
+    if (site.task && writable && !site.task.gitBefore) site.task.gitBefore = await snapshotGitEntries(writable);
+
     let shell: ShellLaunch;
     try {
       shell = await site.sandbox.launchSealed(this.researchShell, site.sealed);
@@ -492,10 +507,27 @@ export abstract class BaseFileSystem implements IFileSystem {
     const first = site.task !== undefined && !site.task.sealed;
     if (site.task) site.task.sealed = true;
     const outcome = await this.execBashImpl(command, shell, signal, site.root);
-    const { writable, workspace, worktrees } = site.sealed;
-    const removed = site.task && writable ? await removeOutwardLinks(writable, [writable, workspace]) : [];
-    const planted = site.task && writable ? await removePlantedGit(writable, worktrees ?? [writable]) : false;
-    const swept = `${removed.length > 0 ? `\n\n[${OUTWARD_LINKS_REMOVED} ${removed.join(', ')}]` : ''}${planted ? `\n\n[${PLANTED_GIT_REMOVED}]` : ''}`;
+    let removedLinks: string[] = [];
+    let removedGit: string[] = [];
+    let stuckGit: string[] = [];
+    if (site.task && writable) {
+      // The workspace root goes first, where a group's runner starts its own
+      // git; the walk below then covers every subdirectory.
+      const planted = await removePlantedGit(writable, worktrees ?? [writable], site.task.gitBefore);
+      const sweep = await removeOutwardLinks(writable, [writable, workspace], { keep: site.task.gitBefore ?? new Set(), worktrees: worktrees ?? [writable] });
+      removedLinks = sweep.removedLinks;
+      removedGit = [...(planted ? ['.git'] : []), ...sweep.removedGit];
+      stuckGit = sweep.stuckGit;
+      // A `.git` still where git would find it is what the sweep's removal
+      // could not take; every later command is refused rather than run beside
+      // a repository the run planted (ADR-0046).
+      if (stuckGit.length > 0) {
+        site.task.stopped = `a repository a sealed run planted could not be removed (${stuckGit.join(', ')}), so this task's shell is stopped`;
+      }
+    }
+    const swept = `${removedLinks.length > 0 ? `\n\n[${OUTWARD_LINKS_REMOVED} ${removedLinks.join(', ')}]` : ''}`
+      + `${removedGit.length > 0 ? `\n\n[${PLANTED_GIT_REMOVED} ${removedGit.join(', ')}]` : ''}`
+      + `${stuckGit.length > 0 ? `\n\n[${PLANTED_GIT_STUCK} ${stuckGit.join(', ')}]` : ''}`;
     if (signal?.aborted) return { ...outcome, output: `${outcome.output}${swept}` };
     const failed = outcome.timedOut && shell.wallTimeMs !== undefined
       ? sealedTimeLimitNote(shell.wallTimeMs, site.task !== undefined)
