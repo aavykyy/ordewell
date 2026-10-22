@@ -4,10 +4,9 @@ import type { PreservedWork, PreviousWork } from '../interfaces/IWorktreeIsolati
 import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
+import { REPORT_MAX_CHARS } from '../models/Handoff';
 
 const MAX_TAIL_CHARS = 500;
-/** Whole findings fit; a runaway summary does not bloat the session file, which holds every task's report. */
-const MAX_REPORT_CHARS = 20_000;
 /** Each dependency's share of a dependent's prompt, which carries every direct dependency's report. */
 const MAX_DEPENDENCY_REPORT_CHARS = 4_000;
 const DEFAULT_PLAN_MAP_MAX_ENTRIES = 30;
@@ -26,9 +25,10 @@ export interface PriorOutput {
   round?: { round: number; maxRounds: number };
 }
 
+/** The session file holds every task's report, so a runaway one is cut; the whole handoff stays in the attempt's log (ADR-0047). */
 function capReport(report: string): string {
-  if (report.length <= MAX_REPORT_CHARS) return report;
-  return `${report.slice(0, MAX_REPORT_CHARS).trimEnd()}\n\n[Report cut by Ordewell at ${MAX_REPORT_CHARS} characters; the rest was not kept.]`;
+  if (report.length <= REPORT_MAX_CHARS) return report;
+  return `${report.slice(0, REPORT_MAX_CHARS).trimEnd()}\n\n[Report cut by Ordewell at ${REPORT_MAX_CHARS} characters; the whole handoff is in the attempt's log.]`;
 }
 
 export function summarizeOutput(reviewReason: string | undefined, output: string, report?: string): TaskOutputSummary {

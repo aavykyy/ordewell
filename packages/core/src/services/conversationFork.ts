@@ -19,6 +19,7 @@ function forkTask(task: Task): Task {
   if (RUN_BOUND_STATUSES.has(task.status)) {
     copy.status = 'pending';
     copy.outputSummary = undefined;
+    delete copy.handoff;
     delete copy.awaitingReason;
     delete copy.resumeAt;
   }

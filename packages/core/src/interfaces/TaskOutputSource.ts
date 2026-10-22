@@ -1,4 +1,5 @@
 import type { IRunnerSession } from './IRunner';
+import type { StoredHandoff } from '../models/Handoff';
 
 export interface LiveTailOptions {
   maxLines: number;
@@ -29,6 +30,8 @@ export interface TaskOutputSource {
   finalText(taskId: string): string;
   /** The summary the runner reported through `task_complete` in its latest turn, if it made that call. */
   report(taskId: string): string | undefined;
+  /** The handoff of that call, findings numbered (ADR-0047); undefined when the turn made none, or it handed nothing over. */
+  handoff(taskId: string): StoredHandoff | undefined;
   /** Recent output of the task's latest capture, or null if it never had one. */
   liveTail(taskId: string, opts: LiveTailOptions): LiveTail | null;
 }

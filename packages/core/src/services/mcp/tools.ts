@@ -2,6 +2,7 @@ import { z } from 'zod/v4';
 import { TASK_QUERY_TASK_FIELDS, OUTPUT_LINES_MAX } from '../TaskQuery';
 import { TASK_LOG_KINDS } from '../taskLogRead';
 import type { ToolOutcome } from '../../interfaces/IFileSystem';
+import { HANDOFF_LIMITS } from '../../models/Handoff';
 
 /**
  * The tools of the Ordewell MCP server, per token role (ADR-0022), and the
@@ -13,11 +14,50 @@ import type { ToolOutcome } from '../../interfaces/IFileSystem';
  * how far the wiring has got.
  */
 
+const handoffReference = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('file'),
+    path: z.string().min(1).describe('A path in the repository.'),
+    line: z.number().int().min(1).optional(),
+  }),
+  z.object({
+    kind: z.literal('commit'),
+    sha: z.string().regex(/^[0-9a-fA-F]{4,64}$/, 'A commit sha is 4 to 64 hex characters.'),
+    repo: z.string().min(1).optional().describe('The repository it is in, where the run has several.'),
+  }),
+  z.object({
+    kind: z.literal('task'),
+    task: z.union([z.string().min(1), z.number().int().min(0)]).transform(String)
+      .describe('A task you may read — this one, one it depends on, or its loop\'s other end: "#order", its id or its title.'),
+    finding: z.string().regex(/^F[1-9][0-9]*$/, 'A finding is named as Ordewell numbered it: "F1", "F2", ….').optional()
+      .describe('One of that task\'s findings, as "F3".'),
+  }),
+  z.object({
+    kind: z.literal('url'),
+    url: z.string().min(1).describe('An http or https URL.'),
+  }),
+]);
+
+const handoffFinding = z.object({
+  severity: z.enum(['blocker', 'major', 'minor', 'info'])
+    .describe('How much it matters to the next reader. Advice only: it never changes the verdict.'),
+  title: z.string().trim().min(1).max(HANDOFF_LIMITS.title).regex(/^[^\r\n]*$/, 'A title is one line.').describe('One line.'),
+  detail: z.string().max(HANDOFF_LIMITS.detail).optional(),
+  evidence: z.array(handoffReference).max(HANDOFF_LIMITS.evidence).optional().describe('Where a reader can check it.'),
+});
+
 const taskCompleteInput = z.object({
   status: z.enum(['done', 'blocked', 'failed'])
     .describe("'done' only when the task is fully complete. 'blocked' or 'failed' end the attempt without passing."),
-  summary: z.string().describe('What was done, handed to the tasks that depend on this one.'),
+  summary: z.string().max(HANDOFF_LIMITS.summary, `The summary is at most ${HANDOFF_LIMITS.summary} characters: put the long form in report.`)
+    .describe('The handoff the next task reads first, written for that reader: what changed, what is left, what to watch.'),
   reason: z.string().optional().describe("Why the task is blocked or failed. Expected for anything but 'done'."),
+  findings: z.array(handoffFinding).max(HANDOFF_LIMITS.findings).optional()
+    .describe('What the next reader must act on, one item each, most important first. Ordewell numbers them F1, F2, … in this order.'),
+  artifacts: z.array(handoffReference).max(HANDOFF_LIMITS.artifacts).optional()
+    .describe('What this task produced, for the next reader to start from.'),
+  report: z.string().max(HANDOFF_LIMITS.report).optional()
+    .describe('The long form, for a reader who needs it all: kept with this attempt and read only on demand, never put in another task\'s prompt.'),
 });
 
 const checkpointInput = z.object({
@@ -314,12 +354,14 @@ export const TASK_COMPLETE_TOOL = 'task_complete';
  * message into a summary, while its instructions are re-applied whole.
  */
 export const TASK_COMPLETION_CONTRACT = [
-  `When you have fully completed this task, call the \`${TASK_COMPLETE_TOOL}\` tool with status \`done\` and a summary of what you did. If you cannot complete it, call \`${TASK_COMPLETE_TOOL}\` with status \`blocked\` or \`failed\` and the reason instead.`,
-  `The \`${TASK_COMPLETE_TOOL}\` summary is this task's report: the planner and the tasks that depend on this one read it, and nothing else you write reaches them. Put the full result there — findings, decisions, anything a reader needs to act on it. A review or other read-only task especially: its findings are its result, so put them all in the summary, and do not write the report to a file.`,
+  `When you have fully completed this task, call the \`${TASK_COMPLETE_TOOL}\` tool with status \`done\` and your handoff. If you cannot complete it, call \`${TASK_COMPLETE_TOOL}\` with status \`blocked\` or \`failed\` and the reason instead. Call it once, as your last action.`,
+  `Its \`summary\` is this task's handoff to the next task: the planner and the tasks that depend on this one read it first, and nothing else you write reaches them unless they ask. Write it for that reader, not as a log: what changed, what is left, what to watch.`,
+  `Put anything the next reader must act on in \`findings\`, one item each, most important first, each with a severity, a one-line title, its detail and evidence to check it by: a file (and line), a commit, a task (and one of its findings, as "F3") or a URL. Ordewell numbers them F1, F2, … so a later task can cite one. List what you produced in \`artifacts\`.`,
+  `The long story, if there is one, goes in \`report\`: it is kept with this attempt and read only on demand. A review or other read-only task especially: its findings are its result, so state each one, and do not write the report to a file.`,
 ].join('\n\n');
 
 export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
-  tool(TASK_COMPLETE_TOOL, 'Report that this task has ended, and how. Call it once, as your last action.',
+  tool(TASK_COMPLETE_TOOL, 'Report that this task has ended, and how, with its handoff for the tasks that read it. Call it once, as your last action.',
     taskCompleteInput, (h) => h.taskComplete?.bind(h)),
   tool('checkpoint', "Ask the user a question and wait for the answer, which is this call's result.",
     checkpointInput, (h) => h.checkpoint?.bind(h)),
@@ -391,9 +433,9 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     submitPlanInput, (h) => h.submitPlan?.bind(h), PLANNER_READ_ONLY),
   tool('edit_plan', 'Change the current plan with task operations: update, add, remove, reorder, merge, split or rearm.',
     editPlanInput, (h) => h.editPlan?.bind(h), PLANNER_READ_ONLY),
-  tool('task_query', 'Read the long fields of plan tasks that the plan summary leaves out (prompt, user steps, verdict, output summary, attached skills), and optionally the live runner catalog. Read a task before you rewrite it.',
+  tool('task_query', 'Read the long fields of plan tasks that the plan summary leaves out (prompt, user steps, verdict, output summary, handoff, attached skills), and optionally the live runner catalog. Read a task before you rewrite it.',
     taskQueryInput, (h) => h.taskQuery?.bind(h), PLANNER_READ_ONLY),
-  tool('task_output', "Read the recent output of a running task, to check what its runner is doing; paged by offset. A task that is not running answers with its verdict, output summary and a digest of its last attempt. Supply attempt or kinds to page a saved structured log, latest by default.",
+  tool('task_output', "Read the recent output of a running task, to check what its runner is doing; paged by offset. A task that is not running answers with its verdict, output summary, its whole handoff, its findings and report, and a digest of its last attempt. Supply attempt or kinds to page a saved structured log, latest by default.",
     taskOutputInput, (h) => h.taskOutput?.bind(h), PLANNER_READ_ONLY),
   tool('task_diff', 'Read what a task changed since it started: file stats with repository paths, or a single file patch with path and repo. Paged by since/nextOffset. Shared runs without recorded changes report not available.',
     taskDiffInput, (h) => h.taskDiff?.bind(h), PLANNER_READ_ONLY),

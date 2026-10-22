@@ -1365,6 +1365,7 @@ describe('task attempts', () => {
       reset: () => {},
       finalText: () => '',
       report: () => undefined,
+      handoff: () => undefined,
       liveTail: () => null,
     };
     const orchestrator = makeOrchestrator({ runner: { spawn, stop }, output: throwingOutput });

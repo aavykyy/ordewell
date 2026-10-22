@@ -14,7 +14,7 @@ import type { RunnerSpawnOptions } from '../AbstractRunner';
 import { listTaskLogAttempts, openTaskLog, readTaskLog, type TaskLogFile } from '../../utils/taskLogStore';
 import { FakeRunnerSession } from '../../testing';
 import { fakeSpawn, fixture } from './harnessTestKit';
-import { makeSession, memoryTaskLogs, taskOf } from './sessionTestKit';
+import { makeSession, memoryTaskLogs, saves, taskOf } from './sessionTestKit';
 
 type TaskLogMessage = Extract<SessionMessage, { type: 'task_log' }>;
 
@@ -318,6 +318,25 @@ describe('a session’s task logs', () => {
     await vi.waitFor(() => expect(taskLogs(sent).flatMap((m) => m.events).map((e) => e.type)).toEqual(['turn_start', 'turn_end']));
     expect(taskLogs(sent)[0]).toMatchObject({ taskId: 't1', attempt: 1 });
     expect(files.files.get('t1')).toEqual([[{ type: 'turn_start', message: 'do it' }, { type: 'turn_end', reason: 'completed' }]]);
+  });
+
+  it('writes the handoff a task completed with into its attempt\'s log once, report and all, and keeps the plan to its digest', async () => {
+    const { runner, sessions } = runnerFor();
+    const sent: SessionMessage[] = [];
+    const files = memoryTaskLogs();
+    const session = makeSession({ runner, broadcast: (m) => sent.push(m), openTaskLog: files });
+    session.loadPlan(plan(), 'Goal', '/repo');
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+    const report = Array.from({ length: 600 }, (_, i) => `Line ${i + 1}: what was checked.`).join('\n');
+
+    sessions[0].reportComplete({ status: 'done', summary: 'Done.', findings: [{ severity: 'minor', title: 'A nit', detail: 'Rename x.' }], report });
+
+    await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('completed'));
+    const handoff = { summary: 'Done.', findings: [{ id: 'F1', severity: 'minor', title: 'A nit', detail: 'Rename x.' }], findingCount: 1 };
+    expect(files.files.get('t1')!.flat().filter((e) => e.type === 'handoff')).toEqual([{ type: 'handoff', handoff: { ...handoff, report } }]);
+    expect(taskLogs(sent).flatMap((m) => m.events).filter((e) => e.type === 'handoff')).toHaveLength(1);
+    expect(taskOf(session, 't1')?.handoff).toEqual(handoff);
+    await vi.waitFor(() => expect(saves(session).mock.calls.at(-1)?.[0].tasks[0].handoff).toEqual(handoff));
   });
 
   it('opens an attempt log even when the runner emits only plain output', async () => {

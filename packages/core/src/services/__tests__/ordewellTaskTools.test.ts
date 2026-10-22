@@ -88,6 +88,11 @@ async function connect(config: McpClientConfig): Promise<Client> {
   return client;
 }
 
+/** A tool result's text, as the runner reads it. */
+function text(result: Awaited<ReturnType<Client['callTool']>>): string {
+  return (result.content as { type: string; text: string }[]).map((c) => c.text).join('\n');
+}
+
 const task = (id: string, order: number, extra: Partial<Task> = {}) =>
   createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, ...extra });
 
@@ -238,5 +243,182 @@ describe('checkpoint over HTTP, through the orchestrator', () => {
     await orchestrator.retryTask('t1');
 
     expect(await call).toMatchObject({ isError: true });
+  });
+});
+
+describe('the handoff a task_complete call carries (ADR-0047)', () => {
+  async function completing(plan: Task[] = [task('t1', 1)], taskId = 't1') {
+    const rigged = rig();
+    rigged.orchestrator.loadPlan(plan);
+    await rigged.orchestrator.forceStartTask(taskId);
+    const client = await connect(rigged.adapters.at(-1)!.config);
+    const complete = (args: Record<string, unknown>) => client.callTool({ name: 'task_complete', arguments: { status: 'done', ...args } });
+    return { ...rigged, client, complete };
+  }
+
+  it('keeps a call that sends only a summary as a handoff with no findings', async () => {
+    const { complete, get } = await completing();
+
+    const result = await complete({ summary: 'Added the cache; eviction is still missing.' });
+
+    expect(result.isError).toBe(false);
+    await vi.waitFor(() => expect(get('t1').status).toBe('completed'));
+    expect(get('t1').handoff).toEqual({ summary: 'Added the cache; eviction is still missing.', findings: [], findingCount: 0 });
+  });
+
+  it('numbers the findings F1 to Fn in the order the author gave them, and keeps the artifacts', async () => {
+    const { complete, get } = await completing();
+
+    const result = await complete({
+      summary: 'Reviewed the cache.',
+      findings: [
+        { severity: 'blocker', title: 'Entries never expire', detail: 'get() ignores the TTL.', evidence: [{ kind: 'file', path: 'src/cache.ts', line: 12 }] },
+        { severity: 'info', title: 'The README still says v1' },
+        { severity: 'minor', title: 'A stale comment', evidence: [{ kind: 'commit', sha: 'a1b2c3d' }, { kind: 'url', url: 'https://example.com/ttl' }] },
+      ],
+      artifacts: [{ kind: 'file', path: 'docs/cache-review.md' }],
+    });
+
+    expect(result.isError).toBe(false);
+    await vi.waitFor(() => expect(get('t1').status).toBe('completed'));
+    expect(get('t1').handoff).toEqual({
+      summary: 'Reviewed the cache.',
+      findings: [
+        { id: 'F1', severity: 'blocker', title: 'Entries never expire', detail: 'get() ignores the TTL.', evidence: [{ kind: 'file', path: 'src/cache.ts', line: 12 }] },
+        { id: 'F2', severity: 'info', title: 'The README still says v1' },
+        { id: 'F3', severity: 'minor', title: 'A stale comment', evidence: [{ kind: 'commit', sha: 'a1b2c3d' }, { kind: 'url', url: 'https://example.com/ttl' }] },
+      ],
+      findingCount: 3,
+      artifacts: [{ kind: 'file', path: 'docs/cache-review.md' }],
+    });
+  });
+
+  it('refuses a summary past its limit, naming the field and where the rest goes, and keeps the attempt open for a resend', async () => {
+    const { complete, get } = await completing();
+
+    const refused = await complete({ summary: 'x'.repeat(1_501) });
+
+    expect(refused.isError).toBe(true);
+    expect(text(refused)).toMatch(/summary/);
+    expect(text(refused)).toMatch(/1500 characters: put the long form in report/);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(get('t1').status).toBe('in_progress');
+
+    expect((await complete({ summary: 'Short.', report: 'x'.repeat(1_501) })).isError).toBe(false);
+    await vi.waitFor(() => expect(get('t1').status).toBe('completed'));
+    expect(get('t1').handoff?.summary).toBe('Short.');
+  });
+
+  it('refuses a URL that is not http or https, naming the field, the value and what is accepted, and records nothing', async () => {
+    const { complete, get } = await completing();
+
+    const refused = await complete({
+      summary: 'Reviewed.',
+      findings: [{ severity: 'major', title: 'XSS', evidence: [{ kind: 'file', path: 'a.ts' }, { kind: 'url', url: 'javascript:alert(1)' }] }],
+    });
+
+    expect(refused.isError).toBe(true);
+    expect(text(refused)).toContain('findings[0].evidence[1].url');
+    expect(text(refused)).toContain('"javascript:alert(1)"');
+    expect(text(refused)).toMatch(/only an http or https URL/);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(get('t1').status).toBe('in_progress');
+    expect(get('t1').handoff).toBeUndefined();
+  });
+
+  it('names a cited task by its id, and refuses a task this one may not read, one not in the plan, or a finding it never had', async () => {
+    const done = task('t1', 1, { status: 'completed', handoff: { summary: 'Wrote it.', findings: [], findingCount: 2 } });
+    const { complete, get } = await completing([done, task('t2', 2, { dependencies: ['t1'] }), task('t3', 3)], 't2');
+
+    const refused = await complete({
+      summary: 'Checked.',
+      findings: [{ severity: 'major', title: 'Still broken', evidence: [{ kind: 'task', task: '#3' }, { kind: 'task', task: '#9' }, { kind: 'task', task: '#1', finding: 'F3' }] }],
+    });
+
+    expect(refused.isError).toBe(true);
+    expect(text(refused)).toContain('findings[0].evidence[0].task: "#3" is #3 Task t3, which this task may not read: only itself, a task it depends on, or its loop\'s other end.');
+    expect(text(refused)).toContain('findings[0].evidence[1].task: "#9" names no task in the plan');
+    expect(text(refused)).toContain('findings[0].evidence[2].finding: "F3" is not a finding of #1 Task t1: its latest handoff has F1 to F2.');
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(get('t2').status).toBe('in_progress');
+
+    const accepted = await complete({
+      summary: 'Checked.',
+      findings: [{ severity: 'major', title: 'Still broken', evidence: [{ kind: 'task', task: '#1', finding: 'F2' }] }],
+      artifacts: [{ kind: 'task', task: 't2' }],
+    });
+    expect(accepted.isError).toBe(false);
+    await vi.waitFor(() => expect(get('t2').status).toBe('completed'));
+    expect(get('t2').handoff?.findings[0].evidence).toEqual([{ kind: 'task', task: 't1', finding: 'F2' }]);
+    expect(get('t2').handoff?.artifacts).toEqual([{ kind: 'task', task: 't2' }]);
+  });
+
+  it('lets a loop\'s check cite its body, and a body task cite its check', async () => {
+    const check = task('c', 1, { loop: { body: ['b'], maxRounds: 2 } });
+    const body = task('b', 2, { dependencies: ['c'], status: 'completed', handoff: { summary: 'Fixed F1.', findings: [], findingCount: 0 } });
+    const { complete, get } = await completing([check, body], 'c');
+
+    const result = await complete({ summary: 'The fix holds.', findings: [{ severity: 'info', title: 'Verified', evidence: [{ kind: 'task', task: '#2' }] }] });
+
+    expect(result.isError).toBe(false);
+    await vi.waitFor(() => expect(get('c').status).toBe('completed'));
+    expect(get('c').handoff?.findings[0].evidence).toEqual([{ kind: 'task', task: 'b' }]);
+  });
+
+  it('keeps the first 25 findings and no report on the plan, counting every finding', async () => {
+    const { complete, get } = await completing();
+    const findings = Array.from({ length: 30 }, (_, i) => ({ severity: 'minor', title: `Finding ${i + 1}` }));
+
+    expect((await complete({ summary: 'Thirty things.', findings, report: 'The long form.' })).isError).toBe(false);
+
+    await vi.waitFor(() => expect(get('t1').status).toBe('completed'));
+    const { handoff } = get('t1');
+    expect(handoff?.findingCount).toBe(30);
+    expect(handoff?.findings.map((f) => f.id)).toEqual(Array.from({ length: 25 }, (_, i) => `F${i + 1}`));
+    expect(handoff).not.toHaveProperty('report');
+  });
+
+  it('gives a reader of the output summary the whole handoff as the report, task references named as the plan names them', async () => {
+    const done = task('t1', 1, { status: 'completed' });
+    const { complete, get } = await completing([done, task('t2', 2, { dependencies: ['t1'] })], 't2');
+
+    await complete({
+      summary: 'Reviewed the cache.',
+      findings: [
+        { severity: 'blocker', title: 'Entries never expire', detail: 'get() ignores the TTL.\nset() too.', evidence: [{ kind: 'file', path: 'src/cache.ts', line: 12 }, { kind: 'task', task: 't1' }] },
+        { severity: 'info', title: 'The README still says v1', evidence: [{ kind: 'commit', sha: 'a1b2c3d', repo: 'api' }, { kind: 'url', url: 'https://example.com/ttl' }] },
+      ],
+      artifacts: [{ kind: 'file', path: 'docs/review.md' }],
+      report: 'The long form.',
+    });
+
+    await vi.waitFor(() => expect(get('t2').status).toBe('completed'));
+    expect(get('t2').outputSummary?.report).toBe([
+      'Reviewed the cache.',
+      '',
+      'Findings:',
+      '- F1 [blocker] Entries never expire',
+      '  get() ignores the TTL.',
+      '  set() too.',
+      '  Evidence: src/cache.ts:12; task #1',
+      '- F2 [info] The README still says v1',
+      '  Evidence: commit a1b2c3d in api; https://example.com/ttl',
+      '',
+      'Artifacts: docs/review.md',
+      '',
+      'Report:',
+      'The long form.',
+    ].join('\n'));
+  });
+
+  it('starts a retry without the handoff of the attempt before it', async () => {
+    const { orchestrator, complete, get } = await completing();
+    await complete({ status: 'failed', summary: 'The schema is missing.' });
+    await vi.waitFor(() => expect(get('t1').status).toBe('failed'));
+    expect(get('t1').handoff?.summary).toBe('The schema is missing.');
+
+    await orchestrator.retryTask('t1');
+
+    expect(get('t1').handoff).toBeUndefined();
   });
 });

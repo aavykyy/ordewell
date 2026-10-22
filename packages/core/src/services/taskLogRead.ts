@@ -1,5 +1,6 @@
 import { scriptExitText, type TaskLogEvent } from '../models/TaskLog';
 import { commandLine } from '../models/ScriptTask';
+import { handoffLines } from '../models/Handoff';
 
 const LOG_KINDS = {
   task_skills: true,
@@ -32,6 +33,7 @@ const LOG_KINDS = {
   script_run: true,
   script_output: true,
   script_exit: true,
+  handoff: true,
 } satisfies Record<TaskLogEvent['type'], true>;
 
 export const TASK_LOG_KINDS = Object.keys(LOG_KINDS) as [TaskLogEvent['type'], ...TaskLogEvent['type'][]];
@@ -81,6 +83,7 @@ function eventText(event: TaskLogEvent): string {
     case 'script_run': return 'argv' in event ? `$ ${commandLine(event.argv)}` : `script:\n${event.script}`;
     case 'script_output': return event.omittedChars ? `… ${event.omittedChars} characters omitted …\n${event.text}` : event.text;
     case 'script_exit': return scriptExitText(event);
+    case 'handoff': return handoffLines(event.handoff).join('\n');
   }
 }
 

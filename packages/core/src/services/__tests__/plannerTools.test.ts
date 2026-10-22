@@ -26,6 +26,7 @@ import { respondingSpawn, planJson, type FakeAgentProcess, type FakeSpawnResult 
 import { plannerToolHandler, PLANNER_TURN_ENDED, type PlannerToolsHost } from '../plannerTools';
 import { EMPTY_CONVERSATION, fromTranscript, reduceConversation, type ConversationView } from '../../conversation';
 import type { SubmitPlanArgs } from '../mcp/tools';
+import { TASK_READ_TOOLS_PROTOCOL } from '../TaskQuery';
 
 /**
  * The Ordewell MCP server reaching the Claude Code planner (ADR-0022): the
@@ -825,6 +826,14 @@ describe('what the planner is told', () => {
     expect(PLANNER_TOOLS.find((t) => t.name === 'task_query')?.description).toMatch(/\bskills\b/);
   });
 
+  it('that task_query reads a task\'s handoff, and task_output an ended task\'s whole handoff with its report (ADR-0047)', () => {
+    const described = (name: string) => PLANNER_TOOLS.find((t) => t.name === name)?.description;
+    expect(described('task_query')).toMatch(/\bhandoff\b/);
+    expect(described('task_output')).toMatch(/whole handoff, its findings and report/);
+    expect(TASK_READ_TOOLS_PROTOCOL.join('\n')).toMatch(/outputSummary, handoff, userStoriesCovered/);
+    expect(TASK_READ_TOOLS_PROTOCOL.join('\n')).toMatch(/whole handoff, its findings and report/);
+  });
+
   const systemPrompt = (spawned: FakeSpawnResult) => {
     const args = spawned.lastArgs();
     return args[args.indexOf('--append-system-prompt') + 1];
@@ -1062,6 +1071,62 @@ describe('task_query with a task report', () => {
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
+  });
+});
+
+describe('task_query with a handoff (ADR-0047)', () => {
+  const handoff = {
+    summary: 'Reviewed the cache; two blockers.',
+    findings: [{ id: 'F1', severity: 'blocker' as const, title: 'Entries never expire', detail: 'get() ignores the TTL.', evidence: [{ kind: 'task' as const, task: 'a', finding: 'F2' }, { kind: 'file' as const, path: 'src/cache.ts', line: 12 }] }],
+    findingCount: 30,
+    artifacts: [{ kind: 'commit' as const, sha: 'a1b2c3d' }],
+  };
+
+  async function readBoth(args: Record<string, unknown>) {
+    const workspace = mkdtempSync(join(tmpdir(), 'ordewell-task-handoff-'));
+    let read: { isError: boolean; body: unknown } | undefined;
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp) => {
+        read = await call(mcp!, 'task_query', args);
+        return 'I see.';
+      },
+    }));
+    try {
+      session.loadPlan({
+        tasks: [
+          createTask({
+            id: 'a', order: 1, title: 'Build', prompt: 'p', assignedRunner: 'claude-code', status: 'completed',
+            outputSummary: { reviewReason: 'Verified', report: 'Built it.', logTail: '', capturedAt: '2026-10-05T10:00:00Z' },
+          }),
+          createTask({
+            id: 'b', order: 2, title: 'Review', prompt: 'p', assignedRunner: 'claude-code', status: 'completed', dependencies: ['a'], handoff,
+            outputSummary: { reviewReason: 'Verified', report: 'Reviewed the cache; two blockers. (the whole handoff as text)', logTail: '', capturedAt: '2026-10-05T10:00:00Z' },
+          }),
+        ],
+        generatedAt: '2026-10-05T09:00:00Z', lastUpdated: '2026-10-05T09:00:00Z', status: 'approved', runners: ['claude-code'],
+        conversationHistory: [{ role: 'user', content: 'review it', timestamp: '2026-10-05T09:00:00Z' }],
+      }, 'review it', workspace, { persist: false });
+      await session.continueConversation('what did it find?');
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+    return (read?.body as { tasks: Record<string, unknown>[] }).tasks;
+  }
+
+  it('reads the digest by default, tasks named as the plan names them, and points to the log for the rest; a task saved before handoffs keeps its report', async () => {
+    const [legacy, reviewed] = await readBoth({ tasks: ['#1', '#2'] });
+
+    expect(reviewed.handoff).toEqual({
+      summary: 'Reviewed the cache; two blockers.',
+      findings: [{ id: 'F1', severity: 'blocker', title: 'Entries never expire', detail: 'get() ignores the TTL.', evidence: [{ kind: 'task', task: '#1', finding: 'F2' }, { kind: 'file', path: 'src/cache.ts', line: 12 }] }],
+      findingCount: 30,
+      artifacts: [{ kind: 'commit', sha: 'a1b2c3d' }],
+      rest: 'Findings F2 to F30 and the report are in the attempt\'s log: read them with task_output.',
+    });
+    // The handoff carries what the report said; the summary keeps only how it ended.
+    expect(reviewed.outputSummary).toEqual({ reviewReason: 'Verified' });
+    expect(legacy.handoff).toBeNull();
+    expect(legacy.outputSummary).toEqual({ reviewReason: 'Verified', report: 'Built it.' });
   });
 });
 
@@ -1631,12 +1696,84 @@ describe('task_output', () => {
           reason: expect.stringContaining('not running'),
           verdict: { outcome: 'pass', reason: 'Completion marker found', checks: [{ name: 'completion_marker', result: 'pass' }] },
           outputSummary: { reviewReason: 'It finished cleanly', logTail: 'added src/cache.ts' },
+          handoff: null,
           lastAttempt: '- Bash {"command":"npm test"} → ok\n\nIts last message:\n  The cache is in place.',
         },
       });
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
+  });
+
+  describe('of a task that ended with a handoff (ADR-0047)', () => {
+    const findings = [
+      { id: 'F1', severity: 'blocker' as const, title: 'Entries never expire', evidence: [{ kind: 'task' as const, task: 'a' }] },
+      { id: 'F2', severity: 'minor' as const, title: 'A stale comment', detail: 'cache.ts:3' },
+    ];
+    const saved = { summary: 'Reviewed the cache.', findings, findingCount: 2, report: 'The long form.' };
+
+    async function readOutput(args: Record<string, unknown>) {
+      const workspace = mkdtempSync(join(tmpdir(), 'ordewell-task-output-handoff-'));
+      let answer: { isError: boolean; body: unknown } | undefined;
+      const { session } = plannerSession(fakeClaude({
+        turn: async (mcp) => {
+          answer = await call(mcp!, 'task_output', args);
+          return 'I see.';
+        },
+      }));
+      try {
+        session.loadPlan({
+          tasks: [
+            createTask({ id: 'a', order: 1, title: 'Build', prompt: 'p', assignedRunner: 'claude-code', status: 'completed' }),
+            createTask({
+              id: 'b', order: 2, title: 'Review', prompt: 'p', assignedRunner: 'claude-code', status: 'completed', dependencies: ['a'],
+              handoff: { summary: saved.summary, findings: [findings[0]], findingCount: 2 },
+              outputSummary: { reviewReason: 'Verified', report: 'The handoff, as one text.', logTail: '', capturedAt: '2026-10-05T10:00:00Z' },
+            }),
+          ],
+          generatedAt: '2026-10-05T09:00:00Z', lastUpdated: '2026-10-05T09:00:00Z', status: 'approved', runners: ['claude-code'],
+          conversationHistory: [{ role: 'user', content: 'review it', timestamp: '2026-10-05T09:00:00Z' }],
+        }, 'review it', workspace, { persist: false });
+        openTaskLog({ baseDir: workspace, sessionId: session.sessionId }, 'b').append([
+          { type: 'text', text: 'Reviewed.' },
+          { type: 'handoff', handoff: saved },
+        ]);
+        await session.continueConversation('what did it find?');
+      } finally {
+        rmSync(workspace, { recursive: true, force: true });
+      }
+      return answer!.body as Record<string, unknown>;
+    }
+
+    it('answers with every finding and the report, read from its attempt\'s log, the tasks it cites named by reference', async () => {
+      const body = await readOutput({ task: '#2' });
+
+      expect(body.handoff).toEqual({
+        summary: 'Reviewed the cache.',
+        findings: [{ ...findings[0], evidence: [{ kind: 'task', task: '#1' }] }, findings[1]],
+        findingCount: 2,
+        report: 'The long form.',
+      });
+      expect(body.outputSummary).toEqual({ reviewReason: 'Verified' });
+    });
+
+    it('renders the handoff event whole in a read of the saved log', async () => {
+      const body = await readOutput({ task: '#2', kinds: ['handoff'] });
+
+      expect(body.output).toBe([
+        '[2 handoff] Reviewed the cache.',
+        '',
+        'Findings:',
+        '- F1 [blocker] Entries never expire',
+        '  Evidence: task a',
+        '- F2 [minor] A stale comment',
+        '  cache.ts:3',
+        '',
+        'Report:',
+        'The long form.',
+        '',
+      ].join('\n'));
+    });
   });
 
   it('names a task that is not in the plan', async () => {

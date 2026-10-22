@@ -113,6 +113,35 @@ describe('rendering the output read', () => {
     expect(answer).toContain('outputSummary: Failed verification\nlog tail:\nnpm ERR! missing script');
   });
 
+  it('answers a task\'s handoff with each finding, the tasks it cites by reference, and where the rest is; its report is the handoff\'s, not the summary\'s', () => {
+    const reviewed = tasks();
+    reviewed[1].outputSummary = { reviewReason: 'Verified', report: 'The handoff, as one text.', logTail: '', capturedAt: 'x' };
+    reviewed[1].handoff = {
+      summary: 'Login works; the refresh path does not.',
+      findings: [{ id: 'F1', severity: 'major', title: 'Refresh swallows errors', detail: 'services/Auth.ts drops the 401.', evidence: [{ kind: 'task', task: 'a', finding: 'F2' }] }],
+      findingCount: 3,
+      artifacts: [{ kind: 'file', path: 'docs/auth.md' }],
+    };
+    const answer = renderTaskQueryAnswer({ tasks: ['#1', '#2'], catalog: false }, reviewed, catalog);
+
+    expect(answer).toContain('handoff: (none)');
+    expect(answer).toContain([
+      'outputSummary: Verified',
+      'handoff:',
+      'Login works; the refresh path does not.',
+      '',
+      'Findings:',
+      '- F1 [major] Refresh swallows errors',
+      '  services/Auth.ts drops the 401.',
+      '  Evidence: task #1 F2',
+      '+2 more findings, in the attempt\'s log',
+      '',
+      'Artifacts: docs/auth.md',
+      '(The whole handoff, report and all, is in the attempt\'s log.)',
+    ].join('\n'));
+    expect(answer).not.toContain('The handoff, as one text.');
+  });
+
   it('says when a task has never run in this session instead of answering silence', () => {
     const { asked, liveOutput } = fakeLive({});
     const answer = renderTaskQueryAnswer(
