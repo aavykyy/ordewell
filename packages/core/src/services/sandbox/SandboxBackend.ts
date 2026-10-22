@@ -23,6 +23,13 @@ export interface SandboxProfile {
   /** Directories the command may write, recursively. Nothing else can be written. */
   write: readonly string[];
   /**
+   * Of `write`, those the command may not put a symbolic link in, nor move
+   * one into: what is read there outside the sandbox, as the user, would
+   * follow it (ADR-0046). A backend that cannot refuse a link by its type
+   * refuses the profile.
+   */
+  linkless?: readonly string[];
+  /**
    * What the command may read besides `write`. `'host'` is the whole
    * filesystem: the planner's reads are confined by ADR-0008's path check,
    * not here (ADR-0011 B2). A list confines reads to those paths, for a
@@ -130,7 +137,7 @@ export class SandboxUnsupportedError extends Error {
  * an option.
  */
 export function assertProfilePaths(backend: string, profile: SandboxProfile): void {
-  const paths = [...profile.write, ...(profile.read === 'host' ? [] : profile.read), ...(profile.throwaway ?? []), ...(profile.masked ?? [])];
+  const paths = [...profile.write, ...(profile.linkless ?? []), ...(profile.read === 'host' ? [] : profile.read), ...(profile.throwaway ?? []), ...(profile.masked ?? [])];
   for (const p of paths) {
     if (!path.posix.isAbsolute(p) || p.includes('\0')) throw new SandboxUnsupportedError(backend, `the path ${JSON.stringify(p)}`);
   }

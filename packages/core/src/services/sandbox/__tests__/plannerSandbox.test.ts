@@ -201,6 +201,13 @@ describe('sealedShellProfile (ADR-0036 S1)', () => {
     expect(sealedShellProfile(host, { workspace: '/work/repo' }).write).toEqual([]);
   });
 
+  it('refuses links in that directory where Seatbelt can, and leaves bubblewrap a profile it can start (ADR-0046)', () => {
+    const darwin = { ...host, platform: 'darwin' as NodeJS.Platform };
+    expect(sealedShellProfile(darwin, { scratch: '/tmp/s', workspace: '/work/repo', writable: '/work/tree' }).linkless).toEqual(['/work/tree']);
+    expect(sealedShellProfile(darwin, { scratch: '/tmp/s', workspace: '/work/repo' }).linkless).toBeUndefined();
+    expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/work/repo', writable: '/work/tree' }).linkless).toBeUndefined();
+  });
+
   it('keeps its network off unless a native shell asks for the harness\'s own (N3)', () => {
     expect(sealedShellProfile(host, { workspace: '/w' }).network).toBe(false);
     expect(sealedShellProfile(host, { workspace: '/w', network: true }).network).toBe(true);

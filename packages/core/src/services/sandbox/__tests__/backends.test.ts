@@ -126,6 +126,16 @@ describe('SeatbeltBackend.wrap', () => {
       expect(text.indexOf('(deny file-read* file-write* (subpath (param "MASKED_0")))')).toBeGreaterThan(text.indexOf('READ_2'));
     });
 
+    it('refuses a link made in, or moved into, a writable directory without links, after the rule that makes it writable (ADR-0046)', () => {
+      const launch = seatbelt.wrap(SH, sealed({ write: [SCRATCH, '/work/repo/wt'], linkless: ['/work/repo/wt'] }));
+      const text = profileText(launch.args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1));
+      const deny = '(deny file-write-create (require-all (vnode-type SYMLINK) (require-any (subpath (param "LINKLESS_0")))))';
+      expect(text).toContain(deny);
+      expect(text.indexOf(deny)).toBeGreaterThan(text.indexOf('(param "WRITABLE_1")'));
+      expect(launch.args).toContain('LINKLESS_0=/work/repo/wt');
+      expect(profileText(seatbelt.wrap(SH, sealed()).args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1))).not.toContain('LINKLESS');
+    });
+
     it('keeps a hostile path out of the profile text in the read list too', () => {
       const launch = seatbelt.wrap(SH, sealed({ read: [HOSTILE] }));
       expect(launch.args.find((arg) => arg.startsWith('(version 1)'))).not.toContain('a"b');
@@ -219,6 +229,7 @@ describe('BubblewrapBackend.wrap', () => {
     ['a limit that is not a whole number', { limits: { ...LIMITS, memoryBytes: -1 } }],
     ['a relative path', { masked: ['run/user'] }],
     ['a relative throwaway directory', { throwaway: ['repo'] }],
+    ['a writable directory without links, which a mount cannot hold to (ADR-0046)', { write: ['/work/repo/wt'], linkless: ['/work/repo/wt'] }],
   ])('refuses %s rather than enforce less than it was asked', (_what, overrides) => {
     expect(() => bwrap().wrap(SH, profile(overrides))).toThrow(SandboxUnsupportedError);
   });

@@ -209,6 +209,8 @@ export function sealedShellProfile(
 ): SandboxProfile {
   return {
     write: [opts.scratch, opts.writable, opts.tmpdir].filter((p): p is string => !!p),
+    // Seatbelt refuses a link by its type; under bubblewrap the task shell removes those leading out once the run ends (ADR-0046).
+    ...(opts.writable && host.platform === 'darwin' ? { linkless: [opts.writable] } : {}),
     read: [...host.reads, opts.workspace],
     ...(host.overlay ? { throwaway: [opts.workspace] } : {}),
     masked: host.masked,

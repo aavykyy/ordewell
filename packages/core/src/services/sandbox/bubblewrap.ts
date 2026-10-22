@@ -95,6 +95,8 @@ export class BubblewrapBackend implements SandboxBackend {
   }
 
   wrap(invocation: SandboxInvocation, profile: SandboxProfile): SandboxLaunch {
+    // A mount grants a directory whole; refusing one kind of file in it would take a seccomp filter.
+    if (profile.linkless?.length) throw new SandboxUnsupportedError(this.name, 'a writable directory without links');
     // Sharing the host's network namespace shares its loopback; keeping one without the other needs a network of its own.
     if (profile.network && profile.localNetwork === false) throw new SandboxUnsupportedError(this.name, "the network without this machine's own services");
     assertProfilePaths(this.name, profile);

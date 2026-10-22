@@ -170,11 +170,13 @@ function codex(script: FakeRunnerScript): FakeRunner {
     } else if (msg.method === 'thread/start' || msg.method === 'thread/resume') {
       const params = (msg.params ?? {}) as CodexThreadParams;
       threads[spawned.processes.indexOf(proc)] = params;
-      proc.emitStdout(fixture('codex', 'task-thread'));
+      proc.emitStdout(line({ ...(JSON.parse(fixture('codex', 'task-thread')) as RpcLine), id: msg.id }));
       if (params.config?.mcp_servers?.ordewell) {
         const status = script.attach === 'connected' ? 'ready' : 'failed';
         proc.emitStdout(line({ jsonrpc: '2.0', method: 'mcpServer/startupStatus/updated', params: { name: 'ordewell', status } }));
       }
+    } else if (msg.method === 'config/read') {
+      proc.emitStdout(line({ jsonrpc: '2.0', id: msg.id, result: { config: { mcp_servers: {} }, origins: {} } }));
     } else if (msg.method === 'skills/list' || msg.method === 'mcpServerStatus/list') {
       proc.emitStdout(line({ jsonrpc: '2.0', id: msg.id, result: { data: [], nextCursor: null } }));
     } else if (msg.method === 'turn/start') {
