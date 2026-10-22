@@ -164,6 +164,16 @@ describe.skipIf(process.platform === 'win32')('run — a sealed run (ADR-0036 S1
     expect(Date.now() - started).toBeLessThan(3_000);
   });
 
+  it('reports the kill as the time limit it was, so the result can say so', async () => {
+    const r = await run('/bin/sh', ['-c', 'sleep 5'], { timeout: 300, sealed: true });
+    expect(r).toMatchObject({ timedOut: true });
+  });
+
+  it('does not call a command that failed on its own a timeout', async () => {
+    const r = await run('/bin/sh', ['-c', 'exit 3'], { timeout: 5_000, sealed: true });
+    expect(r).toMatchObject({ code: 3, timedOut: false });
+  });
+
   it('answers soon after it exits, though a process it left behind holds its output open', async () => {
     const started = Date.now();
     const r = await run('/bin/sh', ['-c', 'sleep 5 & echo done'], { timeout: 10_000, sealed: true });

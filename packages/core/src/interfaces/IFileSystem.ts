@@ -2,6 +2,12 @@ export interface ToolOutcome {
   success: boolean;
   output: string;
   truncated: boolean;
+  /**
+   * The child was killed at its time limit, so what it had not finished did
+   * not happen (ADR-0036 S1). The adapters set it, and a sealed run's result
+   * names the limit it ran out of rather than blaming the command.
+   */
+  timedOut?: boolean;
 }
 
 export interface ReadFileOpts {

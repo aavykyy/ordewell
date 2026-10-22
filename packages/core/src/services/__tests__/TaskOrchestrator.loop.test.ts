@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TaskOrchestrator } from '../TaskOrchestrator';
+import { applyTaskOps } from '../TaskOps';
 import { createTask, type Task } from '../../models/Task';
 import type { TaskLoop } from '../../models/Loop';
 import type { IRunner, ScriptExit } from '../../interfaces/IRunner';
@@ -170,6 +171,34 @@ describe('a loop: a check that repeats with its fix until it passes (ADR-0045)',
     await vi.waitFor(() => expect(h.executionComplete).toHaveBeenCalled());
     expect(h.spawns('fix')).toHaveLength(0);
     expect(h.get('fix')).toMatchObject({ status: 'skipped', skipReason: 'not run: the loop ran out of rounds' });
+    expect(h.orchestrator.getBlockedBy('ship')).toEqual(['review']);
+  });
+
+  it('closes a loop an edit leaves out of rounds, and settles its check once more', async () => {
+    const h = setup(reviewed());
+    await h.orchestrator.approveReview();
+    await h.pass('build');
+    await h.fail('review', 1, 'Found it.');
+    await vi.waitFor(() => expect(h.spawns('fix')).toHaveLength(1));
+
+    // An edit adds a body task and lowers maxRounds to the round in progress:
+    // the check is now out of rounds with its body still unrun (L6).
+    const edited = applyTaskOps(h.orchestrator.storeInstance.snapshot(), [
+      { op: 'add', task: { title: 'Fix again', description: 'again', prompt: 'again', dependencies: ['review'], sliceType: 'AFK', autonomy: 'AFK' }, handle: 'f2' },
+      { op: 'update', taskId: 'review', changes: { loop: { body: ['fix', 'f2'], maxRounds: 1 } } as Partial<Task> },
+    ], ['claude-code']);
+    expect(edited.ok).toBe(true);
+    const again = edited.handles!.get('f2')!;
+    h.orchestrator.reconcilePlan(edited.tasks, ['claude-code']);
+
+    expect(h.get(again)).toMatchObject({ status: 'skipped', skipReason: 'not run: the loop ran out of rounds' });
+    // The round-1 settle, and the one that says the loop ended.
+    expect(h.settled.filter((id) => id === 'review')).toHaveLength(2);
+
+    await h.pass('fix');
+    await vi.waitFor(() => expect(h.executionComplete).toHaveBeenCalled());
+    expect(h.spawns('review')).toHaveLength(1);
+    expect(h.get('fix').status).toBe('completed');
     expect(h.orchestrator.getBlockedBy('ship')).toEqual(['review']);
   });
 

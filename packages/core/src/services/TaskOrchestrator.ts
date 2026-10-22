@@ -1055,7 +1055,8 @@ export class TaskOrchestrator {
    * A failed task stays failed, unlike a plan load's fresh chance: an edit is
    * not a retry, and the tasks it blocks wait for that retry (ADR-0034).
    */
-  reconcilePlan(newTasks: Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS]): void {
+  reconcilePlan(newTasks: readonly Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS]): void {
+    const before = this.store.planTasks;
     const adopted = [...newTasks];
     for (const taskId of this.attempts.keys()) {
       const task = this.store.get(taskId);
@@ -1072,12 +1073,35 @@ export class TaskOrchestrator {
 
     const waitingRunners = new Set(this.store.allTasks.filter(waitsForReset).map((t) => this.store.resolveTaskRunner(t)));
     this.store.load(adopted, planRunners, { keepFailed: true });
+    this.planEdited(before);
     // An edit that took the last task waiting on a runner's reset out of the
     // plan — or ended its pause by re-arming it — releases the hold and
     // disarms the wait, so the run goes on and no timer resumes a wait
     // nothing owes (ADR-0018, U1).
     for (const runner of waitingRunners) if (this.waitingOn(runner).length === 0) this.limitWaits.disarm(runner);
     this.releaseHold();
+  }
+
+  /**
+   * An edit landed on the plan — a planner's task ops through
+   * {@link reconcilePlan}, or the user's direct edit through the PlanEditor.
+   * One that leaves a loop's check out of rounds ends the loop (ADR-0045 L6):
+   * what of its body has not run will not run, and, while the run is under
+   * way, the check settles once more so the supervisor hears the end. Nothing
+   * else notices such an edit: the check settled when it failed a round, and
+   * no round will run it again.
+   */
+  planEdited(before: readonly Task[]): void {
+    const was = new Map(before.map((task) => [task.id, task]));
+    for (const check of this.store.allTasks) {
+      if (!outOfRounds(check)) continue;
+      const prior = was.get(check.id);
+      if (prior && outOfRounds(prior)) continue;
+      this.closeLoop(check, LOOP_OUT_OF_ROUNDS);
+      // Outside a run there is no supervisor to settle it for, and the next
+      // run starts a failed check's rounds over; the close still stands.
+      if (this.isRunning) this.emit('onTaskSettled', { taskId: check.id });
+    }
   }
 
   /** Start the full-plan run, or continue one that is held or ended on a failure. */

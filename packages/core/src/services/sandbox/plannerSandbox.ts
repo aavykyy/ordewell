@@ -1,6 +1,7 @@
 import * as fsSync from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { timeLimitText } from '../../models/ScriptTask';
 import type { ResearchShell, ShellLaunch } from '../researchShell';
 import { SEALED_RUN_MARK } from '../researchStepSummary';
 import { BubblewrapBackend, findBubblewrap } from './bubblewrap';
@@ -42,6 +43,12 @@ export interface SealedRunOptions {
   keychain?: boolean;
   /** Whether that network reaches loopback and this machine's Unix sockets. Defaults to true; a native shell passes false (N2). */
   localNetwork?: boolean;
+  /**
+   * The limits the sealed run is held to (ADR-0036 S1). {@link SEALED_LIMITS}
+   * by default; a read-only task passes {@link TASK_SEALED_LIMITS}, since its
+   * one shell is where it runs the project's tests (ADR-0046).
+   */
+  limits?: SandboxLimits;
 }
 
 export type SealedAvailability =
@@ -198,6 +205,13 @@ const SEALED_ENV: readonly string[] = [
 export const SEALED_LIMITS: SandboxLimits = { processes: 256, memoryBytes: 4 * 1024 ** 3, wallTimeMs: 60_000 };
 
 /**
+ * A read-only task's sealed runs (ADR-0046): the same resources, with the ten
+ * minutes a script task gets by default, since its one shell is where the task
+ * runs the project's tests and a suite does not fit in a minute.
+ */
+export const TASK_SEALED_LIMITS: SandboxLimits = { ...SEALED_LIMITS, wallTimeMs: 10 * 60_000 };
+
+/**
  * A sealed run's profile (S1): the workspace read-only, or a throwaway
  * overlay over it where the host has one; the scratch directory writable and
  * its `HOME`; outside the workspace only {@link SEALED_READS}; no network, a
@@ -220,7 +234,7 @@ export function sealedShellProfile(
     privateTmp: true,
     env: opts.scratch ? { ...scratchEnv(opts.scratch, host.platform), HOME: opts.scratch } : {},
     inheritEnv: SEALED_ENV,
-    limits: SEALED_LIMITS,
+    limits: opts.limits ?? SEALED_LIMITS,
   };
 }
 
@@ -462,6 +476,7 @@ export class PlannerShellSandbox {
       scratch: this.scratchDir(),
       workspace: canonical(opts.workspace),
       ...(opts.writable ? { writable: canonical(opts.writable) } : {}),
+      ...(opts.limits ? { limits: opts.limits } : {}),
     }));
   }
 
@@ -556,6 +571,18 @@ export function sealedRunHeader(why: 'asked' | 'refused', task?: { worktree: boo
 
 /** A read-only task's {@link SEALED_FAILURE_NOTE}: it has nowhere to send the work but its report (ADR-0046). */
 export const TASK_SEALED_FAILURE_NOTE = "A sealed run cannot reach the network, the user's credentials or their files outside the workspace, and writes nothing but this task's worktree and scratch directory, so running it again fails the same way. If what it could not do matters, say so in your report.";
+
+/**
+ * Appended to a sealed run the wall-time limit ended (ADR-0036 S1), in place
+ * of a failure note about reach: the command did not fail, it ran out of time,
+ * so the way on is to run less at a time rather than not at all.
+ */
+export function sealedTimeLimitNote(wallTimeMs: number, forTask: boolean): string {
+  const limit = timeLimitText(wallTimeMs);
+  return forTask
+    ? `The sealed run was ended at its time limit of ${limit}: what it had not finished did not happen. Run less at a time, in commands that each finish inside the limit, or say in your report what needs longer.`
+    : `The sealed run was ended at its time limit of ${limit}: what it had not finished did not happen. A command that needs longer belongs in the plan as a task; to read something, run it in pieces that each finish in time.`;
+}
 
 /** Appended to a sealed run that failed: what it could never have done, and what to do in place of a retry. */
 export const SEALED_FAILURE_NOTE = "A sealed run cannot reach the network, the user's credentials or their files outside the workspace, and cannot change the workspace, so running it sealed again fails the same way. To read something it could not, run each command on its own, without a loop or inline code, so Ordewell's command rules can judge it; a change belongs in the plan as a task.";
