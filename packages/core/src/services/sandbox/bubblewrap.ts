@@ -114,6 +114,14 @@ export class BubblewrapBackend implements SandboxBackend {
     // An empty directory over a directory, /dev/null over anything else: a socket that is a file can only be covered by another file.
     for (const p of shallowFirst(profile.masked ?? [])) args.push(...(this.isDirectory(p) ? ['--tmpfs', p] : ['--ro-bind', '/dev/null', p]));
     for (const p of shallowFirst(profile.write)) args.push('--bind', p, p);
+    // After the writable binds that cover them: a worktree's `.git` file stays
+    // the repository's, so git outside the sandbox cannot be made to load one
+    // the command rewrote. Creating a `.git` beneath the worktree would take a
+    // seccomp filter and is left a residual (ADR-0046).
+    for (const worktree of profile.gitWorktrees ?? []) {
+      const gitFile = path.posix.join(worktree, '.git');
+      args.push('--ro-bind', gitFile, gitFile);
+    }
     args.push('--', invocation.shell, ...invocation.shellArgs);
 
     const env = launchEnv(invocation, profile);

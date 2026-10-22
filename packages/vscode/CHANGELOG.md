@@ -56,6 +56,11 @@
 - **Once a read-only task has run a command sealed, all its later commands run
   sealed too**, allowlisted ones included, so none can run a script a sealed
   run rewrote with the network and your files in reach.
+- **A read-only task's sealed runs cannot plant a git repository**: they cannot
+  rewrite or replace the worktree's `.git`, nor (on macOS) create a `.git`
+  beneath it, so later git never loads a repository with hooks or filters of
+  the run's own, and `task_diff` refuses a read-only task. A `.git` in a
+  worktree subdirectory on Linux is a residual.
 - **An edit to an approved script task's body needs your consent again.**
 
 ## [0.10.10] - 2026-10-19

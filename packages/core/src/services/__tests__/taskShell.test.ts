@@ -138,6 +138,20 @@ describe("a read-only task's shell (ADR-0046)", () => {
     }
   });
 
+  it("protects each worktree's .git in its sealed profile: the one writable worktree, or every repo's in a group (ADR-0046)", async () => {
+    const lone = session();
+    await lone.taskShell({ cwd: worktree, writable: worktree }).run('npm test');
+    expect(lone.ran[0].profile!.gitWorktrees).toEqual([worktree]);
+
+    const group = session();
+    const alpha = join(worktree, 'alpha');
+    const beta = join(worktree, 'beta');
+    mkdirSync(alpha, { recursive: true });
+    mkdirSync(beta, { recursive: true });
+    await group.taskShell({ cwd: alpha, writable: worktree, worktrees: [alpha, beta] }).run('npm test');
+    expect(group.ran[0].profile!.gitWorktrees).toEqual([alpha, beta]);
+  });
+
   it("gives its sealed runs a task-sized time limit, not the planner's short one (ADR-0046)", async () => {
     const fs = session();
     await fs.taskShell({ cwd: worktree, writable: worktree }).run('npm test');

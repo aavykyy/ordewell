@@ -81,6 +81,12 @@ export interface TaskShellSite {
   cwd: string;
   /** The task's own worktree, the one directory but scratch a sealed run may write; absent without one. */
   writable?: string;
+  /**
+   * The git worktree roots inside `writable` whose `.git` a sealed run must
+   * not rewrite into a repository of its own (ADR-0046): one per repo in a
+   * group. Left out, the single `writable` worktree's `.git` is protected.
+   */
+  worktrees?: readonly string[];
 }
 
 /**

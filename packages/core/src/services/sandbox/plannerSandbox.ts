@@ -26,6 +26,12 @@ export interface SealedRunOptions {
   /** None by default, so the workspace stays read-only. A read-only task passes its own throwaway worktree (ADR-0046). */
   writable?: string;
   /**
+   * The git worktree roots inside `writable` whose own `.git` a sealed run
+   * must not rewrite into a repository of its own (ADR-0046). A repo group
+   * passes one per repo; left out, the single `writable` worktree is used.
+   */
+  worktrees?: readonly string[];
+  /**
    * A harness's short per-session temporary directory, writable besides the
    * scratch one (ADR-0036 N2). A native shell needs it: Claude Code writes the
    * shell's working directory there after every command.
@@ -221,10 +227,13 @@ export function sealedShellProfile(
   host: { platform: NodeJS.Platform; reads: readonly string[]; masked: readonly string[]; overlay: boolean },
   opts: SealedRunOptions & { scratch?: string },
 ): SandboxProfile {
+  const worktrees = opts.worktrees ?? (opts.writable ? [opts.writable] : []);
   return {
     write: [opts.scratch, opts.writable, opts.tmpdir].filter((p): p is string => !!p),
     // Seatbelt refuses a link by its type; under bubblewrap the task shell removes those leading out once the run ends (ADR-0046).
     ...(opts.writable && host.platform === 'darwin' ? { linkless: [opts.writable] } : {}),
+    // Keep each worktree's `.git` the repository's, so git run outside the sandbox never loads one a sealed run planted (ADR-0046).
+    ...(worktrees.length ? { gitWorktrees: worktrees } : {}),
     read: [...host.reads, opts.workspace],
     ...(host.overlay ? { throwaway: [opts.workspace] } : {}),
     masked: host.masked,
@@ -476,6 +485,7 @@ export class PlannerShellSandbox {
       scratch: this.scratchDir(),
       workspace: canonical(opts.workspace),
       ...(opts.writable ? { writable: canonical(opts.writable) } : {}),
+      ...(opts.worktrees ? { worktrees: opts.worktrees.map(canonical) } : {}),
       ...(opts.limits ? { limits: opts.limits } : {}),
     }));
   }

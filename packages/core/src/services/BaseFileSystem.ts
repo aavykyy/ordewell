@@ -322,13 +322,13 @@ export abstract class BaseFileSystem implements IFileSystem {
    * runs as the planner's command would, until the shell's first sealed run;
    * from then on every command runs sealed. Its scratch directory is its own.
    */
-  taskShell({ cwd, writable }: TaskShellSite): TaskShell {
+  taskShell({ cwd, writable, worktrees }: TaskShellSite): TaskShell {
     const sandbox = this.sandbox.withOwnScratch();
     const site: ShellSite = {
       root: cwd,
       approval: allowlistOnly(() => this.approval),
       sandbox,
-      sealed: { workspace: this.getWorkspaceRoot(), ...(writable ? { writable } : {}), limits: TASK_SEALED_LIMITS },
+      sealed: { workspace: this.getWorkspaceRoot(), ...(writable ? { writable } : {}), ...(worktrees?.length ? { worktrees } : {}), limits: TASK_SEALED_LIMITS },
       task: { worktree: writable !== undefined, sealed: false },
     };
     // One command at a time: an unsealed one must never read the worktree

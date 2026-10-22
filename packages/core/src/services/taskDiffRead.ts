@@ -41,6 +41,10 @@ function inside(root: string, target: string): boolean {
 export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskId: string, options: TaskDiffRead): Promise<TaskDiffResult> {
   const record = run.tasks[taskId];
   if (!record) return { available: false, reason: TASK_DIFF_UNAVAILABLE };
+  // A read-only task's sealed runs may write its worktree, `.git` file
+  // included: git run there could load a repository the task planted. Ordewell
+  // runs no git in such a worktree (ADR-0046); the task's report is its result.
+  if (record.readOnly) return { available: false, reason: 'Task diff is not available for a read-only task: it lands nothing, and Ordewell runs no git in its worktree. Its report is its result.' };
   if (options.path !== undefined && !allowedPath(options.path)) {
     return { available: false, reason: 'Refused task_diff path: use a literal repo-relative file path from the file list, without traversal or Ordewell state paths.' };
   }

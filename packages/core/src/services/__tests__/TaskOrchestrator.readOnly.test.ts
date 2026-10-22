@@ -70,7 +70,8 @@ describe('a read-only task (ADR-0046)', () => {
     const cwd = env.spawned('r1')[0].cwd;
     expect(cwd).toBe('/fake-worktrees/run1/1-r1');
     expect(env.record('r1')?.readOnly).toBe(true);
-    expect(env.sites).toEqual([{ cwd, writable: cwd }]);
+    // The worktree's `.git` is named so the sealed profile keeps it the repository's (ADR-0046).
+    expect(env.sites).toEqual([{ cwd, writable: cwd, worktrees: [cwd] }]);
     expect(env.spawned('r1')[0].shell).toBe(env.shells[0]);
     expect(env.spawned('c2')[0].shell).toBeUndefined();
     expect(env.record('c2')?.readOnly).toBeUndefined();

@@ -81,7 +81,21 @@ nothing.
   when the attempt ends. Commands start in the worktree. So the task can try a
   fix, or add a failing test and run the suite. The repository's `.git` stays
   read-only, since a worktree's `.git` is a file pointing into it: git reads
-  the history and records nothing, and each sealed result says so.
+  the history and records nothing, and each sealed result says so. The
+  worktree's own `.git` file is kept the repository's too: a sealed run may not
+  write, replace, rename or remove it — nor, on macOS, create a `.git` anywhere
+  beneath the worktree — so git run later in that worktree outside the sandbox,
+  as the user (Ordewell's, below, or the runner's own), loads no repository the
+  run planted with a `core.fsmonitor`, `core.hooksPath`, filter driver or
+  `include.path` of its own. It is one field of the sealed profile
+  (`SandboxProfile.gitWorktrees`), set by `sealedShellProfile` with the repo
+  worktree roots — one per repo in a group — as `linkless` is set from the
+  writable worktree, but on every platform, and `git log`, `git diff` and `git
+  status` still work inside the run. On macOS Seatbelt denies it by the file,
+  with a deny placed after the writable allow (the last matching rule wins, as
+  with `linkless`), and refuses creating a `.git` beneath the worktree by a
+  regex; bubblewrap binds each `.git` file read-only after the writable bind
+  and cannot refuse creating one beneath it, a Linux residual.
 - **No link out of the worktree.** A sealed run may leave no link leading out
   of its worktree and the workspace. The runner's native reads run as the
   user, outside the sealed profile, and would follow it. On macOS the profile
@@ -159,7 +173,11 @@ nothing.
   whole, with nothing kept on a branch. Ordewell runs no git inside it once the
   task has run there: keeping its changes would mean committing, as the user,
   in a tree its sealed commands wrote, `.git` file included. Removing it
-  follows no link the task put on the way.
+  follows no link the task put on the way. `task_diff` refuses a read-only task
+  for the same reason — a live read-only worktree's `.git` could be one a
+  sealed run planted — and the release and crash-recovery prune of its record
+  run git only in the repository, with the worktree as an argument, never from
+  inside it.
 - **A continue starts clean.** Its worktree is fresh, and it is told that
   nothing its earlier attempt changed was kept.
 
@@ -214,6 +232,19 @@ nothing.
   removed first.** The design until 2026-10-22. Rejected: a sealed run could
   rewrite a script an allowlisted command then ran with the network and the
   host readable.
+- **Passing `task_diff` the recorded git dir and work tree, so it could read a
+  live read-only worktree without discovering its `.git`.** Rejected: the
+  worktree's admin directory name (`.git/worktrees/<name>`) is not recorded,
+  and finding it means either trusting the worktree's `.git` file, which a
+  sealed run controls, or running more git in the repository; a read-only task
+  lands nothing, so its diff is not work to inspect, and refusing it is the
+  smaller change that holds.
+- **Pinning `GIT_DIR`/`GIT_WORK_TREE` in the read-only runner's environment, so
+  its own git ignores a planted `.git`.** Rejected: one pair cannot serve a
+  repo group's several worktrees, the admin directory name is not recorded, and
+  on macOS the sealed profile already refuses a planted `.git` outright; the
+  Linux gap is left a residual rather than papered over with a setting that
+  breaks a group.
 
 ## Consequences
 
@@ -237,6 +268,15 @@ nothing.
   could follow a link in the instant before it is removed: any link on Linux,
   and on macOS one inside a directory the run moved in. Closing that on Linux
   needs a seccomp filter in the bubblewrap backend.
+- A read-only task's runner runs its own git in the task's working directory,
+  as the user, for its context (Claude Code's git status, Codex's turn diffs,
+  OpenCode's snapshots and project detection). On macOS no `.git` can be
+  planted for it to load: the worktree's own is write-protected and creating
+  one beneath the worktree is refused. On Linux bubblewrap can bind the
+  worktree's `.git` read-only but cannot refuse creating one beneath it, so a
+  runner whose working directory is at or below a subdirectory where a sealed
+  run planted a `.git` could load it; closing that needs the same seccomp
+  filter the native-read race does.
 - A failed or stopped read-only attempt leaves its log and its report to look
   at, and no worktree.
 - Where no sandbox runs, a read-only task runs only the classifier's read-only
@@ -254,3 +294,5 @@ nothing.
 - 2026-10-22 — a sealed run leaves no link out of its worktree (refused on macOS, removed after the run on every platform); a task's sealed commands have ten minutes; a Codex read-only task keeps only Ordewell's MCP server.
 
 - 2026-10-22 — every command of a read-only task's shell runs sealed after its first sealed run; the link walk stays on macOS, where Seatbelt misses a directory moved in that holds a link.
+
+- 2026-10-22 — a sealed run cannot write, replace, rename or remove its worktree's own `.git`, nor (on macOS) create one beneath the worktree, so no git outside the sandbox loads a planted repository (`SandboxProfile.gitWorktrees`); `task_diff` refuses a read-only task; the runner's own git keeps a Linux-only residual.

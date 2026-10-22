@@ -2712,7 +2712,12 @@ export class TaskOrchestrator {
       previousAttempt: (taskId) => this.opsPreviousAttempt(taskId),
     });
     const env = await this.envForTask(cwd);
-    if (landsNothing(kind)) attempt.shell = this.taskShell({ cwd, ...(writable ? { writable } : {}) }) ?? null;
+    if (landsNothing(kind)) {
+      // Each repo worktree's `.git` must stay the repository's, so a sealed run
+      // cannot plant one for the runner's own git to load (ADR-0046).
+      const worktrees = writable ? Object.values(this.runs.openRecord(task.id)?.repos ?? {}).map((r) => r.worktree) : [];
+      attempt.shell = this.taskShell({ cwd, ...(writable ? { writable } : {}), ...(worktrees.length ? { worktrees } : {}) }) ?? null;
+    }
     const shell = attempt.shell;
     return this.runner.spawn({
       taskId: task.id,
