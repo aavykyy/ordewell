@@ -49,6 +49,43 @@ describe('ChatMessage', () => {
     expect(container.querySelector('.chat-msg-planner')).toBeNull();
   });
 
+  describe('a run update that delivers a research report (ADR-0037 R2)', () => {
+    const digest = (lines: number): string => [
+      'Run update:',
+      `- task #3 "Scout the cache", whose result you asked for, has ended. ${['It passed.', ...Array.from({ length: lines - 1 }, (_, i) => `finding ${i + 1}`)].join('\n  ')}`,
+      '- task #4 "Fix it" failed: tests red',
+    ].join('\n');
+    const report = (container: HTMLElement) => container.querySelector('.chat-report-body')!.textContent!.split('\n');
+
+    it('draws a short report whole, set apart under its task, beside the update\'s other lines', () => {
+      const { container } = render(<ChatMessage block={message({ role: 'wake_up', text: digest(4) })} />);
+      expect(container.querySelector('.chat-msg-wake-up .chat-msg-label')!.textContent).toBe('Run update');
+      expect(container.querySelector('.chat-report-head')!.textContent).toBe('Report from task #3 "Scout the cache"');
+      expect(report(container)).toEqual(['It passed.', 'finding 1', 'finding 2', 'finding 3']);
+      expect(container.querySelector('.cmd-row-more')).toBeNull();
+      expect(container.querySelector('.chat-msg-wake-up .chat-msg-content')!.textContent).toContain('- task #4 "Fix it" failed: tests red');
+    });
+
+    it('folds a long report and counts what it leaves out, until the detail switch opens it', () => {
+      const { container, rerender } = render(<ChatMessage block={message({ role: 'wake_up', text: digest(20) })} />);
+      expect(report(container)).toHaveLength(8);
+      expect(container.querySelector('.cmd-row-more')!.textContent).toBe('+12 lines of the report');
+
+      rerender(<ChatMessage block={message({ role: 'wake_up', text: digest(20) })} expanded />);
+      expect(report(container)).toHaveLength(20);
+      expect(report(container).at(-1)).toBe('finding 19');
+      expect(container.querySelector('.cmd-row-more')).toBeNull();
+    });
+
+    it('is opened by the conversation\'s one detail switch', () => {
+      const blocks = [message({ id: 'w', role: 'wake_up', text: digest(20) })];
+      const { container, rerender } = render(<ConversationBlocks blocks={blocks} detailAll={false} onShowPlan={() => {}} />);
+      expect(container.querySelector('.chat-report-body')!.textContent!.split('\n')).toHaveLength(8);
+      rerender(<ConversationBlocks blocks={blocks} detailAll onShowPlan={() => {}} />);
+      expect(container.querySelector('.chat-report-body')!.textContent!.split('\n')).toHaveLength(20);
+    });
+  });
+
   it('renders a reply still streaming as markdown, marked live', () => {
     const { container } = render(<ChatMessage block={message({ text: 'Reading **the', streaming: true })} />);
     expect(container.querySelector('.chat-msg-planner.streaming .chat-msg-content')!.textContent).toBe('Reading **the');
@@ -97,6 +134,13 @@ describe('ThinkingBlock', () => {
 });
 
 describe('CommandRow', () => {
+  it('marks a command that ran sealed, and no other (ADR-0036 S4)', () => {
+    const sealed = render(<CommandRow block={tool({ sealed: true })} expanded={false} />);
+    expect(sealed.container.querySelector('.cmd-row-sealed')!.textContent).toBe('sealed');
+    const plain = render(<CommandRow block={tool()} expanded={false} />);
+    expect(plain.container.querySelector('.cmd-row-sealed')).toBeNull();
+  });
+
   it('heads the row with the tool and its main argument, in monospace', () => {
     const { container } = render(<CommandRow block={tool()} expanded={false} />);
     const head = container.querySelector('code.cmd-row-head')!;
@@ -308,6 +352,25 @@ describe('approval cards (ADR-0018, A1)', () => {
     fireEvent.change(getByPlaceholderText(/Note to the agent/), { target: { value: '  use notes/ instead ' } });
     fireEvent.click(getByText('Deny'));
     expect(onAnswerApproval).toHaveBeenCalledWith('ap-1', { decision: 'deny', note: 'use notes/ instead' });
+  });
+
+  it('shows a script task start\'s body verbatim in a code block, pending and settled (ADR-0035)', () => {
+    const body = 'git tag v1\n  git push origin v1\n\nTime limit: 10 minutes.';
+    const start = card({ kind: 'task_start', approvalId: 'ap-2', subject: 'Run script task #2 "Push"', scope: 'Run script task #2 "Push"', body });
+
+    const { container, getByText, onResolveApproval, unmount } = draw(start);
+    expect(container.querySelector('pre.approval-card-body')?.textContent).toBe(body);
+    fireEvent.click(getByText('Allow'));
+    expect(onResolveApproval).toHaveBeenCalledWith('ap-2', true);
+    unmount();
+
+    const settled = draw({ ...start, status: 'granted', decidedBy: 'asked' });
+    expect(settled.container.querySelector('pre.approval-card-body')?.textContent).toBe(body);
+  });
+
+  it('shows no body block on a request that has none', () => {
+    const { container } = draw(card({ kind: 'shell_command' }));
+    expect(container.querySelector('.approval-card-body')).toBeNull();
   });
 
   it('offers no grant for the task when the runner proposed none', () => {

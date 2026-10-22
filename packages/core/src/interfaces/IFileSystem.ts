@@ -2,6 +2,12 @@ export interface ToolOutcome {
   success: boolean;
   output: string;
   truncated: boolean;
+  /**
+   * The child was killed at its time limit, so what it had not finished did
+   * not happen (ADR-0036 S1). The adapters set it, and a sealed run's result
+   * names the limit it ran out of rather than blaming the command.
+   */
+  timedOut?: boolean;
 }
 
 export interface ReadFileOpts {
@@ -60,6 +66,41 @@ export const SEARCH_EXCLUSIONS = [
   'vendor', 'coverage', '.turbo', '.cache', '.gradle', 'Pods', '.terraform',
 ];
 
+export interface BashOptions {
+  /**
+   * Run the command sealed (ADR-0036 S2): no network, no home directory,
+   * nothing written reaching the workspace, and nobody asked. Refused where
+   * the host has no sandbox to seal it in.
+   */
+  sealed?: boolean;
+}
+
+/** Where a read-only task's commands run (ADR-0046). */
+export interface TaskShellSite {
+  /** Where its commands start, and what their paths are confined to: the task's worktree, or the workspace root when the run does not isolate. */
+  cwd: string;
+  /** The task's own worktree, the one directory but scratch a sealed run may write; absent without one. */
+  writable?: string;
+  /**
+   * The git worktree roots inside `writable` whose `.git` a sealed run must
+   * not rewrite into a repository of its own (ADR-0046): one per repo in a
+   * group. Left out, the single `writable` worktree's `.git` is protected.
+   */
+  worktrees?: readonly string[];
+}
+
+/**
+ * A read-only task's `run_command` (ADR-0046): the planner's command rules at
+ * the task's working directory, with nobody to ask. One per attempt, with a
+ * scratch directory of its own; once one of its commands has run sealed,
+ * every later one does.
+ */
+export interface TaskShell {
+  run(command: string, signal?: AbortSignal): Promise<ToolOutcome>;
+  /** The attempt ended: its scratch directory goes. */
+  end(): void;
+}
+
 export interface IFileSystem {
   readFile(path: string, opts?: ReadFileOpts): Promise<ToolOutcome>;
   readFiles(paths: string[]): Promise<ToolOutcome>;
@@ -72,7 +113,7 @@ export interface IFileSystem {
    * tools here are short enough that the loop's between-call abort check is
    * indistinguishable from cancelling them mid-flight; a `bash` call is not.
    */
-  bash(command: string, signal?: AbortSignal): Promise<ToolOutcome>;
+  bash(command: string, signal?: AbortSignal, opts?: BashOptions): Promise<ToolOutcome>;
   /** Definition-first lookup for one symbol. See `symbolPatterns.ts`. */
   findSymbol(symbol: string, opts?: FindSymbolOptions): Promise<ToolOutcome>;
   getWorkspaceRoot(): string;
@@ -83,4 +124,12 @@ export interface IFileSystem {
   setApproval?(approval: import('./IApproval').IApproval): void;
   /** Held credentials read live by the outbound secret check. */
   setOutboundSecrets?(secrets: () => Iterable<string>): void;
+  /** Where the filesystem tells the session, once, that the planner's shell runs without an OS sandbox here (ADR-0011 B5). */
+  setNotice?(notice: (message: string) => void): void;
+  /** The session ended: its scratch directory is removed, and the next command starts a fresh one (ADR-0011 B2). */
+  endSession?(): void;
+  /** Whether a command can run sealed on this host (ADR-0036 S6); where it cannot, the session's one notice says so. */
+  canSeal?(): Promise<boolean>;
+  /** A read-only task's shell at `site`, held to this session's allowlist and never asking (ADR-0046). */
+  taskShell?(site: TaskShellSite): TaskShell;
 }

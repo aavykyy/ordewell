@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createTask, rejoinPlanTree, type LegacyPlanState, type Task } from '../../models/Task';
 import type { SkillInfo } from '../SkillsService';
-import { makeSession, FakeRunnerSession, fakeConfig, taskOf, saves, memoryTaskLogs } from './sessionTestKit';
+import { makeSession, FakeRunnerSession, fakeConfig, fakeFs, taskOf, saves, memoryTaskLogs } from './sessionTestKit';
 import { contextMeterText, plannerContextFill, taskUsageSummary, usageText } from '../../models/Usage';
 import { scriptedAdapter, fakeMcpServer, fakeSpawn, fixture } from './harnessTestKit';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
@@ -1842,5 +1842,47 @@ describe('executing a plan whose tasks are all completed', () => {
     await session.execute({ command: 'approve_review' }, { kind: 'user' });
 
     expect(broadcast.mock.calls.filter(([msg]) => msg.type === 'execution_complete')).toHaveLength(1);
+  });
+});
+
+describe("the planner shell's notice and scratch directory (ADR-0011)", () => {
+  it('says the notice the filesystem raises through the session, and ends its session on reset and destroy', () => {
+    let notify: ((message: string) => void) | undefined;
+    const endSession = vi.fn();
+    const notices: unknown[] = [];
+    const session = makeSession({
+      fsAdapter: { ...fakeFs(), setNotice: (notice) => { notify = notice; }, endSession },
+      onNotice: (notice) => notices.push(notice),
+    });
+
+    notify?.('The planner\'s shell runs without an OS sandbox on this machine.');
+    expect(notices).toEqual([{ type: 'notice', level: 'warn', message: 'The planner\'s shell runs without an OS sandbox on this machine.' }]);
+
+    session.reset();
+    expect(endSession).toHaveBeenCalledTimes(1);
+    session.destroy();
+    expect(endSession).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('the native-shell setting\'s notice channel (ADR-0036 N4)', () => {
+  it('hands a harness planner the session notice, so it can say why the setting is not offered', async () => {
+    const notices: unknown[] = [];
+    const startConversation = vi.fn(async (req: { notice?: (level: 'warn', message: string) => void }) => {
+      req.notice?.('warn', 'The planner\'s own shell is off: Claude Code 2.1.300 has not been checked.');
+      return { kind: 'message' as const, text: 'hello', researchLog: [] };
+    });
+    const session = makeSession({
+      aiService: { startConversation, hasActiveConversation: () => false, reset: vi.fn() },
+      onNotice: (notice) => notices.push(notice),
+    });
+
+    await session.startPlanning('test goal', ['claude-code']);
+
+    expect(notices).toEqual([{
+      type: 'notice',
+      level: 'warn',
+      message: 'The planner\'s own shell is off: Claude Code 2.1.300 has not been checked.',
+    }]);
   });
 });

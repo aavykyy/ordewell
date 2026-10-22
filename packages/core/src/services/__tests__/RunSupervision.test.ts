@@ -23,6 +23,8 @@ function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptio
     tasks: () => tasks,
     checkpointQuestion: () => undefined,
     recentOutput: () => undefined,
+    reportTail: () => undefined,
+    reported: vi.fn(),
     systemNote: vi.fn((text: string) => { transcript.push({ text, voice: 'system' }); }),
     supervisorNote: vi.fn((text: string) => { transcript.push({ text, voice: 'supervisor' }); }),
     changed: vi.fn(),
@@ -158,6 +160,22 @@ describe('an automatic lowering', () => {
     expect(supervision.level).toBe('watch');
     expect(supervision.mayWake()).toBe(true);
   });
+
+  it('stops only the report turns at Off when a report turn fails twice: there was no supervisor to stop', async () => {
+    const { supervision, plan, transcript } = harness({ supervisorLevel: 'off' });
+    supervision.runStarted('user');
+    const fail = () => supervision.wakeUp(async () => { throw new Error('planner exited'); }, undefined, 'user');
+
+    await expect(fail()).rejects.toThrow('planner exited');
+    await expect(fail()).rejects.toThrow('planner exited');
+
+    expect(plan.runSettings!.unsupervised).toBe('the planner\'s report turn failed twice (planner exited)');
+    expect(supervision.mayReport()).toBe(false);
+    expect(transcript.at(-1)).toEqual({
+      voice: 'system',
+      text: 'Report turns stopped: the planner\'s report turn failed twice (planner exited). The reports the planner asked for reach it with your next message.',
+    });
+  });
 });
 
 describe('the end-of-run handoff', () => {
@@ -181,5 +199,55 @@ describe('the end-of-run handoff', () => {
     supervision.apply({ supervisorLevel: 'off' });
 
     expect(host.resendHandoff).not.toHaveBeenCalled();
+  });
+});
+
+describe('a loop\'s check whose result a planner turn asked for (ADR-0045 L3, L6; ADR-0037 R2)', () => {
+  const failedRound = (loopRound: number): Partial<Task> => ({
+    status: 'failed',
+    loop: { body: ['t2'], maxRounds: 3 },
+    loopRound,
+    verdict: { outcome: 'fail', reason: 'two tests fail', checks: [], decidedAt: '2026-10-13T00:00:00Z', reported: 'failed' },
+  });
+  const owed = (loopRound: number): Task => ({ ...task('t1', 1, failedRound(loopRound)), reportTo: { actor: 'planner-turn', consent: { by: 'autorun' } } });
+
+  it('owes its report only once the loop is over, and the report names the rounds it took', async () => {
+    vi.useFakeTimers();
+    const { supervision, tasks, host } = harness({ supervisorLevel: 'off' });
+    supervision.runStarted('user');
+
+    tasks[0] = owed(1);
+    supervision.taskSettled(tasks[0]);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(host.reported).not.toHaveBeenCalled();
+    expect(host.deliver).not.toHaveBeenCalled();
+
+    tasks[0] = owed(3);
+    supervision.taskSettled(tasks[0]);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(host.reported).toHaveBeenCalledTimes(1);
+    expect(host.deliver).toHaveBeenCalledTimes(1);
+    expect(host.deliver).toHaveBeenCalledWith(expect.stringContaining('Its loop ran out of rounds: it failed all 3. It failed: two tests fail'), 'user');
+  });
+
+  it('owes its report once a failing body task stops the loop', async () => {
+    vi.useFakeTimers();
+    const { supervision, tasks, host } = harness({ supervisorLevel: 'off' });
+    supervision.runStarted('user');
+    tasks[0] = owed(1);
+    tasks.push(task('t2', 2, { dependencies: ['t1'] }));
+    supervision.taskSettled(tasks[0]);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(host.reported).not.toHaveBeenCalled();
+
+    tasks[1] = { ...tasks[1], status: 'failed', verdict: { outcome: 'fail', reason: 'could not fix it', checks: [], decidedAt: '2026-10-13T00:00:00Z', reported: 'failed' } };
+    supervision.taskSettled(tasks[1]);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(host.reported).toHaveBeenCalledTimes(1);
+    expect(host.reported).toHaveBeenCalledWith('t1', expect.anything());
+    expect(host.deliver).toHaveBeenCalledWith(expect.stringContaining('two tests fail'), 'user');
   });
 });

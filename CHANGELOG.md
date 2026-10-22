@@ -8,6 +8,165 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Script tasks.** A plan can hold a task with no runner and no model: a list
+  of commands, run in order with no shell and stopping at the first that
+  fails, or one script. Ordewell runs it where and when it runs an ops task: at
+  the workspace root, behind a merge gate when it depends on change tasks, and
+  never during Merge all. Its exit status is its verdict, and its log is each
+  command, what it printed and how it exited. Every surface shows its body,
+  read-only, in place of a prompt; only the planner writes it, and a retry
+  runs it as written
+  ([ADR-0035](docs/adr/supervision/0035-effects-are-consented-and-recorded.md)).
+- **`run_script`: the planner can carry out a small effect in your turn.** A
+  push, a tag or one setting on a cloud resource no longer takes a runner
+  session. The planner adds a script task and starts it in one step, and hears
+  its verdict and the tail of its output; a script still running after a
+  minute reports back when it ends. Unless the effect allowlist covers it, you
+  approve it on the approval card, which shows the commands or the script
+  verbatim, and an unanswered or denied card leaves the task in the plan,
+  unapproved. A supervisor at Act may run one; at Watch it can only suggest
+  one.
+- **The effect allowlist names script tasks that run without asking**
+  (`ordewell.effectAllowlist`, elsewhere `ORDEWELL_EFFECT_ALLOW`). A rule is
+  matched against the whole command, every word in order and flags included:
+  `git push origin feature/*` covers `git push origin feature/login`, not the
+  same push with `--force`. A script task runs unasked only when every one of
+  its commands is covered; a shell script, or a program named by its path,
+  never is. The planner allowlist's `!` exclusions still win. It is read from
+  your user settings only, and has no built-in rules.
+- **Check-and-fix loops.** A task can declare `loop: { body, maxRounds }`: it
+  is the check, and the tasks of its body fix what it finds. Ordewell runs the
+  rounds itself, with no planner turn in between: while the check fails with
+  rounds left (3 unless the plan says otherwise, at most 10), the body runs
+  again on the latest integrated work, given the check's latest report, then
+  the check runs again. A pass ends the loop and skips what of the body it no
+  longer needs. A check that fails its last round blocks its dependents, and
+  the supervisor hears once how many rounds it ran. A loop picks up mid-round
+  after a reload. Every surface draws a loop's rounds, and the planner plans
+  one for work that repeats until it passes, such as a review and its fix
+  ([ADR-0045](docs/adr/supervision/0045-a-check-repeats-with-its-fix-until-it-passes.md)).
+- **Research tasks.** The planner can hand an investigation that would outlive
+  its turn to a research task: a read-only task whose report comes back to the
+  planner. Its end, passed, failed or blocked, opens a planner turn with the
+  report at every supervisor level, Off included, and you can talk to the
+  planner while it runs. Research tasks start without asking, the planner
+  decides how many a message starts, and they run within the run's Parallel
+  limit like any other task. Surfaces mark a research row and show its report in
+  the run update that delivered it
+  ([ADR-0037](docs/adr/supervision/0037-research-tasks-wake-the-planner.md)).
+- **The planner chooses a strategy before it outlines a plan.** It first
+  decides what kind of goal it has: a question it answers in its reply, with no
+  plan; a small effect, as one script task; a build, planned as vertical
+  slices; a failure to explain, reproduced first and investigated as competing
+  hypotheses in parallel; or an open problem, explored one round at a time.
+  Its instructions also say how to spend its own context: go deep on small
+  sequential work, delegate independent or large pieces with a self-contained
+  brief, and prefer evidence a test or an exit code can check.
+- **Every planner turn tells the planner how full its context is and what
+  remains of its budgets**: its task reads and its web reads. API and
+  coding-agent planners get the same line, wake-up turns included.
+- **Planner skills for a failure to explain and an open problem.** `diagnose`
+  reproduces a failure first, tests competing hypotheses as parallel research
+  tasks, decides from the evidence, then plans the fix inside a loop checked by
+  the reproduction. `explore` plans one round of deliberately different research
+  tasks, tries to break each promising claim, and extends the plan as reports
+  come back. The planner loads either itself when the goal fits, and you can
+  type `/diagnose` or `/explore`.
+- **Sealed runs.** Where the planner's sandbox runs, a command its command
+  rules would refuse without asking (a loop over files, a here-document, a few
+  lines of Python over a command's output) runs sealed instead: the workspace
+  read-only, no home directory, no network, none of your credentials, and
+  limits on processes, memory and time. A planner can also ask for one with
+  `sealed: true` on `bash` or `run_command`, and research subagents run sealed
+  what they would have had to ask about. An allowlist exclusion and a command
+  you denied are still refused, and the research timeline marks a sealed step.
+  Without a sandbox, refusals stay as they were, and the planner's one notice
+  says why. A sealed run that reaches its time limit says so
+  ([ADR-0036](docs/adr/planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md)).
+- **A coding-agent planner can use its own shell, if you opt in.** With
+  `ordewell.plannerNativeShell` (elsewhere `ORDEWELL_PLANNER_NATIVE_SHELL`),
+  off by default, a Claude Code or OpenCode 2.x planner on macOS keeps its own
+  shell beside `run_command`. Every command it runs goes through Ordewell's
+  launcher in the sealed profile with the network: the workspace read-only,
+  writes confined to a scratch folder, your keychain and credential files out
+  of reach, and this machine's own services refused. It is offered only on the
+  versions checked live, Claude Code 2.1.304–2.1.x and OpenCode 2.0.32–2.0.x;
+  other versions, OpenCode 1.x and Linux keep `run_command` alone, and a
+  notice says why. Codex already has its own shell. A workspace cannot set it.
+
+### Changed
+
+- **A read-only task is defined by Ordewell, the same on every runner.** It
+  keeps its runner's own read and search tools, and its shell is Ordewell's
+  `run_command`: what the planner would have to ask about runs sealed, with the
+  task's own worktree writable and nobody asked, so a review can run the test
+  suite or try a fix, and a sealed command may run for ten minutes. It lands
+  nothing: its worktree is thrown away when it ends, and its `task_complete`
+  report is its result. A Claude Code read-only task runs its assigned model,
+  not the one plan mode pinned
+  ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
+- **A runner that cannot connect to Ordewell's tools holds its task instead
+  of failing it.** A runner is given longer to connect on a busy machine, and
+  if it still cannot, the task is put on hold to start again and its
+  dependents are not blocked. Every hold now says why: the TUI's plan row and
+  `ordewell status` read "on hold: …", and VS Code shows the reason on the
+  task's status badge.
+- **The TUI repaints only the rows that changed, and paints at a capped
+  rate.** A long command output streaming into a task's pane no longer stalls
+  it; very large outputs, diffs and messages show their head and say how much
+  is not shown.
+- **The VS Code Marketplace listing is rewritten**, and the README states the
+  approval promise in its opening paragraph and links the first-run Discussion.
+
+### Security
+
+- **The planner's shell runs in an OS sandbox on macOS and Linux.** Every
+  command a planner runs, through `bash`, a research subagent or
+  `run_command`, can write nothing outside a scratch directory of its
+  session, and one that runs without asking has no network. The command rules
+  are unchanged. Where no sandbox can start (Windows, a Linux host without
+  bubblewrap or with user namespaces restricted), commands run as before and
+  the planner says so once per session, with the fix
+  ([ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-shell.md)).
+- **A read-only task can no longer write outside the sandbox.** Its runner's
+  own edit, write and shell tools are withheld on Claude Code, Codex and
+  OpenCode alike, so every write it makes is a sealed command's; before, Claude
+  Code's plan mode could write its plan file outside the workspace. Its
+  runner's own web fetch and search are refused, since a task has no web
+  policy to check them.
+- **Once a read-only task has run a command sealed, all its later commands run
+  sealed too**, allowlisted ones included, with no network. A sealed run can
+  rewrite a script or config file in the task's worktree, such as the `test`
+  script an allowlisted `npm test` runs, and that command would otherwise have
+  run it with the network and your files readable
+  ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
+- **A read-only task's sealed runs cannot plant a git repository for later git
+  to load.** A sealed run can write the task's worktree — in a repo group each
+  worktree — but not the worktree root itself or its `.git`: on macOS Seatbelt
+  denies renaming or removing the root and any write to the `.git`, and on
+  Linux the worktree mount refuses a rename while the `.git` is bound
+  read-only. In a repo group the task workspace root, where the group's runner
+  starts its git, is not persistently writable: a write is refused where the
+  root is bound read-only, and under bubblewrap's throwaway overlay one may
+  succeed only into the layer discarded with the run. Every `.git` entry the
+  checkout brought, such as a submodule's file or a vendored repository, is
+  held still the same way and checked after each run for a changed identity,
+  content or hooks. On macOS a sealed run also cannot create a `.git` anywhere
+  in what it may write. A `.git` that was not there before the task's first
+  sealed run is removed after every run; one that cannot be removed, or one the
+  checkout brought that changed, stops that task's shell. So git run later
+  outside the sandbox, Ordewell's at a repo root or the runner's own at the
+  task's working directory, loads no repository the run planted or armed with
+  its own hooks or filters, and `task_diff` refuses a read-only task on every
+  platform
+  ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
+- **Consent to a script task is consent to what it runs.** An edit that
+  changes an approved script task's commands, script or time limit, or turns
+  it into another type of task, takes it out of the approved set. Autorun in
+  Guarded never approves one, and a denied or unanswered card leaves it
+  unapproved.
 ## [0.10.12] - 2026-10-22
 
 ### Fixed

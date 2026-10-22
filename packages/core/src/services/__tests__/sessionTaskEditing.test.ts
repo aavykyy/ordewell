@@ -385,7 +385,7 @@ describe('Session.updateTask — the rules the plan\'s tasks are held to togethe
 
     await expect(session.updateTask('u', { sliceType: 'AFK' })).rejects.toThrow('User Task "Sign off" has sliceType "AFK". User tasks must have sliceType "HITL".');
     await expect(session.updateTask('t1', { autonomy: 'AFK', userSteps: steps })).rejects.toThrow('Task "Setup" has autonomy "AFK" but contains userSteps. AFK tasks must not have user touchpoints.');
-    await expect(session.updateTask('t2', { taskMode: 'plan' })).rejects.toThrow('Task "Build" is an ops task, which runs commands, so it cannot run in its runner\'s read-only mode');
+    await expect(session.updateTask('t2', { taskMode: 'plan' })).rejects.toThrow('Task "Build" is an ops task, which acts in the workspace, so it cannot use the read-only profile');
 
     expect(taskOf(session, 'u')?.sliceType).toBe('HITL');
     expect(taskOf(session, 't1')?.autonomy).toBeUndefined();

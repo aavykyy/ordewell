@@ -1,10 +1,11 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { PlanIsolation } from '../interfaces/IWorktreeIsolation';
 import type { AttemptUsage, PlannerUsage, ReportedWindow, UsageRecord, UsageTotals } from './Usage';
-import type { ExecutionRecord, SupervisorLevel } from './Execution';
+import type { ExecutionRecord, ScriptConsent, SupervisorLevel } from './Execution';
 import type { SkillSource } from '../services/SkillsService';
 import type { SupervisionMemorySnapshot } from '../services/LoopGuards';
 import type { SupervisorSnapshot } from '../services/Supervisor';
+import type { TaskLoop } from './Loop';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
 import { subtreeIds, walkPlan } from '../services/PlanTree';
 
@@ -14,9 +15,12 @@ export interface UserStep {
   completed: boolean;
 }
 
-/** One deterministic signal gathered while verifying a completed task. `completion_marker` is only in verdicts saved before completion was reported through `task_complete` alone. */
+/**
+ * One deterministic signal gathered while verifying a completed task. `completion_marker` is only in verdicts saved before completion was reported through `task_complete` alone.
+ * `script_exit` is a script task's exit status, its one evidence (ADR-0035).
+ */
 export interface VerificationCheck {
-  name: 'exit_code' | 'completion_marker' | 'task_complete' | 'manual';
+  name: 'exit_code' | 'completion_marker' | 'task_complete' | 'manual' | 'script_exit';
   passed: boolean;
   /** A check that did not apply. Skipped checks don't affect the verdict. */
   skipped: boolean;
@@ -29,6 +33,15 @@ export interface Verdict {
   reason: string;
   checks: VerificationCheck[];
   decidedAt: string;
+  /**
+   * What the attempt's evidence said of the work: the status the runner's
+   * `task_complete` call reported, or a script's exit read the same way —
+   * `done` on exit 0, `failed` on a non-zero exit, a signal or its time limit,
+   * `blocked` when it could not start. A loop starts a round only on `failed`
+   * (ADR-0045 L2). Absent when nothing reported: a runner that exited without
+   * the call, Mark complete, a stopped script, a verdict saved before it was kept.
+   */
+  reported?: 'done' | 'failed' | 'blocked';
 }
 
 export interface TaskOutputSummary {
@@ -40,7 +53,8 @@ export interface TaskOutputSummary {
   capturedAt: string;
 }
 
-export type TaskType = 'ai' | 'user';
+/** `script` is an ops task whose body Ordewell runs with no model (ADR-0035). */
+export type TaskType = 'ai' | 'user' | 'script';
 /**
  * `skipped` is terminal and verdict-less: the task will not be waited for, and
  * nothing it did lands. Its dependents go ahead without it once the work it
@@ -103,6 +117,25 @@ export function migrateLoadedTasks(tasks: readonly Task[]): void {
     delete (task as { thinkingEffort?: unknown }).thinkingEffort;
     migrateLoadedTasks(task.subtasks ?? []);
   }
+}
+
+/**
+ * Drop what a build before the per-message research budget was removed wrote
+ * for it (ADR-0037): the budget, its two run settings, its per-turn flag, and
+ * the report wait a task carried. The persisted types no longer name these,
+ * so a reopened session would otherwise spread them onto the wire and write
+ * them back; they are deleted by key, never widened into the types.
+ */
+export function dropRetiredPlanFields(plan: LegacyPlanState): void {
+  const raw = plan as unknown as Record<string, unknown>;
+  delete raw.researchBudget;
+  const settings = plan.runSettings as unknown as Record<string, unknown> | undefined;
+  if (settings) {
+    delete settings.researchMaxParallel;
+    delete settings.researchMaxPerMessage;
+  }
+  for (const turn of plan.pendingTurns ?? []) delete (turn as unknown as Record<string, unknown>).budgetStarted;
+  for (const task of flattenTasks(plan.tasks)) delete (task as unknown as Record<string, unknown>).researchWait;
 }
 
 /**
@@ -169,9 +202,14 @@ export interface Task {
    * An ops task (ADR-0020): it changes no repository files, runs at the
    * workspace root rather than in a worktree, and waits for the change tasks
    * it depends on to be merged into the user's branch. Top-level AI tasks
-   * only; absent means a change task.
+   * only; absent means a change task. A script task is one by nature and
+   * stores none (see {@link runsAsOps}).
    */
   ops?: boolean;
+  /** A top-level read-only AI task whose report returns to the planner (ADR-0037 R1). */
+  research?: boolean;
+  /** A retry still owes research's report under its original authority (ADR-0037 R3). */
+  researchOrigin?: TaskReportTo;
   /**
    * The dependencies, by title, whose work was not merged into the user's
    * branch when the user force-started this task past its merge gate
@@ -193,7 +231,43 @@ export interface Task {
    */
   addedBy?: 'supervisor';
   attemptUsage?: AttemptUsage[];
+  /**
+   * A script task's body (ADR-0035), exactly one of these two: argument
+   * vectors run in order with no shell, stopping at the first that fails, or
+   * one script run by the research shell's interpreter.
+   */
+  commands?: string[][];
+  script?: string;
+  /** A script task's time limit; absent means ten minutes (`DEFAULT_SCRIPT_TIMEOUT_MS`). */
+  timeoutMs?: number;
+  /** Set on a loop's check (ADR-0045): the tasks that fix what it finds, and how many times it may run. */
+  loop?: TaskLoop;
+  /**
+   * The round of a loop's check's latest run, or the one it is running;
+   * absent is round 1. Execution state, saved so a reload resumes mid-round,
+   * and started over by a retry of the check (ADR-0045 L5, L7).
+   */
+  loopRound?: number;
+  /**
+   * A planner turn waits for this task's result (ADR-0037, R2): set when the
+   * tool that started it answered before it ended, or when research lands.
+   * Cleared once its end is reported, in a turn acting for whoever started it (R3).
+   */
+  reportTo?: TaskReportTo;
 }
+
+/**
+ * Who started a task whose result is owed to the planner (ADR-0037, R3): a
+ * planner turn in the user's conversation, or the supervisor, at its level
+ * then, with script consent (ADR-0035) or the research profile (ADR-0037 R4).
+ */
+export type TaskReportTo = ({ consent: ScriptConsent; research?: never } | { research: true; consent?: never }) & (
+  | { actor: 'planner-turn' }
+  | { actor: 'supervisor'; level: SupervisorLevel }
+);
+
+/** Whose authority a turn opened without the user acts with (ADR-0037, R3): the user's turn, or the supervisor's. */
+export type TurnAuthority = 'user' | 'supervisor';
 
 export interface DiscoveredMode {
   id: string;
@@ -474,6 +548,12 @@ export interface PendingPlanTurn {
   skills?: SkillLoad[];
   /** Force sent: it waits ahead of every input not forced, and its turn is its own (ADR-0023, F2). */
   forced?: true;
+  /**
+   * A supervisor input carrying a report the planner asked for (ADR-0037, R2),
+   * which opens a turn at every supervisor level: `user` for a task started in
+   * the user's turn, which the turn then acts as (R3).
+   */
+  report?: TurnAuthority;
 }
 
 /**
@@ -517,6 +597,8 @@ export interface PlannerResendState {
 }
 
 export interface LegacyPlanState {
+  /** Research profiles the planner approved as they landed: lifting one withdraws its approval (ADR-0037 R4). */
+  researchApprovals?: string[];
   runSettings?: RunSettings;
   /** What supervision remembers across a daemon restart (ADR-0029); absent on plans saved before it existed. */
   supervision?: SupervisionSnapshot;
@@ -699,12 +781,13 @@ export { taskOrderLabel, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, res
 
 export function createTask(overrides: Partial<Task> = {}): Task {
   const skills = skillNames(overrides.skills);
+  const type = overrides.type ?? 'ai';
   return {
     id: overrides.id ?? uuidv4(),
     order: overrides.order ?? 0,
     title: overrides.title ?? '',
     description: overrides.description ?? '',
-    type: overrides.type ?? 'ai',
+    type,
     status: overrides.status ?? 'pending',
     dependencies: overrides.dependencies ?? [],
     prompt: overrides.prompt,
@@ -715,13 +798,20 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     ...(overrides.attemptUsage ? { attemptUsage: structuredClone(overrides.attemptUsage) } : {}),
     assignedModel: overrides.assignedModel,
     assignedRunner: overrides.assignedRunner ?? DEFAULT_RUNNERS[0],
-    taskMode: overrides.taskMode ?? 'build',
+    // A script task runs in no mode (ADR-0035): one given it would read as a mode it runs in.
+    taskMode: overrides.taskMode ?? (type === 'script' ? undefined : 'build'),
     autonomy: overrides.autonomy,
     sliceType: overrides.sliceType,
     userStoriesCovered: overrides.userStoriesCovered,
     ...(opsFlag(overrides.ops, overrides.type) ? { ops: true } : {}),
     ...(skills ? { skills } : {}),
     ...(overrides.addedBy === 'supervisor' ? { addedBy: 'supervisor' as const } : {}),
+    ...(overrides.commands !== undefined ? { commands: overrides.commands.map((argv) => [...argv]) } : {}),
+    ...(overrides.script !== undefined ? { script: overrides.script } : {}),
+    ...(overrides.timeoutMs !== undefined ? { timeoutMs: overrides.timeoutMs } : {}),
+    ...(overrides.loop ? { loop: { body: [...overrides.loop.body], maxRounds: overrides.loop.maxRounds } } : {}),
+    ...(overrides.loopRound !== undefined ? { loopRound: overrides.loopRound } : {}),
+    ...(overrides.research !== undefined ? { research: overrides.research } : {}),
   };
 }
 
@@ -768,6 +858,14 @@ export function inheritedSkills(chosen: unknown, inherited: readonly string[] | 
  */
 export function opsFlag(value: unknown, type: Task['type'] = 'ai'): true | undefined {
   return value === true && type === 'ai' ? true : undefined;
+}
+
+/**
+ * Whether a task runs as an ops task (ADR-0020): an AI task marked so, or a
+ * script task, which is one by nature and never marked (ADR-0035).
+ */
+export function runsAsOps(task: Pick<Task, 'ops' | 'type'>): boolean {
+  return task.type === 'script' || opsFlag(task.ops, task.type) === true;
 }
 
 /**
@@ -851,15 +949,29 @@ export function addTaskToPlan(tasks: readonly Task[], partial: Partial<Task>): T
   return renumberTasks([...tasks, newTask]);
 }
 
+/**
+ * A removed task leaves every dependency on it, and every loop's body it was
+ * in (ADR-0045 L8): a loop it leaves with no body is no loop. Whether its
+ * removal may go ahead at all — a loop's check may not be removed — is the
+ * caller's to say.
+ */
 export function removeTaskFromPlan(tasks: readonly Task[], taskId: string): Task[] {
   const removed = subtreeIds(tasks, taskId);
   const prune = (level: readonly Task[]): Task[] => level
     .filter((t) => !removed.has(t.id))
-    .map((t) => ({
-      ...t,
-      dependencies: t.dependencies.filter((depId) => !removed.has(depId)),
-      subtasks: prune(t.subtasks),
-    }));
+    .map((t) => {
+      const pruned: Task = {
+        ...t,
+        dependencies: t.dependencies.filter((depId) => !removed.has(depId)),
+        subtasks: prune(t.subtasks),
+      };
+      if (!t.loop?.body.some((id) => removed.has(id))) return pruned;
+      const body = t.loop.body.filter((id) => !removed.has(id));
+      if (body.length > 0) return { ...pruned, loop: { ...t.loop, body } };
+      delete pruned.loop;
+      delete pruned.loopRound;
+      return pruned;
+    });
   return renumberTasks(prune(tasks));
 }
 
@@ -902,14 +1014,15 @@ export function approvalRecordOf(plan: ApprovalRecord): ApprovalRecord {
 }
 
 /**
- * A task the scheduler leaves for the user (ADR-0035): an AI task not started
- * yet, in a plan they approved, outside their approval record — the planner
- * added it since. It starts once they start it or execute the plan. In a plan
- * they never approved nothing is theirs yet, so nothing is singled out.
+ * A task the scheduler leaves for the user (ADR-0035): an AI or script task
+ * not started yet, in a plan they approved, outside their approval record —
+ * the planner added it since, or changed a script's body. It starts once they
+ * start it or execute the plan. In a plan they never approved nothing is
+ * theirs yet, so nothing is singled out.
  */
 export function waitsForApproval(task: Pick<Task, 'id' | 'type' | 'status'>, record: ApprovalRecord): boolean {
   return record.approved === true
-    && task.type === 'ai'
+    && task.type !== 'user'
     && (task.status === 'pending' || task.status === 'approved')
     && !(record.approvedTasks ?? []).includes(task.id);
 }
@@ -949,7 +1062,9 @@ function holdsSettledWork(task: Task): boolean {
  * so the status it writes is not evidence. A settled task is kept exactly as
  * it stands wherever the rewrite names it, and put back beside its old
  * neighbour where the rewrite leaves it out. Every other task keeps the status
- * it had; a task the rewrite adds starts pending.
+ * it had; a task the rewrite adds starts pending. A failed task the rewrite
+ * turns into a script task or out of one is kept as it was: what ran, and
+ * where, is fixed once it has run (ADR-0020, ADR-0035).
  */
 export function keepExecutionState(current: readonly Task[], rewrite: Task[]): Task[] {
   const existing = new Map(flattenTasks(current).map((t) => [t.id, t]));
@@ -959,6 +1074,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
     const result = tasks.map((t): Task => {
       const prior = existing.get(t.id);
       if (prior && SETTLED_STATUSES.has(prior.status)) return { ...prior };
+      if (prior?.status === 'failed' && (prior.type === 'script') !== (t.type === 'script')) return { ...prior };
       return {
         ...t,
         status: prior?.status ?? 'pending',
@@ -970,9 +1086,12 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
         carriedFrom: prior?.carriedFrom,
         attemptSkills: prior?.attemptSkills,
         attemptUsage: prior?.attemptUsage,
+        loopRound: prior?.loopRound,
         // Where a task that has run ran is fixed, like its runner session (ADR-0020).
         ...(prior?.status === 'failed' ? { ops: prior.ops } : {}),
         forcedPastGate: prior?.forcedPastGate,
+        reportTo: prior?.reportTo,
+        researchOrigin: prior?.researchOrigin,
         subtasks: overlay(t.subtasks ?? [], prior?.subtasks ?? []),
       };
     });

@@ -84,6 +84,20 @@ describe('selectReadyTasks', () => {
     expect(why(readiness, 'd1')).toEqual([{ kind: 'dependencies', waiting: ['missing'] }]);
   });
 
+  it('keeps the runner connection hold reason until it is released', () => {
+    const task = createTask({ id: 'r1', order: 1, title: 'Research', prompt: 'investigate', taskMode: 'plan', research: true });
+    const reason = 'could not connect to Ordewell\'s tools; start it again';
+    const onHold = new Map([[task.id, reason]]);
+    const state = input([task], { onHold });
+
+    expect(selectReadyTasks(state).ready).toEqual([]);
+    expect(why(selectReadyTasks(state), task.id)).toEqual([{ kind: 'on-hold', reason }]);
+    expect(startWaits(task, state, { queued: false })).toEqual([]);
+
+    onHold.delete(task.id);
+    expect(selectReadyTasks(state).ready.map((ready) => ready.id)).toEqual([task.id]);
+  });
+
   it('holds back a task outside the user\'s approval record, however ready it is (ADR-0035)', () => {
     const approved = createTask({ id: 't1', order: 1, title: 'Approved', prompt: 'x' });
     const added = createTask({ id: 't2', order: 2, title: 'Added since', prompt: 'x' });

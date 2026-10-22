@@ -50,7 +50,10 @@ freely within one plan.
   runs them.
 - **Operations in the right place and order.** A deploy, a cloud CLI call or a
   push runs as an ops task in your own checkout, and waits until the change it
-  depends on is merged into your branch.
+  depends on is merged into your branch. When the planner can state the exact
+  commands, it adds a script task instead: Ordewell runs them with no model, and
+  you approve what will run as written, or pre-approve exact commands with the
+  effect allowlist.
 - **Done means reported.** A task finishes when its agent reports it done through
   Ordewell's own tools, never because a model thinks the work looks finished. You
   see which tasks passed, failed or need you, and can read each one's log live.
@@ -60,8 +63,12 @@ freely within one plan.
   supervisor level, merging automatically and the rest of your run settings.
 - **Read-only tasks.** A review or an audit runs without write access, so it
   cannot change your repository.
+- **Research tasks.** A read-only task can be research: its report goes back to
+  the planner, which wakes to read it while you keep talking. The planner
+  decides how many to start, within the run's Parallel limit.
 - **A planner that cannot write.** It reads, asks, and plans. Commands that would
-  change your repository are refused.
+  change your repository are refused, and an effect such as a push reaches the
+  world only as a script task or an ops task in the plan.
 - **No extra API key.** A coding agent you already pay for can be the planner. An API
   key from any of 25 providers works too.
 - **Use it where you work.** A terminal UI, a VS Code extension, a CLI for scripts

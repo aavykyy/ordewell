@@ -1,4 +1,4 @@
-import { ORDEWELL_MCP_SERVER_NAME, PLANNER_TOOLS, TASK_TOOLS, type McpCredential } from '../mcp';
+import { ORDEWELL_MCP_SERVER_NAME, PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, type McpCredential } from '../mcp';
 import type { PlannerStartOptions } from './AgentAdapter';
 
 export class McpAttachError extends Error {
@@ -7,6 +7,29 @@ export class McpAttachError extends Error {
     this.name = 'McpAttachError';
   }
 }
+
+/**
+ * A runner whose process stayed up but which never reported the server
+ * connected. Its task is held rather than failed: nothing was sent to it, and
+ * a start on a less loaded machine can still run it.
+ */
+export class McpAttachTimeout extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'McpAttachTimeout';
+  }
+}
+
+/**
+ * How long a runner that stays alive may keep reporting the server `pending`
+ * before the spawn is called a missed connection. A machine under heavy load
+ * can take well past ten seconds to schedule a CLI and finish an MCP
+ * handshake, and giving up early turned a slow start into a failed task. Two
+ * minutes is long enough for a loaded machine and short enough that a hung
+ * process gives its slot back. A runner that reports `failed`, or whose
+ * process exits, ends the wait at once instead of running to this cap.
+ */
+export const MCP_ATTACH_TIMEOUT_MS = 120_000;
 
 /**
  * A runner that exited on its own while starting, in its own last words. It
@@ -20,8 +43,8 @@ export class RunnerStartupExit extends Error {
   }
 }
 
-/** Which token's tools a runner is handed (ADR-0022, A1). */
-export type OrdewellToolRole = 'task' | 'planner';
+/** Which token's tools a runner is handed (ADR-0022, A1); a read-only task's add `run_command` (ADR-0046). */
+export type OrdewellToolRole = 'task' | 'readOnlyTask' | 'planner';
 
 /** A runner's report on the Ordewell server's connection, in one vocabulary for every runner. */
 export type AttachState = 'connected' | 'pending' | 'failed';
@@ -63,11 +86,12 @@ export interface OrdewellToolBinding<Ask = never> {
 
 /** The tools of a role, by their names on the server, less `hidden`. */
 export function ordewellToolNames(role: OrdewellToolRole, hidden: readonly string[] = []): string[] {
-  return (role === 'task' ? TASK_TOOLS : PLANNER_TOOLS).map((tool) => tool.name).filter((tool) => !hidden.includes(tool));
+  const tools = role === 'task' ? TASK_TOOLS : role === 'readOnlyTask' ? READ_ONLY_TASK_TOOLS : PLANNER_TOOLS;
+  return tools.map((tool) => tool.name).filter((tool) => !hidden.includes(tool));
 }
 
-/** Every tool the server serves, under either role, by its name on the server. */
-export const ORDEWELL_TOOL_NAMES: readonly string[] = [...new Set([...TASK_TOOLS, ...PLANNER_TOOLS].map((tool) => tool.name))];
+/** Every tool the server serves, under any role, by its name on the server. */
+export const ORDEWELL_TOOL_NAMES: readonly string[] = [...new Set([...TASK_TOOLS, ...READ_ONLY_TASK_TOOLS, ...PLANNER_TOOLS].map((tool) => tool.name))];
 
 /** The naming half of a binding for a runner that names a server's tool `<prefix><tool>`. */
 export function prefixedToolNames(prefix: string): Pick<OrdewellToolBinding, 'toolName' | 'toolNames'> & { isToolName(name: string): boolean } {
@@ -91,8 +115,12 @@ export function listed(items: string[]): string {
 /** An adapter as {@link spawnAttached} handles it. */
 interface SpawnedAdapter {
   dispose(): void;
-  /** Absent: the runner cannot be handed the server at all. */
-  mcpAttached?(): Promise<boolean>;
+  /**
+   * Absent: the runner cannot be handed the server at all. `false` is the old
+   * boolean answer for a runner that has not attached (a timeout), kept for
+   * simple test adapters; the real adapters say `pending` or `failed`.
+   */
+  mcpAttached?(): Promise<boolean | AttachState>;
 }
 
 /** A runner spawned with the Ordewell server connected, and the token it was spawned with. */
@@ -125,11 +153,26 @@ export interface SpawnAttachSteps<A extends SpawnedAdapter> {
   startupExit?(): string | null;
   /** Why the first spawn failed, told before the respawn. */
   onRespawn?(failure: string): void;
-  /** The {@link McpAttachError}'s message once the respawn failed too. */
+  /** The {@link McpAttachError}'s or {@link McpAttachTimeout}'s message once the respawn failed too. */
   failed(first: string, second: string): string;
 }
 
 const CANCELLED = Symbol('cancelled');
+
+/**
+ * Why one spawn did not attach. `failed` is the runner's own report that the
+ * server cannot connect (a configuration problem); `unreachable` is a wait
+ * that ran out while the runner was still starting.
+ */
+interface SpawnFailure {
+  kind: 'failed' | 'unreachable';
+  message: string;
+}
+
+/** `report`, with the old boolean answer read as connected or still pending. */
+function attachReport(report: boolean | AttachState): AttachState {
+  return report === true ? 'connected' : report === false ? 'pending' : report;
+}
 
 /** `work`'s outcome, or {@link CANCELLED} as soon as `signal` aborts, whichever comes first. */
 function unlessCancelled<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T | typeof CANCELLED> {
@@ -147,25 +190,34 @@ function unlessCancelled<T>(work: Promise<T>, signal: AbortSignal | undefined): 
 /**
  * One runner with Ordewell's tools attached (ADR-0025): a spawn that does not
  * report the server connected is killed with its token and respawned once on
- * a fresh one; a second failure throws {@link McpAttachError}. One that exited
- * while starting throws {@link RunnerStartupExit} instead. Null once
+ * a fresh one. A second wait that ran out throws {@link McpAttachTimeout}, so
+ * the task can be held; a runner that reported the server failed, or could
+ * not be checked, throws {@link McpAttachError} instead. One that exited while
+ * starting throws {@link RunnerStartupExit}. Null once
  * {@link SpawnAttachSteps.cancelled}, with nothing left running.
  */
 export async function spawnAttached<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): Promise<AttachedSpawn<A> | null> {
   const first = await spawnOnce(steps);
-  if (typeof first !== 'string') return first;
-  steps.onRespawn?.(first);
+  if (!isSpawnFailure(first)) return first;
+  steps.onRespawn?.(first.message);
   const second = await spawnOnce(steps);
-  if (typeof second !== 'string') return second;
-  throw new McpAttachError(steps.failed(first, second));
+  if (!isSpawnFailure(second)) return second;
+  const message = steps.failed(first.message, second.message);
+  // One real failure is enough: a respawn cannot configure the server either.
+  if (first.kind === 'failed' || second.kind === 'failed') throw new McpAttachError(message);
+  throw new McpAttachTimeout(message);
 }
 
-async function spawnOnce<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): Promise<AttachedSpawn<A> | null | string> {
+function isSpawnFailure<A>(spawned: AttachedSpawn<A> | SpawnFailure | null): spawned is SpawnFailure {
+  return spawned !== null && 'kind' in spawned;
+}
+
+async function spawnOnce<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): Promise<AttachedSpawn<A> | SpawnFailure | null> {
   let credential: McpCredential;
   try {
     credential = await steps.issueToken();
   } catch (err) {
-    return `Ordewell's MCP server could not issue a token (${errorText(err)})`;
+    return { kind: 'failed', message: `Ordewell's MCP server could not issue a token (${errorText(err)})` };
   }
   const { token } = credential;
   const signal = steps.cancelled;
@@ -191,7 +243,7 @@ async function spawnOnce<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): 
   };
   if (!adapter.mcpAttached) {
     takeBack();
-    return `${steps.runner} cannot be handed Ordewell's MCP server`;
+    return { kind: 'failed', message: `${steps.runner} cannot be handed Ordewell's MCP server` };
   }
   try {
     await steps.start(adapter, credential);
@@ -206,12 +258,12 @@ async function spawnOnce<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): 
   // In the abort itself: whoever cancelled already reports the runner gone,
   // and the check can wait out its whole deadline.
   signal?.addEventListener('abort', takeBack, { once: true });
-  let failure = `${steps.runner} did not report Ordewell's MCP server connected`;
-  let attached = false;
+  const failure = `${steps.runner} did not report Ordewell's MCP server connected`;
+  let state: AttachState = 'pending';
   try {
     const report = await unlessCancelled(adapter.mcpAttached(), signal);
     if (report === CANCELLED) return null;
-    attached = report;
+    state = attachReport(report);
     const exit = steps.startupExit?.() ?? null;
     if (exit !== null) {
       takeBack();
@@ -219,15 +271,16 @@ async function spawnOnce<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): 
     }
   } catch (err) {
     if (err instanceof RunnerStartupExit) throw err;
-    failure = `${steps.runner} could not check Ordewell's MCP attach state (${errorText(err)})`;
+    takeBack();
+    return { kind: 'failed', message: `${steps.runner} could not check Ordewell's MCP attach state (${errorText(err)})` };
   }
   if (signal?.aborted) return null;
-  if (attached) {
+  if (state === 'connected') {
     signal?.removeEventListener('abort', takeBack);
     return { adapter, token };
   }
   takeBack();
-  return failure;
+  return { kind: state === 'failed' ? 'failed' : 'unreachable', message: failure };
 }
 
 function errorText(err: unknown): string {
@@ -237,15 +290,16 @@ function errorText(err: unknown): string {
 /**
  * Ask the runner until it reports the server connected or failed, or the
  * deadline passes. `probe` gets the time left and answers with the runner's
- * latest report, waiting for one however it must.
+ * latest report, waiting for one however it must. Running out of time is
+ * `pending`: the runner was still starting when the wait ended.
  */
-export async function awaitAttach(probe: (msLeft: number) => Promise<AttachState>, timeoutMs: number, pollMs: number): Promise<boolean> {
+export async function awaitAttach(probe: (msLeft: number) => Promise<AttachState>, timeoutMs: number, pollMs: number): Promise<AttachState> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const left = deadline - Date.now();
-    if (left <= 0) return false;
+    if (left <= 0) return 'pending';
     const state = await probe(left);
-    if (state !== 'pending') return state === 'connected';
+    if (state !== 'pending') return state;
     if (pollMs > 0) {
       await new Promise((resolve) => {
         const timer = setTimeout(resolve, pollMs);

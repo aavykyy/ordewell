@@ -48,6 +48,12 @@ const names = svc.listSkills().map((s) => s.name);
 check(names.includes('test-me'), 'listSkills() includes test-me');
 check(names.includes('override-me'), 'listSkills() includes override-me');
 
+for (const name of ['diagnose', 'explore']) {
+  const builtin = svc.findSkill(name);
+  check(builtin !== undefined, `built-in "${name}" is seeded and found`);
+  check(builtin && builtin.appliesTo === 'planner' && builtin.modelInvocable, `built-in "${name}" is a model-invocable planner skill`);
+}
+
 if (failures > 0) {
   console.error(`\nverify-skills: ${failures} check(s) failed`);
   process.exit(1);

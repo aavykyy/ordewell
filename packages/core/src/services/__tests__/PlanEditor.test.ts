@@ -66,6 +66,7 @@ function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Recor
     releaseMovedResume: (_taskId: string, changes: Partial<Task>) => changes,
     tick: vi.fn(async () => { events.push('tick'); }),
     releaseTask: vi.fn(async (taskId: string) => { events.push(`release:${taskId}`); }),
+    planEdited: vi.fn(),
   };
   const runs = { current: opts.run ?? null, linkResolver: vi.fn() };
   const plannerTools = vi.fn(() => false);

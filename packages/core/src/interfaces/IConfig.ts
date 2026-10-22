@@ -93,8 +93,16 @@ export interface IConfig {
   approvalPreApproved: string[];
   /** Whether the built-in allowlist of read-only command families and MCP tools applies. */
   approvalDefaults: boolean;
+  /** The user's effect allowlist rules (ADR-0035, `effectAllowlist.ts`), read on every request. It has no defaults. */
+  effectAllowlist: string[];
   /** How many fetches and searches one planner turn may make (ADR-0027). User-only, like the approval settings. */
   webReadBudget: number;
+  /**
+   * Let a harness planner use its own shell beside `run_command` (ADR-0036
+   * N1), where the installed version passed the live checks (N2, N4). Off by
+   * default, and never a workspace's to choose.
+   */
+  plannerNativeShell: boolean;
 
   /** Get the base URL for an OpenAI-compatible provider. */
   getProviderBaseUrl(provider: AiProvider): string;

@@ -385,6 +385,26 @@ body {
   word-break: break-word;
 }
 
+/* A research report in a run update (ADR-0037): text to read, set apart from Ordewell's own lines */
+.chat-report {
+  margin: 4px 0;
+}
+
+.chat-report-head {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chat-report-body {
+  margin: 2px 0 0;
+  padding: 4px 8px;
+  border-left: 2px solid var(--cyan);
+  font: inherit;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .plan-supervisor-stopped {
   color: var(--orange);
 }
@@ -574,6 +594,13 @@ body {
   flex-shrink: 0;
   font-size: 10px;
   color: var(--orange);
+}
+
+/* A sealed run is a fact about where the command ran, not an exception. */
+.cmd-row-sealed {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-muted);
 }
 
 .cmd-row[data-status='pending'] .cmd-row-icon {
@@ -5735,6 +5762,34 @@ body.vscode-high-contrast-light .pending-message {
   color: var(--purple);
 }
 
+/* A research task (ADR-0037): read-only, its report returns to the planner */
+.task-type-badge.research {
+  background: var(--cyan-subtle);
+  color: var(--cyan);
+}
+
+/* A script task (ADR-0035): an ops task by nature, drawn with its body */
+.task-type-badge.script {
+  background: var(--purple-subtle);
+  color: var(--purple);
+}
+
+.task-script-body,
+.approval-card-body {
+  margin: 6px 0;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
 .plan-supervisor-lower {
   display: inline-flex;
   gap: 4px;
@@ -5744,6 +5799,30 @@ body.vscode-high-contrast-light .pending-message {
 .task-isolation-badge.approval {
   background: var(--orange-subtle);
   color: var(--orange);
+}
+
+/* A loop's check and body (ADR-0045): progress while it goes on, a failure only
+   when it ends or stops. */
+.task-isolation-badge.loop {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.task-isolation-badge.loop.repeating {
+  background: var(--orange-subtle);
+  color: var(--orange);
+}
+
+.task-isolation-badge.loop.passed {
+  background: var(--green-subtle);
+  color: var(--green);
+}
+
+.task-isolation-badge.loop.stopped,
+.task-isolation-badge.loop.out-of-rounds,
+.task-isolation-badge.loop.failed {
+  background: var(--red-subtle);
+  color: var(--red);
 }
 
 .task-ops-toggle {

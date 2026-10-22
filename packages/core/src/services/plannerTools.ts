@@ -1,4 +1,5 @@
 import { flattenTasks, type RunnerId, type SkillLoad, type Task, type Verdict } from '../models/Task';
+import { scriptBodyOf } from '../models/ScriptTask';
 import type { SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, snapshotSkill } from './skillInvocation';
 import { autonomyLevelLabel, readOnlyMode } from './ModeResolver';
@@ -11,12 +12,12 @@ import {
 import type { TaskOp } from './TaskOps';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
 import type { PlanChange, ToolRead } from './PlannerConversation';
-import type { McpToolReply, PlannerToolHandler } from './mcp';
+import { commandReply, type McpToolReply, type PlannerToolHandler } from './mcp/tools';
 import type { TaskLogEvent } from '../models/TaskLog';
 import { renderTaskLog } from './taskLogRead';
 import { taskReadPage } from './taskReadPage';
 import type { TaskDiffRead, TaskDiffResult } from './taskDiffRead';
-import type { ToolOutcome } from '../interfaces/IFileSystem';
+import type { BashOptions, ToolOutcome } from '../interfaces/IFileSystem';
 import type { CommandOutcome, ExecutionCommand } from './ExecutionCommands';
 import { resolveTaskRef, taskRefOf } from './TaskRefs';
 
@@ -51,14 +52,18 @@ export interface PlannerToolsHost {
   taskDiff(taskId: string, options: TaskDiffRead): Promise<TaskDiffResult>;
   /** The catalog a plan's tasks will see where they run, which attached skill names are checked against. */
   taskSkills(): SkillLookup;
-  /** The planner's research shell: classified, confined and approved as the API planner's `bash` is (ADR-0026). */
-  runCommand(command: string, signal: AbortSignal): Promise<ToolOutcome>;
+  /** The planner's research shell: classified, confined and approved as the API planner's `bash` is (ADR-0026), or sealed (ADR-0036). */
+  runCommand(command: string, signal: AbortSignal, opts?: BashOptions): Promise<ToolOutcome>;
   /** A fetch through the session's web fetcher, whose web-read policy decides it (ADR-0027). */
   fetchUrl(url: string): Promise<ToolOutcome>;
   /** A search the same way; undefined when the fetcher has no search. */
   webSearch(query: string): Promise<ToolOutcome | undefined>;
-  /** An execution command through the session's command seam (ADR-0029), asked by this planner turn. */
-  execute(command: ExecutionCommand): Promise<CommandOutcome>;
+  /**
+   * An execution command through the session's command seam (ADR-0029), asked
+   * by this planner turn. `signal` ends a wait on the caller's behalf: the
+   * call's own cancellation, or its turn ending.
+   */
+  execute(command: ExecutionCommand, signal?: AbortSignal): Promise<CommandOutcome>;
   /** Why the open turn may not make this change — a wake-up turn under Watch, say (ADR-0029); undefined when it may. */
   editsRefused(change: PlanChange): string | undefined;
 }
@@ -76,16 +81,16 @@ export type PlanEditOutcome =
   | { ok: true; summary: string[]; coerced?: Omit<AssignmentAdjustment, 'taskId'>[] }
   | { ok: false; errors: string[] };
 
-/** The runners a set of tasks runs on. A user task runs on none. */
+/** The runners a set of tasks runs on. A user task runs on none, and a script task on no runner (ADR-0035). */
 export function runnersOf(tasks: readonly Task[]): RunnerId[] {
-  return [...new Set(flattenTasks(tasks).filter((t) => t.type !== 'user').map((t) => t.assignedRunner))];
+  return [...new Set(flattenTasks(tasks).filter((t) => t.type === 'ai').map((t) => t.assignedRunner))];
 }
 
 export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
   // Bound to the turn it was made in: a late call from a turn that ended has nobody's consent behind it.
-  const execute = async (command: ExecutionCommand): Promise<McpToolReply> => {
+  const execute = async (command: ExecutionCommand, signal?: AbortSignal): Promise<McpToolReply> => {
     if (host.turnId() === undefined) return { isError: true, text: JSON.stringify({ ok: false, outcome: 'refused', reason: 'No planning turn is open, so nothing was done.' }) };
-    const outcome = await host.execute(command);
+    const outcome = await host.execute(command, signal);
     return outcome.ok
       ? answer({ ok: true, result: outcome.message })
       : { isError: true, text: JSON.stringify({ ok: false, outcome: outcome.outcome, reason: outcome.message }) };
@@ -105,6 +110,13 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       ...(note !== undefined ? { note } : {}),
     }),
     mergeAll: () => execute({ command: 'merge_all' }),
+    runScript: ({ title, commands, script, timeoutMs, dependencies }, { signal }) => execute({
+      command: 'run_script', title,
+      ...(commands !== undefined ? { commands } : {}),
+      ...(script !== undefined ? { script } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(dependencies !== undefined ? { dependencies: dependencies.map(String) } : {}),
+    }, signal),
 
     async loadSkill({ name }) {
       const skills = modelInvocablePlannerSkills(host.skills());
@@ -118,9 +130,8 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       return { text: skill.content };
     },
 
-    async runCommand({ command }, { signal }) {
-      const outcome = await host.runCommand(command, signal);
-      return { text: outcome.output || (outcome.success ? '(no output)' : 'The command failed with no output.'), ...(outcome.success ? {} : { isError: true }) };
+    async runCommand({ command, sealed }, { signal }) {
+      return commandReply(await (sealed ? host.runCommand(command, signal, { sealed }) : host.runCommand(command, signal)));
     },
 
     async fetch({ url }) {
@@ -299,9 +310,10 @@ function taskDetail(plan: readonly Task[], ref: string, fields: readonly TaskQue
   const wants = (field: TaskQueryField) => fields.includes(field);
   return {
     ...taskHead(plan, task),
-    type: task.type === 'user' ? 'user' : 'ai',
+    type: task.type,
     ...(wants('description') ? { description: task.description || null } : {}),
-    ...(wants('prompt') ? { prompt: task.prompt || null } : {}),
+    // A script task's body is what it runs, as a prompt is what a runner is told (ADR-0035).
+    ...(wants('prompt') ? (task.type === 'script' ? { body: scriptBodyOf(task) } : { prompt: task.prompt || null }) : {}),
     ...(wants('userSteps')
       ? { userSteps: task.userSteps?.length ? task.userSteps.map((s) => ({ order: s.order, instruction: s.instruction, completed: s.completed === true })) : null }
       : {}),

@@ -1,4 +1,4 @@
-import { flattenTasks, flattenTasksWithParents, type RunSettings, type SupervisionSnapshot, type Task } from '../models/Task';
+import { flattenTasks, flattenTasksWithParents, type RunSettings, type SupervisionSnapshot, type Task, type TaskReportTo, type TurnAuthority } from '../models/Task';
 import type { ExecutionActor, ExecutionRecord, SupervisorLevel } from '../models/Execution';
 import type { IsolationHandoff } from '../interfaces/IWorktreeIsolation';
 import type { GlobalRunSettings } from './SettingsService';
@@ -9,7 +9,10 @@ import { Supervisor, type RunEventInput, type SupervisorHost, type SupervisorOpt
 import { SupervisionMemory, type GuardTarget, type GuardTrip } from './LoopGuards';
 import { SUPERVISOR_LEVEL_LABEL } from './runSettingsText';
 import { executionSummary } from './SessionMessage';
-import { blockingFailures } from './blocking';
+import { blockingFailures, repeatingChecks } from './blocking';
+import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
+import { reportEnded, researchReport, taskReport } from './taskReport';
+import { researchReportTo } from './ResearchTasks';
 
 /** Supervisor levels, lowest first: an automatic lowering only ever goes down. */
 const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 };
@@ -17,6 +20,11 @@ const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 }
 /** A run the supervisor opens continues the last; every other actor asks for the user (ADR-0029, ADR-0030). */
 export function runOrigin(actor: ExecutionActor): RunOrigin {
   return actor.kind === 'supervisor' ? 'supervisor' : 'user';
+}
+
+/** One word for a loop's whole run, saying how many rounds it took (ADR-0045 L6); empty for any other failure. */
+function outOfRoundsNote(task: Readonly<Task>): string {
+  return outOfRounds(task) ? `its loop ran out of rounds: it failed all ${loopRoundOf(task)}.` : '';
 }
 
 /**
@@ -35,6 +43,10 @@ export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pu
   checkpointQuestion(taskId: string): string | undefined;
   /** The last few lines a task's runner wrote. */
   recentOutput(taskId: string): string | undefined;
+  /** The tail of a task's output a report carries; see {@link taskReport}. */
+  reportTail(taskId: string): string | undefined;
+  /** A task's result owed to the planner went into a report: it is owed no longer, and its end is kept in the timeline (ADR-0035). */
+  reported(taskId: string, to: TaskReportTo): void;
   /** A line in the transcript in Ordewell's voice, saved and announced with the run's settings as they are now. */
   systemNote(text: string): void;
   /** A message to the user in the supervisor's voice, saved and announced. */
@@ -70,7 +82,7 @@ export class RunSupervision {
         const settings = this.settings();
         return settings ? { level: settings.supervisorLevel ?? 'off', ...(settings.unsupervised ? { unsupervised: settings.unsupervised } : {}) } : null;
       },
-      deliver: (digest) => host.deliver(digest),
+      deliver: (digest, report) => host.deliver(digest, report),
       pump: () => host.pump(),
       saveState: () => host.save(),
       describeTask: (taskId) => this.describeTask(taskId),
@@ -132,7 +144,8 @@ export class RunSupervision {
       delete settings.unsupervised;
       this.host.systemNote(`You set the supervisor to ${SUPERVISOR_LEVEL_LABEL[level]}.`);
       if (level === 'off') this.supervisor.standDown();
-      else this.supervisor.setByUser();
+      // At Off too: a report the planner asked for still opens a turn (ADR-0037, R2), and what failed before is behind it.
+      this.supervisor.setByUser();
       if (level !== 'act') this.handOver();
     }
     if (changes.mergeAtGatesAutomatically !== undefined) settings.mergeAtGatesAutomatically = changes.mergeAtGatesAutomatically;
@@ -146,15 +159,65 @@ export class RunSupervision {
     this.supervisor.observe(event);
   }
 
-  /** A task settled on its own: the guards remember a failure's shape, and the supervisor hears of it. */
+  /**
+   * A task settled on its own: the guards remember a failure's shape, and the
+   * supervisor hears of it. The end of a task whose result a planner turn
+   * asked for is that turn's report instead, which wakes the planner at every
+   * level (ADR-0037, R2). A loop's check that failed a round with rounds left
+   * is none of these while its loop goes on: no one is asked, so it counts for
+   * no guard, wakes no one, and owes its report only once the loop is over
+   * (ADR-0045 L3, L7). A body task that fails stops the loop, so the report
+   * its check owes goes then.
+   */
   taskSettled(task: Readonly<Task>): void {
+    const repeating = repeatingChecks([...this.host.tasks()]);
+    this.reportStoppedLoops(repeating, task.id);
+    if (repeating.has(task.id)) return;
     this.guards.settled(task);
+    const to = this.reportAddress(task);
+    if (to && reportEnded(task)) {
+      this.supervisor.observe({ kind: 'task_report', taskId: task.id, report: this.reportOf(task, to) });
+      this.host.reported(task.id, to);
+      return;
+    }
     const event = this.settledEvent(task);
     if (event) this.supervisor.observe(event);
   }
 
+  /**
+   * The reports owed by loops' checks between rounds whose loop has stopped
+   * (ADR-0045 L7): the check is the failure it is stored as now, and no
+   * further round will settle it. `settling` is the task settling now, whose
+   * own report its settling sends.
+   */
+  private reportStoppedLoops(repeating: ReadonlySet<string>, settling?: string): void {
+    for (const check of this.host.tasks()) {
+      const to = check.reportTo;
+      if (!to || check.id === settling || !betweenRounds(check) || repeating.has(check.id)) continue;
+      this.supervisor.observe({ kind: 'task_report', taskId: check.id, report: this.reportOf(check, to) });
+      this.host.reported(check.id, to);
+    }
+  }
+
+  private reportOf(task: Readonly<Task>, to: TaskReportTo): RunEventInput['report'] {
+    const authority: TurnAuthority = to.actor === 'supervisor' ? 'supervisor' : 'user';
+    const rounds = outOfRoundsNote(task);
+    const tail = this.host.reportTail(task.id);
+    const text = to.research ? researchReport(task, tail) : taskReport(task, tail);
+    return { authority, text: rounds ? `${rounds.charAt(0).toUpperCase()}${rounds.slice(1)} ${text}` : text, passed: task.status === 'completed' };
+  }
+
+  private reportAddress(task: Readonly<Task>): TaskReportTo | undefined {
+    if (task.reportTo) return task.reportTo;
+    if (!task.research) return;
+    return task.researchOrigin ?? researchReportTo(task.addedBy === 'supervisor'
+      ? { kind: 'supervisor', level: this.level } : { kind: 'planner-turn' });
+  }
+
   /** The run finished; a handoff deferred to the supervisor is resent once its wake-up turn on it is over. */
   runFinished(): void {
+    // A skip of a body task stops its loop and settles nothing.
+    this.reportStoppedLoops(repeatingChecks([...this.host.tasks()]));
     const { total, completed, failed, blocked, skipped } = executionSummary(flattenTasks([...this.host.tasks()]));
     this.supervisor.observe({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}${blocked > 0 ? `, ${blocked} blocked` : ''}${skipped > 0 ? `, ${skipped} skipped` : ''}` });
     if (!this.supervisor.awaitsRunEnd) this.handOver();
@@ -171,9 +234,18 @@ export class RunSupervision {
     return this.supervisor.mayWake();
   }
 
-  /** Run one wake-up turn, held to the run's level; see {@link Supervisor.turn}. */
-  wakeUp<T>(reply: (signal: AbortSignal, turn: WakeUpTurn) => Promise<T>, signal?: AbortSignal): Promise<T> {
-    return this.supervisor.turn((turnSignal) => reply(turnSignal, this.supervisor.wakeUpTurn()), signal);
+  /** Whether a report the planner asked for may open a turn now; see {@link Supervisor.mayReport}. */
+  mayReport(): boolean {
+    return this.supervisor.mayReport();
+  }
+
+  /**
+   * Run one turn opened without the user, held to the run's level or, on a
+   * report owed to the user's turn, to that turn's authority (ADR-0037, R3);
+   * see {@link Supervisor.turn}.
+   */
+  wakeUp<T>(reply: (signal: AbortSignal, turn: WakeUpTurn) => Promise<T>, signal?: AbortSignal, authority: TurnAuthority = 'supervisor'): Promise<T> {
+    return this.supervisor.turn(reply, signal, authority);
   }
 
   /** The command seam's loop guard: a supervisor's call checked against what this run remembers. */
@@ -231,12 +303,15 @@ export class RunSupervision {
 
   /**
    * The supervisor failed for the rest of the run: the run carries on as Off.
+   * At Off, the turns that failed were report turns, and they stop instead.
    * Said in the transcript, where its notes would have been, and as a notice.
    */
   private goUnsupervised(reason: string): void {
     const settings = this.settings();
     if (!settings || settings.unsupervised) return;
-    const text = `The supervisor stopped: ${reason}. The run carries on unsupervised; what it was not told reaches the planner with your next message.`;
+    const text = this.level === 'off'
+      ? `Report turns stopped: ${reason}. The reports the planner asked for reach it with your next message.`
+      : `The supervisor stopped: ${reason}. The run carries on unsupervised; what it was not told reaches the planner with your next message.`;
     settings.unsupervised = reason;
     this.host.systemNote(text);
     this.host.notice('warn', text);
@@ -276,7 +351,10 @@ export class RunSupervision {
   private settledEvent(task: Readonly<Task>): RunEventInput | null {
     const taskId = task.id;
     if (task.status === 'completed') return { kind: 'task_passed', taskId };
-    if (task.status === 'failed') return { kind: 'task_failed', taskId, ...(task.verdict?.reason ? { detail: task.verdict.reason } : {}) };
+    if (task.status === 'failed') {
+      const detail = `${outOfRoundsNote(task)} ${task.verdict?.reason ?? ''}`.trim();
+      return { kind: 'task_failed', taskId, ...(detail ? { detail } : {}) };
+    }
     if (task.status !== 'awaiting_user') return null;
     switch (task.awaitingReason) {
       case 'checkpoint': {

@@ -4,12 +4,12 @@ status: accepted
 
 # 0008 — The planner's exploration envelope: tiered commands, confined paths, one approval seam
 
-*Pending:* [ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md) — the planner performs exact effects as script tasks, and its refusals point there; [ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md) — where a sandbox holds it, a command the envelope would refuse without asking runs sealed.
-
 See also [ADR-0011](0011-sandboxing-the-planners-shell.md): the classifier
 below is a denylist over a real shell, not an OS-level sandbox for it. That
 ADR runs the planner's shell under the same kind of OS sandbox Codex already
-requires for itself, beneath the classifier, where the platform has one.
+requires for itself, beneath the classifier, where the platform has one, and
+[ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md) runs
+there, sealed, what this envelope would refuse without asking.
 
 ## Problem
 
@@ -31,9 +31,9 @@ Meanwhile paths were not confined at all. `PoolFileSystem.resolve()` was `path.i
 |---|---|
 | `auto` | read-only inspection — runs with no prompt (the historical allowlist, widened with `rg`, `find`, `jq`, `tail`, …, and `sed` printing lines by number) |
 | `ask` | anything else not obviously destructive — one approval, remembered at `scope` granularity for the session |
-| `refuse` | writes, privilege escalation, output redirection, piping or redirecting code into an interpreter, inline code in any spelling the interpreter accepts — never runs, never prompts |
+| `refuse` | writes, privilege escalation, output redirection, piping or redirecting code into an interpreter, inline code in any spelling the interpreter accepts — never runs as classified, never prompts; runs sealed where the planner's sandbox can seal it |
 
-`refuse` is deliberately **not promptable**. A planner that can `rm` is a planner that can silently break the workspace it was asked to reason about, and this repo's thesis already puts mutation in the runners.
+`refuse` is deliberately **not promptable**. A planner that can `rm` is a planner that can silently break the workspace it was asked to reason about, and this repo's thesis puts changes to repository files in the runners' change tasks. The envelope is for reading. Its refusals say where an effect goes instead ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)): `run_script` for one the planner can state as exact commands, which the user consents to as written; an ops task for one that needs judgment. Where ADR-0011's sandbox runs, a refused command, and one the approval mode refuses without asking, runs sealed instead ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md)): the workspace read-only, no home directory and no network, so an `rm` there only reports an error, and a loop or a few lines of Python compute without the classifier having to read them. A `!` exclusion and a person's denial still refuse. Elsewhere a refusal is a refusal.
 
 Path confinement moved into `BaseFileSystem` as template methods: every public method resolves and authorizes before delegating to an adapter `*Impl`, which therefore only ever receives an absolute, approved path. Out-of-workspace access is an `ask`, scoped to the containing directory.
 
@@ -54,7 +54,7 @@ Both halves have to agree on what the shell will actually do with a string, or t
 - **One in-flight ask per scope (T3).** Parallel tool rounds cannot raise two prompts for the same thing.
 - **Nothing in core knows which UI is listening (T4).** Requests ride the same `SessionMessage` broadcast as every other planner event. VS Code answers in-process via `INotification.confirm`; the CLI and TUI answer over `POST /api/approvals/:sessionId/:approvalId`. A prompt outlives the socket that announced it, which is why answers are HTTP rather than a socket reply.
 - **Absent is denial, everywhere (T5).** No approval channel wired, a dismissed modal, an empty CLI answer, a malformed request body, a five-minute timeout — all deny. The timeout is load-bearing, not defensive: an unanswered prompt would otherwise hang the research loop with no visible cause.
-- **Research subagents can never prompt (T6).** They run in the background with nobody watching, so `nonPromptingFs` refuses at the capability boundary — auto-tier commands still work, anything that *would* ask is refused with a message telling the agent to report the gap in its digest. Enforced by wrapper, not by prompt instruction.
+- **Research subagents can never prompt (T6).** They run in the background with nobody watching, so `nonPromptingFs` decides at the capability boundary — auto-tier commands still work, and anything that *would* ask runs sealed where the sandbox can seal it, which asks nobody ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md), S5); elsewhere it is refused with a message telling the agent to report the gap in its digest. Enforced by wrapper, not by prompt instruction.
 - **Session boundaries are hard (T7).** `Session.reset()` clears granted scopes. A path approved for one goal is not approved for the next, consistent with the rest of the session-isolation rules.
 
 ## Visibility: the outcome is data, not a string to re-parse
@@ -327,8 +327,9 @@ of.
   judged by name, not by where `link` points.
 
 Research subagents use the same resolution, so a chain that stays inside the
-workspace works for them and one that leaves it is refused, named by where it
-resolves rather than as written.
+workspace works for them, and one that leaves it runs sealed (T6) or, where
+nothing can seal it, is refused, named by where it resolves rather than as
+written.
 
 ## Harness planners and native plan files
 
@@ -411,3 +412,5 @@ model's refusal to write were never security evidence.
 - 2026-10-13 — `sed` printing lines by number moves to `auto`; a denied `sed` names the line reads that run without asking, and a path denied after an unfollowed `cd` says why it was judged from the root.
 - 2026-10-14 — the TUI status row no longer lists the planner's in-flight calls: it relates to the selected chat only and says Planning, with the calls in the transcript.
 - 2026-10-17 — the Codex planner paragraph reads `approvalPolicy: on-request`, as ADR-0026 made it on 2026-10-10; it still said `never`.
+- 2026-10-21 — where the planner's sandbox runs, a command refused without asking, by the classifier or the approval mode, runs sealed instead, and so does what a research subagent would have asked about ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md), #109).
+- 2026-10-21 — the planner performs an exact effect itself as a script task through `run_script`, outside this envelope, and the refusals and the `allowlist` mode's refusal point there instead of at an ops task alone ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).

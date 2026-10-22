@@ -20,6 +20,7 @@ import {
   STOPPED_TOOL_RESULT,
   type GrepOptions,
   type ReadFileOpts,
+  type ShellLaunch,
   type ToolOutcome,
 } from '@ordewell/core';
 
@@ -28,12 +29,15 @@ const SEARCH_TIMEOUT_MS = 20_000;
 /** Generous, because an approved `bash` call may legitimately be a test suite. */
 const BASH_TIMEOUT_MS = 120_000;
 
-interface ExecResult { stdout: string; stderr: string; code: number | null }
+interface ExecResult { stdout: string; stderr: string; code: number | null; timedOut: boolean }
+
+/** How long a sealed run's output may trail its exit. */
+const SEALED_OUTPUT_GRACE_MS = 1_000;
 
 function run(
   file: string,
   args: string[],
-  opts: { cwd?: string; timeout: number; shell?: boolean | string; env?: NodeJS.ProcessEnv; signal?: AbortSignal },
+  opts: { cwd?: string; timeout: number; shell?: boolean | string; env?: NodeJS.ProcessEnv; signal?: AbortSignal; sealed?: boolean },
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     // Node hands only ENOENT/EAGAIN/EMFILE/ENFILE from spawn(2) to the
@@ -42,13 +46,17 @@ function run(
     // this promise and abort the whole planner turn instead of the one tool
     // call. Kept in step with PoolFileSystem.run, which had the same defect.
     try {
-      execFile(file, args, {
+      const child = execFile(file, args, {
         cwd: opts.cwd,
         timeout: opts.timeout,
         maxBuffer: MAX_OUTPUT_BYTES,
         encoding: 'utf8',
         shell: opts.shell,
         env: opts.env,
+        // A sealed run's wall-time limit is a kill, not a request it may trap
+        // (ADR-0036 S1); the sandbox takes the processes it started down with
+        // it. Kept in step with PoolFileSystem's run.
+        ...(opts.sealed ? { killSignal: 'SIGKILL' as const } : {}),
         // Node kills the child when this aborts and calls back with an
         // ABORT_ERR, which lands on the `code: 1` branch below — a failed
         // tool call, like any command that did not finish. Stopping the
@@ -56,13 +64,17 @@ function run(
         signal: opts.signal,
       }, (err, stdout, stderr) => {
         const code = err && typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : err ? 1 : 0;
-        resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code });
+        // Only Node's own timeout sets `killed`; an abort and a stdout overflow do not, so this names the limit exactly.
+        resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code, timedOut: err?.killed === true });
       });
+      // A process that left a sealed run's process group can hold its output
+      // open after the run has ended: the result is what arrived by then.
+      if (opts.sealed) child.once('exit', () => setTimeout(() => { child.stdout?.destroy(); child.stderr?.destroy(); }, SEALED_OUTPUT_GRACE_MS).unref());
     } catch (err) {
       // `code: null` rather than 1: the search adapters read 0 and 1 as "ran,
       // possibly no matches", so a 1 would surface a confident "No matches
       // found." for a search that never executed.
-      resolve({ stdout: '', stderr: (err as Error).message, code: null });
+      resolve({ stdout: '', stderr: (err as Error).message, code: null, timedOut: false });
     }
   });
 }
@@ -263,15 +275,16 @@ export class VsCodeFileSystem extends BaseFileSystem {
     }
   }
 
-  protected async execBashImpl(command: string, signal?: AbortSignal): Promise<ToolOutcome> {
+  protected async execBashImpl(command: string, shell: ShellLaunch, signal: AbortSignal | undefined, cwd: string): Promise<ToolOutcome> {
     // `file: null` means "host default", i.e. the `shell: true` this always
-    // did — unchanged on POSIX. A resolved file is the POSIX shell found on a
-    // Windows box, invoked explicitly so the command runs in the dialect
-    // `BaseFileSystem` classified it under.
-    const { file, args } = this.researchShell;
+    // did, where no sandbox runs. A resolved file is the sandbox launcher
+    // around the POSIX shell, or the POSIX shell found on a Windows box:
+    // either way the command goes last, in the dialect `BaseFileSystem`
+    // classified it under.
+    const { file, args, env, wallTimeMs } = shell;
     const result = file === null
-      ? await run(command, [], { cwd: this.getWorkspaceRoot(), timeout: BASH_TIMEOUT_MS, shell: true, signal })
-      : await run(file, [...args, command], { cwd: this.getWorkspaceRoot(), timeout: BASH_TIMEOUT_MS, signal });
+      ? await run(command, [], { cwd, timeout: BASH_TIMEOUT_MS, shell: true, env, signal })
+      : await run(file, [...args, command], { cwd, timeout: wallTimeMs ?? BASH_TIMEOUT_MS, env, signal, sealed: wallTimeMs !== undefined });
     const out = (result.stdout || '').trim();
     const err = (result.stderr || '').trim();
 
@@ -283,7 +296,7 @@ export class VsCodeFileSystem extends BaseFileSystem {
       const detail = err || out || `exited with code ${result.code}`;
       // A failing command is still research — the failure output is usually
       // the answer the model was diagnosing toward.
-      return { success: false, output: `Command exited ${result.code}:\n${detail.slice(0, 20_000)}`, truncated: detail.length > 20_000 };
+      return { success: false, output: `Command exited ${result.code}:\n${detail.slice(0, 20_000)}`, truncated: detail.length > 20_000, ...(result.timedOut ? { timedOut: true } : {}) };
     }
 
     const combined = err ? `${out}\n[stderr]\n${err}` : out;

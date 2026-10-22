@@ -1,10 +1,12 @@
-export { isTaskRunning, taskStatusKind, awaitingLabel, approvalLabel, resumeLabel, resumeTime, blockedByLabel, skippedLabel, NOT_STARTED, WAITS_FOR_APPROVAL_LABEL } from './status';
+export { isTaskRunning, taskStatusKind, awaitingLabel, approvalLabel, resumeLabel, resumeTime, blockedByLabel, holdLabel, skippedLabel, NOT_STARTED, WAITS_FOR_APPROVAL_LABEL } from './status';
 export type { TaskStatusKind } from './status';
 export { taskRowActions, markAction, markRequestFor, opsEditable } from './actions';
 export type { TaskRowAction, TaskRowPlacement } from './actions';
-export { taskRowView, namedRepos } from './view';
-export type { TaskRowUsage, TaskRowView, TaskRowSubject, TaskRowIsolation, TaskRowContext, TaskRowKind } from './view';
-export { titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields } from './texts';
+export { taskRowView, namedRepos, loopRowParts } from './view';
+export type { TaskRowUsage, TaskRowView, TaskRowLoop, TaskRowSubject, TaskRowIsolation, TaskRowContext, TaskRowKind } from './view';
+export { titledRefs, dependentsNotice, loopLeaveNotice, pastGateConfirmation, newTaskFields } from './texts';
 export type { NewTaskFields } from './texts';
 export { assignmentIssue, assignmentIssueText } from '../services/AssignmentScope';
 export type { AssignmentScope, AssignmentIssue } from '../services/AssignmentScope';
+export { loopCheckState, loopCheckLabel, loopBodyRound, loopBodyLabel } from './loop';
+export type { LoopCheckState, LoopCheckFacts } from './loop';

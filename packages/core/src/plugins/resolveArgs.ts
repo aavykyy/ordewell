@@ -36,6 +36,7 @@ export function resolveTaskRunnerFlags(
   ctx: { mode: string; model?: string; thinkingEffort?: string },
 ): TaskRunnerFlags {
   const flags: TaskRunnerFlags = {
+    ...(manifest.modes?.some((m) => m.id === ctx.mode && m.readOnly) ? { readOnly: true } : {}),
     permissionMode: permissionModeValue(manifest, ctx.mode),
     modeSettings: resolveModeSettings(manifest, ctx.mode),
   };

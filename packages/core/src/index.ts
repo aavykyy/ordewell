@@ -38,11 +38,14 @@ export type {
   Task,
   TaskModelAssignment,
   TaskStatus,
+  TaskType,
   VerificationCheck,
 } from './models/Task';
 export * from './models/Session';
 export * from './models/Usage';
 export * from './models/TaskLog';
+export { commandLine, scriptBodyOf, scriptBodyText, scriptTaskText, timeLimitText, DEFAULT_SCRIPT_TIMEOUT_MS, type ScriptBody } from './models/ScriptTask';
+export { betweenRounds, outOfRounds, loopRoundOf, checkOf, inLoop, loopRemovalRefusal, DEFAULT_LOOP_ROUNDS, MAX_LOOP_ROUNDS, type TaskLoop, type LoopSubject } from './models/Loop';
 export * from './models/RunnerCommand';
 export * from './models/Execution';
 export * from './interfaces/IFileSystem';
@@ -66,6 +69,7 @@ export type { HttpWebFetcherOptions, WebResponse, WebTransport } from './service
 export type { ApprovalMode, ApprovalModeSetting, ApprovalPolicyOptions, ApprovalSource } from './services/ApprovalPolicy';
 export { DEFAULT_PLANNER_ALLOWLIST, parseAllowlist, commandAllowedBy, toolAllowed, scopeAllowed } from './services/plannerAllowlist';
 export type { PlannerAllowlist, CommandWords } from './services/plannerAllowlist';
+export { parseEffectAllowlist, effectRuleFor, type EffectRules } from './services/effectAllowlist';
 export { PendingApprovals } from './services/PendingApprovals';
 export type { AskOptions, PendingApproval, PendingApprovalsOptions } from './services/PendingApprovals';
 export { RunnerApprovals } from './services/RunnerApprovals';
@@ -133,6 +137,8 @@ export { ClaudeCodeAdapter } from './services/harness/ClaudeCodeAdapter';
 export { CodexAdapter } from './services/harness/CodexAdapter';
 export { CodexSandboxAvailability, codexSandboxNotice, CODEX_SANDBOX_DOCS, CODEX_SANDBOX_OFF_LINE } from './services/harness/codexSandbox';
 export { OpenCodeAdapter } from './services/harness/OpenCodeAdapter';
+export { nativeShellOffer } from './services/harness/nativeShell';
+export type { NativeShellOffer } from './services/harness/nativeShell';
 export { mapAgentTool, normalizeAgentArgs } from './services/harness/agentTools';
 export type { MappedTool } from './services/harness/agentTools';
 export { applyTaskOps, parseTaskOpsJson, textHasTaskOps, canMergeTasks, canSplitTask, canSetDependencies, dependencyCandidates, dependentsOf } from './services/TaskOps';
@@ -193,8 +199,8 @@ export type {
 } from './services/SessionMessage';
 export { EMPTY_RUN, reduceRun } from './services/runView';
 export { serializeTask, serializeTaskStatus, serializePlan, surfacePlan, surfacePlanState, executionSummary, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, type ExecutionSummary } from './services/SessionMessage';
-export { blockingFailures, type BlockingSubject } from './services/blocking';
-export { summarizeToolCall, classifyOutcome } from './services/researchStepSummary';
+export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, type PlanBlocks } from './services/blocking';
+export { summarizeToolCall, classifyOutcome, ranSealed, withoutSealedMark } from './services/researchStepSummary';
 export * from './conversation';
 export * from './taskRow';
 export { VerdictEngine } from './services/VerdictEngine';
@@ -206,6 +212,7 @@ export type { RunnerModeInfo } from './services/ModeResolver';
 export { AbstractRunnerSession, AbstractRunner } from './services/AbstractRunner';
 export type { RunnerSpawnOptions } from './services/AbstractRunner';
 export { StructuredRunner, StructuredSession } from './services/StructuredRunner';
+export { ScriptRunner, ScriptSession, SCRIPT_RUNNER } from './services/ScriptRunner';
 export type { StructuredRunnerDeps } from './services/StructuredRunner';
 export { continuability, canContinue } from './services/continuation';
 export type { Continuability } from './services/continuation';
@@ -248,7 +255,12 @@ export {
   researchToolsPath,
   researchShellWarning,
 } from './services/researchShell';
-export type { ResearchShell, ResearchShellDeps, ShellDialect } from './services/researchShell';
+export type { ResearchShell, ResearchShellDeps, ShellDialect, ShellLaunch } from './services/researchShell';
+export { PlannerShellSandbox, resolvePlannerSandbox, clearPlannerSandboxCache, PLANNER_SANDBOX_DOCS, SEALED_LIMITS, TASK_SEALED_LIMITS } from './services/sandbox/plannerSandbox';
+export { createNativeShellLauncher, nativeShellInvocation } from './services/sandbox/nativeShellLauncher';
+export type { NativeShellLauncher } from './services/sandbox/nativeShellLauncher';
+export type { PlannerSandboxAvailability, PlannerSandboxDeps, SealedAvailability, SealedRunOptions } from './services/sandbox/plannerSandbox';
+export type { SandboxBackend, SandboxProfile, SandboxLimits, SandboxInvocation, SandboxLaunch } from './services/sandbox/SandboxBackend';
 export { clipboardCopyCommand } from './utils/clipboard';
 export type { HasBinFn } from './utils/clipboard';
 export { RunnerRegistry } from './plugins/RunnerRegistry';
@@ -282,6 +294,7 @@ export {
   type PlannerSelectionState,
 } from './services/selectPlanner';
 export { DEFAULT_MAX_PARALLEL, parseMaxParallel } from './utils/maxParallel';
+export { compareVersions, parseVersion } from './utils/version';
 
 export { walkPlan, taskPlacement, subtreeIds } from './services/PlanTree';
 export type { TreeTask, TaskPlacement } from './services/PlanTree';

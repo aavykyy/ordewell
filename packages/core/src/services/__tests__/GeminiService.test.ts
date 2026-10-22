@@ -4,6 +4,7 @@ import type { IFileSystem } from '../../interfaces/IFileSystem';
 import type { ResearchProgress } from '../../models/Task';
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import type { SkillInfo } from '../SkillsService';
+import { TurnBudgets } from '../PlannerBudgets';
 
 /** The chat instance every getGenerativeModel().startChat() hands back. */
 const startChat = vi.hoisted(() => vi.fn());
@@ -276,5 +277,27 @@ describe('Gemini planner skill catalog', () => {
     const system = history[0].parts[0].text;
     expect(system).toContain('Task skills you may attach:\n- pr-style: pr-style description');
     expect(system).not.toMatch(/review-plan|load_skill/);
+  });
+});
+
+describe('Gemini turn budgets', () => {
+  beforeEach(() => { startChat.mockReset(); });
+
+  it('appends the budget block to the turn\'s message and keeps it out of the system prompt', async () => {
+    const reply = () => streamResult([{ candidates: [{ content: { parts: [{ text: 'Which cache?' }] }, finishReason: 'STOP' }] }]);
+    const { requests } = scriptStreams([reply(), reply()]);
+    let left = 40;
+    const service = new GeminiService(geminiConfig(), new TurnBudgets([() => `Web reads left this turn: ${left}.`]));
+
+    await service.startConversation({ goal: 'add a cache', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem() as IFileSystem, onProgress: () => {} });
+    left = 39;
+    await service.continueConversation('in-process', () => {});
+
+    expect(requests).toEqual([
+      'add a cache\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 40.',
+      'in-process\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 39.',
+    ]);
+    const [{ history }] = startChat.mock.calls[0] as [{ history: { parts: { text: string }[] }[] }];
+    expect(history[0].parts[0].text).not.toContain('CONTEXT AND BUDGETS');
   });
 });

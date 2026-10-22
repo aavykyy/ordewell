@@ -4,6 +4,8 @@ export interface ExecResult {
   stdout: string;
   stderr: string;
   code: number | null;
+  /** The child was killed at the call's time limit, rather than exiting on its own. */
+  timedOut: boolean;
 }
 
 /**
@@ -12,6 +14,9 @@ export interface ExecResult {
  * — a string, so the coercion below maps it to `1` (see `run`).
  */
 export const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+
+/** How long a sealed run's output may trail its exit. */
+const SEALED_OUTPUT_GRACE_MS = 1_000;
 
 /**
  * The single primitive every search/inspection adapter in this package is
@@ -32,17 +37,20 @@ export const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 export function run(
   file: string,
   args: string[],
-  opts: { cwd?: string; timeout: number; shell?: boolean; env?: NodeJS.ProcessEnv; signal?: AbortSignal },
+  opts: { cwd?: string; timeout: number; shell?: boolean; env?: NodeJS.ProcessEnv; signal?: AbortSignal; sealed?: boolean },
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     try {
-      execFile(file, args, {
+      const child = execFile(file, args, {
         cwd: opts.cwd,
         timeout: opts.timeout,
         maxBuffer: MAX_OUTPUT_BYTES,
         encoding: 'utf8',
         shell: opts.shell,
         env: opts.env,
+        // A sealed run's wall-time limit is a kill, not a request it may trap
+        // (ADR-0036 S1); the sandbox takes the processes it started down with it.
+        ...(opts.sealed ? { killSignal: 'SIGKILL' as const } : {}),
         // Node kills the child when this aborts, and calls back with an
         // ABORT_ERR — which lands on the `code: 1` branch below, i.e. a
         // failed tool call, exactly like any other command that did not
@@ -51,13 +59,17 @@ export function run(
         signal: opts.signal,
       }, (err, stdout, stderr) => {
         const code = err && typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : err ? 1 : 0;
-        resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code });
+        // Only Node's own timeout sets `killed`; an abort and a stdout overflow do not, so this names the limit exactly.
+        resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code, timedOut: err?.killed === true });
       });
+      // A process that left a sealed run's process group can hold its output
+      // open after the run has ended: the result is what arrived by then.
+      if (opts.sealed) child.once('exit', () => setTimeout(() => { child.stdout?.destroy(); child.stderr?.destroy(); }, SEALED_OUTPUT_GRACE_MS).unref());
     } catch (err) {
       // `code: null` rather than 1 on purpose: the search adapters read 0 and 1
       // as "ran, possibly no matches", so a 1 here would report a confident
       // "No matches found." for a search that never executed.
-      resolve({ stdout: '', stderr: (err as Error).message, code: null });
+      resolve({ stdout: '', stderr: (err as Error).message, code: null, timedOut: false });
     }
   });
 }

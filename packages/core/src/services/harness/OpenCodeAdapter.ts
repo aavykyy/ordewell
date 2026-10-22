@@ -1,10 +1,16 @@
+import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 import type { ChildProcess } from 'child_process';
 import type { RunnerCommand, RunnerMcpServer } from '../../models/RunnerCommand';
 import { randomBytes } from 'crypto';
+import { isCredentialVariable } from './credentialEnv';
+import { PlannerShellSandbox } from '../sandbox/plannerSandbox';
+import { createNativeShellLauncher, type NativeShellLauncher } from '../sandbox/nativeShellLauncher';
+import { assertWorkspaceExists } from '../../utils/workspace';
+import { augmentedPath } from '../../utils/shellPath';
 import { RunnerProcess } from './runnerProcess';
 import { OpenCodeV2 } from './OpenCodeV2';
-import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV } from './openCodeOrdewell';
-import { awaitAttach } from './ordewellBinding';
+import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV, OPENCODE_READ_ONLY_PERMISSION } from './openCodeOrdewell';
+import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
 import { TASK_COMPLETION_CONTRACT, type McpClientConfig } from '../mcp';
 import type { ProjectMcpServer } from './repoConfig';
 import { hunksOf, markedLines } from './fileDiff';
@@ -25,8 +31,6 @@ const RECOVERY_TIMEOUT_MS = 900000;
 const STATUS_POLL_INTERVAL_MS = 1000;
 /** The Basic-auth username `serve` defaults to. Set explicitly so a host's own `OPENCODE_SERVER_USERNAME` cannot win. */
 const SERVER_USERNAME = 'opencode';
-/** How long a planner waits for the Ordewell server to show as connected, and how often it asks. */
-const MCP_ATTACH_TIMEOUT_MS = 10_000;
 const MCP_STATUS_POLL_MS = 200;
 
 /**
@@ -54,6 +58,9 @@ const DISABLED_TOOLS: Record<string, boolean> = {
  * task's agent decides what it may do.
  */
 const TASK_DISABLED_TOOLS: Record<string, boolean> = { question: false };
+const READ_ONLY_DISABLED_TOOLS: Record<string, boolean> = Object.fromEntries(
+  Object.entries(OPENCODE_READ_ONLY_PERMISSION).filter(([name, effect]) => name !== '*' && name !== 'external_directory' && effect === 'deny').map(([name]) => [name, false]),
+);
 
 interface OpenCodePart {
   id?: string;
@@ -260,6 +267,8 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
 
   private process: ChildProcess | null = null;
   private baseUrl: string | null = null;
+  /** The server's version from `/api/info`; null on 1.x, which does not report one (ADR-0036 N2). */
+  private serverVersion: string | null = null;
   /** Sent on every request to a task's server, which a per-task password secures. */
   private authorization: string | null = null;
   private sessionId: string | null = null;
@@ -276,7 +285,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   private mcpServers: string[] = [];
   private readonly permissions = openCodePermissions(
     (id, sessionId, decision) => this.replyPermission(id, sessionId, permissionReply(decision, 'reply')),
-    () => ({ role: this.task ? 'task' : 'planner', autoApprove: !!this.task && autoApproves(this.task) }),
+    () => ({ role: this.task ? 'task' : 'planner', autoApprove: !!this.task && autoApproves(this.task), decide: readOnlyTaskPolicy(this.task) }),
   );
   /** Messages handed into the running task turn, until the model reads them (ADR-0023). Kept across turns: the server keeps the message too. */
   private readonly steers = new PendingSteers();
@@ -284,6 +293,10 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   private v2: OpenCodeV2 | null = null;
   /** The Ordewell server this process was configured with; null when none was given or its config could not be merged. */
   private ordewell: McpClientConfig | null = null;
+  /** The sealed launcher this planner's own shell goes through, when the opt-in is on (ADR-0036 N2). */
+  private nativeShell: NativeShellLauncher | null = null;
+  /** The sandbox that holds the native shell; its scratch directory goes with the process. */
+  private nativeSandbox: PlannerShellSandbox | null = null;
 
   constructor(private deps: AgentProcessDeps) {
     this.runner = new RunnerProcess(deps);
@@ -294,6 +307,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
 
   async start(opts: AgentStartOptions): Promise<void> {
     try {
+      await this.prepareNativeShell(opts);
       await this.launch(opts);
       if (opts.kind === 'task') await this.loadCommands();
     } catch (err) {
@@ -301,6 +315,35 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       this.dispose();
       throw err;
     }
+  }
+
+  /**
+   * Prepare the native shell before the server starts, or fail the start
+   * rather than run it outside a sandbox (ADR-0036 N2). OpenCode takes a shell
+   * program rather than a prefix, so the launcher is named as `SHELL` and as
+   * the `shell` of the config layer that carries Ordewell's policy.
+   */
+  private async prepareNativeShell(opts: AgentStartOptions): Promise<void> {
+    if (opts.kind !== 'planner' || opts.nativeShell !== true) return;
+    // The launcher resolves the workspace on disk before the runner's own
+    // check would run, so a missing one must be reported as itself.
+    assertWorkspaceExists(opts.cwd, { isDirectory: this.deps.isDirectory });
+    const sandbox = (this.deps.nativeShellSandbox ?? (() => new PlannerShellSandbox()))();
+    try {
+      // The same PATH the harness itself starts with, so a command finds the
+      // tools the user's CLI does even when the host was launched from a GUI.
+      const PATH = await (this.deps.resolvePath ?? augmentedPath)();
+      this.nativeShell = await createNativeShellLauncher({
+        workspace: opts.cwd,
+        sandbox,
+        platform: this.deps.platform,
+        env: { ...process.env, PATH },
+      });
+    } catch (err) {
+      sandbox.end();
+      throw new Error(`The native-shell setting is on, but Ordewell could not put this planner's shell in its sandbox (${err instanceof Error ? err.message : String(err)}). Turn the setting off, or fix the sandbox, and start the conversation again.`);
+    }
+    this.nativeSandbox = sandbox;
   }
 
   private async launch(opts: AgentStartOptions): Promise<void> {
@@ -313,6 +356,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     // 2.x answers every `/api` request without credentials with a 401, so a
     // server with no password cannot be spoken to at all.
     const password = randomBytes(24).toString('base64url');
+    const nativeShell = this.nativeShell?.prefix;
     const command = () => ({
       command: 'opencode',
       args: ['serve', '--hostname', '127.0.0.1', '--port', '0'],
@@ -322,8 +366,10 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
         // over content that cannot be merged too: a planner without its policy may not start.
         const existing = workspaceEnv[OPENCODE_CONFIG_VARIABLE] ?? process.env[OPENCODE_CONFIG_VARIABLE];
         const projectServers = opts.kind === 'planner' ? Object.fromEntries((opts.projectServers ?? []).map((server) => [server.name, server.definition])) : {};
-        const ordewellConfig = opts.kind === 'planner'
-          ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, 'planner', projectServers) ?? OPENCODE_ORDEWELL.configContent(undefined, opts.mcp ?? null, 'planner', projectServers)
+        const readOnly = opts.kind === 'task' && readOnlyTask(opts);
+        const role = readOnly ? 'readOnlyTask' : opts.kind;
+        const ordewellConfig = opts.kind === 'planner' || readOnly
+          ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined, nativeShell) ?? OPENCODE_ORDEWELL.configContent(undefined, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined, nativeShell)
           : opts.mcp ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp, 'task') : null;
         if (opts.mcp && ordewellConfig === null) {
           console.error('[opencode] OPENCODE_CONFIG_CONTENT is not a JSON object, so the Ordewell tools were not injected.');
@@ -331,12 +377,19 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
         this.ordewell = ordewellConfig === null ? null : opts.mcp ?? null;
         return {
           PWD: opts.cwd,
-          ...(opts.kind === 'planner' ? OPENCODE_PLANNER_ENV : {}),
+          ...(opts.kind === 'planner' || readOnly ? OPENCODE_PLANNER_ENV : {}),
           ...(ordewellConfig === null ? {} : { [OPENCODE_CONFIG_VARIABLE]: ordewellConfig }),
           OPENCODE_SERVER_USERNAME: SERVER_USERNAME,
           OPENCODE_SERVER_PASSWORD: password,
+          // N2: the config layer's `shell` wins over this, and both beat the
+          // user's global config. Last so no workspace variable replaces it.
+          ...(nativeShell ? { SHELL: nativeShell } : {}),
         };
       },
+      // N2.2: a sandboxed command can read its parent's environment on macOS,
+      // so the credentials must not be in this process at all. The harness's
+      // own login stays (N3).
+      ...(nativeShell ? { envDrop: isCredentialVariable } : {}),
     });
     await this.runner.start(opts.cwd, command, (child) => {
       this.process = child;
@@ -381,9 +434,11 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     }
 
     const version = await this.v2Version();
+    this.serverVersion = version;
     if (version !== null) {
       this.v2 = new OpenCodeV2({
         version,
+        nativeShell: this.nativeShell?.prefix ?? null,
         request: (method, path, body, signal) => this.request(method, path, body, signal),
         json: (method, path, body, signal) => this.json(method, path, body, signal),
         openEvents: (signal) => this.deps.fetch(`${this.baseUrl}/api/event`, { signal, headers: this.headers() }),
@@ -620,7 +675,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       parts: [{ type: 'text', text: message }],
       // The manifest's meaning of the task's mode (ADR-0001): for OpenCode a mode is an agent.
       agent: task.flags.permissionMode,
-      tools: TASK_DISABLED_TOOLS,
+      tools: readOnlyTask(task) ? READ_ONLY_DISABLED_TOOLS : TASK_DISABLED_TOOLS,
       ...(task.mcp ? { system: TASK_COMPLETION_CONTRACT } : {}),
       ...(model ? { model } : {}),
       ...(task.flags.effort ? { variant: task.flags.effort } : {}),
@@ -1023,7 +1078,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       // The patterns `always` would grant: the runner's own offer, and the only grounds for "Allow for this task".
       ...(ask.always?.length ? { suggestions: ask.always } : {}),
       ...(ask.tool?.callID ? { toolUseId: ask.tool.callID } : {}),
-      ...(this.task ? {} : { ask: openCodePlannerAsk(name, ask, this.mcpServers) }),
+      ...(!this.task || readOnlyTask(this.task) ? { ask: openCodePlannerAsk(name, ask, this.mcpServers) } : {}),
       ordewell: !!this.ordewell && OPENCODE_ORDEWELL.isOrdewellAsk(name),
     }, ask.sessionID ?? this.sessionId ?? '', seen, onEvent);
   }
@@ -1070,15 +1125,17 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
 
   nativeSessionId(): string | null { return this.sessionId; }
 
+  version(): string | null { return this.serverVersion; }
+
   unusableProjectServers(): ProjectMcpServer[] { return this.v2?.unusableProjectServers() ?? []; }
 
   /** 2.x only: a 1.x server's saved output was never checked, so it is asked about as any outside read. */
   savedOutput(abs: string): boolean { return this.v2?.savedOutput(abs) ?? false; }
 
   /** Asks the server, which lists every MCP server it has with the state of its connection. */
-  async mcpAttached(): Promise<boolean> {
+  async mcpAttached(): Promise<AttachState> {
     const ordewell = this.ordewell;
-    if (!ordewell || !this.baseUrl) return false;
+    if (!ordewell || !this.baseUrl) return 'failed';
     return awaitAttach(async () => {
       if (this.exited) return 'failed';
       const servers = this.v2 ? await this.v2McpStatus() : await this.json<Record<string, { status?: string } | undefined>>('GET', '/mcp').catch(() => null);
@@ -1105,6 +1162,10 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     this.steers.drain();
     this.process = null;
     this.baseUrl = null;
+    this.nativeShell?.remove();
+    this.nativeShell = null;
+    this.nativeSandbox?.end();
+    this.nativeSandbox = null;
     // A surviving server keeps the port and the session.
     this.runner.dispose();
   }

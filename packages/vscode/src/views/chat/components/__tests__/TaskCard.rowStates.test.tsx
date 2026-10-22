@@ -71,6 +71,11 @@ describe('a task card, pinned before its rules move to core', () => {
     expect(badge()?.textContent).toBe('Skipped');
   });
 
+  it('reads a held task with its reason, so it does not look merely unstarted', () => {
+    render(<TaskCard task={makeTask()} models={[]} run={{ holdReason: 'could not connect to Ordewell\'s tools; start it again' }} />);
+    expect(badge()?.textContent).toBe('On hold: could not connect to Ordewell\'s tools; start it again');
+  });
+
   it('unfolds a skip reason cut to its row on a click, and folds it back', () => {
     const observed = vi.fn();
     vi.stubGlobal('ResizeObserver', class { constructor(private cb: () => void) {} observe() { observed(); this.cb(); } disconnect() {} });
@@ -111,6 +116,45 @@ describe('a task card, pinned before its rules move to core', () => {
     unmount();
     render(<TaskCard task={makeTask({ ops: true, type: 'user' })} models={[]} />);
     expect(document.querySelector('.task-type-badge.ops')).toBeNull();
+  });
+
+  describe('a script task (ADR-0035)', () => {
+    const scriptTask = (over: Partial<Task> = {}): Task => makeTask({
+      type: 'script', assignedRunner: undefined as never, taskMode: undefined, description: 'Tag it',
+      commands: [['git', 'tag', 'v1'], ['git', 'push', 'origin', 'v1']], timeoutMs: 90_000, ...over,
+    });
+
+    it('badges it Script, not AI or Ops', () => {
+      render(<TaskCard task={scriptTask()} models={[]} />);
+      expect(document.querySelector('.task-type-badge.script')?.textContent).toBe('Script');
+      expect(document.querySelector('.task-type-badge.ai')).toBeNull();
+      expect(document.querySelector('.task-type-badge.ops')).toBeNull();
+    });
+
+    it('shows the commands one to a line, and the time limit, in a read-only monospace block where the prompt goes', () => {
+      render(<TaskCard task={scriptTask()} models={[]} expanded onExpandedChange={noop} />);
+      const body = document.querySelector('.task-script-body');
+      expect(body?.tagName).toBe('PRE');
+      expect(body?.textContent).toBe('git tag v1\ngit push origin v1\n\nTime limit: 90 seconds.');
+      expect(document.querySelector('textarea')).toBeNull();
+      expect(document.querySelector('.task-prompt-editable')).toBeNull();
+    });
+
+    it('shows a script as written, a control character spelled out', () => {
+      render(<TaskCard task={scriptTask({ commands: undefined, script: 'set -e\necho hi\x1b[2J', timeoutMs: undefined })} models={[]} expanded onExpandedChange={noop} />);
+      expect(document.querySelector('.task-script-body')?.textContent).toBe('set -e\necho hi<U+001B>[2J\n\nTime limit: 10 minutes.');
+    });
+
+    it('offers no prompt editing, runner, model or mode picker, skills, or ops toggle, even before the plan runs', () => {
+      render(<TaskCard task={scriptTask()} models={[]} runners={[{ id: 'claude-code', displayName: 'Claude Code' }]} expanded onExpandedChange={noop}
+        onRunnerChange={noop} onModelChange={noop} onModeChange={noop} onPromptChange={noop} onSkillsChange={noop} {...handlers} />);
+      expect(document.querySelector('.task-ops-toggle')).toBeNull();
+      expect(document.querySelector('select')).toBeNull();
+      expect(document.querySelector('.task-prompt-textarea')).toBeNull();
+      expect(document.querySelector('.task-assignment')).toBeNull();
+      expect(screen.queryByText('Runner')).toBeNull();
+      expect(screen.queryByText('Mode')).toBeNull();
+    });
   });
 
   it('badges a task a failure blocks with the failed task it waits on, in a subtask too (ADR-0034)', () => {
@@ -258,5 +302,29 @@ describe('a subtask card, pinned before its rules move to core', () => {
   it('labels itself by its dotted order', () => {
     render(<SubTaskCard task={makeTask({ id: 's1', order: 1 })} parentTask={parent} models={[]} />);
     expect(document.querySelector('.subtask-order')?.textContent).toBe('2.1.');
+  });
+
+  it('shows its own hold reason, so it does not read as merely unstarted', () => {
+    render(<SubTaskCard task={makeTask({ id: 's1' })} parentTask={parent} models={[]} run={{ holdReason: 'could not connect to Ordewell\'s tools; start it again' }} />);
+    expect(badge()?.textContent).toBe('On hold: could not connect to Ordewell\'s tools; start it again');
+  });
+});
+
+describe('a research task card (ADR-0037)', () => {
+  const research = (over: Partial<Task> = {}) => makeTask({ research: true, ...over });
+  const badges = (): string[] => Array.from(document.querySelectorAll('.task-type-badge')).map((b) => b.textContent ?? '');
+
+  it('is marked Research beside AI, and a task that is not research is not', () => {
+    const { unmount } = render(<TaskCard task={research()} models={[]} />);
+    expect(badges()).toEqual(['AI', 'Research']);
+    expect(document.querySelector('.task-type-badge.research')?.getAttribute('title')).toContain('Its report comes back to the planner and wakes it');
+    unmount();
+    render(<TaskCard task={makeTask()} models={[]} />);
+    expect(badges()).toEqual(['AI']);
+  });
+
+  it('reads its own status once it has started', () => {
+    render(<TaskCard task={research({ status: 'in_progress' })} models={[]} isExecuting />);
+    expect(badge()?.textContent).toBe('Running');
   });
 });

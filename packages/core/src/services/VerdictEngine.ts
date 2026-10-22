@@ -1,5 +1,5 @@
 import type { Task, Verdict, VerificationCheck } from '../models/Task';
-import type { IRunnerSession } from '../interfaces/IRunner';
+import type { IRunnerSession, ScriptExit, ScriptStatus } from '../interfaces/IRunner';
 import type { CheckpointAnswer, TaskCompleteArgs } from './mcp/tools';
 
 export type VerdictListener = (taskId: string, verdict: Verdict) => void;
@@ -139,7 +139,8 @@ export class VerdictEngine {
   /**
    * Attach to a spawned session. The runner's `task_complete` call on the
    * attempt's token is the only completion evidence (ADR-0022, V2); a session
-   * that exits before one gets a failed verdict.
+   * that exits before one gets a failed verdict. A script task's session has
+   * no runner to call it: its exit status is the evidence instead (ADR-0035).
    *
    * Returns the attempt's generation, what {@link signalComplete} is checked against.
    */
@@ -171,6 +172,7 @@ export class VerdictEngine {
       else if (event.type === 'permission_decided' || event.type === 'permission_withdrawn') this.approvalClosed(task.id, event.id, gen);
     });
     session.onTaskComplete((report) => this.signalComplete(task.id, gen, report));
+    session.onScriptExit((exit) => this.signalScriptExit(task.id, gen, exit));
     session.onToolCheckpoint((question, signal) => this.raiseCheckpoint(task.id, gen, question, signal));
     session.onExit((exitCode: number) => {
       if (this.generations.get(task.id) !== gen) return;
@@ -189,6 +191,16 @@ export class VerdictEngine {
   signalComplete(taskId: string, generation: number, report: TaskCompleteArgs): void {
     if (this.generations.get(taskId) !== generation) return;
     this.acceptVerdict(taskId, reportedVerdict(report));
+  }
+
+  /**
+   * A script task's exit status (ADR-0035): its one evidence, as a runner's
+   * `task_complete` call is a runner's. It settles the attempt unless that
+   * attempt is no longer the task's current one.
+   */
+  signalScriptExit(taskId: string, generation: number, exit: ScriptExit): void {
+    if (this.generations.get(taskId) !== generation) return;
+    this.acceptVerdict(taskId, scriptVerdict(exit));
   }
 
   /** The runner was told something after its evidence so far, so only what it reports from here counts. */
@@ -356,6 +368,55 @@ function exitVerdict(exitCode: number): Verdict {
   };
 }
 
+/** How a status reads in a reason: its exit code, the signal that ended it, or why it never started. */
+function statusText(status: ScriptStatus): string {
+  if (status.error !== undefined) return `could not start: ${status.error}`;
+  if (status.signal) return `was ended by ${status.signal}`;
+  return `exited with code ${status.code ?? 'unknown'}`;
+}
+
+function withTail(reason: string, errorTail: string): string {
+  const tail = errorTail.trim();
+  return tail ? `${reason}\n\nThe end of its error output:\n${tail}` : reason;
+}
+
+/**
+ * A script task's verdict from its exit status alone (ADR-0035): every step
+ * exiting 0 passes, anything else fails with the status and the tail of its
+ * error output. Never an exit check — the script did not stop before it was
+ * done — so it is never read as a runner that hit its usage limit.
+ */
+function scriptVerdict(exit: ScriptExit): Verdict {
+  const decidedAt = new Date().toISOString();
+  const check = (passed: boolean, detail: string): VerificationCheck[] => [{ name: 'script_exit', passed, skipped: false, detail }];
+  const command = exit.outcome !== 'passed' && exit.command !== undefined ? `\`${exit.command}\`` : undefined;
+  switch (exit.outcome) {
+    case 'passed':
+      return { outcome: 'pass', reason: 'Verified: every step of the script exited 0.', checks: check(true, 'every step exited 0'), decidedAt, reported: 'done' };
+    case 'failed': {
+      const said = `${command ?? 'it'} ${statusText(exit.status)}`;
+      // A step that never started found nothing about the work (ADR-0045 L2).
+      const reported = exit.status.error !== undefined ? 'blocked' : 'failed';
+      return { outcome: 'fail', reason: withTail(`The script failed: ${said}.`, exit.errorTail), checks: check(false, said), decidedAt, reported };
+    }
+    case 'timed-out': {
+      const said = `the time limit of ${durationText(exit.timeoutMs)} ran out${command ? ` while ${command} ran` : ''}, so it was ended`;
+      return { outcome: 'fail', reason: withTail(`The script failed: ${said}.`, exit.errorTail), checks: check(false, said), decidedAt, reported: 'failed' };
+    }
+    case 'stopped': {
+      const said = `it was stopped${command ? ` while ${command} ran` : ''}`;
+      return { outcome: 'fail', reason: `The script did not finish: ${said}.`, checks: check(false, said), decidedAt };
+    }
+  }
+}
+
+/** A limit as a reader says it: minutes when it is whole minutes, else seconds. */
+function durationText(ms: number): string {
+  if (ms % 60_000 === 0) return `${ms / 60_000} minute${ms === 60_000 ? '' : 's'}`;
+  const seconds = Math.round(ms / 100) / 10;
+  return `${seconds} second${seconds === 1 ? '' : 's'}`;
+}
+
 function reportedVerdict(report: TaskCompleteArgs): Verdict {
   const checks: VerificationCheck[] = [
     {
@@ -366,11 +427,13 @@ function reportedVerdict(report: TaskCompleteArgs): Verdict {
     },
   ];
   const decidedAt = new Date().toISOString();
+  // Kept apart from the outcome: `blocked` and `failed` fail alike, but only a `failed` check starts a loop's round (ADR-0045 L2).
+  const reported = report.status;
   if (report.status === 'done') {
-    return { outcome: 'pass', reason: 'Verified: the runner reported completion through task_complete. Task completed successfully.', checks, decidedAt };
+    return { outcome: 'pass', reason: 'Verified: the runner reported completion through task_complete. Task completed successfully.', checks, decidedAt, reported };
   }
   // Runners often put the why in the summary and leave `reason` out; its
   // first paragraph is their own words, where "no reason given" would not be.
   const why = report.reason?.trim() || report.summary?.trim().split(/\n\s*\n/)[0].trim() || 'no reason given';
-  return { outcome: 'fail', reason: `The runner reported the task ${report.status}: ${why}`, checks, decidedAt };
+  return { outcome: 'fail', reason: `The runner reported the task ${report.status}: ${why}`, checks, decidedAt, reported };
 }

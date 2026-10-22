@@ -39,6 +39,17 @@ describe('removalPrompt', () => {
   it('stays answerable when the id is already gone', () => {
     expect(removalPrompt(chain(), 'ghost')).toBe('Remove this task?');
   });
+
+  it('says a body task leaves its loop, and that the loop goes with its last one (ADR-0045 L8)', () => {
+    const loop = (body: string[]): Task[] => [
+      createTask({ id: 'c', order: 1, title: 'Review', loop: { body, maxRounds: 3 } }),
+      createTask({ id: 'f', order: 2, title: 'Fix', dependencies: ['c'] }),
+      createTask({ id: 'g', order: 3, title: 'Polish', dependencies: ['c'] }),
+    ];
+
+    expect(removalPrompt(loop(['f', 'g']), 'f')).toBe('Remove "Fix"?\n\nIt is in the body of #1 Review\'s loop, and leaves it.');
+    expect(removalPrompt(loop(['f']), 'f')).toBe('Remove "Fix"?\n\nIt is the whole body of #1 Review\'s loop, so the loop is dropped with it.');
+  });
 });
 
 describe('taskFromDraft', () => {

@@ -43,7 +43,7 @@ describe('SLASH_COMMANDS', () => {
 
   // `/settings` and `/planner` cover these; one command per value only made
   // the surface larger than the thing it described.
-  it.each(['auto', 'supervisor', 'automerge', 'autorun', 'parallel', 'model', 'planner-effort'])(
+  it.each(['auto', 'supervisor', 'automerge', 'autorun', 'research', 'parallel', 'model', 'planner-effort'])(
     'no longer exposes /%s',
     (name) => {
       expect(findCommand(name)).toBeUndefined();

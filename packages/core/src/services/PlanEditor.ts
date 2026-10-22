@@ -15,6 +15,9 @@ import type { SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { checkTaskSkillsEdit, type SkillLookup } from './taskSkills';
 import { createTask, opsFlag, skillNames, updateTaskInPlan, type DiscoveredModel, type LegacyPlanState, type RunnerId, type Task, type TaskModelAssignment } from '../models/Task';
 import type { RunnerModelRef } from '../models/RunnerCommand';
+import { clearedBodyFields } from '../models/ScriptTask';
+import { loopRemovalRefusal, loopSpec } from '../models/Loop';
+import { taggedReadOnlyMode } from './ModeResolver';
 
 /** The fields that decide what a task runs on: an edit that touches none of them leaves the assignment as it stands. */
 const ASSIGNMENT_FIELDS = ['assignedRunner', 'assignedModel', 'taskMode', 'type'] as const satisfies readonly (keyof Task)[];
@@ -33,7 +36,7 @@ export interface PlanEditorDeps {
    * there is no plan or `op` changed nothing.
    */
   mutate: (op: () => boolean, notify?: () => void) => LegacyPlanState | null;
-  scheduler: Pick<TaskOrchestrator, 'tick' | 'releaseTask' | 'releaseMovedResume'>;
+  scheduler: Pick<TaskOrchestrator, 'tick' | 'releaseTask' | 'releaseMovedResume' | 'planEdited'>;
   runs: Pick<IsolationRunController, 'current' | 'linkResolver'>;
   broadcast: SessionBroadcaster;
   /** Whether the planner has Ordewell's tools, which changes how a merge or split is asked of it. */
@@ -126,7 +129,7 @@ export class PlanEditor {
   followRunnerModel(taskId: string, model: RunnerModelRef, effort: string | undefined, live: () => boolean): Promise<LegacyPlanState | null> {
     return this.inTaskOrder(taskId, async () => {
       const task = this.store.get(taskId);
-      if (!task || task.type === 'user' || !live()) return null;
+      if (!task || task.type !== 'ai' || !live()) return null;
       const catalog = this.catalog.edit();
       const listed = catalog.modelsByRunner[task.assignedRunner]?.find((m) => m.modelId === model.model);
       const thinkingEffort = clampThinkingEffort(effort ?? task.assignedModel?.thinkingEffort, listed?.variants ?? []);
@@ -162,7 +165,7 @@ export class PlanEditor {
     const runner = changes.assignedRunner ?? target.assignedRunner;
     // Listing models spawns the runner's own CLI: a move that could not be made anyway is refused first.
     if (changes.assignedRunner) this.refuseLiveRetarget(target);
-    const discovered = changes.assignedRunner || (changes.type === 'ai' && target.type === 'user') ? await this.discover(runner) : undefined;
+    const discovered = changes.assignedRunner || (changes.type === 'ai' && target.type !== 'ai') ? await this.discover(runner) : undefined;
     const landed = this.landedEdit(taskId, changes, discovered);
     if (!landed) return null;
     const { edit, adjustments } = landed;
@@ -206,6 +209,8 @@ export class PlanEditor {
       if (outcome.task.taskMode !== written.taskMode) edit.taskMode = outcome.task.taskMode;
       adjustments = outcome.adjustments;
     }
+    if (before.research && changes.research !== true && edit.taskMode !== undefined
+      && edit.taskMode !== taggedReadOnlyMode(catalog.runnerModes?.[edit.assignedRunner ?? before.assignedRunner])) edit.research = false;
     this.refuseBreach(taskId, edit, catalog);
     return { edit, adjustments };
   }
@@ -291,7 +296,7 @@ export class PlanEditor {
     const draft = editableFields(given);
     const runner = draft.assignedRunner ?? plan.runners[0];
     const dependencies = (draft.dependencies ?? []).filter((id) => this.store.get(id));
-    const discovered = draft.type === 'user' ? undefined : await this.discover(runner);
+    const discovered = (draft.type ?? 'ai') !== 'ai' ? undefined : await this.discover(runner);
     const written: Task = { ...createTask({ ...draft, assignedRunner: runner, dependencies }), taskMode: draft.taskMode };
     const catalog = this.assignmentCatalog(runner, discovered);
     const outcome = resolveAssignment({ writer: 'userAdd', task: written, catalog });
@@ -345,7 +350,11 @@ export class PlanEditor {
    * deleting their own task means it.
    */
   async removeTask(taskId: string): Promise<LegacyPlanState | null> {
-    if (!this.plan() || !this.store.get(taskId)) return null;
+    const task = this.store.get(taskId);
+    if (!this.plan() || !task) return null;
+    // Its body would be left to run on its own (ADR-0045 L8); a body task leaves its loop as it goes.
+    const refused = loopRemovalRefusal(task);
+    if (refused) throw new PlanEditError(refused);
     for (const id of subtreeIds(this.store.planTasks, taskId)) await this.scheduler.releaseTask(id);
     return this.commit(() => (this.store.remove(taskId), true));
   }
@@ -417,8 +426,12 @@ export class PlanEditor {
    * turn's end instead (`PlanTurns`); it must not tick twice.
    */
   private async commit(op: () => boolean, notify?: () => void): Promise<LegacyPlanState | null> {
+    // The plan as it was, so the scheduler can see a loop this edit ends:
+    // `updateTaskInPlan` copies every task, so this view stays what it read.
+    const before = this.store.planTasks;
     const plan = this.mutate(op, notify);
     if (!plan) return null;
+    this.scheduler.planEdited(before);
     await this.scheduler.tick();
     return plan;
   }
@@ -446,7 +459,14 @@ function editableFields(given: Partial<Task>): Partial<Task> {
     if (key in given) (fields as Record<string, unknown>)[key] = (given as Record<string, unknown>)[key];
   }
   if ('ops' in fields) fields.ops = opsFlag(fields.ops);
-  return fields;
+  if ('loop' in fields) {
+    // `null` drops the loop, and the round it was in with it (ADR-0045).
+    const spec = loopSpec(fields.loop);
+    if ('error' in spec) throw new PlanEditError(`This task ${spec.error}`);
+    fields.loop = spec.loop;
+    if (!spec.loop) fields.loopRound = undefined;
+  }
+  return clearedBodyFields(fields);
 }
 
 /**
@@ -455,14 +475,14 @@ function editableFields(given: Partial<Task>): Partial<Task> {
  * status, verdict or subtasks are execution's and the plan tree's, never a
  * patch's. The ops flag and skills are read as every entry point reads them,
  * and a runner that changes nothing — the same one, or one for a task that
- * stays manual — is dropped, so it asks discovery nothing.
+ * stays manual or a script — is dropped, so it asks discovery nothing.
  */
 function directChanges(patch: Partial<Task>, target: Task): Partial<Task> {
   const changes = editableFields(patch);
   if ('skills' in changes) changes.skills = skillNames(changes.skills);
   if (Array.isArray(changes.dependencies)) changes.dependencies = changes.dependencies.map(String);
   else delete changes.dependencies;
-  const stays = changes.assignedRunner === target.assignedRunner || (changes.type ?? target.type) === 'user';
+  const stays = changes.assignedRunner === target.assignedRunner || (changes.type ?? target.type) !== 'ai';
   if ('assignedRunner' in changes && (typeof changes.assignedRunner !== 'string' || !changes.assignedRunner || stays)) delete changes.assignedRunner;
   return changes;
 }

@@ -422,6 +422,15 @@ describe('the ops flag on a new task (ADR-0020)', () => {
   });
 });
 
+describe('a status update carries the task type a surface tags it by', () => {
+  it('says which task is a script task (ADR-0035)', () => {
+    const script = createTask({ id: 't1', title: 'Push the tag', type: 'script', commands: [['git', 'push']] });
+
+    expect(serializeTaskStatus(script).type).toBe('script');
+    expect(serializeTaskStatus(createTask({ id: 't2', title: 'Build' })).type).toBe('ai');
+  });
+});
+
 describe('what an awaiting_user task waits on (ADR-0018, W1)', () => {
   it.each(['input', 'checkpoint', 'conflict', 'files-changed'])('%s is a reason', (reason) => {
     expect(isAwaitingReason(reason)).toBe(true);

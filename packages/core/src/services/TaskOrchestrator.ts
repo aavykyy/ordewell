@@ -1,10 +1,11 @@
-import { unavailableTaskModeMessage } from './ModeResolver';
-import { McpAttachError, RunnerStartupExit } from './harness/ordewellBinding';
+import { taggedReadOnlyMode, unavailableTaskModeMessage } from './ModeResolver';
+import { McpAttachError, McpAttachTimeout, RunnerStartupExit } from './harness/ordewellBinding';
 import * as path from 'path';
-import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, pausedOnLimit, waitsForReset, type RunSettings } from '../models/Task';
+import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasksWithParents, pausedOnLimit, waitsForReset, type RunSettings } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
+import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
 import type { RunnerModelRef } from '../models/RunnerCommand';
 import { countedSessionCost, resumedSessionWindow } from '../models/Usage';
 import { summarizeOutput } from './promptAugment';
@@ -18,6 +19,7 @@ import type {
   IsolationMergeResult,
   IsolationRun,
   IWorktreeIsolation,
+  PreviousWork,
   TreeSnapshot,
 } from '../interfaces/IWorktreeIsolation';
 import { createWorktreeIsolation } from './GitWorktreeIsolation';
@@ -27,11 +29,13 @@ import { IsolationRunController } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
 import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import { RELAPSE_MS, RESUME_MARGIN_MS, UsageLimitWaits } from './UsageLimitWaits';
-import { selectReadyTasks, startWaits, waitOf, type ForcedStart, type Readiness, type StartRuleInput, type StartWait, type StartWaitKind } from './readiness';
-import { blockingFailures } from './blocking';
+import { landed, selectReadyTasks, startWaits, waitOf, type ForcedStart, type Readiness, type StartRuleInput, type StartWait, type StartWaitKind } from './readiness';
+import type { ResearchTasks } from './ResearchTasks';
+import { blockingFailures, planBlocks, repeatingChecks } from './blocking';
+import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 import {
-  attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, mergeExcludes, takesSkills,
-  type AttemptKind, type Continuation,
+  attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, landsNothing, mergeExcludes, takesSkills,
+  type AttemptKind, type Continuation, type TaskWork,
 } from './attemptKind';
 import { resolveTaskSkills, TaskSkillsError, type SkillLookup } from './taskSkills';
 import { SkillsService, workspaceSkillRoots } from './SkillsService';
@@ -42,6 +46,8 @@ import { continuability, sessionOwner } from './continuation';
 import { quotedList } from '../utils/quotedList';
 import type { RunMergeView } from './SessionMessage';
 import { resumeTime } from '../taskRow/status';
+import { scriptBodyOf } from '../models/ScriptTask';
+import { SCRIPT_RUNNER, ScriptRunner } from './ScriptRunner';
 
 /** What ran an automatic Merge all: a task reaching its merge gate, or the run settling with landed work unmerged. */
 export type AutoMergeTrigger = { kind: 'gate'; taskId: string } | { kind: 'run_end' };
@@ -226,6 +232,10 @@ interface TaskAttempt {
    * task of the new one that happens to reuse its id.
    */
   readonly planScope: number;
+  /** A script task's attempt (ADR-0035): the script runner runs its body, with no model. */
+  readonly script: boolean;
+  /** A read-only attempt's `run_command` (ADR-0046), ended with the attempt. */
+  shell: TaskShell | null;
 }
 
 type AttemptPhase = 'starting' | 'running' | 'integrating';
@@ -239,7 +249,7 @@ interface QueuedStart {
 }
 
 /** What keeps a queued force start waiting, with nothing to say: it starts once these clear. */
-const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued', 'completing', 'merging', 'start-hold']);
+const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued', 'completing', 'merging', 'start-hold', 'unapproved']);
 
 /** A force start the user made now: their own act, past the whole merge gate they confirmed. */
 const FORCED_NOW: ForcedStart = { queued: false };
@@ -290,9 +300,13 @@ export interface TaskAttemptSnapshot {
  * one place defaults live.
  */
 export interface TaskOrchestratorDeps {
+  /** What starting a research task owes the planner (ADR-0037 R3); starts are bounded by the run's Parallel limit. */
+  research?: Pick<ResearchTasks, 'started'>;
   config: IConfig;
   notifications: INotification;
   runner: IRunner;
+  /** Runs script tasks' bodies (ADR-0035), in place of a registered runner. */
+  scriptRunner: IRunner;
   store: PlanStore;
   output: TaskOutputSource;
   /** The plan's isolation run and the open run's lifecycle (ADR-0013). */
@@ -325,6 +339,8 @@ export interface TaskOrchestratorDeps {
    * owns it, and the scheduler starts nothing outside it.
    */
   isApproved: (taskId: string) => boolean;
+  /** A read-only attempt's shell (ADR-0046); absent, its runner is given no `run_command`. */
+  taskShell?: (site: TaskShellSite) => TaskShell | undefined;
 }
 
 /**
@@ -333,9 +349,12 @@ export interface TaskOrchestratorDeps {
  * resolved wiring the orchestrator itself runs on.
  */
 export interface TaskOrchestratorOptions {
+  /** What starting a research task owes the planner (ADR-0037 R3). */
+  research?: Pick<ResearchTasks, 'started'>;
   config: IConfig;
   notifications: INotification;
   runner: IRunner;
+  scriptRunner?: IRunner;
   store?: PlanStore;
   output?: TaskOutputSource;
   isolation?: IWorktreeIsolation;
@@ -348,6 +367,7 @@ export interface TaskOrchestratorOptions {
   runSettings?: () => SchedulerRunSettings | undefined;
   /** Every task is approved unless a Session supplies its record: an orchestrator on its own has no user to ask. */
   isApproved?: (taskId: string) => boolean;
+  taskShell?: (site: TaskShellSite) => TaskShell | undefined;
 }
 
 /**
@@ -364,6 +384,7 @@ export class TaskOrchestrator {
   private config: IConfig;
   private notifications: INotification;
   private runner: IRunner;
+  private scriptRunner: IRunner;
   private store: PlanStore;
   private output: TaskOutputSource;
   private attempts = new Map<string, TaskAttempt>();
@@ -399,12 +420,13 @@ export class TaskOrchestrator {
   /** What the workspace env has already warned about, so a run says it once, not per task. */
   private envWarnings = new Set<string>();
   /**
-   * Tasks pulled out of auto-scheduling (user-cancelled or failed to spawn).
-   * They stay 'pending' — "not executed" — but the scheduler skips them until
-   * the user retries or force-starts, which would otherwise loop forever on a
-   * task whose spawn always throws.
+   * Tasks pulled out of auto-scheduling (user-cancelled, marked not done, or a
+   * start that could not reach its runner), each with the reason the surfaces
+   * show. They stay 'pending' — "not executed" — but the scheduler skips them
+   * until the user retries or force-starts, which would otherwise loop forever
+   * on a task whose spawn always throws.
    */
-  private onHold = new Set<string>();
+  private onHold = new Map<string, string>();
   /**
    * Force starts queued behind dependencies the scheduler will not start them
    * after: outside a run it drives, or past a failed dependency, which it
@@ -437,11 +459,15 @@ export class TaskOrchestrator {
   private lastLoggedAttempt: (taskId: string) => number;
   private runSettings: () => SchedulerRunSettings | undefined;
   private isApproved: (taskId: string) => boolean;
+  private taskShell: (site: TaskShellSite) => TaskShell | undefined;
+  private readonly research: Pick<ResearchTasks, 'started'> | undefined;
 
   constructor(deps: TaskOrchestratorDeps) {
+    this.research = deps.research;
     this.config = deps.config;
     this.notifications = deps.notifications;
     this.runner = deps.runner;
+    this.scriptRunner = deps.scriptRunner;
     this.store = deps.store;
     this.output = deps.output;
     this.runs = deps.runs;
@@ -454,6 +480,7 @@ export class TaskOrchestrator {
     this.lastLoggedAttempt = deps.lastLoggedAttempt;
     this.runSettings = deps.runSettings;
     this.isApproved = deps.isApproved;
+    this.taskShell = deps.taskShell ?? (() => undefined);
 
     this.store.onMutate = () => this.emit('onTaskChanged');
     this.verifier.onVerdict((taskId, verdict) => { void this.deliverVerdict(taskId, verdict); });
@@ -513,6 +540,7 @@ export class TaskOrchestrator {
       config: options.config,
       notifications: options.notifications,
       runner: options.runner,
+      scriptRunner: options.scriptRunner ?? new ScriptRunner(),
       store,
       output,
       runs,
@@ -525,6 +553,8 @@ export class TaskOrchestrator {
       lastLoggedAttempt: options.lastLoggedAttempt ?? (() => 0),
       runSettings: options.runSettings ?? (() => undefined),
       isApproved: options.isApproved ?? (() => true),
+      research: options.research,
+      ...(options.taskShell ? { taskShell: options.taskShell } : {}),
     });
     return orchestrator;
   }
@@ -681,6 +711,7 @@ export class TaskOrchestrator {
   private runnerSession(taskId: string, action: keyof typeof CONTROL_WORDS): IRunnerSession {
     const task = this.store.get(taskId);
     if (!task) throw new TaskControlError(`No task ${taskId} in this plan.`);
+    if (task.type === 'script') throw new TaskControlError(`Task "${task.title}" is a script task: it runs no model, so there is no turn to ${CONTROL_WORDS[action]}. Stop it, or edit its body and retry it.`);
     const attempt = this.attempts.get(taskId);
     const session = attempt?.session;
     if (!attempt || !session || attempt.phase !== 'running' || attempt.decided) {
@@ -936,6 +967,11 @@ export class TaskOrchestrator {
     return waitOf(this.startWaits(task), 'merge-gate')?.unmerged ?? [];
   }
 
+  /** Why a task is held out of auto-scheduling, as the surfaces show it; null when it is not held. */
+  holdReason(taskId: string): string | null {
+    return this.onHold.get(taskId) ?? null;
+  }
+
   /**
    * Every reason a task cannot start now, from the one start rule
    * (ADR-0034); none when it can. `forced` judges a start the user forced.
@@ -964,7 +1000,14 @@ export class TaskOrchestrator {
     return blockingFailures(this.store.planTasks).get(taskId) ?? [];
   }
 
-  loadPlan(tasks: readonly Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS]): void {
+  /**
+   * `edited`: the plan is the last one edited, not a new one. Only a Stop
+   * withdraws a queued start (ADR-0035), so one of a task the edit keeps
+   * stays queued: a script task waiting at its merge gate still starts at
+   * Merge all.
+   */
+  loadPlan(tasks: readonly Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS], edited = false): void {
+    const queued = edited ? [...this.queuedStarts] : [];
     // End what belongs to the plan being replaced before it is swapped: its
     // ledgers are its tasks', and a task of the next plan that reuses an id
     // must not inherit them. The bump then closes the scope, so a runner still
@@ -986,7 +1029,7 @@ export class TaskOrchestrator {
     this.retryCounts.clear();
     this.spawnCounts.clear();
     this.onHold.clear();
-    this.queuedStarts.clear();
+    this.queuedStarts = new Map(queued.filter(([id]) => this.store.get(id)));
     this.recoverOrphans();
     this.rearmLimitWaits();
   }
@@ -1005,7 +1048,8 @@ export class TaskOrchestrator {
    * A failed task stays failed, unlike a plan load's fresh chance: an edit is
    * not a retry, and the tasks it blocks wait for that retry (ADR-0034).
    */
-  reconcilePlan(newTasks: Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS]): void {
+  reconcilePlan(newTasks: readonly Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS]): void {
+    const before = this.store.planTasks;
     const adopted = [...newTasks];
     for (const taskId of this.attempts.keys()) {
       const task = this.store.get(taskId);
@@ -1021,16 +1065,36 @@ export class TaskOrchestrator {
     }
 
     const waitingRunners = new Set(this.store.allTasks.filter(waitsForReset).map((t) => this.store.resolveTaskRunner(t)));
-    this.store.load(adopted, planRunners);
-    for (const t of flattenTasks(adopted)) {
-      if (t.status === 'failed') this.store.markFailed(t.id);
-    }
+    this.store.load(adopted, planRunners, { keepFailed: true });
+    this.planEdited(before);
     // An edit that took the last task waiting on a runner's reset out of the
     // plan — or ended its pause by re-arming it — releases the hold and
     // disarms the wait, so the run goes on and no timer resumes a wait
     // nothing owes (ADR-0018, U1).
     for (const runner of waitingRunners) if (this.waitingOn(runner).length === 0) this.limitWaits.disarm(runner);
     this.releaseHold();
+  }
+
+  /**
+   * An edit landed on the plan — a planner's task ops through
+   * {@link reconcilePlan}, or the user's direct edit through the PlanEditor.
+   * One that leaves a loop's check out of rounds ends the loop (ADR-0045 L6):
+   * what of its body has not run will not run, and, while the run is under
+   * way, the check settles once more so the supervisor hears the end. Nothing
+   * else notices such an edit: the check settled when it failed a round, and
+   * no round will run it again.
+   */
+  planEdited(before: readonly Task[]): void {
+    const was = new Map(before.map((task) => [task.id, task]));
+    for (const check of this.store.allTasks) {
+      if (!outOfRounds(check)) continue;
+      const prior = was.get(check.id);
+      if (prior && outOfRounds(prior)) continue;
+      this.closeLoop(check, LOOP_OUT_OF_ROUNDS);
+      // Outside a run there is no supervisor to settle it for, and the next
+      // run starts a failed check's rounds over; the close still stands.
+      if (this.isRunning) this.emit('onTaskSettled', { taskId: check.id });
+    }
   }
 
   /** Start the full-plan run, or continue one that is held or ended on a failure. */
@@ -1081,6 +1145,7 @@ export class TaskOrchestrator {
     // reports meanwhile is still counted; whatever is still starting goes too.
     for (const attempt of this.attempts.values()) this.stopRunner(attempt);
     this.runner.stopAll();
+    this.scriptRunner.stopAll();
     // Interrupted work is kept like a failed attempt's: inspectable, and off
     // `active` so a crash-recovery prune does not sweep it away. A stopped
     // repair did not land, so its task waits on the user as its conflict did;
@@ -1124,7 +1189,7 @@ export class TaskOrchestrator {
    * read as running — or, in an isolated run, count as live work forever.
    */
   private recoverOrphans(): void {
-    const orphans = this.store.allTasks.filter((t) => t.type === 'ai' && t.status === 'in_progress' && !this.attempts.has(t.id) && !this.completing.has(t.id));
+    const orphans = this.store.allTasks.filter((t) => t.type !== 'user' && t.status === 'in_progress' && !this.attempts.has(t.id) && !this.completing.has(t.id));
     if (orphans.length === 0) return;
     for (const t of orphans) this.store.markPending(t.id);
     const one = orphans.length === 1;
@@ -1216,8 +1281,12 @@ export class TaskOrchestrator {
     this.stopRunner(attempt);
 
     console.error(`[TaskOrchestrator] Task ${taskRefOf(this.store.planTasks, task.id) ?? `#${task.order}`} "${task.title}" verdict=${verdict.outcome}`);
-    console.error(`[TaskOrchestrator] Runner: ${task.assignedRunner}, Model: ${task.assignedModel?.modelId ?? 'default'}`);
-    console.error(`[TaskOrchestrator] Prompt preview: ${(task.prompt ?? '').slice(0, 200)}`);
+    if (attempt.script) {
+      console.error(`[TaskOrchestrator] Script body: ${JSON.stringify(scriptBodyOf(task)).slice(0, 200)}`);
+    } else {
+      console.error(`[TaskOrchestrator] Runner: ${task.assignedRunner}, Model: ${task.assignedModel?.modelId ?? 'default'}`);
+      console.error(`[TaskOrchestrator] Prompt preview: ${(task.prompt ?? '').slice(0, 200)}`);
+    }
     if (attempt.kind.kind === 'repair') return this.settleRepair(task, attempt, verdict);
 
     // A verdict can arrive inside whatever ended the runner: a stop kills every
@@ -1247,9 +1316,10 @@ export class TaskOrchestrator {
     } else {
       // Missing completion evidence is a hard boundary for what depends on
       // this task: its dependents are blocked until a retry passes
-      // (ADR-0034). Independent work keeps starting.
+      // (ADR-0034). Independent work keeps starting. A loop's check that
+      // starts a round instead is no failure yet (ADR-0045 L3).
       this.store.markFailed(taskId);
-      this.notifications.error(unresumedReason ?? `Task "${task.title}" failed verification: ${verdict.reason}`);
+      if (!this.startRound(taskId)) this.notifications.error(unresumedReason ?? failureText(this.store.get(taskId) ?? task, verdict));
       if (attempt.worktree) await this.runs.release(taskId, { keep: true });
     }
 
@@ -1310,6 +1380,7 @@ export class TaskOrchestrator {
   private async applyLanding(task: Task, outcome: LandingOutcome, admission: Admitted, onLanded: () => void): Promise<void> {
     if (!completesTask(outcome)) return this.settleUnlanded(task, outcome, admission);
     this.store.markCompleted(task.id);
+    this.closeLoop(task, LOOP_PASSED);
     onLanded();
     this.say(outcome.messages);
     await this.landResolved(task.id, admission);
@@ -1410,7 +1481,18 @@ export class TaskOrchestrator {
 
   /** The kind a task's next attempt starts as, short of a repair or a continue: what is weighed before one exists. */
   private nextAttemptKind(taskId: string): AttemptKind {
-    return classifyAttempt(this.store.isOps(taskId), { carriedFrom: this.store.get(taskId)?.carriedFrom });
+    const task = this.store.get(taskId);
+    return classifyAttempt(task ? this.workOf(task) : 'change', { carriedFrom: task?.carriedFrom });
+  }
+
+  /**
+   * What a task's work is. A read-only task is one on the mode its runner's
+   * manifest tags read-only (ADR-0001), which is what lands nothing (ADR-0046).
+   */
+  private workOf(task: Task): TaskWork {
+    if (this.store.isOps(task.id)) return 'ops';
+    const modes = this.registry?.get(this.store.resolveTaskRunner(task))?.manifest.modes;
+    return task.type === 'ai' && task.taskMode !== undefined && task.taskMode === taggedReadOnlyMode(modes) ? 'readOnly' : 'change';
   }
 
   /**
@@ -1436,7 +1518,7 @@ export class TaskOrchestrator {
     if (!this.attempts.has(taskId) && task.status !== 'in_progress') return;
     const ended = this.endAttempt(taskId, 'cancel');
     this.store.markPending(taskId);
-    this.onHold.add(taskId);
+    this.onHold.set(taskId, 'cancelled; retry or force start to run it again');
     this.emit('onTaskChanged');
     await this.runs.release(taskId, worktree, ended?.integration);
     await this.tick();
@@ -1486,8 +1568,10 @@ export class TaskOrchestrator {
       this.completing.delete(taskId);
     }
 
-    if (completesTask(landing)) this.store.markCompleted(taskId);
-    else this.settleUnlanded(task, landing, admission);
+    if (completesTask(landing)) {
+      this.store.markCompleted(taskId);
+      this.closeLoop(task, LOOP_CHECK_MARKED_COMPLETE);
+    } else this.settleUnlanded(task, landing, admission);
     this.store.setTaskVerdict(taskId, verdict);
     this.store.setTaskOutputSummary(taskId, summarizeOutput(verdict.reason, ''));
     this.logAndArchive(task, verdict);
@@ -1518,7 +1602,7 @@ export class TaskOrchestrator {
     this.verifier.clear(task);
     this.store.retry(taskId);
     this.store.removeFromLog(taskId);
-    this.onHold.add(taskId);
+    this.onHold.set(taskId, 'marked not done; retry or force start to run it again');
 
     this.notifications.info(`Task "${task.title}" marked not done.`);
     this.emit('onTaskChanged');
@@ -1542,6 +1626,7 @@ export class TaskOrchestrator {
       const ended = this.endAttempt(taskId, 'skip');
       this.verifier.clear(task);
       this.store.markSkipped(taskId, reason?.trim() || undefined);
+      this.closeLoop(task, LOOP_CHECK_SKIPPED);
       this.onHold.delete(taskId);
       this.notifications.info(`Task "${task.title}" skipped: none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done.`);
       this.emit('onTaskChanged');
@@ -1847,7 +1932,8 @@ export class TaskOrchestrator {
       else if (!this.mayResume(task, admission, now !== undefined)) return;
       const resumeSessionId = task.runnerSessionId;
       this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
-      this.store.retry(taskId);
+      // The attempt the limit cut short goes on, in the round it was in.
+      this.store.retry(taskId, { sameRound: true });
       this.onHold.delete(taskId);
       const message = asked && now?.message ? `${LIMIT_RESET_MESSAGE}\n\n${now.message}` : LIMIT_RESET_MESSAGE;
       const continuation = resumeSessionId ? { message, resumeSessionId } : null;
@@ -1890,18 +1976,31 @@ export class TaskOrchestrator {
    * so is the answer.
    * Reuses the scheduler's own claim so a force-started task gets the same
    * augmented prompt, session tracking, and exit handling — callers must not
-   * re-spawn the runner themselves. No-op if the task is unknown, not an AI
+   * re-spawn the runner themselves. No-op if the task is unknown, a user
    * task, or already running.
    */
   async forceStartTask(taskId: string, origin: RunOrigin = 'user'): Promise<string | undefined> {
     const task = this.store.get(taskId);
-    if (!task || task.type !== 'ai') return;
+    if (!task || task.type === 'user') return;
     if (this.attempts.has(taskId)) return;
     this.refuseOpsDuringMerge(taskId, FORCED_NOW);
     const queued = this.queueBehindDependencies(task);
     if (queued) return queued;
     this.queuedStarts.delete(taskId);
     return this.startForced(taskId, origin, FORCED_NOW);
+  }
+
+  /**
+   * Start an approved task once its merge gate opens, never past it: a script
+   * task `run_script` added behind work not merged into the user's branch yet
+   * (ADR-0035). A scheduler driving the run starts it as it would any task;
+   * otherwise it waits with the queued force starts, confirmed past nothing,
+   * so it starts once Merge all has merged that work, and a Stop withdraws it.
+   */
+  startAtGate(taskId: string): void {
+    if (!this.store.get(taskId) || this.attempts.has(taskId)) return;
+    if (!this.isScheduling) this.queuedStarts.set(taskId, { pastGate: [] });
+    this.emit('onTaskChanged');
   }
 
   /**
@@ -1929,6 +2028,8 @@ export class TaskOrchestrator {
       const requeued = !forced.queued && task ? this.queueBehindDependencies(task) : null;
       if (requeued) return requeued;
       this.refuseClaim(taskId, admission);
+      // Forced again after a failure, a loop's check starts its rounds over, as a retry does (ADR-0045 L7).
+      if (this.store.isFailed(taskId)) this.store.startRoundsOver(taskId);
       // A force start is the user's own act, so it ends the task's pause: its
       // resume goes, and the hold with it once nothing else waits (U1).
       this.dropResume(taskId);
@@ -1950,7 +2051,7 @@ export class TaskOrchestrator {
     const waiting = (waitOf(waits, 'dependencies') ?? waitOf(waits, 'queued'))?.waiting ?? [];
     if (waiting.length === 0) return null;
     this.onHold.delete(task.id);
-    if (!this.isScheduling || this.getBlockedBy(task.id).length > 0) this.queuedStarts.set(task.id, { pastGate: this.getMergeGate(task.id) });
+    if (!this.leftToScheduler(task)) this.queuedStarts.set(task.id, { pastGate: this.getMergeGate(task.id) });
     const names = waiting.map((id) => `task "${this.store.get(id)?.title ?? id}"`);
     const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
     const idle = this.isScheduling || waiting.some((id) => this.attempts.has(id)) ? '' : ' Nothing is running now: run the plan to start them.';
@@ -1958,6 +2059,16 @@ export class TaskOrchestrator {
     this.tell('info', queued);
     this.emit('onTaskChanged');
     return queued;
+  }
+
+  /**
+   * A force start the scheduler driving the run makes for itself once its
+   * dependencies finish: a task not started yet that nothing blocks. A failed
+   * one, such as a loop's check forced mid-round, it would never start again,
+   * so the force start stays queued.
+   */
+  private leftToScheduler(task: Readonly<Task>): boolean {
+    return this.isScheduling && (task.status === 'pending' || task.status === 'approved') && this.getBlockedBy(task.id).length === 0;
   }
 
   /**
@@ -1974,9 +2085,10 @@ export class TaskOrchestrator {
         this.queuedStarts.delete(id);
         continue;
       }
-      const waits = this.startWaits(task, { queued: true, pastGate: queued.pastGate });
+      const waits = this.startWaits(task, task.research ? undefined : { queued: true, pastGate: queued.pastGate });
+      if (task.research && (waits.length > 0 || this.attempts.size >= this.config.maxParallelSessions)) continue;
       if (waits.some((w) => QUEUED_WAITS.has(w.kind))) continue;
-      if (this.isScheduling && this.getBlockedBy(id).length === 0 && queued.pastGate.length === 0) {
+      if (this.leftToScheduler(task) && queued.pastGate.length === 0) {
         this.queuedStarts.delete(id);
         continue;
       }
@@ -1987,7 +2099,8 @@ export class TaskOrchestrator {
       }
       this.queuedStarts.delete(id);
       try {
-        await this.startForced(id, 'user', { queued: true, pastGate: queued.pastGate });
+        const origin = task.research && (task.reportTo ?? task.researchOrigin)?.actor === 'supervisor' ? 'supervisor' : 'user';
+        await this.startForced(id, origin, { queued: true, pastGate: queued.pastGate });
       } catch (err) {
         this.tell('warn', `Task "${task.title}" did not start once its dependencies finished: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -2063,6 +2176,7 @@ export class TaskOrchestrator {
     // that would otherwise end under it. Its release ticks again.
     if (this.startHolds > 0) return;
 
+    this.repeatChecks();
     let readiness = this.readiness();
     // Work merged by hand opens a gate as Merge all does; only git can tell.
     // A user task's gate counts too, though the scheduler never starts one.
@@ -2147,11 +2261,11 @@ export class TaskOrchestrator {
       if (!remainingById.has(task.id)) continue;
       console.log(`  - ${label}. ${task.title} [${task.type}/${task.status}] prompt=${!!task.prompt}`);
     }
-    const blocked = blockingFailures(this.store.planTasks);
+    const { blocked, repeating } = planBlocks(this.store.planTasks);
     if (remaining.length === 0) {
       this.runState = 'finished';
       this.sayFinished();
-    } else if (remaining.every((t) => t.status === 'failed' || blocked.has(t.id))) {
+    } else if (remaining.every((t) => (t.status === 'failed' && !repeating.has(t.id)) || blocked.has(t.id))) {
       // Nothing left can start until a failed task is retried (ADR-0034):
       // the run ends, and a retry continues it.
       this.runState = 'endedOnFailure';
@@ -2170,6 +2284,69 @@ export class TaskOrchestrator {
     this.emit('onTick');
     await this.closeRun();
     this.emit('onExecutionComplete');
+  }
+
+  /**
+   * A loop's check failed (ADR-0045). With `failed` evidence and rounds left,
+   * a round starts: its body runs again as new attempts, each from the
+   * integration tip, so it builds on what earlier rounds landed, and true says
+   * the failure is the round's, not the task's. Approval is not spent by a
+   * run, so the plan's approval of the body covers every round. Out of
+   * rounds, the body still to run will not run. A body task the user skipped
+   * has stopped the loop (L7): no round starts, and the skip stands.
+   */
+  private startRound(checkId: string): boolean {
+    const check = this.store.get(checkId);
+    if (!check?.loop) return false;
+    if (outOfRounds(check)) {
+      this.closeLoop(check, LOOP_OUT_OF_ROUNDS);
+      return false;
+    }
+    if (!betweenRounds(check)) return false;
+    const body = check.loop.body.flatMap((id) => this.store.get(id) ?? []);
+    if (body.some((t) => t.status === 'skipped' && !LOOP_SKIPS.has(t.skipReason ?? ''))) return false;
+    for (const task of body.filter((t) => !this.attempts.has(t.id) && REPEATABLE.has(t.status))) {
+      this.store.retry(task.id);
+      this.onHold.delete(task.id);
+      this.queuedStarts.delete(task.id);
+    }
+    const named = quotedList(body.map((t) => t.title));
+    this.tell('info', `Task "${check.title}" failed round ${loopRoundOf(check)} of ${check.loop.maxRounds}: ${named} ${body.length === 1 ? 'runs' : 'run'} to fix what it found, then it checks again.`);
+    return true;
+  }
+
+  /**
+   * The loop is over (ADR-0045 L6): its check passed, or will run no more.
+   * What of its body has not run, or did not pass, is not waited for: it ends
+   * skipped, with why. A body task at work is left to finish.
+   */
+  private closeLoop(check: Readonly<Task>, reason: string): void {
+    for (const id of check.loop?.body ?? []) {
+      const task = this.store.get(id);
+      if (!task || this.attempts.has(id) || !LEFT_UNDONE.has(task.status)) continue;
+      this.store.markSkipped(id, reason);
+      this.onHold.delete(id);
+      this.queuedStarts.delete(id);
+    }
+  }
+
+  /**
+   * A check whose round's body has all passed and landed runs again, as the
+   * next round (ADR-0045 L5). Read off the plan at each tick rather than at a
+   * body's verdict, so whatever finishes the body — a verdict, a retry, a Mark
+   * complete, a reload in between — resumes the loop alike.
+   */
+  private repeatChecks(): void {
+    let repeated = false;
+    for (const id of repeatingChecks(this.store.planTasks)) {
+      const check = this.store.get(id);
+      if (!check?.loop || this.attempts.has(id) || !check.loop.body.every((b) => landed(b, this.store, this.runs))) continue;
+      this.store.repeat(id);
+      this.onHold.delete(id);
+      repeated = true;
+      this.notifications.info(`The fix for task "${check.title}" has landed: it checks again, round ${loopRoundOf(check)} of ${check.loop.maxRounds}.`);
+    }
+    if (repeated) this.emit('onTaskChanged');
   }
 
   /** Skipped work is not completed work, so a run with any says so rather than that everything completed. */
@@ -2258,16 +2435,17 @@ export class TaskOrchestrator {
     const refused = this.claimRefusal(taskId, admission);
     if (refused) return { refused };
     const task = this.store.get(taskId)!;
+    const script = task.type === 'script';
     const attempt: TaskAttempt = {
       taskId: task.id,
       attempt: Math.max(this.spawnCounts.get(task.id) ?? 0, this.lastLoggedAttempt(task.id), ...task.attemptUsage?.map((u) => u.attempt) ?? []) + 1,
       phase: 'starting',
       session: null,
-      runner: this.store.resolveTaskRunner(task),
+      runner: script ? SCRIPT_RUNNER : this.store.resolveTaskRunner(task),
       cwd: null,
       worktree: false,
       integration: null,
-      kind: classifyAttempt(this.store.isOps(task.id), { repair: this.landing.nextRepair(task.id), continuation, carriedFrom: task.carriedFrom }),
+      kind: classifyAttempt(this.workOf(task), { repair: this.landing.nextRepair(task.id), continuation, carriedFrom: task.carriedFrom }),
       snapshot: null,
       startedAt: new Date().toISOString(),
       decided: false,
@@ -2279,10 +2457,14 @@ export class TaskOrchestrator {
       reminded: false,
       runnerStopped: false,
       planScope: this.planScope,
+      script,
+      shell: null,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.attempts.set(task.id, attempt);
-    this.store.startAttemptUsage(task.id, attempt.attempt, attempt.runner, attempt.startedAt);
+    this.research?.started(task);
+    // A script spends nothing a ledger counts: no model, no tokens (ADR-0035).
+    if (!script) this.store.startAttemptUsage(task.id, attempt.attempt, attempt.runner, attempt.startedAt);
     this.store.markInProgress(task.id);
     this.emit('onTaskChanged');
     return { spawned: this.runClaimed(task, attempt, continuation) };
@@ -2314,22 +2496,24 @@ export class TaskOrchestrator {
   private async spawnAttempt(task: Task, attempt: TaskAttempt): Promise<boolean> {
     try {
       const { kind } = attempt;
-      // Nothing can drive a runner without a structured connector, so it is
-      // refused before a worktree is made for it.
-      if (!supportsTaskMode(attempt.runner)) {
-        const name = this.registry?.get(attempt.runner)?.manifest.displayName ?? attempt.runner;
-        throw new Error(`${name} has no structured connector, so Ordewell cannot run its tasks. Assign the task to another runner.`);
+      if (!attempt.script) {
+        // Nothing can drive a runner without a structured connector, so it is
+        // refused before a worktree is made for it.
+        if (!supportsTaskMode(attempt.runner)) {
+          const name = this.registry?.get(attempt.runner)?.manifest.displayName ?? attempt.runner;
+          throw new Error(`${name} has no structured connector, so Ordewell cannot run its tasks. Assign the task to another runner.`);
+        }
+        // The plan fixed this mode when it was made and ADR-0001 forbids
+        // swapping it here, so a host that cannot run it ends the attempt
+        // before a worktree is made for it.
+        const manifest = this.registry?.get(attempt.runner)?.manifest;
+        const unavailable = manifest && unavailableTaskModeMessage(manifest, task.taskMode);
+        if (unavailable) throw new Error(unavailable);
       }
-      // The plan fixed this mode when it was made and ADR-0001 forbids
-      // swapping it here, so a host that cannot run it ends the attempt
-      // before a worktree is made for it.
-      const manifest = this.registry?.get(attempt.runner)?.manifest;
-      const unavailable = manifest && unavailableTaskModeMessage(manifest, task.taskMode);
-      if (unavailable) throw new Error(unavailable);
       // Resumed beside a runner still winding it down, a session would run in
       // two processes, and count from before what the first one still reports.
       if (kind.kind === 'continuation') await this.windDowns.get(task.id);
-      const { cwd, worktree, previousWork } = await attemptCwd(kind, task, this.runs);
+      const { cwd, worktree, previousWork, workspace } = await attemptCwd(kind, task, this.runs);
       attempt.cwd = cwd;
       attempt.worktree = worktree;
       if (checksTree(kind)) attempt.snapshot = await this.runs.snapshotWorkspace();
@@ -2342,41 +2526,9 @@ export class TaskOrchestrator {
         this.abandonSpawn(task, attempt);
         return false;
       }
-      // Read where the attempt runs: a skill an earlier task committed is in
-      // this worktree only once that task's work has landed.
-      if (takesSkills(kind) && task.skills?.length) {
-        attempt.skills = resolveTaskSkills(task, this.skillsAt(this.skillRoots(cwd)), worktree ? (name) => this.uncommittedSkillFolder(name) : undefined);
-      }
-      const finalPrompt = attemptPrompt(kind, {
-        task,
-        plan: this.store.planTasks,
-        planMapEnabled: this.config.planMapEnabled,
-        previousWork,
-        skills: attempt.skills,
-        repairPrompt: (t) => this.landing.repairPrompt(t),
-        previousAttempt: (taskId) => this.opsPreviousAttempt(taskId),
-      });
-      const env = await this.envForTask(cwd);
-      const session = await this.runner.spawn({
-        taskId: task.id,
-        runner: attempt.runner,
-        prompt: finalPrompt,
-        modelId: task.assignedModel?.modelId,
-        thinkingEffort: task.assignedModel?.thinkingEffort,
-        modelVariants: task.assignedModel?.availableVariants,
-        mode: task.taskMode ?? 'build',
-        cwd,
-        registry: this.registry ?? undefined,
-        order: task.order,
-        title: task.title,
-        env,
-        resumeSessionId: kind.kind === 'continuation' ? kind.resumeSessionId : undefined,
-        resumeCost: kind.kind === 'continuation' ? countedSessionCost(task.attemptUsage, kind.resumeSessionId) : undefined,
-        resumeWindow: kind.kind === 'continuation' ? resumedSessionWindow(task.attemptUsage, attempt.runner, attempt.attempt, kind.resumeSessionId) : undefined,
-        attempt: attempt.attempt,
-        ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
-        onNotice: (message) => this.tell('warn', `Task "${task.title}": ${message}`),
-      });
+      const session = attempt.script
+        ? await this.spawnScript(task, attempt, cwd)
+        : await this.spawnRunner(task, attempt, cwd, worktree ? workspace : undefined, previousWork);
 
       // Stop/load/cancel can end the attempt while the async adapter is
       // starting. Do not resurrect that execution after the surface already
@@ -2429,7 +2581,11 @@ export class TaskOrchestrator {
       // Each way out settles the task's status before it awaits anything, so
       // no tick in between finds it in progress with no attempt.
       const refusal = err instanceof Error ? err.message : String(err);
-      if (attempt.kind.kind !== 'repair' && classifyRunnerStop(refusal) === 'usage-limit') {
+      // A missed attach is a hold for a start or a continue: nothing ran, so
+      // the task is not failed and its saved session stays for a retry.
+      const attachTimeout = err instanceof McpAttachTimeout;
+      // A script has no runner whose account a limit could stop (ADR-0035).
+      if (attempt.kind.kind !== 'repair' && !attempt.script && classifyRunnerStop(refusal) === 'usage-limit') {
         // The limit refused the turn Ordewell was starting: a pause, as one
         // mid-turn is, and the saved session stays for the resume to continue.
         this.pauseOnLimit(task, attempt, refusal);
@@ -2440,7 +2596,7 @@ export class TaskOrchestrator {
         await this.tick();
         return false;
       }
-      if (attempt.kind.kind === 'continuation') {
+      if (attempt.kind.kind === 'continuation' && !attachTimeout) {
         // A runner that exits while starting on a saved session has refused it.
         const refused = err instanceof RunnerStartupExit;
         const reason = refused
@@ -2459,6 +2615,20 @@ export class TaskOrchestrator {
       if (attempt.kind.kind === 'repair') {
         this.store.markAwaitingUser(task.id, 'conflict');
         this.settleUnlanded(task, await this.landing.unrepaired(task, `could not start: ${err instanceof Error ? err.message : String(err)}`), attempt.admission);
+        this.emit('onTaskSettled', { taskId: task.id });
+        this.emit('onTaskChanged');
+        await this.tick();
+        return false;
+      }
+      if (attachTimeout) {
+        // The runner stayed up but never connected. Nothing was sent to it
+        // and no verdict exists, so the task is held with a reason rather
+        // than failed: its dependents stay on the plan, and a later start
+        // can still run it (ADR-0022, S2).
+        this.store.markPending(task.id);
+        this.onHold.set(task.id, 'could not connect to Ordewell\'s tools; start it again');
+        await this.runs.release(task.id, { keep: false });
+        this.tell('warn', `Task "${task.title}" is on hold: could not connect to Ordewell's tools. Start it again.`);
         this.emit('onTaskSettled', { taskId: task.id });
         this.emit('onTaskChanged');
         await this.tick();
@@ -2491,13 +2661,92 @@ export class TaskOrchestrator {
       // Couldn't spawn — the task was never executed, so it stays "to do".
       // Held out of auto-scheduling to avoid a spawn-throw retry loop.
       this.store.markPending(task.id);
-      this.onHold.add(task.id);
+      this.onHold.set(task.id, `could not start: ${err instanceof Error ? err.message : String(err)}; start it again`);
       await this.runs.release(task.id, { keep: false });
       this.tell('error', `Failed to start task "${task.title}": ${err}`);
       this.emit('onTaskChanged');
       await this.tick();
       return false;
     }
+  }
+
+  /**
+   * The runner's half of a start: the skills read where the attempt runs, the
+   * prompt its kind is told, and the runner spawned on its model and mode. A
+   * read-only attempt is given its shell, which may write its task workspace,
+   * `writable`, and nothing of the user's (ADR-0046).
+   */
+  private async spawnRunner(task: Task, attempt: TaskAttempt, cwd: string, writable: string | undefined, previousWork: PreviousWork | undefined): Promise<IRunnerSession> {
+    const worktree = attempt.worktree;
+    const { kind } = attempt;
+    // Read where the attempt runs: a skill an earlier task committed is in
+    // this worktree only once that task's work has landed.
+    if (takesSkills(kind) && task.skills?.length) {
+      attempt.skills = resolveTaskSkills(task, this.skillsAt(this.skillRoots(cwd)), worktree ? (name) => this.uncommittedSkillFolder(name) : undefined);
+    }
+    const finalPrompt = attemptPrompt(kind, {
+      task,
+      plan: this.store.planTasks,
+      planMapEnabled: this.config.planMapEnabled,
+      previousWork,
+      skills: attempt.skills,
+      repairPrompt: (t) => this.landing.repairPrompt(t),
+      previousAttempt: (taskId) => this.opsPreviousAttempt(taskId),
+    });
+    const env = await this.envForTask(cwd);
+    if (landsNothing(kind)) {
+      // Each repo worktree's `.git` must stay the repository's, so a sealed run
+      // cannot plant one for the runner's own git to load (ADR-0046).
+      const worktrees = writable ? Object.values(this.runs.openRecord(task.id)?.repos ?? {}).map((r) => r.worktree) : [];
+      attempt.shell = this.taskShell({ cwd, ...(writable ? { writable } : {}), ...(worktrees.length ? { worktrees } : {}) }) ?? null;
+    }
+    const shell = attempt.shell;
+    return this.runner.spawn({
+      taskId: task.id,
+      runner: attempt.runner,
+      prompt: finalPrompt,
+      modelId: task.assignedModel?.modelId,
+      thinkingEffort: task.assignedModel?.thinkingEffort,
+      modelVariants: task.assignedModel?.availableVariants,
+      mode: task.taskMode ?? 'build',
+      cwd,
+      registry: this.registry ?? undefined,
+      order: task.order,
+      title: task.title,
+      env,
+      resumeSessionId: kind.kind === 'continuation' ? kind.resumeSessionId : undefined,
+      resumeCost: kind.kind === 'continuation' ? countedSessionCost(task.attemptUsage, kind.resumeSessionId) : undefined,
+      resumeWindow: kind.kind === 'continuation' ? resumedSessionWindow(task.attemptUsage, attempt.runner, attempt.attempt, kind.resumeSessionId) : undefined,
+      attempt: attempt.attempt,
+      ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
+      ...(shell ? { shell } : {}),
+      workspaceRoot: this.workspaceRootFn(),
+      onNotice: (message) => this.tell('warn', `Task "${task.title}": ${message}`),
+    });
+  }
+
+  /**
+   * A script task's start (ADR-0035): its body as the plan holds it now, run
+   * by the script runner at the workspace root with the workspace's own
+   * variables, as a task's runner gets them (ADR-0016). There is no prompt,
+   * so no skills and no account of an earlier attempt: a retry runs the body
+   * again as written.
+   */
+  private async spawnScript(task: Task, attempt: TaskAttempt, cwd: string): Promise<IRunnerSession> {
+    const body = scriptBodyOf(task);
+    if (!body) throw new Error(`Task "${task.title}" has no script to run: give it "commands" or a "script".`);
+    const env = await this.envForTask(cwd);
+    return this.scriptRunner.spawn({
+      taskId: task.id,
+      runner: attempt.runner,
+      prompt: '',
+      cwd,
+      order: task.order,
+      title: task.title,
+      env,
+      attempt: attempt.attempt,
+      script: body,
+    });
   }
 
   /** For a skill the main checkout has, the folder a worktree only gets once it is committed. */
@@ -2534,6 +2783,7 @@ export class TaskOrchestrator {
    */
   private abandonSpawn(task: Task, attempt: TaskAttempt, session?: IRunnerSession): void {
     session?.kill();
+    attempt.shell?.end();
     if (this.attempts.has(task.id) || this.completing.has(task.id) || this.store.get(task.id)?.status !== 'in_progress') return;
     if (attempt.kind.kind === 'repair') this.store.markAwaitingUser(task.id, 'conflict');
     else this.store.markPending(task.id);
@@ -2582,6 +2832,7 @@ export class TaskOrchestrator {
     if (attempt) {
       this.store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined, nativeSessionId ?? undefined);
       this.output.detach(taskId);
+      attempt.shell?.end();
     }
     if (attempt && session) this.saveNativeSession(taskId, nativeSessionId, attempt.runner);
     if (stopsRunner(reason)) {
@@ -2603,7 +2854,8 @@ export class TaskOrchestrator {
     attempt.runnerStopped = true;
     const { taskId } = attempt;
     // A stop that failed leaves nothing to wait for, and nothing awaits this but a continue.
-    const windDown = Promise.all([this.windDowns.get(taskId), this.runner.stop(session.id)]).catch(() => undefined).then(() => {
+    const runner = attempt.script ? this.scriptRunner : this.runner;
+    const windDown = Promise.all([this.windDowns.get(taskId), runner.stop(session.id)]).catch(() => undefined).then(() => {
       if (this.windDowns.get(taskId) === windDown) this.windDowns.delete(taskId);
     });
     this.windDowns.set(taskId, windDown);
@@ -2635,6 +2887,27 @@ export class TaskOrchestrator {
 }
 
 const LIMIT_RESET_MESSAGE = 'Your usage limit has reset. Carry on with the task from where you stopped.';
+
+/** Why a loop's body that did not run ends skipped once its loop is over (ADR-0045 L6). */
+const LOOP_PASSED = 'not needed: its check passed';
+const LOOP_OUT_OF_ROUNDS = 'not run: the loop ran out of rounds';
+const LOOP_CHECK_MARKED_COMPLETE = 'not needed: its check was marked complete';
+const LOOP_CHECK_SKIPPED = 'not needed: its check was skipped';
+
+/** The skips a loop made itself, which a new set of rounds undoes; any other is the user's, and stops the loop (L7). */
+const LOOP_SKIPS: ReadonlySet<string> = new Set([LOOP_PASSED, LOOP_OUT_OF_ROUNDS, LOOP_CHECK_MARKED_COMPLETE, LOOP_CHECK_SKIPPED]);
+
+/** A body task a round runs again: not at work, and not waiting on the user. */
+const REPEATABLE: ReadonlySet<Task['status']> = new Set<Task['status']>(['pending', 'approved', 'completed', 'failed', 'skipped']);
+
+/** A body task a closed loop leaves undone: it has not run, or it did not pass. */
+const LEFT_UNDONE: ReadonlySet<Task['status']> = new Set<Task['status']>(['pending', 'approved', 'failed']);
+
+/** What a failed task's notice says; a loop's check out of rounds says how many it ran. */
+function failureText(task: Readonly<Task>, verdict: Verdict): string {
+  if (outOfRounds(task)) return `Task "${task.title}" failed in all ${loopRoundOf(task)} rounds of its loop: ${verdict.reason}`;
+  return `Task "${task.title}" failed verification: ${verdict.reason}`;
+}
 
 /** How much of an ops task's last attempt the next one is shown. */
 const OPS_RETRY_TAIL_LINES = 60;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AUTO_COMMANDS, classifyCommand, pathLikeArgs, pathRefs } from '../commandPolicy';
+import { AUTO_COMMANDS, classifyCommand, innerCommandScopes, pathLikeArgs, pathRefs } from '../commandPolicy';
 
 describe('classifyCommand', () => {
   describe('auto tier — read-only inspection runs with no prompt', () => {
@@ -276,6 +276,14 @@ describe('classifyCommand', () => {
       expect(reason).toMatch(/read-only planner/i);
       expect(reason).toMatch(/runner/i);
     });
+
+    it.each(['git push origin main', 'git tag v1.2.0', 'npm publish', 'kubectl apply -f deploy.yaml', 'wget --post-data=a=b -O - https://example.com/hook'])(
+      'points %s at run_script for an exact effect, and at an ops task for one that needs judgment (ADR-0035)', (command) => {
+        const { tier, reason } = classifyCommand(command);
+        expect(tier).toBe('refuse');
+        expect(reason).toContain('call run_script with the exact commands');
+        expect(reason).toContain('ops task');
+      });
   });
 
   describe('chained commands are classified per stage, not by the string as a whole', () => {
@@ -911,6 +919,14 @@ describe('a command runner is classified by the command it runs', () => {
   it.each(['parallel echo ::: a', 'watch ls', 'script -c ls', 'flock /tmp/lock ls', 'chroot / ls',
     'unshare -r ls', 'nsenter -t 1 ls', 'setpriv ls', 'runuser -u x ls', 'strace ls', 'ltrace ls'])(
     'refuses the runner %s rather than prompting for it', (cmd) => {
+      expect(classifyCommand(cmd).tier).toBe('refuse');
+    },
+  );
+
+  // Ordewell launches these itself, around the shell (ADR-0011 B6); a model
+  // naming them would choose its own policy, so they stay refused.
+  it.each(['bwrap --ro-bind / / sh -c ls', "sandbox-exec -p '(version 1)(allow default)' ls", 'sandbox-exec -n no-network ls'])(
+    'refuses the sandbox launcher %s when the model types it', (cmd) => {
       expect(classifyCommand(cmd).tier).toBe('refuse');
     },
   );
@@ -1681,5 +1697,33 @@ describe('sed that only prints lines by number runs without asking', () => {
   it('leaves its files to path confinement', () => {
     expect(pathLikeArgs("sed -n '1,5p' ../../etc/passwd")).toEqual(['../../etc/passwd']);
     expect(pathLikeArgs('sed -ne1p /etc/shadow')).toEqual(['/etc/shadow']);
+  });
+});
+
+// ADR-0036 S3: a denial on the card is remembered under each command's own
+// scope, so a sealed run checks the scopes inside a refused wrapper, not only
+// the whole command string. `innerCommandScopes` is what it checks against, and
+// each scope it names is the one that command's own classification produces.
+describe('innerCommandScopes', () => {
+  it('names a loop body under the scope its own classification would use', () => {
+    expect(innerCommandScopes('for f in *; do npm test; done')).toContain('npm test');
+    expect(innerCommandScopes('for f in *; do npm test; done')).toContain(classifyCommand('npm test').scope);
+    expect(innerCommandScopes('while true; do git push; done')).toContain('git push');
+  });
+
+  it('unwraps a runner in the body, so the wrapped command is the scope', () => {
+    expect(innerCommandScopes('for f in *; do nice npm test; done')).toContain('npm test');
+  });
+
+  it('names every non-auto command across a pipeline or a line, once each', () => {
+    expect(innerCommandScopes('npm test | tee out; npm run build')).toEqual(
+      expect.arrayContaining(['npm test', 'npm run build']),
+    );
+    expect(innerCommandScopes('az group list | python3 -c "import sys"')).toContain('python3');
+  });
+
+  it('is empty for a line of only read-only commands, which are never remembered', () => {
+    expect(innerCommandScopes('ls | sort | head')).toEqual([]);
+    expect(innerCommandScopes('grep -r x . && git log')).toEqual([]);
   });
 });

@@ -1,5 +1,7 @@
 import { ORDEWELL_MCP_SERVER_NAME, type McpClientConfig } from '../mcp';
 import { ORDEWELL_TOOL_NAMES, prefixedToolNames, type OrdewellToolBinding, type OrdewellToolRole } from './ordewellBinding';
+import type { TaskStartOptions } from './AgentAdapter';
+import { realpathSync } from 'fs';
 
 /**
  * OpenCode names an MCP tool `<server>_<tool>`, each part with anything but
@@ -31,10 +33,11 @@ function allowRules(mcp: McpClientConfig, role: OrdewellToolRole): Record<string
  * applies the last rule that matches, so the catch-all comes first. Anything
  * not named asks, which reaches the planner's envelope: a user's MCP tool, a
  * search, a read outside the workspace. OpenCode's own read tools run, and
- * everything that writes or runs is denied — its shell too, since the
- * planner's commands go through Ordewell's `run_command`. 2.x renamed `bash`
- * to `shell` and `task` to `subagent`, and added a `browser` that clicks
- * through pages; both spellings are listed. Checked against 1.18.35 and 2.0.26.
+ * everything that writes or runs is denied — its shell too, since by default
+ * the planner's commands go through Ordewell's `run_command`. 2.x renamed
+ * `bash` to `shell` and `task` to `subagent`, and added a `browser` that
+ * clicks through pages; both spellings are listed. Checked against 1.18.35 and
+ * 2.0.26.
  *
  * Web reads (ADR-0027): `webfetch` follows redirects itself, so Ordewell would
  * vet only the first URL, and the planner fetches through Ordewell's `fetch`
@@ -59,6 +62,35 @@ export const OPENCODE_PLANNER_PERMISSION: Record<string, OpenCodeSessionRule['ef
   bash: 'deny', task: 'deny', question: 'deny', todowrite: 'deny',
   shell: 'deny', subagent: 'deny', browser: 'deny',
 };
+
+/**
+ * A planner's policy with the native-shell opt-in on (ADR-0036 N1, N2): the
+ * shell asks, and the harness's request becomes the `native-shell` kind the
+ * adapter routes to the user's grant. Off, both spellings stay denied, so a
+ * planner has `run_command` alone.
+ */
+export function plannerPermission(nativeShell: boolean): Record<string, OpenCodeSessionRule['effect']> {
+  return nativeShell ? { ...OPENCODE_PLANNER_PERMISSION, bash: 'ask', shell: 'ask' } : OPENCODE_PLANNER_PERMISSION;
+}
+
+/** ADR-0046: nobody can approve native tools; only reads and the task token's tools run. */
+export const OPENCODE_READ_ONLY_PERMISSION: Record<string, OpenCodeSessionRule['effect']> = {
+  ...OPENCODE_PLANNER_PERMISSION,
+  '*': 'deny',
+  external_directory: 'deny', websearch: 'deny', codesearch: 'deny', execute: 'deny', lsp: 'deny',
+  bash: 'deny', shell: 'deny',
+};
+
+export function readOnlySessionRules(site: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>): OpenCodeSessionRule[] {
+  const rules = Object.entries(OPENCODE_READ_ONLY_PERMISSION).map(([action, effect]) => ({ action, resource: '*', effect }));
+  // OpenCode asks external_directory for the original workspace when cwd is a task worktree.
+  for (const root of new Set([site.cwd, site.workspaceRoot].filter((r): r is string => r !== undefined))) {
+    let real = root;
+    try { real = realpathSync.native(root); } catch { /* A missing root grants no additional real path. */ }
+    for (const path of new Set([root, real])) rules.push({ action: 'external_directory', resource: `${path.replace(/[\\/]$/, '')}/*`, effect: 'allow' });
+  }
+  return rules;
+}
 
 /** The variable OpenCode reads inline configuration from, over its config files. */
 export const OPENCODE_CONFIG_VARIABLE = 'OPENCODE_CONFIG_CONTENT';
@@ -89,8 +121,12 @@ export interface OpenCodeSessionRule {
 export const OPENCODE_SEARCH_PROVIDER = { provider: 'opencode', providerLabel: 'OpenCode\'s web search (Exa, unless another search provider is chosen in OpenCode)' } as const;
 
 export interface OpenCodeOrdewellBinding extends OrdewellToolBinding<string> {
-  /** The 1.x server's `OPENCODE_CONFIG_CONTENT` with the server added — see {@link mergeOrdewellConfig}. */
-  configContent(existing: string | undefined, mcp: McpClientConfig | null, role: 'planner' | 'task', projectServers?: Record<string, unknown>): string | null;
+  /**
+   * The 1.x server's `OPENCODE_CONFIG_CONTENT` with the server added — see
+   * {@link mergeOrdewellConfig}. `nativeShell`, when given, is the launcher
+   * every command must run in (ADR-0036 N2).
+   */
+  configContent(existing: string | undefined, mcp: McpClientConfig | null, role: OrdewellToolRole, projectServers?: Record<string, unknown>, site?: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>, nativeShell?: string): string | null;
   /** The rules a 2.x session is created with so the server's tools never wait on a person (ADR-0022, S3). */
   sessionRules(mcp: McpClientConfig, role: OrdewellToolRole): OpenCodeSessionRule[];
   /**
@@ -160,8 +196,13 @@ export function withoutParentOrdewell(content: string): string {
  * inherited one outlives the fresh credential. Null when
  * `existing` is not a JSON object — it cannot be merged, and replacing it would
  * silently drop whatever it carried, so the caller runs without the server.
+ *
+ * With `nativeShell`, the config names the launcher as `shell`, the last
+ * config layer OpenCode reads for it (ADR-0036 N2). It is set here, in the one
+ * layer that also decides the policy, so a user's own config cannot choose a
+ * different shell for the planner.
  */
-function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig | null, role: 'planner' | 'task', projectServers: Record<string, unknown> = {}): string | null {
+function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig | null, role: OrdewellToolRole, projectServers: Record<string, unknown> = {}, site?: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>, nativeShell?: string): string | null {
   let base: Record<string, unknown> = {};
   if (existing?.trim()) {
     let parsed: unknown;
@@ -170,7 +211,8 @@ function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig 
     base = withoutOrdewell(parsed);
   }
   // A planner's policy is Ordewell's alone: a permission the workspace grants its own sessions is not one it grants the planner.
-  if (role === 'planner') { delete base.permission; delete base.permissions; }
+  const restricted = role !== 'task';
+  if (restricted) { delete base.permission; delete base.permissions; }
   // A bare `"permission": "allow"` is the whole policy; the rule needs an object to join.
   const policy = typeof base.permission === 'string' ? { '*': base.permission } : base.permission;
   const servers = {
@@ -181,8 +223,16 @@ function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig 
     ...(Object.keys(servers).length > 0 ? { mcp: servers } : {}),
     // A language server opened on a file the planner reads can run the
     // repository's toolchain; 1.x's `read` opens every file it reads (ADR-0028).
-    ...(role === 'planner' ? { lsp: false } : {}),
-    permission: { ...(role === 'planner' ? OPENCODE_PLANNER_PERMISSION : {}), ...(mcp ? allowRules(mcp, role) : {}) },
+    ...(restricted ? { lsp: false } : {}),
+    // N2: a `shell` in this layer beats one in the user's global config, and
+    // beats `SHELL`; the launch environment names the same launcher as a
+    // fallback for OpenCode built without this layer.
+    ...(nativeShell ? { shell: nativeShell } : {}),
+    permission: {
+      ...(role === 'planner' ? plannerPermission(nativeShell !== undefined) : role === 'readOnlyTask' ? OPENCODE_READ_ONLY_PERMISSION : {}),
+      ...(role === 'readOnlyTask' && site ? { external_directory: Object.fromEntries(readOnlySessionRules(site).filter((r) => r.action === 'external_directory').map((r) => [r.resource, r.effect])) } : {}),
+      ...(mcp ? allowRules(mcp, role) : {}),
+    },
   };
   return JSON.stringify(deepMerge({ ...base, ...(policy === undefined ? {} : { permission: policy }) }, ours));
 }

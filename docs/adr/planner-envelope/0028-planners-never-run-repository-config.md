@@ -56,7 +56,8 @@ Ordewell decides them.
 **A planner runs nothing the repository's config names: no hook, no settings
 environment, no helper command, no plugin, and no MCP server the user has not
 approved. Instruction files are text, and Ordewell gives them to the planner
-itself. Tasks are unchanged.**
+itself. Change and ops tasks keep their native configuration; read-only tasks
+use these same restrictions (ADR-0046).**
 
 ### Claude Code planners
 
@@ -207,12 +208,13 @@ Code; the `mcp` entries of the project's `opencode.json`/`opencode.jsonc` or
 The workspace's own environment (ADR-0016) is unchanged: it holds only what
 direnv was allowed to export and an untracked `.ordewell/env`.
 
-### Tasks are unchanged
+### Task configuration
 
-A task, an ops task included, runs the repository's code by design and keeps
+A change or ops task runs the repository's code by design and keeps
 every native capability of its runner (ADR-0020, ADR-0027): its settings,
 hooks, project servers and instruction files load as its runner loads them,
-and its launch is byte for byte what it was.
+and its launch is byte for byte what it was. A read-only task instead withholds
+project configuration and native writes as ADR-0046 specifies.
 
 ## Key properties
 
@@ -306,3 +308,5 @@ and its launch is byte for byte what it was.
   ([ADR-0032](0032-runner-state-outside-the-workspace.md)).
 - 2026-10-13 — an OpenCode project server whose name could give a tool one of Ordewell's names is not offered.
 - 2026-10-13 — a Claude Code or Codex project server named `ordewell` is not offered either.
+
+- 2026-10-21 — read-only tasks use the same repository-config restrictions as planners (ADR-0046).

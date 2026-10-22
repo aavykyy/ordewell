@@ -1,7 +1,8 @@
 import { Task, flattenTasksWithParents } from '../models/Task';
 import { canSetDependencies } from './PlanTree';
 import { NOT_STARTED } from '../taskRow/status';
-import { opsPlacementRefusal } from './PlannedTask';
+import { notOnAScriptMessage, opsPlacementRefusal } from './PlannedTask';
+import { notAScriptsFields, SCRIPT_BODY_FIELDS } from '../models/ScriptTask';
 
 /**
  * Who is making the edit. The planner (`applyTaskOps`) and the direct-edit
@@ -42,6 +43,9 @@ export function lockedTaskRefusal(task: Pick<Task, 'title' | 'status'>, action =
 
 const AI_ONLY_FIELDS = ['assignedModel', 'taskMode', 'autonomy', 'ops'] as const satisfies readonly (keyof Task)[];
 
+/** What a task loses on becoming a script task (ADR-0035): everything a runner would read. */
+const NOT_KEPT_BY_A_SCRIPT = [...AI_ONLY_FIELDS, 'prompt', 'skills', 'userSteps'] as const satisfies readonly (keyof Task)[];
+
 /**
  * Coherence between `type` and the fields that only make sense for one side
  * of it. Deriving user steps from an AI prompt (or vice versa) would fabricate
@@ -53,6 +57,13 @@ const AI_ONLY_FIELDS = ['assignedModel', 'taskMode', 'autonomy', 'ops'] as const
  */
 function typeCoherenceCheck(target: Task, changes: Partial<Task>): TaskEditCheck | null {
   if (!changes.type || changes.type === target.type) return null;
+  // What runs, and where, is fixed once it has run (ADR-0020): a script's
+  // body and a runner's prompt are not the same work, and its log and verdict
+  // would describe the other one.
+  if ((changes.type === 'script' || target.type === 'script') && !NOT_STARTED.has(target.status)) {
+    return { ok: false, error: `"${target.title}" has started, so whether it is a script task is fixed: add a new task instead` };
+  }
+  const body = target.type === 'script' ? SCRIPT_BODY_FIELDS.filter((f) => target[f] !== undefined) : [];
 
   if (changes.type === 'user') {
     if (!Array.isArray(changes.userSteps) || changes.userSteps.length === 0) {
@@ -60,17 +71,45 @@ function typeCoherenceCheck(target: Task, changes: Partial<Task>): TaskEditCheck
     }
     return {
       ok: true,
-      clear: AI_ONLY_FIELDS.filter((f) => target[f] !== undefined),
+      clear: [...AI_ONLY_FIELDS.filter((f) => target[f] !== undefined), ...body],
       // User tasks are held to HITL, so a flip that kept the AI task's slice would be refused by the plan's own rules.
       ...(target.sliceType !== 'HITL' ? { set: { sliceType: 'HITL' as const } } : {}),
     };
+  }
+
+  if (changes.type === 'script') {
+    if (changes.commands === undefined && changes.script === undefined) {
+      return { ok: false, error: `"${target.title}" cannot become a script task without a body: include "commands" or "script" in this edit` };
+    }
+    return { ok: true, clear: NOT_KEPT_BY_A_SCRIPT.filter((f) => target[f] !== undefined) };
   }
 
   // changes.type === 'ai'
   if (!changes.prompt || !changes.prompt.trim()) {
     return { ok: false, error: `"${target.title}" cannot become an AI task without a prompt: include "prompt" in this edit` };
   }
-  return { ok: true, clear: target.userSteps && target.userSteps.length > 0 ? ['userSteps'] : [] };
+  return { ok: true, clear: [...(target.userSteps && target.userSteps.length > 0 ? ['userSteps' as const] : []), ...body] };
+}
+
+/**
+ * What a script task's edit may hold (ADR-0035). It runs its body with no
+ * model, so a runner, model, mode or prompt is refused rather than dropped,
+ * and a body belongs on a script task only. A new body replaces the old one,
+ * whichever kind it was: the edit writes what runs.
+ */
+function scriptCheck(target: Task, changes: Partial<Task>): TaskEditCheck | null {
+  if ((changes.type ?? target.type) !== 'script') {
+    const body = SCRIPT_BODY_FIELDS.filter((f) => changes[f] !== undefined);
+    if (body.length === 0) return null;
+    return { ok: false, error: `"${target.title}" is not a script task, so it has no ${body.map((f) => `"${f}"`).join(', ')}: set "type": "script" with it, or leave it out` };
+  }
+  const extra = [...('assignedRunner' in changes && changes.assignedRunner !== undefined ? ['assignedRunner'] : []), ...notAScriptsFields(changes)];
+  if (extra.length > 0) return { ok: false, error: `"${target.title}" ${notOnAScriptMessage(extra)}` };
+  const replaced = [
+    ...(changes.commands !== undefined && !('script' in changes) && target.script !== undefined ? ['script' as const] : []),
+    ...(changes.script !== undefined && !('commands' in changes) && target.commands !== undefined ? ['commands' as const] : []),
+  ];
+  return replaced.length > 0 ? { ok: true, clear: replaced } : null;
 }
 
 /**
@@ -93,8 +132,9 @@ function opsCheck(target: Task, isSubtask: boolean, changes: Partial<Task>): Tas
  * may make it, and whether the task stays well-formed. Lock rules
  * (running/completed) apply to the planner only. Well-formedness rules — a
  * hand-set dependency list, the one edit that can leave the plan
- * unschedulable, type/content coherence on an AI↔MAN flip, and where an ops
- * task may be — describe the task rather than who asked, so they run for
+ * unschedulable, type/content coherence on a flip between AI, manual and
+ * script, what a script task may hold, and where an ops task may be —
+ * describe the task rather than who asked, so they run for
  * both, through the same {@link canSetDependencies} guard the pickers and the
  * API read. What the task's runner, model, effort and mode end up as is the
  * assignment resolver's (`resolveAssignment`), and the rules the plan's tasks
@@ -124,8 +164,12 @@ export function validateTaskEdit(
   const coherence = typeCoherenceCheck(target, changes);
   if (coherence && !coherence.ok) return coherence;
 
+  const script = scriptCheck(target, changes);
+  if (script && !script.ok) return script;
+
   const ops = opsCheck(target, parent !== null, changes);
   if (ops) return ops;
 
-  return coherence ?? { ok: true };
+  if (!script) return coherence ?? { ok: true };
+  return { ...coherence, ok: true, clear: [...coherence?.clear ?? [], ...script.clear ?? []] };
 }

@@ -86,7 +86,7 @@ async function runTool(
     case 'grep': return fs.grep(String(args.pattern ?? ''), grepOptions(args));
     case 'find_symbol': return fs.findSymbol(String(args.symbol ?? ''), { language: str(args.language), path: str(args.path) });
     case 'list_dir': return fs.listDir(String(args.path ?? ''), num(args.depth));
-    case 'bash': return fs.bash(String(args.command ?? ''), signal);
+    case 'bash': return args.sealed === true ? fs.bash(String(args.command ?? ''), signal, { sealed: true }) : fs.bash(String(args.command ?? ''), signal);
     case 'fetch': {
       if (!fetcher) return { success: false, output: 'Web fetching is not available in this environment.', truncated: false };
       return fetcher.fetch(String(args.url ?? ''));

@@ -13,6 +13,13 @@
  *                                            its output is flushed and sent
  *   { mark: string }                      — a named checkpoint the driving
  *                                            script can screenshot/assert at
+ *
+ * It also holds GOAL_SCENARIOS, the five kinds of goal the planner's strategy
+ * step teaches (#108). Unlike the tour above, those are driven against the real
+ * planner loop by drive-conversation.mjs: the mock's `mock/goal-*` persona
+ * produces each kind's plumbing, and the driver asserts the session accepts
+ * it; `--real` replays the same five goals and reports what strategy was
+ * observed. The table stays here so a new kind of goal is added in one place.
  */
 
 const step = (id, tool, args, result, outcome, extra = {}) => ({
@@ -257,3 +264,58 @@ export const TASK_CARDS_PLAN = {
   runners: ['claude-code', 'codex'],
   lastUpdated: '2026-09-27T10:03:20.000Z',
 };
+
+/**
+ * The kinds of goal the planner's strategy step teaches (#108), one scenario
+ * each. `persona` is the mock model that replies with that kind's plumbing
+ * (mock-provider.mjs); `expect` is what the live driver asserts the session
+ * accepted. `realReplies` is what a real run answers if the planner asks a
+ * question — a nudge, never a scripted answer, since the report is about the
+ * planner's own choice.
+ */
+const REAL_NUDGE = 'Please use your judgement and continue with the strategy this goal calls for.';
+
+export const GOAL_SCENARIOS = [
+  {
+    kind: 'question',
+    persona: 'mock/goal-question',
+    goal: 'What does this demo project do, and does it have a test suite?',
+    // No nudge: an answer is the observed outcome; a clarifying question is too.
+    realReplies: [],
+    // A question is answered in the reply: no plan, no tasks, conversation open.
+    expect: { noPlan: true },
+  },
+  {
+    kind: 'small effect',
+    persona: 'mock/goal-effect',
+    goal: 'Emit a completion marker from one exact command.',
+    realReplies: [REAL_NUDGE, REAL_NUDGE],
+    // run_script adds a script task and starts it; its exit status is the verdict.
+    expect: { script: { title: 'Emit the completion marker', output: 'effect-ok' } },
+  },
+  {
+    kind: 'build',
+    persona: 'mock/goal-build',
+    goal: 'Add a --verbose flag that prints each file the demo CLI reads, with a test for it.',
+    realReplies: [REAL_NUDGE, REAL_NUDGE],
+    // A build: vertical slices, no research tasks, no script, no loop.
+    expect: { tasks: 3, ai: 3, research: 0, scripts: 0, loops: 0, chained: true },
+  },
+  {
+    kind: 'failure to explain',
+    persona: 'mock/goal-failure',
+    goal: 'The parser test fails with "unexpected token" on nested arrays. Find the cause and fix it.',
+    realReplies: [REAL_NUDGE, REAL_NUDGE],
+    // A reproduction (script check) with the fix in a loop's body, and two
+    // hypotheses as research tasks that start in parallel.
+    expect: { tasks: 4, ai: 3, research: 2, scripts: 1, loops: 1, reproductionCheck: true },
+  },
+  {
+    kind: 'open problem',
+    persona: 'mock/goal-open',
+    goal: 'We do not know yet how to make sync fast enough. Explore the options for a first round.',
+    realReplies: [REAL_NUDGE, REAL_NUDGE],
+    // An open problem: only the first round, as research tasks, no build yet.
+    expect: { tasks: 2, ai: 2, research: 2, scripts: 0, loops: 0 },
+  },
+];

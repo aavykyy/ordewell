@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { MessageBlock } from '@ordewell/core';
+import type { MessageBlock, ToolBlock } from '@ordewell/core';
 import { stripAnsi, style } from '../ansi';
 import { conversationLines } from '../blocks';
 
@@ -36,8 +36,18 @@ describe('a wrapped line keeps the colour it started in', () => {
   });
 });
 
-describe('model Markdown is sanitized before it is parsed (#83)', () => {
-  // Only the TUI's own colour may remain: any other escape would act on the terminal.
+describe('a huge message is cut for the frame, with a note', () => {
+  it('shows its head and counts the characters it left out', () => {
+    const huge = `start ${'word '.repeat(40_000)}end`;
+    const out = conversationLines([message('planner', huge)], 60, false).map(stripAnsi).join('\n');
+
+    expect(out).toContain('start');
+    expect(out).toContain('not shown');
+    expect(out).not.toContain('end');
+  });
+});
+
+describe('model Markdown is sanitized before it is parsed (#83)', () => {  // Only the TUI's own colour may remain: any other escape would act on the terminal.
   const strayEscapes = (lines: string[]): string[] =>
     // eslint-disable-next-line no-control-regex
     lines.join('\n').replace(/\x1b\[[0-9;]*m/g, '').match(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g) ?? [];
@@ -97,6 +107,19 @@ describe('a task\'s runner commands in its log (#66)', () => {
     expect(plainRows([{ type: 'compaction', id: 'b1', trigger: 'auto' }])).toEqual(['≡ Context compacted by the runner on its own']);
   });
 
+  it('says how much of a huge output it leaves out instead of reading all of it', () => {
+    const huge = Array.from({ length: 100_000 }, (_, i) => `test case ${i} passed`).join('\n');
+    const block = { type: 'command' as const, id: 'b1', name: 'test', status: 'done' as const, output: huge };
+
+    const collapsed = plainRows([block]);
+    expect(collapsed.slice(1, 4)).toEqual(['  ⎿  test case 0 passed', '     test case 1 passed', '     test case 2 passed']);
+    expect(collapsed.at(-1)).toBe('     … +99997 lines (ctrl+o to expand)');
+
+    const detail = plainRows([block], true);
+    expect(detail.length).toBeLessThanOrEqual(2_002);
+    expect(detail.at(-1)).toBe('     … +98000 lines not shown');
+  });
+
   it('collapses what the runner loaded to one line, and lists it in full detail', () => {
     const loaded = {
       type: 'runner_loaded' as const, id: 'b1',
@@ -116,5 +139,73 @@ describe('a task\'s runner commands in its log (#66)', () => {
       '     built-in: /compact /model',
       '     MCP servers: docs-server (pending)',
     ]);
+  });
+});
+
+describe('a command that ran sealed (ADR-0036 S4)', () => {
+  const sealedRun = (over: Partial<ToolBlock> = {}): ToolBlock => ({
+    type: 'tool', id: 'b1', tool: 'bash', headline: { name: 'Bash', keyArg: 'for f in *.md; do wc -l "$f"; done' },
+    args: '{"command":"for f in *.md; do wc -l \\"$f\\"; done"}', status: 'ok', outcome: 'success',
+    output: '3 README.md', outputLineCount: 1, sealed: true, ...over,
+  });
+  const plainRows = (block: ToolBlock, cols = 80, detailAll = false) =>
+    conversationLines([block], cols, detailAll).map(stripAnsi).filter((row) => row !== '');
+
+  it('says so after the command, and still closes it when the row is short', () => {
+    expect(plainRows(sealedRun())).toEqual(['● Bash(for f in *.md; do wc -l "$f"; done) · sealed', '  ⎿  3 README.md']);
+    expect(plainRows(sealedRun(), 30)[0]).toBe('● Bash(for f in *.m…) · sealed');
+    expect(plainRows(sealedRun(), 80, true)[0]).toBe('● Bash(for f in *.md; do wc -l "$f"; done) · sealed');
+  });
+
+  it('leads a failure with its own reason', () => {
+    const failed = sealedRun({ status: 'error', outcome: 'failure', output: 'Command exited 6:\ncurl: (6) Could not resolve host' });
+    expect(plainRows(failed)[1]).toBe('  ⎿  Error: Command exited 6:');
+  });
+});
+
+describe('a run update that delivers a research report (ADR-0037 R2)', () => {
+  const digest = (report: string[]): string => [
+    'Run update:',
+    `- task #3 "Scout the cache", whose result you asked for, has ended. ${report.join('\n  ')}`,
+  ].join('\n');
+  // The pane leaves a blank row after a block, which is no part of it.
+  const drawn = (text: string, detailAll: boolean, cols = 60): string[] =>
+    conversationLines([message('wake_up', text)], cols, detailAll).map(stripAnsi).filter((row, i, all) => i < all.length - 1 || row !== '');
+  const numbered = (n: number): string[] => ['It passed.', ...Array.from({ length: n - 1 }, (_, i) => `finding ${i + 1}`)];
+
+  it('draws a short report whole, beneath its task', () => {
+    const out = drawn(digest(numbered(4)), false);
+    expect(out[0]).toBe('↯ Run update:');
+    expect(out[1]).toContain('- task #3 "Scout the cache" ended, with this report:');
+    expect(out.slice(2)).toEqual(['    It passed.', '    finding 1', '    finding 2', '    finding 3']);
+  });
+
+  it('folds a long report, and says how many lines it leaves out', () => {
+    const out = drawn(digest(numbered(20)), false);
+    expect(out).toContain('    finding 7');
+    expect(out).not.toContain('    finding 8');
+    expect(out.at(-1)).toBe('    … +12 lines of the report (ctrl+o to expand)');
+  });
+
+  it('draws all of it when the detail is on, and says how to fold it back', () => {
+    const out = drawn(digest(numbered(20)), true);
+    expect(out).toContain('    finding 19');
+    expect(out.join('\n')).not.toContain('lines of the report');
+    expect(out.at(-1)).toBe('    … (ctrl+o to collapse)');
+  });
+
+  it('wraps a long line of the report rather than cutting it', () => {
+    const word = 'unbroken-'.repeat(3);
+    const out = drawn(digest(['It passed.', `${word} ${word} ${word}`]), false, 40).join('\n');
+    expect(out.match(/unbroken-/g)).toHaveLength(9);
+  });
+
+  it('keeps the update\'s other lines as they were', () => {
+    const text = `${digest(numbered(2))}\n- task #4 "Fix it" failed: tests red`;
+    expect(drawn(text, false)).toContain('  - task #4 "Fix it" failed: tests red');
+  });
+
+  it('draws an update with no report as it always was', () => {
+    expect(drawn('Run update:\n- task #4 "Fix it" failed: tests red', false)).toEqual(['↯ Run update:', '  - task #4 "Fix it" failed: tests red']);
   });
 });

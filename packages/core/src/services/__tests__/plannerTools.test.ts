@@ -151,6 +151,7 @@ describe('the Claude Code planner with the Ordewell server injected', () => {
       'mcp__ordewell__run_command', 'mcp__ordewell__load_skill',
       'mcp__ordewell__run_plan', 'mcp__ordewell__run_task', 'mcp__ordewell__stop_task', 'mcp__ordewell__stop_run',
       'mcp__ordewell__retry_task', 'mcp__ordewell__skip_task', 'mcp__ordewell__message_task', 'mcp__ordewell__answer_approval', 'mcp__ordewell__merge_all',
+      'mcp__ordewell__run_script',
     ]);
     expect(args[args.indexOf('--permission-mode') + 1]).toBe('default');
   });
@@ -486,17 +487,17 @@ describe('list_runners and list_models', () => {
   });
 });
 
-/** A host where Codex's sandbox cannot start: its read-only and Guarded modes are off (ADR-0033). */
+/** Guarded needs Codex's sandbox; Ordewell's read-only profile does not (ADR-0046). */
 function codexWithoutSandbox(): RunnerRegistry {
   const registry = new RunnerRegistry();
-  registry.setUnavailableModes('codex', { agent: CODEX_SANDBOX_MODE_REASON, plan: CODEX_SANDBOX_MODE_REASON });
+  registry.setUnavailableModes('codex', { agent: CODEX_SANDBOX_MODE_REASON });
   return registry;
 }
 
 describe('a Codex whose sandbox cannot start', () => {
   const bothRunners = { enabledRunners: ['claude-code', 'codex'] };
 
-  it('is listed without a read-only mode, so a read-only task is not offered to it', async () => {
+  it('keeps read-only support in list_runners when its native sandbox is unavailable', async () => {
     let answer: unknown;
     const { session } = plannerSession(fakeClaude({
       turn: async (mcp) => {
@@ -507,10 +508,10 @@ describe('a Codex whose sandbox cannot start', () => {
 
     await session.startPlanning('add a cache', ['claude-code', 'codex']);
 
-    expect(answer).toEqual({ autonomy: 'Full', runners: [{ id: 'claude-code', readOnly: true }, { id: 'codex', readOnly: false }] });
+    expect(answer).toEqual({ autonomy: 'Full', runners: [{ id: 'claude-code', readOnly: true }, { id: 'codex', readOnly: true }] });
   });
 
-  it('refuses a submitted read-only task on Codex, naming the other runner and the reason', async () => {
+  it('accepts a read-only task on Codex without its native sandbox', async () => {
     let submitted: { isError: boolean; body: unknown } | undefined;
     const { session } = plannerSession(fakeClaude({
       turn: async (mcp) => {
@@ -521,14 +522,11 @@ describe('a Codex whose sandbox cannot start', () => {
 
     await session.startPlanning('add a cache', ['claude-code', 'codex']);
 
-    expect(submitted?.isError).toBe(true);
-    const message = JSON.stringify(submitted?.body);
-    expect(message).toContain('one of: claude-code');
-    expect(message).toContain('sandbox cannot start on this host');
-    expect(session.planTasks).toEqual([]);
+    expect(submitted?.isError).toBe(false);
+    expect(session.planTasks[0]).toMatchObject({ assignedRunner: 'codex', taskMode: 'plan' });
   });
 
-  it('refuses a planner edit that moves a read-only task onto it, and leaves the plan as it was', async () => {
+  it('keeps a task read-only when an edit moves it to Codex without its native sandbox', async () => {
     let edited: { isError: boolean; body: unknown } | undefined;
     let planned = false;
     const { session } = plannerSession(fakeClaude({
@@ -545,9 +543,8 @@ describe('a Codex whose sandbox cannot start', () => {
 
     await session.continueConversation('EDIT NOW');
 
-    expect(edited?.isError).toBe(true);
-    expect(JSON.stringify(edited?.body)).toContain('sandbox cannot start on this host');
-    expect(session.planTasks[0]).toMatchObject({ assignedRunner: 'claude-code', taskMode: 'plan' });
+    expect(edited?.isError).toBe(false);
+    expect(session.planTasks[0]).toMatchObject({ assignedRunner: 'codex', taskMode: 'plan' });
   });
 });
 
@@ -1923,5 +1920,45 @@ describe('a task without saved logs', () => {
     });
     await session.continueConversation('read errors');
     expect(answer).toEqual({ isError: true, body: { ok: false, error: 'No saved task log is available for this task.', attempts: [] } });
+  });
+});
+
+describe('run_command, sealed (ADR-0036)', () => {
+  const context = { signal: new AbortController().signal };
+  const runCommand = vi.fn(async () => ({ success: true, output: '[Ran sealed as asked: …]\n3', truncated: false }));
+  const handler = plannerToolHandler({
+    skills: () => [],
+    turnId: () => 'turn-1',
+    recordSkillLoad: () => false,
+    liveCatalog: async () => ({ runners: ['claude-code'], models: {}, modes: {}, autonomousDefault: true }),
+    adjustments: () => [],
+    submitPlan: () => true,
+    editPlan: async () => ({ ok: true as const, summary: [], queued: false }),
+    tasks: () => [],
+    read: async (_signature, answerRead) => ({ status: 'answered', value: await answerRead(), landNow: false }),
+    liveOutput: () => null,
+    lastAttempt: () => null,
+    taskLogAttempts: () => [],
+    taskLog: () => [],
+    taskDiff: async () => ({ available: false, reason: 'not available' }),
+    runCommand,
+    fetchUrl: async () => ({ success: true, output: '', truncated: false }),
+    webSearch: async () => undefined,
+    execute: async () => ({ ok: true, message: '' }),
+    editsRefused: () => undefined,
+    taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [], uncommitted: async () => new Map() }),
+  });
+
+  it('hands a sealed run to the session only when the planner asks for one, and returns what it said', async () => {
+    expect(await handler.runCommand!({ command: 'for f in *; do :; done', sealed: true }, context)).toEqual({ text: '[Ran sealed as asked: …]\n3' });
+    await handler.runCommand!({ command: 'git status' }, context);
+    expect(runCommand.mock.calls.map((call: unknown[]) => call.slice(2))).toEqual([[{ sealed: true }], []]);
+  });
+
+  it('offers `sealed` and says what a sealed run is, for every harness planner', () => {
+    const tool = PLANNER_TOOLS.find((t) => t.name === 'run_command')!;
+    expect(tool.description).toContain('runs sealed instead: no network, no home directory or credentials');
+    expect(Object.keys(tool.inputSchema.properties as Record<string, unknown>)).toEqual(['command', 'sealed']);
+    expect(tool.inputSchema.required).toEqual(['command']);
   });
 });

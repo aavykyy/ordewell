@@ -65,13 +65,24 @@ describe('the execution tools on the Ordewell MCP server', () => {
     expect(JSON.parse(text(answered))).toEqual({ ok: true, result: 'done' });
   });
 
+  it('hands run_script to the seam as one command, with the call\'s own cancellation (ADR-0035)', async () => {
+    const execute = vi.fn(async (_command: ExecutionCommand, _signal?: AbortSignal): Promise<CommandOutcome> => ({ ok: true, message: 'Ran script task #2 "Push". It passed.' }));
+    const client = await connected(host(execute));
+
+    const result = await client.callTool({ name: 'run_script', arguments: { title: 'Push', commands: [['git', 'push', 'origin', 'main']], timeoutMs: 30_000, dependencies: [1, '#2'] } });
+
+    expect(execute.mock.calls[0][0]).toEqual({ command: 'run_script', title: 'Push', commands: [['git', 'push', 'origin', 'main']], timeoutMs: 30_000, dependencies: ['1', '#2'] });
+    expect(execute.mock.calls[0][1]).toBeInstanceOf(AbortSignal);
+    expect(JSON.parse(text(result))).toEqual({ ok: true, result: 'Ran script task #2 "Push". It passed.' });
+  });
+
   it('lets an "allow" reach the seam, so the refusal says why rather than a schema error', async () => {
     const execute = vi.fn(async (): Promise<CommandOutcome> => ({ ok: false, outcome: 'refused', message: 'answer_approval never allows.' }));
     const client = await connected(host(execute));
 
     const result = await client.callTool({ name: 'answer_approval', arguments: { task: 't1', answer: 'allow' } });
 
-    expect(execute).toHaveBeenCalledWith({ command: 'answer_approval', task: 't1', answer: 'allow' });
+    expect(execute).toHaveBeenCalledWith({ command: 'answer_approval', task: 't1', answer: 'allow' }, undefined);
     expect(result.isError).toBe(true);
     expect(JSON.parse(text(result))).toEqual({ ok: false, outcome: 'refused', reason: 'answer_approval never allows.' });
   });
@@ -102,6 +113,18 @@ describe('the execution tools as the API planner declares them', () => {
     expect(retry.required).toEqual(['task', 'from']);
     expect(retry.properties.from).toMatchObject({ type: 'string', enum: ['fresh', 'session'] });
     expect(retry.properties.task.type).toBe('string');
+  });
+
+  it('declare run_script\'s commands as a list of argument vectors, which a provider refuses an array not to say', () => {
+    const spec = executionToolSpecs().find((s) => s.name === 'run_script')!;
+    const openAi = toOpenAiTools(true).find((t) => t.function.name === 'run_script')!;
+    const gemini = toGeminiToolDeclarations(true).find((d) => d.name === 'run_script')!;
+
+    expect(spec.required).toEqual(['title']);
+    expect(spec.properties.commands).toMatchObject({ type: 'array', items: { type: 'array', items: { type: 'string' } } });
+    expect(spec.properties.dependencies).toMatchObject({ type: 'array', items: { type: 'string' } });
+    expect(openAi.function.parameters).toMatchObject({ properties: { commands: { type: 'array', items: { type: 'array', items: { type: 'string' } } } } });
+    expect(gemini.parameters).toMatchObject({ properties: { commands: { type: 'array', items: { type: 'array', items: { type: 'string' } } } } });
   });
 
   it('are offered to an OpenAI-compatible conversation only when asked for', () => {

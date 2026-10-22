@@ -8,6 +8,7 @@ export const OPENCODE_MANIFEST: RunnerManifest = {
   runner: { command: 'opencode' },
 
   features: {
+    permissionModeValues: { plan: 'build' },
     modeSettings: {
       approvals: { build: 'auto' },
     },
@@ -35,6 +36,6 @@ export const OPENCODE_MANIFEST: RunnerManifest = {
 
   modes: [
     { id: 'build', label: 'Build', description: 'Full access agent for development work', cliValue: 'build', autonomous: true, safe: true },
-    { id: 'plan', label: 'Plan', description: 'Read-only agent for analysis and exploration', cliValue: 'plan', readOnly: true },
+    { id: 'plan', label: 'Read-only', description: 'Native reads and Ordewell commands; lands nothing', cliValue: 'build', readOnly: true },
   ],
 };

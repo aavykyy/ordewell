@@ -273,6 +273,19 @@ carries what *Merge all* did, blocked repos and all, to every surface;
 *Avoid:* "event", "progress callback" for this concept — and do not add a
 per-call progress override; the broadcast seam is the only channel.
 
+**Research task** (`Task.research`, `ResearchTasks`; ADR-0037) — a top-level
+read-only AI task whose `task_complete` report is addressed to the planner.
+It cannot be a loop body task. The planner approves it as it lands, and its
+end (passed, failed or blocked) joins the shared report wake-up path at Off,
+Watch and Act, with the authority of the turn that started it. Nothing lands
+(ADR-0046). How many a message starts is the planner's judgement, and the run's
+Parallel limit bounds what runs at once: research tasks and every other task
+share the same slots. Removing research or lifting read-only withdraws the
+approval granted as research landed. Surfaces mark its row as research and draw
+its report in the run update that delivered it, folded when long.
+*Avoid:* "background agent" — a harness's subagents are awaited inside their
+turn; work across turns is a task in the plan.
+
 **ResearchStep outcome** — how one research tool call ended, as data:
 `success | failure | refused | denied | not_executed`, derived once by
 `classifyOutcome` and carried on every `research_step_done` alongside the
@@ -453,7 +466,7 @@ Code's `disable-model-invocation` and `user-invocable` (unmarked = both). It liv
 `~/.ordewell/skills/` (built-in seeds plus the user's own; tasks never write
 it) or **workspace** `.ordewell/skills/` (committed, so it reaches worktrees
 through git). On a name clash global wins and the workspace copy is reported
-as shadowed. The built-in planner skills are user-only; the built-in `tdd` task skill is model-invocable (ADR-0024). Ordewell never ships, reads, or
+as shadowed. The built-in `grilling`, `to-spec` and `improve-codebase-architecture` are user-only; the built-in `diagnose` and `explore` planner skills and the `tdd` task skill are model-invocable (ADR-0024). Ordewell never ships, reads, or
 references runner-native skill mechanisms (`.claude/skills`, OpenCode plugins,
 etc.) to deliver a skill. Research subagents (`spawn_research_agent`, ADR-0005)
 are always-on for the planner, not a skill.
@@ -895,10 +908,26 @@ families only.
 *Avoid:* "whitelist", "pre-approved scopes" for the rules (a rule names an
 operation by its words, a scope is what one approval remembers).
 
+**Effect allowlist** (`effectAllowlist.ts`; ADR-0035) — the user's standing
+approval for named effects, beside the *Planner allowlist*, which names reads.
+VS Code `ordewell.effectAllowlist`, elsewhere `ORDEWELL_EFFECT_ALLOW`; user
+settings only, refused from a workspace's environment files, read on every
+request, with no built-in entries. A rule is matched against a whole command,
+every word in order and flags included, and spells out its operation before any
+`*`. A `*` never stands for a flag, a refspec's `+` or `:`, or a word across a
+`:` outside a URL. It covers a script task's `commands` body only, and only when
+every command is covered; a `script` body, and a program named by its path,
+never are. The planner allowlist's `!` exclusions hold, and win. A covered
+script task runs without asking, recorded by its rule.
+*Avoid:* "whitelist"; "approved commands" — it approves a script task, and a
+covered one is still a task in the plan with a log and a verdict; confusing it
+with the *Planner allowlist*, which never covers an effect.
+
 **Approval mode** — what happens to a planner request the *planner allowlist*
 does not cover: `ask` the user, refuse it (`allowlist`), or run it (`allow`).
 The default, `auto`, follows the autonomy level: Guarded asks, Full refuses
-and the plan carries the change as an *ops task*. Web reads are the one
+and the planner carries the change as a *script task* when it can state the
+exact commands, or the plan as an *ops task*. Web reads are the one
 exception: `auto` allows them at both levels (ADR-0027).
 *Avoid:* conflating it with a task's mode or the autonomy level itself.
 
@@ -932,7 +961,8 @@ with a task's *task token*: the only runner completion evidence. It is handed
 to `VerdictEngine`, which alone produces the verdict after checking the current
 generation. Evidence held behind an undelivered message is superseded when
 that message is read. Only `done` passes; `blocked` and `failed` carry their
-reason. The
+reason, and the verdict keeps which (`Verdict.reported`): only `failed` starts
+a *Loop*'s round. The
 `summary` is the task's *Report*.
 *Avoid:* "self-report" or "the model says it's done" (it is the runner's
 explicit signal bound to the attempt, not a judgement anyone weighs), and
@@ -1038,7 +1068,8 @@ reconciled into it rather than reloaded over it, leaving the failed task failed:
 an edit is not a retry. A task at work — force-started, or waiting on the user —
 is never blocked. A usage-limit pause with a reset holds the whole run until it;
 one without a time keeps only its own runner's tasks from starting, and a
-merge gate keeps the run waiting; neither is a block.
+merge gate keeps the run waiting; neither is a block. A *Loop*'s check
+*between rounds* is stored failed but blocks nothing while its loop goes on.
 *Avoid:* "halted run" — a failure no longer halts the run; "waiting" for it — a
 task waiting on its dependencies starts on its own once they complete, a blocked
 one only after a retry or a skip.
@@ -1046,9 +1077,11 @@ one only after a retry or a skip.
 **Start rule** (`startWaits`, `StartWait`, `services/readiness.ts`) — whether a
 task can start now and, if not, every reason it waits, in a fixed order whose
 first is *the* reason (ADR-0034): it has started; Mark complete is landing it;
-it has no prompt; it is outside the user's approval record; it is on hold; it
-is blocked; its dependencies are not met, or, queued by a force start, are
-still under way; a Merge all is under way and it is an ops task; its runner
+it has no prompt; it is outside the user's approval record; it is on hold, with
+that reason shown on every surface; it is blocked; it is in a *Loop*'s body
+whose check has not failed this round
+(`loop-check`, "runs if #X fails"); its dependencies are not met, or, queued
+by a force start, are still under way; a Merge all is under way and it is an ops task; its runner
 waits on a usage limit's reset; a planner turn holds new starts; it is at its
 *Merge gate*; it is a user task. One pure function over the plan, the holds
 and the open isolated run, which the scheduler, the explicit starts, the
@@ -1056,7 +1089,8 @@ automatic merge at a gate, the command seam's refusals, the task row's merge
 gate and the planner's view of the plan (`waits:` on each task's line) read. A
 force start reads it as forced: past a hold, a failure, a usage limit and the
 gate the user confirmed. The claim is separate: it checks only what can change
-at the last moment.
+at the last moment. A loop's check *between rounds* waits `repeating` in place
+of "it has started": its loop starts it again.
 *Avoid:* "readiness gate" for one of its reasons, and "gate" for any reason but
 the *Merge gate*.
 
@@ -1076,6 +1110,47 @@ reason, and only a task that failed, is blocked or is waiting for input — and
 it never runs a skipped task again (ADR-0029).
 *Avoid:* "completed" or "done" for it — nothing of it landed; "cancelled" —
 a cancel returns a task to pending.
+
+**Loop** (`Task.loop`, `models/Loop.ts`; ADR-0045) — a *Loop check* that
+repeats with its fix until it passes, declared on it as `loop: { body, maxRounds }`.
+Ordewell runs it with no planner turn: the check runs; while it fails with
+rounds left, its *body* runs with its report and then the check runs again.
+It ends when the check passes (the body that did not run is skipped as not
+needed), when it runs out of rounds (the check fails, its dependents are
+blocked, the supervisor hears once), or when a body task fails or is skipped,
+which stops it until that task is retried and passes. The plan does not grow:
+each round is a new attempt of the same tasks.
+*Avoid:* "cycle" or "back-edge" — the graph stays acyclic, and the loop is a
+declaration on one task; "retry" for a round — a retry of the check starts its
+rounds over, and the guards count no round; "iteration".
+
+**Loop check** — the task that declares the *Loop*, "the check" within it: an
+AI task reporting through `task_complete`, or a script task, whose verdict
+decides whether the loop goes on. A round starts only on `failed` evidence
+(`Verdict.reported`): a `blocked` report, an exit without one or a script that
+could not start starts none, and the check fails as any task does.
+*Avoid:* a bare "check" where a verdict's *Check* could be meant — this one is
+a task; "test" or "review" for the role — those are what a loop check may do;
+"declared check" — that is #39's acceptance check, which is not a loop's.
+
+**Body** (of a loop) — the top-level tasks `loop.body` names, which fix what the
+check found. A body task depends on its check, and otherwise only on what the
+check depends on or on other body tasks; nothing outside the loop depends on
+it. It runs only for its check: before the check fails it waits `loop-check`,
+and once the loop is over, a body task that has not run ends skipped. Removing
+one takes it out of its loop; a check with a loop cannot be removed.
+*Avoid:* "fix task" as a kind of task — any AI or script task can be in a body.
+
+**Round** (`Task.loopRound`) — one run of a loop's check, and the body's run
+before it: round 1 is the check's first run, and `maxRounds` (3 unless set, at
+most 10) is the most it runs in one set of rounds. The round is saved on the
+check, so a reload resumes mid-round. A check that failed with rounds left is
+**between rounds** (`betweenRounds`): stored failed, but no failure for the
+blocked rule, the run's end, wake-ups or the loop guards while its loop goes
+on; it runs again once its body has passed and landed.
+*Avoid:* "attempt" for a round — a round is the loop's count, and the check's
+attempts are counted apart; "repeating" as a status — it is derived, never
+stored.
 
 **Attempt usage** (`AttemptUsage`, `Task.attemptUsage`) — the persisted ledger
 of one task attempt: its number, runner, the runner session it ran in
@@ -1338,8 +1413,8 @@ without a gate and keeps its mid-run card for a gate wait.
 *Avoid:* per-repo merge — there is none, by design (ADR-0014).
 
 **Change task** — a task whose result is a change to repository files: it runs
-in a worktree and lands on the integration branch. Every task is one unless it
-is marked `ops` (ADR-0020).
+in a worktree and lands on the integration branch. Every AI task is one unless
+it is marked `ops` (ADR-0020) or is a *read-only task* (ADR-0046).
 *Avoid:* "code task" — docs and config edits are changes too.
 
 **Ops task** — an AI task marked `ops: true` (ADR-0020): it changes no repository files, acting instead on systems outside the repo (a
@@ -1351,10 +1426,33 @@ the group, it waits on the user (`awaitingReason: 'files-changed'`) rather than
 completing. A retry is told what the attempt before it did, since its effects
 are never rolled back. The planner sets the mark and splits a mixed request into
 a change task and an ops task; the user can flip it until the task starts. A
-subtask runs with its top-level task.
+subtask runs with its top-level task. A *Script task* is an ops task too, by
+its type, with no `ops` mark.
 *Avoid:* "operation" as the term (used loosely everywhere), "external effects
 task", "checkout task" — it runs at the workspace root, which in a group is not
 one checkout.
+
+**Script task** (`type: 'script'`, `models/ScriptTask.ts`; ADR-0035) — an ops
+task whose body is a literal script that Ordewell runs itself, with no runner,
+model or mode. The body is `commands`, argument vectors run in order with no
+shell and stopping at the first that fails, or `script`, one script for the
+research shell's interpreter, outside the planner's sandbox; a time limit
+(ten minutes unless the task sets one) ends it as failed. It is top-level only,
+runs at the workspace root with the workspace's environment, and is an ops task
+in everything else: the merge gate, the Merge-all exclusion and the tracked-file
+check. Its verdict is its exit status, handed to `VerdictEngine` as the
+attempt's evidence in place of a `task_complete` call: every step exiting 0
+passes. The planner adds one with `edit_plan` or `submit_plan`, or adds it and
+starts it at once with `run_script`; the user consents to the body as written,
+on the approval card or through the *Effect allowlist*, and a changed body needs
+consent again. Surfaces draw it as an ops task with its body in place of a
+prompt, read-only. The planner writes one for an effect it can state as exact
+commands (a push, one setting on a cloud resource); an effect that needs
+judgment is an ops task.
+*Avoid:* "command", "action", "effect" or "operation" as the term (ADR-0035
+rejected them for ops tasks too); "ops task" for it where the difference
+matters — an ops task has a runner and a model, a script task has neither;
+"shell task" — `commands` run with no shell.
 
 **Merge gate** — where an ops task or a user task that depends on change tasks
 waits until their work is merged into the user's branch (ADR-0020): until the
@@ -1924,17 +2022,28 @@ purpose: ModeResolver resolves *runner modes*; ModelResolver resolves *models*.
 *Avoid:* "the parser" for this policy — it lives in `ModeResolver.ts`, not the
 plan parser, even though the parser calls `plannedMode`.
 
-**Read-only task** — an AI task the planner marks `readOnly: true` because it
-must not change any file: a review, an audit, an analysis whose result is a
-report (ADR-0031). It runs in its runner's `readOnly`-tagged mode (`plan` on
-every built-in runner), at either level, and stays read-only through a
+**Read-only task** — an AI task that lands nothing (ADR-0046): a review, an
+audit, an analysis whose result is its `task_complete` report. The planner
+marks it `readOnly: true` (ADR-0031), and the task stores that as its runner's
+`readOnly`-tagged mode (`plan` on every built-in runner), at either level. It
+works in a worktree of its own where the run isolates, which is thrown away
+whatever it changed when the attempt ends (`AttemptKind` `readOnly`,
+`IsolationTaskRecord.readOnly`), and keeps its runner's own read tools. Its
+shell is Ordewell's `run_command`, on its token alone (`BaseFileSystem.taskShell`):
+the planner's command rules from the task's working directory, asking
+nobody, where what would ask or be refused is a *sealed run* with the
+worktree writable, so it can try a fix or add a failing test and run the
+suite; git there reads and records nothing. From the attempt's first sealed
+run on, every command of its shell runs sealed, what the allowlist covers
+included, since a sealed run may have rewritten what a later command runs. It stays read-only through a
 planner's move or split unless the planner lifts it with `readOnly: false`.
 Its AI subtasks are read-only too unless one says otherwise; a manual task
-and an ops task cannot be one.
-The planner's only say over a task's mode; a runner without a read-only mode
-cannot take one. It is a request, not a task field: the task stores the mode.
+and an ops task cannot be one. The planner's only say over a task's mode; a
+runner without a read-only mode cannot take one. It is a request, not a task
+field: the task stores the mode.
 *Avoid:* "plan mode task" (`plan` is one runner's mode id, not the concept),
-"analysis task".
+"analysis task", "read-only mode" for the task (the mode is the runner's; what
+makes the task read-only is that nothing lands).
 
 **Unavailable mode** (`RunnerModeInfo.unavailable`,
 `RunnerRegistry.setUnavailableModes`, `unavailableModeReason`) — a mode a
@@ -2023,7 +2132,10 @@ required completion check, with `exit_code` as supporting diagnostic evidence.
 A manual completion has a `manual` check. `model_review`, `workspace_changes`
 and `verify_command` were removed because they conflated evidence with opinion.
 Verification never asks a model to break a tie. A runner exit without a
-completion call fails, even with exit code zero.
+completion call fails, even with exit code zero. A *Script task* has no runner
+to make the call: its `script_exit` check, the exit status of the literal script
+the plan holds, is its evidence.
+*Avoid:* using it for a *Loop check*, which is a task, not a signal.
 
 **Testing strategy** — *removed.* Verification is completion-evidence based;
 the planner no longer assigns a testing strategy per task. The `user_verify`
@@ -2291,8 +2403,10 @@ note in the transcript; `runSettings.unsupervised` says why).
 "autopilot".
 
 **Supervisor level** — the **Run setting** **Off** / **Watch** / **Act**,
-Watch by default, set in `/settings` (or `ordewell supervisor` headless; ADR-0029, ADR-0030). Off: the planner
-speaks only when the user writes. Watch: wake-up turns read and suggest;
+Watch by default, set in `/settings` (or `ordewell supervisor` headless;
+ADR-0029, ADR-0030). Off: the planner speaks when the user writes or a task
+reports a result the planner asked for (ADR-0037 R2). Watch: wake-up turns read
+and suggest;
 execution tools and plan edits are refused, with a note telling it to suggest
 the action to the user. Act: wake-up turns may also run, stop, retry and skip
 tasks (`skip_task`, with a reason; never Mark complete), message runners, deny
@@ -2317,8 +2431,9 @@ setting; a Guarded session can have an Act supervisor. *Avoid:* "mandate" until
 **Run settings** — the machine-wide user settings that say how a run is
 started, watched and merged: **Supervisor level**, **Auto-merge at gates**,
 **Autorun**, the supervisor's retry limit and the wake-up read budget
-(ADR-0030). Saved in `settings.json`, changed only by the user through `/settings`
-(or the headless commands behind it) or `PATCH /api/settings`, never by the
+(ADR-0030). Saved in
+`settings.json`, changed only by the user through `/settings` (or the headless
+commands behind it) or `PATCH /api/settings`, never by the
 planner. A change applies at once to the session it is made in; another
 session's run under way keeps its values until it ends. A run's own copy is
 `runSettings` on the plan, which only **Run supervision** writes; the plan
@@ -2437,8 +2552,9 @@ paused.
 **Command seam** (`ExecutionCommands`, `Session.execute`) — the one core entry
 point every execution action reaches the scheduler through: `run_plan`,
 `run_task`, `stop_task`, `stop_run`, `retry_task`, `message_task`,
-`answer_approval`, `merge_all`, `skip_task` (ADR-0029, #91), and the user's
-own controls, refused to anyone else: `force_start`, `mark_complete`,
+`answer_approval`, `merge_all`, `skip_task` (ADR-0029, #91), `run_script`
+(ADR-0035: it adds a *Script task* and starts it in one step; only a planner
+turn or the supervisor calls it), and the user's own controls, refused to anyone else: `force_start`, `mark_complete`,
 `mark_not_done`, `interrupt_task`, a force send (`message_task` with `force`),
 `force_send_queued`, `remove_queued`, `cancel_resume`, `answer_checkpoint` and
 `approve_review`. Resume now is `retry_task` from `session` on a paused task.
@@ -2732,6 +2848,70 @@ escape in `sh` and a separator in cmd, so `rg pattern C:\repo\src` tokenized to
 `C:reposrc` and failed containment against the workspace it named.
 *Avoid:* a `platform` parameter here. The question is which language, and a
 Windows box can answer POSIX.
+
+**Planner sandbox** (`services/sandbox/`, ADR-0011) — the OS sandbox every
+command of the planner's shell runs in, beneath the classifier: Seatbelt on
+macOS, bubblewrap on Linux, none on Windows. One profile for every command the
+classifier allowed: the host readable, the session's *scratch directory*
+writable, and the network only for a command that was approved; an `auto` one
+has none, nor the local services that would act for it (on macOS but
+launchd). A *sealed run* has a stricter profile of its own. A `SandboxBackend` (`probe`, `wrap`) turns the *research
+shell* and a `SandboxProfile` into the launcher to spawn, with the command
+appended last, so the string classified is the string that runs; a backend
+refuses a profile it cannot enforce. Probed once per process; where it cannot
+start, commands run on the classifier alone and the session says so once.
+Separate from Codex's *Sandbox probe*, which asks whether Codex's own sandbox
+starts. *Avoid:* "container" — sandboxes share nothing and need no daemon.
+
+**Scratch directory** — the one directory a planner command may write, set as
+its `TMPDIR` (and a *sealed run*'s `HOME`): made under the OS temporary
+directory on the session's first command, private to the user, and removed
+when the session ends or resets (or by the next process, when the one that made
+it was killed). The caches read commands write as a side effect (npm's, Go's,
+the XDG cache root) point at it, and a sealed run keeps intermediate files
+there for the session's later commands. *Avoid:* "workspace" — the workspace
+is read-only to the planner.
+
+**Sealed run** (`PlannerShellSandbox.launchSealed`, ADR-0036) — a planner
+command run where it can compute anything and change nothing, so that no
+classifier has to vouch for it: the workspace read-only (a throwaway overlay on
+a bubblewrap that has one), the *scratch directory* writable and its `HOME`,
+nothing else readable but the system's executables, libraries and minimal
+configuration, no network, none of the host's environment beyond `PATH` and
+the locale, a `/tmp` of its own, limits on processes, memory and wall time, and
+dying with its parent. That holds as written on Linux. On macOS three things
+no Seatbelt rule closes stay open to it: what the user's other processes hold
+in their command lines and environments, their launchd jobs, and the shell's
+here-document files (ADR-0036). A command runs sealed when the planner passes
+`sealed: true` to `bash` or `run_command`, or when the envelope would refuse it
+without asking anyone: the classifier's `refuse`, or the `allowlist` approval
+mode's. A research subagent runs sealed what would have asked, and so does a
+*read-only task*'s `run_command`, with the task's worktree writable and a
+scratch directory of its own (ADR-0046). A `!` allowlist
+exclusion and a denial given on the card still refuse; where no sandbox can
+hold one, a refusal stays a refusal. Its result starts with `[Ran sealed`,
+which the research timeline turns into a mark on the row. *Avoid:* "safe mode",
+"dry run" — the command really runs, against the real workspace, and only its
+reach is cut.
+
+**Native shell** (`services/sandbox/nativeShellLauncher.ts`, ADR-0036 N1–N6) —
+a harness planner's own shell, let through only by the user's opt-in
+(`ordewell.plannerNativeShell` / `ORDEWELL_PLANNER_NATIVE_SHELL`): Claude
+Code's `Bash` and `Monitor`, or OpenCode 2.x's `bash` and `shell`. Ordewell
+names its launcher in the harness's own spelling — `CLAUDE_CODE_SHELL_PREFIX`,
+or `SHELL` plus the config layer's `shell` — and every command runs through it
+in the *sealed run* profile with the network (N3), so the workspace stays
+read-only and the keychain and the user's credential files stay out of reach;
+that network stops at the machine itself, with loopback and local Unix sockets
+refused, since the harness's own server and Ordewell's daemon listen there;
+the planner's process starts without the user's credential variables (N2.2)
+and keeps the harness's own login (N3). Each command is a `bash` step, and an
+OpenCode `shell.created` that names another shell fails its call. Off by
+default and never a repository setting; offered only on versions checked live
+(Claude Code 2.1.304–2.1.x and OpenCode 2.0.32–2.0.x, on macOS), so OpenCode
+1.x and Linux keep `run_command` alone, and Codex already has its own shell.
+*Avoid:* "sandboxed shell" for the harness's own shell tool — the shell is the
+harness's, and Ordewell only puts its launcher and profile around it.
 
 **Kill tree** (`utils/processTree.ts`) — the one way an agent process is stopped.
 On POSIX a runner is spawned as the leader of its own process group

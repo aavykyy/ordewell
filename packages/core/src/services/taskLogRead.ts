@@ -1,4 +1,5 @@
-import type { TaskLogEvent } from '../models/TaskLog';
+import { scriptExitText, type TaskLogEvent } from '../models/TaskLog';
+import { commandLine } from '../models/ScriptTask';
 
 const LOG_KINDS = {
   task_skills: true,
@@ -28,6 +29,9 @@ const LOG_KINDS = {
   approval_decided: true,
   approval_withdrawn: true,
   runner_ended: true,
+  script_run: true,
+  script_output: true,
+  script_exit: true,
 } satisfies Record<TaskLogEvent['type'], true>;
 
 export const TASK_LOG_KINDS = Object.keys(LOG_KINDS) as [TaskLogEvent['type'], ...TaskLogEvent['type'][]];
@@ -74,6 +78,9 @@ function eventText(event: TaskLogEvent): string {
     case 'approval_decided': return `${event.approvalId} ${event.decision}${event.note ? `: ${event.note}` : ''}`;
     case 'approval_withdrawn': return event.approvalId;
     case 'runner_ended': return 'runner exited';
+    case 'script_run': return 'argv' in event ? `$ ${commandLine(event.argv)}` : `script:\n${event.script}`;
+    case 'script_output': return event.omittedChars ? `… ${event.omittedChars} characters omitted …\n${event.text}` : event.text;
+    case 'script_exit': return scriptExitText(event);
   }
 }
 

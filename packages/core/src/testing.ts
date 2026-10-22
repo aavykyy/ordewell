@@ -1,6 +1,6 @@
 import type { IConfig } from './interfaces/IConfig';
 import type { IFileSystem, ToolOutcome } from './interfaces/IFileSystem';
-import type { InvokedCommand, IRunnerSession, QueuedTaskMessage, StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from './interfaces/IRunner';
+import type { InvokedCommand, IRunnerSession, QueuedTaskMessage, ScriptExit, StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from './interfaces/IRunner';
 import type { RunnerCommand } from './models/RunnerCommand';
 import type { RunnerSessionCost } from './models/Usage';
 import type { ApprovalDecision } from './interfaces/IApproval';
@@ -15,6 +15,7 @@ import type {
   IsolationRun,
   IntegrationDisposal,
   PreparedTask,
+  PrepareIntent,
   IWorktreeIsolation,
   RepairEvidence,
   SetupFailure,
@@ -64,7 +65,9 @@ export function fakeConfig(overrides: Partial<IConfig> = {}): IConfig {
     approvalPreApproved: [],
     // Off so a test that is not about the allowlist sees every prompt it raises.
     approvalDefaults: false,
+    effectAllowlist: [],
     webReadBudget: 40,
+    plannerNativeShell: false,
     setProviderModelLists: () => {},
     getProviderBaseUrl: () => '',
     // Every vendor holds a key, so no planner turn is refused for want of one
@@ -157,6 +160,12 @@ export class FakeRunnerSession implements IRunnerSession {
     for (const cb of this.completeCbs) cb(report);
   }
   onToolCheckpoint(handler: (question: string, signal: AbortSignal) => Promise<CheckpointAnswer>): void { this.checkpointHandler = handler; }
+  private scriptExitCbs: Array<(exit: ScriptExit) => void> = [];
+  onScriptExit(cb: (exit: ScriptExit) => void): void { this.scriptExitCbs.push(cb); }
+  /** A script task's body ended, as `ScriptSession` hands it on (ADR-0035). */
+  reportScriptExit(exit: ScriptExit): void {
+    for (const cb of this.scriptExitCbs) cb(exit);
+  }
   /** The runner calls `checkpoint`, as `StructuredSession` relays it; settles with the answer. */
   callCheckpoint(question: string, signal: AbortSignal = new AbortController().signal): Promise<CheckpointAnswer> {
     if (!this.checkpointHandler) throw new Error('no checkpoint handler attached');
@@ -383,7 +392,7 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
     };
   }
 
-  async prepare(task: Task, run: IsolationRun): Promise<PreparedTask> {
+  async prepare(task: Task, run: IsolationRun, _intent?: PrepareIntent, opts: { readOnly?: boolean } = {}): Promise<PreparedTask> {
     this.log({ op: 'prepare', taskId: task.id });
     const name = `${task.order}-${task.id}`;
     const cwd = `/fake-worktrees/${run.id}/${name}`;
@@ -391,6 +400,7 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
     run.tasks[task.id] = {
       taskId: task.id, order: task.order, title: task.title, branch, workspace: cwd, status: 'active',
       repos: Object.fromEntries(run.repos.map((r) => [r.path, { worktree: r.path === SELF_REPO ? cwd : `${cwd}/${r.path}`, linked: [] }])),
+      ...(opts.readOnly ? { readOnly: true } : {}),
     };
     return { cwd, branch, copied: [...this.copied], ...(this.setupFailed.length > 0 ? { setupFailed: [...this.setupFailed] } : {}) };
   }
@@ -420,6 +430,11 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
     this.log({ op: 'integrate', taskId: task.id });
     const record = run.tasks[task.id];
     if (!record) return 'failed';
+    if (record.readOnly) {
+      record.status = 'failed';
+      record.landingError = 'a read-only task lands nothing';
+      return 'failed';
+    }
     const changed = this.changes.get(task.id) ?? run.repos.map((r) => r.path);
     for (const [repo, entry] of Object.entries(record.repos)) entry.changed = changed.includes(repo) || (entry.changed ?? false);
     if (changed.length > 0) {
@@ -446,6 +461,11 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   async release(run: IsolationRun, taskId: string, opts: { keep: boolean }): Promise<IsolationRemoval> {
     this.log({ op: 'release', taskId, keep: opts.keep });
     const record = run.tasks[taskId];
+    // Like git: a read-only task's record goes whole, with nothing kept (ADR-0046).
+    if (record?.readOnly) {
+      delete run.tasks[taskId];
+      return noRemoval();
+    }
     const removal = opts.keep || !record ? noRemoval() : this.removed();
     const refused = removal.refused.some((r) => r.task?.taskId === taskId);
     if (!opts.keep && !refused) delete run.tasks[taskId];

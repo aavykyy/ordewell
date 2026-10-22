@@ -46,8 +46,8 @@ Concretely:
   at spawn.
 - **Manifests declare what autonomy means for that runner.** Core never
   hardcodes mode IDs. Each manifest tags one mode `autonomous: true` and one
-  `safe: true`, and its read-only mode, if it has one, `readOnly: true` (the
-  built-in `plan` modes):
+  `safe: true`, and its Ordewell read-only profile `readOnly: true` (the built-ins keep
+  `plan` as the saved mode ID; it no longer selects a native plan mode, ADR-0046):
   - **Claude Code:** `bypassPermissions` ("Bypass permissions") is
     `autonomous`; `auto` (`--permission-mode auto`, where Claude's own
     classifier approves or blocks each action) is `safe`. `default` ("Ask
@@ -64,7 +64,8 @@ Concretely:
   - **OpenCode:** `build` wears both tags — an honest no-op, since OpenCode has
     nothing safer than build, rather than a mystery.
 - **The planner says read-only, not a mode** (detailed below). It marks a task
-  `readOnly: true` when it must not change files, and names no mode. Ordewell
+  `readOnly: true` when it must land nothing, its report being its result
+  (ADR-0046), and names no mode. Ordewell
   fills the mode in when the task is planned: the runner's `readOnly` mode, or
   the runner's mode for the level. A planner edit that asks for no change
   keeps the task's mode when its runner offers it, so a mode the user picked
@@ -83,15 +84,18 @@ the task's mode when the task is planned: the runner's read-only mode, or else
 the runner's mode for the user's level. The planner never names a mode. The
 user still picks any mode per task by hand.**
 
-One per-task choice is real: a review, an audit or an analysis that must not
-change files. Each built-in runner has a mode built for it, `plan`.
+One per-task choice is real: a review, an audit or an analysis that must land
+nothing. Every built-in runner offers Ordewell's read-only profile under the
+saved mode ID `plan` (ADR-0046). Native writes and shell tools are withheld,
+commands use the task token's `run_command`, and the assigned model stays as
+planned; Claude Code needs no native plan-mode model pin.
 
 #### What the planner says
 
-- **`readOnly: true`** on a task that must not change any file. Absent or
-  `false` otherwise. A task that must run commands — tests, scripts, builds —
-  is not read-only even when it changes no file: the read-only modes refuse
-  them, and the planner is told so. It is the only mode-related field in the plan JSON,
+- **`readOnly: true`** on a task that must land nothing: its worktree is thrown away when it ends, and its report is its
+  result ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
+  Absent or `false` otherwise. Read-only tasks can run tests, scripts and builds,
+  and try changes in their disposable worktrees through Ordewell's shell. It is the only mode-related field in the plan JSON,
   `submit_plan` and `edit_plan`.
 - **`taskMode` is not the planner's.** In a submitted plan it is ignored, and
   `submit_plan` says so in its warnings. In an edit it is refused, with
@@ -129,10 +133,9 @@ that offers the same mode.
 - **A manual task cannot be read-only.** It runs in no mode. A submitted plan
   ignores the mark on one and `submit_plan` says so in its warnings; an edit
   that asks for it is refused.
-- **An ops task cannot be read-only.** It runs commands in the session's mode
-  ([ADR-0020](../isolation/0020-ops-tasks-and-merge-gates.md)), and a read-only mode
-  refuses them: Claude Code under `plan` declined to run the one command an
-  ops task existed for. A submitted plan ignores the mark on one and
+- **An ops task cannot be read-only.** It acts in the workspace in the session's mode
+  ([ADR-0020](../isolation/0020-ops-tasks-and-merge-gates.md)); a read-only task
+  instead works in a disposable worktree and lands nothing. A submitted plan ignores the mark on one and
   `submit_plan` says so in its warnings; an edit that asks for it, or turns a
   read-only task into an ops task without `readOnly: false`, is refused.
 - **A merge is read-only only when every merged task was.** One task that
@@ -291,4 +294,6 @@ writing.
   the runner moves to on its own is stated, never written
   ([ADR-0041](0041-a-tasks-model-follows-the-runners-own-switch.md)).
 - 2026-10-18 — one assignment resolver derives the mode for every writer: a user's move of a read-only task to a runner without a read-only mode is refused, a manual task the user turns into an AI one gets the level's mode, and a user's edit may not put an ops task on a read-only mode.
+- 2026-10-21 — a read-only task lands nothing: its worktree is thrown away and its runner is given Ordewell's sealed `run_command` (ADR-0046).
+- 2026-10-21 — read-only selects Ordewell's profile on every built-in runner (ADR-0046); native plan modes and the Claude model pin are removed.
 - 2026-10-22: the TUI and VS Code set the level in `/settings`; the headless CLI keeps `ordewell auto`, aliases included.

@@ -20,6 +20,7 @@ import type { IAiService, ConversationRequest, ConversationTurn, PlannerToolsOff
 import {
   buildConversationSystemPrompt,
   buildPlanWithResults,
+  NATIVE_SHELL_GUIDE,
 } from '../PlanPrompts';
 import { repairLoop, resubmitPlanPrompt } from '../PlanRepair';
 import { validatePlanTasks } from '../PlanValidator';
@@ -41,7 +42,9 @@ import { mcpClientConfig, sharedMcpServer, type OrdewellMcpServer } from '../mcp
 import { instructionsBlock, repoRoot } from './repoConfig';
 import { NOT_APPROVED, decideProjectServers, fileProjectServerApprovals, heldServersNote, recordUnusable, type ProjectServerApprovals } from './projectServers';
 import { TurnReply } from './turnReply';
+import { nativeShellOffer } from './nativeShell';
 import type { IApproval } from '../../interfaces/IApproval';
+import { withTurnBudgets, type TurnBudgets } from '../PlannerBudgets';
 
 /**
  * How many times a turn that backgrounded a subagent may be asked to wait for
@@ -74,6 +77,8 @@ export interface CliAgentAiServiceDeps extends Partial<AgentProcessDeps> {
   mcpServer?: OrdewellMcpServer;
   /** A person's approvals of project MCP servers, kept across sessions (ADR-0028). Defaults to Ordewell's data directory. */
   projectServerApprovals?: ProjectServerApprovals;
+  /** What the planner is shown of its context and budgets at the start of each turn. */
+  turnBudgets?: TurnBudgets;
 }
 
 interface OneShotCatalog {
@@ -130,6 +135,17 @@ class PlannerSession {
   token: string | null = null;
   /** The {@link PlannerStartOptions.nativeSearch} the running process was spawned with. */
   nativeSearch = false;
+  /** The {@link PlannerStartOptions.nativeShell} the running process was spawned with. */
+  nativeShell = false;
+  /** The version the last process reported, kept across a restart for the native-shell check (ADR-0036 N2). */
+  nativeShellVersion: string | null = null;
+  /**
+   * Where the native-shell setting's one warning goes (ADR-0036 N4). A
+   * one-shot session has none: no surface is showing it.
+   */
+  notice?: (level: 'info' | 'warn' | 'error', message: string) => void;
+  /** The setting's reason was already said this session; see {@link CliAgentAiService.noticeNativeShell}. */
+  nativeShellNoticed = false;
   /**
    * The agent's own session id, kept across a process death so the next turn
    * can resume warm context instead of re-reading the repository. Never
@@ -197,6 +213,7 @@ export class CliAgentAiService implements IAiService {
   /** The conversation's session, from its start until the next session boundary. */
   private session: PlannerSession | null = null;
   private readonly mcpServer: OrdewellMcpServer;
+  private readonly turnBudgets: TurnBudgets | undefined;
   private readonly projectServerApprovals: ProjectServerApprovals;
   private activeAbort: AbortController | null = null;
 
@@ -221,6 +238,7 @@ export class CliAgentAiService implements IAiService {
     this.makeAdapter = deps.createAdapter ?? createPlannerAdapter;
     this.workspaceRoot = deps.workspaceRoot ?? (() => process.cwd());
     this.mcpServer = deps.mcpServer ?? sharedMcpServer();
+    this.turnBudgets = deps.turnBudgets;
     this.projectServerApprovals = deps.projectServerApprovals ?? fileProjectServerApprovals();
   }
 
@@ -274,6 +292,7 @@ export class CliAgentAiService implements IAiService {
     }
     const session = new PlannerSession(this.mcpServer);
     this.session = session;
+    session.notice = req.notice;
 
     const contextStr = await collectResearchContext(req.fs, req.runners);
     const systemPrompt = buildConversationSystemPrompt(
@@ -392,7 +411,8 @@ export class CliAgentAiService implements IAiService {
       // (ADR-0025), so its reply is prose whatever JSON it shows, and a plan
       // or edit lands only from a submission the conversation accepted.
       const turn = await settleReply({
-        message,
+        // The turn's own input carries the budgets, not the system prompt, which stays cacheable.
+        message: withTurnBudgets(this.turnBudgets, message),
         send,
         onProgress,
         signal: combined,
@@ -609,6 +629,10 @@ export class CliAgentAiService implements IAiService {
       session.stop();
       throw err;
     }
+    // A failed or stopped turn may have ended before the harness named its
+    // version; the next one can still say why the setting is not offered.
+    session.nativeShellVersion = adapter.version?.() ?? session.nativeShellVersion;
+    if (!error && !signal?.aborted) this.noticeNativeShell(session, adapter);
 
     // Anything still pending when the turn ended never produced a result —
     // report it rather than leaving a spinner running in every surface.
@@ -643,7 +667,13 @@ export class CliAgentAiService implements IAiService {
   private async startAdapter(opts: PlannerStartOptions, tools: PlannerToolsOffer, session: PlannerSession): Promise<AgentAdapter> {
     const server = this.mcpServer;
     // Decided once, here, so the token's tools and the session's config are the same decision.
-    const start: PlannerStartOptions = { ...opts, nativeSearch: this.nativeSearch(session) };
+    const nativeShell = this.nativeShellOffered(session);
+    const start: PlannerStartOptions = {
+      ...opts,
+      nativeSearch: this.nativeSearch(session),
+      nativeShell,
+      systemPrompt: nativeShell ? `${opts.systemPrompt}\n\n${NATIVE_SHELL_GUIDE}` : opts.systemPrompt,
+    };
     const spawned = await spawnAttached({
       runner: this.runner,
       create: () => this.newAdapter(),
@@ -657,6 +687,10 @@ export class CliAgentAiService implements IAiService {
     session.adapter = spawned.adapter;
     session.token = spawned.token;
     session.nativeSearch = start.nativeSearch ?? false;
+    session.nativeShell = start.nativeShell ?? false;
+    // A harness that reports its version as it connects (OpenCode 2.x) has it
+    // before the first turn; Claude Code names it on `init`, inside one.
+    session.nativeShellVersion = spawned.adapter.version?.() ?? session.nativeShellVersion;
     return spawned.adapter;
   }
 
@@ -670,6 +704,41 @@ export class CliAgentAiService implements IAiService {
   private nativeSearch(session: PlannerSession): boolean {
     const provider = connectorFor(this.runner)?.ordewellTools.sessionSearchProvider;
     return provider !== undefined && (session.searchesUnasked?.(provider) ?? false);
+  }
+
+  /**
+   * Whether this planner process may be given its harness's own shell
+   * (ADR-0036 N1, N2): the setting is on, and the version the last process
+   * reported is one N2's live checks cover (N5). A version not known yet is
+   * not offered, so the first process keeps `run_command` alone; once a turn
+   * has named one, the next process gets the shell.
+   */
+  private nativeShellOffered(session: PlannerSession): boolean {
+    if (!this.config.plannerNativeShell) return false;
+    return nativeShellOffer({
+      runner: this.runner,
+      version: session.nativeShellVersion,
+      platform: this.processDeps.platform ?? process.platform,
+    }).offered;
+  }
+
+  /**
+   * The setting's one warning per session when this harness's own shell is not
+   * offered, and why (ADR-0036 N2, N4). Read after a turn: Claude Code names its
+   * version on `init`, inside the turn, and a check before it would say the
+   * wrong thing. A harness that never names one is not offered the opt-in
+   * either; its notice says so.
+   */
+  private noticeNativeShell(session: PlannerSession, adapter: AgentAdapter): void {
+    if (!this.config.plannerNativeShell || session.nativeShellNoticed) return;
+    // Codex already has its own shell (N1), so the setting changes nothing and
+    // there is no loss to explain.
+    if (this.runner === 'codex') return;
+    const version = adapter.version?.() ?? null;
+    const offer = nativeShellOffer({ runner: this.runner, version, platform: this.processDeps.platform ?? process.platform });
+    if (offer.offered) return;
+    session.nativeShellNoticed = true;
+    session.notice?.('warn', `The native-shell setting is on, but this planner keeps run_command alone: ${offer.reason}`);
   }
 
   /**
@@ -687,11 +756,13 @@ export class CliAgentAiService implements IAiService {
    * Also restarted when the policy's decision on the runner's own search has
    * changed since the process was spawned: the running thread would otherwise
    * keep searching unasked after Full turned Guarded. Codex 0.162 applies
-   * `thread/resume`'s `config.web_search` either way (checked live).
+   * `thread/resume`'s `config.web_search` either way (checked live). The
+   * native-shell setting is the same kind of spawn-time decision (ADR-0036
+   * N1), so a change reopens the process too.
    */
   private async ensureAdapter(session: PlannerSession): Promise<AgentAdapter> {
     const live = session.adapter;
-    if (live && !live.exited && session.nativeSearch === this.nativeSearch(session)) return live;
+    if (live && !live.exited && session.nativeSearch === this.nativeSearch(session) && session.nativeShell === this.nativeShellOffered(session)) return live;
     session.stop();
     const start = session.start;
     if (!start) throw new Error('No active planner conversation.');

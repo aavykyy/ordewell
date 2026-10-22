@@ -1,4 +1,4 @@
-import type { LegacyPlanState, PendingPlanTurn, PlanTurnSource, RunnerId, SkillLoad } from '../models/Task';
+import type { LegacyPlanState, PendingPlanTurn, PlanTurnSource, RunnerId, SkillLoad, TurnAuthority } from '../models/Task';
 import { ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError } from './PlannerConversation';
 import { PlannerResend, type PlannerLimit } from './PlannerResend';
 import type { TurnFailure } from './runnerExit';
@@ -15,6 +15,8 @@ export interface PlanTurnInput {
   source: PlanTurnSource;
   text: string;
   skills?: readonly SkillLoad[];
+  /** A supervisor input carrying a report the planner asked for; see {@link PendingPlanTurn.report}. */
+  report?: TurnAuthority;
   /** Stops the turn that takes this input. Not saved: a replayed input has no caller left to stop it. */
   signal?: AbortSignal;
 }
@@ -27,16 +29,25 @@ export interface PlanTurnInput {
 export interface TurnPrompt extends SkillInvocation {
   source: PlanTurnSource;
   wakeUps: string[];
+  /**
+   * A wake-up turn's: who it acts for (ADR-0037, R3) — the supervisor, or the
+   * user's turn whose report it delivers. Absent on the user's own turn.
+   */
+  authority?: TurnAuthority;
   /** The message was force sent: the turn replaces the one it stopped. */
   forced?: true;
 }
 
 export interface PlanTurnsHost {
+  /** The inputs a turn is about to take; the Session saves what is left of them. */
+  turnStarting?(inputs: readonly PendingPlanTurn[]): void;
   plan(): LegacyPlanState | null;
   /** A planner turn this module did not open holds the conversation: an opening, a compaction, plan generation. */
   conversationBusy(): boolean;
   /** Whether wake-ups alone may open a turn now; when not, they wait for one that may, or for the user's next message. */
   mayWake(): boolean;
+  /** Whether a report the planner asked for may open a turn now, whatever the supervisor's level (ADR-0037, R2). */
+  mayReport(): boolean;
   /** Save the pending list. */
   persist(): void;
   /** The wait on the planner's usage limit changed with no turn to say so: save the plan, and announce it. */
@@ -93,8 +104,14 @@ export function turnPrompt(batch: readonly PendingPlanTurn[]): TurnPrompt {
     text: fromUser.map((t) => t.text).join('\n\n'),
     skills: fromUser.flatMap((t) => t.skills ?? []),
     wakeUps: batch.filter((t) => t.source === 'supervisor').map((t) => t.text),
+    ...(fromUser.length === 0 ? { authority: authorityOf(batch[0]) } : {}),
     ...(batch.some((t) => t.forced) ? { forced: true } : {}),
   };
+}
+
+/** Who a wake-up input's turn acts for: the user's turn only for a report it is owed (ADR-0037, R3). */
+function authorityOf(input: PendingPlanTurn | undefined): TurnAuthority {
+  return input?.report === 'user' ? 'user' : 'supervisor';
 }
 
 /**
@@ -118,7 +135,8 @@ export function turnPrompt(batch: readonly PendingPlanTurn[]): TurnPrompt {
  * it (ADR-0023, F5): a turn it stopped keeps its wake-ups waiting, undelivered,
  * for the supervisor's next turn. The user's Stop also drops the user's inputs
  * waiting behind the turn it stopped ({@link stopQueued}). A reload keeps
- * what no turn answered for the next input, without opening a turn.
+ * what no turn answered for the next input, without opening a turn unless a
+ * report the planner asked for waits ({@link restoreResend}).
  */
 export class PlanTurns {
   private readonly waiters = new Map<string, Waiter>();
@@ -131,6 +149,8 @@ export class PlanTurns {
   private quiet = false;
   /** A loaded session stays idle even if an outgoing turn's release pumps the queue. */
   private restored = false;
+  /** A saved report's wake-up after a load, which waits for the load to finish. */
+  private reportWake: ReturnType<typeof setTimeout> | null = null;
   private seq = 0;
   private readonly resend: PlannerResend;
 
@@ -172,10 +192,27 @@ export class PlanTurns {
     for (const t of plan.pendingTurns) if (t.source === 'user') this.settle(t.id, (w) => w.resolve(plan));
   }
 
-  /** A plan adopted off disk keeps its inputs until a new input asks for a turn. */
+  /**
+   * A plan adopted off disk keeps its inputs until a new input asks for a
+   * turn. A report the planner asked for is one (ADR-0037, R2): saved behind
+   * a turn that never landed, it wakes the planner once the load is done, as
+   * one still in the supervisor's batch does. Only a saved usage-limit wait
+   * keeps it for the user's next message; `mayReport` holds it once two
+   * automatic turns have failed, and a chain of reports is not capped per
+   * message (ADR-0037, R4).
+   */
   restoreResend(): void {
     this.restored = true;
     this.resend.restore();
+    if (this.reportWake) clearTimeout(this.reportWake);
+    this.reportWake = null;
+    if (!this.host.plan()?.pendingTurns?.some((t) => t.report !== undefined)) return;
+    this.reportWake = setTimeout(() => {
+      this.reportWake = null;
+      if (!this.restored || this.resend.holds() || !this.host.mayReport()) return;
+      this.restored = false;
+      this.pump();
+    }, 0);
   }
 
   /** Whether a turn this module opened is in flight. */
@@ -254,6 +291,7 @@ export class PlanTurns {
       timestamp: new Date().toISOString(),
       ...(input.skills && input.skills.length > 0 ? { skills: [...input.skills] } : {}),
       ...(forced ? { forced: true } : {}),
+      ...(input.report ? { report: input.report } : {}),
     };
   }
 
@@ -272,7 +310,6 @@ export class PlanTurns {
     if (!plan || this.host.conversationBusy()) return;
     const batch = this.liveBatch(plan);
     if (batch.length === 0) return;
-    if (batch.every((t) => t.source === 'supervisor') && (this.quiet || !this.host.mayWake())) return;
     const detecting = this.host.plannerDetecting();
     if (detecting) {
       this.detecting = true;
@@ -351,6 +388,8 @@ export class PlanTurns {
    */
   abandon(): void {
     this.resend.reset();
+    if (this.reportWake) clearTimeout(this.reportWake);
+    this.reportWake = null;
     this.running?.release();
     this.running = null;
     this.quiet = false;
@@ -361,7 +400,10 @@ export class PlanTurns {
 
   /**
    * What the next turn takes: what waits, oldest first, less any input whose
-   * caller stopped it before its turn began — or a forced input alone.
+   * caller stopped it before its turn began — or a forced input alone. With
+   * no user input, only wake-ups that may open a turn now, and of one
+   * authority: a report owed to the user's turn and the supervisor's own
+   * inputs take turns of their own (ADR-0037, R3), the older first.
    */
   private liveBatch(plan: LegacyPlanState): PendingPlanTurn[] {
     const pending = plan.pendingTurns ?? [];
@@ -372,7 +414,18 @@ export class PlanTurns {
       for (const t of stopped) this.settle(t.id, (w) => w.reject(new PlannerTurnStoppedError()));
     }
     const live = plan.pendingTurns ?? [];
-    return live[0]?.forced ? [live[0]] : live;
+    if (live[0]?.forced) return [live[0]];
+    if (live.some((t) => t.source === 'user')) return live;
+    if (this.quiet) return [];
+    // A report turn that may not open waits for the user's next message, even beside a supervisor input (ADR-0037 R2).
+    const eligible = this.host.mayReport() ? live : live.filter((t) => t.report === undefined);
+    const authorities = [...new Set(eligible.map(authorityOf))];
+    return authorities.map((authority) => eligible.filter((t) => authorityOf(t) === authority)).find((group) => this.mayOpen(group)) ?? [];
+  }
+
+  /** A report the planner asked for opens a turn at every level (ADR-0037, R2); the supervisor's own wake-ups only while it watches. */
+  private mayOpen(wakeUps: readonly PendingPlanTurn[]): boolean {
+    return wakeUps.some((t) => t.report !== undefined) ? this.host.mayReport() : this.host.mayWake();
   }
 
   private async run(plan: LegacyPlanState, batch: readonly PendingPlanTurn[]): Promise<void> {
@@ -386,6 +439,7 @@ export class PlanTurns {
     const signals = batch.flatMap((t) => this.waiters.get(t.id)?.signal ?? []);
     let outcome: { ok: true; plan: LegacyPlanState } | { ok: false; err: unknown };
     try {
+      this.host.turnStarting?.(batch);
       const landed = await this.host.run(turnPrompt(batch), {
         taken: () => this.take(plan, ids),
         signal: signals.length > 0 ? AbortSignal.any(signals) : undefined,

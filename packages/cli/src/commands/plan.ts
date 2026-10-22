@@ -5,7 +5,7 @@ import { ApiClient } from '../apiClient';
 import { createApprovalHandler } from '../approvals';
 import { createStepLog, type LogLine } from './researchLog';
 import type { SerializedTask, DiscoveredModel } from '@ordewell/core';
-import { mintSessionId, taskOrderLabel } from '@ordewell/core';
+import { loopRowParts, mintSessionId, scriptTaskText, taskOrderLabel, taskRowView } from '@ordewell/core';
 import type { PlanBody, WsEvent } from '../apiClient';
 import { fail, headlessPlannerRefusal } from './shared';
 
@@ -116,8 +116,9 @@ async function withSpinner<T>(label: string, work: () => Promise<T>): Promise<T>
 
 function printPlan(plan: PlanBody, sessionId: string, runners: string[], models: DiscoveredModel[]): void {
   const tasks = planTasks(plan);
-  const aiCount = tasks.filter((t: SerializedTask) => t.type !== 'user').length;
+  const aiCount = tasks.filter((t: SerializedTask) => t.type !== 'user' && t.type !== 'script').length;
   const manCount = tasks.filter((t: SerializedTask) => t.type === 'user').length;
+  const scriptCount = tasks.filter((t: SerializedTask) => t.type === 'script').length;
 
   const modelSuffix = (task: SerializedTask): string => {
     if (!task.assignedModel) return '';
@@ -129,13 +130,19 @@ function printPlan(plan: PlanBody, sessionId: string, runners: string[], models:
       : ` (${task.assignedModel.modelLabel})`;
   };
 
-  console.log(`\nPlan: ${tasks.length} task${tasks.length === 1 ? '' : 's'} (${aiCount} AI, ${manCount} Manual): ${runnersOf(plan, runners).join(', ')}`);
+  console.log(`\nPlan: ${tasks.length} task${tasks.length === 1 ? '' : 's'} (${aiCount} AI${scriptCount > 0 ? `, ${scriptCount} Script` : ''}, ${manCount} Manual): ${runnersOf(plan, runners).join(', ')}`);
   console.log(`Session: ${sessionId}\n`);
 
   for (const t of tasks) {
-    const typeIcon = t.type === 'user' ? '[MAN]' : t.ops ? '[OPS]' : '[ AI]';
+    const typeIcon = t.type === 'user' ? '[MAN]' : t.type === 'script' ? '[SCR]' : t.ops ? '[OPS]' : t.research ? '[RES]' : '[ AI]';
     const deps = t.dependencies?.length ? ` ← ${t.dependencies.join(', ')}` : '';
     console.log(`  ${taskOrderLabel(t).padStart(2)}. ${typeIcon} ${t.title}${modelSuffix(t)}${deps}`);
+    // What the user approves and what runs: the body as the plan holds it, not a summary.
+    if (t.type === 'script') {
+      for (const line of scriptTaskText({ ...t, type: 'script' }).split('\n')) console.log(line ? `        ${line.replace(/\t/g, '    ')}` : '');
+    }
+    const loop = taskRowView({ id: t.id, order: t.order, status: t.status ?? 'pending', type: t.type === 'user' || t.type === 'script' ? t.type : 'ai', dependencies: t.dependencies ?? [], loop: t.loop, loopRound: t.loopRound }, { tasks }).loop;
+    if (loop) console.log(`        ↻ ${loopRowParts(loop).join(' · ')}`);
     for (const sub of t.subtasks || []) {
       const subTypeIcon = sub.type === 'user' ? '[MAN]' : '[ AI]';
       const subDeps = sub.dependencies?.length ? ` ← ${sub.dependencies.join(', ')}` : '';
@@ -148,6 +155,12 @@ function printPlan(plan: PlanBody, sessionId: string, runners: string[], models:
   }
   if (tasks.some((t) => t.ops)) {
     console.log('  [OPS] = ops task: runs in your checkout once the work it depends on is merged (`ordewell handoff merge`)');
+  }
+  if (tasks.some((t) => t.research)) {
+    console.log('  [RES] = research task: read-only, lands nothing; its report wakes the planner when it ends');
+  }
+  if (scriptCount > 0) {
+    console.log('  [SCR] = script task: runs the commands shown, with no model, in your checkout once the work it depends on is merged; the planner writes them, and you approve each');
   }
 }
 

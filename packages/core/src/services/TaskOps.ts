@@ -9,7 +9,9 @@ import { taskPlacement } from './PlanTree';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
 import { validateTaskEdit, lockedTaskRefusal, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
 import { resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
-import { plannedTask, checkPlanInvariants, detectCycle, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, OPS_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask, type PlanTaskError } from './PlannedTask';
+import { plannedTask, checkPlanInvariants, detectCycle, notOnAScriptMessage, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, OPS_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask, type PlanTaskError } from './PlannedTask';
+import { clearedBodyFields } from '../models/ScriptTask';
+import { loopRemovalRefusal, loopReshapeRefusal, loopSpec } from '../models/Loop';
 import { taggedReadOnlyMode } from './ModeResolver';
 
 /**
@@ -36,6 +38,7 @@ export type TaskOp =
 /** Fields the planner may change on an existing task. Everything else (id, status, verdict…) is system-owned. */
 export const UPDATABLE_FIELDS: (keyof Task)[] = [
   'title', 'description', 'prompt', 'dependencies', 'assignedRunner', 'assignedModel', 'taskMode', 'type', 'userSteps', 'autonomy', 'sliceType', 'ops', 'skills',
+  'commands', 'script', 'timeoutMs', 'loop', 'research',
 ];
 
 /**
@@ -52,7 +55,7 @@ export function taskOpsProtocol(executionNote = '', tools = false): string[] {
     tools ? '- To modify specific tasks, call edit_plan, never a JSON reply. Its argument is:' : '- To modify specific tasks, reply with ONLY this JSON object:',
     tools ? '  {"ops": [' : '  {"taskOps": [',
     `    {"op":"update","taskId":"<id or #order>","changes":{${updateChanges}}},`,
-    '    {"op":"add","task":{"title","description","prompt","dependencies":["<id or #order>"],"assignedRunner"?,"assignedModel"?,"readOnly"?,"ops"?},"handle"?:"<name>"},',
+    '    {"op":"add","task":{"title","description","prompt","dependencies":["<id or #order>"],"assignedRunner"?,"assignedModel"?,"readOnly"?,"research"?,"ops"?},"handle"?:"<name>"},',
     '    {"op":"remove","taskId":"<id or #order>"},',
     '    {"op":"reorder","taskIds":["<id or #order>", "... every task exactly once"]},   // only to re-prioritise INDEPENDENT tasks',
     '    {"op":"merge","taskIds":["<id or #order>", "..."],"merged":{"title","description","prompt"?,"assignedRunner"?,"assignedModel"?,...},"handle"?:"<name>"},',
@@ -63,11 +66,14 @@ export function taskOpsProtocol(executionNote = '', tools = false): string[] {
     'Every "<id or #order>" ref in a batch resolves against the plan shown above, before any op in the batch runs — an earlier remove/merge/split never shifts what a later "#N" means. "#N" is top-level task N; a subtask is named by its dotted label ("#2.1"), as the plan lists it.',
     'Give "add", "merge", or "split" a "handle" (any name you choose, unused elsewhere in this batch) to let a LATER op in the same batch reference the task it produces — for "split", the handle names its last part. A handle used before its defining op is rejected.',
     `When creating or changing tasks, set "assignedRunner" and "assignedModel" ({"modelId","modelLabel","thinkingEffort"?}) using only the runners and models ${tools ? 'list_runners and list_models return' : 'listed in <available_models>'}.`,
-    'Set "readOnly": true on a task that must not change any file, never on one that must run commands (tests, scripts, builds) or an ops task, and "readOnly": false to lift it; you never set "taskMode". A task you move, split or edit keeps being read-only or not unless you say otherwise, and so do the subtasks of a read-only task you add.',
+    'Set "readOnly": true on a task that must land nothing: it runs tests, scripts and builds sealed through Ordewell run_command (no network), and may try changes in its throwaway worktree, which is thrown away when it ends. Never on an ops task, and "readOnly": false to lift it; you never set "taskMode". A task you move, split or edit keeps being read-only or not unless you say otherwise, and so do the subtasks of a read-only task you add.',
+    '"research": true on a read-only top-level AI task makes it a research task, whose task_complete report wakes you when it ends; "research": false lifts it. Lifting "readOnly" lifts it too. It is never a subtask, an ops task or a loop\'s body.',
+    '"loop" makes a task the check of a loop (see LOOPS in your instructions): {"body": ["<id, #order or handle>", ...], "maxRounds"?: 1 to 10}; null drops the loop. A handle cannot be referenced before the op that defines it, so adding a loop takes three ops in this order: "add" the check without "loop", with a "handle"; "add" each body task, depending on the check\'s handle, with a handle of its own; then "update" the check, by its handle, with "loop": {"body": [the body handles]}.',
     'Keep dependencies consistent: no cycles, no references to removed tasks, and never touch running or completed tasks — "rearm" is the one exception, below.',
     ...(tools ? ['edit_plan checks the batch when you call it and answers with what it will change, or with the error to fix — call it again in the same reply. The edit is applied when your reply ends; edits you make in one reply join one batch.'] : []),
     'Just declare the dependencies you want — display order is repaired for you afterwards, so a rewire or a newly added prerequisite never needs a "reorder" op. Only a task that is running or completed cannot be shifted, so an edit that would need one to move is rejected.' + executionNote,
-    'Flipping "type" between "ai" and "user" is a content change, not just a label: an update to "user" needs "userSteps" in the SAME op, and an update to "ai" needs "prompt" in the SAME op — the model/mode/effort/autonomy fields (flipping to "user", which also makes the task HITL) or the userSteps (flipping to "ai") are cleared automatically.',
+    'Flipping "type" between "ai", "user" and "script" is a content change, not just a label: an update to "user" needs "userSteps" in the SAME op, an update to "ai" needs "prompt", and an update to "script" needs "commands" or "script" — the fields the old type had and the new one does not are cleared automatically (flipping to "user" also makes the task HITL). Only a task that has not started can flip to or from "script".',
+    'A script task ("type":"script", top-level only) is run by Ordewell with no model: "commands" is a list of argument vectors run in order with no shell, stopping at the first that fails (e.g. [["git","push","origin","main"]]), or "script" is one script for the shell; "timeoutMs" is its time limit (ten minutes when left out). Give it exactly one of "commands" or "script", and never "prompt", "assignedRunner", "assignedModel", "skills", "readOnly" or "ops". Writing one body replaces the other. Changing its body or time limit takes it out of what the user approved, so it waits for their approval again.',
     '"skills" in "changes" REPLACES the task\'s whole skill list. To add one, send the names the plan block shows in its skills:[...] plus the new one; to drop one, send the rest; [] removes them all.',
     '"rearm" puts a failed OR completed task back to pending — verdict and output summary are cleared, any dependents it had blocked are released, and it may carry field changes (e.g. a corrected "prompt") applied in the same op. A running task cannot be re-armed. Never rearm a task just to relabel it — only when it should actually run again.',
   ];
@@ -164,7 +170,7 @@ function updatableChanges(raw: Partial<Task> | undefined): Partial<Task> {
   }
   if ('ops' in changes) changes.ops = opsFlag(changes.ops);
   if ('skills' in changes) changes.skills = skillNames(changes.skills);
-  return changes;
+  return clearedBodyFields(changes);
 }
 
 function findInTasks(tasks: readonly Task[], id: string): Task | undefined {
@@ -281,6 +287,8 @@ export function canMergeTasks(tasks: readonly Task[], selectedIds: string[]): { 
   for (const t of toMerge) {
     if (t.status === 'in_progress') return { ok: false, error: `"${t.title}" is running and cannot be merged` };
     if (t.status === 'completed') return { ok: false, error: `"${t.title}" is completed and cannot be merged` };
+    const looped = loopReshapeRefusal(tasks, t, 'merged');
+    if (looped) return { ok: false, error: looped };
   }
   const ordered = [...toMerge].sort((a, b) => a.order - b.order);
   const survivorId = '__merge_sim__';
@@ -316,7 +324,8 @@ export function canSplitTask(tasks: readonly Task[], taskId: string): { ok: bool
   if (!target) return { ok: false, error: 'Task not found' };
   if (target.status === 'in_progress') return { ok: false, error: `"${target.title}" is running and cannot be split` };
   if (target.status === 'completed') return { ok: false, error: `"${target.title}" is completed and cannot be split` };
-  return { ok: true };
+  const looped = loopReshapeRefusal(tasks, target, 'split');
+  return looped ? { ok: false, error: looped } : { ok: true };
 }
 
 
@@ -366,6 +375,11 @@ function idsOf(op: unknown): () => string {
  * applies and the result validates (deps resolve, no cycles, running and
  * completed tasks untouched), or nothing is returned and `errors` explains
  * why. The caller commits `tasks` on ok.
+ *
+ * `addedPast` are tasks put in the plan past the turn's held edit, as
+ * `run_script` puts its own (ADR-0035): a `reorder` may leave them out, as
+ * one written before they were added could not list them, and they then
+ * keep their place after the tasks it lists.
  */
 export function applyTaskOps(
   currentTasks: readonly Task[],
@@ -373,6 +387,7 @@ export function applyTaskOps(
   runners: RunnerId[],
   catalog?: AssignmentCatalog,
   held: readonly TaskOp[] = [],
+  addedPast: ReadonlySet<string> = new Set(),
 ): ApplyTaskOpsResult {
   // Ops already accepted earlier in the batch apply first; errors number only
   // the new ones, as the planner wrote them in the call it is answered for.
@@ -446,7 +461,10 @@ export function applyTaskOps(
         if (typeof done === 'string') return done;
         subtasks.push(done);
       }
-      return { ...t, dependencies: ids, subtasks };
+      if (!t.loop) return { ...t, dependencies: ids, subtasks };
+      const body = resolveDeps(t.loop.body, opIndex);
+      if (body.bad.length) return `unknown tasks in the loop's "body"${parentTitle !== undefined ? ` of ${taskWhere(t.title, parentTitle)}` : ''}: ${body.bad.join(', ')}`;
+      return { ...t, dependencies: ids, subtasks, loop: { ...t.loop, body: body.ids } };
     };
     const done = walk(planned.task);
     return typeof done === 'string' ? { error: done } : { task: done };
@@ -475,6 +493,9 @@ export function applyTaskOps(
     const target = findInTasks(tasks, ref.id);
     if (!target) return { error: `${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)` };
     if (refuseRunning && target.status === 'in_progress') return { error: `${label}: ${lockedTaskRefusal(target, 're-armed')}` };
+    // What only a runner would read, and that never lands on a task, is refused here for a script (ADR-0035).
+    const planners = op.changes ? (['readOnly', 'thinkingEffort'] as const).filter((f) => op.changes?.[f] !== undefined && op.changes?.[f] !== null && op.changes?.[f] !== false) : [];
+    if ((op.changes?.type ?? target.type) === 'script' && planners.length > 0) return { error: `${label}: "${target.title}" ${notOnAScriptMessage(planners)}` };
     if (op.changes && 'taskMode' in op.changes) return { error: `${label}: ${MODE_NOT_THE_PLANNERS}` };
     const changes = updatableChanges(op.changes);
     if (op.changes && 'thinkingEffort' in op.changes) {
@@ -495,9 +516,10 @@ export function applyTaskOps(
     if (readOnly === true && (changes.type ?? target.type) === 'user') return { error: `${label}: ${MANUAL_NOT_READ_ONLY}` };
     if ((changes.ops ?? target.ops) && (readOnly ?? isReadOnly(target, catalog))) return { error: `${label}: ${OPS_NOT_READ_ONLY}` };
     const landed: Partial<Task> = { ...changes };
+    if (readOnly === false && target.research && op.changes?.research !== true) landed.research = false;
     const written = { ...target, ...changes };
     // A runner not allowed has nothing to resolve against; the plan's rules refuse it once the op is applied.
-    if (written.type === 'user' || runners.includes(written.assignedRunner)) {
+    if (written.type !== 'ai' || runners.includes(written.assignedRunner)) {
       const resolved = resolveAssignment({ writer: 'edit', task: written, before: target, readOnly, catalog: catalog ?? NO_CATALOG });
       if (!resolved.ok) return { error: `${label}: ${resolved.error}` };
       if (resolved.task.assignedModel !== written.assignedModel) landed.assignedModel = resolved.task.assignedModel;
@@ -508,6 +530,19 @@ export function applyTaskOps(
       const { ids, bad } = resolveDeps(changes.dependencies, opIndex);
       if (bad.length) return { error: `${label}: unknown dependencies: ${bad.join(', ')}` };
       landed.dependencies = ids;
+    }
+    if ('loop' in changes) {
+      // `null` drops the loop, and the round it was in with it (ADR-0045).
+      const spec = loopSpec(changes.loop);
+      if ('error' in spec) return { error: `${label}: "${target.title}" ${spec.error}` };
+      if (spec.loop) {
+        const { ids, bad } = resolveDeps(spec.loop.body, opIndex);
+        if (bad.length) return { error: `${label}: unknown tasks in the loop's "body": ${bad.join(', ')}` };
+        landed.loop = { ...spec.loop, body: ids };
+      } else {
+        landed.loop = undefined;
+        landed.loopRound = undefined;
+      }
     }
     return { target, changes: landed, fields: changedFields(target, changes, landed, catalog), check };
   };
@@ -562,7 +597,7 @@ export function applyTaskOps(
         if (!target) { errors.push(`${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)`); break; }
         // Removing the task takes its whole subtree, so every task in it meets
         // the same lock rule as the named one (ADR-0029).
-        const locked = lockedTaskRefusal(target, 'removed') ?? lockedInSubtree(target);
+        const locked = lockedTaskRefusal(target, 'removed') ?? lockedInSubtree(target) ?? loopRemovalRefusal(target);
         if (locked) { errors.push(`${label}: ${locked}`); break; }
         tasks = removeTaskFromPlan(tasks, target.id);
         summary.push(`Removed "${target.title}"`);
@@ -574,8 +609,9 @@ export function applyTaskOps(
         if (badRef) { errors.push(`${label}: ${badRef.error}`); break; }
         const resolved = (refs as { id: string }[]).map((r) => findTopLevel(tasks, r.id));
         if (resolved.some((t) => !t)) { errors.push(`${label}: unknown task in reorder list`); break; }
-        const orderIds = resolved.map((t) => t!.id);
-        if (new Set(orderIds).size !== tasks.length) {
+        const listed = resolved.map((t) => t!.id);
+        const orderIds = [...listed, ...tasks.filter((t) => addedPast.has(t.id) && !listed.includes(t.id)).map((t) => t.id)];
+        if (orderIds.length !== tasks.length || new Set(orderIds).size !== tasks.length) {
           errors.push(`${label}: reorder must list every top-level task exactly once (${tasks.length} tasks)`);
           break;
         }
@@ -592,7 +628,7 @@ export function applyTaskOps(
         if (resolved.some((t) => !t)) { errors.push(`${label}: unknown task in merge list (already removed, merged, or split by an earlier op)`); break; }
         const toMerge = [...new Map(resolved.map((t) => [t!.id, t!])).values()].sort((a, b) => a.order - b.order);
         if (toMerge.length < 2) { errors.push(`${label}: merge needs at least two tasks`); break; }
-        const locked = toMerge.map((t) => lockedTaskRefusal(t, 'merged')).find((refusal) => refusal !== null);
+        const locked = toMerge.map((t) => lockedTaskRefusal(t, 'merged') ?? loopReshapeRefusal(tasks, t, 'merged')).find((refusal) => refusal !== null);
         if (locked) { errors.push(`${label}: ${locked}`); break; }
         const idSet = new Set(toMerge.map((t) => t.id));
         const unionDepsRaw = [...new Set(toMerge.flatMap((t) => t.dependencies))].filter((d) => !idSet.has(d));
@@ -611,7 +647,8 @@ export function applyTaskOps(
             fields: {
               description: toMerge.map((t) => t.description).filter(Boolean).join('\n\n'),
               prompt: toMerge.map((t) => t.prompt).filter(Boolean).join('\n\n---\n\n') || undefined,
-              type: toMerge.some((t) => t.type === 'user') ? 'user' : 'ai',
+              // A merge that takes in a script runs a body, which the merged task must state: no body is guessed (ADR-0035).
+              type: toMerge.some((t) => t.type === 'user') ? 'user' : toMerge.some((t) => t.type === 'script') ? 'script' : 'ai',
               assignedRunner: toMerge[0].assignedRunner,
               assignedModel: toMerge.find((t) => t.assignedModel)?.assignedModel,
               taskMode: (writes ?? toMerge[0]).taskMode,
@@ -651,7 +688,7 @@ export function applyTaskOps(
         if ('error' in ref) { errors.push(`${label}: ${ref.error}`); break; }
         const target = findTopLevel(tasks, ref.id);
         if (!target) { errors.push(`${label}: task "${op.taskId}" not found`); break; }
-        const locked = lockedTaskRefusal(target, 'split');
+        const locked = lockedTaskRefusal(target, 'split') ?? loopReshapeRefusal(tasks, target, 'split');
         if (locked) { errors.push(`${label}: ${locked}`); break; }
         const parts = op.parts ?? [];
         if (parts.length < 2) { errors.push(`${label}: split needs at least two parts`); break; }
@@ -718,7 +755,8 @@ export function applyTaskOps(
         const prep = prepareEdit(op, i, label, 'direct', true);
         if ('error' in prep) { errors.push(prep.error); break; }
         const { target, changes, fields, check } = prep;
-        tasks = updateTaskInPlan(tasks, target.id, { ...changes, status: 'pending', verdict: undefined, outputSummary: undefined, awaitingReason: undefined, resumeAt: undefined, skipReason: undefined });
+        // A re-armed check starts its rounds over, as a retry does (ADR-0045 L7).
+        tasks = updateTaskInPlan(tasks, target.id, { ...changes, status: 'pending', verdict: undefined, outputSummary: undefined, awaitingReason: undefined, resumeAt: undefined, skipReason: undefined, loopRound: undefined });
         const clearedNote = check.clear?.length ? `; cleared ${check.clear.join(', ')}` : '';
         const changedNote = fields.length ? ` (${fields.join(', ')})` : '';
         summary.push(`Re-armed "${target.title}"${changedNote}${clearedNote}`);

@@ -2,8 +2,7 @@
 
 ## Codex sandbox unavailable on this host
 
-Ordewell shows **Codex sandbox unavailable on this host: read-only and Guarded
-modes are off**, and Codex tasks in a read-only or Guarded mode are refused.
+Ordewell shows **Codex sandbox unavailable on this host: Guarded mode is off**, and Codex tasks in Guarded mode are refused.
 
 ### Cause
 
@@ -17,10 +16,9 @@ on codex-cli 0.162 either.
 On such a host, Ordewell probes the sandbox once per daemon. While it cannot
 start:
 
-- Codex's sandboxed modes, read-only (`plan`) and Guarded (`agent`), are off.
+- Codex's Guarded (`agent`) mode is off. Ordewell's read-only profile (`plan`) remains available: its native shell is off, and commands use Ordewell's run_command.
   Its Full access mode is not sandboxed and stays available.
-- The planner is not offered a read-only task on Codex, and a plan or an edit
-  that puts a task in one of those modes is refused with the reason. A task
+- A plan or an edit that puts a task in Guarded mode is refused with the reason. A task
   already in one fails at start with the same reason. Ordewell never swaps the
   mode for another.
 - A Codex planner still plans: its own shell is off and it reads through
@@ -73,6 +71,72 @@ Tasks planned while the modes were off keep the mode the plan gave them.
 
 Give the task Full access, or assign it to another runner. Full access means
 Codex runs with no sandbox at all.
+
+## Planner shell not sandboxed
+
+Ordewell says **The planner's shell runs without an OS sandbox on this
+machine**, or **Sealed runs are unavailable on this machine**, once per
+planning session.
+
+### Cause
+
+Every command the planner's shell runs (an API planner's `bash`, its research
+subagents, a harness planner's `run_command`) runs in an OS sandbox where
+nothing outside a scratch directory can be written
+([ADR-0011](adr/planner-envelope/0011-sandboxing-the-planners-shell.md)):
+Seatbelt on macOS, bubblewrap on Linux. Ordewell checks once per process
+whether one can start. When none can, commands run as before, held to the
+command rules alone, and planning goes on. The notice names the cause:
+
+- Windows, which has no sandbox Ordewell can use.
+- Linux without bubblewrap (`bwrap`) installed.
+- Linux where bubblewrap cannot create user namespaces: Ubuntu 24.04's
+  AppArmor restriction, or a container, as for
+  [Codex's sandbox](#codex-sandbox-unavailable-on-this-host).
+- macOS, when Ordewell itself runs inside another sandbox.
+
+Without a sandbox there are no sealed runs either: a command the command rules
+refuse, such as a loop, a here-document or a script piped into `python3`, is
+refused rather than run sealed
+([ADR-0036](adr/planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md)).
+**Sealed runs are unavailable** means the sandbox starts but its stricter
+sealed profile does not: its read list, or its limits on processes and
+memory, which a shell prelude sets with `ulimit` before the sandbox starts.
+The notice quotes what failed.
+
+### Check it
+
+```bash
+bwrap --unshare-pid --unshare-net --ro-bind / / --dev /dev --proc /proc true   # no output means it starts
+```
+
+### Fix
+
+Install bubblewrap: `sudo apt install bubblewrap` (Debian, Ubuntu),
+`sudo dnf install bubblewrap` (Fedora), `sudo pacman -S bubblewrap` (Arch).
+For the user-namespace restriction, the fixes for
+[Codex's sandbox](#fix-the-narrow-one-an-apparmor-profile-for-bwrap) apply:
+an AppArmor profile for `/usr/bin/bwrap`, or the sysctl. Then restart
+Ordewell (the daemon, or the VS Code window), since the check is made once per
+process.
+
+### What the sandbox changes
+
+- A command that runs without asking has no network; one you approve keeps it.
+- On macOS, `ps` and `top` cannot start inside it: the kernel will not run a
+  setuid program in a sandbox. On Linux, a process listing shows only the
+  sandbox's own processes.
+- A tool that must write to read fails, such as `cargo metadata` on a crate
+  without a committed `Cargo.lock`. The planner is told the sandbox stopped it.
+- A sealed run sees only the workspace and the system's own files: a tool
+  installed under your home directory (`~/.nvm`, `~/.cargo/bin`) does not
+  start in one, and nothing it needs from the network or your accounts works.
+  The planner's sealed runs have 60 seconds, and the result says it ran sealed.
+  A read-only task's sealed commands get ten minutes instead, the time limit a
+  script task gets, since running the project's tests is what its one shell is
+  for; one that runs out of time says so. Once a read-only task has run one
+  command sealed, all its later commands run sealed too, allowlisted ones
+  included, so a `gh` it runs after that has no network.
 
 ## Merge all refused: not on the base branch
 
@@ -152,7 +216,11 @@ nothing may start it until you approve it
 approve every waiting task with `/run` (or **Approve all** in VS Code). Neither
 starts a task before its dependencies finish: it starts once they do, and the
 answer says what it waits for. With nothing running, run the plan to start them.
-With autorun on, tasks the planner adds in your turn need no approval.
+With autorun on, tasks the planner adds in your turn need no approval, a script
+task apart: under Guarded it waits unless your effect allowlist covers every
+command in it. Its row shows the commands or the script as written, so read it,
+then approve it as above. With autorun off, a script task the planner adds in
+the plan waits even when the allowlist covers it.
 
 ## Continue is not offered after moving a task to another runner
 

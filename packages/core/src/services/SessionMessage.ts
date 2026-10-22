@@ -1,6 +1,7 @@
 import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, PendingPlanTurn, ReplyRun, ResearchStep, RunnerId, RunSettings, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
 import type { SessionBilling, AttemptUsage, ContextFill, ModelUsage, PlanUsage, UsageTotals } from '../models/Usage';
 import type { ExecutionRecord } from '../models/Execution';
+import type { TaskLoop } from '../models/Loop';
 import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from './ApprovalPolicy';
@@ -13,8 +14,11 @@ import { blockingFailures } from './blocking';
 
 export type SerializedTaskStatus = {
   id: string;
+  /** The task's type, so a status-only surface can tag a script task (ADR-0035); absent from an older daemon. */
+  type?: Task['type'];
   status: Task['status'];
-  verdict: { outcome: 'pass' | 'fail'; reason: string; checks: Verdict['checks'] } | null;
+  /** `reported` tells a loop's check between rounds from one that failed (ADR-0045 L2). */
+  verdict: { outcome: 'pass' | 'fail'; reason: string; checks: Verdict['checks']; reported?: Verdict['reported'] } | null;
   /** Advisory silence timestamp from VerdictEngine — not part of task status semantics. */
   idleSince?: string | null;
   /** Absent unless the plan has an isolation run, so a shared-root plan's updates are unchanged. */
@@ -50,7 +54,15 @@ export type SerializedTaskStatus = {
    * scheduler leaves it for them (ADR-0035). Absent for any other task.
    */
   waitsForApproval?: true;
+  /** Why a task is held out of auto-scheduling, in the user's words; absent when it is not held. */
+  holdReason?: string;
+  /** Set only on a research task, so a stream of statuses alone can say which task is one (ADR-0037). */
+  research?: true;
   attemptUsage?: AttemptUsage[];
+  /** Set only on a loop's check, so a stream of statuses alone can say which task is one (ADR-0045). */
+  loop?: TaskLoop;
+  /** The round a loop's check is in, past its first (ADR-0045 L5); absent on round 1 and on any other task. */
+  loopRound?: number;
 };
 
 /**
@@ -89,11 +101,20 @@ export type SerializedTask = {
   skipReason?: string;
   /** Set only on an ops task (ADR-0020). */
   ops?: true;
+  research?: boolean;
   /** Task skills attached by name; absent when none. */
   skills?: string[];
   /** Set only on a task an Act supervisor added (ADR-0029). */
   addedBy?: 'supervisor';
   attemptUsage?: AttemptUsage[];
+  /** A script task's body and time limit (ADR-0035); absent on any other task. */
+  commands?: string[][];
+  script?: string;
+  timeoutMs?: number;
+  /** Set only on a loop's check (ADR-0045). */
+  loop?: TaskLoop;
+  /** As on {@link SerializedTaskStatus}: only on a loop's check past its first round. */
+  loopRound?: number;
 };
 
 /** Skill loads go out as notices: their bodies are for the planner, and stay in the session. */
@@ -319,7 +340,7 @@ export type SessionMessage =
   // blocked until a human answers. Broadcast rather than returned, because the
   // human may be on any surface (or several at once) and the request outlives
   // whichever HTTP call triggered it.
-  | { type: 'approval_request'; id: string; kind: ApprovalKind; subject: string; scope: string; detail?: string; turnId?: string }
+  | { type: 'approval_request'; id: string; kind: ApprovalKind; subject: string; scope: string; detail?: string; body?: string; turnId?: string }
   | { type: 'approval_settled'; id: string; granted: boolean }
   // A decision reached with no round-trip prompt: pre-approved via config,
   // remembered from earlier in this session, or the operator's mode floor
@@ -347,7 +368,7 @@ export type PlanSnapshot = { type: 'plan_snapshot'; plan: SurfacePlan | SurfaceP
 /** What only the status stream says about a task; a plan refresh keeps these as they were. */
 export type RunTaskStatus = Partial<Pick<
   SerializedTaskStatus,
-  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval'
+  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason'
 >>;
 
 /** A task in the run view: the plan's fields, then the status stream's. */
@@ -404,9 +425,15 @@ export function serializeTask(t: SurfaceTask): SerializedTask {
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && t.resumeAt ? { resumeAt: t.resumeAt } : {}),
     ...(t.status === 'skipped' && t.skipReason ? { skipReason: t.skipReason } : {}),
     ...(t.ops ? { ops: true as const } : {}),
+    ...(t.research !== undefined ? { research: t.research } : {}),
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(t.skills?.length ? { skills: [...t.skills] } : {}),
     ...(t.addedBy ? { addedBy: t.addedBy } : {}),
+    ...(t.commands ? { commands: t.commands.map((argv) => [...argv]) } : {}),
+    ...(t.script !== undefined ? { script: t.script } : {}),
+    ...(t.timeoutMs !== undefined ? { timeoutMs: t.timeoutMs } : {}),
+    ...(t.loop ? { loop: { body: [...t.loop.body], maxRounds: t.loop.maxRounds } } : {}),
+    ...(t.loop && t.loopRound !== undefined ? { loopRound: t.loopRound } : {}),
   };
 }
 
@@ -419,12 +446,14 @@ export function serializeTaskStatus(
   mergeGate: readonly string[] = [],
   checkpoint = '',
   waitsForApproval = false,
+  holdReason: string | null = null,
 ): SerializedTaskStatus {
   return {
     id: t.id,
+    type: t.type,
     status: t.status,
     verdict: t.verdict
-      ? { outcome: t.verdict.outcome, reason: t.verdict.reason, checks: t.verdict.checks || [] }
+      ? { outcome: t.verdict.outcome, reason: t.verdict.reason, checks: t.verdict.checks || [], ...(t.verdict.reported ? { reported: t.verdict.reported } : {}) }
       : null,
     idleSince,
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
@@ -439,6 +468,10 @@ export function serializeTaskStatus(
     ...(mergeGate.length > 0 ? { mergeGate: [...mergeGate] } : {}),
     ...(t.forcedPastGate?.length ? { forcedPastGate: [...t.forcedPastGate] } : {}),
     ...(waitsForApproval ? { waitsForApproval: true as const } : {}),
+    ...(holdReason ? { holdReason } : {}),
+    ...(t.research ? { research: true as const } : {}),
+    ...(t.loop ? { loop: { body: [...t.loop.body], maxRounds: t.loop.maxRounds } } : {}),
+    ...(t.loop && t.loopRound !== undefined ? { loopRound: t.loopRound } : {}),
   };
 }
 

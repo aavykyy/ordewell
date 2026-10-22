@@ -22,6 +22,18 @@
  *   mock/task-query-editor  reads a task's prompt via taskQuery, then edits it
  *                       from what the answer actually contained
  *
+ * The five `mock/goal-*` personas are the kinds of goal the strategy step
+ * teaches (#108), each replying with the plumbing its kind calls for:
+ *   mock/goal-question  one read, then a prose answer and no plan
+ *   mock/goal-effect    one `run_script` call, then a short confirmation
+ *   mock/goal-build     a plan of three vertical slices, chained
+ *   mock/goal-failure   a reproduction script task with a loop, two parallel
+ *                       research tasks, and the fix in the loop's body
+ *   mock/goal-open      a first round of two research tasks, no build
+ * They are driven by `drive-conversation.mjs`, which asserts the session's
+ * acceptance of each shape; the scenario table is GOAL_SCENARIOS in
+ * scenarios.mjs.
+ *
  * Usage: node bench/live/mock-provider.mjs [--port 3799]
  */
 import http from 'node:http';
@@ -65,6 +77,93 @@ const PLAN_JSON = (title) => JSON.stringify({
 // Trailing comma before the closing brace — classic budget-model emission.
 const FENCED_PLAN = (title) =>
   'Great — generating the plan now.\n```json\n' + PLAN_JSON(title).replace(/\n  \]\n\}$/, '\n  ],\n}') + '\n```';
+
+/** A plan object as a budget model emits it: a preamble, then a ```json fence. */
+const fence = (plan) => 'Here is the plan.\n```json\n' + JSON.stringify(plan, null, 2) + '\n```';
+
+/** A goal-kind plan task, with the assignment fields every AI task needs. */
+const aiTask = (over) => ({
+  type: 'ai',
+  assignedRunner: 'claude-code',
+  assignedModel: { modelId: 'deepseek/deepseek-v4-flash', modelLabel: 'DeepSeek V4 Flash' },
+  autonomy: 'AFK',
+  sliceType: 'AFK',
+  subtasks: [],
+  ...over,
+});
+
+/** The build kind: three vertical slices of one flag, each standing on the last. */
+const BUILD_PLAN = {
+  tasks: [
+    aiTask({
+      id: 'build-flag', order: 1, title: 'Parse --verbose and print each file',
+      description: 'The flag works end to end from the CLI entry point',
+      dependencies: [], prompt: 'In src/index.ts add a --verbose flag to the existing argument parser, and in src/walk.ts print each file path the walker yields. Keep the default output unchanged.',
+    }),
+    aiTask({
+      id: 'build-thread', order: 2, title: 'Thread --verbose through the file walk',
+      description: 'The flag reaches the walker from the CLI',
+      dependencies: ['build-flag'], prompt: 'In src/walk.ts accept a verbose option and inject it from src/index.ts. A test at test/walk.test.ts covers a nested directory.',
+    }),
+    aiTask({
+      id: 'build-tests', order: 3, title: 'Test the verbose output',
+      description: 'The flag has a test that fails without it',
+      dependencies: ['build-thread'], prompt: 'Add test/verbose.test.ts: run the CLI with --verbose over a two-file fixture and assert both paths print in order. Run node --test.',
+    }),
+  ],
+};
+
+/**
+ * The failure kind: the reproduction is the check of a loop whose body is the
+ * fix, and two hypotheses run as research tasks in parallel while the planner
+ * keeps talking. `h1`/`h2` are read-only, so they are approved to start as the
+ * plan lands; the reproduction is not, because the user has not run the plan.
+ */
+const FAILURE_PLAN = {
+  tasks: [
+    {
+      id: 'repro', order: 1, title: 'Reproduce the nested-array parse failure',
+      description: 'The failing test is the reproduction', type: 'script', dependencies: [],
+      commands: [['node', '--test', 'test/parser.test.mjs']], sliceType: 'AFK',
+      loop: { body: ['fix'], maxRounds: 2 },
+    },
+    aiTask({
+      id: 'h1', order: 2, title: 'Does the tokenizer split nested brackets?',
+      description: 'Reports the evidence for and against one hypothesis', dependencies: [],
+      prompt: 'Hypothesis: the tokenizer closes an array at the first ] even when nested. Reproduce `node --test test/parser.test.mjs`, then check src/parser/tokenizer.ts. Report whether it holds, with file paths and line numbers, and the command and output that settle it.',
+      readOnly: true, research: true,
+    }),
+    aiTask({
+      id: 'h2', order: 3, title: 'Does the parser treat a nested array as a delimiter?',
+      description: 'Reports the evidence for and against the other hypothesis', dependencies: [],
+      prompt: 'Hypothesis: the parser treats the inner [ of a nested array as the start of a new value. Reproduce `node --test test/parser.test.mjs`, then check src/parser/parse.ts. Report whether it holds, with file paths and line numbers, and the command and output that settle it.',
+      readOnly: true, research: true,
+    }),
+    aiTask({
+      id: 'fix', order: 4, title: 'Fix the cause the reports name',
+      description: 'Makes the reproduction pass', dependencies: ['repro'],
+      prompt: 'The reproduction and the research reports are in your prior task outputs. Fix the cause they name, in src/parser/, and change nothing else. Run node --test test/parser.test.mjs and report the result.',
+    }),
+  ],
+};
+
+/** The open-problem kind: one round, deliberately different questions, no build yet. */
+const OPEN_PLAN = {
+  tasks: [
+    aiTask({
+      id: 'open-approach', order: 1, title: 'Which sync architecture fits: full-state or op-log?',
+      description: 'Compares the two candidate approaches on this codebase', dependencies: [],
+      prompt: 'Compare a full-state sync and an op-log sync for src/sync/. Read the existing sync code and report: each approach\'s claim, the evidence for and against it in this codebase, what would break it, and the commands you ran. This is the first round; do not plan the build.',
+      readOnly: true, research: true,
+    }),
+    aiTask({
+      id: 'open-measure', order: 2, title: 'What does the current sync actually cost?',
+      description: 'Measures the present path before either approach is chosen', dependencies: [],
+      prompt: 'Measure the current sync path in src/sync/ rather than argue about it: count round trips and bytes for a representative change, in a test or a script. Report the method, the numbers with the command that produced them, and what would make the measurement wrong.',
+      readOnly: true, research: true,
+    }),
+  ],
+};
 
 function toolCallTurn(name, args) {
   return { toolCalls: [{ id: `call_${Math.random().toString(36).slice(2, 10)}`, name, args: JSON.stringify(args) }] };
@@ -124,6 +223,43 @@ function scriptTurn(model, messages) {
       return { content: JSON.stringify({ taskQuery: { tasks: ['#2'], fields: ['prompt'] } }) };
     }
     return { content: JSON.stringify({ taskOps: [{ op: 'update', taskId: '#2', changes: { description: `read-confirmed:${marker}` } }] }) };
+  }
+
+  if (persona === 'goal-question') {
+    // A question the research answers: one read, then prose. No plan, no tag.
+    if (s.toolRounds === 0) return { reasoning: 'Read the README before answering; the goal is a question, not a plan. ', ...toolCallTurn('read_file', { path: 'README.md' }) };
+    return {
+      content: 'The demo project is a tiny app: `src/index.ts` prints a line and the README describes it, with a TODO for tests. There is no test suite checked in, so the TODO is still open. Nothing needs a plan for that answer.',
+    };
+  }
+
+  if (persona === 'goal-effect') {
+    // A small effect stated as exact commands: one script task through run_script.
+    if (s.toolRounds === 0) {
+      return {
+        reasoning: 'One exact command, no files to change: run it as a script task. ',
+        ...toolCallTurn('run_script', { title: 'Emit the completion marker', commands: [['node', '-e', "process.stdout.write('effect-ok')"]] }),
+      };
+    }
+    return { content: 'Done: the marker command ran as a script task, and its output is in the task log.' };
+  }
+
+  if (persona === 'goal-build') {
+    if (s.toolRounds === 0) return { reasoning: 'Ground the build in the real layout first. ', ...toolCallTurn('read_file', { path: 'README.md' }) };
+    return { reasoning: 'Three vertical slices, each standing on the last. ', content: fence(BUILD_PLAN) };
+  }
+
+  if (persona === 'goal-failure') {
+    if (s.toolRounds === 0) return { reasoning: 'Look at the failing area before planning reproduction. ', ...toolCallTurn('list_dir', { path: 'src', depth: 2 }) };
+    return {
+      reasoning: 'The reproduction is a command, so it is the loop check; two hypotheses run as research tasks; the fix is the loop body. ',
+      content: fence(FAILURE_PLAN),
+    };
+  }
+
+  if (persona === 'goal-open') {
+    if (s.toolRounds === 0) return { reasoning: 'The problem has no known path: only the first round is plannable. ', ...toolCallTurn('list_dir', { path: 'src', depth: 2 }) };
+    return { reasoning: 'Two deliberately different questions, no build yet. ', content: fence(OPEN_PLAN) };
   }
 
   if (persona === 'fenced-json') {

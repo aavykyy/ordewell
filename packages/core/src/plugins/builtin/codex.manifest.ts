@@ -68,7 +68,7 @@ export const CODEX_MANIFEST: RunnerManifest = {
 
   modes: [
     { id: 'agent', label: 'Agent', description: 'Workspace-write sandbox: edits files inside the workspace, and Codex\'s reviewer subagent assesses each approval request', cliValue: 'workspace-write', safe: true, sandboxed: true },
-    { id: 'plan', label: 'Plan', description: 'Read-only sandbox for analysis and exploration', cliValue: 'read-only', readOnly: true, sandboxed: true },
+    { id: 'plan', label: 'Read-only', description: 'Ordewell commands with the native shell off; lands nothing', cliValue: 'read-only', readOnly: true },
     { id: 'fullAccess', label: 'Full access', description: 'No sandbox: full disk and network access for autonomous runs', cliValue: 'danger-full-access', autonomous: true },
   ],
 };

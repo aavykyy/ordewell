@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, markRequestFor, opsEditable,
-  titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, blockedByLabel, skippedLabel, type TaskRowSubject, type TaskRowAction,
+  titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, blockedByLabel, holdLabel, skippedLabel, type TaskRowSubject, type TaskRowAction,
 } from '..';
 import { taskRef, titledTaskRef } from '../../services/TaskRefs';
 
@@ -157,11 +157,17 @@ describe('actions per status', () => {
   });
 });
 
+describe('the research mark', () => {
+  it('marks only an AI task as research', () => {
+    expect(taskRowView(subject({ type: 'script', research: true })).research).toBe(false);
+  });
+});
+
 describe('the row view, every status against every annotation', () => {
   const isolated = { branch: 'b', worktree: 'w', repos: ['.'] };
   const annotations: [string, Partial<TaskRowSubject>, (view: ReturnType<typeof taskRowView>, status: string) => void][] = [
     ['nothing', {}, (v) => {
-      expect(v).toMatchObject({ conflict: null, repairing: null, repaired: null, mergeGate: null, opsChangedFiles: false, forcedPastGate: null, approvals: null, autonomous: false, waitsForApproval: null });
+      expect(v).toMatchObject({ conflict: null, repairing: null, repaired: null, mergeGate: null, opsChangedFiles: false, forcedPastGate: null, approvals: null, autonomous: false, waitsForApproval: null, holdReason: null, research: false });
     }],
     ['a conflict in a named repo', { isolation: { ...isolated, state: 'conflict', conflictRepo: 'api', conflictFiles: ['a', 'b', 'c', 'd', 'e', 'f'] } }, (v) => {
       expect(v.conflict).toEqual({ repo: 'api', files: 'a, b, c, d, e, +1 more' });
@@ -210,6 +216,13 @@ describe('the row view, every status against every annotation', () => {
       expect(v.waitsForApproval).toBe(status === 'pending' || status === 'approved' || status === 'blocked' ? 'Waits for your approval' : null);
       expect(v.approvals).toBeNull();
     }],
+    ['a hold with its reason', { holdReason: 'could not connect to Ordewell\'s tools; start it again' }, (v) => {
+      expect(v.holdReason).toBe('could not connect to Ordewell\'s tools; start it again');
+      expect(holdLabel(v.holdReason!)).toBe('On hold: could not connect to Ordewell\'s tools; start it again');
+    }],
+    ['a research task', { research: true }, (v) => {
+      expect(v).toMatchObject({ research: true, kind: 'ai' });
+    }],
     ['dependencies', { dependencies: ['t1', 'ghost'] }, (v) => {
       expect(v.dependencies).toEqual(['#1', 'ghost']);
     }],
@@ -230,6 +243,14 @@ describe('the row view, every status against every annotation', () => {
     expect(taskRowView(subject()).kind).toBe('ai');
     expect(taskRowView(subject({ ops: true })).kind).toBe('ops');
     expect(taskRowView(subject({ type: 'user', ops: true })).kind).toBe('user');
+    // An ops task by nature (ADR-0035), but drawn with its body, so it has a kind of its own.
+    expect(taskRowView(subject({ type: 'script' })).kind).toBe('script');
+    expect(taskRowView(subject({ type: 'script', ops: true })).kind).toBe('script');
+  });
+
+  it('offers a script task the force start an AI task gets, but never the ops toggle', () => {
+    expect(taskRowActions({ status: 'pending', type: 'script' })).toEqual(['force-start']);
+    expect(opsEditable({ status: 'pending', type: 'script' })).toBe(false);
   });
 
   it('labels a subtask by its dotted order', () => {
@@ -280,6 +301,19 @@ describe('the row view, every status against every annotation', () => {
     expect(taskRowView(subject({ id: 't4', order: 4 }), { tasks: tree })).toMatchObject({ status: 'todo', blockedBy: null });
     expect(taskRowView(subject({ id: 't3', order: 3, dependencies: ['t2'] }))).toMatchObject({ status: 'todo', blockedBy: null });
     expect(blockedByLabel(['#1', '#2.1'])).toBe('Blocked by #1, #2.1');
+  });
+
+  it('does not show a loop\'s check between rounds as blocking its dependents, until its loop stops (ADR-0045 L3)', () => {
+    const tree = (fix: string) => [
+      { id: 'c', order: 1, title: 'Review', status: 'failed', dependencies: [], loop: { body: ['f'], maxRounds: 3 }, verdict: { outcome: 'fail', reported: 'failed' } },
+      { id: 'f', order: 2, title: 'Fix', status: fix, dependencies: ['c'] },
+      { id: 'd', order: 3, title: 'Ship', status: 'pending', dependencies: ['c'] },
+    ];
+
+    expect(taskRowView(subject({ id: 'd', order: 3, dependencies: ['c'] }), { tasks: tree('in_progress') })).toMatchObject({ status: 'todo', blockedBy: null });
+    expect(taskRowView(subject({ id: 'd', order: 3, dependencies: ['c'] }), { tasks: tree('failed') })).toMatchObject({ status: 'blocked', blockedBy: ['#1'] });
+    const notRun = [{ ...tree('pending')[0], status: 'pending', verdict: null }, ...tree('pending').slice(1)];
+    expect(taskRowView(subject({ id: 'd', order: 3, dependencies: ['c'] }), { tasks: notRun })).toMatchObject({ status: 'todo', blockedBy: null });
   });
 
   it('offers Skip on a task a failure blocks, though its own status is not blocked', () => {

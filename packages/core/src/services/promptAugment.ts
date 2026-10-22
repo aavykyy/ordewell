@@ -3,6 +3,7 @@ import { flattenTasksWithParents } from '../models/Task';
 import type { PreservedWork, PreviousWork } from '../interfaces/IWorktreeIsolation';
 import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
+import { betweenRounds, loopRoundOf } from '../models/Loop';
 
 const MAX_TAIL_CHARS = 500;
 /** Whole findings fit; a runaway summary does not bloat the session file, which holds every task's report. */
@@ -21,6 +22,8 @@ export interface PriorOutput {
   logTail: string;
   /** Set for a dependency that was skipped: nothing of it landed. `reason` is the skipper's, when they gave one. */
   skipped?: { reason?: string };
+  /** Set for the dependent's own loop's check, between rounds: the round its report is from (ADR-0045 L4). */
+  round?: { round: number; maxRounds: number };
 }
 
 function capReport(report: string): string {
@@ -46,6 +49,8 @@ export function collectDirectDependencyOutputs(task: Task, allTasks: readonly Ta
     const skipped = dep.status === 'skipped' ? { ...(dep.skipReason ? { reason: dep.skipReason } : {}) } : undefined;
     // A skip is said even of a task that never ran: the dependent starts without it.
     if (!deps.has(dep.id) || (!dep.outputSummary && !skipped)) continue;
+    // A check's summary is its latest round's: the loop clears it as the check runs again.
+    const round = dep.loop?.body.includes(task.id) && betweenRounds(dep) ? { round: loopRoundOf(dep), maxRounds: dep.loop.maxRounds } : undefined;
     out.push({
       label,
       title: dep.title,
@@ -53,6 +58,7 @@ export function collectDirectDependencyOutputs(task: Task, allTasks: readonly Ta
       report: dep.outputSummary?.report,
       logTail: dep.outputSummary?.logTail ?? '',
       ...(skipped ? { skipped } : {}),
+      ...(round ? { round } : {}),
     });
   }
   return out;
@@ -88,7 +94,10 @@ export function renderPriorOutputs(outputs: PriorOutput[]): string {
       if (o.skipped && !o.reviewReason && !o.report && !o.logTail) return `${heading}\n${skip}`;
       const reason = o.reviewReason || '(no review note)';
       const output = o.report ? `- Report:\n${indent(dependencyReport(o.report))}` : `- Tail:\n${o.logTail ? indent(o.logTail) : '  (no output captured)'}`;
-      return `${heading}\n${skip ? `${skip}\n` : ''}- Review: ${reason}\n${output}`;
+      const round = o.round
+        ? `- The check of your loop: it failed round ${o.round.round} of ${o.round.maxRounds}, and you are part of the fix. Fix what its report found; it runs again once the fix has landed.\n`
+        : '';
+      return `${heading}\n${skip ? `${skip}\n` : ''}${round}- Review: ${reason}\n${output}`;
     });
   return `## Prior task outputs\n\n${blocks.join('\n\n')}`;
 }
@@ -154,7 +163,8 @@ export function renderPlanMap(planTasks: readonly Task[], currentTaskId: string,
     const tag = planMapStatus(row.task, isCurrent);
     const order = row.parent ? row.label : row.label.padStart(2, ' ');
     const arrow = isCurrent ? '   ← you are here' : '';
-    const runner = row.task.assignedRunner ? ` (${row.task.assignedRunner})` : '';
+    // A script task runs on no runner (ADR-0035): what it is says more than the runner it was never given.
+    const runner = row.task.type === 'script' ? ' (script)' : row.task.assignedRunner ? ` (${row.task.assignedRunner})` : '';
     return `${order}. [${tag.padEnd(7, ' ')}] ${row.task.title}${runner}${arrow}`;
   });
 
@@ -213,6 +223,9 @@ function keptWorkLines(preserved: readonly PreservedWork[], whose: string): stri
  * What a continued session is told became of the edits it remembers
  * (ADR-0018, K1). Absent work is in the checkout, where it was left.
  */
+/** What a read-only task's continue is told of its earlier attempt's files: they went with its worktree (ADR-0046). */
+export const READ_ONLY_CONTINUED_NOTE = 'This task is read-only, so nothing your earlier attempt changed was kept: check the working tree before relying on files you remember.';
+
 export function continuedWorkNote(work: PreviousWork | undefined): string {
   if (!work) return 'Your previous changes are in the working tree (shared workspace).';
   if (work.outcome === 'restored') return 'Your previous changes are in the working tree.';

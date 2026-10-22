@@ -90,7 +90,7 @@ export const SETTINGS: StepperDefinition = {
     {
       id: 'parallel',
       label: 'Parallel',
-      hint: 'How many AI tasks run at once, a live run included',
+      hint: 'How many AI tasks run at once, a live run included; research tasks use the same slots',
       number: { min: 1, current: (state) => state.maxParallel },
     },
   ],

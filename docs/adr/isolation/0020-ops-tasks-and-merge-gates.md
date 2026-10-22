@@ -5,8 +5,6 @@ amends: ["0013", "0014"]
 
 # 0020 — Ops tasks run in the workspace, behind a merge gate
 
-*Pending:* [ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md) — script tasks: ops tasks Ordewell runs itself from a literal script, which the planner may add and start.
-
 **Amends:** ADR-0013 (worktree isolation) — what Merge all does to a run still
 going, and when a run decides whether it isolates; ADR-0014 (multi-repo
 workspaces) — which tasks are isolated, where it had rejected the task marker
@@ -52,8 +50,14 @@ that depends on.**
   repo (a cloud CLI, a deployment, a pipeline) or on git refs and history of
   the user's branch (push, tag, reword commits). It runs at the workspace root
   and never gets a worktree. In the plan it is `ops: true`; absent means a
-  change, so saved plans need no migration. Only an AI task can be ops — a user
-  task (`type: 'user'`) never runs in a worktree anyway.
+  change, so saved plans need no migration. An AI task can be ops; a user task
+  (`type: 'user'`) never runs in a worktree anyway.
+- A **script task** ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md))
+  is an ops task whose body is a literal script that Ordewell runs with no
+  model. It is an ops task by its type, so it carries no `ops` mark, and
+  everything this ADR says of where and when ops tasks run holds for it: the
+  workspace root, the merge gate, the Merge-all exclusion and the tracked-file
+  check. Only its evidence differs (see Running ops tasks).
 - **Only top-level tasks.** A subtask runs with its parent.
 - **The planner sets it** by one test — is the task's result a file change? —
   and splits a mixed request into a change and an ops task that depends on it
@@ -61,8 +65,9 @@ that depends on.**
   ops task that pushes and watches the pipeline). The user can flip it in the
   task editor until the task starts; from then it is fixed, like its transport.
 - **A question is not a task.** "What's the frontend's URL?" is answered in the
-  planner conversation. The planner still never carries out an effect itself:
-  its envelope (ADR-0008) is unchanged, and ops tasks are how a plan acts.
+  planner conversation. The planner's envelope (ADR-0008) is for reading: a
+  plan acts through ops tasks, and the planner performs an exact effect itself
+  only as a script task (ADR-0035).
 - **An ops task runs in the session's mode**, like any task. No mode is
   chosen for it and none is rewritten (ADR-0001): a full-access session runs its
   ops tasks with full access.
@@ -157,7 +162,9 @@ that depends on.**
   twenty tool calls and how each ended, then its last message and the error
   that stopped it.
 - Its completion evidence is the attempt-bound `task_complete` call, as for any task (ADR-0013). A task that
-  watches a pipeline runs until the pipeline ends.
+  watches a pipeline runs until the pipeline ends. A script task has no runner
+  to make that call, so its evidence is its exit status, handed to
+  `VerdictEngine` (ADR-0035).
 
 ### Isolation is decided at the first change task
 
@@ -234,4 +241,5 @@ it.
 - 2026-10-16 — the gate covers the task's whole dependency closure, not just its direct dependencies: a dependency on a verification task implies the work it verified, and a verification lands nothing of its own, so a direct-only gate let an ops task act on the user's checkout before that work was merged. A skipped task adds nothing of its own, but the work behind it still counts.
 - 2026-10-18 — a merge that leaves the run going no longer clears a surface's isolation marks: the Session announces the run's closing as `run_closed` ([ADR-0013](0013-worktree-isolation.md)).
 - 2026-10-18 — a force start queued behind its dependencies passes only the gate the user confirmed when forcing it, and an automatic merge at a gate is made only for a task nothing else holds back: one the user has not approved no longer triggers it ([ADR-0034](../supervision/0034-a-failed-task-blocks-only-its-dependents.md)'s one start rule).
+- 2026-10-21 — a script task is an ops task Ordewell runs from a literal script with no model, whose evidence is its exit status, and the planner may add and start one; the planner no longer "never carries out an effect itself" ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
 - 2026-10-22: merge automatically is set in `/settings`; `ordewell automerge` stays headless.

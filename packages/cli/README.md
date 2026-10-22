@@ -24,7 +24,7 @@ agent you already use.
 The welcome screen says it plainly: nothing runs until you approve the plan (unless autorun is on).
 
 `/settings` walks autonomy, supervisor, merge automatically, autorun and parallel
-in one panel and saves only what you changed. `/planner` walks harness, model and
+(research uses the same Parallel slots) in one panel and saves only what you changed. `/planner` walks harness, model and
 effort in one flow, so there is no separate model or effort command. Press `?` in
 the plan pane for the full key sheet; the footer shows only the keys that apply
 to the selected task.

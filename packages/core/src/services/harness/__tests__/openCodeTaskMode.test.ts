@@ -133,6 +133,34 @@ function basic(password: string): string {
 }
 
 describe('OpenCodeAdapter task mode — start', () => {
+  it('uses Ordewell permissions for a read-only task, with project config off and its task tools allowed', async () => {
+    const server = fakeServer();
+    const mcp = mcpClientConfig({ token: 'read-only-test', url: 'http://127.0.0.1:4555/mcp', readOnly: true });
+    const { adapter, env } = await startTask(server, taskStart({ mode: 'plan', workspaceRoot: '/workspace', flags: { readOnly: true, permissionMode: 'build', modeSettings: {} }, mcp }), {
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: { '*': 'allow', shell: 'allow' } }),
+    });
+    try {
+      expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe('1');
+      const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT!) as { lsp: boolean; permission: Record<string, unknown> };
+      expect(config.lsp).toBe(false);
+      for (const tool of ['*', 'edit', 'write', 'patch', 'apply_patch', 'multiedit', 'bash', 'shell', 'task', 'subagent', 'webfetch', 'websearch', 'codesearch', 'execute']) expect(config.permission[tool]).toBe('deny');
+      for (const tool of ['read', 'grep', 'glob', 'list', 'ordewell_run_command', 'ordewell_checkpoint', 'ordewell_task_complete']) expect(config.permission[tool]).toBe('allow');
+      expect(config.permission.external_directory).toMatchObject({ '*': 'deny', '/workspace/*': 'allow' });
+      const events: AgentEvent[] = [];
+      const turn = adapter.send('Review', (e) => events.push(e));
+      const stream = await server.stream();
+      stream.push({ type: 'permission.asked', properties: { id: 'ro-outside', sessionID: 'ses_task', permission: 'external_directory', patterns: ['/outside/*'] } });
+      await until(() => server.requests.some((r) => r.path === '/permission/ro-outside/reply'));
+      expect(server.requests.find((r) => r.path === '/permission/ro-outside/reply')?.body).toMatchObject({ reply: 'reject' });
+      expect(events.find((e) => e.type === 'permission_request')).toMatchObject({ decided: { decision: 'deny' } });
+      stream.push(status('busy'));
+      stream.push(status('idle'));
+      await turn;
+      const prompt = server.requests.find((r) => r.path.endsWith('/prompt_async'));
+      expect(prompt?.body).toMatchObject({ agent: 'build', model: { providerID: 'anthropic', modelID: 'claude-sonnet-4' }, tools: { bash: false, edit: false } });
+    } finally { adapter.dispose(); }
+  });
+
   it('serves the worktree behind a per-task password, sent on every request', async () => {
     const server = fakeServer();
     const { adapter, spawned, env } = await startTask(server);
@@ -939,7 +967,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
   const taskAllow = { ordewell_task_complete: 'allow', ordewell_checkpoint: 'allow' };
   const plannerAllow = Object.fromEntries([
     'list_runners', 'list_models', 'submit_plan', 'edit_plan', 'task_query', 'task_output', 'task_diff', 'run_command', 'fetch', 'web_search', 'load_skill',
-    'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'merge_all',
+    'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'merge_all', 'run_script',
   ].map((tool) => [`ordewell_${tool}`, 'allow']));
 
   // A host running inside OpenCode carries its own configuration, which a child rightly keeps.
@@ -1050,7 +1078,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
         permission: { ...unrelated.permission, ...taskAllow },
       });
       expect(carriesParent(env)).toBe(false);
-      expect(await adapter.mcpAttached()).toBe(true);
+      expect(await adapter.mcpAttached()).toBe('connected');
       adapter.dispose();
     });
 
@@ -1108,7 +1136,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     const { adapter, env } = await startTask(fakeServer(), taskStart({ mcp }), { OPENCODE_CONFIG_CONTENT: '// mine\n{}' });
 
     expect(env.OPENCODE_CONFIG_CONTENT).toBe('// mine\n{}');
-    expect(await adapter.mcpAttached()).toBe(false);
+    expect(await adapter.mcpAttached()).toBe('failed');
     adapter.dispose();
   });
 
@@ -1187,11 +1215,11 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
 
   it('reports the server attached once OpenCode lists it as connected, and not when it failed', async () => {
     const connected = await startTask(fakeServer({ 'GET /mcp': () => ({ ordewell: { status: 'connected' } }) }), taskStart({ mcp }));
-    expect(await connected.adapter.mcpAttached()).toBe(true);
+    expect(await connected.adapter.mcpAttached()).toBe('connected');
     connected.adapter.dispose();
 
     const failed = await startTask(fakeServer({ 'GET /mcp': () => ({ ordewell: { status: 'failed', error: 'refused' } }) }), taskStart({ mcp }));
-    expect(await failed.adapter.mcpAttached()).toBe(false);
+    expect(await failed.adapter.mcpAttached()).toBe('failed');
     failed.adapter.dispose();
   });
 });

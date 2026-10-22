@@ -2,7 +2,7 @@ import { isApiProvider } from '@ordewell/core';
 import { bodyRows, helpScrollMax } from '../layout';
 import { findTask, refFor, visibleItems, type PickerItem, type PickerState, type TuiState } from '../state';
 import type { Key } from '../keys';
-import { handleApprovalKey } from './approvals';
+import { handleApprovalKey, scrollApproval } from './approvals';
 import { keyPrompt, newSession, pickRewindTarget, withIdlePlanner } from './commands';
 import { chooseBlocked, confirmedHandoff, handleHandoffKey, type BlockedChoice } from '../handoff';
 import { DEFAULT_EFFORT, pickerItemsFor } from './pickers';
@@ -16,6 +16,10 @@ import { handleStepperKey } from './stepper';
 
 export function handleOverlayKey(state: TuiState, overlay: NonNullable<TuiState['overlay']>, key: Key): Step {
   if (overlay.kind === 'help') return handleHelpKey(state, overlay, key);
+  if (overlay.kind === 'approval') {
+    const scrolled = scrollApproval(state, overlay, key);
+    if (scrolled) return scrolled;
+  }
   // A sideways notch is not a keystroke, and every overlay below reads an
   // unhandled key as a cue to close or to hold still.
   if (key.name === 'wheelignored') return step(state);

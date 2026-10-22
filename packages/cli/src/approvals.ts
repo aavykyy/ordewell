@@ -24,6 +24,8 @@ export interface ApprovalEvent {
   subject?: unknown;
   scope?: unknown;
   detail?: unknown;
+  /** A script task's start: what it runs, one command to a line (ADR-0035). */
+  body?: unknown;
   [key: string]: unknown;
 }
 
@@ -52,7 +54,11 @@ export function describeApproval(event: ApprovalEvent): string {
   const detailLine = detail ? `\n  ${detail}` : '';
 
   // A start is asked every time (ADR-0029), so its answer grants nothing more.
-  if (event.kind === 'task_start') return `${headline}${detailLine}`;
+  // A script's body is printed whole: the consent is to what runs (ADR-0035).
+  if (event.kind === 'task_start') {
+    const body = event.body ? `\n${String(event.body).split('\n').map((line) => (line ? `      ${line}` : '')).join('\n')}` : '';
+    return `${headline}${detailLine}${body}`;
+  }
   // The grant is deliberately wider than the request, so say so rather than
   // letting the user discover it when the next call does not prompt.
   return `${headline}${detailLine}\n  Approving also allows: ${scope}`;

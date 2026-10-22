@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Script tasks.** A plan can hold a task with no runner and no model, a list
+  of commands or one script that Ordewell runs at the workspace root; its exit
+  status is its verdict. The plan shows its body, read-only, in place of a
+  prompt.
+- **The planner can carry out a small effect in your turn** with
+  `run_script`: a push, a tag or one cloud setting, as a script task you
+  approve on the approval card, which shows exactly what will run.
+- **`ordewell.effectAllowlist` names script tasks that run without asking.**
+  A rule matches the whole command, flags included, and a task runs unasked
+  only when every command is covered. It has no built-in rules.
+- **Check-and-fix loops.** A task can be a loop's check: while it fails with
+  rounds left, the tasks of its body fix what it found and the check runs
+  again, with no planner turn in between. The plan shows each loop's rounds.
+- **Research tasks.** The planner can hand a longer investigation to a
+  read-only task whose report wakes it with the result, at every supervisor
+  level. Research tasks run within the run's Parallel limit like any other
+  task.
+- **The planner chooses a strategy before it outlines a plan**, from answering
+  a question with no plan to exploring an open problem one round at a time,
+  and each of its turns tells it how full its context is and what remains of
+  its budgets.
+- **Planner skills `diagnose` and `explore`**, for a failure to explain and an
+  open problem. Type `/diagnose` or `/explore`, or let the planner load one.
+- **Sealed runs.** Where the planner's sandbox runs, a command it would have
+  had to ask about runs sealed instead: the workspace read-only, no network,
+  no home directory and none of your credentials.
+- **`ordewell.plannerNativeShell` lets a Claude Code or OpenCode 2.x planner on
+  macOS use its own shell**, off by default and on checked versions only, with
+  every command run in Ordewell's sealed profile with the network. A
+  workspace cannot set it.
+
+### Changed
+
+- **A read-only task is the same on every runner.** It reads with its runner's
+  own tools, runs commands sealed with its worktree writable, so a review can
+  run the tests, and lands nothing: its report is its result.
+- **A runner that cannot connect to Ordewell's tools holds its task** instead
+  of failing it, and every hold shows its reason on the task's status badge.
 ## [0.10.12] - 2026-10-22
 
 ### Fixed
@@ -23,6 +63,31 @@
   that nothing runs until you approve the plan, and make an installed coding
   agent the default way to plan, with API keys as a secondary note.
 
+### Security
+
+- **The planner's shell runs in an OS sandbox on macOS and Linux**: it can
+  write only to a scratch folder, and a command run without asking has no
+  network.
+- **A read-only task can no longer write outside the sandbox**: its runner's
+  own edit, write, shell and web tools are withheld.
+- **Once a read-only task has run a command sealed, all its later commands run
+  sealed too**, allowlisted ones included, so none can run a script a sealed
+  run rewrote with the network and your files in reach.
+- **A read-only task's sealed runs cannot plant a git repository**: the
+  worktree root itself and its `.git` are held still — on macOS Seatbelt denies
+  renaming or removing the root and any write to the `.git`, and on Linux the
+  worktree mount refuses a rename while the `.git` is bound read-only — and
+  every `.git` entry the checkout brought is held the same way and checked
+  after each run. In a repo group each worktree is writable, while the group's
+  task workspace root is not persistently writable: a write is refused where
+  it is bound read-only, and under bubblewrap's throwaway overlay one may
+  succeed only into the layer discarded with the run. On macOS they cannot
+  create a `.git` anywhere they may write. A `.git` that was not there before
+  the task's first sealed run is removed after every run; one that cannot be
+  removed, or one that changed, stops that task's shell. So git run later there
+  loads no repository the run planted or armed with hooks or filters of its
+  own, and `task_diff` refuses a read-only task.
+- **An edit to an approved script task's body needs your consent again.**
 ### Fixed
 
 - **A completed task's `task_complete` call shows as a success, not a

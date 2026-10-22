@@ -47,6 +47,27 @@ export function planSnapshot(plan: unknown): PlanSnapshot {
 }
 
 /**
+ * A script task's body, as it arrived. Not through `sanitize`: that would drop
+ * a control character a reader should see, and the pane spells it out instead
+ * (ADR-0035).
+ */
+const scriptBodyFields = (t: RunTask): Pick<TaskView, 'commands' | 'script' | 'timeoutMs'> => ({
+  ...(Array.isArray(t.commands) ? { commands: t.commands.map((argv) => [...argv]) } : {}),
+  ...(typeof t.script === 'string' ? { script: t.script } : {}),
+  ...(typeof t.timeoutMs === 'number' ? { timeoutMs: t.timeoutMs } : {}),
+});
+
+/** A loop's check (ADR-0045), with the verdict that tells it between rounds from a failure; nothing on any other task. */
+const loopFields = (t: RunTask): Pick<TaskView, 'loop' | 'loopRound' | 'verdict'> => {
+  if (!t.loop || !Array.isArray(t.loop.body)) return {};
+  return {
+    loop: { body: t.loop.body.map((id) => planLabel(id)), maxRounds: t.loop.maxRounds },
+    ...(typeof t.loopRound === 'number' ? { loopRound: t.loopRound } : {}),
+    ...(t.verdict ? { verdict: { outcome: t.verdict.outcome, ...(t.verdict.reported ? { reported: t.verdict.reported } : {}) } } : {}),
+  };
+};
+
+/**
  * One run-view task as the pane's `TaskView`, recursing into subtasks sorted by
  * order so the dotted labels read in plan order.
  */
@@ -58,7 +79,7 @@ function runTaskToView(t: RunTask): TaskView {
     title: planLabel(t.title, 'Untitled task'),
     description: planText(t.description ?? t.title),
     prompt: typeof t.prompt === 'string' ? sanitize(t.prompt) : undefined,
-    type: t.type === 'user' ? 'user' : 'ai',
+    type: t.type === 'user' || t.type === 'script' ? t.type : 'ai',
     attemptUsage: Array.isArray(t.attemptUsage) ? t.attemptUsage : undefined,
     status: planLabel(t.status, 'pending'),
     idleSince: t.idleSince ?? null,
@@ -81,7 +102,11 @@ function runTaskToView(t: RunTask): TaskView {
     continuable: t.continuable === true,
     awaitingApproval: t.awaitingApproval,
     ...(t.waitsForApproval === true ? { waitsForApproval: true } : {}),
+    ...(typeof t.holdReason === 'string' && t.holdReason.trim() ? { holdReason: sanitize(t.holdReason) } : {}),
     ...(t.ops === true ? { ops: true } : {}),
+    ...(t.research === true ? { research: true } : {}),
+    ...scriptBodyFields(t),
+    ...loopFields(t),
     ...(Array.isArray(t.skills) && t.skills.length > 0 ? { skills: t.skills.map((name) => planLabel(name)) } : {}),
     ...(t.addedBy ? { addedBy: t.addedBy } : {}),
     ...(Array.isArray(t.mergeGate) && t.mergeGate.length > 0 ? { mergeGate: t.mergeGate.map((title) => planLabel(title)) } : {}),
@@ -154,10 +179,10 @@ export function applySettings(state: TuiState, settings: Partial<SettingsRespons
 export function followSession(state: TuiState, message: SessionMessage): TuiState {
   const heard = hear(state, message);
   if (message.type === 'approval_request') {
-    const { id, kind, subject, scope, detail } = message;
+    const { id, kind, subject, scope, detail, body } = message;
     // A task runner's request is answered in its task view, never in the planner's modal.
     if (kind === 'runner_tool') return heard;
-    return enqueueApproval(heard, { id, kind, subject, scope, ...(detail ? { detail } : {}) });
+    return enqueueApproval(heard, { id, kind, subject, scope, ...(detail ? { detail } : {}), ...(body ? { body } : {}) });
   }
   return message.type === 'approval_settled' ? dropApproval(heard, message.id) : heard;
 }

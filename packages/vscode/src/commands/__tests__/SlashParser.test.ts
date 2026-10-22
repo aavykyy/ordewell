@@ -85,7 +85,7 @@ describe('isKnownSlashCommand', () => {
 
   // /settings and /planner own these values now; the one-value commands only
   // exist headless, where no panel can be opened.
-  it.each(['/model', '/model set foo', '/planner-effort', '/auto full', '/supervisor act', '/automerge on', '/autorun on', '/parallel 8'])(
+  it.each(['/model', '/model set foo', '/planner-effort', '/auto full', '/supervisor act', '/automerge on', '/autorun on', '/research parallel 2', '/parallel 8'])(
     'does not claim the retired command %s',
     (line) => {
       expect(isKnownSlashCommand(line)).toBe(false);

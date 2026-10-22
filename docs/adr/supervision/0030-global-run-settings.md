@@ -5,8 +5,6 @@ amends: ["0001", "0013", "0020", "0029"]
 
 # 0030 — Run settings are global, saved and live; autorun
 
-*Pending:* [ADR-0035](0035-effects-are-consented-and-recorded.md) — with autorun on in Full, the planner's script tasks run without asking.
-
 **Amends:** ADR-0029 — the supervisor level, merge at gates automatically, the
 retry limit and the wake-up read budget stop being per-plan settings saved at
 run start; the default level becomes Watch; "an unapproved task never starts"
@@ -48,8 +46,9 @@ on one machine can disagree.
 **Full/Guarded, the supervisor level, merge at gates automatically, autorun,
 the retry limit and the wake-up read budget are machine-wide user settings,
 saved in `settings.json` and changed through `/settings` (or the headless
-commands behind it). A change applies at once to the session it is made in, and
-to every other session from its next run. Autorun, a new setting, starts the plan when the planner submits it.**
+commands behind it). A change applies at once to the session it is made in,
+and to every other session from its next run. Autorun, a new setting, starts
+the plan when the planner submits it.**
 
 ### One store, machine-wide
 
@@ -204,8 +203,8 @@ wrong", that users want in either combination.
   systems from a plan no person read. Holding plans with ops tasks for review
   was weighed and rejected below. The narrower answer — declared scope per ops
   task, escalation of outward effects — belongs to the mandate (#23), which
-  revisits this. Until then, `/autorun on` is the user's statement that they
-  accept it, and its confirmation says so.
+  revisits this. Until then, turning autorun on is the user's statement that
+  they accept it, and its confirmation says so.
 
 This is the exception to ADR-0029's "an unapproved task never starts": under
 autorun, submission is approval.
@@ -225,6 +224,13 @@ refused, and the task waited for a person the user had said was not needed.
   turning autorun off or going to Guarded stops it at once. A start that goes
   through approves the task, as the user's own start does.
 - **Ops tasks too**, for the reason autorun starts them in a submitted plan.
+- **Script tasks, and `run_script`, in Full only** ([ADR-0035](0035-effects-are-consented-and-recorded.md)).
+  With autorun on in Full, on an approved plan, `run_script` runs a script
+  without asking, and a script task the planner writes in the user's turn is
+  approved as it lands. Under Guarded autorun does not do so: `run_script` asks
+  on the approval card, and a script task the planner writes waits for the
+  user's approval unless their effect allowlist covers it. A script's body is
+  shown verbatim either way.
 - **Only a planner turn the user started, and only on a plan the user or
   autorun approved.** Under Guarded, autorun off, or a plan never approved, an
   added task waits for the user as before. The supervisor's starts follow its
@@ -291,7 +297,7 @@ the daemon reads it from there at generation.
 
 ## Consequences
 
-- `UserSettings` gains the six values; the plan loses four fields and keeps
+- `UserSettings` holds these values; the plan loses four fields and keeps
   `runSettings`, which one module owns (`RunSupervision`): it copies them at
   a run the user starts, keeps them for a run that continues, and applies the
   user's change to the run under way (`Session.applyRunSettings`). The
@@ -321,8 +327,8 @@ the daemon reads it from there at generation.
 - 2026-10-12 — amended: the setting is read as "merge automatically": at merge
   gates and at the end of a run. A user who turned it on was still stopped at
   the end of the run, and the handoff overlay asked about a merge the
-  supervisor was about to make. The command `/automerge` and the settings key
-  `mergeAtGatesAutomatically` are unchanged; the handoff is not opened by the
+  supervisor was about to make. The settings key
+  `mergeAtGatesAutomatically` is unchanged; the handoff is not opened by the
   surfaces while an automatic merge is coming
   ([ADR-0029](0029-the-supervisor.md), "Merge at gates automatically").
 - 2026-10-13 — one owner of the run's settings (`RunSupervision`); the
@@ -334,7 +340,11 @@ the daemon reads it from there at generation.
   whose Setup block already shows the same values.
 - 2026-10-14 — the status row the badge shares speaks only for the chat on
   screen; what the run waits on moved to the plan pane's title.
+- 2026-10-21 — with autorun on in Full, the planner's `run_script` and the script tasks it writes in the user's turn run without asking; under Guarded autorun approves the rest of what the planner writes, but not a script task unless the effect allowlist covers it ([ADR-0035](0035-effects-are-consented-and-recorded.md)).
+- 2026-10-21 — research limits lived in the global store and the live run copy, set from the `/settings` panel (ADR-0037 R4).
 - 2026-10-22: the TUI and VS Code set every value in `/settings`; the
   one-value slash commands are gone from both, and the headless CLI keeps them
   for scripts. The panel was already the one place a user saw them together,
   and two ways to set one value read as two products.
+- 2026-10-22 — the two research limits are removed: research starts are the
+  planner's judgement, bounded by the run's Parallel limit ([ADR-0037](0037-research-tasks-wake-the-planner.md) R4).

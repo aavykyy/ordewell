@@ -10,7 +10,7 @@ import type { ForkedDialogue } from './conversationFork';
 import { condensedNotice, extractSummary, keptTail, summaryRequest } from './conversationSummary';
 import type { ConversationMessage, LegacyPlanState, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
 import { flattenTasksWithParents, isUserMessage } from '../models/Task';
-import type { ExecutionRecord } from '../models/Execution';
+import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
@@ -159,6 +159,17 @@ export interface WakeUpTurn {
   refused(change: PlanChange): string | undefined;
   /** Told to the model after the digests and never saved, like the plan block: who it is in this turn, and what it may do. */
   brief?: string;
+  /**
+   * Who the turn acts for at the command seam, read at each call; absent, the
+   * supervisor at the run's level. A turn on a report owed to the user's turn
+   * acts as that turn did, and speaks as the planner (ADR-0037, R3).
+   */
+  actor?: () => Extract<ExecutionActor, { kind: 'planner-turn' | 'supervisor' }>;
+}
+
+/** The planner speaks as the supervisor in a wake-up turn, but for one acting as the user's turn. */
+function bySupervisor(wakeUp: WakeUpTurn | undefined): boolean {
+  return wakeUp !== undefined && wakeUp.actor?.().kind !== 'planner-turn';
 }
 
 /** One user turn, from the message to its settled outcome: every backend call it makes streams through `stream`. */
@@ -583,6 +594,18 @@ export class PlannerConversation {
   /** The open turn's wake-up rules, when the supervisor is answering it rather than the user's message. */
   get currentWakeUp(): WakeUpTurn | undefined {
     return this.openTurn?.wakeUp;
+  }
+
+  /**
+   * What the open turn's task reads have left, for the planner to see. A user
+   * turn counts down to the instruction to land and names the hard stop; a
+   * wake-up turn has its one budget, whole.
+   */
+  get readsLeft(): { left: number; hardStop?: number } | undefined {
+    const turn = this.openTurn;
+    if (!turn) return undefined;
+    const { reads, wakeUp } = turn;
+    return wakeUp ? { left: reads.hard - reads.answered } : { left: reads.soft - reads.answered, hardStop: reads.hard };
   }
 
   /** A skill the planner loaded in the open turn, held with the turn; false when none is open to take it. */
@@ -1040,7 +1063,7 @@ export class PlannerConversation {
       type: 'planner_turn_started', turnId, prompt: prompt.text,
       ...(skills.length > 0 ? { skills } : {}),
       ...(wakeUps.length > 0 ? { wakeUps: [...wakeUps] } : {}),
-      ...(wakeUp ? { supervisor: true } : {}),
+      ...(bySupervisor(wakeUp) ? { supervisor: true } : {}),
       ...(forced ? { forced: true } : {}),
     });
     let outcome: PlannerTurnOutcome = 'error';
@@ -1113,7 +1136,7 @@ export class PlannerConversation {
     const { turnId } = userTurn.stream;
     const now = new Date().toISOString();
     // A supervisor's words and edits are drawn as the supervisor's, so the user can tell what changed on its own.
-    const supervisor = userTurn.wakeUp !== undefined;
+    const supervisor = bySupervisor(userTurn.wakeUp);
     let said: Landed[] = [];
     const plan = this.host.mutate(() => {
       this.writeHeld(userTurn, researchLog);
@@ -1505,6 +1528,11 @@ export class PlannerConversation {
     const refOf = new Map(rows.map(({ task, ref }) => [task.id, ref]));
     const { modes } = this.host.catalog();
     return rows.map(({ task: t, parent }) => {
+      const refs = (ids: readonly string[]) => `[${ids.map((d) => refOf.get(d) ?? d).join(', ')}]`;
+      // A script task runs on no runner, model or mode (ADR-0035): what it runs is its line.
+      if (t.type === 'script') {
+        return `${parent ? '  ' : ''}${refOf.get(t.id)} id=${t.id} "${t.title}" [${t.status}] type:SCRIPT ${scriptPlanField(t)} slice:${t.sliceType ?? '-'} deps:${refs(t.dependencies)}${waitNote(this.host.startWaits(t), refs)}`;
+      }
       const isMan = t.type === 'user';
       // A MAN task has no model or mode to run under — the field that means
       // something there is how many steps the human still has to do. The
@@ -1513,10 +1541,21 @@ export class PlannerConversation {
       const runFields = isMan
         ? `steps:${t.userSteps?.length ?? 0}`
         : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}${readOnly ? 'read-only ' : ''}effort:${t.assignedModel?.thinkingEffort ?? '-'}`;
-      const refs = (ids: readonly string[]) => `[${ids.map((d) => refOf.get(d) ?? d).join(', ')}]`;
       return `${parent ? '  ' : ''}${refOf.get(t.id)} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:${refs(t.dependencies)}${t.skills?.length ? ` skills:[${t.skills.join(', ')}]` : ''}${waitNote(this.host.startWaits(t), refs)}`;
     });
   }
+}
+
+/**
+ * A script task's body as its plan line shows it: its commands whole, as the
+ * planner would write them, or the first line of its script, which
+ * `task_query` reads whole. Its time limit when it set one.
+ */
+function scriptPlanField(t: Task): string {
+  const limit = t.timeoutMs !== undefined ? ` timeoutMs:${t.timeoutMs}` : '';
+  if (t.commands) return `commands:${JSON.stringify(t.commands)}${limit}`;
+  const lines = (t.script ?? '').trim().split('\n');
+  return `script:${JSON.stringify(lines[0])}${lines.length > 1 ? ` (${lines.length} lines; task_query prompt reads it whole)` : ''}${limit}`;
 }
 
 /** Said already by a task's line — its status, its type — or by the note that execution is running. */
@@ -1531,7 +1570,10 @@ function waitNote(waits: readonly StartWait[], refs: (ids: readonly string[]) =>
     case 'dependencies':
     case 'queued': return ` waits:${wait.kind}${refs(wait.waiting)}`;
     case 'merge-gate': return ` waits:merge-gate${refs(wait.unmerged)}`;
+    case 'repeating': return ` waits:repeating(round ${wait.round} of ${wait.maxRounds})${wait.waiting.length > 0 ? refs(wait.waiting) : ''}`;
+    case 'loop-check': return ` waits:loop-check${refs([wait.check])}`;
     case 'usage-limit': return ` waits:usage-limit[${wait.runner}]`;
+    case 'on-hold': return ` waits:on-hold${wait.reason ? `(${wait.reason.replace(/\s+/g, ' ')})` : ''}`;
     default: return ` waits:${wait.kind}`;
   }
 }

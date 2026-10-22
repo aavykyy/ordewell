@@ -1,3 +1,4 @@
+import { readOnlyTask } from './plannerPermissions';
 import { randomUUID } from 'crypto';
 import { isAbsolute, relative, sep } from 'path';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskModeAgentAdapter } from './AgentAdapter';
@@ -11,7 +12,7 @@ import { probeCodexSandbox, codexSandboxUnavailableMessage, codexShellOffNote, t
 import { ORDEWELL_MCP_SERVER_NAME } from '../mcp';
 import { untrustedProjects } from './codexRepoConfig';
 import { CODEX_ORDEWELL } from './codexOrdewell';
-import { awaitAttach, type AttachState } from './ordewellBinding';
+import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
 import { CodexRpc, type RpcMessage, type RpcResponse } from './codexRpc';
 import { settleWithin } from './settleWithin';
 import { PermissionLedger } from './permissionLedger';
@@ -19,8 +20,6 @@ import { ReplyRuns } from './replyRuns';
 import { codexSessionBilling, codexUsageLimitSignal, mergeCodexRateLimits, type CodexRateLimits } from './codexUsageLimit';
 
 const HANDSHAKE_TIMEOUT_MS = 30000;
-/** Codex starts a thread's MCP servers as the thread opens; one that is not up by now is not coming. */
-const MCP_ATTACH_TIMEOUT_MS = 10_000;
 
 /**
  * One entry of a Codex turn. Field names are the app-server protocol's, taken
@@ -333,6 +332,11 @@ const NO_MEMORIES = ['-c', 'features.memories=false'];
  */
 const NO_OWN_SHELL = { shell_tool: false, unified_exec: false };
 
+/** Thread config that keeps these of the user's MCP servers from starting; Codex merges it over their own entries. */
+function withheld(servers: readonly string[]): Record<string, { enabled: false }> {
+  return Object.fromEntries(servers.map((name) => [name, { enabled: false }]));
+}
+
 /**
  * Codex as a planner (ADR-0009) and as a task's runner (ADR-0018, #54), over
  * its `app-server` stdio JSON-RPC transport. The start switch decides the
@@ -395,6 +399,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   private sandbox: CodexSandboxDecision = 'default';
   /** A planner on a host where no sandbox starts: Codex's own shell is off, and `run_command` is its only one (ADR-0033). */
   private ownShellOff = false;
+  /** A read-only task's: every MCP server Codex would start beside Ordewell's, each switched off for its thread (ADR-0046). */
+  private withheldServers: string[] = [];
   /** The Ordewell server's startup state, as Codex last reported it for this thread. */
   private mcpStartup: string | null = null;
   private mcpStartupSettled: (() => void) | null = null;
@@ -428,15 +434,16 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   protected async handshake(opts: AgentStartOptions): Promise<void> {
     // Before the protocol, the machine: a Codex whose sandbox cannot start runs
     // no command and works from imagination instead of from the repository.
-    this.sandbox = await probeCodexSandbox(this.deps, opts.cwd, this.spawnEnv);
+    const readOnly = readOnlyTask(opts);
+    this.sandbox = readOnly ? 'default' : await probeCodexSandbox(this.deps, opts.cwd, this.spawnEnv);
     // A full-access task asks for no sandbox, so a host without one is no reason to refuse it.
     const needsSandbox = opts.kind === 'planner' || opts.flags.permissionMode !== 'danger-full-access';
     // A planner still reads through Ordewell's `run_command`, so it plans with
-    // its own shell off instead of not at all. A task has no such second shell,
-    // and switching its mode would rewrite the plan (ADR-0001).
-    this.ownShellOff = this.sandbox === 'unavailable' && opts.kind === 'planner' && !!opts.mcp;
+    // its own shell off instead of not at all. Read-only tasks always use
+    // that profile (ADR-0046); change tasks keep their planned mode (ADR-0001).
+    this.ownShellOff = readOnly || (this.sandbox === 'unavailable' && opts.kind === 'planner' && !!opts.mcp);
     if (this.sandbox === 'unavailable' && needsSandbox && !this.ownShellOff) throw new Error(codexSandboxUnavailableMessage(opts.kind));
-    if (this.ownShellOff) this.announce({ type: 'thinking', text: codexShellOffNote() });
+    if (this.ownShellOff && !readOnly) this.announce({ type: 'thinking', text: codexShellOffNote() });
 
     // A binary that rejects `app-server` outright dies immediately; waiting
     // out the timeout would turn a one-line diagnostic into a 30s stall.
@@ -463,6 +470,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       throw initialized.closed ? this.handshakeIncomplete() : new Error(`The Codex app-server rejected initialize: ${initialized.message ?? 'unknown error'}`);
     }
 
+    if (readOnlyTask(opts)) this.withheldServers = await this.configuredServers(opts.cwd);
     const resumeId = opts.resumeSessionId;
     let opened = await this.requestThread(resumeId);
     if ('reason' in opened && resumeId) {
@@ -520,6 +528,24 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     this.announce({ type: 'runner_loaded', commands: this.commands(), mcpServers });
   }
 
+  /**
+   * The MCP servers Codex's own configuration would start, every layer of it,
+   * less Ordewell's. A read-only task may change nothing, and a user's server
+   * can: one set to approve its tools runs them under any approval policy, so
+   * none of them starts (ADR-0046), as Claude's and OpenCode's deny theirs.
+   * Not knowing them, the task does not start.
+   */
+  private async configuredServers(cwd: string): Promise<string[]> {
+    const response = await this.rpc.call('config/read', { cwd });
+    const config = response.ok ? response.result.config as { mcp_servers?: unknown } | undefined : undefined;
+    const servers = config?.mcp_servers ?? {};
+    if (!response.ok || typeof servers !== 'object' || servers === null || Array.isArray(servers)) {
+      if (!response.ok && response.closed) throw this.handshakeIncomplete();
+      throw new Error(`Codex did not report the MCP servers it would start${response.ok ? '' : ` (${response.message ?? 'no answer'})`}, so a read-only task cannot keep them off and did not start.`);
+    }
+    return Object.keys(servers).filter((name) => name !== ORDEWELL_MCP_SERVER_NAME);
+  }
+
   private async requestThread(resumeSessionId?: string): Promise<{ id: string; model: string | null } | { reason: string }> {
     const response = await this.rpc.call(resumeSessionId ? 'thread/resume' : 'thread/start', {
       ...(resumeSessionId ? { threadId: resumeSessionId } : {}),
@@ -557,8 +583,9 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         sandbox: opts.flags.permissionMode,
         ...(approvalPolicy ? { approvalPolicy } : {}),
         ...(approvalsReviewer ? { approvalsReviewer } : {}),
-        ...(opts.mcp ? { developerInstructions: CODEX_ORDEWELL.taskInstructions() } : {}),
+        ...(opts.mcp ? { developerInstructions: CODEX_ORDEWELL.taskInstructions(readOnlyTask(opts)) } : {}),
         ...threadConfig,
+        ...(readOnlyTask(opts) ? { config: { ...config, mcp_servers: { ...withheld(this.withheldServers), ...config.mcp_servers }, projects: untrustedProjects(opts.cwd), web_search: 'disabled' } } : {}),
       };
     }
     const nativeSearch = opts?.nativeSearch ?? false;
@@ -595,8 +622,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
    * has tried to connect (ADR-0022, S4). A report that came before this was
    * asked is kept, so asking late still gets the answer.
    */
-  async mcpAttached(): Promise<boolean> {
-    if (!this.startOpts?.mcp || !this.process) return false;
+  async mcpAttached(): Promise<AttachState> {
+    if (!this.startOpts?.mcp || !this.process) return 'failed';
     return awaitAttach(async (left) => {
       const known = CODEX_ORDEWELL.attachState(this.mcpStartup);
       if (known !== 'pending') return known;
@@ -746,7 +773,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         // Answered rather than refused: it is not a capability request, and
         // failing it would break a tool for no reason.
         this.rpc.respond(msg.id, { currentTimeAt: Math.floor(Date.now() / 1000) });
-      } else if (this.startOpts?.kind === 'task') {
+      } else if (this.startOpts?.kind === 'task' && !readOnlyTask(this.startOpts)) {
         this.openTaskRequest(msg, emit);
       } else {
         this.answerServerRequest(msg, emit);
@@ -1053,8 +1080,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     const method = msg.method!;
     const params = msg.params ?? {};
     if (this.raiseOrdewellAsk(msg, method, params, emit)) return;
-    if (this.holdMcpToolApproval(msg, method, params, emit)) return;
-    const result = DECLINE_RESULTS[method];
+    if (!readOnlyTask(this.startOpts) && this.holdMcpToolApproval(msg, method, params, emit)) return;
+    const result = readOnlyTask(this.startOpts) && method === 'item/permissions/requestApproval' ? { permissions: {}, scope: 'turn' } : DECLINE_RESULTS[method];
     if (result) {
       this.rpc.respond(msg.id!, result);
     } else {

@@ -9,7 +9,7 @@ import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
-import { blockedByLabel, dependencyCandidates, capConflictFiles, pausedOnLimit, skippedLabel, taskRowView } from '@ordewell/core/plan-utils';
+import { blockedByLabel, dependencyCandidates, capConflictFiles, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind, AssignmentScope } from '@ordewell/core';
 
 export interface RunnerMode {
@@ -50,7 +50,9 @@ interface TaskCardProps {
    * runner approvals, isolation and merge gate. Absent before the host has
    * folded the run, in which case the plan's own fields are all there is.
    */
-  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval'>;
+  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason'>;
+  /** Every task's run entry, keyed by id, so a subtask card can read its own hold. */
+  runsByTask?: ReadonlyMap<string, RunTask>;
   /** Opt in to resolving this task's merge conflict as an AI task. */
   onResolveConflict?: (taskId: string) => void;
   dependentCount?: number;
@@ -103,11 +105,27 @@ const STATUS_BADGE: Record<TaskStatusKind, { label: string; cls: string }> = {
   awaiting: { label: 'Awaiting User', cls: 'status-blocked' },
 };
 
-/** The status badge: what an awaiting task waits on, the failure a blocked one waits on, or why one was skipped, outranks the generic word. */
-export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'blockedBy' | 'skipReason'>): { label: string; cls: string } {
+/** The status badge: what an awaiting task waits on, why it is held, the failure a blocked one waits on, or why one was skipped, outranks the generic word. */
+export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'blockedBy' | 'skipReason' | 'holdReason'>): { label: string; cls: string } {
   const badge = STATUS_BADGE[row.status];
   if (row.status === 'skipped') return { ...badge, label: skippedLabel(row.skipReason) };
-  return { ...badge, label: row.awaiting ?? (row.blockedBy ? blockedByLabel(row.blockedBy) : badge.label) };
+  if (row.awaiting) return { ...badge, label: row.awaiting };
+  if (row.holdReason) return { ...badge, label: holdLabel(row.holdReason) };
+  return { ...badge, label: row.blockedBy ? blockedByLabel(row.blockedBy) : badge.label };
+}
+
+/**
+ * A loop's check says its round, and each body task which check it runs for
+ * (ADR-0045); what the loop waits for or stopped at is in the hover.
+ */
+function LoopBadge({ loop }: { loop: TaskRowView['loop'] }) {
+  if (!loop) return null;
+  const text = loop.role === 'body' ? loop.label : loop.state === 'waiting' || loop.state === 'ended' ? loop.label : `Loop · ${loop.label}`;
+  return (
+    <span className={`task-isolation-badge loop ${loop.role === 'check' ? loop.state : 'body'}`} title={loopRowParts(loop).join('. ')}>
+      {text}
+    </span>
+  );
 }
 
 /** A skip or block reason can run to a sentence: it is cut to the row it
@@ -318,7 +336,7 @@ export function TaskMessageBox({ taskId, onSend, onSendNow, working = false, res
 
 const DEFAULT_MODES: RunnerMode[] = [
   { id: 'build', label: 'Build', description: 'Edit files and run commands' },
-  { id: 'plan', label: 'Plan', description: 'Read-only analysis' },
+  { id: 'plan', label: 'Read-only', description: 'Ordewell commands; lands nothing' },
 ];
 
 /**
@@ -333,7 +351,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, run, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, planActions, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, planActions, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -356,7 +374,8 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
 
   const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
-  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true }, { tasks: siblings, modes: activeModes, runnerScope });
+  // The run's verdict and round are the newer word on a loop's check: they say whether it is between rounds (ADR-0045).
+  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate, holdReason: run?.holdReason, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true, ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}) }, { tasks: siblings, modes: activeModes, runnerScope });
   const conflictFiles = isolatedWork?.conflictFiles ?? [];
   const repair = isolatedWork?.repair ?? null;
 
@@ -411,8 +430,11 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
             <TaskCheck row={row} taskId={task.id} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
             <span className="task-order">{row.orderLabel}</span>
             <span className={`task-type-badge ${task.type}`}>
-              {isUserTask ? 'Manual' : 'AI'}
+              {isUserTask ? 'Manual' : row.kind === 'script' ? 'Script' : 'AI'}
             </span>
+            {row.research && (
+              <span className="task-type-badge research" title="A research task: read-only, it lands nothing. Its report comes back to the planner and wakes it when the task ends.">Research</span>
+            )}
             {row.kind === 'ops' && (
               <span className="task-type-badge ops" title="An ops task: it changes no repository files and runs in your checkout, once the work it depends on is merged">Ops</span>
             )}
@@ -575,6 +597,14 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
               </div>
             )}
 
+            {/* Where the prompt goes, read-only: only the planner writes a script's body, and it is what the user consents to (ADR-0035). */}
+            {row.kind === 'script' && (
+              <div className="task-script">
+                <pre className="task-script-body" aria-label="Script body">{scriptTaskText(task)}</pre>
+                <div className="task-ops-note">Runs in your checkout with no model, once the work it depends on is merged.</div>
+              </div>
+            )}
+
             {!isExecuting && task.type === 'ai' && task.prompt && (
               editingPrompt === null ? (
                 <div className="task-prompt task-prompt-editable" onClick={(e) => { e.stopPropagation(); setEditingPrompt(task.prompt ?? ''); }} title="Click to edit prompt">
@@ -671,7 +701,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
                     <SubTaskCard key={sub.id} task={sub} parentTask={task} tasks={siblings} models={subModels}
                       modes={subModes} runners={runners} runnerScope={runnerScope} effectiveRunner={subRunner}
                       configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
-                      isExecuting={isExecuting}
+                      isExecuting={isExecuting} run={runsByTask?.get(sub.id)}
                       onRunnerChange={onRunnerChange}
                       onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
                       taskSkills={taskSkills} onSkillsChange={onSkillsChange}
@@ -717,6 +747,8 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
         )}
 
         <AssignmentFlag row={row} />
+
+        <LoopBadge loop={row.loop} />
 
         {row.mergeGate && (
           <span className="task-isolation-badge gate"
@@ -773,8 +805,9 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
 
         {/* The awaiting reason is a badge in its own right (ADR-0018, W1): a
             task held for the user must read as such whether or not a run is
-            still being drawn as active — and so must one a failure blocks. */}
-        {(isExecuting || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
+            still being drawn as active — and so must one a failure blocks,
+            one on hold, or a skipped one. */}
+        {(isExecuting || row.holdReason || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
           <StatusBadge status={status} />
         )}
         {planActions}

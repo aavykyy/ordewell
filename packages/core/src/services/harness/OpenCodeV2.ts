@@ -1,8 +1,9 @@
+import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 import { realpathSync } from 'fs';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, PlannerStartOptions, TaskStartOptions } from './AgentAdapter';
 import { TASK_COMPLETION_CONTRACT } from '../mcp';
-import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
+import { OPENCODE_ORDEWELL, plannerPermission, readOnlySessionRules, OPENCODE_SEARCH_OFF, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
 import { hunksOf } from './fileDiff';
 import { heldServersNote } from './projectServers';
 import type { ProjectMcpServer } from './repoConfig';
@@ -19,10 +20,13 @@ const IDLE_POLLS_BEFORE_START = 3;
 /**
  * The planner's session gets the same policy its server is configured with
  * (ADR-0026), catch-all first: 2.x, like 1.x, applies the last rule that
- * matches, after the agent's and the user's own.
+ * matches, after the agent's and the user's own. With the native-shell
+ * opt-in, `bash` and `shell` ask instead of denying (ADR-0036 N2).
  */
-const PLANNER_RULES: SessionRule[] = Object.entries(OPENCODE_PLANNER_PERMISSION)
-  .map(([action, effect]) => ({ action, resource: '*', effect }));
+function plannerRules(nativeShell: boolean): SessionRule[] {
+  return Object.entries(plannerPermission(nativeShell))
+    .map(([action, effect]) => ({ action, resource: '*', effect }));
+}
 const SEARCH_OFF_RULES: SessionRule[] = Object.entries(OPENCODE_SEARCH_OFF)
   .map(([action, effect]) => ({ action, resource: '*', effect }));
 /**
@@ -31,9 +35,9 @@ const SEARCH_OFF_RULES: SessionRule[] = Object.entries(OPENCODE_SEARCH_OFF)
  * A planner's session denies it outright.
  */
 const CODE_MODE_OFF_RULES: SessionRule[] = [{ action: 'execute', resource: '*', effect: 'deny' }];
-function codeModeOnly(version: string | undefined): string {
-  return `OpenCode${version ? ` ${version}` : ''} cannot run the planner safely: it can only offer Ordewell's tools inside code mode, which runs code the planner writes without asking. `
-    + 'The planner needs an OpenCode version that can list MCP tools outside code mode. Update OpenCode, or choose another planner runner.';
+function codeModeOnly(version: string | undefined, role: 'planner' | 'task'): string {
+  return `OpenCode${version ? ` ${version}` : ''} cannot run the ${role} safely: it can only offer Ordewell's tools inside code mode, which runs code the model writes without asking. `
+    + `This ${role} needs an OpenCode version that can list MCP tools outside code mode. Update OpenCode, or choose another runner.`;
 }
 /** Why an approved project server's tools are missing, when this OpenCode cannot list them as tools of their own. */
 const UNUSABLE = 'not usable on this OpenCode version: its tools are only reachable through code mode\'s `execute`, which the planner may not use';
@@ -81,6 +85,8 @@ interface V2Frame {
      * for the context, the file the whole of it was saved to.
      */
     metadata?: { sessionID?: string; status?: string; files?: unknown; truncated?: unknown; outputPath?: unknown };
+    /** `shell.created`: the shell a command was started in (ADR-0036 N2). */
+    info?: { id?: string; shell?: string; command?: string; metadata?: { sessionID?: string } };
   };
 }
 
@@ -106,11 +112,16 @@ function searchProviderChosen(config: unknown): boolean {
   return false;
 }
 
+/** The effect of the last `*`-resource rule for `action`, as OpenCode reads a session's own rules. */
+function ruleEffect(rules: unknown, action: string): string | undefined {
+  if (!Array.isArray(rules)) return undefined;
+  const last = [...rules].reverse().find((rule: unknown) => isRecord(rule) && rule.action === action && (rule.resource === '*' || rule.resource === undefined));
+  return isRecord(last) && typeof last.effect === 'string' ? last.effect : undefined;
+}
+
 /** Whether a session's own rules deny `action` outright, as {@link SEARCH_OFF_RULES} and {@link CODE_MODE_OFF_RULES} do. */
 function rulesDeny(rules: unknown, action: string): boolean {
-  if (!Array.isArray(rules)) return false;
-  const last = [...rules].reverse().find((rule: unknown) => isRecord(rule) && rule.action === action && (rule.resource === '*' || rule.resource === undefined));
-  return isRecord(last) && last.effect === 'deny';
+  return ruleEffect(rules, action) === 'deny';
 }
 
 /**
@@ -134,6 +145,8 @@ interface V2Message {
 export interface OpenCodeV2Host {
   /** What `/api/info` reports. */
   version?: string;
+  /** The native-shell launcher every command of a planner must run in (ADR-0036 N2); null when the opt-in is off. */
+  nativeShell?: string | null;
   /** The user's MCP servers the server listed, for telling a planner's MCP tool request from a built-in's (ADR-0026). */
   mcpServers?(): readonly string[];
   request(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Response>;
@@ -156,6 +169,10 @@ interface TurnState extends StreamTurn<V2Frame> {
   briefs: Map<string, string>;
   /** A `read` call's id → the path it reads; its `external_directory` request names only the folder. */
   readPaths: Map<string, string>;
+  /** A `bash`/`shell` call's id → the command it asked for, and the session that runs it. */
+  shellCalls: Map<string, { command: string; session: string }>;
+  /** A shell call whose command OpenCode ran outside Ordewell's launcher (ADR-0036 N2), and why it failed. */
+  wrongShell: Map<string, string>;
 }
 
 interface Turn extends TurnLatch {
@@ -164,7 +181,15 @@ interface Turn extends TurnLatch {
 }
 
 function newTurnState(): TurnState {
-  return { ...streamTurn<V2Frame>(), toolNames: new Map(), stepModels: new Map(), briefs: new Map(), readPaths: new Map() };
+  return {
+    ...streamTurn<V2Frame>(),
+    toolNames: new Map(),
+    stepModels: new Map(),
+    briefs: new Map(),
+    readPaths: new Map(),
+    shellCalls: new Map(),
+    wrongShell: new Map(),
+  };
 }
 
 /**
@@ -232,7 +257,7 @@ export class OpenCodeV2 {
   private readonly saved = new Set<string>();
   private readonly permissions = openCodePermissions(
     (id, sessionId, decision) => this.replyPermission(id, sessionId, decision),
-    () => ({ role: this.role, autoApprove: this.opts.kind === 'task' && autoApproves(this.opts) }),
+    () => ({ role: this.role, autoApprove: this.opts.kind === 'task' && autoApproves(this.opts), decide: readOnlyTaskPolicy(this.opts) }),
   );
 
   constructor(
@@ -248,6 +273,9 @@ export class OpenCodeV2 {
 
   nativeSessionId(): string | null { return this.sessionId; }
 
+  /** The launcher every command must run in, or null when the user's opt-in is off (ADR-0036 N2). */
+  private get nativeShell(): string | null { return this.host.nativeShell ?? null; }
+
   unusableProjectServers(): ProjectMcpServer[] { return [...this.unusable]; }
 
   savedOutput(abs: string): boolean { return this.saved.has(abs); }
@@ -260,7 +288,11 @@ export class OpenCodeV2 {
       const existing = await this.host.json<{ data?: { id?: string; permissions?: unknown } }>('GET', `/api/session/${resume}`).catch(() => null);
       // Its rules are the ones it was created with, which no route changes: a planner session from before
       // `execute` was denied would keep running the planner's code unasked, so it is treated as stale.
-      const resumable = this.role === 'task' || rulesDeny(existing?.data?.permissions, 'execute');
+      // The shell rules must match the opt-in too (ADR-0036 N1): resuming a session created without it
+      // would leave the new process with a shell it may not use, or with one it may when the user turned it off.
+      const resumable = !readOnlyTask(this.opts)
+        && (this.role === 'task' || rulesDeny(existing?.data?.permissions, 'execute'))
+        && this.shellRulesMatch(existing?.data?.permissions);
       if (existing?.data?.id && resumable) {
         this.sessionId = existing.data.id;
         // The instructions follow its rules too.
@@ -281,11 +313,18 @@ export class OpenCodeV2 {
     const created = await this.host.json<{ data?: { id?: string } }>('POST', '/api/session', {
       agent: this.agent,
       ...(this.model ? { model: this.model } : {}),
-      permissions: [...(this.role === 'planner' ? [...PLANNER_RULES, ...(this.ownSearch ? [] : SEARCH_OFF_RULES), ...CODE_MODE_OFF_RULES] : TASK_RULES), ...this.ordewellRules()],
+      permissions: [...(this.opts.kind === 'task' && readOnlyTask(this.opts) ? readOnlySessionRules(this.opts) : this.role === 'planner' ? [...plannerRules(this.nativeShell !== null), ...(this.ownSearch ? [] : SEARCH_OFF_RULES), ...CODE_MODE_OFF_RULES] : TASK_RULES), ...this.ordewellRules()],
     });
     if (!created?.data?.id) throw new Error(`The OpenCode ${this.role} server did not return a session id.`);
     this.sessionId = created.data.id;
     await this.applyInstructions();
+  }
+
+  /** Whether a planner session's own shell rules are the ones the current opt-in needs (ADR-0036 N2). */
+  private shellRulesMatch(rules: unknown): boolean {
+    if (this.role !== 'planner') return true;
+    const expected = this.nativeShell ? 'ask' : 'deny';
+    return ruleEffect(rules, 'bash') === expected && ruleEffect(rules, 'shell') === expected;
   }
 
   /**
@@ -304,8 +343,8 @@ export class OpenCodeV2 {
    */
   private async exposeServers(): Promise<void> {
     const mcp = this.opts.mcp;
-    if (mcp && !await this.expose(mcp.name, { type: 'remote', url: mcp.url, headers: mcp.headers }) && this.role === 'planner') {
-      throw new Error(codeModeOnly(this.host.version));
+    if (mcp && !await this.expose(mcp.name, { type: 'remote', url: mcp.url, headers: mcp.headers }) && (this.role === 'planner' || readOnlyTask(this.opts))) {
+      throw new Error(codeModeOnly(this.host.version, this.role));
     }
     const project = this.opts.kind === 'planner' ? this.opts.projectServers ?? [] : [];
     for (const server of project) {
@@ -321,7 +360,7 @@ export class OpenCodeV2 {
 
   /** Allow the Ordewell server's tools, so a call never waits on a person (ADR-0022, S3). */
   private ordewellRules(): SessionRule[] {
-    return this.opts.mcp ? OPENCODE_ORDEWELL.sessionRules(this.opts.mcp, this.role) : [];
+    return this.opts.mcp ? OPENCODE_ORDEWELL.sessionRules(this.opts.mcp, readOnlyTask(this.opts) ? 'readOnlyTask' : this.role) : [];
   }
 
   /**
@@ -494,6 +533,12 @@ export class OpenCodeV2 {
   private onFrame(frame: V2Frame, state: TurnState, turn: Turn, onEvent: (e: AgentEvent) => void): void {
     const data = frame.data;
     if (!data || !frame.type) return;
+    // Not a session event: it names the session only inside the shell's own
+    // metadata. Checked before the session filter below (ADR-0036 N2).
+    if (frame.type === 'shell.created') {
+      this.checkShell(data, state, turn);
+      return;
+    }
     if (frame.type === 'session.created') {
       if (data.parentID && data.parentID === this.sessionId && data.sessionID) state.children.created(data.sessionID);
       return;
@@ -518,7 +563,8 @@ export class OpenCodeV2 {
       if (frame.type === 'session.execution.succeeded' || frame.type === 'session.execution.failed' || frame.type === 'session.execution.interrupted') {
         if (!turn.live || turn.done) return;
         turn.outcome = frame.type === 'session.execution.succeeded' ? 'succeeded' : frame.type === 'session.execution.failed' ? 'failed' : 'interrupted';
-        if (turn.outcome === 'failed') turn.failure = data.error?.message ?? data.error?.type ?? null;
+        // A shell that escaped the launcher already named the failure (N2); OpenCode's own error must not replace it.
+        if (turn.outcome === 'failed') turn.failure ??= data.error?.message ?? data.error?.type ?? null;
         turn.finish();
         return;
       }
@@ -542,6 +588,26 @@ export class OpenCodeV2 {
       subagentId = owner;
     }
     this.onContentFrame(frame, data, state, turn, onEvent, subagentId);
+  }
+
+  /**
+   * Each shell OpenCode starts names the program it runs in. With the opt-in
+   * on, anything but Ordewell's launcher means the command escaped the sandbox
+   * (ADR-0036 N2): the turn fails, and the call whose command it was reports
+   * that failure rather than a success it cannot vouch for.
+   */
+  private checkShell(data: NonNullable<V2Frame['data']>, state: TurnState, turn: Turn): void {
+    const expected = this.nativeShell;
+    const info = data.info;
+    if (!expected || !info?.shell || info.shell === expected) return;
+    const session = info.metadata?.sessionID;
+    if (session && session !== this.sessionId && !state.children.follows(session)) return;
+    const reason = `OpenCode ran a command in ${info.shell}, not Ordewell's launcher (${expected}). This planner's own shell is not sandboxed, so the turn is failed.`;
+    const call = [...state.shellCalls].find(([id, held]) => !state.wrongShell.has(id)
+      && held.command === info.command
+      && (!session || held.session === session))?.[0];
+    if (call) state.wrongShell.set(call, reason);
+    turn.failure = reason;
   }
 
   private onContentFrame(frame: V2Frame, data: NonNullable<V2Frame['data']>, state: TurnState, turn: Turn, onEvent: (e: AgentEvent) => void, subagentId?: string): void {
@@ -578,6 +644,11 @@ export class OpenCodeV2 {
         const input = data.input ?? {};
         const name = state.toolNames.get(id) ?? 'tool';
         if (name === 'read' && typeof input.path === 'string') state.readPaths.set(id, input.path);
+        // The shell's own `shell.created` carries no call id, so the command is
+        // what ties the process Ordewell checks to the call the model made (N2).
+        if ((name === 'bash' || name === 'shell') && typeof input.command === 'string') {
+          state.shellCalls.set(id, { command: input.command, session: data.sessionID ?? '' });
+        }
         const brief = typeof input.description === 'string' ? input.description : typeof input.prompt === 'string' ? input.prompt : '';
         state.briefs.set(id, brief);
         onEvent({ type: 'tool_call', id, name, args: input, subagentId });
@@ -592,9 +663,10 @@ export class OpenCodeV2 {
         const id = data.id;
         if (!id || state.seen.has(`result:${id}`)) return;
         state.seen.add(`result:${id}`);
-        const success = frame.type === 'session.tool.success';
+        const wrongShell = state.wrongShell.get(id);
+        const success = frame.type === 'session.tool.success' && !wrongShell;
         if (success && this.role === 'planner') this.rememberSaved(data.metadata);
-        const output = success ? editDiff(data.metadata) || contentText(data.content) : data.error?.message ?? data.error?.type ?? '';
+        const output = wrongShell ?? (success ? editDiff(data.metadata) || contentText(data.content) : data.error?.message ?? data.error?.type ?? '');
         onEvent({ type: 'tool_result', id, name: state.toolNames.get(id) ?? 'tool', output, success, subagentId });
         if (!subagentId) this.finishChild(id, success, output, state, onEvent);
         return;
@@ -660,12 +732,12 @@ export class OpenCodeV2 {
   private onPermissionAsked(ask: NonNullable<V2Frame['data']>, session: string, state: TurnState, onEvent: (e: AgentEvent) => void): void {
     const request = this.permissionRequest(ask);
     if (!request) return;
-    if (this.role !== 'task') {
+    if (this.role !== 'task' || readOnlyTask(this.opts)) {
       // `/api/mcp` may have been read before OpenCode listed the approved servers; they are known from the start.
       // An unusable one is running too, but what reaches its tools is `execute`, and the planner was told it has none.
       const listed = (this.host.mcpServers?.() ?? []).filter((name) => !this.unusable.some((server) => server.name === name));
       const read = request.name === 'external_directory' && ask.source?.id ? state.readPaths.get(ask.source.id) : undefined;
-      request.ask = openCodePlannerAsk(request.name, { patterns: ask.resources, ...(read ? { metadata: { filepath: read } } : {}) }, [...listed, ...this.exposed]);
+      request.ask = openCodePlannerAsk(request.name, { patterns: ask.resources, ...(read ? { metadata: { filepath: read } } : {}) }, [...listed, ...this.exposed], this.nativeShell !== null);
     }
     raiseOnce(this.permissions, request, session, state.seen, onEvent);
   }

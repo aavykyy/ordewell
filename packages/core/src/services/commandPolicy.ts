@@ -47,8 +47,9 @@ import { SHELL_STATE_COMMANDS, dialectFor, lexAll, literalCdTarget, type Segment
 import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
 import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, takesNextToken, valueFlagIn } from './flagPolicy';
 import { AWK_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
-import { commandAllowedBy, scopeExcluded, type PlannerAllowlist } from './plannerAllowlist';
+import { commandAllowedBy, commandExcludedBy, scopeExcluded, type PlannerAllowlist } from './plannerAllowlist';
 import { EFFECT_REFUSAL_HINT, READ_REFUSAL_HINT, webCommand, wgetVersionCommands } from './webCommands';
+import { EFFECT_ROUTE } from './effectRoute';
 
 export type { Dialect } from './shellLexer';
 
@@ -372,6 +373,50 @@ export function pathRefs(command: string, opts: CommandPolicyOptions = {}): Path
 }
 
 /**
+ * The `!` allowlist entry naming a command on this line, read from every word
+ * of every segment the lexer finds, or undefined (ADR-0036 S3). Not a
+ * classification: a line the classifier refuses unread can still run sealed,
+ * and the user's exclusion holds for it all the same.
+ */
+export function excludedBy(command: string, allow: PlannerAllowlist, opts: CommandPolicyOptions = {}): string | undefined {
+  const { segments } = lexAll(command.trim(), dialectFor(opts.dialect), opts.cdpathSet);
+  for (const seg of segments) {
+    const rule = commandExcludedBy(allow, [seg.binary, ...seg.args]);
+    if (rule) return rule;
+  }
+  return undefined;
+}
+
+/**
+ * The command scope each segment the lexer finds would be remembered under,
+ * one per distinct non-auto segment (ADR-0036 S3). A denial on the card is
+ * keyed on these scopes, so a sealed run must check them, not only the whole
+ * command string: `npm test` denied once also refuses `for f in *; do npm
+ * test; done`, which the classifier refuses unread and which would otherwise
+ * run sealed under a request that names the whole loop. Read-only segments
+ * carry no scope and are left out, as they are never asked about.
+ */
+export function innerCommandScopes(command: string, opts: CommandPolicyOptions = {}): string[] {
+  const dialect = dialectFor(opts.dialect);
+  const { segments } = lexAll(command.trim(), dialect, opts.cdpathSet);
+  const scopes = new Set<string>();
+  for (const seg of segments) {
+    // The lexer keeps a compound-command opener as the segment's first word and
+    // the command it heads among the words after it (`do npm test` is one
+    // segment). Step past the openers, then unwrap any runner, so the command a
+    // loop body runs is scoped under the same name a denial on the card is
+    // remembered as — the scope its own classification produced.
+    let binary = seg.binary;
+    let args = seg.args;
+    while (SHELL_KEYWORDS.includes(binary) && args.length > 0) [binary, ...args] = args;
+    if (SHELL_KEYWORDS.includes(binary)) continue;
+    const { seg: inner, runner } = unwrap({ ...seg, binary, args, binaryPath: undefined }, dialect);
+    if (runner !== undefined || !isAuto(inner, opts)) scopes.add(scopeFor(inner));
+  }
+  return [...scopes];
+}
+
+/**
  * A literal `cd` that `followCd` left unfollowed, so the paths after it were
  * judged from the workspace root: worth saying in a refusal, since the model
  * otherwise sees a path it never meant.
@@ -577,7 +622,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
     return `cmd.exe reads a "/" or "=" inside "${seg.ambiguousCmdName}" as ending the command name, so this classifier cannot tell which program would run. Name the program as a plain command, or describe the work as a task.`;
   }
   if (REFUSED_COMMANDS.includes(seg.binary)) {
-    return `"${seg.binary}" modifies state. You are a read-only planner — describe the change as a task instead, and the runner executing the plan will make it.`;
+    return `"${seg.binary}" modifies state. You are a read-only planner: ${EFFECT_ROUTE}`;
   }
   const runs = REFUSED_RUNNERS[seg.binary];
   if (runs) {
@@ -615,7 +660,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   if (subs) {
     const sub = subcommandOf(seg);
     if (sub && subs.includes(sub)) {
-      return `"${seg.binary} ${sub}" changes state or reaches outward. You are a read-only planner — put it in the plan and let the runner do it.`;
+      return `"${seg.binary} ${sub}" changes state or reaches outward. You are a read-only planner: ${EFFECT_ROUTE}`;
     }
   }
   // `git branch`/`git tag` are read-only subcommands, but their delete/move
@@ -626,7 +671,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
     if (sub === 'branch' || sub === 'tag') {
       const flag = seg.args.find((a) => ['-D', '-d', '-m', '-M', '--delete', '--move'].includes(a));
       if (flag) {
-        return `"git ${sub} ${flag}" mutates refs. You are a read-only planner — describe the change as a task instead.`;
+        return `"git ${sub} ${flag}" mutates refs. You are a read-only planner: ${EFFECT_ROUTE}`;
       }
       // The flag forms above are not the only way to write a ref: a bare
       // positional (`git branch foo`, `git tag v1`) creates or moves one with
@@ -637,7 +682,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
       const scan = scanFlags(seg);
       const target = scan?.operands[1];
       if (!listing && target) {
-        return `"git ${sub} ${target}" creates or moves a ref. You are a read-only planner — describe the change as a task instead.`;
+        return `"git ${sub} ${target}" creates or moves a ref. You are a read-only planner: ${EFFECT_ROUTE}`;
       }
     }
   }

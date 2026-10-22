@@ -236,7 +236,8 @@ describe('a structured run through the real Claude adapter', () => {
 
   /** `mode` is the one the fixture was recorded under; the adapter holds the CLI to the mode asked for. */
   async function run(name: string, mode = 'acceptEdits') {
-    const spawned = fakeSpawn([fixture('claude-code', name)]);
+    const recorded = fixture('claude-code', name);
+    const spawned = fakeSpawn([mode === 'plan' ? recorded.replaceAll('"permissionMode":"plan"', '"permissionMode":"default"') : recorded]);
     const structured = new StructuredRunner({
       process: { spawn: spawned.spawn, resolvePath: async () => '/usr/bin', platform: 'linux', isDirectory: () => true, exists: () => true },
     });

@@ -385,10 +385,12 @@ filed as its own issue.
   capability of their runner: a Claude task loads the user's and the
   project's settings and MCP servers with no ask rule added and no tool
   hidden, a Codex task thread keeps its own `web_search` and config, an
-  OpenCode task session keeps its own permissions, and no task passes
+  OpenCode task session keeps its own permissions, and no change or ops task passes
   through the web-read policy, the budget or `run_command`'s `curl`/`wget`
   rules. How an ops task is authorized beyond plan approval — the mandate,
-  issue #23 — is deliberately out of scope here.
+  issue #23 — is deliberately out of scope here. Read-only tasks withhold
+  native web tools: they have no task web-policy channel to apply the checks
+  above (ADR-0046).
 - **Absent is denial (T5).** An `ask` web read with no approval channel, a
   dismissed card or a timeout is refused, as before.
 - **The secret check narrows, it does not close.** A Full planner that read
@@ -467,3 +469,5 @@ filed as its own issue.
   `ask`. Codex planners in Guarded get their native `cached` search. `curl`
   and `wget` are unchanged: they are shell commands, and Guarded still asks
   about them per origin.
+
+- 2026-10-21 — read-only tasks withhold native web tools because they have no task web-policy channel (ADR-0046).

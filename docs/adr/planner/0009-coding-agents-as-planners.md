@@ -4,7 +4,6 @@ status: accepted
 
 # 0009 — Coding agents as planners: the harness planner backend
 
-*Pending:* [ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md) — effects are consented to and recorded whoever performs them, and the planner runs script tasks; [ADR-0037](../supervision/0037-research-tasks-wake-the-planner.md) — research that outlives a turn is a research task, which is why harness subagents are still awaited within it.
 
 ## Problem
 
@@ -91,7 +90,10 @@ model's behalf, which is precisely what a coding agent replaces.
 
 ## Key properties
 
-- **Mutation belongs to task runners (T1).** A planner reads, searches and asks.
+- **Mutation belongs to task runners (T1).** A planner reads, searches and asks,
+  and writes no repository file. The one effect it performs itself is a script
+  task through `run_script`, which Ordewell runs with no model and the user
+  consents to as written ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
   A harness's own edit tools are denied, its commands run through Ordewell's
   `run_command` inside ADR-0008's envelope, and the one harness shell that stays
   is Codex's, inside its read-only, network-less sandbox. Enforcement comes from
@@ -112,11 +114,14 @@ model's behalf, which is precisely what a coding agent replaces.
     against `IApproval` rather than auto-denied. An absent answer is a denial.
   - The planner's execution tools (`run_plan`, `run_task`, `stop_task`,
     `stop_run`, `retry_task`, `message_task`, `answer_approval`, `merge_all`,
-    `skip_task`) are a further explicit exception
+    `skip_task`, `run_script`) are a further explicit exception
     ([ADR-0029](../supervision/0029-the-supervisor.md)). They change what runs,
     through one core command seam that checks the supervisor level and the
-    plan's approval; they edit no file and run nothing outside the envelope, so
-    mutation still belongs to the runners.
+    plan's approval; they edit no file. All but `run_script` run nothing outside
+    the envelope. `run_script` adds a script task to the plan and starts it,
+    which runs the commands it was given outside the planner's sandbox, under
+    the consent rule of ADR-0035; repository files still change only in the
+    runners' worktrees.
   - Adapters also have a task mode, for the structured transport
     ([ADR-0018](../runners/0018-structured-runner-transport.md)), whose
     permission mode and effort come from the runner manifest; it is an explicit
@@ -176,7 +181,10 @@ model's behalf, which is precisely what a coding agent replaces.
   survives on a subscription: plan with Haiku, execute with Opus.
 - **Research subagents are inert on this backend (T8).** `spawn_research_agent`
   is a Ordewell-executed tool with no meaning when the agent owns its own
-  subagent mechanism. It is hidden rather than silently ignored.
+  subagent mechanism. It is hidden rather than silently ignored. A harness's
+  own subagents are awaited before the turn ends (`MAX_AGENT_WAITS`); research
+  that outlives a turn is a read-only research task in the plan whose report
+  returns to the planner ([ADR-0037](../supervision/0037-research-tasks-wake-the-planner.md), R1, R5).
 - **An unusable agent fails before the goal is typed (T9).** `RunnerInstallation`
   probes the binary and credentials; a planner picker offers only the agents
   that are usable, and states what to install when none is. A turn
@@ -343,3 +351,6 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-17 — a planner picker offers only usable coding agents and configured vendors, with a one-line hint when none is, instead of listing unusable agents greyed-out.
 - 2026-10-17 — a planner switch is shown at once and no longer waits on the target's model discovery; a failed discovery is remembered briefly instead of re-run on every switch ([ADR-0040](../routing/0040-a-slow-model-discovery-never-gates-the-planner-pick.md)).
 - 2026-10-18 — reply text arrives in runs under the runner's own ids, with no paragraph break inside the text; consumers join runs themselves.
+- 2026-10-21 — the planner performs an exact effect itself as a script task through `run_script`, a further execution tool; T1 now says repository files are the runners' alone ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
+
+- 2026-10-21 — research that outlives a turn uses research tasks; harness subagents stay awaited inside the turn (ADR-0037 R5).

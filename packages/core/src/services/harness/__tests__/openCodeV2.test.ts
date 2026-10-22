@@ -1,11 +1,14 @@
-import { describe, it, expect } from 'vitest';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { OpenCodeAdapter } from '../OpenCodeAdapter';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions, TaskModeAgentAdapter } from '../AgentAdapter';
 import { fakeSpawn, sseResponse, type FakeEventStream } from '../../__tests__/harnessTestKit';
 import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF } from '../openCodeOrdewell';
+import { PlannerShellSandbox, plannerShellProfile, sealedShellProfile, type SealedAvailability } from '../../sandbox/plannerSandbox';
+import type { SandboxBackend, SandboxProfile } from '../../sandbox/SandboxBackend';
+import { mapAgentTool } from '../agentTools';
 import { mcpClientConfig } from '../../mcp';
 import type { ProjectMcpServer } from '../repoConfig';
 import type { StructuredEvent } from '../../../interfaces/IRunner';
@@ -98,7 +101,7 @@ function plannerStart(overrides: Record<string, unknown> = {}): AgentStartOption
   return { kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', model: 'opencode-go/deepseek-v4.1-flash', ...overrides } as AgentStartOptions;
 }
 
-async function start(server: ReturnType<typeof fakeServer>, opts: AgentStartOptions = taskStart()) {
+async function start(server: ReturnType<typeof fakeServer>, opts: AgentStartOptions = taskStart(), sandbox?: () => PlannerShellSandbox) {
   const spawned = fakeSpawn([]);
   const envs: NodeJS.ProcessEnv[] = [];
   const spawn: SpawnFn = (cmd, argv, options) => {
@@ -113,6 +116,7 @@ async function start(server: ReturnType<typeof fakeServer>, opts: AgentStartOpti
     isDirectory: () => true,
     exists: () => true,
     workspaceEnv: async () => ({}),
+    ...(sandbox ? { nativeShellSandbox: sandbox } : {}),
   };
   const adapter = new OpenCodeAdapter(deps);
   const started = adapter.start(opts);
@@ -147,6 +151,39 @@ const permissionAsk = (id: string, sessionID = SES) => ({
 });
 
 describe('OpenCode 2.x — start', () => {
+  it('gives a read-only task restrictive session rules and exposes MCP outside code mode', async () => {
+    const server = fakeServer();
+    const mcp = mcpClientConfig({ token: 'read-only-test', url: 'http://127.0.0.1:4555/mcp', readOnly: true });
+    const { adapter, env } = await start(server, taskStart({ mode: 'plan', workspaceRoot: '/workspace', flags: { readOnly: true, permissionMode: 'build', modeSettings: {} }, mcp }));
+    try {
+      expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe('1');
+      const created = server.requests.find((r) => r.method === 'POST' && r.path === '/api/session')?.body as { agent: string; model: unknown; permissions: Array<{ action: string; resource: string; effect: string }> };
+      expect(created.agent).toBe('build');
+      expect(created.model).toEqual({ providerID: 'opencode-go', id: 'deepseek-v4.1-flash' });
+      for (const action of ['*', 'external_directory', 'edit', 'write', 'patch', 'apply_patch', 'multiedit', 'bash', 'shell', 'task', 'subagent', 'webfetch', 'websearch', 'execute']) expect(created.permissions).toContainEqual({ action, resource: '*', effect: 'deny' });
+      for (const action of ['read', 'grep', 'glob', 'list', 'ordewell_run_command', 'ordewell_task_complete', 'ordewell_checkpoint']) expect(created.permissions).toContainEqual({ action, resource: '*', effect: 'allow' });
+      expect(created.permissions).toContainEqual({ action: 'external_directory', resource: '/workspace/*', effect: 'allow' });
+      expect(server.requests.find((r) => r.path === '/api/experimental/mcp/ordewell')?.body).toMatchObject({ config: { codemode: false } });
+      const events: AgentEvent[] = [];
+      const turn = adapter.send('Review', (e) => events.push(e));
+      const stream = await server.stream();
+      stream.push(started());
+      stream.push(permissionAsk('ro-shell'));
+      await until(() => server.requests.some((r) => r.path.endsWith('/permission/ro-shell/reply')));
+      expect(server.requests.find((r) => r.path.endsWith('/permission/ro-shell/reply'))?.body).toMatchObject({ decision: 'reject' });
+      expect(events.find((e) => e.type === 'permission_request')).toMatchObject({ decided: { decision: 'deny' } });
+      stream.push(succeeded());
+      await turn;
+    } finally { adapter.dispose(); }
+  });
+
+  it('refuses a read-only task when MCP is reachable only through unchecked code mode', async () => {
+    const server = fakeServer({ 'PUT /api/experimental/mcp/ordewell': () => ({ status: 404 }) });
+    const mcp = mcpClientConfig({ token: 'read-only-test', url: 'http://127.0.0.1:4555/mcp', readOnly: true });
+    await expect(start(server, taskStart({ mode: 'plan', flags: { readOnly: true, permissionMode: 'build', modeSettings: {} }, mcp }))).rejects.toThrow(/code mode/);
+    expect(server.requests.some((r) => r.path === '/api/session')).toBe(false);
+  });
+
   it('takes a 2.x server by its /api/info, and secures a planner as it does a task', async () => {
     const server = fakeServer();
     const { adapter, env } = await start(server, plannerStart());
@@ -156,6 +193,8 @@ describe('OpenCode 2.x — start', () => {
     expect(server.requests.some((r) => r.path === '/session')).toBe(false);
     for (const request of server.requests) expect(request.authorization).toBe(basic(password!));
     expect(adapter.nativeSessionId()).toBe(SES);
+    // The native-shell check reads it (ADR-0036 N2).
+    expect(adapter.version()).toBe('2.0.22');
     adapter.dispose();
   });
 
@@ -231,7 +270,7 @@ const rules = (policy: Record<string, string>) => Object.entries(policy).map(([a
 /** Ordewell's tools, each allowed by its exact name: a pattern would cover a server named `ordewell_<anything>` too. */
 const ordewellAllow = [
   'list_runners', 'list_models', 'submit_plan', 'edit_plan', 'task_query', 'task_output', 'task_diff', 'run_command', 'fetch', 'web_search', 'load_skill',
-  'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'merge_all',
+  'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'merge_all', 'run_script',
 ].map((tool) => ({ action: `ordewell_${tool}`, resource: '*', effect: 'allow' }));
 const taskAllow = ['task_complete', 'checkpoint'].map((tool) => ({ action: `ordewell_${tool}`, resource: '*', effect: 'allow' }));
 const document = (info: Record<string, unknown>) => ({ type: 'document', path: '/home/u/.config/opencode/opencode.jsonc', info });
@@ -308,6 +347,199 @@ describe('OpenCode 2.x — a planner\'s own search (ADR-0027)', () => {
     expect(server.requests.some((r) => r.path === '/api/config')).toBe(false);
     expect(env.OPENCODE_CONFIG_CONTENT ?? '').not.toContain('websearch');
     adapter.dispose();
+  });
+});
+
+describe('OpenCode 2.x — the native shell (ADR-0036 N2)', () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function workspace(): string {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-native-opencode-')));
+    dirs.push(dir);
+    return dir;
+  }
+
+  /** The host's sandbox, with a backend that only records what it was asked to wrap. */
+  function nativeSandbox(profiles: SandboxProfile[] = []): () => PlannerShellSandbox {
+    const backend: SandboxBackend = {
+      name: 'fake',
+      probe: async () => ({ ok: true }),
+      wrap: (invocation, profile) => {
+        profiles.push(profile);
+        return {
+          file: '/usr/bin/sandbox-exec',
+          args: ['-p', 'PROFILE', invocation.shell, ...invocation.shellArgs],
+          env: { ...invocation.env, ...profile.env },
+        };
+      },
+    };
+    const sealed: SealedAvailability = {
+      available: true,
+      profile: (opts) => sealedShellProfile({ platform: 'darwin', reads: ['/usr'], masked: [], overlay: false }, opts),
+    };
+    return () => new PlannerShellSandbox(async () => ({
+      available: true,
+      backend,
+      profile: (opts) => plannerShellProfile({ platform: 'darwin', services: [] }, opts),
+      sealed,
+    }));
+  }
+
+  it('names the launcher in SHELL and the config, asks for both shell spellings, and starts the server credential-free', async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'ghp_secret');
+    vi.stubEnv('OPENCODE_API_KEY', 'oc-login');
+    vi.stubEnv('DEEPSEEK_API_KEY', 'provider-secret');
+    const profiles: SandboxProfile[] = [];
+    const server = fakeServer();
+    const { adapter, env } = await start(server, plannerStart({ cwd: workspace(), nativeShell: true }), nativeSandbox(profiles));
+    const launcher = env.SHELL;
+    try {
+      expect(launcher).toBeTruthy();
+      expect(existsSync(launcher!)).toBe(true);
+      const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? 'null') as { shell?: string; permission: Record<string, string> };
+      expect(config.shell).toBe(launcher);
+      expect(config.permission).toMatchObject({ bash: 'ask', shell: 'ask', edit: 'deny', write: 'deny' });
+
+      // N2.2: the server process has no user credential, and keeps OpenCode's own login (N3).
+      expect(env.GITHUB_TOKEN).toBeUndefined();
+      expect(env.DEEPSEEK_API_KEY).toBeUndefined();
+      expect(env.OPENCODE_API_KEY).toBe('oc-login');
+
+      const created = server.requests.find((r) => r.method === 'POST' && r.path === '/api/session')?.body as { permissions: Array<{ action: string; effect: string }> };
+      expect(created.permissions).toContainEqual({ action: 'shell', resource: '*', effect: 'ask' });
+      expect(created.permissions).toContainEqual({ action: 'bash', resource: '*', effect: 'ask' });
+
+      // N2, N3: the sealed profile with the network, the keychain withheld, and
+      // the launcher outside every writable directory.
+      const profile = profiles[0];
+      expect(profile.network).toBe(true);
+      expect(profile.keychain).toBe(false);
+      expect(profile.write.some((dir) => launcher!.startsWith(`${dir}/`))).toBe(false);
+    } finally {
+      adapter.dispose();
+    }
+    expect(existsSync(launcher!)).toBe(false);
+  });
+
+  it('leaves SHELL, the config and the policy alone with the flag off', async () => {
+    const server = fakeServer();
+    const { adapter, env } = await start(server, plannerStart({ cwd: workspace() }));
+    try {
+      expect(env.SHELL).toBe(process.env.SHELL);
+      const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? 'null') as { shell?: string; permission: Record<string, string> };
+      expect(config.shell).toBeUndefined();
+      expect(config.permission).toMatchObject({ bash: 'deny', shell: 'deny' });
+      const created = server.requests.find((r) => r.method === 'POST' && r.path === '/api/session')?.body as { permissions: Array<{ action: string; effect: string }> };
+      expect(created.permissions).toContainEqual({ action: 'shell', resource: '*', effect: 'deny' });
+      expect(created.permissions).toContainEqual({ action: 'bash', resource: '*', effect: 'deny' });
+    } finally {
+      adapter.dispose();
+    }
+  });
+
+  it('routes a shell request to the native-shell kind the opt-in allows', async () => {
+    const server = fakeServer();
+    const { adapter } = await start(server, plannerStart({ cwd: workspace(), nativeShell: true }), nativeSandbox());
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => events.push(e));
+    const stream = await server.stream();
+    await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
+    stream.push(started());
+    stream.push(permissionAsk('per_1'));
+    await until(() => events.some((e) => e.type === 'permission_request'));
+
+    expect(events.find((e) => e.type === 'permission_request')).toMatchObject({
+      ask: { kind: 'native-shell', tool: 'shell', command: 'echo hi' },
+    });
+    expect(await adapter.answerPermission('per_1', { decision: 'allow' })).toBe(true);
+    stream.push(succeeded());
+    await turn;
+    adapter.dispose();
+  });
+
+  it('fails a call whose shell.created names another shell, and reports it on that call', async () => {
+    const server = fakeServer();
+    const { adapter } = await start(server, plannerStart({ cwd: workspace(), nativeShell: true }), nativeSandbox());
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => events.push(e));
+    const stream = await server.stream();
+    await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
+    stream.push(started());
+    for (const f of call('call_1', { command: 'echo hi' }, 'shell')) stream.push(f);
+    stream.push({ type: 'shell.created', data: { info: { id: 'sh_1', shell: '/bin/sh', command: 'echo hi', metadata: { sessionID: SES } } } });
+    stream.push(frame('session.tool.success', { assistantMessageID: MSG, id: 'call_1', content: [{ type: 'text', text: 'hi' }] }));
+    stream.push(succeeded());
+    await turn;
+
+    expect(events.find((e) => e.type === 'tool_result')).toMatchObject({
+      id: 'call_1',
+      name: 'shell',
+      success: false,
+      output: expect.stringContaining('not Ordewell'),
+    });
+    expect(events.find((e) => e.type === 'error')).toMatchObject({ message: expect.stringContaining('not Ordewell') });
+    adapter.dispose();
+  });
+
+  it('accepts a shell.created naming Ordewell\'s launcher, and reports each command as a bash step', async () => {
+    const server = fakeServer();
+    const { adapter, env } = await start(server, plannerStart({ cwd: workspace(), nativeShell: true }), nativeSandbox());
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => events.push(e));
+    const stream = await server.stream();
+    await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
+    stream.push(started());
+    for (const f of call('call_1', { command: 'echo hi' }, 'shell')) stream.push(f);
+    stream.push({ type: 'shell.created', data: { info: { id: 'sh_1', shell: env.SHELL, command: 'echo hi', metadata: { sessionID: SES } } } });
+    stream.push(frame('session.tool.success', { assistantMessageID: MSG, id: 'call_1', content: [{ type: 'text', text: 'hi' }] }));
+    stream.push(succeeded());
+    await turn;
+
+    expect(events.find((e) => e.type === 'tool_result')).toMatchObject({ id: 'call_1', name: 'shell', output: 'hi', success: true });
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(mapAgentTool('shell')).toEqual({ tool: 'bash', toolLabel: 'shell' });
+    adapter.dispose();
+  });
+
+  it('fails the start rather than run the shell outside a sandbox', async () => {
+    const server = fakeServer();
+    const spawned = fakeSpawn([]);
+    const adapter = new OpenCodeAdapter({
+      spawn: spawned.spawn,
+      fetch: server.fetch,
+      resolvePath: async () => '/usr/bin',
+      platform: 'linux',
+      isDirectory: () => true,
+      exists: () => true,
+      workspaceEnv: async () => ({}),
+      nativeShellSandbox: () => new PlannerShellSandbox(async () => ({ available: false, notice: 'no sandbox' })),
+    });
+    await expect(adapter.start(plannerStart({ cwd: workspace(), nativeShell: true })))
+      .rejects.toThrow('could not put this planner\'s shell in its sandbox');
+    expect(spawned.processes).toHaveLength(0);
+    adapter.dispose();
+  });
+
+  it('resumes a planner session whose shell rules match the opt-in, and starts fresh when they do not', async () => {
+    const shellAsk = rules(OPENCODE_PLANNER_PERMISSION).map((rule) => (rule.action === 'bash' || rule.action === 'shell' ? { ...rule, effect: 'ask' } : rule));
+    const resumable = fakeServer({ [`GET /api/session/${SES}`]: () => ({ data: { id: SES, permissions: [...shellAsk, ...codeModeOff] } }) });
+    const resumed = await start(resumable, plannerStart({ cwd: workspace(), nativeShell: true, resumeSessionId: SES }), nativeSandbox());
+    expect(resumed.adapter.nativeSessionId()).toBe(SES);
+    resumed.adapter.dispose();
+
+    // Created without the opt-in: its saved shell deny would leave the new
+    // process a shell it may ask nothing about (ADR-0036 N1).
+    const stale = fakeServer({
+      [`GET /api/session/${SES}`]: () => ({ data: { id: SES, permissions: [...rules(OPENCODE_PLANNER_PERMISSION), ...codeModeOff] } }),
+      'POST /api/session': () => ({ data: { id: 'ses_new' } }),
+    });
+    const fresh = await start(stale, plannerStart({ cwd: workspace(), nativeShell: true, resumeSessionId: SES }), nativeSandbox());
+    expect(fresh.adapter.nativeSessionId()).toBe('ses_new');
+    fresh.adapter.dispose();
   });
 });
 
@@ -622,8 +854,8 @@ describe('OpenCode 2.x — MCP servers', () => {
     const server = fakeServer({ 'PUT /api/experimental/mcp/ordewell': () => ({ status: 404 }), 'GET /api/info': () => ({ version: '2.0.9' }) });
 
     await expect(start(server, plannerStart({ mcp: ORDEWELL, projectServers: [PROBE] }))).rejects.toThrow(
-      'OpenCode 2.0.9 cannot run the planner safely: it can only offer Ordewell\'s tools inside code mode, which runs code the planner writes without asking. '
-      + 'The planner needs an OpenCode version that can list MCP tools outside code mode. Update OpenCode, or choose another planner runner.',
+      'OpenCode 2.0.9 cannot run the planner safely: it can only offer Ordewell\'s tools inside code mode, which runs code the model writes without asking. '
+      + 'This planner needs an OpenCode version that can list MCP tools outside code mode. Update OpenCode, or choose another runner.',
     );
     expect(server.requests.some((r) => r.method === 'POST' && r.path === '/api/session')).toBe(false);
     expect(server.requests.some((r) => r.path === '/api/experimental/mcp/probe')).toBe(false);
@@ -711,7 +943,7 @@ describe('OpenCode 2.x — MCP servers', () => {
   it('takes a planner request for an approved project server\'s tool as that tool, before /api/mcp lists the server', async () => {
     const server = fakeServer({ 'GET /api/mcp': () => ({ data: [{ name: 'ordewell', status: { status: 'connected' } }] }) });
     const { adapter } = await start(server, plannerStart({ mcp: ORDEWELL, projectServers: [PROBE] }));
-    expect(await adapter.mcpAttached()).toBe(true);
+    expect(await adapter.mcpAttached()).toBe('connected');
 
     const events: AgentEvent[] = [];
     void adapter.send('go', (e) => events.push(e));
@@ -730,7 +962,7 @@ describe('OpenCode 2.x — MCP servers', () => {
       'GET /api/mcp': () => ({ data: [{ name: 'ordewell', status: { status: 'connected' } }, { name: 'todoist', status: { status: 'connected' } }] }),
     });
     const { adapter } = await start(server, plannerStart({ mcp: { name: 'ordewell', url: 'http://127.0.0.1:1/mcp', headers: {} } }));
-    expect(await adapter.mcpAttached()).toBe(true);
+    expect(await adapter.mcpAttached()).toBe('connected');
 
     const events: AgentEvent[] = [];
     void adapter.send('go', (e) => events.push(e));

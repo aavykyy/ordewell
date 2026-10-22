@@ -84,6 +84,8 @@ export interface ToolBlock {
   outputLineCount: number;
   /** Present when the call edited a file and `output` is its diff: a surface draws it as one. */
   diff?: DiffStat;
+  /** A command that ran sealed (ADR-0036 S4): no network, no home, nothing it wrote kept. A surface marks the row. */
+  sealed?: true;
   turnId?: string;
   /**
    * The subagent this call starts. The call becomes that subagent's block once
@@ -125,6 +127,8 @@ export interface ApprovalBlock {
   subject: string;
   scope: string;
   detail?: string;
+  /** What a script task runs, verbatim, for a start the user is asked to approve (ADR-0035). */
+  body?: string;
   status: ApprovalStatus;
   /** Absent while pending. */
   decidedBy?: ApprovalSource;

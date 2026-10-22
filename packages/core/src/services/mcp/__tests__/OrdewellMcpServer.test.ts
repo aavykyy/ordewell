@@ -55,8 +55,31 @@ describe('OrdewellMcpServer', () => {
     expect(await names(task)).toEqual(['checkpoint', 'task_complete']);
     expect(await names(planner)).toEqual([
       'answer_approval', 'edit_plan', 'fetch', 'list_models', 'list_runners', 'load_skill', 'merge_all', 'message_task', 'retry_task', 'run_command',
-      'run_plan', 'run_task', 'skip_task', 'stop_run', 'stop_task', 'submit_plan', 'task_diff', 'task_output', 'task_query', 'web_search',
+      'run_plan', 'run_script', 'run_task', 'skip_task', 'stop_run', 'stop_task', 'submit_plan', 'task_diff', 'task_output', 'task_query', 'web_search',
     ]);
+  });
+
+  it("gives run_command to a read-only task's token alone, and routes its calls to that attempt's shell (ADR-0046)", async () => {
+    const server = newServer();
+    const runCommand = vi.fn(async ({ command }: { command: string }, _context: McpToolContext): Promise<McpToolReply> => ({ text: `ran ${command}` }));
+    const credential = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1, readOnly: true }, { runCommand });
+    const writer = await server.issueTaskToken({ sessionId: 's1', taskId: 't2', attempt: 1 }, { runCommand });
+    const readOnly = await connect(credential);
+    const change = await connect(writer);
+
+    expect(credential.readOnly).toBe(true);
+    expect(mcpClientConfig(credential).readOnly).toBe(true);
+    expect(writer.readOnly).toBeUndefined();
+    expect(mcpClientConfig(writer).readOnly).toBeUndefined();
+    const tools = (await readOnly.listTools()).tools;
+    expect(tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'run_command', 'task_complete']);
+    // The hint names what lands, even when a command changes its disposable worktree.
+    expect(tools.find((t) => t.name === 'run_command')?.annotations?.readOnlyHint).toBe(true);
+    expect((await change.listTools()).tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'task_complete']);
+
+    expect(await readOnly.callTool({ name: 'run_command', arguments: { command: 'npm test' } })).toMatchObject({ content: [{ type: 'text', text: 'ran npm test' }], isError: false });
+    await expect(change.callTool({ name: 'run_command', arguments: { command: 'npm test' } })).rejects.toThrow(/Unknown tool/);
+    expect(runCommand).toHaveBeenCalledTimes(1);
   });
 
   // Claude Code in plan mode refuses any MCP tool not marked read-only, even
@@ -68,9 +91,9 @@ describe('OrdewellMcpServer', () => {
     const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }));
 
     const hints = Object.fromEntries((await planner.listTools()).tools.map((t) => [t.name, t.annotations?.readOnlyHint]));
-    const executing = ['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'merge_all'];
+    const executing = ['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'merge_all', 'run_script'];
     for (const [name, hint] of Object.entries(hints)) expect(hint, name).toBe(!executing.includes(name));
-    expect(Object.keys(hints)).toHaveLength(20);
+    expect(Object.keys(hints)).toHaveLength(21);
     expect((await task.listTools()).tools.map((t) => t.annotations?.readOnlyHint)).toEqual([undefined, undefined]);
   });
 
@@ -106,7 +129,7 @@ describe('OrdewellMcpServer', () => {
 
     expect((await planner.listTools()).tools.map((t) => t.name).sort()).toEqual([
       'answer_approval', 'edit_plan', 'list_models', 'list_runners', 'load_skill', 'merge_all', 'message_task', 'retry_task', 'run_command',
-      'run_plan', 'run_task', 'skip_task', 'stop_run', 'stop_task', 'submit_plan', 'task_diff', 'task_output', 'task_query',
+      'run_plan', 'run_script', 'run_task', 'skip_task', 'stop_run', 'stop_task', 'submit_plan', 'task_diff', 'task_output', 'task_query',
     ]);
     await expect(planner.callTool({ name: 'fetch', arguments: { url: 'https://example.com' } })).rejects.toThrow(/Unknown tool/);
     expect(fetch).not.toHaveBeenCalled();

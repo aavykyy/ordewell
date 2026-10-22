@@ -1,7 +1,7 @@
 import { createAiService, type IAiService } from './AiService';
 import { PlannerBackend } from './PlannerBackend';
 import { applyTaskOps, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
-import { carryPlannedModes } from './ModeResolver';
+import { carryPlannedModes, taggedReadOnlyMode } from './ModeResolver';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
 import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome } from './plannerTools';
@@ -16,6 +16,7 @@ import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type Run
 import { PlanStore } from './PlanStore';
 import { ApprovalPolicy, effectiveApprovalMode } from './ApprovalPolicy';
 import { DEFAULT_PLANNER_ALLOWLIST } from './plannerAllowlist';
+import { effectRuleFor, parseEffectAllowlist } from './effectAllowlist';
 import { PendingApprovals, type PendingApproval } from './PendingApprovals';
 import { RunnerApprovals } from './RunnerApprovals';
 import { approvalScopes, isRunnerApproval, type ApprovalAnswer, type ApprovalRequest } from '../interfaces/IApproval';
@@ -39,11 +40,15 @@ import { saveSession } from '../utils/sessionStore';
 import { listTaskLogAttempts, readTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
 import { digestTaskLog, type TaskLogEvent } from '../models/TaskLog';
 import { TaskLogRecorder } from './TaskLogRecorder';
+import { ScriptRunner } from './ScriptRunner';
+import { rewrittenScripts } from '../models/ScriptTask';
 import { SessionWindows, withContextWindows } from './ContextWindowFill';
 import { PlannerUsageLedger } from './PlannerUsage';
+import { plannerContextFill } from '../models/Usage';
+import { TurnBudgets, contextLine, taskReadsLine, webReadsLine } from './PlannerBudgets';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
-import { approvalRecordOf, flattenTasks, keepExecutionState, stampOrigin, waitsForApproval, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskSnapshot, type RunnerId } from '../models/Task';
+import { approvalRecordOf, dropRetiredPlanFields, flattenTasks, keepExecutionState, stampOrigin, waitsForApproval, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
 import { installedPlannerAnswered, installedPlannerDetected } from './InstalledPlanner';
@@ -60,6 +65,8 @@ import { PlanEditor } from './PlanEditor';
 import { PlanEditError } from './PlanEditError';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { ExecutionCommands, mergeStopped, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
+import { REPORT_TAIL_LINES, reportEnded } from './taskReport';
+import { ResearchTasks, researchReportTo } from './ResearchTasks';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
 import { TurnEffects } from './TurnEffects';
 
@@ -154,6 +161,8 @@ export interface SessionDeps {
   config: IConfig;
   notifications: INotification;
   runner: IRunner;
+  /** What runs script tasks' bodies (ADR-0035); the real {@link ScriptRunner} unless a test supplies one. */
+  scriptRunner?: IRunner;
   registry: RunnerRegistry;
   /** Resolves the workspace root for the orchestrator (lazy — VS Code can change it). */
   workspaceRoot: () => string;
@@ -215,10 +224,10 @@ function isPlannerApproval(request: ApprovalRequest): boolean {
  * what the task says, not where it stands, so a run moving a task on meanwhile
  * is not mistaken for the planner rewriting it.
  */
-function writtenTasks(before: readonly Task[], after: readonly Task[]): string[] {
+function writtenTasks(before: readonly Task[], after: readonly Task[]): Task[] {
   const said = ({ subtasks: _subtasks, status: _status, ...task }: Task): string => JSON.stringify(task);
   const prior = new Map(flattenTasks(before).map((t) => [t.id, said(t)]));
-  return flattenTasks(after).filter((t) => prior.get(t.id) !== said(t)).map((t) => t.id);
+  return flattenTasks(after).filter((t) => prior.get(t.id) !== said(t));
 }
 
 /**
@@ -233,9 +242,16 @@ export function createSession(deps: SessionDeps): Session {
   // so both read it once it exists.
   let conversation: PlannerConversation | undefined;
   const busy = () => conversation?.isTurnInFlight ?? false;
+  // Each source is read when a turn's input is built; the ledger, the web
+  // reads and the conversation are all made below.
+  const turnBudgets: TurnBudgets = new TurnBudgets([
+    () => contextLine(plannerContextFill(usage.snapshot())),
+    () => taskReadsLine(conversation?.readsLeft),
+    () => webReadsLine(webReads.remaining()),
+  ]);
   const backend = new PlannerBackend(deps.aiService
     ? { pinned: deps.aiService, busy }
-    : { provider: () => deps.config.aiProvider, create: () => createAiService(deps.config, { workspaceRoot: deps.workspaceRoot, mcpServer }), busy });
+    : { provider: () => deps.config.aiProvider, create: () => createAiService(deps.config, { workspaceRoot: deps.workspaceRoot, mcpServer, turnBudgets }), busy });
   const aiService = () => backend.current();
   const store = new PlanStore();
   // A window a runner or provider reports wins, and every later stream of the
@@ -269,6 +285,7 @@ export function createSession(deps: SessionDeps): Session {
         subject: request.subject,
         scope: approvalScopes(request).join(', '),
         detail: request.detail,
+        ...(request.body ? { body: request.body } : {}),
         turnId: conversation?.currentTurnId,
       });
     },
@@ -282,6 +299,7 @@ export function createSession(deps: SessionDeps): Session {
     config: deps.config,
     notifications: deps.notifications,
     runner: taskLogs.wrap(runnerApprovals.wrap(withContextWindows(deps.runner, windows))),
+    scriptRunner: taskLogs.wrap(deps.scriptRunner ?? new ScriptRunner()),
     store,
     output: deps.taskOutput,
     isolation: deps.isolation,
@@ -292,6 +310,11 @@ export function createSession(deps: SessionDeps): Session {
     lastLoggedAttempt: (taskId) => session.taskLogAttempts(taskId).at(-1) ?? 0,
     runSettings: () => session.planState?.runSettings,
     isApproved: (taskId) => session.isApproved(taskId),
+    research: {
+      started: (task) => session.research.started(task),
+    },
+    // The planner's command rules, at the read-only task's own working directory (ADR-0046).
+    taskShell: (site) => deps.fsAdapter.taskShell?.(site),
   });
   const usage = new PlannerUsageLedger(windows);
   const events = new SessionEventRelay({
@@ -305,7 +328,7 @@ export function createSession(deps: SessionDeps): Session {
     autonomous: () => deps.config.autonomousMode,
     // Read per request, so a change of autonomy level or allowlist applies to the next call.
     mode: (kind) => effectiveApprovalMode(deps.config.approvalMode, deps.config.autonomousMode, kind),
-    preApproved: () => [...(deps.config.approvalDefaults ? DEFAULT_PLANNER_ALLOWLIST : []), ...deps.config.approvalPreApproved],
+    preApproved: () => plannerAllowlistOf(deps.config),
     ask: (req) => approvals.ask(req),
     // The interactive path (`asked`) already broadcasts approval_request +
     // approval_settled; only the silent sources need a signal, or a
@@ -378,6 +401,11 @@ export function createSession(deps: SessionDeps): Session {
 }
 
 /** Every credential the config holds, read afresh so a key set mid-session is covered. */
+/** The planner allowlist in force: the built-in reads unless turned off, then the user's entries. */
+function plannerAllowlistOf(config: IConfig): string[] {
+  return [...(config.approvalDefaults ? DEFAULT_PLANNER_ALLOWLIST : []), ...config.approvalPreApproved];
+}
+
 function configSecrets(config: IConfig): string[] {
   return [
     config.apiKey, config.openAiApiKey, config.openrouterKey, config.geminiKey, config.openaiCompatibleApiKey,
@@ -431,6 +459,11 @@ export interface SessionParts {
  * (setModels, setRunnerList, …) stay on the host; Session never emits them.
  */
 export class Session {
+  readonly research = new ResearchTasks({
+    plan: () => this.plan,
+    owe: (id, to) => { this.store.update(id, { reportTo: to, researchOrigin: to }); },
+  });
+
   private readonly backend: PlannerBackend;
   private readonly usage: PlannerUsageLedger;
   private readonly windows: SessionWindows;
@@ -452,6 +485,8 @@ export class Session {
    * supervisor has first.
    */
   private sentHandoff: IsolationHandoff | null = null;
+  /** The effect allowlist rules already warned about as ignored, so each is said once, not on every script. */
+  private readonly ignoredEffectRules = new Set<string>();
   /** The run was forgotten and no surface has been told yet; see {@link announceClosed}. */
   private closedUnannounced = false;
   /** The edit the open planner turn holds, as last announced: a surface that joins mid-turn is shown it. */
@@ -507,10 +542,10 @@ export class Session {
     taskLog: (taskId, attempt) => this.taskLog(taskId, attempt),
     taskDiff: (taskId, options) => this.runs.taskDiff(taskId, options),
     taskSkills: () => this.workspaceSkills(),
-    runCommand: (command, signal) => this.fsAdapter.bash(command, signal),
+    runCommand: (command, signal, opts) => this.fsAdapter.bash(command, signal, opts),
     fetchUrl: (url) => this.fetcher.fetch(url),
     webSearch: async (query) => this.fetcher.search?.(query),
-    execute: (command) => this.execute(command, this.turnActor()),
+    execute: (command, signal) => this.commands.run(command, this.turnActor(), undefined, signal),
     editsRefused: (change) => this.conversation.currentWakeUp?.refused(change),
   });
 
@@ -528,6 +563,8 @@ export class Session {
     };
     this.notifications = parts.notifications;
     this.onNotice = parts.onNotice;
+    // A planner shell without an OS sandbox is said once, here, rather than in every command's output (ADR-0011 B5).
+    this.fsAdapter.setNotice?.((message) => this.notice('warn', message));
     this.modelResolver = parts.modelResolver;
     this.settingsFn = parts.settings;
     this.hostSessionId = parts.hostSessionId;
@@ -558,8 +595,8 @@ export class Session {
       assignmentScope: () => this.catalog.scope(),
       autorun: () => this.userRunSettings().autorun,
       tasks: () => this.store.planTasks,
-      // Before the user approves the plan, nothing of it starts: every task would say so.
-      startWaits: (task) => (this.plan?.approved ? this.orchestrator.startWaits(task) : []),
+      // Before plan approval, only research has start rules to explain (ADR-0037 R4).
+      startWaits: (task) => (this.plan?.approved || task.research ? this.orchestrator.startWaits(task) : []),
       liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
       isExecuting: () => this.isExecuting,
       mutate: (op, notify) => this.mutatePlan(op, notify),
@@ -588,9 +625,13 @@ export class Session {
     });
 
     this.turns = new PlanTurns({
+      turnStarting: () => {
+        this.persist();
+      },
       plan: () => (this.closed ? null : this.plan),
       conversationBusy: () => this.conversation.isTurnInFlight,
       mayWake: () => this.supervision.mayWake(),
+      mayReport: () => this.supervision.mayReport(),
       persist: () => this.persist(),
       announce: () => {
         this.persist();
@@ -607,9 +648,10 @@ export class Session {
           this.conversation.reply(prompt, { signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, forced: prompt.forced, ...(wakeUp ? { wakeUp } : {}) });
         // Wake-ups that ride with a user's message are context for the user's turn.
         const { landed, effects } = await this.openTurn(() => (prompt.source === 'supervisor'
-          ? this.supervision.wakeUp(reply, signal)
+          ? this.supervision.wakeUp(reply, signal, prompt.authority)
           : reply(signal)));
-        if (prompt.source !== 'supervisor') this.autorunSubmitted(effects);
+        // A report turn for a task the user's turn started acts as their turns do, autorun included (ADR-0037, R3).
+        if (prompt.source !== 'supervisor' || prompt.authority === 'user') this.autorunSubmitted(effects);
         return landed;
       },
       notice: (message) => this.notice('error', message),
@@ -624,6 +666,11 @@ export class Session {
       tasks: () => this.store.planTasks,
       checkpointQuestion: (taskId) => this.orchestrator.getCheckpointQuestion(taskId) ?? undefined,
       recentOutput: (taskId) => this.orchestrator.getLiveOutput(taskId, { maxLines: 3 })?.text.trim(),
+      reportTail: (taskId) => this.reportTail(taskId),
+      reported: (taskId, to) => {
+        this.store.update(taskId, { reportTo: undefined });
+        if (!to.research) this.commands.scriptEnded(taskId, to);
+      },
       systemNote: (text) => this.systemNote(text),
       supervisorNote: (text) => this.supervisorNote(text),
       changed: () => this.mutatePlan(() => true),
@@ -632,7 +679,7 @@ export class Session {
         const handoff = this.owedHandoff();
         if (handoff) this.broadcast({ type: 'isolation_handoff', ...handoff });
       },
-      deliver: (digest) => this.turns.enqueue({ source: 'supervisor', text: digest }),
+      deliver: (digest, report) => this.turns.enqueue({ source: 'supervisor', text: digest, ...(report ? { report } : {}) }),
       pump: () => this.turns.pump(),
       restartPlanner: () => this.backend.current().restart?.(),
       abandonTurn: () => this.conversation.abandonHungTurn(),
@@ -663,6 +710,16 @@ export class Session {
       // A Guarded start asks on the card the planner's other requests use.
       consent: { request: (request) => this.approvals.ask(request) },
       guards: [this.supervision.guard],
+      // Read per request, like the planner allowlist, so an edited rule applies to the next script (ADR-0035).
+      effects: (body) => {
+        const rules = parseEffectAllowlist(this.config.effectAllowlist, plannerAllowlistOf(this.config));
+        for (const { rule, warning } of rules.ignored) {
+          if (this.ignoredEffectRules.has(rule)) continue;
+          this.ignoredEffectRules.add(rule);
+          this.notice('warn', warning);
+        }
+        return effectRuleFor(rules, body);
+      },
     });
 
     this.unsubObserver = this.orchestrator.subscribe(this.observer());
@@ -777,7 +834,82 @@ export class Session {
         this.systemNote(text);
         this.conversation.tellRunUpdate(text);
       },
+      heldPlan: () => this.conversation.pendingOps() === null,
+      draftScript: (call, actor) => this.draftScript(call, actor),
+      addScript: (task, actor) => this.addScript(task, actor),
+      startAtGate: (taskId) => this.orchestrator.startAtGate(taskId),
+      awaitEnd: (taskId, ms, signal) => this.awaitEnd(taskId, ms, signal),
+      owe: (taskId, to) => this.oweReport(taskId, to),
+      reportTail: (taskId) => this.reportTail(taskId),
     };
+  }
+
+  /**
+   * The script task a `run_script` call would add (ADR-0035), checked as the
+   * planner's own add is, against the plan as it stands: never the turn's held
+   * edit, which lands only as the reply ends. A supervisor's is held to the
+   * oscillation guard its edits are held to, and marked as its own.
+   */
+  private draftScript(call: Extract<ExecutionCommand, { command: 'run_script' }>, actor: ExecutionActor): { ok: true; task: Task } | { ok: false; errors: string[] } {
+    const runners = this.editRunners();
+    const spec: Partial<Task> = {
+      title: call.title, type: 'script', sliceType: 'AFK',
+      ...(call.commands !== undefined ? { commands: call.commands } : {}),
+      ...(call.script !== undefined ? { script: call.script } : {}),
+      ...(call.timeoutMs !== undefined ? { timeoutMs: call.timeoutMs } : {}),
+      ...(call.dependencies !== undefined ? { dependencies: call.dependencies } : {}),
+    };
+    const result = applyTaskOps(this.store.planTasks, [{ op: 'add', task: spec }], runners, this.catalog.edit(runners));
+    if (!result.ok) return { ok: false, errors: result.errors.map((e) => e.replace(/^op \d+ \(\w+\): /, '')) };
+    const known = new Set(this.store.allTasks.map((t) => t.id));
+    const task = flattenTasks(result.tasks).find((t) => !known.has(t.id));
+    if (!task) return { ok: false, errors: ['the plan did not take it'] };
+    if (actor.kind !== 'supervisor') return { ok: true, task };
+    const trip = this.supervision.checkEdit(this.store.planTasks, result.tasks);
+    return trip ? { ok: false, errors: [trip.refusal] } : { ok: true, task: { ...task, addedBy: 'supervisor' } };
+  }
+
+  /** A drafted script task into the plan now, unapproved: the seam approves it once its start is consented to. */
+  private addScript(task: Task, actor: ExecutionActor): void {
+    const before = this.store.planTasks;
+    this.mutatePlan(() => {
+      this.store.add(task);
+      return true;
+    });
+    this.turnEffects.scriptAdded(task.id);
+    if (actor.kind === 'supervisor') this.supervision.edited(before, this.store.planTasks);
+  }
+
+  /** Settles once the task's attempt is over — it ended, was stopped or left the plan — or after `ms`, or as `signal` aborts. */
+  private awaitEnd(taskId: string, ms: number, signal?: AbortSignal): Promise<void> {
+    const over = () => {
+      const task = this.store.get(taskId);
+      return !task || reportEnded(task) || (task.status !== 'in_progress' && !this.orchestrator.getAttempt(taskId));
+    };
+    if (over() || signal?.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        unsubscribe();
+        signal?.removeEventListener('abort', done);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      const check = () => { if (over()) done(); };
+      const unsubscribe = this.orchestrator.subscribe({ onTaskChanged: check, onTaskSettled: check });
+      signal?.addEventListener('abort', done, { once: true });
+    });
+  }
+
+  /** A task's result is owed to the planner (ADR-0037, R2): saved on the task, so a restart still owes it. */
+  private oweReport(taskId: string, to: TaskReportTo): void {
+    this.mutatePlan(() => !!this.store.update(taskId, { reportTo: to }), () => {});
+  }
+
+  /** The end of a task's output as a report carries it: the live capture while it lasts, else the tail its verdict kept. */
+  private reportTail(taskId: string): string | undefined {
+    const live = this.orchestrator.getLiveOutput(taskId, { maxLines: REPORT_TAIL_LINES })?.text;
+    return live?.trim() ? live : this.store.get(taskId)?.outputSummary?.logTail;
   }
 
   /**
@@ -805,7 +937,7 @@ export class Session {
     const held = this.conversation.pendingOps();
     if (!held || held.length === 0 || !this.plan) return unedited;
     const runners = this.editRunners();
-    const result = applyTaskOps(this.store.planTasks, held, runners, this.catalog.edit(runners));
+    const result = applyTaskOps(this.store.planTasks, held, runners, this.catalog.edit(runners), [], this.turnEffects.addedPastEdit);
     return result.ok ? { tasks: result.tasks, handles: result.handles ?? new Map() } : unedited;
   }
 
@@ -816,7 +948,8 @@ export class Session {
 
   /** The open planner turn is the supervisor's, acting at Act: its edits and added tasks are its own (ADR-0029). */
   private supervisorEditing(): boolean {
-    return this.conversation.currentWakeUp !== undefined && this.supervision.level === 'act';
+    const actor = this.turnActor();
+    return actor.kind === 'supervisor' && actor.level === 'act';
   }
 
   /**
@@ -835,7 +968,7 @@ export class Session {
    */
   private checkPlannerOps(ops: TaskOp[], held: readonly TaskOp[] = []): ApplyTaskOpsResult {
     const runners = this.editRunners();
-    const result = applyTaskOps(this.store.planTasks, ops, runners, this.catalog.edit(runners), held);
+    const result = applyTaskOps(this.store.planTasks, ops, runners, this.catalog.edit(runners), held, this.turnEffects.addedPastEdit);
     if (!result.ok || !this.supervisorEditing()) return result;
     const trip = this.supervision.checkEdit(this.store.planTasks, result.tasks);
     if (!trip) return result;
@@ -863,12 +996,13 @@ export class Session {
 
   /**
    * Who the open planner turn speaks for at the seam: the supervisor in a
-   * wake-up turn, at its level as of this call, else the user's turn.
+   * wake-up turn, at its level as of this call, else the user's turn — which a
+   * report turn for a task that turn started acts as (ADR-0037, R3).
    */
   private turnActor(): ExecutionActor {
-    return this.conversation.currentWakeUp
-      ? { kind: 'supervisor', level: this.supervision.level }
-      : { kind: 'planner-turn' };
+    const wakeUp = this.conversation.currentWakeUp;
+    if (!wakeUp) return { kind: 'planner-turn' };
+    return wakeUp.actor?.() ?? { kind: 'supervisor', level: this.supervision.level };
   }
 
   /** The user's run settings as they stand now (ADR-0030). */
@@ -907,6 +1041,13 @@ export class Session {
     const present = taskIds.filter((id) => this.store.get(id));
     if (!this.plan || present.length === 0) return;
     this.plan.approvedTasks = [...new Set([...(this.plan.approvedTasks ?? []), ...present])];
+  }
+
+  /** Take tasks out of the approval record: what they would run now is not what was approved. */
+  private withdrawApprovals(taskIds: readonly string[]): void {
+    const approved = this.plan?.approvedTasks;
+    if (!approved || !taskIds.some((id) => approved.includes(id))) return;
+    this.plan!.approvedTasks = approved.filter((id) => !taskIds.includes(id));
   }
 
   /**
@@ -1057,6 +1198,15 @@ export class Session {
    */
   private persist(): void {
     if (!this.plan) return;
+    // Removing research or its read-only profile ends its unasked approval on every edit route (ADR-0037 R4).
+    const unsafe = (this.plan.researchApprovals ?? []).filter((id) => {
+      const task = this.store.get(id);
+      const modes = task && this.catalog.edit().runnerModes?.[task.assignedRunner];
+      return !task?.research || task.type !== 'ai' || (modes !== undefined && task.taskMode !== taggedReadOnlyMode(modes));
+    });
+    this.withdrawApprovals(unsafe);
+    for (const id of unsafe) if (this.store.get(id)?.researchOrigin) this.store.update(id, { reportTo: undefined, researchOrigin: undefined });
+    this.plan.researchApprovals = this.plan.researchApprovals?.filter((id) => !unsafe.includes(id));
     this.syncPlanTasks();
     this.plan.isolation = this.runs.planIsolation ?? undefined;
     this.plan.plannerUsage = this.usage.snapshot();
@@ -1144,6 +1294,7 @@ export class Session {
     this.beginFreshPlan();
     this.catalog.reset();
     this.remintSessionId();
+    this.fsAdapter.endSession?.();
   }
 
   /** What a planner may assign right now; see {@link SessionCatalog.live}. */
@@ -1297,7 +1448,7 @@ export class Session {
     this.beginFreshPlan({ keepGrants: true });
     const chosenRunners = this.chosenRunners(runners);
 
-    return this.conversation.hold(options?.signal, async (turn) => {
+    const generated = await this.conversation.hold(options?.signal, async (turn) => {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
       const settings = this.settingsFn();
       const modes = { ...plannerModesFrom(this.config.autonomousMode), isolatedExecution: await this.runs.plannerLayout(), taskSkills: this.workspaceSkills() };
@@ -1328,11 +1479,14 @@ export class Session {
         this.conversation.recordSkillWarnings(skillWarnings, plan.generatedAt);
         this.orchestrator.loadPlan(plan.tasks, plan.runners);
         this.store.resetForRun({ preserveCompleted: false });
+        this.adoptResearch([]);
         return true;
       });
       for (const warning of skillWarnings) this.notice('warn', warning);
       return plan;
     });
+    if (this.orchestrator.startsPending) await this.withSave(() => this.orchestrator.tick());
+    return generated;
   }
 
   /**
@@ -1372,6 +1526,7 @@ export class Session {
     try {
       const { landed, effects } = await opened;
       this.autorunSubmitted(effects);
+      if (this.orchestrator.startsPending) await this.withSave(() => this.orchestrator.tick());
       return landed;
     } catch (err) {
       if (!(err instanceof PlannerUsageLimitError) || !this.plan) throw err;
@@ -1565,6 +1720,7 @@ export class Session {
       fs: this.fsAdapter,
       fetcher: this.fetcher,
       approval: this.approvalPolicy,
+      notice: (level, message) => this.notice(level, message),
       plannerTools: { sessionId: this.sessionId, handler: this.plannerTools },
       skills: this.workspaceSkills().listSkills(),
     };
@@ -1597,19 +1753,40 @@ export class Session {
     const { tasks: stamped, added } = stampOrigin(before, coerced, bySupervisor);
     coerced = this.preparePlannerTaskUpdates(stamped);
     if (bySupervisor) this.supervision.edited(before, coerced);
+    // Consent is to a body (ADR-0035): a script that will run something else
+    // than what was approved waits for approval again, read before any rule
+    // below approves what this edit wrote.
+    const rewritten = rewrittenScripts(before, coerced);
     // A run that ended on a failure is still the one a retry continues: reloaded,
     // the failed task would lose its failure and its retry would run it alone.
     if (this.orchestrator.isRunning || this.orchestrator.awaitsResume) {
       this.orchestrator.reconcilePlan(coerced, runners);
     } else {
-      this.orchestrator.loadPlan(coerced, runners);
+      this.orchestrator.loadPlan(coerced, runners, true);
       this.store.resetForRun({ keepScheduledResumes: true });
     }
+    this.withdrawApprovals(rewritten);
     // Once they are in the plan: approval is only ever of a task the plan holds.
     if (bySupervisor) this.approve(added);
     // With autorun on the user said they need not approve what the planner writes in their turn; read as it lands, so turning it off first holds the task.
-    else if (this.conversation.currentWakeUp === undefined && this.userRunSettings().autorun) this.approve(writtenTasks(before, coerced));
+    else if (this.turnActor().kind === 'planner-turn' && this.userRunSettings().autorun) this.approve(this.commands.autorunApproves(writtenTasks(before, coerced)));
+    this.adoptResearch(before);
     return coerced.length;
+  }
+
+  private adoptResearch(before: readonly Task[]): void {
+    const known = new Map(flattenTasks(before).map((t) => [t.id, t]));
+    for (const task of this.store.planTasks) {
+      if (!task.research || known.get(task.id)?.research) continue;
+      const to = researchReportTo(this.turnActor());
+      this.store.update(task.id, { reportTo: to, researchOrigin: to });
+      if (!this.isApproved(task.id)) {
+        this.approve([task.id]);
+      }
+      this.plan!.researchApprovals = [...new Set([...(this.plan!.researchApprovals ?? []), task.id])];
+      // Queue only as it lands: re-queuing on each turn would undo the user's Stop (ADR-0037 R4).
+      this.orchestrator.startAtGate(task.id);
+    }
   }
 
   private preparePlannerTaskUpdates(tasks: Task[]): Task[] {
@@ -2093,6 +2270,9 @@ export class Session {
     for (const key of ['supervisorLevel', 'mergeAtGatesAutomatically', 'supervisorRetryLimit', 'wakeUpReadBudget']) {
       delete (plan as unknown as Record<string, unknown>)[key];
     }
+    // The per-message research budget is gone (ADR-0037); a plan saved before
+    // its removal is read once and written back without its keys.
+    dropRetiredPlanFields(plan);
     carryOverQueuedEdits(plan);
     // The run record is taken synchronously; the orphan prune and the look at
     // what the user has merged since are awaited in the background, and git
@@ -2142,6 +2322,7 @@ export class Session {
     this.approvals.clear();
     this.unsubObserver?.();
     this.unsubObserver = null;
+    this.fsAdapter.endSession?.();
   }
 
   /**

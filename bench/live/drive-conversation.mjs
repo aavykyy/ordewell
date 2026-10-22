@@ -9,12 +9,23 @@
  *       node bench/live/drive-conversation.mjs
  *     runs the full scripted scenario suite with assertions), or
  *
- *   - a REAL model over OpenRouter (no assertions — prints the transcript
- *     and a behavioral report):
+ *   - a REAL model over OpenRouter (no assertions — prints the transcripts and
+ *     writes a behavioural report):
  *       OPENROUTER_API_KEY=sk-or-... node bench/live/drive-conversation.mjs \
- *         --real --model deepseek/deepseek-v4-flash --grilling \
- *         --goal "make this project better" \
- *         --replies "focus on code health::node:test please::confirm"
+ *         --real --model deepseek/deepseek-v4-flash [--out DIR]
+ *     (`MODEL` in the environment works too, as in drive-taskops.mjs.)
+ *
+ * The mock suite includes one scenario per kind of goal the strategy step
+ * teaches (#108): a question, a small effect, a build, a failure to explain and
+ * an open problem. Their personas reply with that kind's plumbing, and the
+ * driver asserts the real Session accepts it: a plan committed with vertical
+ * slices, a `run_script` call that adds and runs a script task, research tasks
+ * approved and started, and a loop whose check is the reproduction. `--real`
+ * replays the same five goals and reports the strategy each one was given —
+ * observed, never graded, and with no cost or performance claim.
+ *
+ * `--real --goal "..."` still runs one goal, with `--replies a::b` answered in
+ * turn, as before.
  *
  * The API key is always taken from the environment — never hardcoded.
  * Requires `npm run build:core` first (imports the built core).
@@ -24,6 +35,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { GOAL_SCENARIOS } from './scenarios.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const core = await import(path.join(__dirname, '../../packages/core/dist/index.mjs'));
@@ -37,7 +49,7 @@ function arg(name, fallback) {
 const REAL = process.argv.includes('--real');
 const GRILLING = process.argv.includes('--grilling');
 const PRD = process.argv.includes('--prd');
-const MODEL = arg('model', 'mock/interviewer');
+const MODEL = arg('model', REAL ? (process.env.MODEL || '') : 'mock/interviewer');
 const GOAL = arg('goal', 'make this project better');
 const REPLIES = (arg('replies', '') || '').split('::').filter(Boolean);
 const BASE_URL = REAL ? (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1') : `http://127.0.0.1:${arg('port', '3799')}/v1`;
@@ -45,6 +57,10 @@ const API_KEY = REAL ? process.env.OPENROUTER_API_KEY : 'mock-key';
 
 if (REAL && !API_KEY) {
   console.error('OPENROUTER_API_KEY is required for --real runs (pass it via the environment, never hardcode it).');
+  process.exit(2);
+}
+if (REAL && !MODEL) {
+  console.error('--real needs --model (or MODEL in the environment): there is no mock persona to pick a real model by.');
   process.exit(2);
 }
 
@@ -141,6 +157,7 @@ const cfg = (model) => ({
   conflictRepairAttempts: 0,
   approvalMode: 'allow',
   approvalPreApproved: [],
+  effectAllowlist: [],
   getProviderBaseUrl: () => BASE_URL,
   getProviderApiKey: () => API_KEY,
   setProviderModelLists: () => {},
@@ -156,7 +173,9 @@ const RUNNER_MODES = {
   'claude-code': [
     { id: 'acceptEdits', label: 'Accept Edits', description: 'Edit automatically', tags: ['autonomous'] },
     { id: 'default', label: 'Default', description: 'Ask before edits', tags: ['safe'] },
-    { id: 'plan', label: 'Plan', description: 'Read-only', tags: [] },
+    // Tagged read-only as the shipped manifest does (ADR-0046), so a plan with
+    // research tasks can be submitted here exactly as in the app.
+    { id: 'plan', label: 'Read-only', description: 'Reads and sealed commands; lands nothing', readOnly: true, tags: [] },
   ],
 };
 
@@ -336,8 +355,14 @@ async function realRun() {
   if (PRD) console.log(`  PRD extracted: ${run.prdBlock ? `yes (slug=${run.prdBlock.slug})` : 'no'}`);
 }
 
-if (REAL) await realRun();
-else await mockSuite();
+if (REAL) {
+  // A single goal with --goal keeps the old one-off behaviour; otherwise the
+  // report covers every kind the strategy step teaches.
+  if (process.argv.includes('--goal')) await realRun();
+  else await realGoalsReport();
+} else {
+  await mockSuite();
+}
 
 // ---------- full Session scenario (production wiring incl. PRD save) ----------
 async function sessionSuite() {
@@ -438,12 +463,14 @@ async function approvalsSuite() {
     assert(approvalReqs(broadcasts).length === 0, 'auto-tier emits no approval_request', failures);
   }
 
-  // 2. refuse-tier: never prompts, returns a refusal tool result.
+  // 2. refuse-tier: never prompts; refused, or run sealed where the host has a
+  //    sandbox (ADR-0036) — never in the workspace either way.
   {
     const { fsAdapter, broadcasts } = makeApprovalSession();
     const result = await fsAdapter.bash('rm -rf build');
-    assert(result.success === false, 'refuse-tier rm is denied', failures);
-    assert(result.output.includes('refused'), 'refusal is actionable', failures);
+    const sealed = /^\[Ran sealed/.test(result.output);
+    assert(result.success === false || sealed, 'refuse-tier rm is refused, or runs sealed where the host has a sandbox', failures);
+    assert(result.output.includes('refused') || sealed, 'the outcome says it was refused without asking', failures);
     assert(approvalReqs(broadcasts).length === 0, 'refuse-tier emits no approval_request', failures);
   }
 
@@ -577,14 +604,19 @@ async function visibilitySuite() {
   assert(byId.size === 4, 'each settled step carries its own tool_call id', failures);
 
   const outcomes = ['vc-1', 'vc-2', 'vc-3', 'vc-4'].map((id) => byId.get(id)?.outcome);
+  // On a host with a sandbox, a refused command runs sealed instead (ADR-0036)
+  // and honestly reports the run; without one, it is refused.
+  const sealedBlocked = /^\[Ran sealed/.test(byId.get('vc-3')?.result ?? '');
   assert(
-    JSON.stringify(outcomes) === JSON.stringify(['success', 'success', 'refused', 'denied']),
-    `outcomes are honest per call: ${JSON.stringify(outcomes)}`,
+    JSON.stringify(outcomes.slice(0, 2)) === JSON.stringify(['success', 'success'])
+      && (outcomes[2] === 'refused' || (outcomes[2] === 'success' && sealedBlocked))
+      && outcomes[3] === 'denied',
+    `outcomes are honest per call: ${JSON.stringify(outcomes)}${sealedBlocked ? ' (vc-3 ran sealed)' : ''}`,
     failures,
   );
 
   const refused = byId.get('vc-3');
-  assert(refused?.success === false, 'a refused command is not reported as a success', failures);
+  assert(refused?.success === false || sealedBlocked, 'a refused command is not reported as a success outside a sealed run', failures);
   assert((refused?.result ?? '').length > 0, 'the refusal reason reaches the surfaces', failures);
   assert(
     dones.every((m) => classifyOutcome(m.step.success, m.step.result) === m.step.outcome),
@@ -686,3 +718,306 @@ async function taskQuerySuite() {
 }
 
 if (!REAL) await taskQuerySuite();
+
+// ---------- one scenario per kind of goal (#108) ----------
+// The strategy step tells the planner what kind of goal it is looking at. These
+// scenarios assert the plumbing each kind produces, through a real Session: the
+// API planner submits a whole plan as the JSON envelope (the same commit path a
+// harness planner's submit_plan reaches), `run_script` goes through the session's
+// command seam, and the session validates, adopts and starts what arrives. What
+// a real model CHOOSES is not asserted here — that is the --real report below.
+
+/** A session that stays live and silent: research tasks start and wait, as they do while their runner works. */
+function silentSession(taskId) {
+  return {
+    id: `silent-${taskId}`, taskId,
+    onOutput() {}, onExit() {}, kill() {},
+    async stop() {},
+    getOutput: () => '',
+    write() {},
+    turnState: () => 'working',
+    onTurnEnd() {}, onEvent() {},
+    sendMessage: () => 'm1', forceSend: () => 'm2',
+    forceSendQueued: () => true, removeQueued: () => true,
+    queued: () => [], interrupt: async () => {},
+    nativeSessionId: () => null,
+    commands: () => [], invokeCommand: () => 'c1',
+    answerPermission: () => false,
+    onTaskComplete() {}, onToolCheckpoint() {}, onScriptExit() {},
+  };
+}
+
+function silentRunner(spawned) {
+  return {
+    async spawn({ taskId }) {
+      const session = silentSession(taskId);
+      spawned.push(session);
+      return session;
+    },
+    async stop() {},
+    stopAll() {},
+    get activeCount() { return 0; },
+  };
+}
+
+/**
+ * The real Session, over the mock provider, with the same wiring the PRD suite
+ * uses. `approveScripts` stands in for a user answering the run_script card:
+ * a script runs only on a yes, and this is the bench's yes.
+ */
+function makeGoalSession({ model, approveScripts = false }) {
+  const { createSession, RunnerRegistry, ModelResolver } = core;
+  const root = makeSandbox();
+  const registry = new RunnerRegistry();
+  const config = cfg(model);
+  const modelResolver = new ModelResolver(registry, config, { execImpl: () => Promise.reject(new Error('no CLI in harness')) });
+  const broadcasts = [];
+  const spawned = [];
+  let session;
+  const broadcast = (m) => {
+    broadcasts.push(m);
+    if (approveScripts && m.type === 'approval_request') queueMicrotask(() => session.resolveApproval(m.id, true));
+  };
+  session = createSession({
+    config,
+    notifications: { info() {}, warn() {}, error() {}, async confirm() { return undefined; } },
+    runner: silentRunner(spawned),
+    registry,
+    workspaceRoot: () => root,
+    fsAdapter: makeFs(root),
+    broadcast,
+    modelResolver,
+    settings: () => ({ grillingEnabled: false }),
+  });
+  return { session, broadcasts, spawned, root };
+}
+
+function clip(text, max) {
+  return text.length > max ? `${text.slice(0, max)} …[${text.length} chars]` : text;
+}
+
+function taskLine(task) {
+  const flags = `${task.research ? '+research' : task.taskMode === 'plan' ? '+readonly' : ''}${task.loop ? `+loop(${task.loop.body.length}·${task.loop.maxRounds})` : ''}`;
+  return `${task.type}${flags} "${task.title}"`;
+}
+
+function printGoal(run) {
+  console.log(`\n=== kind of goal: ${run.scenario.kind} (${run.scenario.persona}) ===`);
+  for (const m of run.broadcasts.filter((m) => m.type === 'planner_message')) console.log(`<< PLANNER: ${clip(m.content, 300)}`);
+  console.log(`-- plan: ${run.active ? 'still open (no commit)' : 'committed'}; tasks: ${run.tasks.length ? run.tasks.map(taskLine).join(' | ') : '(none)'}`);
+  const tools = run.broadcasts.filter((m) => m.type === 'research_step_done').map((m) => m.step.toolLabel ?? m.step.tool);
+  console.log(`-- tools: [${tools.join(', ')}]`);
+  for (const task of run.tasks.filter((t) => t.verdict)) console.log(`-- verdict ${taskLine(task)}: ${task.verdict.outcome}`);
+}
+
+/** A read-only task is one a runner's read-only profile is tagged for; the shipped claude-code manifest calls it plan. */
+const isReadOnly = (task) => task.taskMode === 'plan';
+
+async function goalsSuite() {
+  const failures = [];
+
+  for (const scenario of GOAL_SCENARIOS) {
+    const run = await (async () => {
+      const parts = makeGoalSession({ model: scenario.persona, approveScripts: !!scenario.expect.script });
+      const plan = await parts.session.startPlanning(scenario.goal, ['claude-code']);
+      return {
+        ...parts, scenario, plan,
+        tasks: parts.session.planTasks.map((t) => ({ ...t })),
+        active: parts.session.isConversationActive,
+      };
+    })();
+
+    try {
+      printGoal(run);
+      const { expect } = scenario;
+
+      if (expect.noPlan) {
+        const said = run.broadcasts.filter((m) => m.type === 'planner_message').at(-1)?.content ?? '';
+        assert(run.tasks.length === 0, 'no task was planned for a question', failures);
+        assert(run.active === true, 'the conversation stays open: the answer is the turn', failures);
+        assert(said.trim().length > 0 && /demo/i.test(said), 'the answer reached the user as prose, grounded in the README it read', failures);
+        assert(!run.broadcasts.some((m) => m.type === 'plan_generated'), 'no plan_generated broadcast', failures);
+      }
+
+      if (expect.script) {
+        const call = run.broadcasts.find((m) => m.type === 'research_step_done' && m.step.toolLabel === 'run_script');
+        const script = run.tasks.find((t) => t.type === 'script');
+        assert(!!call, 'run_script was offered to the planner and its call reached the session', failures);
+        assert(call?.step.outcome === 'success', `the session accepted the run_script call (got ${call?.step.outcome})`, failures);
+        assert((call?.step.result ?? '').includes(expect.script.output), 'the command\'s output came back to the planner', failures);
+        assert(!!script, 'the session holds a script task added by run_script', failures);
+        assert(script?.title === expect.script.title, `the script task is the one run_script named (got "${script?.title}")`, failures);
+        assert(script?.status === 'completed', `the script ran to an end (status ${script?.status})`, failures);
+        assert(script?.verdict?.outcome === 'pass', `its exit status was its verdict (got ${script?.verdict?.outcome})`, failures);
+        assert(
+          run.broadcasts.some((m) => m.type === 'execution_action' && m.record?.command === 'run_script'),
+          'the command seam recorded the run_script execution',
+          failures,
+        );
+      }
+
+      if (expect.tasks !== undefined) {
+        const tasks = run.tasks;
+        const research = tasks.filter((t) => t.research === true);
+        const scripts = tasks.filter((t) => t.type === 'script');
+        const loops = tasks.filter((t) => t.loop);
+        assert(tasks.length === expect.tasks, `the submitted plan was committed whole (${tasks.length} of ${expect.tasks} tasks)`, failures);
+        assert(tasks.filter((t) => t.type === 'ai').length === expect.ai, `AI tasks: ${expect.ai}`, failures);
+        assert(research.length === expect.research, `research tasks: ${expect.research}`, failures);
+        assert(scripts.length === expect.scripts, `script tasks: ${expect.scripts}`, failures);
+        assert(loops.length === expect.loops, `loops: ${expect.loops}`, failures);
+        assert(!run.active, 'the conversation closed on the plan commit', failures);
+        assert(run.broadcasts.some((m) => m.type === 'plan_generated'), 'the plan was broadcast to the surfaces', failures);
+
+        if (expect.chained) {
+          assert(
+            tasks.slice(1).every((t, i) => t.dependencies.includes(tasks[i].id)),
+            'each vertical slice depends on the one before it',
+            failures,
+          );
+          assert(tasks.every((t) => (t.prompt ?? '').trim().length > 0), 'every slice carries its own prompt', failures);
+        }
+
+        if (expect.reproductionCheck) {
+          const check = loops[0];
+          const fix = check ? tasks.find((t) => check.loop.body.includes(t.id)) : undefined;
+          assert(check?.type === 'script', 'the submitted plan took a script task, and its exit status is the loop\'s check', failures);
+          assert(research.every((t) => t.type === 'ai' && isReadOnly(t)), 'each hypothesis is a top-level read-only AI task', failures);
+          assert(research.every((t) => t.dependencies.length === 0), 'the hypotheses have no dependencies: they run in parallel', failures);
+          assert(!!fix && fix.type === 'ai' && fix.dependencies.includes(check.id), 'the fix is the loop body and depends on the reproduction', failures);
+          assert(!tasks.some((t) => t !== check && t !== fix && t.dependencies.includes(fix.id)), 'nothing outside the loop depends on its body', failures);
+          assert(
+            research.every((t) => (run.plan.researchApprovals ?? []).includes(t.id)),
+            'the session approved the research tasks as the plan landed',
+            failures,
+          );
+          assert(
+            research.every((t) => run.spawned.some((s) => s.taskId === t.id)),
+            'both research tasks started, in parallel',
+            failures,
+          );
+        }
+
+        if (expect.research === expect.tasks) {
+          assert(research.every((t) => isReadOnly(t)), 'every task in the first round is read-only', failures);
+          assert(research.every((t) => t.dependencies.length === 0), 'the first round runs in parallel', failures);
+          assert(
+            research.every((t) => (run.plan.researchApprovals ?? []).includes(t.id) && run.spawned.some((s) => s.taskId === t.id)),
+            'the session approved and started every research task',
+            failures,
+          );
+        }
+      }
+    } finally {
+      run.session.stopExecution?.();
+      run.session.destroy();
+    }
+  }
+
+  console.log('\n========================');
+  if (failures.length) {
+    console.log(`${failures.length} GOAL FAILURE(S):`);
+    for (const f of failures) console.log(`  ✗ ${f}`);
+    process.exit(1);
+  }
+  console.log('all kind-of-goal scenarios passed');
+}
+
+if (!REAL) await goalsSuite();
+
+// ---------- --real: what strategy a real model chooses for each kind ----------
+// No assertions and no grade: the report states what happened. A real run may
+// ask questions; the scenario's nudge answers instead of scripting a choice.
+function observedStrategy(run) {
+  if (run.turn.kind !== 'plan') return 'no plan: the turn ended as a message (answered, or still asking)';
+  const tasks = run.turn.tasks;
+  const research = tasks.filter((t) => t.research === true).length;
+  const loops = tasks.filter((t) => t.loop).length;
+  if (tasks.length === 1 && tasks[0].type === 'script') return 'small effect: one script task';
+  if (research === tasks.length) return 'research only: a first round (an open problem\'s, or a failure\'s hypotheses)';
+  if (research > 0 && loops > 0) return 'failure to explain: research tasks and a check-and-fix loop';
+  if (research > 0) return 'research first: tasks whose reports come back to the planner';
+  if (loops > 0) return 'a plan ending on a check-and-fix loop';
+  return 'build: change tasks, no research and no loop observed';
+}
+
+function realExcerpt(run) {
+  return run.transcript
+    .slice(0, 8)
+    .map((m) => {
+      const who = m.who === 'user' ? 'USER' : m.who === 'plan' ? 'PLAN' : 'PLANNER';
+      return `  ${who}: ${clip(m.text, 600).replace(/\n/g, '\n    ')}`;
+    })
+    .join('\n');
+}
+
+function realReport(runs) {
+  const rows = runs.map(({ scenario, run }) => {
+    const tasks = run.turn.kind === 'plan' ? `${run.turn.tasks.length}` : 'none';
+    return `| ${scenario.kind} | ${run.turn.kind} | ${tasks} | ${observedStrategy(run)} |`;
+  });
+  const sections = runs.map(({ scenario, run }, i) => {
+    const shape = run.turn.kind === 'plan'
+      ? run.turn.tasks.map((t) => `  - ${taskLine(t)}${t.dependencies?.length ? ` (deps: ${t.dependencies.join(', ')})` : ''}`).join('\n')
+      : '  - none';
+    const tools = run.trace.events.filter((e) => e.t === 'tool_call').map((e) => e.tool);
+    return [
+      `## ${i + 1}. ${scenario.kind}`,
+      '',
+      `- goal: ${scenario.goal}`,
+      `- final turn: ${run.turn.kind}`,
+      `- tools called: ${tools.length > 0 ? tools.join(', ') : '(none)'}`,
+      `- planner messages with a question: ${run.transcript.filter((m) => m.who === 'planner' && m.text.includes('?')).length}`,
+      `- plan shape:`,
+      shape,
+      `- observed strategy: ${observedStrategy(run)}`,
+      '',
+      'Transcript excerpt:',
+      '',
+      realExcerpt(run),
+      '',
+    ].join('\n');
+  });
+  return [
+    '# Planner strategy for five kinds of goal',
+    '',
+    `- model: \`${MODEL}\``,
+    `- run at: ${new Date().toISOString()}`,
+    '- where: a throwaway copy of a tiny demo project; no plan was executed and no runner was started',
+    '',
+    'This report records the strategy the planner chose for each goal and the shape of the',
+    'plan it submitted. It is an observation of behaviour, not a pass/fail result, and it',
+    'makes no cost or performance claim.',
+    '',
+    '| kind of goal | final turn | tasks | observed strategy |',
+    '| --- | --- | --- | --- |',
+    ...rows,
+    '',
+    ...sections,
+    'The mock suite (this file without --real) asserts the plumbing behind these same five',
+    'kinds. This report is about the prompt\'s judgment alone, so it has no thresholds.',
+    '',
+  ].join('\n');
+}
+
+async function realGoalsReport() {
+  const runs = [];
+  for (const scenario of GOAL_SCENARIOS) {
+    const run = await runConversation({
+      label: `REAL ${scenario.kind}: ${scenario.goal}`,
+      model: MODEL, goal: scenario.goal, grilling: false, prd: false,
+      replies: [...(scenario.realReplies ?? [])],
+    });
+    printRun(run);
+    runs.push({ scenario, run });
+  }
+
+  const report = realReport(runs);
+  const dir = arg('out', path.join(__dirname, '.real-report'));
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const file = path.join(dir, `real-goals-${MODEL.replace(/[^a-z0-9-]+/gi, '_')}-${stamp}.md`);
+  fs.writeFileSync(file, report);
+  console.log(`\nBehavioral report written to ${file}\n`);
+  console.log(report);
+}

@@ -11,6 +11,7 @@ describe('ordewell run when a task asks a checkpoint', () => {
       { type: 'execution_complete', summary: { total: 1, completed: 1, failed: 0, blocked: 0, skipped: 0 } },
     ];
     const api = {
+      getSession: vi.fn().mockResolvedValue({ meta: {}, plan: { pendingTasks: [] } }),
       streamExecution: vi.fn((_id: string, onEvent: (e: Event) => void, onReady?: (error?: Error) => void) => new Promise<void>((resolve) => {
         setTimeout(() => onReady?.(), 0);
         setTimeout(() => { script.forEach(onEvent); resolve(); }, 5);
@@ -35,6 +36,7 @@ describe('ordewell run when a task asks a checkpoint', () => {
 describe('ordewell run when the daemon drops mid-run', () => {
   it('reports the lost connection and exits non-zero', async () => {
     const api = {
+      getSession: vi.fn().mockResolvedValue({ meta: {}, plan: { pendingTasks: [] } }),
       streamExecution: vi.fn((_id: string, _onEvent: unknown, onReady?: (error?: Error) => void) => new Promise<'lost'>((resolve) => {
         setTimeout(() => onReady?.(), 0);
         setTimeout(() => resolve('lost'), 5);

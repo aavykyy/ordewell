@@ -12,7 +12,7 @@ import { mcpClientConfig } from '../mcp';
 import { CODEX_ORDEWELL } from '../harness/codexOrdewell';
 import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from '../ApprovalPolicy';
 import { WebReadPolicy } from '../webReadPolicy';
-import { modeIds, fakeSpawn, fixture, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
+import { codexAnswer, modeIds, fakeSpawn, fixture, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 
 /**
  * Codex's task mode (ADR-0018, #54) over `codex app-server`. The traffic is
@@ -52,7 +52,7 @@ function taskStart(mode: string, overrides: Partial<TaskStartOptions> = {}): Tas
   };
 }
 
-const handshake = (): ScriptedReply[] => [fixture('codex', 'handshake'), fixture('codex', 'task-thread')];
+const handshake = (): ScriptedReply[] => [fixture('codex', 'handshake'), codexAnswer('task-thread')];
 
 function line(msg: RpcLine): string {
   return `${JSON.stringify({ jsonrpc: '2.0', ...msg })}\n`;
@@ -997,7 +997,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
     const [threadStart] = sentNamed(spawned.processes[0].written, 'thread/start');
     expect(threadStart.params).not.toHaveProperty('config');
     expect(Object.keys(spawned.lastEnv()).filter((name) => name.startsWith('ORDEWELL_MCP'))).toEqual([]);
-    expect(await adapter.mcpAttached()).toBe(false);
+    expect(await adapter.mcpAttached()).toBe('failed');
     adapter.dispose();
   });
 
@@ -1072,7 +1072,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       const adapter = new CodexAdapter(processDeps);
       await adapter.start(taskStart('agent', { mcp }));
       spawned.processes[0].emitStdout(startup('starting') + startup('ready'));
-      expect(await adapter.mcpAttached()).toBe(true);
+      expect(await adapter.mcpAttached()).toBe('connected');
       adapter.dispose();
     });
 
@@ -1084,7 +1084,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       const attached = adapter.mcpAttached();
       await tick();
       spawned.processes[0].emitStdout(startup('ready'));
-      expect(await attached).toBe(true);
+      expect(await attached).toBe('connected');
       adapter.dispose();
     });
 
@@ -1093,7 +1093,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       const adapter = new CodexAdapter(processDeps);
       await adapter.start(taskStart('agent', { mcp }));
       spawned.processes[0].emitStdout(startup(status));
-      expect(await adapter.mcpAttached()).toBe(false);
+      expect(await adapter.mcpAttached()).toBe('failed');
       adapter.dispose();
     });
 
@@ -1103,7 +1103,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       await adapter.start(taskStart('agent', { mcp }));
       const attached = adapter.mcpAttached();
       spawned.processes[0].exit(1);
-      expect(await attached).toBe(false);
+      expect(await attached).toBe('failed');
     });
 
     it('ignores another server\'s report', async () => {
@@ -1111,7 +1111,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       const adapter = new CodexAdapter(processDeps);
       await adapter.start(taskStart('agent', { mcp }));
       spawned.processes[0].emitStdout(line({ method: 'mcpServer/startupStatus/updated', params: { name: 'linear', status: 'ready' } }) + startup('failed'));
-      expect(await adapter.mcpAttached()).toBe(false);
+      expect(await adapter.mcpAttached()).toBe('failed');
       adapter.dispose();
     });
   });
@@ -1209,7 +1209,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
     });
 
     // Planner-only: a task, an ops task above all (ADR-0020), keeps the user's own search setting.
-    it.each(modeIds(CODEX_MANIFEST))('leaves a %s task thread with no search setting of Ordewell\'s, fresh or resumed', async (mode) => {
+    it.each(modeIds(CODEX_MANIFEST).filter((mode) => mode !== 'plan'))('leaves a %s task thread with no search setting of Ordewell\'s, fresh or resumed', async (mode) => {
       const { spawned, processDeps } = deps([...handshake(), ...handshake()]);
       const opened: RpcLine[] = [];
       for (const resumeSessionId of [undefined, 'thr-task-1']) {

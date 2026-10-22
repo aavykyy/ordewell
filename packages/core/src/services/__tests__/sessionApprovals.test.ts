@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { makeSession } from './sessionTestKit';
 import { BaseFileSystem } from '../BaseFileSystem';
+import { PlannerShellSandbox } from '../sandbox/plannerSandbox';
 import { fakeConfig } from '../../testing';
 import type { SessionMessage } from '../SessionMessage';
 import type { ConversationRequest } from '../AiService';
@@ -17,6 +18,12 @@ import type { McpToolReply } from '../mcp/tools';
  * holds regardless of which UI is on the other end.
  */
 class ProbeFileSystem extends BaseFileSystem {
+  // No sandbox, so a refusal stays one on every host (ADR-0036 S6): this file
+  // is about the approval flow, and BaseFileSystem's tests cover sealed runs.
+  constructor() {
+    super(undefined, new PlannerShellSandbox(async () => ({ available: false, notice: 'no sandbox in this test' })));
+  }
+
   bashCalls: string[] = [];
   getWorkspaceRoot(): string { return '/repo'; }
   protected async readFileImpl(absPath: string, _opts?: ReadFileOpts): Promise<ToolOutcome> {
@@ -293,6 +300,7 @@ describe('Session approval flow', () => {
 
       expect(result.success).toBe(false);
       expect(result.output).toContain('ops task');
+      expect(result.output).toContain('call run_script with the exact commands');
       expect(fsAdapter.bashCalls).toEqual([]);
       expect(approvalRequests(messages)).toHaveLength(0);
     });

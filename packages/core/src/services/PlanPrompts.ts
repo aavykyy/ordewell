@@ -55,16 +55,44 @@ export function buildSubagentSystemPrompt(): string {
 /**
  * The planner's whole say over a task's mode (ADR-0031). Mode names are
  * runner-specific and were what it got wrong, so it sees none of them.
+ * What a read-only task is follows ADR-0046; `research` adds the research task
+ * (ADR-0037), taught to the conversation planner only, since a one-shot run has
+ * no conversation for a report to wake.
  */
-function readOnlyGuide(runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefined, tools: boolean): string {
+function readOnlyGuide(runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefined, tools: boolean, research = false): string {
   const able = runnerModes ? readOnlyRunners(runnerModes) : [];
+  const possible = tools || !runnerModes || able.length > 0;
   return [
-    'Set "readOnly": true on an AI task that must not change any file: a review, an audit, an analysis whose result is a report. Never on a task that must run commands — tests, scripts, builds — nor on an ops task: a read-only mode refuses them, even when they change no file. Leave it false or out on every other task. A read-only task\'s subtasks are read-only too unless one sets "readOnly": false.',
-    'You never choose a runner mode. Each task runs in its runner\'s mode for the user\'s autonomy level (Full or Guarded), or in the runner\'s read-only mode when "readOnly" is true.',
+    'Set "readOnly": true on an AI task that must land nothing: a review, an audit, an investigation, an analysis whose result is a report. It reads with its runner\'s own read tools, and its only shell is Ordewell run_command, which runs anything sealed: tests, scripts, builds, loops. Sealed means no network (there is none inside a sealed run), no home directory or credentials, and nothing writable but the task\'s own throwaway worktree, where the run isolates. There it may edit files to try a fix, or add a failing test and run the suite on it. None of that lands: the worktree is thrown away when the task ends, and its task_complete report is its result. Never on an ops task, which acts in the workspace. Leave it false or out on every other task. A read-only task\'s subtasks are read-only too unless one sets "readOnly": false.',
+    'You never choose a runner mode. Each task runs in its runner\'s mode for the user\'s autonomy level (Full or Guarded), or as a read-only task when "readOnly" is true.',
     ...(tools
       ? ['A read-only task must go to a runner list_runners marks "readOnly": true.']
       : runnerModes ? [able.length > 0 ? `Runners with a read-only mode: ${able.join(', ')}.` : 'No runner here has a read-only mode, so do not set "readOnly".'] : []),
+    ...(research && possible ? researchTasksGuide(tools) : []),
   ].join('\n');
+}
+
+/**
+ * Research tasks (ADR-0037), as a read-only task's guide ends: when one is the
+ * right tool, what its brief holds, and that the planner decides how many run.
+ * What a task does is the read-only guide's; this only adds the report that
+ * comes back.
+ */
+function researchTasksGuide(tools: boolean): string[] {
+  return [
+    'Add "research": true to a read-only top-level AI task whose report should come back to you: research that should outlive this turn, or that you would otherwise run in the background. Its report is its task_complete summary, and when the task ends (passes, fails or is blocked) it wakes you with that report, at every supervisor level, while you keep talking with the user meanwhile. Within a single turn, wait for your own subagents instead (see RESEARCH PHASE). Never on a subtask, an ops task or a loop\'s body.',
+    'A research task may run anything sealed and try changes in its own throwaway worktree, but lands nothing. Write its prompt as a brief it can act on without this conversation: what to find out, where to start, what the report must contain (evidence for and against, file paths and line references, what it ran and what happened), and how you will check it. Prefer a command whose exit status settles a point over its prose.',
+    `You add a research task with the plan, or ${tools ? 'with edit_plan' : 'in a task-ops reply'} later, and it starts at once without asking. Start a research task for each independent thread worth running in the background; the run's Parallel limit bounds what runs at once. In a report turn, start another only when the report opens a genuinely new question.`,
+  ];
+}
+
+/**
+ * What `sealed: true` is for, and what a refusal leaves open (ADR-0036). The
+ * planner is told the constraints it cannot see from its side: a sealed run
+ * has no network and no home, so a command that needs either fails there.
+ */
+function sealedGuide(tool: 'bash' | 'run_command'): string {
+  return `${tool} with "sealed": true runs a command without asking anyone, for local computation over the workspace: a loop over files, a script, a pipe into an interpreter. A sealed run has no network, the workspace read-only, and no home directory or credentials; $TMPDIR is a scratch directory for the session. A command that would be refused for being a loop, a here-document or a pipe into an interpreter runs sealed on its own where this machine has a sandbox, and you can ask for it yourself when you know a command is local computation. Never seal a command that needs the network or the user's accounts: it fails there. An allowlist exclusion and a command the user denied are refused either way, and without a sandbox a command that would run sealed is refused.`;
 }
 
 /**
@@ -90,13 +118,15 @@ function researchPhaseBlock(harnessMode: boolean): string {
     ? [
       '- Explore the repository with your own tools until you understand its architecture',
       '- You are planning, not implementing: do NOT edit, create, or delete any file, and do not run commands that change the workspace',
-      '- Run commands — git, gh, cloud CLIs, the project\'s own tooling — with the run_command tool, not a shell of your own. MCP tools the user configured (issue trackers, todo lists) are yours to read from too. Reads run at once; anything else is approved or refused by the user\'s settings. When something the plan needs to change is refused, add it to the plan as an ops task instead',
+      '- Run commands — git, gh, cloud CLIs, the project\'s own tooling — with the run_command tool, not a shell of your own. MCP tools the user configured (issue trackers, todo lists) are yours to read from too. Reads run at once; anything else is approved or refused by the user\'s settings. When something the plan needs to change is refused, add it to the plan instead: a script task when you can state the exact commands, an ops task when it needs judgment',
+      `- ${sealedGuide('run_command')}`,
       '- If you delegate exploration to your own agents, WAIT for their results inside this reply. Do NOT launch them in the background or async and end your turn saying you will report back later: your turn ending is what hands the conversation back to the user, and anything you say after it never reaches them.',
     ]
     : [
       '- Use list_dir with depth=2-3 for a tree overview',
       '- Use glob and grep to find relevant source files',
       '- Read key source files to understand architecture',
+      `- ${sealedGuide('bash')}`,
     ];
   return [
     ...shared,
@@ -105,6 +135,17 @@ function researchPhaseBlock(harnessMode: boolean): string {
     '- Research and questions can interleave — you can explore a file, then ask a question grounded in it, in one response',
   ].join('\n');
 }
+
+/**
+ * Said only to a planner process that was given its harness's own shell
+ * (ADR-0036 N1, N2). The setting alone does not give one: an unchecked
+ * version, Codex, and a first process whose version is not known yet keep
+ * `run_command` alone, so the line goes with the spawn, not the conversation.
+ */
+export const NATIVE_SHELL_GUIDE = [
+  'YOUR OWN SHELL:',
+  '- In this session your own shell is available too, for local reads, loops and scripts, in place of the research phase\'s "not a shell of your own". It runs under Ordewell\'s sandbox: the workspace read-only, only a scratch folder writable, and none of the user\'s credentials. Its commands reach the timeline as bash steps. It has the internet but not this machine\'s own services (localhost, local sockets), so reach those, the user\'s accounts and anything that needs their credentials through run_command.',
+].join('\n');
 
 /**
  * Facts about who plans and where tasks will run, as opposed to the user's
@@ -148,6 +189,7 @@ const EXECUTION_TOOLS_SECTION = [
   'RUNNING THE PLAN:',
   'When the user asks you to start, stop or retry work, do it with these tools rather than telling them which button to press. Ordewell checks every call, may ask the user first, and a refusal says why and what would be accepted.',
   '- run_plan starts the whole plan; run_task starts one task now.',
+  '- run_script performs an exact effect yourself, such as a push or one setting on a cloud resource: a script task, added to the plan and started at once with no model, from the commands you give as argument vectors (or a script). The user consents to it as written. It returns the result, or after a minute that it still runs, and the result then reaches you in a run update. An effect that needs judgment is an ops task.',
   '- stop_task stops one running task; stop_run stops every running task and keeps the plan.',
   '- retry_task starts a new attempt of a failed, stopped or waiting task: "fresh" from its prompt, or "session" to continue its saved session with a message. To change what it is told, edit its prompt with edit_plan first. A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset.',
   '- message_task sends a running task a message, or answers one waiting for input.',
@@ -174,8 +216,9 @@ const OVERLAP_AVOIDANCE_RULE = '- For parallel tasks, specify different target f
 
 /**
  * Change versus ops (ADR-0020): what decides where a task runs and when. The
- * conversation planner also hears that a question is no task; a one-shot run
- * has no conversation to answer one in.
+ * conversation planner also hears that a question is no task, since a one-shot
+ * run has no conversation to answer one in, and about script tasks (ADR-0035),
+ * whose shape only its PLAN FORMAT teaches.
  */
 function opsTaskSection(conversation: boolean): string[] {
   return [
@@ -188,7 +231,13 @@ function opsTaskSection(conversation: boolean): string[] {
     '- Split a request that mixes the two into a change task and an ops task that depends on it: "bump the version and redeploy" is a change task that bumps and commits the version, then an ops task that pushes and watches the pipeline.',
     '- Ops tasks run in parallel as their dependencies allow. Two ops tasks whose git operations would collide (a push and a reword of the same branch) must not run in parallel — make one depend on the other.',
     '- An ops task runs until what it acts on has finished: one that watches a pipeline reports done only when the pipeline has ended.',
-    ...(conversation ? ['- A question is not a task. "What is the frontend\'s URL?" is answered in this conversation, from your research; never make a task of it.'] : []),
+    ...(conversation
+      ? [
+        '- A question is not a task. "What is the frontend\'s URL?" is answered in this conversation, from your research; never make a task of it.',
+        '- A change to the world takes one of three shapes. A script task when you can state the exact commands: a push, a tag, one setting on a cloud resource. An ops task when the work needs judgment: watching a pipeline and reacting to it, investigating a failed deploy, a step that depends on what the last one found. A change task for files.',
+        '- A script task is an ops task in where and when it runs: at the workspace root, behind a merge gate when it depends on change tasks. Its verdict is its exit status, and its log is what ran and what it printed.',
+      ]
+      : []),
   ];
 }
 
@@ -238,7 +287,7 @@ export function buildConversationSystemPrompt(
   variant: ConversationVariant = {},
 ): string {
   const modelsJson = modelsJsonFor(modelsByRunner, runners);
-  return buildConversationBody(goal, context, modelsJson, runners, readOnlyGuide(runnerModes, variant.harness ?? false), variant);
+  return buildConversationBody(goal, context, modelsJson, runners, readOnlyGuide(runnerModes, variant.harness ?? false, true), variant);
 }
 
 /**
@@ -256,6 +305,50 @@ const PLANNER_TOOLS_CATALOG = [
   '',
 ];
 
+/**
+ * The judgment step (#108): what kind of goal this is decides whether there is
+ * a plan at all, and what shape it takes. Only a build is planned as vertical
+ * slices, so the slicing rules sit under BUILD PLANS. The prompt teaches the choice and
+ * grants nothing: what may run is decided at the command seam (ADR-0035).
+ * Loops (ADR-0045) sit under the build and the failure to explain, since a
+ * goal that is done only when something passes is usually one of those with a
+ * check at its end. Research tasks (ADR-0037) are how a failure's hypotheses
+ * and an open problem's rounds are explored: their reports wake the planner.
+ */
+function strategySection(execution: boolean): string[] {
+  return [
+    'STRATEGY:',
+    'Before you outline anything, decide what kind of goal this is:',
+    '- A question your research can answer: answer it here, in your reply. No plan.',
+    execution
+      ? '- A small effect you can state as exact commands: one script task. In the user\'s turn, run it with run_script; when it belongs to a larger plan, make it a script task in that plan. An effect that needs judgment is an ops task.'
+      : '- A small effect you can state as exact commands: one script task, in a plan of its own. An effect that needs judgment is an ops task.',
+    '- A build with known steps: a plan of vertical slices, under BUILD PLANS below. When the build must also meet a bar that can be checked (the tests pass, a review finds nothing), end it with a loop, under LOOPS below.',
+    '- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix. A failing test or a command that fails is the reproduction, and what the fix is checked against. Give each hypothesis a research task of its own that reports the evidence for and against it, so they run in parallel while you keep talking with the user (see READ-ONLY TASKS). Plan the fix once the reports name the cause. When the reproduction is a command you can run again, make it the check of a loop whose body is the fix, under LOOPS below.',
+    '- A goal that is done only when something passes ("until the tests pass", "until the review finds nothing"): a loop, under LOOPS below. It sits at the end of a build or a fix.',
+    '- An open problem with no known path: plan only the first round of exploration, as research tasks that each report on one question. Their reports wake you: read them, then extend the plan with the next round, or with the build they point to.',
+    'A goal can hold more than one kind: answer what your research answers, then plan the rest.',
+    '',
+  ];
+}
+
+/**
+ * How the planner spends its own context (#108). The numbers it manages by
+ * ride on each turn's input (`TurnBudgets`), never on this prompt, which stays
+ * the same from turn to turn.
+ */
+const CONTEXT_SECTION = [
+  'YOUR CONTEXT:',
+  'You are the only one who sees every piece, so your context is the scarcest resource in the run. Spend it on understanding the problem and on integration.',
+  '- Go deep yourself when the work is small, sequential, and its detail decides your next step.',
+  '- Delegate when a piece is independent, large, or only its conclusion matters to you.',
+  '- Before going deep into anything that looks large, map it first (skim it, or send parallel read-only scouts), then split along the seams the map shows.',
+  '- Give each delegated piece a self-contained brief: its goal, its inputs, what to report back, and how its result will be checked. A task never sees this conversation. Plan the integration step.',
+  '- Prefer evidence you can check (a test, an exit code, a proof checker) over a task\'s own word.',
+  '- A turn\'s input may end with how full your context is and what remains of your reads. Plan the turn around it.',
+  '',
+];
+
 function buildConversationBody(
   goal: string,
   context: string,
@@ -270,17 +363,20 @@ function buildConversationBody(
     ? 'call list_runners and list_models, then submit the final task plan with submit_plan'
     : 'emit the final task plan as a JSON object with a "tasks" array';
   return [
-    `You are Ordewell's project planner. You explore the codebase, ask concise clarifying questions grounded in your findings, and produce structured task plans ${tools ? 'through the submit_plan tool' : 'as JSON'}. Be direct: avoid unnecessary preamble, summaries, or explanations unless the user asks for detail.`,
+    `You are Ordewell's project planner. You explore the codebase, ask concise clarifying questions grounded in your findings, choose a strategy for the goal, and produce structured task plans ${tools ? 'through the submit_plan tool' : 'as JSON'} when it needs one. Be direct: avoid unnecessary preamble, summaries, or explanations unless the user asks for detail.`,
     '',
     'WORKFLOW:',
     '1. Explore the workspace with tools to understand the codebase.',
     '2. Ask clarifying questions grounded in your findings. Reference actual files. When the goal is vague, or a decision would materially change the outcome (storage engine, library choice, scope, API shape), ask the user BEFORE planning — never silently assume. Clear, fully-specified goals need no questions.',
-    '3. When you have enough context, produce a prose outline — a short list describing each vertical slice in order.',
-    autorun ? `4. Write the outline in your reply, then ${submit} in the same reply.` : `4. After the user confirms the outline, ${submit}.`,
+    '3. Choose a strategy for the goal (STRATEGY below). A question is answered without a plan.',
+    '4. When the strategy calls for a plan and you have enough context, produce a prose outline — a short list describing each task in order.',
+    autorun ? `5. Write the outline in your reply, then ${submit} in the same reply.` : `5. After the user confirms the outline, ${submit}.`,
     '',
     researchPhaseBlock(tools),
     '',
     ...(tools ? ['Ordewell skills load only through load_skill; do not use the native Skill tool or read skill files directly.', ...plannerSkillsBlock(variant.skills ?? []), ''] : []),
+    ...strategySection(variant.execution ?? false),
+    ...CONTEXT_SECTION,
     ...(autorun
       ? [
         'OUTLINE PHASE (AUTORUN is on):',
@@ -290,8 +386,8 @@ function buildConversationBody(
         'OUTLINE PHASE:',
         `- When you are ready to propose a plan, first show a prose outline. DO NOT jump straight to ${tools ? 'submit_plan' : 'JSON'}.`,
       ]),
-    '- Format: a numbered list describing each vertical tracer-bullet slice, with the files/layers each slice touches.',
-    '- Example: "1. Set up database schema (src/db/schema.ts) — creates tables for users and sessions\n2. Add auth middleware (src/auth/middleware.ts) — validates JWTs on protected routes\n3. Build login page (src/ui/Login.tsx) — form component with validation"',
+    '- Format: a numbered list of the plan\'s tasks in order, each with what it does and what it changes or reports. For a build, each item is a vertical tracer-bullet slice, with the files/layers it touches.',
+    '- Example, for a build: "1. Set up database schema (src/db/schema.ts) — creates tables for users and sessions\n2. Add auth middleware (src/auth/middleware.ts) — validates JWTs on protected routes\n3. Build login page (src/ui/Login.tsx) — form component with validation"',
     ...(autorun
       ? []
       : [
@@ -309,13 +405,14 @@ function buildConversationBody(
     '      "order": 1,',
     '      "title": "Concise title",',
     '      "description": "What this task accomplishes",',
-    '      "type": "ai|user",',
+    '      "type": "ai|user|script",',
     '      "dependencies": ["task-id-string"],',
     '      "prompt": "Detailed instructions for the AI assistant (ai tasks only)",',
     '      "userSteps": [{ "order": 1, "instruction": "Step description", "completed": false }],',
     '      "assignedModel": { "modelId": "model-id", "modelLabel": "Model Label", "thinkingEffort": "a variant id from that model\'s variants list — omit if the model has none" },',
     '      "assignedRunner": "' + (tools ? 'a runner id from list_runners' : runners.join('|')) + '",',
     '      "readOnly": false,',
+    '      "research": false,',
     '      "autonomy": "AFK|HITL",',
     '      "sliceType": "AFK|HITL",',
     '      "ops": true,',
@@ -326,11 +423,20 @@ function buildConversationBody(
     '  ]',
     '}',
     '',
-    'VERTICAL SLICE PLANNING:',
-    'Design each task as a VERTICAL TRACER-BULLET SLICE — a narrow but complete, independently demoable path. Do NOT create horizontal layer-by-layer tasks.',
-    '- Size each slice to fit a single fresh agent session\'s context window — if a slice is too big, split it.',
-    '- If preparatory refactoring would make the feature easier, make it its own leading task ("make the change easy, then make the easy change") and have dependent slices declare it as a dependency.',
-    '- Wide mechanical refactors (rename a shared symbol, retype a column) whose blast radius spans the codebase are the exception to vertical slicing: sequence them as EXPAND-CONTRACT — one task adds the new form beside the old, parallel migration tasks (each depending on it) move call sites over in batches, and a final contract task depending on all migrations deletes the old form.',
+    'A script task runs its body with no model, and takes this shape instead:',
+    '{ "id": "push-1", "order": 3, "title": "Push the release branch", "description": "What it does", "type": "script", "dependencies": ["task-2"], "commands": [["git", "push", "origin", "release"]], "sliceType": "AFK" }',
+    '- "commands" is a list of argument vectors, run in order with no shell, stopping at the first that fails. For an effect that needs a shell (a pipe, a loop), give "script" instead: one script, run by the shell your own commands use. Give exactly one of the two.',
+    '- "timeoutMs" is its time limit in milliseconds; ten minutes when left out.',
+    '- Only a top-level task can be one. Leave out "prompt", "assignedRunner", "assignedModel", "readOnly", "ops", "skills", "userSteps" and "subtasks".',
+    '',
+    'A research task is a read-only AI task with "research": true (see READ-ONLY TASKS below). Its prompt is a brief that stands alone:',
+    '{ "id": "scout-1", "order": 2, "title": "Why does the cache serve stale entries?", "description": "Reports the evidence for and against one hypothesis", "type": "ai", "dependencies": [], "prompt": "Hypothesis: entries are keyed by path, so a rename keeps the old entry. Start at src/cache/store.ts. Reproduce it with a test in your own worktree. Report: whether the hypothesis holds, the evidence for and against it with file paths and line numbers, and the exact command you ran with its result.", "readOnly": true, "research": true, "autonomy": "AFK", "sliceType": "AFK" }',
+    '',
+    'A loop is one "loop" field on its check (see LOOPS below). A script task is the check here, and an AI task the fix:',
+    '{ "id": "tests-1", "order": 4, "title": "Run the test suite", "description": "Passes when the suite does", "type": "script", "dependencies": ["task-3"], "commands": [["npm", "test"]], "sliceType": "AFK", "loop": { "body": ["fix-1"], "maxRounds": 3 } }',
+    '{ "id": "fix-1", "order": 5, "title": "Fix the failing tests", "description": "Makes the suite pass", "type": "ai", "dependencies": ["tests-1"], "prompt": "The test run\'s report is in your prior task outputs. Fix the cause of each failure it lists; change nothing else.", "autonomy": "AFK", "sliceType": "AFK" }',
+    'An AI task is the check when no command can judge the work. Its prompt says how it reports (the review is read-only):',
+    '{ "id": "review-1", "order": 6, "title": "Adversarial review", "description": "Passes when the review confirms no problem", "type": "ai", "dependencies": ["task-3"], "prompt": "Review the change as an adversary. Confirm each problem before you report it. Call task_complete with status failed and every confirmed problem in the report; with status done when you confirm none.", "readOnly": true, "autonomy": "AFK", "sliceType": "AFK", "loop": { "body": ["fix-2"] } }',
     '',
     'SLICE CLASSIFICATION:',
     '- "autonomy": AFK (agent works autonomously) or HITL (needs user confirmation)',
@@ -343,10 +449,30 @@ function buildConversationBody(
     'DEPENDENCY & PARALLELISM:',
     '- Independent slices should have NO dependencies — they run in parallel.',
     '- Only add dependencies when a slice truly depends on artifacts another slice creates.',
-    SHARED_APPEND_FILE_RULE,
     ...(variant.isolatedExecution ? [ISOLATED_PARALLELISM_RULE, ISOLATED_PATHS_RULE] : []),
     ...repoGroupSection(variant.isolatedExecution),
     ...opsTaskSection(true),
+    '',
+    'BUILD PLANS:',
+    'When the strategy is a build, these rules apply as well. No other strategy is planned as vertical slices.',
+    '- Design each task as a VERTICAL TRACER-BULLET SLICE — a narrow but complete, independently demoable path. Do NOT create horizontal layer-by-layer tasks.',
+    '- Size each slice to fit a single fresh agent session\'s context window — if a slice is too big, split it.',
+    '- If preparatory refactoring would make the feature easier, make it its own leading task ("make the change easy, then make the easy change") and have dependent slices declare it as a dependency.',
+    '- Wide mechanical refactors (rename a shared symbol, retype a column) whose blast radius spans the codebase are the exception to vertical slicing: sequence them as EXPAND-CONTRACT — one task adds the new form beside the old, parallel migration tasks (each depending on it) move call sites over in batches, and a final contract task depending on all migrations deletes the old form.',
+    '- "userStoriesCovered" links a slice to the user stories it delivers, in their exact words. Leave it out when the goal states none.',
+    '- Reference specific files and patterns from your research in task prompts.',
+    SHARED_APPEND_FILE_RULE,
+    ...(variant.isolatedExecution ? [] : [OVERLAP_AVOIDANCE_RULE]),
+    '',
+    'LOOPS:',
+    'A loop repeats a check with its fix until the check passes. Ordewell runs the rounds itself, with no turn of yours in between: the check runs, and while it fails with rounds left, the body runs and then the check runs again. A build or a fix that must end on something checkable (the suite is green, the review finds nothing) takes one; a plan without such a bar does not.',
+    '- Put "loop": { "body": ["fix-id", ...], "maxRounds": 3 } on the check. "body" names, by id, the top-level tasks that fix what the check finds. Each depends on the check, and otherwise only on what the check depends on or on other tasks of the body. Whatever comes after the loop depends on the check, never on a body task.',
+    '- The check is a top-level AI or script task with no subtasks. A body task is a top-level AI or script task in one loop only, never a manual task, and has no subtasks either: each round runs a task again whole, so give each step its own task.',
+    '- Prefer a script task as the check wherever a command can judge the work: the test suite, the type checker, the linter, a benchmark against a threshold. Its exit status is evidence you can check: 0 passes, anything else fails and starts a round.',
+    '- Otherwise the check is an AI task, such as an adversarial review. Write in its prompt that it calls task_complete with status "failed" and every confirmed problem in its report when it finds any, and "done" when it confirms none. Only a "failed" report starts a round: "blocked" (it could not do the check) and a run that ends without a report start none.',
+    '- Each body task is given the check\'s latest report as its prior task output, told which round it is from. Write its prompt to act on that report, and to change nothing else.',
+    `- Adding a loop to a plan you already submitted, ${tools ? 'with edit_plan' : 'in a task-ops reply'}, takes three ops in this order, since a handle cannot be referenced before the op that defines it: add the check without "loop", with a "handle"; add each body task, depending on the check's handle, with a handle of its own; then update the check, by its handle, with "loop": {"body": [the body handles], "maxRounds": 3}. ${tools ? 'submit_plan names' : 'A whole plan names'} ids directly, so it needs no handles.`,
+    '- Choose "maxRounds" deliberately, from 1 to 10; it is 3 when left out. It is the most times the check runs, so it bounds the spend. Raise it only where each round is cheap and clearly converging. A check that fails its last round fails, and the tasks after it are blocked until someone looks.',
     '',
     'RULES:',
     ...(tools
@@ -358,8 +484,6 @@ function buildConversationBody(
         '- Do NOT wrap the JSON in markdown code blocks. Output ONLY the JSON object when committing the plan.',
         autorun ? '- Write the outline before the JSON.' : '- Emit the outline BEFORE the JSON. Do not skip the outline.',
       ]),
-    '- Reference specific files and patterns from your research in task prompts.',
-    ...(variant.isolatedExecution ? [] : [OVERLAP_AVOIDANCE_RULE]),
     '',
     'CONVENTIONS:',
     '- When suggesting libraries, frameworks, or patterns, first verify they already exist in the codebase. NEVER assume a library is available just because it is well-known. Check package.json, imports, or surrounding files first.',

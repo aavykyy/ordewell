@@ -84,7 +84,7 @@ export function toTaskView(task: SerializedTask & { status?: string }): TaskView
     title: task.title,
     description: task.description,
     prompt: task.prompt ?? undefined,
-    type: task.type === 'user' ? 'user' : 'ai',
+    type: task.type === 'user' || task.type === 'script' ? task.type : 'ai',
     status: task.status ?? 'pending',
     dependencies: task.dependencies ?? [],
     assignedRunner: task.assignedRunner || undefined,
@@ -92,6 +92,9 @@ export function toTaskView(task: SerializedTask & { status?: string }): TaskView
     assignedModel: task.assignedModel ?? undefined,
     subtasks: [...(task.subtasks ?? [])].sort((a, b) => a.order - b.order).map(toTaskView),
     ...(task.ops ? { ops: true } : {}),
+    ...(task.commands ? { commands: task.commands.map((argv) => [...argv]) } : {}),
+    ...(task.script !== undefined ? { script: task.script } : {}),
+    ...(task.timeoutMs !== undefined ? { timeoutMs: task.timeoutMs } : {}),
     ...(task.skills?.length ? { skills: [...task.skills] } : {}),
     ...(task.addedBy ? { addedBy: task.addedBy } : {}),
   };

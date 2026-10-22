@@ -1,6 +1,7 @@
 import { z } from 'zod/v4';
 import { TASK_QUERY_TASK_FIELDS, OUTPUT_LINES_MAX } from '../TaskQuery';
 import { TASK_LOG_KINDS } from '../taskLogRead';
+import type { ToolOutcome } from '../../interfaces/IFileSystem';
 
 /**
  * The tools of the Ordewell MCP server, per token role (ADR-0022), and the
@@ -29,8 +30,22 @@ const listModelsInput = z.object({
   runner: z.string().min(1).describe('A runner id from list_runners.'),
 });
 
+/**
+ * What a sealed run is, said where the model chooses the tool (ADR-0036 S4)
+ * and shared with the API planner's `bash`, so a sealed failure on the
+ * network reads as the sandbox's doing rather than one to retry.
+ */
+export const SEALED_RUNS = 'Where this machine has a sandbox, a command that would be refused without asking (a loop, a here-document, a pipe into python3) runs sealed instead: no network, no home directory or credentials, and nothing it writes reaches the workspace; $TMPDIR, which is also $HOME, is a scratch directory kept for this session. Its result starts with "[Ran sealed".';
+
+export const SEALED_PARAM = 'Run it sealed, without asking anyone: for local computation over the workspace, such as a loop over files or a pipeline into python3. Never for a command that needs the network or the user\'s accounts; it fails sealed. An allowlist exclusion and a command the user denied are refused either way.';
+
 const runCommandInput = z.object({
   command: z.string().min(1).describe('One shell command line, run from the workspace root.'),
+  sealed: z.boolean().optional().describe(SEALED_PARAM),
+});
+
+const taskRunCommandInput = z.object({
+  command: z.string().min(1).describe("One shell command line, run from this task's working directory."),
 });
 
 const fetchInput = z.object({
@@ -61,7 +76,7 @@ const planTask = z.looseObject({
   order: z.number().optional(),
   title: z.string(),
   description: z.string().optional(),
-  type: z.enum(['ai', 'user']).optional(),
+  type: z.enum(['ai', 'user', 'script']).optional(),
   dependencies: z.array(z.string()).optional(),
   prompt: z.string().optional(),
   userSteps: z.array(z.looseObject({ order: z.number().optional(), instruction: z.string() })).optional(),
@@ -75,6 +90,17 @@ const planTask = z.looseObject({
   skills: z.array(z.string()).optional()
     .describe('Task skills (applies-to: task) by name; their bodies go in the runner\'s prompt. A subtask lists its own.'),
   subtasks: z.array(z.record(z.string(), z.unknown())).optional(),
+  // ADR-0035. Their shape is the plan's rule to judge, as the other fields' is.
+  commands: z.array(z.array(z.string())).optional()
+    .describe('A script task\'s argument vectors, run in order with no shell, stopping at the first that fails. Exactly one of commands or script.'),
+  script: z.string().optional().describe('A script task\'s script, run by the research shell. Exactly one of commands or script.'),
+  timeoutMs: z.number().optional().describe('A script task\'s time limit in milliseconds; ten minutes when left out.'),
+  // ADR-0045. Loose like the rest: the plan's rules judge the body and the rounds.
+  research: z.boolean().optional().describe('A top-level read-only AI task whose report wakes the planner (ADR-0037 R1). Never in a loop body.'),
+  loop: z.looseObject({
+    body: z.array(z.string()).describe('The ids of the top-level tasks that fix what this check finds; each depends on this task.'),
+    maxRounds: z.number().optional().describe('The most times this check runs, 1 to 10; 3 when left out.'),
+  }).optional().describe('Makes this task a loop\'s check: while it fails with rounds left, Ordewell runs the body with its report, then runs it again.'),
 });
 
 const submitPlanInput = z.object({
@@ -141,6 +167,16 @@ const messageTaskInput = z.object({
   text: z.string().trim().min(1).describe('The message. A running task reads it at its next step; one waiting for input takes it as its answer.'),
 });
 
+// What the body holds is judged by the plan's rules, as a script task's in submit_plan is (ADR-0035).
+const runScriptInput = z.object({
+  title: z.string().trim().min(1).describe('What the script does, as its task in the plan is titled.'),
+  commands: z.array(z.array(z.string())).optional()
+    .describe('Argument vectors run in order with no shell, stopping at the first that fails, like [["git", "push", "origin", "main"]]. Exactly one of commands or script.'),
+  script: z.string().optional().describe('A script, run by the shell your run_command uses, for an effect that needs one (a pipe, a loop). Exactly one of commands or script.'),
+  timeoutMs: z.number().optional().describe('Its time limit in milliseconds; ten minutes when left out.'),
+  dependencies: z.array(taskRef).optional().describe('Tasks in the plan it runs after. It waits for the user to merge their work into their branch first.'),
+});
+
 const answerApprovalInput = z.object({
   task: taskRef,
   approval: z.string().optional().describe('Which request, when the task has more than one waiting; a refusal lists them.'),
@@ -154,6 +190,7 @@ export type ListRunnersArgs = z.infer<typeof listRunnersInput>;
 export type ListModelsArgs = z.infer<typeof listModelsInput>;
 export type LoadSkillArgs = z.infer<typeof loadSkillInput>;
 export type RunCommandArgs = z.infer<typeof runCommandInput>;
+export type TaskRunCommandArgs = z.infer<typeof taskRunCommandInput>;
 export type FetchArgs = z.infer<typeof fetchInput>;
 export type WebSearchArgs = z.infer<typeof webSearchInput>;
 export type SubmitPlanArgs = z.infer<typeof submitPlanInput>;
@@ -167,6 +204,7 @@ export type RetryTaskArgs = z.infer<typeof retryTaskInput>;
 export type MessageTaskArgs = z.infer<typeof messageTaskInput>;
 export type SkipTaskArgs = z.infer<typeof skipTaskInput>;
 export type AnswerApprovalArgs = z.infer<typeof answerApprovalInput>;
+export type RunScriptArgs = z.infer<typeof runScriptInput>;
 
 /** What a handler answers with. `isError` marks a refusal the caller should act on. */
 export interface McpToolReply {
@@ -183,6 +221,11 @@ export type CheckpointAnswer =
   | { kind: 'continue' }
   | { kind: 'rejected'; reason: string }
   | { kind: 'withdrawn'; why: string };
+
+/** A command's outcome as `run_command` answers it, the planner's and a read-only task's alike. */
+export function commandReply(outcome: ToolOutcome): McpToolReply {
+  return { text: outcome.output || (outcome.success ? '(no output)' : 'The command failed with no output.'), ...(outcome.success ? {} : { isError: true }) };
+}
 
 /** The checkpoint call's result: the answer as the runner reads it (ADR-0022, V5). */
 export function checkpointReply(answer: CheckpointAnswer): McpToolReply {
@@ -203,6 +246,8 @@ type Run<A> = (args: A, context: McpToolContext) => Promise<McpToolReply>;
 export interface TaskToolHandler {
   taskComplete?: Run<TaskCompleteArgs>;
   checkpoint?: Run<CheckpointArgs>;
+  /** A read-only task's shell (ADR-0046); only its token lists `run_command`. */
+  runCommand?: Run<TaskRunCommandArgs>;
 }
 
 export interface PlannerToolHandler {
@@ -226,6 +271,7 @@ export interface PlannerToolHandler {
   messageTask?: Run<MessageTaskArgs>;
   answerApproval?: Run<AnswerApprovalArgs>;
   mergeAll?: Run<RunPlanArgs>;
+  runScript?: Run<RunScriptArgs>;
 }
 
 export interface McpTool<H> {
@@ -284,10 +330,22 @@ export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
  * read-only, pre-allowed or not. True of the workspace for every planner tool
  * but the execution tools: `submit_plan` and `edit_plan` write only Ordewell's plan, through the same
  * validation as the envelopes (ADR-0022, P1/P2), `run_command` refuses
- * every write the classifier sees (ADR-0026), and `fetch` and `web_search`
+ * every write the classifier sees (ADR-0026) or runs it sealed, where it
+ * cannot write the workspace (ADR-0036), and `fetch` and `web_search`
  * only send a GET (ADR-0027).
  */
 const PLANNER_READ_ONLY = { readOnlyHint: true };
+
+/**
+ * A read-only task's tools (ADR-0046): the task tools, and `run_command`, its
+ * only shell. Its hint describes its landing effects: nothing it changes
+ * reaches the plan's branches.
+ */
+export const READ_ONLY_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
+  ...TASK_TOOLS,
+  tool('run_command', "Run a shell command: git, the project's tests and scripts, anything you need to look at or try. Nothing you change lands: this task's own worktree, when it has one, is thrown away when the task ends, and only your task_complete summary comes back. Read-only commands, and those the user's allowlist covers, run at once; anything else runs sealed instead, and nobody is ever asked: no network, no home directory or credentials, nothing writable but $TMPDIR (which is also $HOME) and the task's own worktree, so you can try a fix or add a failing test and run the suite there. Once one command has run sealed, every later one does too, so run what needs the network first. git can read the repository but not record anything in it. Where this machine has no sandbox, a command that would run sealed is refused. Use it instead of a shell of your own.",
+    taskRunCommandInput, (h) => h.runCommand?.bind(h), PLANNER_READ_ONLY),
+];
 
 /**
  * The execution tools (ADR-0029) change what runs, so they say so. Every
@@ -320,6 +378,8 @@ export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     answerApprovalInput, (h) => h.answerApproval?.bind(h), PLANNER_EXECUTES),
   tool('merge_all', 'Merge the run\'s landed work into the user\'s branch, as their Merge all does, opening the merge gates that wait on it. Only the supervisor at Act may, in a wake-up turn; otherwise the user presses Merge all.',
     runPlanInput, (h) => h.mergeAll?.bind(h), PLANNER_EXECUTES),
+  tool('run_script', 'Perform an exact effect yourself — a push, a tag, one setting on a cloud resource — as a script task: added to the plan and started at once, at the workspace root, with no model. Returns its verdict and the end of its output, or after a minute that it is still running; its result then reaches you in a run update when it ends. The user consents first: in Guarded, or in Full without autorun, they are asked on the approval card, shown the commands as written, and a denial leaves the task in the plan, not approved. For an effect that needs judgment, add an ops task instead; a change to repository files is a change task.',
+    runScriptInput, (h) => h.runScript?.bind(h), PLANNER_EXECUTES),
 ];
 
 export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
@@ -337,7 +397,7 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     taskOutputInput, (h) => h.taskOutput?.bind(h), PLANNER_READ_ONLY),
   tool('task_diff', 'Read what a task changed since it started: file stats with repository paths, or a single file patch with path and repo. Paged by since/nextOffset. Shared runs without recorded changes report not available.',
     taskDiffInput, (h) => h.taskDiff?.bind(h), PLANNER_READ_ONLY),
-  tool('run_command', 'Run a shell command for research: git, gh, az, kubectl, the project\'s own tooling, anything you need to look at. Read-only commands run at once; others ask the user, once per command family; commands that write files are refused. Use it instead of a shell of your own.',
+  tool('run_command', `Run a shell command for research: git, gh, az, kubectl, the project's own tooling, anything you need to look at. Read-only commands run at once; others ask the user, once per command family; commands that write files never change anything. ${SEALED_RUNS} Use it instead of a shell of your own.`,
     runCommandInput, (h) => h.runCommand?.bind(h), PLANNER_READ_ONLY),
   // Fallbacks (ADR-0027): a runner's own fetch or search, where it has one, is
   // decided by the same policy and carries the provider's own summaries, so

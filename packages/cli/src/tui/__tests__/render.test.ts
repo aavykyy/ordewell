@@ -1473,6 +1473,19 @@ describe('approvals', () => {
     expect(blockRows(heard(80, refused('web_search', '(withheld)', 'secret')), '⊘')).toEqual(['⊘ Auto-denied (secret check) · Search the web: (withheld)']);
   });
 
+  it('draws a script task\'s body under its line, whole while it waits and counted when settled long (ADR-0035)', () => {
+    const body = (n: number) => Array.from({ length: n }, (_, i) => `echo line-${i}`).join('\n');
+    const start = (n: number): SessionMessage => ({ type: 'approval_request', id: 'ap-2', kind: 'task_start', subject: 'Run script task #2', scope: 'Run script task #2', body: body(n) });
+    const rows = (state: TuiState): string[] => render(state).map((row) => stripAnsi(row).trimEnd());
+
+    const waiting = rows({ ...heard(80, start(30)), overlay: null, rows: 80 });
+    expect(waiting.filter((row) => /^\s+echo line-\d+$/.test(row))).toHaveLength(30);
+
+    const settled = rows({ ...heard(80, start(30), { type: 'approval_settled', id: 'ap-2', granted: true }), overlay: null, rows: 80 });
+    expect(settled.filter((row) => /^\s+echo line-\d+$/.test(row))).toHaveLength(20);
+    expect(settled).toContain('    … 10 more lines');
+  });
+
   it('says an approved project server is not usable on the runner\'s version', () => {
     const unusable: SessionMessage = { type: 'approval_decided', kind: 'mcp_server', subject: 'probe: ./serve.sh', scope: 'mcp-server:probe@abc', granted: false, source: 'unsupported' };
     expect(blockRows(heard(100, unusable), '⊘')).toEqual(['⊘ Auto-denied (not usable on this runner version) · Start a project MCP server: probe: ./serve.sh']);

@@ -12,8 +12,8 @@ type PlanFields = Omit<RunTask, keyof RunTaskStatus>;
  * no plan carries, so only a status update changes it and a plan refresh
  * keeps it. Everything else is the plan's.
  */
-function split({ verdict, idleSince, isolation, checkpoint, queued, continuable, awaitingApproval, mergeGate, forcedPastGate, waitsForApproval, ...plan }: RunTask): { plan: PlanFields; status: RunTaskStatus } {
-  return { plan, status: { verdict, idleSince, isolation, checkpoint, queued, continuable, awaitingApproval, mergeGate, forcedPastGate, waitsForApproval } };
+function split({ verdict, idleSince, isolation, checkpoint, queued, continuable, awaitingApproval, mergeGate, forcedPastGate, waitsForApproval, holdReason, ...plan }: RunTask): { plan: PlanFields; status: RunTaskStatus } {
+  return { plan, status: { verdict, idleSince, isolation, checkpoint, queued, continuable, awaitingApproval, mergeGate, forcedPastGate, waitsForApproval, holdReason } };
 }
 
 /**
@@ -32,8 +32,8 @@ function refresh(previous: readonly RunTask[], tasks: readonly SerializedTask[])
   return tasks.map(fold);
 }
 
-/** A plan carries the task's wait and usage too, but a status update is the newer word on them. */
-function withStatus({ awaitingReason: _reason, resumeAt: _resumeAt, skipReason: _skipped, attemptUsage: _usage, ...plan }: PlanFields, { id: _id, ...status }: SerializedTaskStatus): Omit<RunTask, 'subtasks'> {
+/** A plan carries the task's wait, usage and loop round too, but a status update is the newer word on them. */
+function withStatus({ awaitingReason: _reason, resumeAt: _resumeAt, skipReason: _skipped, attemptUsage: _usage, loopRound: _round, ...plan }: PlanFields, { id: _id, ...status }: SerializedTaskStatus): Omit<RunTask, 'subtasks'> {
   return { ...plan, ...status };
 }
 
@@ -62,6 +62,7 @@ function changeTask(tasks: RunTask[], taskId: string, change: (task: RunTask) =>
 const PATCHABLE: ReadonlySet<string> = new Set<keyof PlanFields>([
   'order', 'title', 'type', 'status', 'description', 'dependencies', 'assignedRunner', 'assignedModel', 'taskMode', 'prompt',
   'userSteps', 'autonomy', 'sliceType', 'userStoriesCovered', 'awaitingReason', 'resumeAt', 'skipReason', 'ops', 'skills', 'addedBy', 'attemptUsage',
+  'commands', 'script', 'timeoutMs', 'loop', 'loopRound', 'research',
 ]);
 
 function patchTask(task: RunTask, changes: Record<string, unknown>): RunTask {

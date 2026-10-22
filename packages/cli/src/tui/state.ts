@@ -1,5 +1,5 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type RunnerCommand, type RunTask, type RunView, type SupervisorLevel, type TaskLogFollow, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type RunnerCommand, type RunTask, type RunView, type SupervisorLevel, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { SaveSettingsEffect } from './reducers/settings';
 import type { StepperState } from './reducers/stepper';
@@ -20,7 +20,7 @@ export interface TaskView {
   title: string;
   description?: string;
   prompt?: string;
-  type: 'ai' | 'user';
+  type: TaskType;
   status: string;
   /** Advisory silence timestamp from VerdictEngine — set while the task's runner has gone quiet. */
   idleSince?: string | null;
@@ -49,8 +49,23 @@ export interface TaskView {
   awaitingApproval?: number;
   /** Added after the user approved the plan, so the scheduler leaves it for them (ADR-0035). */
   waitsForApproval?: boolean;
+  /** Why it is held out of the scheduler; absent when it is not held. */
+  holdReason?: string;
   /** An ops task (ADR-0020): it runs in the user's checkout, never a worktree. */
   ops?: boolean;
+  /** A research task (ADR-0037): its report goes to the planner and wakes it. */
+  research?: boolean;
+  /** A script task's body (ADR-0035): argument vectors run in order, or one script. Kept raw: the pane shows it with unseen characters spelled out. */
+  commands?: string[][];
+  script?: string;
+  /** A script task's time limit; absent where it takes the default. */
+  timeoutMs?: number;
+  /** Set on a loop's check (ADR-0045): its body, by task id, and how many rounds it may run. */
+  loop?: { body: string[]; maxRounds: number };
+  /** The round of the check's latest run, past its first. */
+  loopRound?: number;
+  /** What a check's evidence said, so the pane can tell a check between rounds from one that failed outright (ADR-0045 L2). */
+  verdict?: { outcome: string; reported?: string };
   /** Task skills attached by name, put in the runner's prompt at spawn. */
   skills?: string[];
   /** Set on a task an Act supervisor added during a run (ADR-0029). */
@@ -246,11 +261,14 @@ export interface ApprovalRequestView {
   subject: string;
   scope: string;
   detail?: string;
+  /** What a script task runs, verbatim, for a start the user is asked to approve (ADR-0035). */
+  body?: string;
 }
 
 export type Overlay =
   | { kind: 'help'; scroll?: number; sheet?: 'commands' | 'keys' }
-  | { kind: 'approval'; request: ApprovalRequestView }
+  /** `scroll` is how far into the request's `body` the card is read, when the body does not fit. */
+  | { kind: 'approval'; request: ApprovalRequestView; scroll?: number }
   | { kind: 'picker'; picker: PickerState }
   | { kind: 'stepper'; stepper: StepperState }
   /**

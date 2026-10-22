@@ -115,6 +115,27 @@ describe('BaseConfig', () => {
     });
   });
 
+  describe('plannerNativeShell (ADR-0036 N1)', () => {
+    const key = 'ORDEWELL_PLANNER_NATIVE_SHELL';
+    let backup: string | undefined;
+    beforeEach(() => { backup = process.env[key]; delete process.env[key]; });
+    afterEach(() => { if (backup !== undefined) process.env[key] = backup; else delete process.env[key]; });
+
+    it('is off by default', () => {
+      expect(new TestConfig().plannerNativeShell).toBe(false);
+    });
+
+    it.each(['true', 'TRUE', '1', 'yes', 'on'])('reads %j as on', (value) => {
+      process.env[key] = value;
+      expect(new TestConfig().plannerNativeShell).toBe(true);
+    });
+
+    it.each(['', 'false', '0', 'no', 'off', 'maybe'])('reads %j as off', (value) => {
+      process.env[key] = value;
+      expect(new TestConfig().plannerNativeShell).toBe(false);
+    });
+  });
+
   describe('provider detection & key resolution', () => {
     // Every variable detection reads, so a key in the developer's own shell cannot decide a case.
     const keys = [...new Set(['AI_PROVIDER', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'GEMINI_BASE_URL', ...PROVIDER_DETECT_PRIORITY.flatMap((p) => {

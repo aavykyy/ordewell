@@ -3,14 +3,14 @@ import { cursorInLines, type CursorPosition } from './editor';
 import { assignmentFlagText, checkpointCardLines, conversationLines, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
-import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
 import { SUPERVISOR_LEVEL_LABEL, type DiscoveredModel, type HeldEditMark } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { approvalLabel, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, skippedLabel, hasHiddenDetail, resumeLabel, resumeTime, runnerForProvider, taskRowView, tasksTotalText, taskUsageSummary, plannerContextFill, usageText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
+import { approvalLabel, scriptTaskText, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeLabel, resumeTime, runnerForProvider, taskRowView, tasksTotalText, taskUsageSummary, plannerContextFill, usageText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -263,7 +263,7 @@ export function stopHint(state: TuiState): string {
 }
 
 /**
- * 120ms spinner ticks one colour of the status dot lasts: ~480ms, slow enough
+ * 200ms spinner ticks one colour of the status dot lasts: 800ms, slow enough
  * to read as a pulse and well under the repaint rate the plan spinner already
  * sets. The frame counter wraps at a multiple of this and of the spinner's ten
  * frames, so neither animation skips a beat at the wrap.
@@ -655,6 +655,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ),
     setupRow('Autonomy', state.autonomous ? style.yellow('Full') : 'Guarded', '', cols),
     setupRow('Run', runSettingsValue(state), '/settings', cols),
+    setupRow('Research', 'runs within the Parallel limit', '', cols),
     '',
   ];
   // Only once nothing usable was found: a key reaches the welcome with the catalog, after the probe.
@@ -894,9 +895,13 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     ? style.yellow('RUN')
     : row.kind === 'user'
       ? style.yellow('MAN')
-      : row.kind === 'ops'
-        ? style.magenta('OPS')
-        : style.grey(' AI');
+      : row.kind === 'script'
+        ? style.cyan('SCR')
+        : row.kind === 'ops'
+          ? style.magenta('OPS')
+          : row.research
+            ? style.cyan('RES')
+            : style.grey(' AI');
   const caret = selected ? style.brand('❯') : ' ';
 
   // A subtask row names itself by its dotted order ("2.1") and steps in under
@@ -934,7 +939,8 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     ? `${inRow(row.approvals)}: enter opens it`
     : row.awaiting ? inRow(row.awaiting) : '';
   const skills = (task.skills ?? []).join(' · ');
-  const meta = [activity, runner, model];
+  // A running row's tag says RUN, so the mark moves to the line beneath it.
+  const meta = [activity, ...(row.research && row.running ? [style.cyan('research')] : []), runner, model];
   // The variant rides on the meta line only when the whole line still fits;
   // when it does not, the effort gives way rather than truncating the model.
   const variant = task.type === 'ai' ? sanitize(task.assignedModel?.thinkingEffort ?? '') : '';
@@ -946,6 +952,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   // Runner and model hang under the title. Warnings and the expanded sheet
   // keep the shallower `bodyPad`: they need the room more than the alignment.
   if (metaText) lines.push(style.grey(truncate(`${continuation}${metaText}`, cols)));
+  if (row.loop) lines.push(...loopLines(row.loop, cols, bodyPad));
   // The one isolation state that needs the user; every other stays out of the
   // row and shows only in the expanded detail below.
   if (row.conflict) {
@@ -970,6 +977,9 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   }
   if (row.waitsForApproval) {
     lines.push(...statusLines(style.yellow, '⏸', `${inRow(row.waitsForApproval)} · f approves it · /run approves all`, cols, bodyPad));
+  }
+  if (row.holdReason) {
+    lines.push(...statusLines(style.yellow, '⏸', `${inRow(holdLabel(row.holdReason))} · retry or f start when ready`, cols, bodyPad));
   }
   if (row.blockedBy) {
     lines.push(...statusLines(style.red, '⊘', `${inRow(blockedByLabel(row.blockedBy))}: runs once ${row.blockedBy.length === 1 ? 'it is retried and passes' : 'they are retried and pass'}`, cols, bodyPad));
@@ -1003,8 +1013,17 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
         lines.push(...taskText('Worktree', task.isolation.worktree, cols, bodyPad));
       }
     }
+    if (row.research) {
+      lines.push(...taskText('Research', 'Read-only: it lands nothing. Its report wakes the planner when it ends.', cols, bodyPad));
+    }
     if (row.kind === 'ops') {
       lines.push(...taskText('Ops', 'Runs in your checkout, not a worktree, once the work it depends on is merged. O makes it a change task.', cols, bodyPad));
+    }
+    // Where an ops task shows its prompt: the body is what runs and what the
+    // user consented to, so it is shown whole and verbatim (ADR-0035).
+    if (row.kind === 'script') {
+      lines.push(...taskText('Script', scriptTaskText(task).replace(/\t/g, '    '), cols, bodyPad));
+      lines.push(...taskText('Ops', 'Runs in your checkout with no model, once the work it depends on is merged.', cols, bodyPad));
     }
     if (row.forcedPastGate) {
       lines.push(...taskText('Forced', `Started before the work of ${row.forcedPastGate.join(', ')} was merged into your branch.`, cols, bodyPad));
@@ -1014,7 +1033,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     }
     // The prompt editor is seeded from prompt ?? description ?? title, so only
     // show the static description when it carries information the editor won't.
-    const editableSeed = task.prompt ?? task.description ?? task.title;
+    const editableSeed = row.kind === 'script' ? task.title : task.prompt ?? task.description ?? task.title;
     if (task.description && task.description !== task.title && task.description !== editableSeed) {
       lines.push(...taskText('Description', task.description, cols, bodyPad));
     }
@@ -1030,6 +1049,11 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     }
     if (row.dependencies.length > 0) {
       lines.push(...taskText('Depends on', row.dependencies.join(', '), cols, bodyPad));
+    }
+    // A script's body is the planner's to write: there is no editor to save or cancel.
+    if (row.kind === 'script') {
+      lines.push(style.grey(`${bodyPad}esc collapse · f start · D deps · d remove`));
+      return { lines, editorLine };
     }
     // Two lines: the assignment keys plus the edit verbs no longer fit the plan
     // pane on one, and a truncated hint hides the keys it exists to teach. They
@@ -1047,6 +1071,27 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
  * pane's edge: it says what the user can do, and the end of it is the part
  * they act on.
  */
+const LOOP_PAINT: Record<LoopCheckState, (text: string) => string> = {
+  waiting: style.grey,
+  running: style.grey,
+  repeating: style.yellow,
+  stopped: style.red,
+  passed: style.green,
+  'out-of-rounds': style.red,
+  failed: style.red,
+  ended: style.grey,
+};
+
+/**
+ * A loop's check and body are linked by the same glyph and the check's
+ * reference (ADR-0045): the check says its round and which tasks run if it
+ * fails, and each of those says which check it runs for.
+ */
+function loopLines(loop: TaskRowLoop, cols: number, pad: string): string[] {
+  const paint = loop.role === 'body' ? style.cyan : LOOP_PAINT[loop.state];
+  return statusLines(paint, '↻', loopRowParts(loop).map(inRow).join(' · '), cols, pad);
+}
+
 function statusLines(paint: (text: string) => string, glyph: string, text: string, cols: number, pad: string): string[] {
   const lead = `${pad}${glyph} `;
   const room = Math.max(1, cols - width(lead));
@@ -1157,6 +1202,82 @@ export function helpLayout(rows: number, cols: number, sheet: HelpSheet = 'comma
   // One row for the frame's title, one for the sheet's own footer.
   const room = Math.max(1, rows - 2);
   return { lines, room, maxScroll: Math.max(0, lines.length - room) };
+}
+
+const APPROVAL_HEADLINE: Record<ApprovalRequestView['kind'], string> = {
+  shell_command: 'The planner wants to run a command',
+  url_fetch: 'The planner wants to fetch a URL',
+  web_search: 'The planner wants to search the web',
+  mcp_tool: 'The planner wants to use an MCP tool',
+  mcp_server: 'The planner wants to start a project MCP server',
+  task_start: 'The planner wants to start work',
+  external_path: 'The planner wants to read a path outside the workspace',
+};
+
+export interface ApprovalLayout {
+  /** The card under its title bar: the request, the part of its body in view, and the keys. */
+  lines: string[];
+  maxScroll: number;
+}
+
+/**
+ * The planner's approval card. A script's body is what the user consents to
+ * (ADR-0035), so it is shown whole when it fits and otherwise scrolls, with the
+ * lines out of view counted above and below it: the keys stay on screen, and
+ * nothing is cut without saying so.
+ */
+export function approvalLayout(state: TuiState, request: ApprovalRequestView, scroll: number, rows: number, cols: number): ApprovalLayout {
+  const inner = Math.max(1, cols - 2);
+  const wrapped = (lines: string[]): string[] => lines.flatMap((line) => wrap(line, inner));
+  const queued = state.pendingApprovals.length;
+  const head = wrapped([APPROVAL_HEADLINE[request.kind], '', `  ${style.yellow(request.subject)}`, '']);
+  const foot = wrapped([
+    ...(request.body ? [''] : []),
+    // Disambiguates the `external_path` case: an auto-tier command like
+    // `cat` touching an outside path reads identically to a plain
+    // `read_file` without it.
+    ...(request.detail ? [style.grey(request.detail), ''] : []),
+    // The grant is wider than the request, so name it rather than letting
+    // the user discover it when the next call silently does not prompt. A
+    // start is asked every time (ADR-0029), so it grants nothing more.
+    ...(request.kind === 'task_start' ? [] : [style.grey(`Approving also allows ${request.scope} for the rest of this session.`)]),
+    ...(queued > 0 ? [style.grey(`${queued} more waiting.`)] : []),
+    '',
+    // ESC is not "deny" while a turn is in flight — it kills the turn and
+    // takes this prompt with it. Offering it as the deny key there would
+    // teach the wrong thing about the most destructive key on the sheet.
+    // With a prompt queued the first ESC unsends that instead, so the hint
+    // names the take-back rather than the twice-to-stop.
+    style.grey(plannerInFlight(state)
+      ? state.queuedPrompts.length > 0
+        ? 'y or enter allows · n denies · esc takes back the queued prompt'
+        : 'y or enter allows · n denies · esc twice stops planning'
+      : 'y or enter allows · n or esc denies'),
+  ]);
+  const body = request.body ? wrap(sanitize(request.body).replace(/\n+$/, '').replace(/\t/g, '    '), Math.max(1, inner - 2)).map((line) => `  ${line}`) : [];
+  // The title bar takes a row; a window under three rows could show no line of the body between its markers.
+  const room = Math.max(3, rows - 1 - head.length - foot.length);
+  if (body.length <= room) return { lines: [...head, ...body, ...foot], maxScroll: 0 };
+  const window = room - 2;
+  const maxScroll = body.length - window;
+  const top = Math.min(Math.max(0, scroll), maxScroll);
+  const below = body.length - top - window;
+  return {
+    lines: [
+      ...head,
+      style.grey(top > 0 ? `  ↑ ${top} more ${top === 1 ? 'line' : 'lines'} above` : '  The start of what it runs:'),
+      ...body.slice(top, top + window),
+      style.grey(below > 0 ? `  ↓ ${below} more ${below === 1 ? 'line' : 'lines'} below · up/down or pgup/pgdn scrolls` : '  The end.'),
+      ...foot,
+    ],
+    maxScroll,
+  };
+}
+
+/** How far the approval card's body can scroll at the size it is about to be painted. */
+export function approvalScrollMax(state: TuiState): number {
+  const overlay = state.overlay;
+  return overlay?.kind === 'approval' ? approvalLayout(state, overlay.request, 0, bodyRows(state), state.cols).maxScroll : 0;
 }
 
 /** How far the help sheet can scroll at the size it is about to be painted. */

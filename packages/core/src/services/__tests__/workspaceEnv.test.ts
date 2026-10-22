@@ -78,6 +78,26 @@ describe('resolveWorkspaceEnv', () => {
     expect(result.refused.sort()).toEqual(['LD_PRELOAD', 'NODE_OPTIONS', 'ORDEWELL_SETTINGS_PATH', 'PATH']);
   });
 
+  it('never takes the effect allowlist from a workspace env file or .envrc: it pre-approves effects, and is the user\'s alone (ADR-0035)', async () => {
+    const result = await resolveWorkspaceEnv(ROOT, deps({
+      direnv: { stdout: '{"ORDEWELL_EFFECT_ALLOW":"git push *"}' },
+      files: { '/work/app/.ordewell/env': 'ORDEWELL_EFFECT_ALLOW=gh pr merge *\nSAFE=1\n' },
+    }));
+
+    expect(result.env).toEqual({ SAFE: '1' });
+    expect(result.refused).toEqual(['ORDEWELL_EFFECT_ALLOW']);
+  });
+
+  it('never takes the native-shell opt-in from a workspace env file or .envrc: a repository cannot widen its planner (ADR-0036 N1)', async () => {
+    const result = await resolveWorkspaceEnv(ROOT, deps({
+      direnv: { stdout: '{"ORDEWELL_PLANNER_NATIVE_SHELL":"1"}' },
+      files: { '/work/app/.ordewell/env': 'ORDEWELL_PLANNER_NATIVE_SHELL=true\nSAFE=1\n' },
+    }));
+
+    expect(result.env).toEqual({ SAFE: '1' });
+    expect(result.refused).toEqual(['ORDEWELL_PLANNER_NATIVE_SHELL']);
+  });
+
   it('leaves direnv alone when ORDEWELL_DIRENV is false, and works without direnv installed', async () => {
     const off = deps({ env: { ORDEWELL_DIRENV: 'false' }, direnv: { stdout: '{"A":"1"}' } });
     expect((await resolveWorkspaceEnv(ROOT, off)).env).toEqual({});

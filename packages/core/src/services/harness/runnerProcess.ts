@@ -26,6 +26,11 @@ export interface RunnerCommand {
    * workspace's, for a runner whose value merges into one of them.
    */
   env?: (workspace: Record<string, string>) => Record<string, string>;
+  /**
+   * Names this launch must not inherit from the host or the workspace — the
+   * credentials a native-shell planner keeps out of its process (ADR-0036 N2.2).
+   */
+  envDrop?: (name: string) => boolean;
 }
 
 export interface RunnerExit {
@@ -100,7 +105,7 @@ export class RunnerProcess {
     if (!isExecutableResolved(command.command, launch, PATH, { platform: this.deps.platform, exists: this.deps.exists })) {
       throw new ExecutableNotFoundError(command.command, PATH);
     }
-    this.spawnEnv = runnerEnv(PATH, workspace, command.env?.(workspace));
+    this.spawnEnv = runnerEnv(PATH, workspace, command.env?.(workspace), command.envDrop);
 
     const child = spawnInOwnGroup((detached) => this.deps.spawn(launch.file, launch.args, {
       env: this.spawnEnv,

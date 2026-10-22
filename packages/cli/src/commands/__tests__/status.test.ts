@@ -117,6 +117,58 @@ describe('handleStatus --output', () => {
     srv.close();
   });
 
+  it('says why a live session holds a task, so it does not read as merely unstarted', async () => {
+    const session = {
+      ...SESSION,
+      plan: { pendingTasks: [{ id: 't1', order: 1, title: 'One', status: 'pending' }] },
+      run: {
+        tasks: [{ id: 't1', order: 1, title: 'One', status: 'pending', holdReason: 'could not connect to Ordewell\'s tools; start it again' }],
+        runMerge: null,
+        handoff: null,
+        mergeResult: null,
+      },
+    };
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(session));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() =>
+      handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)),
+    );
+    expect(stdout).toContain('On hold: could not connect to Ordewell\'s tools; start it again');
+    srv.close();
+  });
+
+  it('marks a research task', async () => {
+    const session = {
+      ...SESSION,
+      plan: { pendingTasks: [
+        { id: 't1', order: 1, type: 'ai', title: 'Scout the cache', status: 'pending', research: true },
+        { id: 't2', order: 2, type: 'ai', title: 'Plain task', status: 'pending' },
+      ] },
+      run: {
+        tasks: [
+          { id: 't1', order: 1, title: 'Scout the cache', status: 'pending', research: true },
+          { id: 't2', order: 2, title: 'Plain task', status: 'pending' },
+        ],
+        runMerge: null,
+        handoff: null,
+        mergeResult: null,
+      },
+    };
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(session));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
+    const lines = stripAnsi(stdout).split('\n');
+    expect(lines.find((l) => l.includes('Scout the cache'))).toContain(' [RES] ');
+    expect(lines.find((l) => l.includes('Plain task'))).not.toContain('[RES]');
+    srv.close();
+  });
+
   // A running session's finished tasks come back in a flat execution log, a
   // finished subtask both on its own and inside its parent.
   it('lists each task once, at its own depth, when finished ones come from the execution log', async () => {
@@ -235,6 +287,54 @@ describe('handleStatus --output', () => {
     srv.close();
   });
 
+  it('shows a script task\'s body and time limit, as `ordewell plan` does (ADR-0035)', async () => {
+    const session = {
+      meta: SESSION.meta,
+      plan: {
+        pendingTasks: [
+          {
+            id: 't1', order: 1, type: 'script', title: 'Tag the release', status: 'pending', dependencies: [],
+            commands: [['git', 'tag', 'v1.2.3']], timeoutMs: 90_000,
+          },
+        ],
+      },
+    };
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(session));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
+
+    expect(stdout).toContain('git tag v1.2.3');
+    expect(stdout).toContain('Time limit: 90 seconds.');
+    srv.close();
+  });
+
+  it('tags a script task [SCR] in the task list (ADR-0035)', async () => {
+    const session = {
+      meta: SESSION.meta,
+      plan: {
+        pendingTasks: [
+          { id: 't1', order: 1, title: 'Change', type: 'ai', status: 'pending', dependencies: [] },
+          { id: 't2', order: 2, title: 'Push the tag', type: 'script', status: 'pending', dependencies: [], commands: [['git', 'push']] },
+        ],
+      },
+    };
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(session));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
+
+    const rows = stripAnsi(stdout).split('\n').filter((line) => /^\s+\d+\. /.test(line));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).not.toContain('[SCR]');
+    expect(rows[1]).toMatch(/\[[^\]]+\] \[SCR\] Push the tag/);
+    srv.close();
+  });
+
   // The flag every surface shows for a task outside the user's scope (ADR-0043).
   it('flags a task on a runner switched off or a model off its allowlist, subtasks too, and never a finished one', async () => {
     const session = {
@@ -276,5 +376,55 @@ describe('handleStatus --output', () => {
       '        ⚠ codex is switched off — runs as assigned unless moved',
     ]);
     srv.close();
+  });
+});
+
+describe('handleStatus on a loop (ADR-0045)', () => {
+  const found = { outcome: 'fail', reason: 'two problems', checks: [], reported: 'failed' };
+  const loopSession = (tasks: unknown[]) => ({ meta: { ...SESSION.meta, status: 'approved' }, plan: { pendingTasks: tasks } });
+  const check = (over: Record<string, unknown> = {}) => ({ id: 'c', order: 1, title: 'Review', type: 'ai', status: 'pending', dependencies: [], loop: { body: ['f'], maxRounds: 3 }, ...over });
+  const fix = (over: Record<string, unknown> = {}) => ({ id: 'f', order: 2, title: 'Fix', type: 'ai', status: 'pending', dependencies: ['c'], ...over });
+  const dependent = { id: 'd', order: 3, title: 'Ship', type: 'ai', status: 'pending', dependencies: ['c'] };
+
+  async function status(session: unknown): Promise<string> {
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(session));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
+    srv.close();
+    return stripAnsi(stdout);
+  }
+
+  it('says what the loop will do, on the check and on its body', async () => {
+    const out = await status(loopSession([check(), fix()]));
+
+    expect(out).toContain('      ↻ Loop of up to 3 rounds · Runs #2 if it fails');
+    expect(out).toContain('      ↻ Runs if #1 fails');
+  });
+
+  it('shows a check between rounds as no failure, and what is fixing it', async () => {
+    const out = await status(loopSession([check({ status: 'failed', loopRound: 1, verdict: found }), fix({ status: 'in_progress' }), dependent]));
+
+    expect(out).toContain('      ↻ Round 1 of 3: fixing · Found problems: runs again once #2 has landed');
+    expect(out).toContain('      ↻ Runs if #1 fails (round 1 of 3)');
+    expect(out).toContain('0 failed  |  1 running  |  0 blocked');
+    expect(out).not.toContain('Blocked by');
+    expect(out).not.toContain('✗');
+  });
+
+  it('counts the failure and blocks its dependents once the loop is out of rounds', async () => {
+    const out = await status(loopSession([check({ status: 'failed', loopRound: 3, verdict: found }), fix({ status: 'skipped', skipReason: 'not run: the loop ran out of rounds' }), dependent]));
+
+    expect(out).toContain('      ↻ Failed after 3 rounds');
+    expect(out).toContain('1 failed  |  0 running  |  1 blocked');
+    expect(out).toContain('Blocked by #1');
+  });
+
+  it('says how the loop ended when its check passed', async () => {
+    const out = await status(loopSession([check({ status: 'completed', loopRound: 2, verdict: { outcome: 'pass', reason: 'clean', checks: [], reported: 'done' } }), fix({ status: 'skipped', skipReason: 'not needed: its check passed' })]));
+
+    expect(out).toContain('      ↻ Passed in round 2 of 3');
   });
 });

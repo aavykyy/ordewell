@@ -17,6 +17,7 @@ describe('OrchestratorPool.updateSettings — environment allowlist', () => {
     'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT',
     'OPENROUTER_API_KEY', 'OPENROUTER_BASE_URL',
     'ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_APPROVAL_MODE', 'ORDEWELL_APPROVAL_ALLOW',
+    'ORDEWELL_PLANNER_NATIVE_SHELL',
     'NODE_OPTIONS', 'NODE_PATH', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'PATH', 'ORDEWELL_MAX_PARALLEL',
   ];
   const savedEnv: Record<string, string | undefined> = {};
@@ -63,6 +64,13 @@ describe('OrchestratorPool.updateSettings — environment allowlist', () => {
     expect(process.env.ORDEWELL_APPROVAL_ALLOW).toBeUndefined();
     expect(result.rejectedEnvKeys)
       .toEqual(['ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_APPROVAL_MODE', 'ORDEWELL_APPROVAL_ALLOW']);
+  });
+
+  it('refuses the native-shell opt-in, which a daemon write would turn on for every later planner (ADR-0036 N1)', () => {
+    const result = pool.updateSettings({ env: { ORDEWELL_PLANNER_NATIVE_SHELL: 'true' } });
+
+    expect(process.env.ORDEWELL_PLANNER_NATIVE_SHELL).toBeUndefined();
+    expect(result.rejectedEnvKeys).toEqual(['ORDEWELL_PLANNER_NATIVE_SHELL']);
   });
 
   it('refuses the settings-path override, which would redirect a recursive mkdir', () => {

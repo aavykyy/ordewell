@@ -56,6 +56,12 @@ export interface ConversationRequest {
   initialMessage?: string;
   plannerTools?: PlannerToolsOffer;
   /**
+   * The session's notice channel, for a warning the planner's surface should
+   * show once (ADR-0036 N4: the native-shell setting is on but the harness is
+   * not offered it). Absent: nowhere to show one, so none is raised.
+   */
+  notice?: (level: 'info' | 'warn' | 'error', message: string) => void;
+  /**
    * The session's approval policy, which a harness planner's own tool
    * requests are decided against as the API planner's are (ADR-0026). Absent:
    * nobody can be asked, so they are denied.
@@ -216,7 +222,7 @@ export function createAiService(config: IConfig, deps?: CliAgentAiServiceDeps): 
     return new CliAgentAiService(config, deps);
   }
   if (config.aiProvider === 'google') {
-    return new GeminiService(config);
+    return new GeminiService(config, deps?.turnBudgets);
   }
-  return new OpenAiService(config);
+  return new OpenAiService(config, deps?.turnBudgets);
 }

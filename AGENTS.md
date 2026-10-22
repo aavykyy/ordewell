@@ -85,6 +85,9 @@ node bench/live/drive-conversation.mjs
 - **Verdicts come from evidence.** A task completes when the runner calls
   `task_complete` bound to the attempt's token. Never make the model the
   tie-breaker.
+  One exception: a script task has no runner and no model, so its evidence is
+  the exit status of the literal script the plan holds, handed to
+  `VerdictEngine` ([ADR-0035](docs/adr/supervision/0035-effects-are-consented-and-recorded.md)).
 - **The plan is the source of truth** for what runs. Modes and models are never
   silently rewritten at spawn time
   ([ADR-0001](docs/adr/routing/0001-autonomous-mode-resolution.md)).

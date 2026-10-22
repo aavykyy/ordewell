@@ -20,7 +20,8 @@ I split the problem in two instead:
 2. **Executors** — the actual coding agents (Claude Code, Codex or OpenCode through structured connectors) that
    each run *one* task, in their own session, with the model the planner picked for that task.
 
-The planner never writes code. The executors never plan the whole job. This note is about why that
+The planner never writes code. Its one act of its own is a script task: exact commands you
+approve, which Ordewell runs with no model. The executors never plan the whole job. This note is about why that
 seam is worth having.
 
 ## Planning and coding are different workloads

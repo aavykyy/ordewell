@@ -204,15 +204,22 @@ function harness(rows = 24) {
   // pane divider (`render.ts`).
   // eslint-disable-next-line no-control-regex
   const ROW = /\x1b\[(\d+);1H([\s\S]*?)(?=\x1b\[\d+;1H|$)/g;
-  const frames = () =>
-    output.writes
-      .filter((w) => w.includes('\x1b[?7l'))
-      .map((w) => {
-        const rows = new Map<number, string>();
-        for (const m of w.matchAll(ROW)) rows.set(Number(m[1]), stripAnsi(m[2]));
-        const lastRow = Math.max(0, ...rows.keys());
-        return Array.from({ length: lastRow }, (_, i) => rows.get(i + 1) ?? '').join('\n');
-      });
+  // The terminal paints only the rows that changed, so a frame is what the
+  // screen shows after applying that write to the one before it. A clear
+  // (resize, reset) starts the screen again from blank. Built once and kept
+  // in step with the writes, since tests read the screen repeatedly.
+  const frameCache = { at: 0, rows: new Map<number, string>(), painted: [] as string[] };
+  const frames = () => {
+    for (; frameCache.at < output.writes.length; frameCache.at++) {
+      const w = output.writes[frameCache.at];
+      if (w.includes('\x1b[2J')) frameCache.rows.clear();
+      if (!w.includes('\x1b[?7l')) continue;
+      for (const m of w.matchAll(ROW)) frameCache.rows.set(Number(m[1]), stripAnsi(m[2]));
+      const lastRow = Math.max(0, ...frameCache.rows.keys());
+      frameCache.painted.push(Array.from({ length: lastRow }, (_, i) => frameCache.rows.get(i + 1) ?? '').join('\n'));
+    }
+    return frameCache.painted;
+  };
   const screen = () => frames().at(-1) ?? '';
   // The transcript column only, unwrapped: everything left of the plan-pane
   // divider, with the pane's line wrapping collapsed back to single spaces.
@@ -226,7 +233,9 @@ function harness(rows = 24) {
   return { app, input, output, daemon, envWrites, onExit, clipboard, type, frames, screen, transcript };
 }
 
-const settle = () => vi.waitFor(() => expect(true).toBe(true));
+// Effects settle over microtasks, but a message-driven paint waits for the
+// frame budget; give both a turn before reading the screen.
+const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 50));
 
 beforeEach(() => {
   vi.stubEnv('NO_COLOR', '1');

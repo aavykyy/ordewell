@@ -169,6 +169,76 @@ describe('handlePlan', () => {
     srv.close();
   });
 
+  it('prints a script task as [SCR] with its commands under the title, and a legend line for it (ADR-0035)', async () => {
+    const withScript = {
+      tasks: [
+        { id: 't1', order: 1, title: 'Build', type: 'ai' },
+        { id: 't2', order: 2, title: 'Tag the release', type: 'script', dependencies: ['t1'], commands: [['git', 'tag', 'v1'], ['git', 'push', 'origin', 'v1']], timeoutMs: 90_000 },
+        { id: 't3', order: 3, title: 'Clean up', type: 'script', script: 'rm -rf dist\nls', ops: undefined },
+      ],
+      runners: ['claude-code'],
+    };
+    const srv = await planServer({ '/converse/start': { plan: withScript } }, []);
+    const { handlePlan } = await import('../plan');
+    const { stdout } = await capture(() =>
+      handlePlan(['--goal', 'ship it', '--workspace', '/tmp'], { api: new ApiClient(srv.port) }),
+    );
+    const lines = stdout.split('\n');
+    const title = lines.findIndex((l) => l.includes('[SCR] Tag the release'));
+    expect(title).toBeGreaterThan(-1);
+    expect(lines.slice(title + 1, title + 4)).toEqual([
+      '        git tag v1',
+      '        git push origin v1',
+      '',
+    ]);
+    expect(stdout).toContain('        Time limit: 90 seconds.');
+    expect(stdout).toContain('        rm -rf dist\n        ls');
+    expect(stdout).toContain('(1 AI, 2 Script, 0 Manual)');
+    expect(stdout).toContain('[SCR] = script task');
+    expect(stdout).not.toContain('[OPS]');
+    srv.close();
+  });
+
+  it('prints a research task as [RES], with a legend line for it (ADR-0037)', async () => {
+    const withResearch = {
+      tasks: [
+        { id: 't1', order: 1, title: 'Scout the cache', type: 'ai', readOnly: true, research: true },
+        { id: 't2', order: 2, title: 'Build', type: 'ai' },
+      ],
+      runners: ['claude-code'],
+    };
+    const srv = await planServer({ '/converse/start': { plan: withResearch } }, []);
+    const { handlePlan } = await import('../plan');
+    const { stdout } = await capture(() =>
+      handlePlan(['--goal', 'find it', '--workspace', '/tmp'], { api: new ApiClient(srv.port) }),
+    );
+    expect(stdout).toContain(' 1. [RES] Scout the cache');
+    expect(stdout).toContain(' 2. [ AI] Build');
+    expect(stdout).toContain('[RES] = research task: read-only, lands nothing; its report wakes the planner when it ends');
+    srv.close();
+  });
+
+  it('prints a loop\'s check and body with the rounds and the link between them (ADR-0045)', async () => {
+    const withLoop = {
+      tasks: [
+        { id: 't1', order: 1, title: 'Build', type: 'ai' },
+        { id: 't2', order: 2, title: 'Run the tests', type: 'script', dependencies: ['t1'], commands: [['npm', 'test']], loop: { body: ['t3'], maxRounds: 4 } },
+        { id: 't3', order: 3, title: 'Fix the failures', type: 'ai', dependencies: ['t2'] },
+      ],
+      runners: ['claude-code'],
+    };
+    const srv = await planServer({ '/converse/start': { plan: withLoop } }, []);
+    const { handlePlan } = await import('../plan');
+    const { stdout } = await capture(() =>
+      handlePlan(['--goal', 'get the tests passing', '--workspace', '/tmp'], { api: new ApiClient(srv.port) }),
+    );
+
+    expect(stdout).toContain('        ↻ Loop of up to 4 rounds · Runs #3 if it fails');
+    expect(stdout).toContain('        ↻ Runs if #2 fails');
+    expect(stdout.match(/↻/g)).toHaveLength(2);
+    srv.close();
+  });
+
   it('forwards the planner environment to a daemon that was already running', async () => {
     // The daemon inherits its environment once, at spawn. Without this the
     // documented `AI_PROVIDER=codex ordewell plan …` planned with whatever the

@@ -5,6 +5,8 @@ import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { McpClientConfig } from '../mcp';
 import type { ProjectMcpServer } from './repoConfig';
 import type { RunnerCommand, RunnerMcpServer, RunnerModelRef } from '../../models/RunnerCommand';
+import type { PlannerShellSandbox } from '../sandbox/plannerSandbox';
+import type { AttachState } from './ordewellBinding';
 
 
 /**
@@ -154,6 +156,8 @@ export type PlannerAsk =
    */
   | { kind: 'search'; query: string; provider: string; providerLabel?: string }
   | { kind: 'path'; path: string; directory: boolean }
+  /** A command through the harness's own shell, allowed by the user's opt-in and held in Ordewell's sandbox (ADR-0036 N2, N3). */
+  | { kind: 'native-shell'; tool: string; command?: string }
   /** `note` is why, for a tool the runner knows the planner must not use, in place of the envelope's generic refusal. */
   | { kind: 'other'; note?: string };
 
@@ -190,6 +194,13 @@ export interface PlannerStartOptions extends AgentStartCommon {
    */
   nativeSearch?: boolean;
   /**
+   * Whether the user let this planner use its harness's own shell beside
+   * Ordewell's tools (ADR-0036 N1). The caller sets it only for a version that
+   * passed N2's live checks (see `nativeShellOffer`); absent means off. When
+   * true, the adapter puts every command in Ordewell's sealed profile (N2).
+   */
+  nativeShell?: boolean;
+  /**
    * The repository's own MCP servers this planner may start, as approved
    * (ADR-0028). The runner is launched without the repository's config, so
    * these are the only ones it gets, and each is handed over as parsed.
@@ -203,6 +214,8 @@ export interface PlannerStartOptions extends AgentStartCommon {
  * The adapter adds only its protocol flags around these.
  */
 export interface TaskRunnerFlags {
+  /** Ordewell's read-only profile, independent of the runner's native modes (ADR-0046). */
+  readOnly?: true;
   /** The runner's own permission-mode value for the task's mode. */
   permissionMode: string;
   /** The task's raw effort id, present only alongside a model. Each adapter maps it to its own protocol. */
@@ -214,6 +227,8 @@ export interface TaskRunnerFlags {
 /** A plan task driven over the runner's programmatic protocol (ADR-0018, C1). */
 export interface TaskStartOptions extends AgentStartCommon {
   kind: 'task';
+  /** The session workspace, also readable when cwd is an isolated task worktree (ADR-0046). */
+  workspaceRoot?: string;
   /** The task's runner mode id, as the plan names it. */
   mode: string;
   flags: TaskRunnerFlags;
@@ -265,6 +280,14 @@ export interface AgentAdapter {
   /** The agent's native session id once it has announced one. Resumption hint only. */
   nativeSessionId(): string | null;
 
+  /**
+   * The installed version the agent reported, once it has (ADR-0036 N2):
+   * Claude Code's `claude_code_version` on its first `init`, an OpenCode 2.x
+   * server's `/api/info`. Null while unknown, and on OpenCode 1.x, which does
+   * not report one.
+   */
+  version?(): string | null;
+
   /** What has been counted of the session's running cost, for a runner that reports one; null while unknown. */
   sessionCost?(): RunnerSessionCost | null;
 
@@ -278,8 +301,11 @@ export interface AgentAdapter {
    * Whether the Ordewell MCP server passed in the start options' `mcp` is
    * connected, as the runner itself reports it (ADR-0022, S4). Absent on an
    * adapter that cannot inject the server at all, which cannot run tasks.
+   * `false` is the old boolean answer for "not attached"; a real adapter says
+   * `pending` while its process is still starting, or `failed` when the
+   * runner reports the server cannot connect.
    */
-  mcpAttached?(): Promise<boolean>;
+  mcpAttached?(): Promise<boolean | AttachState>;
 
   /**
    * The approved project servers (ADR-0028) this runner started but cannot
@@ -307,7 +333,7 @@ export interface AgentAdapter {
 
 /** What an adapter adds to run a task rather than a planner (ADR-0018). */
 export interface TaskModeAgentAdapter extends AgentAdapter {
-  mcpAttached(): Promise<boolean>;
+  mcpAttached(): Promise<boolean | AttachState>;
   /**
    * Ask the running turn to stop, keeping the process and its session. Resolves
    * true once the agent acknowledged it; the turn then ends with
@@ -392,6 +418,8 @@ export interface AgentProcessDeps {
   exists?: (candidate: string) => boolean;
   /** The workspace's own variables for a cwd (ADR-0016). Defaults to {@link resolveWorkspaceEnv}. */
   workspaceEnv?: (cwd: string) => Promise<Record<string, string>>;
+  /** Builds the sandbox around a planner's own shell (ADR-0036 N2). Defaults to the host's probe. */
+  nativeShellSandbox?: () => PlannerShellSandbox;
 }
 
 /** Builds the adapter for one runner id, or null when that runner cannot plan. */

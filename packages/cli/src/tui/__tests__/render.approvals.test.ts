@@ -132,4 +132,32 @@ describe('a planner asking to start work (ADR-0029)', () => {
     expect(out).toContain('Start task #2 "Add the cache"');
     expect(out).not.toMatch(/also allows/i);
   });
+
+  describe('a script task start (ADR-0035)', () => {
+    const START: ApprovalRequestView = {
+      id: 'ap-9', kind: 'task_start', subject: 'Run script task #2 "Push"', scope: 'Run script task #2 "Push"',
+      body: 'git tag v1\ngit push origin v1\n\nTime limit: 10 minutes.',
+    };
+
+    it('shows the body verbatim, a command to a line, with the time limit', () => {
+      const out = screenWith(START);
+      expect(out).toMatch(/\n\s+git tag v1 *\n\s+git push origin v1 *\n/);
+      expect(out).toContain('Time limit: 10 minutes.');
+      expect(out).toMatch(/y or enter allows/);
+    });
+
+    it('scrolls a body that does not fit, counting what is out of view and keeping the keys on screen', () => {
+      const long = { ...START, body: Array.from({ length: 60 }, (_, i) => `echo line-${i}`).join('\n') };
+      const top = screenWith(long);
+      expect(top).toContain('echo line-0');
+      expect(top).not.toContain('echo line-59');
+      expect(top).toMatch(/↓ \d+ more lines below/);
+      expect(top).toMatch(/y or enter allows/);
+
+      const end = screenWith(long, { overlay: { kind: 'approval', request: long, scroll: 1000 } });
+      expect(end).toContain('echo line-59');
+      expect(end).toMatch(/↑ \d+ more lines above/);
+      expect(end).toMatch(/y or enter allows/);
+    });
+  });
 });

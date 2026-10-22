@@ -1,6 +1,8 @@
-import { flattenTasksWithParents, pausedOnLimit, waitsForReset, type Task, type TaskStatus } from '../models/Task';
+import { flattenTasksWithParents, pausedOnLimit, waitsForReset, type Task, type TaskReportTo, type TaskStatus } from '../models/Task';
 import { resolveTaskRef, resolveUserTaskRef } from './TaskRefs';
-import type { ExecutionActor, ExecutionCommandName, ExecutionRecord, SupervisorLevel } from '../models/Execution';
+import type { ExecutionActor, ExecutionCommandName, ExecutionRecord, ScriptConsent, ScriptResult, SupervisorLevel } from '../models/Execution';
+import { sameScriptBody, scriptBodyOf, scriptBodyText, type ScriptBody } from '../models/ScriptTask';
+import { reportEnded, scriptResultOf, taskReport } from './taskReport';
 import type { ApprovalDecision, ApprovalRequest, IApproval } from '../interfaces/IApproval';
 import type { IsolationMergeResult } from '../interfaces/IWorktreeIsolation';
 import { continuability } from './continuation';
@@ -45,7 +47,16 @@ export type ExecutionCommand =
   /** The user's answer to the checkpoint a task waits at: it goes on, or is told `reason` to act on. */
   | { command: 'answer_checkpoint'; task: string; answer: 'approve' | 'reject'; reason?: string }
   /** The user signs off the plan's review: every task in it is approved, as executing it approves them, and it runs. */
-  | { command: 'approve_review' };
+  | { command: 'approve_review' }
+  /**
+   * The planner's own exact effect (ADR-0035): a script task added to the plan
+   * and started in one step, answered with its result, or after a minute as
+   * still running. Exactly one of `commands` or `script`; `dependencies` are
+   * references to tasks in the plan now.
+   */
+  | { command: 'run_script'; title: string; commands?: string[][]; script?: string; timeoutMs?: number; dependencies?: string[] };
+
+type RunScript = Extract<ExecutionCommand, { command: 'run_script' }>;
 
 /** What a control answers besides its line, for the surface whose button asked. */
 export type CommandPayload =
@@ -72,6 +83,19 @@ export type CommandOutcome =
 export type Consent = { kind: 'allow' } | { kind: 'ask' } | { kind: 'refuse'; reason: string };
 
 /**
+ * The effect allowlist (ADR-0035): the user's rule, by name, that covers every
+ * command of a `commands` body, or null when none covers it all. A `script`
+ * body is never covered.
+ */
+export type EffectAllowlist = (body: ScriptBody) => string | null;
+
+/** No effect is pre-approved until the user's rules are read: the allowlist has no built-in entries. */
+const NO_EFFECTS: EffectAllowlist = () => null;
+
+/** How long `run_script` waits for its task to end before it answers that it is still running (ADR-0035). */
+export const SCRIPT_ANSWER_WAIT_MS = 60_000;
+
+/**
  * What a supervisor at `level` may do. The mandate (#23) replaces this check;
  * nothing above it moves.
  */
@@ -87,7 +111,7 @@ export type SupervisorPolicy = (level: SupervisorLevel, command: ExecutionComman
 export const SUPERVISOR_LEVELS: SupervisorPolicy = (level) => {
   switch (level) {
     case 'act': return { kind: 'allow' };
-    case 'watch': return { kind: 'refuse', reason: 'You are the supervisor at Watch: you read and suggest, and cannot run, stop, retry, skip or message tasks, answer approvals or merge. Suggest it to the user instead; their reply is an ordinary message, and you can do it then.' };
+    case 'watch': return { kind: 'refuse', reason: 'You are the supervisor at Watch: you read and suggest, and cannot run, stop, retry, skip or message tasks, run scripts, answer approvals or merge. Suggest it to the user instead; their reply is an ordinary message, and you can do it then.' };
     case 'off': return { kind: 'refuse', reason: 'The supervisor is off for this run, so it cannot act. Suggest it to the user instead.' };
   }
 };
@@ -210,6 +234,25 @@ export interface ExecutionHost {
   deferUntilLanded(command: ExecutionCommand, actor: ExecutionActor, intent: string, admission: StartAdmission): void;
   /** A command deferred behind an edit did not run once the edit landed: the user is told, and so is the planner's next turn. */
   queuedNotRun(text: string): void;
+  /** The open planner turn holds a whole plan, which replaces the plan as its reply ends. */
+  heldPlan(): boolean;
+  /**
+   * The script task a `run_script` call would add (ADR-0035), checked as
+   * edit_plan's add is, the supervisor's against its loop guards too — or
+   * why it cannot be added. Not in the plan yet, so the start rule judges it
+   * before anything changes.
+   */
+  draftScript(call: RunScript, actor: ExecutionActor): { ok: true; task: Task } | { ok: false; errors: string[] };
+  /** Put a drafted script task in the plan now, past the turn's held edit, and unapproved. */
+  addScript(task: Task, actor: ExecutionActor): void;
+  /** Start an approved task once its merge gate opens, never past it; see {@link TaskOrchestrator.startAtGate}. */
+  startAtGate(taskId: string): void;
+  /** Settles once the task's attempt is over, `ms` have passed, or `signal` aborted, whichever is first. */
+  awaitEnd(taskId: string, ms: number, signal?: AbortSignal): Promise<void>;
+  /** The task's result is owed to the planner, in a turn acting for whoever started it (ADR-0037, R2, R3). */
+  owe(taskId: string, to: TaskReportTo): void;
+  /** The end of a task's output, as a planner turn is told it; see {@link taskReport}. */
+  reportTail(taskId: string): string | undefined;
 }
 
 export interface ExecutionCommandsDeps {
@@ -218,11 +261,15 @@ export interface ExecutionCommandsDeps {
   consent: Pick<IApproval, 'request'>;
   supervisor?: SupervisorPolicy;
   guards?: readonly LoopGuard[];
+  /** What pre-approves a script's effect (ADR-0035); nothing does unless set. */
+  effects?: EffectAllowlist;
   now?: () => string;
+  /** How long `run_script` waits for its task's end; a minute unless set. */
+  scriptWaitMs?: number;
 }
 
 /** Commands that start work: they need the user's approval of what they start, and ask in Guarded. */
-const STARTS: ReadonlySet<ExecutionCommandName> = new Set(['run_plan', 'run_task', 'retry_task', 'force_start', 'approve_review']);
+const STARTS: ReadonlySet<ExecutionCommandName> = new Set(['run_plan', 'run_task', 'retry_task', 'force_start', 'approve_review', 'run_script']);
 
 /** The user's own controls, by the names they press them by: a model asking for one is refused. */
 const USERS_ONLY: Partial<Record<ExecutionCommandName, string>> = {
@@ -240,6 +287,12 @@ const USERS_ONLY: Partial<Record<ExecutionCommandName, string>> = {
 const MERGE_IS_USERS = 'Merge all is the user\'s: they are in this conversation, and press Merge all themselves. Tell them the work is ready to merge.';
 
 const SKIP_IS_USERS = 'Skipping a task is the user\'s in their own turn: they are in this conversation, and skip it themselves. Suggest it, with why; only the supervisor at Act skips, in a wake-up turn.';
+
+const SCRIPTS_ARE_THE_PLANNERS = 'run_script is the planner\'s: a person adds a script task to the plan and starts it themselves.';
+
+const NO_PLAN_FOR_SCRIPT = 'There is no plan yet, so there is nowhere to add a script task. Submit a plan that holds it: the user approves it by executing the plan.';
+
+const SCRIPT_UNDER_HELD_PLAN = 'Your submit_plan in this reply replaces the plan as the reply ends, and would leave out a script task added now. Put the script task in the plan you submit, or call run_script once that plan has landed.';
 
 const NEVER_ALLOWS = 'answer_approval never allows. A runner asks because its mode did not cover the request, and allowing it would widen the mode the plan gave the task. Deny it with a note saying what to do instead, or escalate it to the user.';
 
@@ -287,20 +340,33 @@ export class ExecutionCommands {
   private readonly host: ExecutionHost;
   private readonly supervisor: SupervisorPolicy;
   private readonly guards: readonly LoopGuard[];
+  private readonly effects: EffectAllowlist;
   private readonly now: () => string;
+  private readonly scriptWaitMs: number;
+  /**
+   * The script tasks whose `run_script` card is open. Their consent is the
+   * card's to give, to the body it shows: executing the plan meanwhile leaves
+   * them out, or a no on the card would come after a yes it never gave.
+   */
+  private readonly carded = new Set<string>();
 
   constructor(private readonly deps: ExecutionCommandsDeps) {
     this.host = deps.host;
     this.supervisor = deps.supervisor ?? SUPERVISOR_LEVELS;
     this.guards = deps.guards ?? [];
+    this.effects = deps.effects ?? NO_EFFECTS;
     this.now = deps.now ?? (() => new Date().toISOString());
+    this.scriptWaitMs = deps.scriptWaitMs ?? SCRIPT_ANSWER_WAIT_MS;
   }
 
   /**
    * `admitted`: a deferred start's admission, taken as it was queued, which
-   * its owner releases; a start asked for now takes its own.
+   * its owner releases; a start asked for now takes its own. `signal` ends a
+   * wait on the caller's behalf: `run_script` then answers that its task is
+   * still running.
    */
-  async run(asked: ExecutionCommand, actor: ExecutionActor, admitted?: StartAdmission): Promise<CommandOutcome> {
+  async run(asked: ExecutionCommand, actor: ExecutionActor, admitted?: StartAdmission, signal?: AbortSignal): Promise<CommandOutcome> {
+    if (asked.command === 'run_script') return this.runScript(asked, actor, signal);
     if (!this.host.tasks()) return { ok: false, outcome: 'refused', message: 'There is no plan yet, so there is nothing to run or stop.' };
     const located = 'task' in asked ? this.locate(asked.task, actor) : undefined;
     // A start queued before the user's Stop is what the Stop withdrew, whatever else has changed since.
@@ -386,6 +452,182 @@ export class ExecutionCommands {
   }
 
   /**
+   * `run_script` (ADR-0035): a script task the planner adds and starts in one
+   * step, past the turn's held edit, so nothing the turn holds can change it
+   * before it runs. Who may is ADR-0035's table ({@link scriptConsent}). A
+   * card unanswered or denied leaves the task in the plan, unapproved, for the
+   * user to start or remove: absence is denial (ADR-0008, T5). It takes the
+   * merge gate and the Merge-all exclusion an ops task takes as it starts, and
+   * answers with the task's result, or after a minute that it is still
+   * running, when its end is owed to the planner as a report (ADR-0037, R2).
+   */
+  private async runScript(command: RunScript, actor: ExecutionActor, signal?: AbortSignal): Promise<CommandOutcome> {
+    if (!this.host.tasks()) return this.refuse(command, actor, undefined, NO_PLAN_FOR_SCRIPT);
+    const consent = this.scriptConsent(actor, scriptBodyOf({ type: 'script', commands: command.commands, script: command.script, timeoutMs: command.timeoutMs }));
+    if (consent.kind === 'refuse') return this.refuse(command, actor, undefined, consent.reason);
+    if (this.host.heldPlan()) return this.refuse(command, actor, undefined, SCRIPT_UNDER_HELD_PLAN);
+    const draft = this.host.draftScript(command, actor);
+    if (!draft.ok) return this.refuse(command, actor, undefined, `The script task was not added: ${draft.errors.join('; ')}`);
+    const unready = this.scriptUnready(draft.task);
+    if (unready) return this.refuse(command, actor, undefined, unready);
+    const tripped = this.tripped(command, actor, undefined);
+    if (tripped) return tripped;
+
+    // Live work for Stop while the user is asked; the start takes its own admission as it claims.
+    const admission = this.host.admitStart();
+    let how: ScriptConsent | CommandOutcome;
+    try {
+      this.host.addScript(draft.task, actor);
+      how = consent.kind === 'ask' ? await this.askForScript(command, actor, draft.task, admission) : consent.how;
+      if ('by' in how) this.host.approve([draft.task.id]);
+    } finally {
+      admission.release();
+    }
+    return 'by' in how ? this.startScript(command, actor, draft.task.id, how, signal) : how;
+  }
+
+  /** The card for a script task in the plan, unapproved: the consent it gives, or what the call comes to without it. */
+  private async askForScript(command: RunScript, actor: ExecutionActor, draft: Readonly<Task>, admission: StartAdmission): Promise<ScriptConsent | CommandOutcome> {
+    const added = this.located(draft.id);
+    if (!added) return this.refuse(command, actor, undefined, 'The script task left the plan as it was added, so nothing ran.');
+    let allowed: boolean;
+    this.carded.add(draft.id);
+    try {
+      allowed = await this.deps.consent.request(this.question(command, actor, added));
+    } finally {
+      this.carded.delete(draft.id);
+    }
+    // The user's Stop withdrew the start; the task stays, as a card left unanswered leaves it.
+    if (!admission.current()) return this.refuse(command, actor, added, STOPPED_BEFORE_START);
+    if (!allowed) {
+      this.keep(command, actor, added, 'declined');
+      return { ok: false, outcome: 'declined', message: `The user did not approve running script ${describe(added)}: it stays in the plan, not approved, for them to start or remove. Do not ask again unless they say so.` };
+    }
+    // The yes was to the body on the card: one changed meanwhile is not what was consented to.
+    const now = this.located(draft.id);
+    if (!now || !sameScriptBody(now.task, draft) || (now.task.status !== 'pending' && now.task.status !== 'approved')) {
+      return this.refuse(command, actor, now ?? added, `Script ${describe(added)} changed while the user was asked, so it was not started.`);
+    }
+    return { by: 'card' };
+  }
+
+  /**
+   * The approved script task's start, and the answer: its result, or that it
+   * waits at its merge gate or still runs, which owes the planner its end.
+   */
+  private async startScript(command: RunScript, actor: ExecutionActor, taskId: string, consent: ScriptConsent, signal: AbortSignal | undefined): Promise<CommandOutcome> {
+    const to = reportTo(actor, consent);
+    const started = this.located(taskId)!;
+    const label = `script ${describe(started)}`;
+    const answered = (result: ScriptResult, message: string, located: Located = started): CommandOutcome => {
+      this.keep(command, actor, located, 'done', undefined, { consent, result });
+      return { ok: true, message };
+    };
+    // Answering took time: what holds it now is read afresh.
+    const waits = this.host.startWaits(started.task);
+    const gate = (waitOf(waits, 'merge-gate')?.unmerged ?? []).flatMap((id) => this.located(id) ?? []);
+    if (gate.length > 0) {
+      this.host.startAtGate(taskId);
+      this.host.owe(taskId, to);
+      return answered('gated', `Added ${label}, approved to run, but it waits at its merge gate: the work of ${named(gate)} is not merged into the user's branch yet. It starts once the user merges it (Merge all), and its result reaches you in a run update when it ends. Tell the user.`);
+    }
+    const unready = this.scriptUnready(started.task);
+    if (unready) return this.refuse(command, actor, started, `Approved ${label}, but it did not start: ${unready} It stays in the plan, approved: start it with run_task once that clears.`);
+    try {
+      await this.host.startTask(taskId, actor);
+    } catch (err) {
+      return this.refuse(command, actor, started, `Approved ${label}, but it did not start: ${err instanceof Error ? err.message : String(err)} It stays in the plan, approved: start it with run_task once that clears.`);
+    }
+    if (this.host.runBlocked()) {
+      this.host.owe(taskId, to);
+      return answered('running', `${MODEL_VOICE.blockedRun} ${capitalize(label)} is approved and starts once they do; its result reaches you in a run update when it ends.`);
+    }
+    await this.host.awaitEnd(taskId, this.scriptWaitMs, signal);
+    // Read as the wait ends, not as it was told: an end that came since is answered here, never owed as well.
+    const now = this.located(taskId);
+    if (!now) return answered('stopped', `${capitalize(label)} was removed from the plan before it ended, so it has no result.`);
+    if (reportEnded(now.task) || (!this.host.running(taskId) && now.task.status !== 'in_progress')) {
+      return answered(scriptResultOf(now.task), `Ran ${label}. ${taskReport(now.task, this.host.reportTail(taskId))}`, now);
+    }
+    this.host.owe(taskId, to);
+    return answered('running', `${capitalize(label)} is still running after a minute. Its result reaches you in a run update when it ends: tell the user so. Read its output meanwhile with task_output "${now.ref}".`, now);
+  }
+
+  /**
+   * Why a script task cannot start as `run_script` would start it, but for its
+   * merge gate, at which it waits: a dependency that failed or has not
+   * finished, a Merge all under way, every slot taken. Null when it can.
+   */
+  private scriptUnready(task: Readonly<Task>): string | null {
+    const waits = this.host.startWaits(task);
+    const one = (n: number, a: string, b: string) => (n === 1 ? a : b);
+    const failed = (waitOf(waits, 'blocked')?.failed ?? []).flatMap((id) => this.located(id) ?? []);
+    if (failed.length > 0) return `Script task "${task.title}" would depend on ${named(failed)}, which failed. Retry ${one(failed.length, 'it', 'them')} first, or leave the dependency out.`;
+    const unmet = (waitOf(waits, 'dependencies')?.waiting ?? []).flatMap((id) => this.located(id) ?? []);
+    if (unmet.length > 0) {
+      return `Script task "${task.title}" would depend on ${unmet.map((dep) => `${describe(dep)} (${depState(dep.task)})`).join(', ')}, which ${one(unmet.length, 'has', 'have')} not finished. Call run_script once ${one(unmet.length, 'it has', 'they have')}, or add the script task with edit_plan to run after ${one(unmet.length, 'it', 'them')}.`;
+    }
+    if (waitOf(waits, 'merging')) return 'A Merge all is under way, and a script task never runs alongside one. Call run_script again once it has finished.';
+    if (waitOf(waits, 'merge-gate')) return null;
+    const live = this.all().filter(({ task: t }) => this.host.running(t.id)).length;
+    if (live >= this.host.maxParallel()) return `${live} tasks are already running, the most this session runs at once. Wait for one to finish, or stop one first.`;
+    return null;
+  }
+
+  /**
+   * Who may run a script without the mandate (#23), as ADR-0035's table says.
+   * An effect the user's allowlist covers runs in every row but one, and is
+   * recorded by its rule. In the user's turn: otherwise autorun in Full runs
+   * it (ADR-0030), and failing that they are asked on the card. The
+   * supervisor's level decides for it first: at Watch it is refused, to
+   * suggest it instead, covered or not; at Act it runs, the task it adds
+   * being approved (ADR-0029).
+   */
+  private scriptConsent(actor: ExecutionActor, body: ScriptBody | null): { kind: 'allow'; how: ScriptConsent } | { kind: 'ask' } | { kind: 'refuse'; reason: string } {
+    // A rule the user wrote covers the whole of a `commands` body, or nothing does.
+    const covered = (): ScriptConsent | undefined => {
+      const rule = body && 'commands' in body ? this.effects(body) : null;
+      return rule ? { by: 'allowlist', rule } : undefined;
+    };
+    switch (actor.kind) {
+      case 'user':
+      case 'autorun': return { kind: 'refuse', reason: SCRIPTS_ARE_THE_PLANNERS };
+      case 'supervisor': {
+        const level = this.supervisor(actor.level, 'run_script');
+        return level.kind === 'allow' ? { kind: 'allow', how: covered() ?? { by: 'act' } } : level;
+      }
+      case 'planner-turn': {
+        const how: ScriptConsent | undefined = covered() ?? (this.addedMayStart(actor) ? { by: 'autorun' } : undefined);
+        return how ? { kind: 'allow', how } : { kind: 'ask' };
+      }
+    }
+  }
+
+  /**
+   * Of the tasks a planner edit in the user's turn wrote, the ones autorun
+   * approves as the edit lands: all of them, but for a script task, which
+   * runs unasked only where `run_script` would run it unasked (ADR-0035), so
+   * under Guarded it waits for the user unless their effect allowlist covers
+   * it. Its row shows the body verbatim, and starting it is their consent.
+   */
+  autorunApproves(written: readonly Readonly<Task>[]): string[] {
+    const turn: ExecutionActor = { kind: 'planner-turn' };
+    return written.filter((t) => t.type !== 'script' || this.scriptConsent(turn, scriptBodyOf(t)).kind === 'allow').map((t) => t.id);
+  }
+
+  /**
+   * A task `run_script` answered for before it ended has ended: its result
+   * joins the timeline beside its start, with who asked and how it was
+   * consented to (ADR-0035).
+   */
+  scriptEnded(taskId: string, to: TaskReportTo): void {
+    const located = this.located(taskId);
+    if (!located) return;
+    const actor: ExecutionActor = to.actor === 'supervisor' ? { kind: 'supervisor', level: to.level } : { kind: 'planner-turn' };
+    this.keep({ command: 'run_script', title: located.task.title }, actor, located, 'done', undefined, { consent: to.consent, result: scriptResultOf(located.task), ended: true });
+  }
+
+  /**
    * A command deferred behind the turn's edit, run now that the edit landed.
    * Nobody reads its answer, so one that does not run is kept as refused and
    * said, to the user and to the planner's next turn.
@@ -457,7 +699,7 @@ export class ExecutionCommands {
     if (!STARTS.has(command.command)) return [];
     if (this.asksToApprove(actor)) return named.flatMap(({ task }) => withSubtasks(task));
     if (actor.kind !== 'user' && actor.kind !== 'autorun' && !this.addedMayStart(actor)) return [];
-    return located ? withSubtasks(located.task) : this.all().map(({ task }) => task.id);
+    return located ? withSubtasks(located.task) : this.all().map(({ task }) => task.id).filter((id) => !this.carded.has(id));
   }
 
   /**
@@ -527,6 +769,8 @@ export class ExecutionCommands {
       case 'cancel_resume': return this.prepareCancelResume(located!);
       case 'answer_checkpoint': return this.prepareCheckpoint(located!, command);
       case 'approve_review': return this.prepareApproveReview();
+      // Its task is not in the plan until the call adds it, so it has a path of its own: see runScript.
+      case 'run_script': return { refusal: 'run_script adds its own task, so it is never judged against one.' };
     }
   }
 
@@ -536,13 +780,13 @@ export class ExecutionCommands {
     if (this.host.hasLiveWork()) {
       // The user's Execute approves what waits rather than restarting the run under way; counted before the approval it records.
       if (actor.kind === 'user') {
-        const waiting = all.filter(({ task }) => this.host.waitsForApproval(task.id)).length;
+        const waiting = all.filter(({ task }) => this.host.waitsForApproval(task.id) && !this.carded.has(task.id)).length;
         return { act: async () => ({ message: await this.host.joinRun(waiting) }) };
       }
       return { refusal: `The plan is already running (${named(live)} ${live.length === 1 ? 'is' : 'are'} running). Start one more ready task with run_task, or wait.` };
     }
     // A new run leaves a skipped task skipped, as it leaves a completed one done.
-    const toRun = all.filter(({ task }) => task.type === 'ai' && task.status !== 'completed' && task.status !== 'skipped');
+    const toRun = all.filter(({ task }) => task.type !== 'user' && task.status !== 'completed' && task.status !== 'skipped');
     if (toRun.length === 0) return { refusal: 'Every task has already completed: there is nothing left to run.' };
     let approves: Located[] = [];
     // Autorun is the user's standing instruction: its run is the user's approval, as Execute plan is.
@@ -585,6 +829,9 @@ export class ExecutionCommands {
     if (task.status === 'completed') return { refusal: `${capitalize(label)} has already completed. ${voice.completed}` };
     const skipped = this.skippedRefusal(located, actor);
     if (skipped) return { refusal: skipped };
+    // Only the user's retry starts a check's rounds over (ADR-0045 L7).
+    const repeating = how === 'run' || actor.kind !== 'user' ? this.betweenRounds(located, tasks) : null;
+    if (repeating) return { refusal: repeating };
     const settled = task.status === 'failed' || task.status === 'awaiting_user' || task.status === 'skipped';
     if (how === 'run' && settled) {
       const next = task.status === 'awaiting_user' && task.awaitingReason === 'input'
@@ -594,10 +841,14 @@ export class ExecutionCommands {
     }
     const waits = this.host.startWaits(task);
     // The start rule's `no-prompt`: a task with nothing to run is never started.
-    if (waitOf(waits, 'no-prompt')) return { refusal: noPromptRefusal(label) };
+    if (waitOf(waits, 'no-prompt')) return { refusal: noPromptRefusal(label, task) };
     const failed = (waitOf(waits, 'blocked')?.failed ?? []).flatMap((id) => this.located(id, tasks) ?? []);
     if (failed.length > 0) {
       return { refusal: `${capitalize(label)} is blocked: ${named(failed)} failed. Retry ${failed.length === 1 ? 'it' : 'them'} first.` };
+    }
+    const check = this.located(waitOf(waits, 'loop-check')?.check ?? '', tasks);
+    if (check) {
+      return { refusal: `${capitalize(label)} is in the body of the loop of ${describe(check)}: it runs only if that check fails, and the loop starts it then.` };
     }
     const approval = this.unapproved(located, actor);
     if (approval && 'refusal' in approval) return approval;
@@ -652,7 +903,7 @@ export class ExecutionCommands {
     if (task.status === 'completed') return { refusal: `${capitalize(label)} has already completed. ${USER_VOICE.completed}` };
     // A force start goes past a hold, a failure and a gate, but not the fact
     // that there is nothing to run (ADR-0034).
-    if (waitOf(this.host.startWaits(task), 'no-prompt')) return { refusal: noPromptRefusal(label) };
+    if (waitOf(this.host.startWaits(task), 'no-prompt')) return { refusal: noPromptRefusal(label, task) };
     return {
       act: async () => {
         const queued = await this.host.forceStart(task.id);
@@ -701,6 +952,7 @@ export class ExecutionCommands {
   private prepareInterrupt(located: Located): Prepared {
     const { task } = located;
     const label = describe(located);
+    if (task.type === 'script') return { refusal: scriptHasNoTurn(label, 'interrupt') };
     if (!this.host.running(task.id)) return { refusal: `${capitalize(label)} is not running (it ${statusWords(task)}): there is no turn to interrupt.` };
     return {
       act: async () => {
@@ -744,6 +996,8 @@ export class ExecutionCommands {
     }
     const skipped = this.skippedRefusal(located, actor);
     if (skipped) return { refusal: skipped };
+    const repeating = actor.kind !== 'user' ? this.betweenRounds(located) : null;
+    if (repeating) return { refusal: repeating };
     const eligible = continuability(task);
     if (!eligible.ok) return { refusal: `${eligible.reason} ${voice.startOver}` };
     if (!message?.trim()) return { refusal: `Continuing ${label} in its saved session needs a message: what the runner should do next.` };
@@ -792,6 +1046,7 @@ export class ExecutionCommands {
     return {
       act: async () => {
         await this.host.stopTask(task.id);
+        if (task.type === 'script') return { message: `Stopped ${label}: what it was running was ended, and it is back to not started and held until it is retried. A retry runs its body again from the first step.` };
         return { message: `Stopped ${label}: it is back to not started and held until it is retried, and its open approvals were denied.${task.ops ? ' A retry is told what this attempt did.' : ''}` };
       },
     };
@@ -821,6 +1076,7 @@ export class ExecutionCommands {
 
   private prepareMessage(located: Located, command: Extract<ExecutionCommand, { command: 'message_task' }>, actor: ExecutionActor): Prepared {
     const label = describe(located);
+    if (located.task.type === 'script') return { refusal: scriptHasNoTurn(label, 'message') };
     if (command.force && actor.kind !== 'user') return { refusal: usersOnly('message_task', 'Force send') };
     return {
       act: async () => {
@@ -919,6 +1175,19 @@ export class ExecutionCommands {
   }
 
   /**
+   * Why a loop's check between rounds is not started from the seam: its loop
+   * runs it again itself, once its body has landed (ADR-0045 L5). Null for
+   * any other task.
+   */
+  private betweenRounds(located: Located, tasks?: readonly Task[]): string | null {
+    const repeating = waitOf(this.host.startWaits(located.task), 'repeating');
+    if (!repeating) return null;
+    const fix = repeating.waiting.flatMap((id) => this.located(id, tasks) ?? []);
+    const when = fix.length > 0 ? `once ${named(fix)} ${fix.length === 1 ? 'has' : 'have'} passed and landed` : 'next';
+    return `${capitalize(describe(located))} is between rounds of its loop: it runs again on its own, as round ${repeating.round} of ${repeating.maxRounds}, ${when}. Leave it to the loop.`;
+  }
+
+  /**
    * A skip ends a task without a verdict and lands nothing, so it never
    * vouches for work. Anyone but the user names why, and the supervisor only
    * gives up on a task that already needs someone: failed, blocked, or
@@ -933,7 +1202,10 @@ export class ExecutionCommands {
     if (task.status === 'skipped') return { refusal: `${capitalize(label)} is already skipped.` };
     if (actor.kind !== 'user') {
       if (!why) return { refusal: `Skipping ${label} needs a reason: it is shown to the user and told to the tasks that depend on it.` };
-      const needsSomeone = task.status === 'failed' || task.status === 'awaiting_user' || waitOf(this.host.startWaits(task), 'blocked') !== undefined;
+      const waits = this.host.startWaits(task);
+      // A check between rounds needs no one: its loop goes on (ADR-0045 L3).
+      if (waitOf(waits, 'repeating')) return { refusal: `${capitalize(label)} is between rounds of its loop, which goes on by itself: it needs no one, so the supervisor does not skip it.` };
+      const needsSomeone = task.status === 'failed' || task.status === 'awaiting_user' || waitOf(waits, 'blocked') !== undefined;
       if (!needsSomeone) return { refusal: `${capitalize(label)} has not started and nothing blocks it: the supervisor skips only a task that failed, is blocked or is waiting for input.` };
     }
     return {
@@ -961,23 +1233,33 @@ export class ExecutionCommands {
   /**
    * The Guarded question, on the card the user answers other planner requests
    * on. It names every task a yes approves, since a yes is the user's
-   * approval of them as Execute plan would be.
+   * approval of them as Execute plan would be. A script task's body is on the
+   * card whole (ADR-0035): the consent is to what will run, not to a
+   * description of it.
    */
   private question(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined, approves: readonly Located[] = []): ApprovalRequest {
     const subject = capitalize(this.intent(command, located));
+    const script = located?.task.type === 'script' ? scriptBodyOf(located.task) : null;
     const how = located?.task.type === 'ai'
       ? ` It runs on ${located.task.assignedRunner}${located.task.taskMode ? ` in ${located.task.taskMode} mode` : ''}, as the plan set it.`
-      : ' Each task runs on its runner, in the mode the plan set.';
+      : script
+        ? ' Ordewell runs exactly what is shown, in order, at the workspace root, with no model.'
+        : ' Each task runs on its runner, in the mode the plan set.';
     const one = approves.length === 1;
-    const approving = approves.length === 0 ? '' : command.command === 'run_plan'
-      ? ` Allowing approves ${named(approves)}, added since you approved the plan, and starts ${one ? 'it' : 'them'} with the rest.`
-      : ` Allowing approves ${named(approves)}, added since you approved the plan.`;
+    const approving = command.command === 'run_script'
+      ? ' Allowing approves it to run as shown; otherwise it stays in the plan, not approved, for you to start or remove.'
+      : approves.length === 0 ? '' : command.command === 'run_plan'
+        ? ` Allowing approves ${named(approves)}, added since you approved the plan, and starts ${one ? 'it' : 'them'} with the rest.`
+        : ` Allowing approves ${named(approves)}, added since you approved the plan.`;
+    const wants = script ? 'wants to run a script task' : 'wants to start work';
+    const body = script ? scriptBodyText(script) : scriptsShown(approves);
     return {
       kind: 'task_start',
       perInvocation: true,
       subject,
       scope: subject,
-      detail: `${actor.kind === 'supervisor' ? 'The supervisor' : 'The planner'} wants to start work.${approving}${how}`,
+      detail: `${actor.kind === 'supervisor' ? 'The supervisor' : 'The planner'} ${wants}.${approving}${how}`,
+      ...(body ? { body } : {}),
     };
   }
 
@@ -1003,6 +1285,7 @@ export class ExecutionCommands {
       case 'cancel_resume': return `cancel the scheduled resume of ${label}`;
       case 'answer_checkpoint': return `answer the checkpoint of ${label}`;
       case 'approve_review': return 'approve the plan';
+      case 'run_script': return located ? `run script ${label}` : `run a script task "${command.title}"`;
     }
   }
 
@@ -1011,7 +1294,7 @@ export class ExecutionCommands {
     return { ok: false, outcome: 'refused', message: reason };
   }
 
-  private keep(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined, outcome: ExecutionRecord['outcome'], detail?: string): void {
+  private keep(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined, outcome: ExecutionRecord['outcome'], detail?: string, script: Pick<ExecutionRecord, 'consent' | 'result' | 'ended'> = {}): void {
     const record: ExecutionRecord = {
       command: command.command,
       actor: actor.kind,
@@ -1019,6 +1302,7 @@ export class ExecutionCommands {
       ...(located ? { task: { id: located.task.id, ref: located.ref, title: located.task.title } } : {}),
       outcome,
       ...(detail ? { detail } : {}),
+      ...script,
       at: this.now(),
     };
     this.host.record(record, describeExecution(record, command, located?.paused));
@@ -1043,6 +1327,11 @@ export class ExecutionCommands {
     const task = actor?.kind === 'user' ? resolveUserTaskRef(tasks, ref) : resolveTaskRef(tasks, ref);
     return task && this.located(task.id, tasks);
   }
+}
+
+/** Whose turn a `run_script` task's result is owed to, and how it was consented to (ADR-0037, R3). */
+function reportTo(actor: ExecutionActor, consent: ScriptConsent): TaskReportTo {
+  return actor.kind === 'supervisor' ? { actor: 'supervisor', level: actor.level, consent } : { actor: 'planner-turn', consent };
 }
 
 /** Why a model may not use one of the user's own controls. */
@@ -1158,7 +1447,21 @@ function capitalize(text: string): string {
 }
 
 /** A start of an AI task the plan gives no prompt: the start rule's `no-prompt`, in one wording (ADR-0034). */
-function noPromptRefusal(label: string): string {
+/** A script task runs its body with no model (ADR-0035): nothing reads a message, and no turn can be interrupted. */
+function scriptHasNoTurn(label: string, what: 'message' | 'interrupt'): string {
+  return `${capitalize(label)} is a script task: it runs no model, so there is ${what === 'message' ? 'nothing to read a message' : 'no turn to interrupt'}. Stop it, or change its body with edit_plan and retry it.`;
+}
+
+/** The bodies of the script tasks a yes would approve, each under its task, for the card (ADR-0035). */
+function scriptsShown(approves: readonly Located[]): string {
+  return approves.flatMap((located) => {
+    const body = located.task.type === 'script' ? scriptBodyOf(located.task) : null;
+    return body ? [`${capitalize(describe(located))}:\n${scriptBodyText(body)}`] : [];
+  }).join('\n\n');
+}
+
+function noPromptRefusal(label: string, task: Pick<Task, 'type'>): string {
+  if (task.type === 'script') return `${capitalize(label)} has no body to run. Give it "commands" or a "script" first.`;
   return `${capitalize(label)} has no prompt, so there is nothing to run. Write one first.`;
 }
 
@@ -1206,6 +1509,7 @@ function describeExecution(record: ExecutionRecord, command: ExecutionCommand, p
   // A refusal for a task the plan does not have names it as the caller did.
   const label = record.task ? `task ${record.task.ref} "${record.task.title}"` : 'task' in command ? `"${command.task}"` : '';
   const continued = command.command === 'retry_task' && command.from === 'session' ? (paused ? 'resume' : 'continue') : null;
+  if (record.ended) return `Script ${label}, which ${WHO[record.actor].toLowerCase()} ran, ${SCRIPT_ENDED[record.result ?? 'stopped']}`;
   if (record.outcome !== 'done') {
     const asked = {
       run_plan: 'run the plan',
@@ -1226,9 +1530,10 @@ function describeExecution(record: ExecutionRecord, command: ExecutionCommand, p
       cancel_resume: `cancel the scheduled resume of ${label}`,
       answer_checkpoint: `answer the checkpoint of ${label}`,
       approve_review: 'approve the plan',
+      run_script: record.task ? `run script ${label}` : `run a script task${command.command === 'run_script' ? ` "${command.title}"` : ''}`,
     }[record.command];
     return record.outcome === 'declined'
-      ? `${who} asked to ${asked}; you declined.`
+      ? `${who} asked to ${asked}; you declined.${record.command === 'run_script' ? ' It stays in the plan, not approved.' : ''}`
       : `${who} asked to ${asked}; refused: ${record.detail ?? 'no reason given'}`;
   }
   const { action, tail } = doneWords(record, command, label, continued);
@@ -1265,8 +1570,40 @@ function doneWords(record: ExecutionRecord, command: ExecutionCommand, label: st
     case 'cancel_resume': return { action: `cancelled the scheduled resume of ${label}`, tail: '.' };
     case 'approve_review': return { action: 'approved the plan, which starts it', tail: '.' };
     case 'answer_checkpoint': return command.answer === 'reject' ? { action: `rejected the checkpoint of ${label}`, tail: quoted } : { action: `approved the checkpoint of ${label}`, tail: '.' };
+    case 'run_script': return record.result === 'gated'
+      ? { action: `added script ${label}, to run once its merge gate opens`, tail: `${consentWords(record.consent)}.` }
+      : { action: `ran script ${label}`, tail: `${consentWords(record.consent)}${SCRIPT_RESULT[record.result ?? 'running']}` };
   }
 }
+
+/** How a script was consented to, as the timeline says it (ADR-0035). */
+function consentWords(consent: ScriptConsent | undefined): string {
+  switch (consent?.by) {
+    case 'card': return ', which you approved on the card';
+    case 'allowlist': return `, which your effect allowlist rule "${consent.rule}" covers`;
+    case 'autorun': return ', under autorun in Full';
+    case 'act': return ', at Act';
+    case undefined: return '';
+  }
+}
+
+const SCRIPT_RESULT: Record<ScriptResult, string> = {
+  passed: ': it passed.',
+  failed: ': it failed.',
+  'changed-files': ': it passed, but changed tracked files and waits for you.',
+  stopped: ': it was stopped before it ended.',
+  running: ': it is still running.',
+  gated: '.',
+};
+
+const SCRIPT_ENDED: Record<ScriptResult, string> = {
+  passed: 'passed.',
+  failed: 'failed.',
+  'changed-files': 'passed, but changed tracked files and waits for you.',
+  stopped: 'was stopped before it ended.',
+  running: 'is still running.',
+  gated: 'waits at its merge gate.',
+};
 
 /** How a Merge all ended, in a clause: why it stopped, for a model or a run update to read. */
 export function mergeStopped(result: IsolationMergeResult): string {

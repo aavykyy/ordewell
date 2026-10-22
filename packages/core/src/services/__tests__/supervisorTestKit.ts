@@ -101,6 +101,8 @@ export interface Options {
   isolation?: IWorktreeIsolation;
   /** False leaves the plan as loaded, never executed by the user. */
   execute?: boolean;
+  /** What runs script tasks (ADR-0035); the recording runner of {@link supervised}'s `scripts` unless set. */
+  scriptRunner?: IRunner;
 }
 
 /** A session running `tasks` under the user's supervisor level, Watch unless the options say otherwise. */
@@ -109,11 +111,13 @@ export async function supervised(tasks: Task[] = [task('t1', 1), task('t2', 2)],
   const settings: GlobalRunSettings = { ...RUN_SETTINGS_DEFAULTS, ...options.settings };
   const planner = heldPlanner();
   const run = recordingRunner();
+  const scripts = recordingRunner();
   const messages: SessionMessage[] = [];
   const notices: SessionNotice[] = [];
   const session = makeSession({
     aiService: planner.aiService,
     runner: run.runner,
+    scriptRunner: options.scriptRunner ?? scripts.runner,
     isolation: options.isolation,
     broadcast: (m) => messages.push(m),
     onNotice: (n) => notices.push(n),
@@ -123,7 +127,7 @@ export async function supervised(tasks: Task[] = [task('t1', 1), task('t2', 2)],
   });
   session.loadPlan(plan(tasks, options.plan), 'build it', options.isolation ? '/repo' : testWorkspace);
   if (options.execute !== false) await session.execute({ command: 'run_plan' }, { kind: 'user' });
-  return { session, planner, run, messages, notices, settings };
+  return { session, planner, run, scripts, messages, notices, settings };
 }
 
 export const prose = (text: string): ConversationTurn => ({ kind: 'message', text, researchLog: [] });

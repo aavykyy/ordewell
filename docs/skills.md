@@ -37,9 +37,22 @@ found as `review`.
 
 Leave the two invocation fields out and both you and a model may invoke the
 skill. Of the built-in skills, `tdd` is open to the planner, which attaches it
-to tasks that implement or change behaviour; the other three are user-only. To
-keep `tdd` from being offered, add `disable-model-invocation: true` to your copy
-in `~/.ordewell/skills/tdd/SKILL.md`; Ordewell will not overwrite it.
+to tasks that implement or change behaviour; `diagnose` and `explore` are open
+to it as planner skills, which it loads itself; the other three are user-only.
+To keep one of these from being offered, add `disable-model-invocation: true` to
+your copy in `~/.ordewell/skills/<name>/SKILL.md`; Ordewell will not overwrite
+it.
+
+## Built-in skills
+
+| Skill | For | Who invokes it |
+| --- | --- | --- |
+| `diagnose` | A planner skill for a failure to explain: reproduce it, test competing hypotheses as parallel research tasks, decide from evidence, then fix inside a loop checked by the reproduction. | You (`/diagnose`) or the planner |
+| `explore` | A planner skill for an open problem: plan the first round of deliberately different research tasks, try to break each promising claim, and extend the plan as reports come back. | You (`/explore`) or the planner |
+| `tdd` | A task skill: work test-first in red-green slices. | The planner attaches it, or you (`/tdd`) |
+| `grilling` | A planner skill that interviews you about a plan or idea. | You |
+| `to-spec` | A planner skill that turns the conversation into a spec. | You |
+| `improve-codebase-architecture` | A planner skill that finds refactors worth doing and turns them into tasks. | You |
 
 A planner skill:
 

@@ -2,7 +2,8 @@ import { realpathSync } from 'fs';
 import type { ApprovalDecision, IApproval } from '../../interfaces/IApproval';
 import type { IWebFetcher } from '../../interfaces/IWebFetcher';
 import { grantScopeFor, resolveWithin } from '../pathScope';
-import type { PlannerAsk } from './AgentAdapter';
+import type { AgentStartOptions, PlannerAsk, TaskStartOptions } from './AgentAdapter';
+import { NOT_APPROVED_HINT } from '../effectRoute';
 
 /**
  * What a harness planner's own tool requests are decided against (ADR-0026):
@@ -21,7 +22,6 @@ export interface PlannerPermissionGate {
 // `other` is not always a write: a read the envelope has no rule for lands here
 // too, so the message names the envelope rather than claiming an edit was tried.
 const UNKNOWN_TOOL_DENIAL = 'The Ordewell planner is read-only and its envelope has no rule for this tool, so it did not run. Read with the read tools, use run_command for commands and fetch or web_search for the web; changes belong to the plan\'s tasks.';
-const OPS_HINT = 'Continue without it. If it would change something outside the repository, add it to the plan as an ops task; if it only reads, ask the user to approve it or add it to the planner allowlist.';
 
 const ALLOW: ApprovalDecision = { decision: 'allow' };
 const NOBODY_TO_ASK = 'Nobody can approve this here. Continue without it.';
@@ -48,6 +48,26 @@ function readTarget(root: string, target: string): { abs: string; inside: boolea
   return real === undefined ? written : resolveWithin(onDisk(root) ?? root, real);
 }
 
+/** ADR-0046: the manifest selects the profile; the credential also identifies its task tools. */
+export function readOnlyTask(opts: AgentStartOptions | null | undefined): boolean {
+  return opts?.kind === 'task' && (opts.flags.readOnly === true || opts.mcp?.readOnly === true);
+}
+
+/** No native tool may write or ask a person on a read-only task (ADR-0046). */
+export function decideReadOnlyTaskPermission(ask: PlannerAsk | undefined, site: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>): ApprovalDecision {
+  if (ask?.kind === 'path') {
+    const target = resolveWithin(site.cwd, ask.path).abs;
+    if ([site.cwd, site.workspaceRoot].some((root) => root !== undefined && readTarget(root, target).inside)) return ALLOW;
+    return deny('This read is outside the task worktree and workspace. Nobody can approve it here.');
+  }
+  return deny('This native tool is unavailable on a read-only task. Use Ordewell run_command for commands; nobody can approve native tools here.');
+}
+
+export function readOnlyTaskPolicy(opts: AgentStartOptions | null | undefined): ((request: { ask?: PlannerAsk }) => ApprovalDecision) | undefined {
+  if (opts?.kind !== 'task' || !readOnlyTask(opts)) return undefined;
+  return (request) => decideReadOnlyTaskPermission(request.ask, opts);
+}
+
 export async function decidePlannerPermission(
   ask: PlannerAsk | undefined,
   input: Record<string, unknown>,
@@ -55,6 +75,11 @@ export async function decidePlannerPermission(
 ): Promise<ApprovalDecision> {
   if (!ask || ask.kind === 'other') return deny(ask?.note ?? UNKNOWN_TOOL_DENIAL);
   if (ask.kind === 'path') return decideRead(ask, gate);
+  // The opt-in is the consent (ADR-0036 N1): the command runs under Ordewell's
+  // sealed profile, with the network its harness gives it (N2, N3), and every
+  // call is on the timeline already. Asking per command would be a second
+  // consent for the same grant, and nobody is there to give it in a one-shot.
+  if (ask.kind === 'native-shell') return ALLOW;
   const { approval } = gate;
   if (!approval) return deny(NOBODY_TO_ASK);
 
@@ -69,7 +94,7 @@ export async function decidePlannerPermission(
         tool: ask.tool,
         detail: `The planner wants to use "${ask.tool}"${ask.server ? ` from ${ask.server}` : ''}. It may change things outside the repository.`,
       });
-      return granted ? ALLOW : deny(`Not approved: ${ask.scope}. ${OPS_HINT}`);
+      return granted ? ALLOW : deny(`Not approved: ${ask.scope}. ${NOT_APPROVED_HINT}`);
     }
     case 'fetch': {
       if (!gate.fetcher) return deny('This fetch cannot be approved here.');

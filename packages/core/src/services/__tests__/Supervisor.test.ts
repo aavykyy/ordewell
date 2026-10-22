@@ -77,6 +77,128 @@ describe('Supervisor', () => {
     vi.useRealTimers();
   });
 
+  describe('a report the planner asked for (ADR-0037)', () => {
+    const report = (authority: 'user' | 'supervisor', taskId = 't1'): RunEventInput => ({ kind: 'task_report', taskId, report: { authority, text: 'It passed.\nIt printed nothing.', passed: true } });
+
+    it('is gathered and delivered at Off, with whose authority, its result whole', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'off' });
+      const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+      supervisor.observe(report('user'));
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(h.deliver).toHaveBeenCalledWith('Run update:\n- task #1 "Task t1", whose result you asked for, has ended. It passed.\n  It printed nothing.', 'user');
+      expect(supervisor.mayWake()).toBe(false);
+      expect(supervisor.mayReport()).toBe(true);
+      vi.useRealTimers();
+    });
+
+    it('goes to a turn of its own when owed to the user\'s turn, apart from the supervisor\'s events in its window', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+      supervisor.observe({ kind: 'task_failed', taskId: 't2', detail: 'broke' });
+      supervisor.observe(report('user'));
+      supervisor.observe(report('supervisor', 't3'));
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(h.deliver.mock.calls).toEqual([
+        [expect.stringMatching(/^Run update:\n- task #2 "Task t2" failed: broke\n- task #3 "Task t3", whose result you asked for/), 'supervisor'],
+        [expect.stringMatching(/^Run update:\n- task #1 "Task t1", whose result you asked for/), 'user'],
+      ]);
+      vi.useRealTimers();
+    });
+
+    it('outlives a new run the user starts, which drops the supervisor\'s own undelivered events', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'watch' });
+      const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+      supervisor.observe({ kind: 'task_failed', taskId: 't2' });
+      supervisor.observe(report('user'));
+      supervisor.runStarted();
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(h.deliver.mock.calls).toEqual([[expect.not.stringContaining('failed'), 'user']]);
+      vi.useRealTimers();
+    });
+
+    it('is delivered once due after a restart that restored it inside its debounce window, without the supervisor\'s own events', async () => {
+      vi.useFakeTimers();
+      const before = new Supervisor(host({ level: 'watch' }), { debounceMs: 10 });
+      before.observe({ kind: 'task_failed', taskId: 't2' });
+      before.observe(report('user'));
+      const saved = before.snapshot();
+      before.reset();
+      const h = host({ level: 'watch' });
+      const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+      supervisor.restore(saved);
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(h.deliver.mock.calls).toEqual([[expect.stringMatching(/^Run update:\n- task #1 "Task t1", whose result you asked for/), 'user']]);
+      expect(supervisor.snapshot().policy.attention).toEqual([expect.objectContaining({ kind: 'task_failed', taskId: 't2' })]);
+
+      supervisor.observe({ kind: 'waiting_input', taskId: 't3' });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(h.deliver).toHaveBeenCalledTimes(2);
+      expect(h.deliver.mock.calls[1]).toEqual([expect.stringMatching(/failed\n- task #3 "Task t3" is waiting for input$/), undefined]);
+      vi.useRealTimers();
+    });
+
+    it('calls a failed report turn of the user\'s a report turn, in the retry and in the give-up', async () => {
+      const h = host({ level: 'off' });
+      const supervisor = new Supervisor(h);
+      const fail = () => supervisor.turn(async () => { throw new Error('planner exited'); }, undefined, 'user');
+
+      await expect(fail()).rejects.toThrow('planner exited');
+      expect(h.notice).toHaveBeenCalledWith('warn', 'The planner\'s report turn failed (planner exited). Retrying once with the planner restarted.');
+      await expect(fail()).rejects.toThrow('planner exited');
+      expect(h.goUnsupervised).toHaveBeenCalledWith('the planner\'s report turn failed twice (planner exited)');
+    });
+
+    it('opens no turn once the turns opened without the user have failed for the run', () => {
+      expect(new Supervisor(host({ level: 'off', unsupervised: 'its wake-up turn failed twice' })).mayReport()).toBe(false);
+    });
+
+    it('acts for the user\'s turn in a report turn of theirs, and refuses it nothing that turn could do', () => {
+      const turn = new Supervisor(host({ level: 'watch' })).wakeUpTurn('user');
+
+      expect(turn.actor?.()).toEqual({ kind: 'planner-turn' });
+      expect(turn.refused('edit')).toBeUndefined();
+      expect(turn.refused('plan')).toBeUndefined();
+      expect(turn.brief).toContain('You act as in that turn');
+    });
+
+    it('acts at the run\'s level now for the supervisor, read at each call', () => {
+      const run: SupervisedRun = { level: 'act' };
+      const turn = new Supervisor({ ...host(null), run: () => run }).wakeUpTurn();
+      run.level = 'watch';
+
+      expect(turn.actor?.()).toEqual({ kind: 'supervisor', level: 'watch' });
+    });
+  });
+
+  it('does not wake on the events a restart restored, with no report among them: a session opening is not a run event', async () => {
+    vi.useFakeTimers();
+    const before = new Supervisor(host({ level: 'watch' }), { debounceMs: 10 });
+    before.observe({ kind: 'task_failed', taskId: 't1' });
+    const saved = before.snapshot();
+    before.reset();
+    const h = host({ level: 'watch' });
+    const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+    supervisor.restore(saved);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(h.deliver).not.toHaveBeenCalled();
+    expect(supervisor.snapshot().policy.attention).toHaveLength(1);
+    vi.useRealTimers();
+  });
+
   it('tells a wake-up turn at Watch its read budget, and refuses every change to the plan', () => {
     const turn = new Supervisor(host({ level: 'watch' })).wakeUpTurn();
 

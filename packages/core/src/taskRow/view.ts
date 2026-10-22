@@ -1,12 +1,15 @@
 import { taskUsageSummary, type AttemptUsage, type TaskUsageSummary } from '../models/Usage';
-import type { AwaitingReason } from '../models/Task';
+import type { AwaitingReason, TaskType } from '../models/Task';
+import type { TaskLoop } from '../models/Loop';
 import type { TaskIsolationState } from '../interfaces/IWorktreeIsolation';
 import { taskOrderLabel, taskRefOf } from '../services/TaskRefs';
 import { capConflictFiles } from '../services/conflictFiles';
-import { blockingFailures, type BlockingSubject } from '../services/blocking';
+import { planBlocks, type BlockingSubject, type PlanBlocks } from '../services/blocking';
+import { checkOf, type LoopSubject } from '../models/Loop';
 import { assignmentConsequence, assignmentIssue, assignmentIssueText, type AssignmentScope } from '../services/AssignmentScope';
 import { approvalLabel, awaitingLabel, isTaskRunning, NOT_STARTED, resumeLabel, taskStatusKind, WAITS_FOR_APPROVAL_LABEL, type TaskStatusKind } from './status';
 import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskRowPlacement } from './actions';
+import { loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, type LoopCheckState } from './loop';
 
 /**
  * A task as both surfaces hold it, with the live state each tracks beside it
@@ -16,7 +19,7 @@ import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskR
 export interface TaskRowSubject {
   id: string;
   order: number;
-  type: 'ai' | 'user';
+  type: TaskType;
   status: string;
   dependencies: readonly string[];
   taskMode?: string;
@@ -31,12 +34,20 @@ export interface TaskRowSubject {
   awaitingApproval?: number;
   /** Added after the user approved the plan, and not approved since (ADR-0035). */
   waitsForApproval?: boolean;
+  /** Why it is held out of the scheduler; absent when it is not held. */
+  holdReason?: string | null;
+  /** A read-only task whose report is addressed to the planner (ADR-0037). */
+  research?: boolean;
   isolation?: TaskRowIsolation | null;
   mergeGate?: readonly string[];
   forcedPastGate?: readonly string[];
   attemptUsage?: readonly AttemptUsage[];
   assignedRunner?: string;
   assignedModel?: { modelId: string; modelLabel?: string };
+  /** A loop's check, its round and what its evidence said: the row's words for the loop are read off them (ADR-0045). */
+  loop?: TaskLoop;
+  loopRound?: number;
+  verdict?: { outcome: string; reported?: string } | null;
 }
 
 export interface TaskRowIsolation {
@@ -60,6 +71,10 @@ interface PlanRefTask {
   status?: string;
   dependencies?: readonly string[];
   subtasks?: readonly PlanRefTask[];
+  /** A loop's check and its round, read so its dependents are not shown blocked between rounds (ADR-0045 L3). */
+  loop?: TaskLoop;
+  loopRound?: number;
+  verdict?: { outcome: string; reported?: string } | null;
 }
 
 export interface TaskRowContext {
@@ -77,13 +92,41 @@ export interface TaskRowContext {
   runnerScope?: AssignmentScope;
 }
 
-/** Whether the row stands for an AI task, a manual one, or an ops task (ADR-0020). */
-export type TaskRowKind = 'ai' | 'user' | 'ops';
+/**
+ * Whether the row stands for an AI task, a manual one, an ops task (ADR-0020),
+ * or a script task (ADR-0035): an ops task by nature, drawn with its body and
+ * with no prompt, runner or model to edit.
+ */
+export type TaskRowKind = 'ai' | 'user' | 'ops' | 'script';
 
 /** The task's whole spend (see `taskUsageSummary`); `attempt` is the latest one, 0 before any reported. */
 export interface TaskRowUsage extends Pick<TaskUsageSummary, 'totals' | 'contextFill'> {
   attempt: number;
 }
+
+/**
+ * A loop's check and its body, as a row draws them. The check says its round
+ * and how the loop stands; a body task says which check it runs for.
+ */
+export type TaskRowLoop =
+  | {
+    role: 'check';
+    state: LoopCheckState;
+    /** "Round 2 of 3", "Passed in round 2 of 3", "Failed after 3 rounds". */
+    label: string;
+    /** What the label leaves out — what the loop waits for, or what stopped it; null when it leaves nothing. */
+    detail: string | null;
+    /** Its body tasks, by reference. */
+    body: string[];
+  }
+  | {
+    role: 'body';
+    /** "Runs if #1 fails", and its round once it runs. */
+    label: string;
+    /** The check, by reference. */
+    check: string;
+    round: number | null;
+  };
 
 export interface TaskRowView {
   usage: TaskRowUsage | null;
@@ -101,10 +144,14 @@ export interface TaskRowView {
   approvals: string | null;
   /** That it waits for the user's approval to start, in sentence case; null once it started, or when it needs none. */
   waitsForApproval: string | null;
+  /** Why it is held out of the scheduler, in sentence case; null when it is not held. */
+  holdReason: string | null;
   /** Why the task's runner or model is one the user has since moved away from, in sentence case; null when it is not. The task still runs. */
   assignmentFlag: string | null;
   /** What the flag means for this task as it stands (a failed one runs again only if retried); set exactly when `assignmentFlag` is. */
   assignmentConsequence: string | null;
+  /** An AI task whose report goes to the planner and wakes it (ADR-0037). */
+  research: boolean;
   /** The task's mode is tagged autonomous: it runs without permission prompts. */
   autonomous: boolean;
   /** The repos its isolated work changed, by path; empty for a group of one. */
@@ -125,6 +172,8 @@ export interface TaskRowView {
   opsChangedFiles: boolean;
   /** The ancestors, by title, a force start went past the merge gate of. */
   forcedPastGate: readonly string[] | null;
+  /** Where the task stands in a loop (ADR-0045); null for a task in none. */
+  loop: TaskRowLoop | null;
   /** The task's dependencies, by reference. */
   dependencies: string[];
   /** What the row offers while a plan runs. */
@@ -146,12 +195,47 @@ export const namedRepos = (repos: readonly string[] | undefined): string[] => (r
 const filesOf = (files: string[] | undefined): string | null => (files?.length ? capConflictFiles(files) : null);
 
 const asBlocking = (tasks: readonly PlanRefTask[]): BlockingSubject[] =>
-  tasks.map((t) => ({ id: t.id, status: t.status ?? '', dependencies: t.dependencies ?? [], subtasks: asBlocking(t.subtasks ?? []) }));
+  tasks.map((t) => ({
+    id: t.id, status: t.status ?? '', dependencies: t.dependencies ?? [], subtasks: asBlocking(t.subtasks ?? []),
+    ...(t.loop ? { loop: t.loop, loopRound: t.loopRound, ...(t.verdict ? { verdict: t.verdict } : {}) } : {}),
+  }));
+
+/** A plan tree that carries statuses, read once: who it blocks, and which loops go on. */
+interface PlanReading {
+  tasks: readonly PlanRefTask[];
+  blocks: PlanBlocks;
+}
 
 /** What blocks a task not started, read off the plan tree; empty without one that carries statuses. */
-function blockedBy(task: TaskRowSubject, tasks: readonly PlanRefTask[] | undefined): string[] {
-  if (!tasks?.length || !NOT_STARTED.has(task.status)) return [];
-  return blockingFailures(asBlocking(tasks)).get(task.id) ?? [];
+function blockedBy(task: TaskRowSubject, reading: PlanReading | null): string[] {
+  if (!reading || !NOT_STARTED.has(task.status)) return [];
+  return reading.blocks.blocked.get(task.id) ?? [];
+}
+
+function loopOf(task: TaskRowSubject, reading: PlanReading | null): TaskRowLoop | null {
+  const tasks = reading?.tasks;
+  if (task.loop) {
+    const check: LoopSubject & { loop: TaskLoop } = { id: task.id, status: task.status, loop: task.loop, loopRound: task.loopRound, ...(task.verdict ? { verdict: task.verdict } : {}) };
+    // With no plan to read the body from, a check between rounds is taken to be going on.
+    const state = loopCheckState(check, reading ? reading.blocks.repeating.has(task.id) : true);
+    const body = refsOf(task.loop.body, tasks);
+    // What stops a loop: a body task that failed, was skipped or is blocked (ADR-0045 L7).
+    const halted = reading ? task.loop.body.filter((id) => {
+      const status = reading.tasks.find((t) => t.id === id)?.status;
+      return status === 'failed' || status === 'skipped' || reading.blocks.blocked.has(id);
+    }) : [];
+    const detail = state === 'repeating'
+      ? `Found problems: runs again once ${body.join(', ')} ${body.length === 1 ? 'has' : 'have'} landed`
+      : state === 'stopped'
+        ? `${refsOf(halted, tasks).join(', ')} did not pass: retry ${halted.length === 1 ? 'it' : 'them'} and the loop goes on`
+        : null;
+    return { role: 'check', state, label: loopCheckLabel(check, state), detail, body };
+  }
+  const owner = reading && checkOf(reading.tasks, task.id);
+  if (!owner?.loop) return null;
+  const [check] = refsOf([owner.id], tasks);
+  const round = loopBodyRound({ status: owner.status ?? '', loopRound: owner.loopRound }, task.status);
+  return { role: 'body', label: loopBodyLabel(check, round, owner.loop.maxRounds), check, round };
 }
 
 function flagOf(task: TaskRowSubject, scope: AssignmentScope | undefined): Pick<TaskRowView, 'assignmentFlag' | 'assignmentConsequence'> {
@@ -170,17 +254,24 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
   const isolation = task.isolation && task.isolation.state !== 'none' ? task.isolation : null;
   const spend = taskUsageSummary(task);
   const latestAttempt = task.attemptUsage?.at(-1);
-  const blocked = blockedBy(task, context.tasks);
+  // A check's own row is the newest word on it: the plan beside it may hold its verdict from before.
+  const tasks = task.loop ? context.tasks?.map((t) => (t.id === task.id ? { ...t, status: task.status, loopRound: task.loopRound, verdict: task.verdict } : t)) : context.tasks;
+  const reading = tasks?.length ? { tasks, blocks: planBlocks(asBlocking(tasks)) } : null;
+  const blocked = blockedBy(task, reading);
+  const loop = loopOf(task, reading);
   return {
     usage: latestAttempt ? { totals: spend.totals, ...(spend.contextFill ? { contextFill: spend.contextFill } : {}), attempt: latestAttempt.attempt } : task.type === 'ai' && ['completed', 'failed', 'in_progress', 'awaiting_user'].includes(task.status) ? { totals: {}, attempt: 0 } : null,
     orderLabel: taskOrderLabel(task, parent),
-    kind: task.type === 'user' ? 'user' : task.ops ? 'ops' : 'ai',
-    status: blocked.length > 0 ? 'blocked' : taskStatusKind(task),
+    kind: task.type === 'user' ? 'user' : task.type === 'script' ? 'script' : task.ops ? 'ops' : 'ai',
+    // Between rounds a check waits for its fix as a task waits for its dependencies, and is no failure (ADR-0045 L3).
+    status: blocked.length > 0 ? 'blocked' : loop?.role === 'check' && loop.state === 'repeating' ? 'todo' : taskStatusKind(task),
     running: isTaskRunning(task),
     awaiting: awaitingLabel(task),
     resumes: resumeLabel(task, context.now),
     approvals: approvalLabel(task.awaitingApproval),
     waitsForApproval: task.waitsForApproval && NOT_STARTED.has(task.status) ? WAITS_FOR_APPROVAL_LABEL : null,
+    holdReason: task.holdReason?.trim() || null,
+    research: task.type === 'ai' && task.research === true,
     ...flagOf(task, context.runnerScope),
     autonomous: task.type === 'ai' && context.modes?.find((m) => m.id === task.taskMode)?.autonomous === true,
     repos: namedRepos(isolation?.repos),
@@ -198,10 +289,22 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     skipReason: task.status === 'skipped' ? task.skipReason ?? null : null,
     opsChangedFiles: task.status === 'awaiting_user' && task.awaitingReason === 'files-changed',
     forcedPastGate: task.forcedPastGate?.length ? task.forcedPastGate : null,
+    loop,
     dependencies: refsOf(task.dependencies, context.tasks),
     // A block read off the plan offers what a stored one does: Skip among them.
     actions: taskRowActions(blocked.length > 0 ? { ...task, status: 'blocked' } : task, context.placement ?? (parent ? 'subtask' : 'task')),
     mark: markAction(task),
     opsEditable: opsEditable(task),
   };
+}
+
+/**
+ * What a loop's row says, as the parts a surface joins: the check's round and
+ * what the loop waits for or stopped at (or which tasks run if it fails, while
+ * it has not failed yet); a body task's "runs if #1 fails". Sentence case.
+ */
+export function loopRowParts(loop: TaskRowLoop): string[] {
+  if (loop.role === 'body') return [loop.label];
+  const runs = loop.state === 'waiting' || loop.state === 'running' ? `Runs ${loop.body.join(', ')} if it fails` : null;
+  return [loop.label, loop.detail ?? runs].filter((part): part is string => part !== null);
 }

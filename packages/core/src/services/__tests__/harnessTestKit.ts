@@ -203,6 +203,12 @@ export function fakeSpawn(replies: ScriptedReply[], options: FakeSpawnOptions = 
       proc.emitStdout(`${JSON.stringify({ id: rpc.id, result: options.codexDiscovery?.(rpc.method) ?? { data: [], nextCursor: null } })}\n`);
       return;
     }
+    // A read-only task asks for the MCP servers Codex's configuration would start (ADR-0046).
+    if (rpc.method === 'config/read') {
+      const answer = options.codexDiscovery?.(rpc.method) ?? { result: { config: { mcp_servers: {} }, origins: {} } };
+      proc.emitStdout(`${JSON.stringify({ id: rpc.id, ...answer })}\n`);
+      return;
+    }
     const reply = queue.shift();
     if (reply !== undefined) {
       if (typeof reply === 'function') reply(chunk, proc);
@@ -353,6 +359,18 @@ export function fixture(agent: string, name: string, vars: Record<string, string
     (text, [key, value]) => text.split(`{{${key}}}`).join(JSON.stringify(value).slice(1, -1)),
     raw,
   );
+}
+
+/**
+ * A recorded Codex response, answered under the id its request was sent
+ * with: a read-only task asks `config/read` before its thread (ADR-0046),
+ * which the recording's fixed ids do not leave room for.
+ */
+export function codexAnswer(name: string): ScriptedReply {
+  return (written, proc) => {
+    const { id } = JSON.parse(written) as { id: number };
+    proc.emitStdout(`${JSON.stringify({ ...(JSON.parse(fixture('codex', name)) as object), id })}\n`);
+  };
 }
 
 /** A plan the validator accepts, as the JSON object an agent would emit. */

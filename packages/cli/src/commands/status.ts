@@ -2,7 +2,7 @@ import { assignmentFlagText } from '../tui/blocks';
 import { writeFileSync } from 'fs';
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
-import { blockedByLabel, blockingFailures, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, tasksTotalText, usageText, waitsForApproval, type ApprovalRecord, type AssignmentScope } from '@ordewell/core';
+import { blockedByLabel, holdLabel, loopRowParts, planBlocks, scriptTaskText, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, tasksTotalText, usageText, waitsForApproval, walkPlan, type ApprovalRecord, type AssignmentScope, type RunView } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type SessionMeta } from '../apiClient';
@@ -24,7 +24,7 @@ export async function handleStatus(subArgs: string[], injectedApi?: ApiClient): 
       emitJson(session, outputPath);
       return;
     }
-    printOneSession(sessionId, session.meta, session.plan, await assignmentScope(api));
+    printOneSession(sessionId, session.meta, session.plan, await assignmentScope(api), session.run);
   } else {
     const sessions = await api.getSessions(workspace);
     if (asJson) {
@@ -87,11 +87,18 @@ function printOneSession(
   meta: SessionMeta,
   plan: Record<string, unknown>,
   runnerScope: AssignmentScope | undefined,
+  run: RunView | undefined,
 ): void {
   const allTasks = allTasksOf(plan);
   const everyTask = flattenTasks(allTasks);
-  const blocked = blockingFailures(everyTask.map((t) => ({ ...t, subtasks: [], dependencies: t.dependencies ?? [] })));
-  const count = (status: string) => everyTask.filter((t) => t.status === status || (status === 'blocked' && blocked.has(t.id))).length;
+  const { blocked, repeating } = planBlocks(everyTask.map((t) => ({ ...t, subtasks: [], dependencies: t.dependencies ?? [] })));
+  // A hold is live session state; a saved plan has none, and a surface does not rebuild one from it.
+  const holds = new Map<string, string>();
+  for (const { task } of walkPlan(run?.tasks ?? [])) {
+    if (task.holdReason) holds.set(task.id, task.holdReason);
+  }
+  // A check between rounds is stored failed, and no failure while its loop goes on (ADR-0045 L3).
+  const count = (status: string) => everyTask.filter((t) => (t.status === status && !(status === 'failed' && repeating.has(t.id))) || (status === 'blocked' && blocked.has(t.id))).length;
 
   console.log(`Session:  ${sessionId}`);
   console.log(`Goal:     ${meta.goal}`);
@@ -108,15 +115,21 @@ function printOneSession(
     ? `${row.waitsForApproval}: \`ordewell force-start ${ref}\` approves it, \`ordewell run\` approves all`
     : null);
   for (const t of allTasks) {
-    const icon = iconFor(blocked.has(t.id) ? 'blocked' : t.status);
     const model = t.assignedModel ? ` (${t.assignedModel.modelLabel})` : '';
     const shortId = (t.id ?? '').slice(-8);
-    console.log(`  ${taskOrderLabel(t).padStart(2)}. ${icon} [${shortId}] ${t.title}${model}`);
-    const row = taskRowView({ ...t, dependencies: t.dependencies ?? [], waitsForApproval: waitsForApproval(t, record) }, { tasks: allTasks, runnerScope });
+    const row = taskRowView({ ...t, dependencies: t.dependencies ?? [], waitsForApproval: waitsForApproval(t, record), holdReason: holds.get(t.id) }, { tasks: allTasks, runnerScope });
+    const icon = iconFor(blocked.has(t.id) ? 'blocked' : repeating.has(t.id) ? 'pending' : t.status);
+    console.log(`  ${taskOrderLabel(t).padStart(2)}. ${icon} [${shortId}]${row.kind === 'script' ? ' [SCR]' : row.research ? ' [RES]' : ''} ${t.title}${model}`);
+    // What the user approves and what runs: the body as the plan holds it, not a summary (ADR-0035).
+    if (t.type === 'script') {
+      for (const line of scriptTaskText(t).split('\n')) console.log(line ? `      ${line.replace(/\t/g, '    ')}` : '');
+    }
     const waiting = approval(row, taskOrderLabel(t));
     if (waiting) console.log(`      ${waiting}`);
+    if (row.holdReason) console.log(`      ${holdLabel(row.holdReason)}`);
     if (row.assignmentFlag) console.log(`      ⚠ ${assignmentFlagText(row)}`);
     if (row.blockedBy) console.log(`      ${blockedByLabel(row.blockedBy)}`);
+    if (row.loop) console.log(`      ↻ ${loopRowParts(row.loop).join(' · ')}`);
     if (row.status === 'skipped') console.log(`      ${skippedLabel(row.skipReason)}`);
     const usage = row.usage && usageText(row.usage);
     if (usage) console.log(`      ${usage}`);
@@ -125,9 +138,10 @@ function printOneSession(
       const subModel = sub.assignedModel ? ` (${sub.assignedModel.modelLabel})` : '';
       const subShortId = (sub.id ?? '').slice(-8);
       console.log(`    ${taskOrderLabel(sub, t)}. ${subIcon} [${subShortId}] ${sub.title}${subModel}`);
-      const subRow = taskRowView({ ...sub, dependencies: sub.dependencies ?? [], waitsForApproval: waitsForApproval(sub, record) }, { parent: t, tasks: allTasks, runnerScope });
+      const subRow = taskRowView({ ...sub, dependencies: sub.dependencies ?? [], waitsForApproval: waitsForApproval(sub, record), holdReason: holds.get(sub.id) }, { parent: t, tasks: allTasks, runnerScope });
       const subWaiting = approval(subRow, taskOrderLabel(sub, t));
       if (subWaiting) console.log(`        ${subWaiting}`);
+      if (subRow.holdReason) console.log(`        ${holdLabel(subRow.holdReason)}`);
       if (subRow.assignmentFlag) console.log(`        ⚠ ${assignmentFlagText(subRow)}`);
       if (subRow.blockedBy) console.log(`        ${blockedByLabel(subRow.blockedBy)}`);
       if (subRow.status === 'skipped') console.log(`        ${skippedLabel(subRow.skipReason)}`);
