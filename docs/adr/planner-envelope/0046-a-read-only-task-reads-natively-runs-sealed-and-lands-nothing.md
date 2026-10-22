@@ -222,7 +222,11 @@ nothing.
   `backends.test.ts` asserts the rules and binds each backend builds for it.
   `sealedRuns.e2e.test.ts` runs it in the host's real sandbox against a git
   worktree, a repo group's root and its worktrees included, and replays the
-  move-and-plant sequence and a nested `.git` rewrite there.
+  move-and-plant sequence and a nested `.git` rewrite there. A macOS run
+  proves the Seatbelt side; the bind mount's refusal to rename or remove a
+  worktree root, the throwaway overlay at a group's root and the read-only
+  binds of `.git` entries are proven by the Linux CI job that runs the same
+  suite under real bubblewrap.
 - Landing and release go through `FakeWorktreeIsolation` for the scheduler's
   side, and real git in `GitWorktreeIsolation.test.ts` for what is removed, what
   is never preserved, and where git runs.
@@ -306,10 +310,11 @@ nothing.
 - No unsealed git runs below a read-only task's working directory: Ordewell's
   git runs only at repo roots, each runner's own only at the task's working
   directory, and a repo group's root is not persistently writable to its
-  sealed runs (under bubblewrap's throwaway overlay a write there is discarded
-  with the run). A `.git` the checkout did not bring is removed after every
-  run, one it brought cannot be changed, and a removal that fails stops that
-  task's shell. So none of them loads a repository a sealed run planted or
+  sealed runs: a write there is refused where the root is bound read-only, and
+  under bubblewrap's throwaway overlay one may succeed only into the layer
+  discarded with the run. A `.git` the checkout did not bring is removed after
+  every run, one it brought cannot be changed, and a removal that fails stops
+  that task's shell. So none of them loads a repository a sealed run planted or
   armed, on macOS or Linux, without a seccomp filter. The native read that
   races a sealed run, above, is unchanged.
 - A failed or stopped read-only attempt leaves its log and its report to look
@@ -337,3 +342,5 @@ nothing.
 - 2026-10-22 — a repo group's task workspace root is no longer writable to a sealed run, only its worktrees are; a `.git` below the writable directory that was not there before the task's first sealed run is swept by the link walk, and one that cannot be removed stops the task's shell.
 
 - 2026-10-22 — a sealed run can no longer rename or remove its worktree root, and every `.git` entry the checkout brought is held by the profile and checked for identity, content and hooks after every run; a repo group's root is described as not persistently writable where bubblewrap overlays it.
+
+- 2026-10-22 — the group-root consequence names the refusal where the root is bound read-only, and the testing decisions say which host proves which rule: macOS for Seatbelt, Linux CI for the bind mount, the group-root overlay and the read-only binds.

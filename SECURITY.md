@@ -76,7 +76,8 @@ their own repositories. The parts most worth your attention:
   a credential, or outlive its limits is in scope, as is a way to run a
   command sealed that a `!` allowlist exclusion names or that you denied. A
   read-only task's sealed runs may also write its own worktree, and in a repo
-  group each worktree but not the group's task workspace root
+  group each worktree, while the group's task workspace root is not
+  persistently writable
   ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)),
   but not a worktree's `.git` or the worktree root itself: a sealed run cannot
   rename or remove the root, nor write, replace, rename or remove its `.git`,
@@ -243,15 +244,16 @@ except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-s
   first sealed run, and anything else runs sealed. After that run every
   command runs sealed, allowlisted ones included, since the run may have
   rewritten a script or config file a later command uses. Sealed, the
-  workspace is readable, nothing is writable but the task's worktree — in a
-  repo group, each of its worktrees, never the group's task workspace root —
-  and a scratch directory of its own, the repository's `.git` and the
-  worktree's own `.git` file stay read-only, and there is no network and no
-  home directory, so none of your credentials. Because a worktree's `.git`
-  cannot be rewritten or replaced, a repo group's root is read-only, and a
-  `.git` that was not there before the task's first sealed run is removed after
-  every run (one that cannot be removed stops the task's shell), git run later
-  there — Ordewell's at a repo root or the runner's own at the task's working
+  workspace is readable, nothing is persistently writable but the task's
+  worktree — in a repo group, each of its worktrees, while the group's task
+  workspace root is not persistently writable — and a scratch directory of its
+  own, the repository's `.git` and the worktree's own `.git` file stay
+  read-only, and there is no network and no home directory, so none of your
+  credentials. Because a worktree's `.git` cannot be rewritten or replaced, a
+  repo group's root is not persistently writable, and a `.git` that was not
+  there before the task's first sealed run is removed after every run (one
+  that cannot be removed stops the task's shell), git run later there —
+  Ordewell's at a repo root or the runner's own at the task's working
   directory — loads no repository a sealed run planted; `task_diff` refuses a
   read-only task outright. On macOS the three gaps listed under Sealed runs
   stay open to these runs too. On Linux a native read or the runner's git
