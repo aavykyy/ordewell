@@ -1,5 +1,5 @@
 import { execFile, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -419,6 +419,92 @@ describe('sealed runs', async () => {
         }
       });
 
+      it("protects every .git entry the checkout brought, so neither a submodule's file nor a vendored repository can be armed (ADR-0046)", async () => {
+        const nested = join(worktree, 'submodule');
+        git(repo, 'worktree', 'add', '-q', '-b', 'ordewell/run/1-review-submodule', nested);
+        const vendor = join(worktree, 'vendor');
+        mkdirSync(vendor, { recursive: true });
+        git(vendor, 'init', '-q');
+        const submoduleGit = readFileSync(join(nested, '.git'), 'utf8');
+        const vendorConfig = readFileSync(join(vendor, '.git', 'config'), 'utf8');
+        const canary = join(repo, `nested-canary-${process.pid}`);
+        writeFileSync(join(worktree, 'evil.sh'), `#!/bin/sh\ntouch '${canary}'\n`);
+        chmodSync(join(worktree, 'evil.sh'), 0o755);
+        const fs = new HostFileSystem(repo, sandbox);
+        const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+        try {
+          // A submodule's `.git` file repointed at a repository of the run's
+          // own, armed to run a program for git outside the sandbox.
+          const armFile = await shell.run(`git init -q --bare submodule/fake && git --git-dir=submodule/fake config core.bare false && git --git-dir=submodule/fake config core.worktree .. && git --git-dir=submodule/fake config core.fsmonitor "$PWD/evil.sh" && printf 'gitdir: fake\\n' > submodule/.git`);
+          expect(ranSealed(armFile.output)).toBe(true);
+          expect(armFile.success).toBe(false);
+          // The write to the protected file is what failed: the repository of
+          // the run's own was made first.
+          expect(existsSync(join(nested, 'fake'))).toBe(true);
+          expect(readFileSync(join(nested, '.git'), 'utf8')).toBe(submoduleGit);
+
+          // A vendored repository's own config, armed the same way.
+          const armDir = await shell.run('git -C vendor config core.fsmonitor "$PWD/evil.sh"');
+          expect(ranSealed(armDir.output)).toBe(true);
+          expect(armDir.success).toBe(false);
+          expect(readFileSync(join(vendor, '.git', 'config'), 'utf8')).toBe(vendorConfig);
+
+          // What the runner's own git runs there, as the user and outside the sandbox.
+          expect(git(nested, 'status').status).toBe(0);
+          expect(git(vendor, 'status').status).toBe(0);
+          expect(existsSync(canary)).toBe(false);
+        } finally {
+          shell.end();
+          rmSync(join(nested, 'fake'), { recursive: true, force: true });
+          writeFileSync(join(nested, '.git'), submoduleGit);
+          writeFileSync(join(vendor, '.git', 'config'), vendorConfig);
+          rmSync(join(worktree, 'evil.sh'), { force: true });
+          rmSync(canary, { force: true });
+          git(repo, 'worktree', 'remove', '--force', nested);
+          rmSync(vendor, { recursive: true, force: true });
+        }
+      });
+
+      it("cannot rename or remove its own worktree root, so a .git planted outside cannot be moved back (ADR-0046)", async () => {
+        const original = readFileSync(join(worktree, '.git'), 'utf8');
+        const canary = join(repo, `root-canary-${process.pid}`);
+        writeFileSync(join(worktree, 'evil.sh'), `#!/bin/sh\ntouch '${canary}'\n`);
+        chmodSync(join(worktree, 'evil.sh'), 0o755);
+        const fs = new HostFileSystem(repo, sandbox);
+        const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+        try {
+          // #51's sequence: take the worktree out of the sandbox's writable set,
+          // plant a repository of the run's own, and move it back under the
+          // path the sweep trusts. A root that cannot be renamed leaves it all
+          // inside the writable directory where every rule still applies.
+          const moved = await shell.run(`orig="$PWD"; cd "$TMPDIR"; mv "$orig" moved && { cd moved; git init -q --bare planted; git --git-dir=planted config core.bare false; git --git-dir=planted config core.worktree ..; git --git-dir=planted config core.fsmonitor "$orig/evil.sh"; printf 'gitdir: planted\\n' > .git; cd "$TMPDIR"; mv moved "$orig"; }`);
+          expect(ranSealed(moved.output)).toBe(true);
+          expect(moved.success).toBe(false);
+          expect(readFileSync(join(worktree, '.git'), 'utf8')).toBe(original);
+          expect(existsSync(join(worktree, 'planted'))).toBe(false);
+
+          // The root itself is denied, not its contents: creating and removing
+          // a file there, and sealed git reads, still work.
+          const inside = await shell.run('printf "inside\\n" > inside-root.txt && cat inside-root.txt');
+          expect(inside.success).toBe(true);
+          expect(inside.output).toContain('inside');
+          expect((await shell.run('git status --short | cat')).success).toBe(true);
+          expect((await shell.run('git diff | cat')).success).toBe(true);
+          expect((await shell.run('rm inside-root.txt')).success).toBe(true);
+          expect(existsSync(join(worktree, 'inside-root.txt'))).toBe(false);
+
+          // What the runner's own git runs where it starts, as the user and outside the sandbox.
+          expect(spawnSync('git', ['-C', worktree, 'status'], { encoding: 'utf8' }).status).toBe(0);
+          expect(existsSync(canary)).toBe(false);
+        } finally {
+          shell.end();
+          writeFileSync(join(worktree, '.git'), original);
+          rmSync(join(worktree, 'planted'), { recursive: true, force: true });
+          rmSync(join(worktree, 'evil.sh'), { force: true });
+          rmSync(canary, { force: true });
+        }
+      });
+
       it("in a repo group, writes each worktree but not the group root, and sweeps a .git planted below one (ADR-0046)", async () => {
         const group = join(repo, '.ordewell', 'worktrees', 'run', '3-group-write');
         const alpha = join(group, 'alpha');
@@ -429,9 +515,13 @@ describe('sealed runs', async () => {
         const shell = fs.taskShell({ cwd: group, writable: group, worktrees: [alpha, beta] });
         try {
           // The group root is where the runner's own git starts, and holds no
-          // worktree's `.git`: the profile leaves it read-only.
+          // worktree's `.git`: it is not persistently writable. Where the root
+          // is a read-only bind the write is refused; under bubblewrap's
+          // throwaway overlay it succeeds into the layer discarded with the run.
           const root = await shell.run('echo nope > root.txt');
-          expect(root.success).toBe(false);
+          const overlaid = availability.available && availability.sealed.available
+            && (availability.sealed.profile({ workspace: repo }).throwaway?.length ?? 0) > 0;
+          if (!overlaid) expect(root.success).toBe(false);
           expect(existsSync(join(group, 'root.txt'))).toBe(false);
 
           const inAlpha = await shell.run('echo changed > alpha/a.md && cat alpha/a.md');

@@ -228,6 +228,20 @@ export class SeatbeltBackend implements SandboxBackend {
     if (profile.gitWorktrees?.length) {
       const gitDirs = profile.gitWorktrees.map((worktree) => path.posix.join(worktree, '.git'));
       rules.push(`(deny file-write* ${filters('GIT', 'literal', gitDirs)})`);
+      // The root itself stays where it is: a command that renamed it could
+      // plant a `.git` outside the profile and move the directory back, under
+      // the path the sweep trusts (ADR-0046). Its contents stay writable.
+      rules.push(`(deny file-write* ${filters('WORKTREE', 'literal', profile.gitWorktrees)})`);
+    }
+    if (profile.gitEntries?.length) {
+      // Every `.git` the checkout brought stays byte for byte what it was: a
+      // file by its literal path, a directory with everything under it, so a
+      // submodule's pointer or a vendored repository's config cannot be armed
+      // for git outside the sandbox (ADR-0046).
+      const files = profile.gitEntries.filter((entry) => !entry.directory).map((entry) => entry.path);
+      const dirs = profile.gitEntries.filter((entry) => entry.directory).map((entry) => entry.path);
+      if (files.length) rules.push(`(deny file-write* ${filters('GITFILE', 'literal', files)})`);
+      if (dirs.length) rules.push(`(deny file-write* ${filters('GITDIR', 'subpath', dirs)})`);
     }
     if (profile.gitless?.length) rules.push(`(deny file-write-create (require-all (regex #"/\\.git$") (require-any ${filters('GITLESS', 'subpath', profile.gitless)})))`);
 

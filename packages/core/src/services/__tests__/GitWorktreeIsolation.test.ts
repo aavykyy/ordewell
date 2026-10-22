@@ -823,6 +823,24 @@ describe.skipIf(!hasGit)("WorktreeIsolation for a read-only task (ADR-0046)", ()
     expect(git(root, 'rev-parse', run.repos[0].integrationBranch)).toBe(tip);
   });
 
+  it.skipIf(process.platform !== 'darwin')('clears an immutable flag before removing its worktree, so the throwaway tree is not left behind (ADR-0046)', async () => {
+    const root = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const { cwd } = await iso.prepare(task(1, 'Review'), run, 'fresh', { readOnly: true });
+    // What a sealed run can leave: a .git under a directory it made immutable.
+    const locked = join(cwd, 'locked');
+    mkdirSync(join(locked, '.git'), { recursive: true });
+    writeFileSync(join(locked, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+    execFileSync('chflags', ['uchg', join(locked, '.git')]);
+    try {
+      expect(await iso.release(run, 'task-1', { keep: false })).toEqual({ preserved: [], refused: [] });
+      expect(existsSync(cwd)).toBe(false);
+    } finally {
+      if (existsSync(join(locked, '.git'))) execFileSync('chflags', ['-R', 'nouchg', join(locked, '.git')]);
+    }
+  });
+
   it('never integrates what it changed', async () => {
     const root = repo();
     const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });

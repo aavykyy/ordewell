@@ -15,6 +15,16 @@ import * as path from 'path';
  */
 
 /**
+ * A `.git` entry the checkout brought, which a sealed run may not change
+ * (ADR-0046). Whether it is a directory decides how a backend refuses a write
+ * into it: its whole subtree, or just the file.
+ */
+export interface SandboxGitEntry {
+  path: string;
+  directory: boolean;
+}
+
+/**
  * What one command may touch. Every path is absolute, and canonical
  * (symlinks resolved) wherever the backend matches the path the kernel
  * resolves, as Seatbelt does.
@@ -34,9 +44,16 @@ export interface SandboxProfile {
    * write, replace, rename nor remove (ADR-0046). A worktree's `.git` is a
    * file pointing into its repository; a command that rewrote it would make
    * git load a repository of the command's own when it runs there outside the
-   * sandbox, as the user.
+   * sandbox, as the user. The root itself is held still too: a command that
+   * renamed it could plant a `.git` outside the profile and move it back.
    */
   gitWorktrees?: readonly string[];
+  /**
+   * Of `write`, every `.git` entry the checkout brought — a submodule's file, a
+   * vendored repository — which a command may not change either: the literal
+   * path for a file, everything under it for a directory (ADR-0046).
+   */
+  gitEntries?: readonly SandboxGitEntry[];
   /**
    * Of `write`, directories in which a command may not create a `.git`, at
    * their root or beneath it, for the same reason (ADR-0046). A backend that
@@ -151,7 +168,7 @@ export class SandboxUnsupportedError extends Error {
  * an option.
  */
 export function assertProfilePaths(backend: string, profile: SandboxProfile): void {
-  const paths = [...profile.write, ...(profile.linkless ?? []), ...(profile.gitWorktrees ?? []), ...(profile.gitless ?? []), ...(profile.read === 'host' ? [] : profile.read), ...(profile.throwaway ?? []), ...(profile.masked ?? [])];
+  const paths = [...profile.write, ...(profile.linkless ?? []), ...(profile.gitWorktrees ?? []), ...(profile.gitEntries ?? []).map((entry) => entry.path), ...(profile.gitless ?? []), ...(profile.read === 'host' ? [] : profile.read), ...(profile.throwaway ?? []), ...(profile.masked ?? [])];
   for (const p of paths) {
     if (!path.posix.isAbsolute(p) || p.includes('\0')) throw new SandboxUnsupportedError(backend, `the path ${JSON.stringify(p)}`);
   }

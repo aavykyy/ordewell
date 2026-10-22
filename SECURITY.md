@@ -78,20 +78,26 @@ their own repositories. The parts most worth your attention:
   read-only task's sealed runs may also write its own worktree, and in a repo
   group each worktree but not the group's task workspace root
   ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)),
-  but not a worktree's `.git`: a sealed run cannot write, replace, rename or
-  remove it, nor (on macOS) create a `.git` anywhere it may write. A `.git`
-  that was not there before the task's first sealed run is removed after every
-  run — a submodule's `.git` file or a vendored repository stays — and a
-  removal that fails stops that task's shell. So git run later there outside
-  the sandbox, at a repo root or the task's working directory, loads no
-  repository the run planted. Nor may it leave a link leading out of the
-  worktree and the workspace, a link in a directory it closed to you
-  included. A way for one to write anywhere else, for
-  anything a read-only task changed to land, for a command of the task to run
-  outside the sealed profile once one of its commands has run sealed, or for a
-  sealed run to make git outside the sandbox load a repository it planted, is
-  in scope. On Linux, a native read or the runner's git racing a sealed run
-  still in progress is a known residual (ADR-0046).
+  but not a worktree's `.git` or the worktree root itself: a sealed run cannot
+  rename or remove the root, nor write, replace, rename or remove its `.git`,
+  nor any `.git` entry the checkout brought — a submodule's file, a vendored
+  repository — and each of those is checked after every run for a changed
+  identity, content or hook set, which stops that task's shell. Nor may it (on
+  macOS) create a `.git` anywhere it may write. The group's root is not
+  persistently writable: a write there is refused where the root is bound
+  read-only, and under bubblewrap's throwaway overlay one may succeed only
+  into the layer discarded with the run, so no `.git` at the root is visible
+  outside the sandbox. A `.git` that was not there before the task's first
+  sealed run is removed after every run, and a removal that fails stops that
+  task's shell. So git run later there outside the sandbox, at a repo root or
+  the task's working directory, loads no repository the run planted or armed.
+  Nor may it leave a link leading out of the worktree and the workspace, a link
+  in a directory it closed to you included. A way for one to write anywhere
+  else, for anything a read-only task changed to land, for a command of the
+  task to run outside the sealed profile once one of its commands has run
+  sealed, or for a sealed run to make git outside the sandbox load a repository
+  it planted, is in scope. On Linux, a native read or the runner's git racing a
+  sealed run still in progress is a known residual (ADR-0046).
 
   On Linux that profile is the whole guarantee: the PID namespace leaves a
   sealed run no other process to look at. **On macOS, three things no Seatbelt

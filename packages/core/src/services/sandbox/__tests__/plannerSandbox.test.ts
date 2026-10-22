@@ -222,6 +222,15 @@ describe('sealedShellProfile (ADR-0036 S1)', () => {
     expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/work/repo' }).gitWorktrees).toBeUndefined();
   });
 
+  it("passes on every .git entry the checkout brought, for the profile to hold still (ADR-0046)", () => {
+    const entries = [{ path: '/work/tree/sub/.git', directory: false }, { path: '/work/tree/vendor/.git', directory: true }];
+    expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/work/repo', writable: '/work/tree', gitEntries: entries }).gitEntries).toEqual(entries);
+    expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/work/repo', writable: '/work/tree' }).gitEntries).toBeUndefined();
+    // One outside the writable directory needs no protection, and binding it
+    // could reveal a file the read list withholds.
+    expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/work/repo', writable: '/work/tree', gitEntries: [{ path: '/elsewhere/.git', directory: false }] }).gitEntries).toBeUndefined();
+  });
+
   it('refuses a .git created anywhere in its writable directory where Seatbelt can, a group\'s task workspace root included (ADR-0046)', () => {
     const darwin = { ...host, platform: 'darwin' as NodeJS.Platform };
     expect(sealedShellProfile(darwin, { scratch: '/tmp/s', workspace: '/ws', writable: '/ws', worktrees: ['/ws/alpha', '/ws/beta'] }).gitless).toEqual(['/ws']);
