@@ -188,12 +188,16 @@ describe('sealed runs', async () => {
 
     it('stops a fork bomb at its process limit, and leaves none of it behind', async () => {
       const marker = `ordewell_bomb_${process.pid}`;
-      const result = await sealed(`${marker}() { ${marker} | ${marker} & }; ${marker}; sleep 2; echo survived`);
+      const result = await sealed(`echo "group=$$"; ${marker}() { ${marker} | ${marker} & }; ${marker}; sleep 2; echo survived`);
       expect(result.out).toMatch(/fork|Resource temporarily unavailable|Cannot fork/i);
       expect(result.out).toContain('survived');
       expect(result.ms).toBeLessThan(30_000);
-      // Its processes went with the run, once a loaded machine has finished tearing them down.
-      const left = () => spawnSync('ps', ['-A', '-o', 'command'], { encoding: 'utf8' }).stdout.split('\n').filter((line) => line.includes(marker));
+      // Its processes went with the run, once a loaded machine has finished
+      // tearing them down. Counted by process group: a bomb's forks are named
+      // `(bash)` or `<defunct>` while they come and go, never by the marker.
+      const group = /group=\s*(\d+)/.exec(result.out)?.[1];
+      expect(group).toBeDefined();
+      const left = () => spawnSync('ps', ['-A', '-o', 'pgid='], { encoding: 'utf8' }).stdout.split('\n').filter((line) => line.trim() === group);
       await vi.waitFor(() => expect(left()).toEqual([]), { timeout: 20_000, interval: 500 });
     });
 

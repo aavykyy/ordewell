@@ -141,7 +141,10 @@ const KEYCHAIN_PROFILE = `(allow mach-lookup
  * command's processes down with it; the group does, except for one that
  * leaves it with `setsid`, which keeps the profile. The group is killed until
  * it is empty, since the kernel skips a process still being forked, and a
- * fork bomb always has one.
+ * fork bomb always has one. Each round stops the group before it kills it,
+ * with no pause between rounds: the few that slip through a kill would
+ * otherwise fill the group back to its process limit while the reaper waited,
+ * and outlast it.
  *
  * macOS counts processes per user and maps hundreds of gigabytes into every
  * program as it starts, so both limits are added to what is measured here.
@@ -153,7 +156,7 @@ function limitsPrelude(limits: SandboxLimits): string {
   return `n=$(/bin/ps -U "$UID" -o pid= | /usr/bin/wc -l) && v=$(/bin/ps -o vsz= -p $$) \\
   && ulimit -u $((n + ${limits.processes})) && ulimit -v $((v + ${kilobytes})) \\
   || { echo 'The sealed run could not be held to its limits, so it did not run.' >&2; exit 125; }
-reap() { i=0; while kill -KILL -$pid 2>/dev/null && [ $i -lt 200 ]; do i=$((i + 1)); /bin/sleep 0.05; done; }
+reap() { i=0; while [ $i -lt 2000 ] && kill -STOP -$pid 2>/dev/null; do kill -KILL -$pid 2>/dev/null; i=$((i + 1)); done; }
 watch=0
 if [ -p /dev/stdin ] || [ -S /dev/stdin ]; then watch=1; fi
 exec 3<&0
