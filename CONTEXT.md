@@ -985,6 +985,53 @@ file instead.
 report is what the runner chose to say), "task output" (that is the live
 `output` read).
 
+**Handoff** (ADR-0047; decided, built by #120) — what a task tells its readers
+when an attempt ends: a `summary` of at most 1,500 characters, optional
+*Findings* and *Artifacts*, and an optional long `report` of at most 20,000.
+An AI task authors it in its *Completion call*; Ordewell derives one for a
+script task (the exit status and the end of its output) and a user task (that
+the user marked it complete, and their note). The full handoff is one `handoff`
+event at the end of the attempt's *Task log*; the plan keeps a bounded digest
+(the summary, the first 25 findings, the artifacts, `findingCount`). A
+dependent's *Prior task outputs* carry at most 4,000 characters of it per
+direct dependency: the summary, then findings whole in the producer's order,
+stopping before one that would not fit, then `+N more findings; read task #x`.
+A task reads the rest with `read_task` — the full handoff, and the report when
+asked, of itself, its transitive dependencies, and its loop's check or body —
+never a transcript. A handoff is not a *Report* (the report is its long form,
+stored and never pushed), and not a *Verdict*: the verdict is what
+`VerdictEngine` derives from the completion call's status, and a finding's
+severity is advice to a reader that reaches it nowhere. A task saved without
+one is rendered from `outputSummary.report`.
+*Avoid:* a bare "handoff" where the *Isolation handoff* (the end of an isolated
+run, for the user to merge) could be meant; "result" or "output" for it;
+"summary" for the whole (the summary is its first field).
+
+**Finding** (ADR-0047) — one atomic item of a *Handoff*: a `severity`
+(`blocker`, `major`, `minor` or `info`), a one-line title, a `detail` of at most
+2,000 characters and optional *Evidence reference*s. Ordewell assigns its id
+`F1` … `Fn` in the order the author gave, so it is cited as "F3 of task 12"; it
+is never cut when rendered, only left out and counted. Severity is advice, not
+evidence.
+*Avoid:* "issue" (that is a GitHub issue), "check" (a verdict's *Check* or a
+*Loop check*), "error".
+
+**Artifact** (ADR-0047) — a typed reference in a *Handoff* to something the
+task produced, of the same four kinds as an *Evidence reference*. It is in the
+digest and on the surfaces, not in the budgeted text a dependent is given.
+*Avoid:* "output", and "artifact" for a file the task wrote that the handoff
+does not name.
+
+**Evidence reference** (ADR-0047) — how a *Finding* points at what supports it:
+a `file` (a repository path, optional line), a `commit` (a sha, the repo
+optional), a `task` (a task reference, optional finding id) or a `url` (`http`
+or `https` only). A `task` reference must resolve to a task the producer may
+read and is refused at the call otherwise, and so is any other URL scheme; a
+`file` or `commit` is a claim about a tree, resolved lazily when read and shown
+unresolved, not refused, when it cannot be.
+*Avoid:* "proof" or "citation" — a reader weighs a reference, and it settles
+nothing about a verdict.
+
 **Spawn toolkit** — the shared process policy behind the runner adapters:
 `planDirectLaunch` (`utils/launch.ts`), runner environment cleanup
 (`services/harness/runnerEnv.ts`), and process-group launch and disposal
@@ -1565,7 +1612,8 @@ added task that merges the branch by hand and through whose landing the
 conflicted task lands, if it is still conflicted by then (a retry in the
 meantime replaces the conflict with a new attempt).
 *Avoid:* "result", "output branch" for the handoff — it is a branch to review,
-not an outcome.
+not an outcome; and a bare "handoff" for a task's end, which is a task's
+*Handoff* (ADR-0047).
 Under ADR-0014 the handoff covers every repo of the group: one *Merge all*, and a
 review diff with one section per repo that has changes, each headed by the repo's
 path and with its paths rooted at the workspace (a repo that is the workspace
