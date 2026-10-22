@@ -159,8 +159,6 @@ describe('research starts (ADR-0037 R4)', () => {
     await until(() => env.run.spawnedIds().length === 2);
     const [first, held] = research(env);
     expect(env.run.spawnedIds().sort()).toEqual(['ordinary', first.id].sort());
-    const updates = env.messages.filter((m) => m.type === 'status_update');
-    expect(updates.flatMap((m) => m.type === 'status_update' ? m.tasks : []).some((t) => 'researchWait' in t)).toBe(false);
 
     env.run.of('ordinary').reportComplete({ status: 'done', summary: 'Done.' });
     env.run.of('ordinary').emitExit(0);

@@ -65,9 +65,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   sequential work, delegate independent or large pieces with a self-contained
   brief, and prefer evidence a test or an exit code can check.
 - **Every planner turn tells the planner how full its context is and what
-  remains of its budgets**: its task reads, its web reads and its research
-  tasks for this message. API and coding-agent planners get the same line,
-  wake-up turns included.
+  remains of its budgets**: its task reads and its web reads. API and
+  coding-agent planners get the same line, wake-up turns included.
 - **Planner skills for a failure to explain and an open problem.** `diagnose`
   reproduces a failure first, tests competing hypotheses as parallel research
   tasks, decides from the evidence, then plans the fix inside a loop checked by
