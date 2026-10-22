@@ -293,7 +293,7 @@ describe('Session phase transitions', () => {
     await session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
 
     runnerSession.reportComplete({ status: 'done', summary: 'answer from the runner' });
-    await vi.waitFor(() => expect(taskOf(session, 't1')?.outputSummary?.report).toBe('answer from the runner'));
+    await vi.waitFor(() => expect(taskOf(session, 't1')?.handoff?.summary).toBe('answer from the runner'));
   });
 
   describe('every spawn path composes the same augmented prompt', () => {

@@ -455,7 +455,7 @@ describe('the attempt\'s verdict when a message is read mid-turn', () => {
     session.deliverMidTurn(id);
     session.reportComplete({ status: 'done', summary: 'Work with tests' });
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')?.status).toBe('completed'));
-    expect(orchestrator.storeInstance.get('t1')?.outputSummary?.report).toBe('Work with tests');
+    expect(orchestrator.storeInstance.get('t1')?.handoff?.summary).toBe('Work with tests');
     expect(session.delivered).toEqual([]);
   });
 
@@ -483,7 +483,7 @@ describe('the attempt\'s verdict when a message is read mid-turn', () => {
     session.deliverMidTurn(id);
     session.reportComplete({ status: 'done', summary: 'Work with tests' });
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')?.status).toBe('completed'));
-    expect(orchestrator.storeInstance.get('t1')?.outputSummary?.report).toBe('Work with tests');
+    expect(orchestrator.storeInstance.get('t1')?.handoff?.summary).toBe('Work with tests');
   });
 });
 

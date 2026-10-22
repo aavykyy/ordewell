@@ -1,6 +1,6 @@
 import type { ScriptResult } from '../models/Execution';
 import type { Task } from '../models/Task';
-import { WAKE_FINDINGS, handoffWakeLines, type HandoffDigest, type HandoffTaskName } from '../models/Handoff';
+import { handoffWakeLines, type HandoffDigest, type HandoffTaskName } from '../models/Handoff';
 import { fitTail } from './TaskQuery';
 
 /** How much of a task's output a report carries: enough to read what happened by, never the log, which `task_output` pages. */
@@ -20,22 +20,9 @@ function endedText(task: Pick<Task, 'status' | 'awaitingReason' | 'verdict'>): s
   }
 }
 
-/**
- * Where what a wake-up leaves out waits (ADR-0047): the whole handoff and the
- * report are in the attempt's log, which the planner reads with `task_output`.
- * Never the text itself: a report is pulled, not pushed.
- */
-function handoffRest(handoff: HandoffDigest): string {
-  const shown = Math.min(handoff.findings.length, WAKE_FINDINGS);
-  const rest = handoff.findingCount - shown;
-  if (rest === 1) return `Finding F${shown + 1} and the report are in the attempt's log: read them with task_output.`;
-  if (rest > 1) return `Findings F${shown + 1} to F${handoff.findingCount} and the report are in the attempt's log: read them with task_output.`;
-  return 'The report, if the task wrote one, is in the attempt\'s log: read it with task_output.';
-}
-
 /** A handoff as a run update carries it: the summary, its top findings whole, and where the rest waits. */
 function handoffWakeText(handoff: HandoffDigest, taskName?: HandoffTaskName): string {
-  const lines = [...handoffWakeLines(handoff, taskName), '', handoffRest(handoff)];
+  const lines = handoffWakeLines(handoff, taskName);
   while (lines[0] === '') lines.shift();
   return lines.join('\n');
 }

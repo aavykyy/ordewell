@@ -136,7 +136,7 @@ describe('rendering the output read', () => {
       '  Evidence: task #1 F2',
       '+2 more findings, in the attempt\'s log',
       '',
-      'Artifacts: docs/auth.md',
+      'Artifacts: docs/auth.md (unresolved)',
       '(The whole handoff, report and all, is in the attempt\'s log.)',
     ].join('\n'));
     expect(answer).not.toContain('The handoff, as one text.');

@@ -96,7 +96,8 @@ describe('a task\'s handoff in its view (ADR-0047)', () => {
     expect(out).toContain('Added the route.');
     expect(out).toContain('F1 · Blocker · Missing auth');
     expect(out).toContain('Add a guard.');
-    expect(out).toContain('Evidence: src/route.ts:12; commit abc123');
+    expect(out).toContain('Evidence: src/route.ts:12 (unresolved); commit');
+    expect(out).toContain('abc123 (unresolved)');
     expect(out).toContain('F2 · Minor · Rename x');
     expect(out).toContain('Evidence: https://example.com/pr/1');
     expect(out).toContain('Artifacts:');

@@ -191,6 +191,8 @@ export class PlanStore {
       if (preserveCompleted && betweenRounds(t)) continue;
       // A failed check runs again as a retry would run it: its rounds start over (ADR-0045 L7).
       if (!preserveCompleted || t.status === 'failed') delete t.loopRound;
+      delete t.handoff;
+      delete t.outputSummary;
       t.status = 'approved';
       delete t.awaitingReason;
       delete t.resumeAt;

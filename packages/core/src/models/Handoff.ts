@@ -38,10 +38,12 @@ export function worstSeverity(findings: readonly Pick<HandoffFinding, 'severity'
 /**
  * A typed reference a reader can check rather than trust. A `task` names the
  * task by id once the call is accepted, and `finding` one of its findings.
+ * `resolved` is read-time metadata: the author cannot vouch for resolution,
+ * so the completion schema strips it and the saved handoff carries no check.
  */
 export type HandoffEvidence =
-  | { kind: 'file'; path: string; line?: number }
-  | { kind: 'commit'; sha: string; repo?: string }
+  | { kind: 'file'; path: string; line?: number; resolved?: boolean }
+  | { kind: 'commit'; sha: string; repo?: string; resolved?: boolean }
   | { kind: 'task'; task: string; finding?: string }
   | { kind: 'url'; url: string };
 
@@ -91,6 +93,7 @@ export const HANDOFF_LIMITS = {
   findings: 50,
   title: 200,
   detail: 2_000,
+  reference: 2_000,
   evidence: 10,
   artifacts: 20,
   report: REPORT_MAX_CHARS,
@@ -141,8 +144,8 @@ export function namedHandoff<H extends HandoffDigest>(plan: readonly Task[], han
 /** A typed reference as a reader says it: `src/a.ts:42`, `commit abc`, `task #2 F1`, a URL. */
 export function handoffReferenceText(ref: HandoffEvidence, taskName: HandoffTaskName = () => undefined): string {
   switch (ref.kind) {
-    case 'file': return ref.line !== undefined ? `${ref.path}:${ref.line}` : ref.path;
-    case 'commit': return `commit ${ref.sha}${ref.repo ? ` in ${ref.repo}` : ''}`;
+    case 'file': return `${ref.line !== undefined ? `${ref.path}:${ref.line}` : ref.path}${ref.resolved === true ? '' : ' (unresolved)'}`;
+    case 'commit': return `commit ${ref.sha}${ref.repo ? ` in ${ref.repo}` : ''}${ref.resolved === true ? '' : ' (unresolved)'}`;
     case 'task': return `task ${taskName(ref.task) ?? ref.task}${ref.finding ? ` ${ref.finding}` : ''}`;
     case 'url': return ref.url;
   }
@@ -162,11 +165,28 @@ export function artifactLines(handoff: HandoffDigest, taskName: HandoffTaskName 
   return handoff.artifacts?.length ? [`Artifacts: ${handoff.artifacts.map((a) => handoffReferenceText(a, taskName)).join('; ')}`] : [];
 }
 
-/**
- * Findings a wake-up carries whole before it counts the rest (ADR-0029): a
- * digest names the top of a handoff, and the reader pulls the whole of it.
- */
-export const WAKE_FINDINGS = 3;
+/** Each pushed handoff's text ceiling, excluding artifacts (ADR-0047). */
+export const HANDOFF_PUSH_CHARS = 4_000;
+
+/** Shared push rendering: reserve the closing pointer before accepting each whole finding. */
+export function boundedHandoffLines(handoff: HandoffDigest, omission: (more: number) => string, taskName: HandoffTaskName = () => undefined, footer = ''): string[] {
+  const lines = [handoff.summary];
+  let shown = 0;
+  const closing = (count: number) => [
+    ...(handoff.findingCount > count ? [omission(handoff.findingCount - count)] : []),
+    ...(footer ? ['', footer] : []),
+  ];
+  for (const finding of handoff.findings) {
+    const next = [...(shown === 0 ? ['', 'Findings:'] : []), ...findingLines(finding, taskName)];
+    if ([...lines, ...next, ...closing(shown + 1)].join('\n').length > HANDOFF_PUSH_CHARS) break;
+    lines.push(...next);
+    shown++;
+  }
+  lines.push(...closing(shown));
+  const artifacts = artifactLines(handoff, taskName);
+  if (artifacts.length) lines.push('', ...artifacts);
+  return lines;
+}
 
 export interface HandoffPreviewOptions {
   /** How many findings to list; the rest are counted. Default: every finding the digest holds. */
@@ -194,19 +214,14 @@ export function handoffPreviewLines(handoff: HandoffDigest, options: HandoffPrev
 }
 
 /**
- * A handoff as a wake-up carries it (ADR-0029, ADR-0037): the summary, its top
- * findings whole, how many are left out, and the artifacts. The report is
- * never pushed; it waits in the attempt's log.
+ * A handoff as a wake-up carries it (ADR-0029, ADR-0037): the summary, its
+ * findings whole within the shared ceiling, how many are left out, and the
+ * artifacts. The report is never pushed; it waits in the attempt's log.
  */
 export function handoffWakeLines(handoff: HandoffDigest, taskName: HandoffTaskName = () => undefined): string[] {
-  // Built as a digest rather than spread, so a caller holding the stored handoff cannot push its report.
-  const digest: HandoffDigest = {
-    summary: handoff.summary,
-    findings: handoff.findings.slice(0, WAKE_FINDINGS),
-    findingCount: handoff.findingCount,
-    ...(handoff.artifacts ? { artifacts: handoff.artifacts } : {}),
-  };
-  return handoffLines(digest, taskName);
+  return boundedHandoffLines(handoff,
+    (more) => `+${more} more finding${more === 1 ? '' : 's'}; read with task_output.`,
+    taskName, "The report, if the task wrote one, is in the attempt's log: read it with task_output.");
 }
 
 /**

@@ -4,7 +4,7 @@ import type { PreservedWork, PreviousWork } from '../interfaces/IWorktreeIsolati
 import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
-import { REPORT_MAX_CHARS, artifactLines, findingLines, namedHandoff, type HandoffDigest, type StoredHandoff } from '../models/Handoff';
+import { REPORT_MAX_CHARS, boundedHandoffLines, findingLines, namedHandoff, type HandoffDigest, type StoredHandoff } from '../models/Handoff';
 
 const MAX_TAIL_CHARS = 500;
 /** Each dependency's share of a dependent's prompt, which carries every direct dependency's handoff (ADR-0047). */
@@ -80,22 +80,7 @@ function indent(text: string): string {
  * and pointed at where `read_task` finds them.
  */
 function handoffText(handoff: HandoffDigest, label: string): string {
-  const lines = [handoff.summary];
-  let used = handoff.summary.length;
-  let shown = 0;
-  for (const finding of handoff.findings) {
-    const next = [...(shown === 0 ? ['', 'Findings:'] : []), ...findingLines(finding)];
-    const cost = next.reduce((n, l) => n + 1 + l.length, 0);
-    if (used + cost > MAX_HANDOFF_CHARS) break;
-    lines.push(...next);
-    used += cost;
-    shown += 1;
-  }
-  const more = handoff.findingCount - shown;
-  if (more > 0) lines.push(`(+${more} more finding${more === 1 ? '' : 's'}; read task #${label})`);
-  const artifacts = artifactLines(handoff);
-  if (artifacts.length > 0) lines.push('', ...artifacts);
-  return lines.join('\n');
+  return boundedHandoffLines(handoff, (more) => `(+${more} more finding${more === 1 ? '' : 's'}; read task #${label})`).join('\n');
 }
 
 /** A plan saved before handoffs has only the report, so its share is cut as it always was. */
