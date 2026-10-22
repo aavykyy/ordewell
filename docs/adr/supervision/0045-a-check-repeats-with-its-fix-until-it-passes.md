@@ -5,6 +5,11 @@ amends: ["0029", "0034"]
 
 # 0045 — A check repeats with its fix until it passes
 
+*Pending:* [ADR-0047](0047-structured-task-handoffs.md) — a body task is given
+the check's handoff, an AI check's next round is given its own last handoff and
+the body's, and a check and its body can read each other's with `read_task`
+(step 3, L1). Waits on #120.
+
 ## Problem
 
 "Until it passes" is a common shape of work: an adversarial review and a fix,
@@ -228,3 +233,4 @@ check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-21 — surfaces draw the rounds and the planner prompt teaches loops (#118); implemented.
 - 2026-10-21 — a check retried or force-started while a fix of its body is at work waits for it to land, then runs as round 1 of a new set of rounds (L5); a new round revives only the loop's own skips, never the user's (L7).
 - 2026-10-22 — an edit that leaves a check between rounds with no rounds left closes its loop (L6).
+- 2026-10-22 — decided, not built: handoffs run in both directions of a loop ([ADR-0047](0047-structured-task-handoffs.md), #120).

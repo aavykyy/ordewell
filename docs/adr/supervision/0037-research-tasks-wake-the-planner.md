@@ -6,6 +6,10 @@ amends: ["0009", "0029"]
 
 # 0037 — Research that outlives a planner turn is a research task, and its report wakes the planner
 
+*Pending:* [ADR-0047](0047-structured-task-handoffs.md) — a research task's
+report is its handoff: a summary and findings, the long form in the handoff's
+`report` (R1, R2, R6). Waits on #120.
+
 ## Problem
 
 A planner turn holds the conversation, and its end gives the conversation
@@ -124,3 +128,4 @@ harness subagents stay as they are, awaited before the turn ends.**
 - 2026-10-21 — implemented the surfaces (R6): the research mark and the report block on the TUI, VS Code and the CLI commands, and the planner's guidance (R5).
 - 2026-10-22 — the per-message research budget and its two run settings are gone: the planner decides how many a message starts, bounded by the run's Parallel limit, and a research task waits for a slot like any other (R4, R6).
 - 2026-10-22 — the report chain is deliberately unbounded per message: a report turn may start further research whose report wakes the planner again, and its only bounds are the planner's judgement, the run's Parallel limit, `mayReport` and the user's Stop (R4, R6).
+- 2026-10-22 — decided, not built: a research task's report is its handoff ([ADR-0047](0047-structured-task-handoffs.md), #120).

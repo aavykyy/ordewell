@@ -4,6 +4,11 @@ status: accepted
 
 # 0022 — The Ordewell MCP server: task and planner tools behind per-caller tokens
 
+*Pending:* [ADR-0047](../supervision/0047-structured-task-handoffs.md) —
+`task_complete` carries a handoff (a summary of at most 1,500 characters,
+findings, artifacts, a long report), the summary stops being the whole result
+(V4), and the task token gains `read_task`. Waits on #120.
+
 ## Problem
 
 Task completion and checkpoints need signals bound to the current attempt,
@@ -287,3 +292,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-21 — `run_script` joins the execution tools, and a script task's exit status is its completion evidence, handed to `VerdictEngine` ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
 - 2026-10-21 — S2: a task runner the server never reaches while its process runs is held with a reason instead of failing and blocking its dependents; a `failed` report still fails it, and a planner turn still fails either way.
 - 2026-10-21 — a read-only task's token serves `run_command`, and says so in the runner's configuration (ADR-0046).
+- 2026-10-22 — decided, not built: `task_complete` carries a handoff and the task token gains `read_task` ([ADR-0047](../supervision/0047-structured-task-handoffs.md), #120).

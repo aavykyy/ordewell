@@ -5,6 +5,10 @@ amends: ["0009", "0013", "0020", "0022"]
 
 # 0029 — The supervisor: levels, live planner turns, execution tools and auto-merge
 
+*Pending:* [ADR-0047](0047-structured-task-handoffs.md) — a run update
+carries a finished task's handoff, rendered whole-finding by whole-finding,
+where it carries its report. Waits on #120.
+
 
 **Amends:** ADR-0009 and ADR-0022 — the planner gains execution tools, a further
 explicit exception to harness planners being read-only; ADR-0013 — "never
@@ -591,3 +595,4 @@ until #30 exists.
 - 2026-10-21 — research reports wake the planner at every level under the originating authority; all automatic report turns share the persisted message limit (ADR-0037 R2, R3, R4).
 - 2026-10-22: the level and its guards are set in `/settings` in the TUI and VS Code; the one-value slash commands are gone there, and `ordewell supervisor` stays headless.
 - 2026-10-22 — automatic report turns are not bounded per user message: a report turn may start further research, whose report opens the next turn, and the chain is held only by the planner's judgement, the run's Parallel limit, `mayReport` and the user's Stop (ADR-0037 R4).
+- 2026-10-22 — decided, not built: run updates carry a task's handoff ([ADR-0047](0047-structured-task-handoffs.md), #120).
