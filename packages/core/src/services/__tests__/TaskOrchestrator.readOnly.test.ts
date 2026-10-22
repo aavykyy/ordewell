@@ -88,7 +88,7 @@ describe('a read-only task (ADR-0046)', () => {
     expect(env.isolation.taskIdsFor('integrate')).toEqual([]);
     expect(env.isolation.calls).toContainEqual({ op: 'release', taskId: 'r1', keep: false });
     expect(env.record('r1')).toBeUndefined();
-    expect(env.orchestrator.storeInstance.get('r1')!.outputSummary?.report).toContain('the cache is never invalidated');
+    expect(env.orchestrator.storeInstance.get('r1')!.handoff?.summary).toContain('the cache is never invalidated');
     expect(env.shells[0].end).toHaveBeenCalled();
   });
 

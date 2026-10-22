@@ -48,7 +48,7 @@ import type { RunMergeView } from './SessionMessage';
 import { resumeTime } from '../taskRow/status';
 import { scriptBodyOf } from '../models/ScriptTask';
 import { SCRIPT_RUNNER, ScriptRunner } from './ScriptRunner';
-import { checkHandoff, handoffLines, type StoredHandoff } from '../models/Handoff';
+import { checkHandoff, type StoredHandoff } from '../models/Handoff';
 import { userTaskHandoff } from '../models/DerivedHandoff';
 import { readTask, type TaskLogReader } from './readTask';
 
@@ -170,7 +170,7 @@ const CONTROL_WORDS = {
 } as const;
 
 /** What Ordewell tells a runner whose turn ended without a `task_complete` call (ADR-0018, W1). */
-const COMPLETION_REMINDER = 'Your turn ended without calling `task_complete`. If the task is done, call `task_complete` with status `done` and your full report as the summary. If you are blocked, call it with status `blocked` and the reason. If you need something from the user, say exactly what and end your turn.';
+const COMPLETION_REMINDER = 'Your turn ended without calling `task_complete`. If the task is done, call `task_complete` with status `done` and a summary of at most 1,500 characters for the next reader. Put atomic findings in findings and the long form in report (at most 20,000 characters). If you are blocked, call it with status `blocked` and the reason. If you need something from the user, say exactly what and end your turn.';
 
 /**
  * One run of one task, from the moment the scheduler claims it until its
@@ -1321,14 +1321,13 @@ export class TaskOrchestrator {
     if (this.attempts.get(taskId) !== attempt) return;
     const summary = this.output.finalText(taskId);
     const handoff = this.output.handoff(taskId);
-    // A reader of the output summary from before handoffs gets the whole handoff, as one text (ADR-0047).
-    const report = handoff && handoffLines(handoff, (id) => taskRefOf(this.store.planTasks, id)).join('\n');
     const landing = verdict.outcome === 'pass' ? await this.land(attempt, () => this.landing.landPassed(task, attempt)) : null;
     const changedFiles = landing && checksTree(attempt.kind) ? await this.runs.filesChangedSince(attempt.snapshot) : [];
     const unresumedReason = this.unresumed(attempt) ? unresumedMessage(task, `${attempt.runner} could not find its saved session`) : null;
     if (this.attempts.get(taskId) !== attempt) return;
     this.endAttempt(taskId, 'verdict');
     this.store.setTaskVerdict(taskId, verdict);
+    this.handOver(taskId, summarizeOutput(unresumedReason ?? verdict.reason, handoff ? '' : summary), handoff, attempt.session?.id);
     console.error(`[TaskOrchestrator] Output summary:\n${summary || '(empty: no output captured)'}`);
     if (changedFiles.length > 0) {
       // The evidence the ops rule rests on: a runner cannot be kept from
@@ -1349,8 +1348,6 @@ export class TaskOrchestrator {
       if (!this.startRound(taskId)) this.notifications.error(unresumedReason ?? failureText(this.store.get(taskId) ?? task, verdict));
       if (attempt.worktree) await this.runs.release(taskId, { keep: true });
     }
-
-    this.handOver(taskId, summarizeOutput(unresumedReason ?? verdict.reason, summary, report), handoff, attempt.session?.id);
 
     this.logAndArchive(task, verdict);
     await this.afterVerdict(taskId);
@@ -1387,9 +1384,12 @@ export class TaskOrchestrator {
    * never a failed task, so never one that blocks its dependents.
    */
   private async settleRepair(task: Task, attempt: TaskAttempt, verdict: Verdict): Promise<void> {
+    const summary = this.output.finalText(task.id);
+    const handoff = this.output.handoff(task.id);
     const outcome = await this.land(attempt, () => this.landing.settleRepair(task, verdict, () => this.attempts.get(task.id) === attempt));
     if (this.attempts.get(task.id) !== attempt) return;
     this.endAttempt(task.id, 'verdict');
+    this.handOver(task.id, summarizeOutput(verdict.reason, handoff ? '' : summary), handoff, attempt.session?.id);
     await this.applyLanding(task, outcome, attempt.admission, () => {
       this.logAndArchive(task, task.verdict ?? verdict);
     });
@@ -1612,7 +1612,7 @@ export class TaskOrchestrator {
     this.store.setTaskVerdict(taskId, verdict);
     // A user task has no attempt to have written a handoff: the user's act is its.
     const handoff = task.type === 'user' ? userTaskHandoff(task.userSteps) : undefined;
-    this.handOver(taskId, summarizeOutput(verdict.reason, '', handoff && handoffLines(handoff).join('\n')), handoff);
+    this.handOver(taskId, summarizeOutput(verdict.reason, ''), handoff);
     this.logAndArchive(task, verdict);
     if (completesTask(landing)) {
       this.onHold.delete(taskId);
@@ -2505,6 +2505,7 @@ export class TaskOrchestrator {
     this.research?.started(task);
     // A script spends nothing a ledger counts: no model, no tokens (ADR-0035).
     if (!script) this.store.startAttemptUsage(task.id, attempt.attempt, attempt.runner, attempt.startedAt);
+    this.store.setTaskOutputSummary(task.id, undefined);
     this.store.markInProgress(task.id);
     this.emit('onTaskChanged');
     return { spawned: this.runClaimed(task, attempt, continuation) };

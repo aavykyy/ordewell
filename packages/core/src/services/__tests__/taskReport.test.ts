@@ -30,12 +30,12 @@ describe('a run update carrying a task\'s result (ADR-0029, ADR-0047)', () => {
   });
 
   it('says how many findings the wake-up left out, and where they are', () => {
-    const many = { ...handoff, findings: [{ ...handoff.findings[0] }, { ...handoff.findings[1] }, { ...handoff.findings[0], id: 'F3', title: 'Third' }, { ...handoff.findings[0], id: 'F4', title: 'Fourth' }], findingCount: 4 };
+    const many = { ...handoff, findings: [{ ...handoff.findings[0] }, { ...handoff.findings[1] }, { ...handoff.findings[0], id: 'F3', title: 'Third' }, { ...handoff.findings[0], id: 'F4', title: 'Fourth' }], findingCount: 5 };
 
     const text = runUpdateReport({ ...passed, handoff: many }, undefined);
 
-    expect(text).toContain('+1 more finding, in the attempt\'s log');
-    expect(text).toContain('Finding F4 and the report are in the attempt\'s log: read them with task_output.');
+    expect(text).toContain('+1 more finding; read with task_output.');
+    expect(text).toContain('- F4 [blocker] Fourth');
   });
 
   it('names a task a finding cites by its reference in the plan', () => {
@@ -76,4 +76,16 @@ describe('a command\'s answer (run_script)', () => {
   it('is unchanged: it prints the end of the output even when the task left a handoff', () => {
     expect(taskReport({ status: 'completed', verdict: passed.verdict }, 'Everything up-to-date')).toBe('It passed.\nThe end of its output:\nEverything up-to-date');
   });
+});
+
+it('bounds a wake handoff with whole findings and its pull pointer inside 4000 characters', () => {
+  const text = runUpdateReport({ status: 'completed', handoff: {
+    summary: 's'.repeat(1500), findingCount: 3,
+    findings: [1, 2, 3].map((n) => ({ id: `F${n}`, severity: 'major', title: 't'.repeat(200), detail: 'd'.repeat(2000) })),
+  } }, undefined);
+  const payload = text.slice('It passed.\n'.length);
+  expect(payload.length).toBeLessThanOrEqual(4000);
+  expect(payload).toContain('- F1 [major]');
+  expect(payload).not.toContain('- F2 [major]');
+  expect(payload).toContain('task_output');
 });

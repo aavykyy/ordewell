@@ -24,17 +24,17 @@ function recording(prefix: string) {
   return { runner, spawn, sessions };
 }
 
-function setup() {
+function setup(isolation = new FakeWorktreeIsolation()) {
   const agents = recording('a');
   const scripts = recording('s');
   const handoffs: Array<{ sessionId: string | undefined; taskId: string; handoff: StoredHandoff }> = [];
   const orchestrator = TaskOrchestrator.compose({
-    config: fakeConfig(),
+    config: fakeConfig({ conflictRepairAttempts: 2 }),
     notifications: fakeNotification(),
     runner: agents.runner,
     scriptRunner: scripts.runner,
     output: new BufferedTaskOutputSource(),
-    isolation: new FakeWorktreeIsolation(),
+    isolation,
     workspaceRoot: () => '/repo',
     recordHandoff: (sessionId, taskId, handoff) => { handoffs.push({ sessionId, taskId, handoff }); },
   });
@@ -87,9 +87,48 @@ describe('the handoff of a script task (ADR-0047)', () => {
     await e.orchestrator.approveReview();
     await vi.waitFor(() => expect(e.scripts.sessions).toHaveLength(1));
 
+    e.scripts.sessions[0].emitOutput('PASS_OUTPUT_SENTINEL');
     e.endScript('s1', { outcome: 'passed' }, 1200);
 
     await vi.waitFor(() => expect(e.promptOf('t2')).toBeDefined());
     expect(e.promptOf('t2')).toContain('exited 0 in 1.2 s');
+    expect(e.promptOf('t2')).toContain('PASS_OUTPUT_SENTINEL');
   });
+});
+
+describe('authored handoffs across attempts (ADR-0047)', () => {
+  it('stores the repair handoff before starting the dependent', async () => {
+    const isolation = new FakeWorktreeIsolation();
+    isolation.outcomes.set('a', 'conflict');
+    const e = setup(isolation);
+    e.orchestrator.loadPlan([
+      createTask({ id: 'a', order: 1, title: 'Build', prompt: 'Build' }),
+      createTask({ id: 'b', order: 2, prompt: 'Continue', dependencies: ['a'] }),
+    ]);
+    await e.orchestrator.approveReview();
+    e.agents.sessions[0].reportComplete({ status: 'done', summary: 'Original result' });
+    await vi.waitFor(() => expect(e.agents.sessions).toHaveLength(2));
+    isolation.outcomes.set('a', 'merged');
+    e.agents.sessions[1].reportComplete({ status: 'done', summary: 'Repair result', findings: [{ severity: 'info', title: 'Repaired' }], report: 'Repair report' });
+    await vi.waitFor(() => expect(e.promptOf('b')).toBeDefined());
+    expect(e.task('a').handoff?.summary).toBe('Repair result');
+    expect(e.handoffs.map((h) => [h.sessionId, h.handoff.summary])).toEqual([['a1', 'Original result'], ['a2', 'Repair result']]);
+    expect(e.handoffs[1].handoff.report).toBe('Repair report');
+    expect(e.promptOf('b')).toContain('Repair result');
+    expect(e.promptOf('b')).not.toContain('Original result');
+  });
+});
+
+it('keeps full findings and the report only in the attempt log for new completions', async () => {
+  const e = setup();
+  e.orchestrator.loadPlan([createTask({ id: 'a', order: 1, prompt: 'Review' })]);
+  await e.orchestrator.approveReview();
+  e.agents.sessions[0].reportComplete({ status: 'done', summary: 'Digest', findings: Array.from({ length: 30 }, (_, i) => ({ severity: 'major', title: `UNIQUE_FINDING_${i + 1}` })), report: 'PRIVATE_REPORT_SENTINEL' });
+  await vi.waitFor(() => expect(e.task('a').status).toBe('completed'));
+  const plan = JSON.stringify(e.orchestrator.storeInstance.snapshot());
+  expect(plan).not.toContain('PRIVATE_REPORT_SENTINEL');
+  expect(plan).not.toContain('UNIQUE_FINDING_30');
+  expect(e.task('a').outputSummary?.report).toBeUndefined();
+  expect(e.handoffs[0].handoff.report).toBe('PRIVATE_REPORT_SENTINEL');
+  expect(e.handoffs[0].handoff.findings).toHaveLength(30);
 });

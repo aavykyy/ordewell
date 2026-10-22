@@ -17,24 +17,24 @@ import { HANDOFF_LIMITS } from '../../models/Handoff';
 const handoffReference = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('file'),
-    path: z.string().min(1).describe('A path in the repository.'),
+    path: z.string().min(1).max(HANDOFF_LIMITS.reference).describe('A path in the repository.'),
     line: z.number().int().min(1).optional(),
   }),
   z.object({
     kind: z.literal('commit'),
     sha: z.string().regex(/^[0-9a-fA-F]{4,64}$/, 'A commit sha is 4 to 64 hex characters.'),
-    repo: z.string().min(1).optional().describe('The repository it is in, where the run has several.'),
+    repo: z.string().min(1).max(HANDOFF_LIMITS.reference).optional().describe('The repository it is in, where the run has several.'),
   }),
   z.object({
     kind: z.literal('task'),
-    task: z.union([z.string().min(1), z.number().int().min(0)]).transform(String)
+    task: z.union([z.string().min(1), z.number().int().min(0)]).transform(String).pipe(z.string().max(HANDOFF_LIMITS.reference))
       .describe('A task you may read — this one, one it depends on, or its loop\'s other end: "#order", its id or its title.'),
-    finding: z.string().regex(/^F[1-9][0-9]*$/, 'A finding is named as Ordewell numbered it: "F1", "F2", ….').optional()
+    finding: z.string().max(HANDOFF_LIMITS.reference).regex(/^F[1-9][0-9]*$/, 'A finding is named as Ordewell numbered it: "F1", "F2", ….').optional()
       .describe('One of that task\'s findings, as "F3".'),
   }),
   z.object({
     kind: z.literal('url'),
-    url: z.string().min(1).describe('An http or https URL.'),
+    url: z.string().min(1).max(HANDOFF_LIMITS.reference).describe('An http or https URL.'),
   }),
 ]);
 

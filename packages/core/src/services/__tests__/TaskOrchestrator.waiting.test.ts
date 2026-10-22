@@ -154,6 +154,9 @@ describe('the completion reminder', () => {
     expect(starts[0]).toMatchObject({ from: 'ordewell' });
     expect(starts[0]?.text).toMatch(/ended without calling `task_complete`/);
     expect(starts[0]?.text).toMatch(/status `done`/);
+    expect(starts[0]?.text).toContain('summary of at most 1,500 characters');
+    expect(starts[0]?.text).toContain('report');
+    expect(starts[0]?.text).not.toContain('full report as the summary');
   });
 
   it('is sent once: the reminder\'s own turn ending without task_complete waits for input', async () => {
@@ -175,7 +178,7 @@ describe('the completion reminder', () => {
     structured.emitTurnEnd('completed');
 
     await vi.waitFor(() => expect(task(orchestrator).status).toBe('completed'));
-    expect(task(orchestrator).outputSummary?.report).toBe('All done: report');
+    expect(task(orchestrator).handoff?.summary).toBe('All done: report');
   });
 
   it('is not sent when a message of the user\'s goes out as the turn ends', async () => {

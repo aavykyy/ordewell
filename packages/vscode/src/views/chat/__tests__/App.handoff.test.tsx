@@ -33,9 +33,9 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     fireEvent.click(screen.getByText('Review boundary'));
     expect(screen.getByText('F1 · Blocker · Sibling read')).toBeTruthy();
     expect(screen.getByText('The token can read a sibling.')).toBeTruthy();
-    expect(screen.getByText(/src\/token.ts:42/)).toBeTruthy();
+    expect(screen.getByText(/src\/token.ts:42 \(unresolved\)/)).toBeTruthy();
     expect(screen.getByText("+27 more findings, in the attempt's log")).toBeTruthy();
-    expect(screen.getByText('docs/review.md')).toBeTruthy();
+    expect(screen.getByText('docs/review.md (unresolved)')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Read full handoff' }));
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'openTaskLog', taskId: 't1' });
     update({ ...task, status: 'in_progress', handoff: undefined });

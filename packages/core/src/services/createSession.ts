@@ -1,3 +1,4 @@
+import { resolveHandoffReferences } from './handoffReferences';
 import { createAiService, type IAiService } from './AiService';
 import { PlannerBackend } from './PlannerBackend';
 import { applyTaskOps, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
@@ -1105,7 +1106,8 @@ export class Session {
 
   /** One attempt's saved log, for `replayTaskLog` — what a reopened task view shows. */
   taskLog(taskId: string, attempt: number): TaskLogEvent[] {
-    return readTaskLog(this.taskLogLocation, taskId, attempt);
+    return readTaskLog(this.taskLogLocation, taskId, attempt).map((event) => event.type === 'handoff'
+      ? { ...event, handoff: resolveHandoffReferences(event.handoff, this.workspace) } : event);
   }
 
   get executionLog(): ReadonlyArray<TaskSnapshot> { return this.store.getExecutionLog(); }

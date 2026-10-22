@@ -177,6 +177,23 @@ describe('OrdewellMcpServer', () => {
     expect(taskComplete).not.toHaveBeenCalled();
   });
 
+  it('refuses oversized reference strings by field and leaves the token open for a corrected completion', async () => {
+    const server = newServer();
+    const taskComplete = vi.fn(async () => ({ text: 'ok' }));
+    const task = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 }, { taskComplete }));
+    const long = 'x'.repeat(200_000);
+    for (const ref of [{ kind: 'file', path: long }, { kind: 'commit', sha: 'abcd', repo: long }, { kind: 'url', url: `https://example.com/${long}` }, { kind: 'task', task: long }, { kind: 'task', task: 't1', finding: `F1${'0'.repeat(200_000)}` }]) {
+      for (const extra of [{ artifacts: [ref] }, { findings: [{ severity: 'major', title: 'Check', evidence: [ref] }] }]) {
+        const result = await task.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Short', ...extra } });
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result.content)).toContain('2000');
+      }
+    }
+    expect(taskComplete).not.toHaveBeenCalled();
+    expect((await task.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Short', artifacts: [{ kind: 'file', path: 'src/a.ts' }] } })).isError).toBeFalsy();
+    expect(taskComplete).toHaveBeenCalledTimes(1);
+  });
+
   it('aborts a waiting call when its token is revoked', async () => {
     const server = newServer();
     let entered!: () => void;

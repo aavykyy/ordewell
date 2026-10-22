@@ -77,6 +77,11 @@ a tree the producer saw: the worktree may be gone when someone reads it, and a
 commit may land after, so Ordewell does not check it at the call and a surface
 shows one it cannot resolve as unresolved, not as an error.
 
+Each reference string (path, repository, task reference, finding reference or
+URL) is at most 2,000 characters, so the digest remains bounded even when
+artifacts are outside the pushed text budget. Commit shas remain 4–64 hex
+characters.
+
 A handoff outside these limits is refused at the call with a result naming the
 field and the limit, and the attempt stays open for the runner to resend it
 (nothing is cut for the author: an author who is told learns, one who is cut
@@ -248,3 +253,4 @@ merges findings; and any new setting.
 
 - 2026-10-22 — accepted. Not yet implemented (#120).
 - 2026-10-22 — `read_task`'s switch for the report is named `include_report`.
+- 2026-10-22 — bounded reference strings to keep artifacts and the plan digest bounded.

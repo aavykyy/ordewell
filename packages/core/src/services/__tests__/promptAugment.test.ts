@@ -92,12 +92,12 @@ describe('prior outputs of a dependency with a handoff (ADR-0047)', () => {
       '  - F1 [blocker] Tokens never expire',
       '    issue() sets no exp claim.',
       '    refresh() neither.',
-      '    Evidence: src/auth.ts:42; commit a1b2c3d',
+      '    Evidence: src/auth.ts:42 (unresolved); commit a1b2c3d (unresolved)',
       '  - F2 [major] No rate limit on login',
       '    Evidence: https://owasp.org/rate-limits',
       '  - F3 [info] The docs still describe v1',
       '',
-      '  Artifacts: docs/auth-review.md; task #1 F1',
+      '  Artifacts: docs/auth-review.md (unresolved); task #1 F1',
       '',
       'fix it',
     ].join('\n'));
@@ -658,4 +658,19 @@ describe('composeAugmentedPrompt — an ops task\'s previous attempt (ADR-0020)'
     expect(composeAugmentedPrompt(task, [task], { previousAttempt: '  ' })).toContain('(no output captured)');
     expect(composeAugmentedPrompt(task, [task], {})).not.toContain('## Previous attempt');
   });
+});
+
+it('reserves space for the omission pointer inside the dependency ceiling', () => {
+  const producer = createTask({ id: 'a', order: 1, handoff: {
+    summary: 's'.repeat(1500),
+    findings: [
+      { id: 'F1', severity: 'major', title: 't'.repeat(200), detail: 'd'.repeat(2000), evidence: [{ kind: 'file', path: 'p'.repeat(246) }] },
+      { id: 'F2', severity: 'minor', title: 'Another' },
+    ], findingCount: 2,
+  } });
+  const output = augmentPromptWithPriorOutputs(createTask({ id: 'b', dependencies: ['a'] }), [producer]);
+  const payload = output.split('- Handoff:\n')[1].trimEnd().split('\n').map((l) => l.startsWith('  ') ? l.slice(2) : l).join('\n');
+  expect(payload.length).toBeLessThanOrEqual(4000);
+  expect(payload).toContain('+2 more findings; read task #1');
+  expect(payload).not.toContain('- F1');
 });

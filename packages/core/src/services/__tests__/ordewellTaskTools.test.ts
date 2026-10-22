@@ -389,9 +389,9 @@ describe('the handoff a task_complete call carries (ADR-0047)', () => {
     expect(handoff).not.toHaveProperty('report');
   });
 
-  it('gives a reader of the output summary the whole handoff as the report, task references named as the plan names them', async () => {
+  it('keeps the long report out of the plan and gives a dependent the full handoff through read_task', async () => {
     const done = task('t1', 1, { status: 'completed' });
-    const { complete, get } = await completing([done, task('t2', 2, { dependencies: ['t1'] })], 't2');
+    const { complete, get, orchestrator, adapters } = await completing([done, task('t2', 2, { dependencies: ['t1'] })], 't2');
 
     await complete({
       summary: 'Reviewed the cache.',
@@ -404,18 +404,23 @@ describe('the handoff a task_complete call carries (ADR-0047)', () => {
     });
 
     await vi.waitFor(() => expect(get('t2').status).toBe('completed'));
-    expect(get('t2').outputSummary?.report).toBe([
+    expect(get('t2').outputSummary?.report).toBeUndefined();
+    orchestrator.loadPlan([...orchestrator.storeInstance.snapshot(), task('t3', 3, { dependencies: ['t2'] })]);
+    await orchestrator.forceStartTask('t3');
+    const reader = await connect(adapters.at(-1)!.config);
+    const pulled = await reader.callTool({ name: 'read_task', arguments: { task: 't2', include_report: true } });
+    expect(text(pulled)).toContain([
       'Reviewed the cache.',
       '',
       'Findings:',
       '- F1 [blocker] Entries never expire',
       '  get() ignores the TTL.',
       '  set() too.',
-      '  Evidence: src/cache.ts:12; task #1',
+      '  Evidence: src/cache.ts:12 (unresolved); task #1',
       '- F2 [info] The README still says v1',
-      '  Evidence: commit a1b2c3d in api; https://example.com/ttl',
+      '  Evidence: commit a1b2c3d in api (unresolved); https://example.com/ttl',
       '',
-      'Artifacts: docs/review.md',
+      'Artifacts: docs/review.md (unresolved)',
       '',
       'Report:',
       'The long form.',

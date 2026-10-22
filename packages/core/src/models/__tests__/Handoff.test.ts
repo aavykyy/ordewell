@@ -37,9 +37,9 @@ describe('a handoff as a surface words it', () => {
   });
 
   it('renders every reference kind as a reader would copy it', () => {
-    expect(handoffReferenceText({ kind: 'file', path: 'src/a.ts', line: 3 })).toBe('src/a.ts:3');
-    expect(handoffReferenceText({ kind: 'file', path: 'src/a.ts' })).toBe('src/a.ts');
-    expect(handoffReferenceText({ kind: 'commit', sha: 'abc123', repo: 'api' })).toBe('commit abc123 in api');
+    expect(handoffReferenceText({ kind: 'file', path: 'src/a.ts', line: 3 })).toBe('src/a.ts:3 (unresolved)');
+    expect(handoffReferenceText({ kind: 'file', path: 'src/a.ts' })).toBe('src/a.ts (unresolved)');
+    expect(handoffReferenceText({ kind: 'commit', sha: 'abc123', repo: 'api' })).toBe('commit abc123 in api (unresolved)');
     expect(handoffReferenceText({ kind: 'task', task: 't2', finding: 'F1' }, (id) => (id === 't2' ? '#2' : undefined))).toBe('task #2 F1');
     expect(handoffReferenceText({ kind: 'url', url: 'https://example.com/pr/1' })).toBe('https://example.com/pr/1');
   });
@@ -62,7 +62,7 @@ describe('a handoff a headless surface prints (ADR-0047)', () => {
       'F1 [blocker] The cache key omits the tenant',
       'F2 [major] No regression test',
       '+2 more findings, in the attempt\'s log',
-      'Artifacts: src/cache.ts:42; https://example.com/pr/7',
+      'Artifacts: src/cache.ts:42 (unresolved); https://example.com/pr/7',
     ]);
   });
 
@@ -71,7 +71,7 @@ describe('a handoff a headless surface prints (ADR-0047)', () => {
       'The cache key omits the tenant.',
       'F1 [blocker] The cache key omits the tenant',
       '+3 more findings, in the attempt\'s log',
-      'Artifacts: src/cache.ts:42; https://example.com/pr/7',
+      'Artifacts: src/cache.ts:42 (unresolved); https://example.com/pr/7',
     ]);
   });
 
@@ -82,8 +82,8 @@ describe('a handoff a headless surface prints (ADR-0047)', () => {
       'Findings:',
       '- F1 [blocker] The cache key omits the tenant',
       '  A second tenant reads the first one\'s entry.',
-      '  Evidence: src/cache.ts:42',
+      '  Evidence: src/cache.ts:42 (unresolved)',
     ]);
-    expect(handoffWakeLines(handoff)).toContain('+2 more findings, in the attempt\'s log');
+    expect(handoffWakeLines(handoff)).toContain('+2 more findings; read with task_output.');
   });
 });

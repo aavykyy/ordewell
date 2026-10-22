@@ -54,7 +54,7 @@ describe('ordewell run prints a task\'s handoff when it ends (ADR-0047)', () => 
       '      ↳ Handoff: The cache key omits the tenant.',
       '      F1 [blocker] Cache key leaks across tenants',
       '      F2 [major] No regression test',
-      '      Artifacts: src/cache.ts:42',
+      '      Artifacts: src/cache.ts:42 (unresolved)',
     ]);
     expect(lines[row + 5]).toContain('#0002');
     expect(lines[row + 5]).toContain('pending');

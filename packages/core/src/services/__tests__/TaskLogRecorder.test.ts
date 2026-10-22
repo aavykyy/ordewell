@@ -396,7 +396,7 @@ describe('a session’s task logs', () => {
     await vi.waitFor(() => expect(taskOf(session, 's1')?.status).toBe('completed'));
     const logged = files.files.get('s1')!.flat();
     expect(logged.map((e) => e.type)).toEqual(['script_run', 'script_exit', 'runner_ended', 'handoff']);
-    expect(logged[3]).toEqual({ type: 'handoff', handoff: { summary: 'exited 0 in 2.5 s', findings: [], findingCount: 0, report: 'built' } });
+    expect(logged[3]).toEqual({ type: 'handoff', handoff: { summary: 'exited 0 in 2.5 s\nbuilt', findings: [], findingCount: 0, report: 'built' } });
   });
 
   it('opens an attempt log even when the runner emits only plain output', async () => {

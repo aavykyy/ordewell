@@ -39,7 +39,7 @@ describe('the task log tab (ADR-0018, V1)', () => {
       findings: [
         { id: 'F1', severity: 'blocker', title: 'Token escapes', detail: 'A sibling can read it.', evidence: [
           { kind: 'file', path: 'src/token.ts', line: 42 },
-          { kind: 'commit', sha: 'abc123', repo: 'core' },
+          { kind: 'commit', sha: 'abc123', repo: 'core', resolved: true },
           { kind: 'task', task: '#3', finding: 'F2' },
           { kind: 'url', url: 'https://example.com/evidence' },
         ] },
@@ -52,11 +52,12 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.getByText('Check the token boundary.')).toBeTruthy();
     expect(screen.getByText('F1 · Blocker · Token escapes')).toBeTruthy();
     expect(screen.getByText('A sibling can read it.')).toBeTruthy();
-    expect(screen.getByText(/src\/token.ts:42/)).toBeTruthy();
+    expect(screen.getByText(/src\/token.ts:42 \(unresolved\)/)).toBeTruthy();
     expect(screen.getByText(/commit abc123 in core/)).toBeTruthy();
+    expect(screen.getByText(/commit abc123 in core/)).not.toHaveTextContent('commit abc123 in core (unresolved)');
     expect(screen.getByText(/task #3 F2/)).toBeTruthy();
     expect(screen.getByText(/https:\/\/example.com\/evidence/)).toBeTruthy();
-    expect(screen.getByText('docs/result.md')).toBeTruthy();
+    expect(screen.getByText('docs/result.md (unresolved)')).toBeTruthy();
     expect(document.querySelector('.task-handoff-report')).toHaveTextContent('Report line 8');
     expect(document.querySelector('.task-handoff-report')).not.toHaveTextContent('Report line 9');
     expect(screen.getByText('+4 lines of the report')).toBeTruthy();

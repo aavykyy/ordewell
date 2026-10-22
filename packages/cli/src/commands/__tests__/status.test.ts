@@ -414,7 +414,7 @@ describe('handleStatus with a handoff (ADR-0047)', () => {
       '      F1 [blocker] Cache key leaks across tenants',
       '      F2 [major] No regression test',
       '      +2 more findings, in the attempt\'s log',
-      '      Artifacts: src/cache.ts:42; https://example.com/pr/7',
+      '      Artifacts: src/cache.ts:42 (unresolved); https://example.com/pr/7',
     ]);
     expect(out).not.toMatch(/Ship it[\s\S]*↳ Handoff/);
   });
