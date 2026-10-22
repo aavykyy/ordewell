@@ -56,16 +56,20 @@
 - **Once a read-only task has run a command sealed, all its later commands run
   sealed too**, allowlisted ones included, so none can run a script a sealed
   run rewrote with the network and your files in reach.
-- **A read-only task's sealed runs cannot plant a git repository**: they cannot
-  rename or remove the worktree root, rewrite or replace its `.git`, nor hold
-  on to any `.git` the checkout brought without it being checked after each
-  run, and on macOS they cannot create a `.git` anywhere they may write. In a
-  repo group each worktree is writable, while the group's task workspace root
-  is only writable inside bubblewrap's throwaway overlay and discarded with the
-  run, and a `.git` that was not there before the task's first sealed run is
-  removed after every run; one that cannot be removed, or one that changed,
-  stops that task's shell. So git run later never loads a repository with hooks
-  or filters of the run's own, and `task_diff` refuses a read-only task.
+- **A read-only task's sealed runs cannot plant a git repository**: the
+  worktree root itself and its `.git` are held still — on macOS Seatbelt denies
+  renaming or removing the root and any write to the `.git`, and on Linux the
+  worktree mount refuses a rename while the `.git` is bound read-only — and
+  every `.git` entry the checkout brought is held the same way and checked
+  after each run. In a repo group each worktree is writable, while the group's
+  task workspace root is not persistently writable: a write is refused where
+  it is bound read-only, and under bubblewrap's throwaway overlay one may
+  succeed only into the layer discarded with the run. On macOS they cannot
+  create a `.git` anywhere they may write. A `.git` that was not there before
+  the task's first sealed run is removed after every run; one that cannot be
+  removed, or one that changed, stops that task's shell. So git run later there
+  loads no repository the run planted or armed with hooks or filters of its
+  own, and `task_diff` refuses a read-only task.
 - **An edit to an approved script task's body needs your consent again.**
 
 ## [0.10.10] - 2026-10-19
