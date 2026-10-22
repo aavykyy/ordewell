@@ -5,11 +5,6 @@ amends: ["0029", "0034"]
 
 # 0045 — A check repeats with its fix until it passes
 
-*Pending:* [ADR-0047](0047-structured-task-handoffs.md) — a body task is given
-the check's handoff, an AI check's next round is given its own last handoff and
-the body's, and a check and its body can read each other's with `read_task`
-(step 3, L1). Waits on #120.
-
 ## Problem
 
 "Until it passes" is a common shape of work: an adversarial review and a fix,
@@ -47,10 +42,15 @@ round *r* and round *r* + 1 the body runs once.
    dependents go on as usual.
 3. **It fails, having found something, with rounds left**: the body runs, as
    new attempts, from the integration tip, so each round builds on what the
-   rounds before it landed. Each body task gets the check's latest report as
+   rounds before it landed. Each body task gets the check's latest handoff as
    its *Prior task outputs*, told which round it is from. Once every body task
    has passed and landed, the check runs again as a new attempt: the next
-   round. There is no planner turn in between.
+   round. An AI check gets its own previous handoff and the latest handoffs
+   of its body tasks, whose claims it is told to verify against the tree.
+   Both directions use the summary and whole findings within the same
+   4,000-character ceiling per handoff
+   ([ADR-0047](0047-structured-task-handoffs.md)). There is no planner turn
+   in between.
 4. **It reports `blocked`**, or cannot otherwise be said to have run: no round
    starts, and it fails as any task does.
 5. **Out of rounds** — it failed in its last round: the check ends failed, body
@@ -70,8 +70,9 @@ round *r* and round *r* + 1 the body runs once.
   only, never the check and never a check itself, and depends on the check
   and otherwise only on what the check depends on or on other tasks of its
   body; no task outside the loop depends on a body task, and the check never
-  waits for its own body. No task in a loop has subtasks, since a round runs
-  each again whole. Every route holds a loop to this: `submit_plan`,
+  waits for its own body. A check and its body may read each other's handoffs
+  with `read_task` without adding dependency edges (ADR-0047). No task in a
+  loop has subtasks, since a round runs each again whole. Every route holds a loop to this: `submit_plan`,
   `edit_plan` (whose body references resolve like dependencies), the user's
   direct edits and a hand-added task. A loop written as `null` is dropped.
 - **Only `failed` evidence starts a round (L2).** The verdict keeps what the
@@ -234,3 +235,4 @@ check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-21 — a check retried or force-started while a fix of its body is at work waits for it to land, then runs as round 1 of a new set of rounds (L5); a new round revives only the loop's own skips, never the user's (L7).
 - 2026-10-22 — an edit that leaves a check between rounds with no rounds left closes its loop (L6).
 - 2026-10-22 — decided, not built: handoffs run in both directions of a loop ([ADR-0047](0047-structured-task-handoffs.md), #120).
+- 2026-10-22 — implemented handoffs in both loop directions and scoped reads between check and body (step 3, L1; ADR-0047, #120).

@@ -57,6 +57,9 @@ freely within one plan.
 - **Done means reported.** A task finishes when its agent reports it done through
   Ordewell's own tools, never because a model thinks the work looks finished. You
   see which tasks passed, failed or need you, and can read each one's log live.
+- **Task handoffs.** Each task leaves a summary and optional numbered findings
+  with evidence. Dependents get whole findings and can pull the full handoff;
+  a loop's check sees what its fix claims and verifies it against the code.
 - **A supervisor for the run.** The planner keeps watching after you approve a
   plan: at Watch it writes you a note when a task fails or gets stuck, and at Act
   it may retry, stop or edit tasks itself, within limits. `/settings` sets the

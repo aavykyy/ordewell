@@ -1,8 +1,8 @@
 ---
 status: accepted
-implemented: none
+implemented: full
 amends: ["0022", "0029", "0037", "0045"]
-note: "Settles #120 for flat plans; the hierarchy half stays with #34. Built by the tasks of #120."
+note: "Settles #120 for flat plans; the hierarchy half stays with #34."
 ---
 
 # 0047 — Every task ends with a handoff: a short summary, atomic findings and a way to pull the rest
@@ -92,9 +92,9 @@ silently does not).
 Each direct dependency contributes at most 4,000 characters to the dependent's
 *Prior task outputs*, built so: the summary first, then the findings **whole**,
 in the producer's order, each with its evidence references, stopping before a
-finding that would pass the ceiling. When findings remain, one line closes the
-block: `+N more findings; read task #x`. Ordewell never cuts a finding, and
-never cuts the summary (it cannot exceed its limit). Artifacts are not part of
+finding that would pass the ceiling, reserving room for the closing pointer.
+When findings remain, one line closes the block:
+`+N more findings; read task #x`. Ordewell never cuts a finding, and never cuts the summary (it cannot exceed its limit). Artifacts are not part of
 the budgeted text; a task that wants the next reader to start from one says so
 in its summary. A task whose saved state has no handoff (a plan saved before
 this decision, an attempt that ended without a completion call) falls back to
@@ -131,7 +131,8 @@ first 25 findings, the artifacts and `findingCount`, enough for every surface
 and for a dependent's prompt without reading a log. The full findings and the
 report stay in the log. `+N more` counts from `findingCount`. A retry or a
 loop round is a new attempt with its own handoff, and the digest is the
-latest attempt's, as the report is today.
+latest attempt's. A restarted task clears its previous digest and output
+summary before it runs; older handoffs remain readable by explicit attempt.
 
 ### Script and user tasks
 
@@ -160,8 +161,10 @@ summary, the findings with their severity and evidence, the artifacts and
 `+N more`; `status`, `run` and `status --json` carry the digest; the
 planner's `task_query` and `task_output` return it; and the supervisor's run
 update and a research task's report wake carry it rendered by the rule above
-([ADR-0029](0029-the-supervisor.md), [ADR-0037](0037-research-tasks-wake-the-planner.md)). A surface reads the digest from the plan and the rest
-through the same task log read as everything else.
+([ADR-0029](0029-the-supervisor.md), [ADR-0037](0037-research-tasks-wake-the-planner.md)).
+Wake-ups use the same 4,000-character ceiling, including omission and report
+pull pointers; artifacts remain outside it. A surface reads the digest from
+the plan and the rest through the same task log read as everything else.
 
 ## Key properties
 
@@ -254,3 +257,4 @@ merges findings; and any new setting.
 - 2026-10-22 — accepted. Not yet implemented (#120).
 - 2026-10-22 — `read_task`'s switch for the report is named `include_report`.
 - 2026-10-22 — bounded reference strings to keep artifacts and the plan digest bounded.
+- 2026-10-22 — implemented the completion envelope, scoped reads, loop context, derived handoffs and all surfaces (#120).

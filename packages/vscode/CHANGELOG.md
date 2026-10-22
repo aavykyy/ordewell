@@ -4,6 +4,11 @@
 
 ### Added
 
+- **Task handoffs.** Task cards show the summary, numbered findings with
+  severity and evidence, artifacts and a count of findings left in the log.
+  Dependents can pull the full handoff, and a loop's check gets its fix's
+  handoff and its own previous findings. Research run updates carry summaries
+  and whole findings; long reports stay in attempt logs.
 - **Script tasks.** A plan can hold a task with no runner and no model, a list
   of commands or one script that Ordewell runs at the workspace root; its exit
   status is its verdict. The plan shows its body, read-only, in place of a

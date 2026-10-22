@@ -163,6 +163,20 @@ describe('attemptPrompt', () => {
     expect(previousHandoff).toHaveBeenCalledWith('check');
   });
 
+  it('keeps a legacy check report when resuming between rounds without a handoff', () => {
+    const check = createTask({ id: 'check', prompt: 'Review again.', status: 'failed', loop: { body: ['fix'], maxRounds: 3 },
+      verdict: { outcome: 'fail', reported: 'failed', reason: 'Holes', checks: [], decidedAt: 'x' },
+      outputSummary: { reviewReason: 'Holes', report: 'A missing comma breaks parsing.', logTail: '', capturedAt: 'x' },
+    });
+
+    const prompt = attemptPrompt({ kind: 'readOnly' }, { ...sources(), task: check, plan: [check] });
+
+    expect(prompt).toContain('You are the check, round 2 of 3.');
+    expect(prompt).toContain('Your previous findings are not structured.');
+    expect(prompt).toContain('A missing comma breaks parsing.');
+    expect(prompt).not.toContain('(no previous report captured)');
+  });
+
   it('tells a carried-over attempt its files come from the runner it left, in a fresh session', () => {
     const prompt = attemptPrompt(KINDS['carried-over change'], { ...sources(), previousWork: { outcome: 'restored' } });
 
