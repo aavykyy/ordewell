@@ -136,7 +136,7 @@ describe('SeatbeltBackend.wrap', () => {
       expect(profileText(seatbelt.wrap(SH, sealed()).args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1))).not.toContain('LINKLESS');
     });
 
-    it("protects a writable worktree's .git, after the writable allow (ADR-0046)", () => {
+    it("protects a writable worktree's .git and its root, after the writable allow (ADR-0046)", () => {
       const launch = seatbelt.wrap(SH, sealed({ write: [SCRATCH, '/work/repo/wt'], gitWorktrees: ['/work/repo/wt'] }));
       const text = profileText(launch.args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1));
       const write = '(deny file-write* (literal (param "GIT_0")))';
@@ -144,7 +144,35 @@ describe('SeatbeltBackend.wrap', () => {
       // After the rule that made the worktree writable, so the last-match-wins deny stands.
       expect(text.indexOf(write)).toBeGreaterThan(text.indexOf('(param "WRITABLE_1")'));
       expect(launch.args).toContain('GIT_0=/work/repo/wt/.git');
+      // The root cannot be renamed or removed either: a moved worktree would
+      // take its `.git` out of the profile and could be moved back with a
+      // planted one (ADR-0046). Its contents stay writable.
+      const root = '(deny file-write* (literal (param "WORKTREE_0")))';
+      expect(text).toContain(root);
+      expect(text.indexOf(root)).toBeGreaterThan(text.indexOf('(param "WRITABLE_1")'));
+      expect(launch.args).toContain('WORKTREE_0=/work/repo/wt');
       expect(profileText(seatbelt.wrap(SH, sealed()).args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1))).not.toContain('GIT_0=');
+    });
+
+    it("holds every .git entry the checkout brought still: literal for a file, subpath for a directory (ADR-0046)", () => {
+      const launch = seatbelt.wrap(SH, sealed({
+        write: [SCRATCH, '/work/repo/wt'],
+        gitEntries: [
+          { path: '/work/repo/wt/sub/.git', directory: false },
+          { path: '/work/repo/wt/vendor/.git', directory: true },
+        ],
+      }));
+      const text = profileText(launch.args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1));
+      const file = '(deny file-write* (literal (param "GITFILE_0")))';
+      const dir = '(deny file-write* (subpath (param "GITDIR_0")))';
+      expect(text).toContain(file);
+      expect(text).toContain(dir);
+      // After the writable allow, so the last-match-wins deny stands.
+      expect(text.indexOf(file)).toBeGreaterThan(text.indexOf('(param "WRITABLE_1")'));
+      expect(text.indexOf(dir)).toBeGreaterThan(text.indexOf('(param "WRITABLE_1")'));
+      expect(launch.args).toContain('GITFILE_0=/work/repo/wt/sub/.git');
+      expect(launch.args).toContain('GITDIR_0=/work/repo/wt/vendor/.git');
+      expect(profileText(seatbelt.wrap(SH, sealed()).args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1))).not.toContain('GITFILE_0=');
     });
 
     it('refuses creating a .git anywhere in a gitless directory, its own root included, after the writable allow (ADR-0046)', () => {
@@ -168,9 +196,11 @@ describe('SeatbeltBackend.wrap', () => {
       const text = profileText(launch.args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1));
       expect(launch.args).toEqual(expect.arrayContaining([
         'WRITABLE_1=/ws/alpha', 'WRITABLE_2=/ws/beta', 'GIT_0=/ws/alpha/.git', 'GIT_1=/ws/beta/.git', 'GITLESS_0=/ws',
+        'WORKTREE_0=/ws/alpha', 'WORKTREE_1=/ws/beta',
       ]));
       expect(launch.args).not.toContain('WRITABLE_1=/ws');
       expect(text).toContain('(deny file-write* (literal (param "GIT_0")) (literal (param "GIT_1")))');
+      expect(text).toContain('(deny file-write* (literal (param "WORKTREE_0")) (literal (param "WORKTREE_1")))');
       expect(text).toContain('(deny file-write-create (require-all (regex #"/\\.git$") (require-any (subpath (param "GITLESS_0")))))');
     });
 
@@ -269,6 +299,7 @@ describe('BubblewrapBackend.wrap', () => {
     ['a relative throwaway directory', { throwaway: ['repo'] }],
     ['a writable directory without links, which a mount cannot hold to (ADR-0046)', { write: ['/work/repo/wt'], linkless: ['/work/repo/wt'] }],
     ['a writable directory where no .git may be created, which a mount cannot hold to (ADR-0046)', { write: ['/work/repo/wt'], gitless: ['/work/repo/wt'] }],
+    ['a relative .git entry', { write: ['/work/repo/wt'], gitEntries: [{ path: 'wt/.git', directory: false }] }],
   ])('refuses %s rather than enforce less than it was asked', (_what, overrides) => {
     expect(() => bwrap().wrap(SH, profile(overrides))).toThrow(SandboxUnsupportedError);
   });
@@ -311,6 +342,21 @@ describe('BubblewrapBackend.wrap', () => {
       // After the writable bind, so the overmount of the .git file stands.
       expect(joined.indexOf('--ro-bind /work/repo/wt/.git')).toBeGreaterThan(joined.indexOf('--bind /work/repo/wt /work/repo/wt'));
       expect(bwrap().wrap(SH, sealed()).args.join(' ')).not.toContain('/.git');
+    });
+
+    it("binds every .git entry the checkout brought read-only after the writable bind (ADR-0046)", () => {
+      const { args } = bwrap().wrap(SH, sealed({
+        write: [SCRATCH, '/work/repo/wt'],
+        gitEntries: [
+          { path: '/work/repo/wt/sub/.git', directory: false },
+          { path: '/work/repo/wt/vendor/.git', directory: true },
+        ],
+      }));
+      const joined = args.join(' ');
+      for (const entry of ['/work/repo/wt/sub/.git', '/work/repo/wt/vendor/.git']) {
+        expect(joined).toContain(`--ro-bind ${entry} ${entry}`);
+        expect(joined.indexOf(`--ro-bind ${entry}`)).toBeGreaterThan(joined.indexOf('--bind /work/repo/wt /work/repo/wt'));
+      }
     });
 
     it("binds a repo group's worktrees, not its task workspace root, which the workspace read leaves read-only (ADR-0046)", () => {

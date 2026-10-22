@@ -1,5 +1,6 @@
 import { readTaskDiff, type TaskDiffRead, type TaskDiffResult } from './taskDiffRead';
 import { randomBytes } from 'crypto';
+import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { IConfig } from '../interfaces/IConfig';
@@ -170,6 +171,16 @@ function resolves(target: string): boolean {
 function inactive(reason: IsolationInactiveReason, repos: string[]): IsolationAvailability {
   const named = repos.filter((r) => r !== SELF_REPO);
   return named.length > 0 ? { active: false, reason, repos: named } : { active: false, reason };
+}
+
+/**
+ * macOS immutable flags stop a recursive removal with ENOTEMPTY and leave the
+ * throwaway worktree behind (ADR-0046). The tree is being discarded, so its
+ * flags are cleared first; elsewhere `chflags` does not exist and is not needed.
+ */
+function clearImmutableFlags(platform: NodeJS.Platform, dir: string): void {
+  if (platform !== 'darwin') return;
+  spawnSync('/usr/bin/chflags', ['-R', 'nouchg', dir], { stdio: 'ignore' });
 }
 
 /**
@@ -1266,6 +1277,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   private removeTaskWorkspace(run: IsolationRun, dir: string): void {
     if (!isInside(this.runRoot(run), dir) || !fs.existsSync(dir)) return;
     this.unlinkLinksUnder(dir);
+    clearImmutableFlags(this.platform, dir);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
@@ -1344,7 +1356,10 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if (LINKED_ARTIFACTS.has(name) || isEnvFile(name)) this.unlinkIfLink(path.join(dir, name));
     }
     await this.tryGit(repo.root, ['worktree', 'remove', '--force', dir]);
-    if (fs.existsSync(dir) && isInside(this.runRoot(run), dir)) fs.rmSync(dir, { recursive: true, force: true });
+    if (fs.existsSync(dir) && isInside(this.runRoot(run), dir)) {
+      clearImmutableFlags(this.platform, dir);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
     await this.tryGit(repo.root, ['worktree', 'prune']);
     // A deeper repo's worktree leaves the directories above it behind.
     for (let parent = path.dirname(dir); isInside(this.runRoot(run), parent); parent = path.dirname(parent)) this.removeIfEmpty(parent);

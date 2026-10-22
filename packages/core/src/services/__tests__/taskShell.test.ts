@@ -152,6 +152,21 @@ describe("a read-only task's shell (ADR-0046)", () => {
     expect(group.ran[0].profile!.gitWorktrees).toEqual([alpha, beta]);
   });
 
+  it("protects every .git entry the checkout brought, not only a worktree root (ADR-0046)", async () => {
+    mkdirSync(join(worktree, 'vendor', '.git'), { recursive: true });
+    writeFileSync(join(worktree, 'vendor', '.git', 'config'), '');
+    mkdirSync(join(worktree, 'sub'));
+    writeFileSync(join(worktree, 'sub', '.git'), 'gitdir: /repo/.git/modules/sub\n');
+    const fs = session();
+
+    await fs.taskShell({ cwd: worktree, writable: worktree }).run('npm test');
+
+    expect(fs.ran[0].profile!.gitEntries).toEqual(expect.arrayContaining([
+      { path: join(worktree, 'vendor', '.git'), directory: true },
+      { path: join(worktree, 'sub', '.git'), directory: false },
+    ]));
+  });
+
   it("gives its sealed runs a task-sized time limit, not the planner's short one (ADR-0046)", async () => {
     const fs = session();
     await fs.taskShell({ cwd: worktree, writable: worktree }).run('npm test');
@@ -516,6 +531,57 @@ describe("a read-only task's shell (ADR-0046)", () => {
     // A submodule's `.git` file and a vendored repository were the checkout's, not the run's.
     expect(readFileSync(join(worktree, 'vendor', 'lib', '.git'), 'utf8')).toBe('gitdir: /repo/.git/modules/lib\n');
     expect(readFileSync(join(worktree, 'vendor', 'tool', '.git', 'HEAD'), 'utf8')).toBe('ref: refs/heads/main\n');
+  });
+
+  describe('a .git entry the checkout brought is checked after every sealed run', () => {
+    /** A vendored repository, and a submodule's `.git` file, as the checkout leaves them. */
+    function checkoutGit(): void {
+      mkdirSync(join(worktree, 'vendor', '.git', 'hooks'), { recursive: true });
+      writeFileSync(join(worktree, 'vendor', '.git', 'config'), '[core]\n\trepositoryformatversion = 0\n');
+      writeFileSync(join(worktree, 'vendor', '.git', 'hooks', 'pre-commit'), '#!/bin/sh\n');
+      mkdirSync(join(worktree, 'sub'), { recursive: true });
+      writeFileSync(join(worktree, 'sub', '.git'), 'gitdir: /repo/.git/modules/sub\n');
+    }
+
+    /** The first command's result names the change; the next one never runs. */
+    async function stopsAfter(mutate: () => void, changed: string): Promise<void> {
+      checkoutGit();
+      const fs = session();
+      fs.effect = ({ sealed }) => { if (sealed) mutate(); };
+      const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+
+      const first = await shell.run('npm test');
+      expect(first.output).toContain("A .git entry this task's checkout brought changed during a sealed run");
+      expect(first.output).toContain(changed);
+
+      const next = await shell.run('git status');
+      expect(next.success).toBe(false);
+      expect(next.output).toContain(`a .git entry the checkout brought changed during a sealed run (${changed})`);
+      expect(next.output).toContain("this task's shell is stopped");
+      expect(fs.ran.map((r) => r.command)).toEqual(['npm test']);
+    }
+
+    it('stops the task shell when a vendored .git config changed', async () => {
+      await stopsAfter(() => writeFileSync(join(worktree, 'vendor', '.git', 'config'), '[core]\n\tfsmonitor = ./evil.sh\n'), 'vendor/.git');
+    });
+
+    it("stops the task shell when a vendored .git's hooks changed", async () => {
+      await stopsAfter(() => {
+        mkdirSync(join(worktree, 'vendor', '.git', 'hooks', 'extra'));
+      }, 'vendor/.git');
+    });
+
+    it("stops the task shell when a submodule's .git file changed", async () => {
+      await stopsAfter(() => writeFileSync(join(worktree, 'sub', '.git'), 'gitdir: fake\n'), 'sub/.git');
+    });
+
+    it('stops the task shell when an entry is replaced at the same path by another kind', async () => {
+      await stopsAfter(() => {
+        const dir = join(worktree, 'vendor', '.git');
+        rmSync(dir, { recursive: true, force: true });
+        writeFileSync(dir, 'gitdir: fake\n');
+      }, 'vendor/.git');
+    });
   });
 
   it('stops the task shell when a .git a sealed run planted cannot be removed', async () => {

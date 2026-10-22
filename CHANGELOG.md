@@ -147,16 +147,19 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
 - **A read-only task's sealed runs cannot plant a git repository for later git
   to load.** A sealed run can write the task's worktree — in a repo group each
-  worktree, but never the group's task workspace root, where the group's runner
-  starts its git — but not a worktree's `.git`: it cannot write, replace, rename
-  or remove the worktree's own `.git` file, nor — on macOS — create a `.git`
-  anywhere in what it may write. A `.git` that was not there before the task's
-  first sealed run is removed after every run, while a submodule's `.git` file
-  or a vendored repository stays, and one that cannot be removed stops that
-  task's shell. So git run later outside the sandbox, Ordewell's at a repo root
-  or the runner's own at the task's working directory, never loads a
-  repository the run planted with its own hooks or filters, and `task_diff`
-  refuses a read-only task on every platform
+  worktree, while the group's task workspace root, where the group's runner
+  starts its git, is writable only inside bubblewrap's throwaway overlay and
+  discarded with the run — but not the worktree root or its `.git`: it cannot
+  rename or remove the root nor write, replace, rename or remove the worktree's
+  own `.git` file, and every `.git` entry the checkout brought, such as a
+  submodule's file or a vendored repository, is held still and checked after
+  each run. On macOS it also cannot create a `.git` anywhere in what it may
+  write. A `.git` that was not there before the task's first sealed run is
+  removed after every run; one that cannot be removed, or one the checkout
+  brought that changed, stops that task's shell. So git run later outside the
+  sandbox, Ordewell's at a repo root or the runner's own at the task's working
+  directory, never loads a repository the run planted or armed with its own
+  hooks or filters, and `task_diff` refuses a read-only task on every platform
   ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
 - **Consent to a script task is consent to what it runs.** An edit that
   changes an approved script task's commands, script or time limit, or turns

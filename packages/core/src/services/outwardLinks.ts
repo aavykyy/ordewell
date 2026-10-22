@@ -57,15 +57,73 @@ async function opened(dir: string): Promise<boolean> {
   }
 }
 
+/** A file's state as the snapshot found it, and as the check finds it after a run (ADR-0046). */
+type FileState =
+  | { kind: 'missing' }
+  | { kind: 'unreadable' }
+  | { kind: 'bytes'; base64: string };
+
+/** The entry names under a `.git` directory's `hooks/`. */
+type HooksState =
+  | { kind: 'missing' }
+  | { kind: 'unreadable' }
+  | { kind: 'entries'; names: string[] };
+
 /**
- * The canonical paths of the `.git` entries under `dir`, taken before a task's
+ * A `.git` entry as the task's first sealed run found it, identity included
+ * (ADR-0046): the sandbox refuses a write to it, and the check after every
+ * run catches a backend that failed to, or an entry replaced at the same path.
+ */
+export type GitEntryState =
+  | { path: string; directory: false; dev: number; ino: number; content: FileState }
+  | { path: string; directory: true; dev: number; ino: number; content: FileState; hooks: HooksState };
+
+async function fileState(file: string): Promise<FileState> {
+  try {
+    return { kind: 'bytes', base64: (await fs.readFile(file)).toString('base64') };
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'missing' } : { kind: 'unreadable' };
+  }
+}
+
+async function hooksState(dir: string): Promise<HooksState> {
+  try {
+    return { kind: 'entries', names: (await fs.readdir(dir)).sort() };
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'missing' } : { kind: 'unreadable' };
+  }
+}
+
+async function entryState(gitPath: string): Promise<GitEntryState | null> {
+  try {
+    const stat = await fs.stat(gitPath);
+    if (stat.isDirectory()) {
+      return {
+        path: gitPath, directory: true, dev: stat.dev, ino: stat.ino,
+        content: await fileState(path.join(gitPath, 'config')),
+        hooks: await hooksState(path.join(gitPath, 'hooks')),
+      };
+    }
+    // Neither a file nor a directory is nothing git can load, and reading a
+    // FIFO as one would wait forever.
+    if (!stat.isFile()) return null;
+    return { path: gitPath, directory: false, dev: stat.dev, ino: stat.ino, content: await fileState(gitPath) };
+  } catch {
+    // Gone between readdir and stat: nothing to keep, and nothing to check.
+    return null;
+  }
+}
+
+/**
+ * The `.git` entries under `dir`, with their identity, taken before a task's
  * first sealed run (ADR-0046). Whatever the checkout brought and the run did
  * not is in this set, and the sweep leaves it; anything else named `.git`
- * later was planted.
+ * later was planted. Each entry is recorded with its identity, so the check
+ * after every run can tell it from one the run put at the same path.
  */
-export async function snapshotGitEntries(dir: string): Promise<Set<string>> {
+export async function snapshotGitEntries(dir: string): Promise<GitBefore> {
   const top = await canonical(dir);
-  const found = new Set<string>();
+  const found = new Map<string, GitEntryState>();
   const walk = async (at: string): Promise<void> => {
     let entries;
     try {
@@ -79,22 +137,28 @@ export async function snapshotGitEntries(dir: string): Promise<Set<string>> {
       if (isGitName(entry.name)) {
         // Record it, never walk in: a repository's own objects are not the
         // task's `.git` problem, and one can hold thousands of files.
-        found.add(await canonical(full));
+        const gitPath = await canonical(full);
+        if (found.has(gitPath)) return;
+        const state = await entryState(gitPath);
+        if (state) found.set(gitPath, state);
         return;
       }
       if (entry.isDirectory()) return walk(full);
     }));
   };
   await walk(top);
-  return found;
+  const entries = [...found.values()].sort((a, b) => a.path.localeCompare(b.path));
+  return { keep: new Set(entries.map((entry) => entry.path)), entries };
 }
 
-/** What the writable directory held before the task's first sealed run, and which of its entries are worktree roots. */
+/** What the writable directory held before the task's first sealed run. */
 export interface GitBefore {
-  /** What {@link snapshotGitEntries} found then. */
+  /** The canonical paths {@link snapshotGitEntries} found then. */
   keep: ReadonlySet<string>;
+  /** Each of them as it was, for {@link changedGitEntries}. */
+  entries: readonly GitEntryState[];
   /** The worktree roots whose own `.git` is the repository's: one per repo in a group. */
-  worktrees: readonly string[];
+  worktrees?: readonly string[];
 }
 
 export interface SealedSweep {
@@ -182,6 +246,48 @@ export async function removeOutwardLinks(dir: string, roots: readonly string[], 
   sweep.removedGit.sort();
   sweep.stuckGit.sort();
   return sweep;
+}
+
+function sameFileState(a: FileState, b: FileState): boolean {
+  if (a.kind !== b.kind) return false;
+  return a.kind !== 'bytes' || b.kind !== 'bytes' || a.base64 === b.base64;
+}
+
+function sameHooks(a: HooksState, b: HooksState): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind !== 'entries' || b.kind !== 'entries') return true;
+  return a.names.length === b.names.length && a.names.every((name, i) => name === b.names[i]);
+}
+
+async function changedEntry(entry: GitEntryState): Promise<boolean> {
+  let stat;
+  try {
+    // The path, not what it points at: a link put here in place of the entry
+    // is a change even when its target holds what was there (ADR-0046).
+    stat = await fs.lstat(entry.path);
+  } catch {
+    return true;
+  }
+  // The path and its type are not enough: a run that could delete an entry
+  // and make another there would pass a path-only check (ADR-0046).
+  if (stat.isSymbolicLink() || stat.isDirectory() !== entry.directory) return true;
+  if (!entry.directory && !stat.isFile()) return true;
+  if (stat.dev !== entry.dev || stat.ino !== entry.ino) return true;
+  if (!sameFileState(await fileState(entry.directory ? path.join(entry.path, 'config') : entry.path), entry.content)) return true;
+  return entry.directory ? !sameHooks(await hooksState(path.join(entry.path, 'hooks')), entry.hooks) : false;
+}
+
+/**
+ * Which `.git` entries the checkout brought are no longer what the task's
+ * first sealed run found, relative to `root` and sorted (ADR-0046). The
+ * profile refuses a write to each of them and to the worktree roots above
+ * them, so a non-empty answer means the sandbox did not hold and the task's
+ * shell must stop rather than let git outside load one.
+ */
+export async function changedGitEntries(entries: readonly GitEntryState[], root: string): Promise<string[]> {
+  const top = await canonical(root);
+  const changed = await Promise.all(entries.map(async (entry) => ((await changedEntry(entry)) ? path.relative(top, entry.path) : null)));
+  return changed.filter((rel): rel is string => rel !== null).sort();
 }
 
 /**

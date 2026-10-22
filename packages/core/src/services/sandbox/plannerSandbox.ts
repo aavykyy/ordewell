@@ -6,7 +6,7 @@ import type { ResearchShell, ShellLaunch } from '../researchShell';
 import { SEALED_RUN_MARK } from '../researchStepSummary';
 import { BubblewrapBackend, findBubblewrap } from './bubblewrap';
 import { SANDBOX_EXEC, SeatbeltBackend } from './seatbelt';
-import { execProbe, type ProbeExec, type SandboxBackend, type SandboxInvocation, type SandboxLaunch, type SandboxLimits, type SandboxProfile } from './SandboxBackend';
+import { execProbe, type ProbeExec, type SandboxBackend, type SandboxGitEntry, type SandboxInvocation, type SandboxLaunch, type SandboxLimits, type SandboxProfile } from './SandboxBackend';
 
 /**
  * The planner's shell inside an OS sandbox (ADR-0011): every command the
@@ -31,6 +31,13 @@ export interface SealedRunOptions {
    * passes one per repo; left out, the single `writable` worktree is used.
    */
   worktrees?: readonly string[];
+  /**
+   * Every `.git` entry the writable directory held before the task's first
+   * sealed run, which a sealed run may not change (ADR-0046). The worktree
+   * roots above cover their own `.git`; this covers a submodule's file and a
+   * vendored repository, whose content a run could otherwise rearm.
+   */
+  gitEntries?: readonly SandboxGitEntry[];
   /**
    * A harness's short per-session temporary directory, writable besides the
    * scratch one (ADR-0036 N2). A native shell needs it: Claude Code writes the
@@ -229,6 +236,10 @@ export function sealedShellProfile(
 ): SandboxProfile {
   const writable = opts.writable;
   const worktrees = opts.worktrees ?? (writable ? [writable] : []);
+  // Only entries under the writable directory are held: one a link points
+  // outside it needs no protection, and binding it could reveal a file the
+  // read list withholds (ADR-0046).
+  const gitEntries = writable ? (opts.gitEntries ?? []).filter((entry) => strictlyWithin(entry.path, writable)) : [];
   // A repo group's task workspace root holds no worktree's `.git`, and is where
   // the runner's own git starts: binding only its worktrees leaves the root
   // read-only, so a sealed run cannot plant a repository there (ADR-0046). One
@@ -240,6 +251,8 @@ export function sealedShellProfile(
     ...(writable && host.platform === 'darwin' ? { linkless: [writable] } : {}),
     // Keep each worktree's `.git` the repository's, so git run outside the sandbox never loads one a sealed run planted (ADR-0046).
     ...(worktrees.length ? { gitWorktrees: worktrees } : {}),
+    // And every other `.git` the checkout brought: a submodule's file, a vendored repository (ADR-0046).
+    ...(gitEntries.length ? { gitEntries } : {}),
     // The whole writable directory, since a repo group's runner starts its git at the task workspace's root, which holds no worktree's `.git`.
     ...(writable && host.platform === 'darwin' ? { gitless: [writable] } : {}),
     read: [...host.reads, opts.workspace],
@@ -259,6 +272,22 @@ export function sealedShellProfile(
 function strictlyWithin(child: string, parent: string): boolean {
   const rel = path.relative(parent, child);
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+/**
+ * The protected `.git` entries made canonical, as Seatbelt matches the path
+ * the kernel resolves. One gone since the snapshot is left out: there is
+ * nothing to protect, and the check after the run stops the shell for it.
+ */
+function canonicalGitEntries(entries: readonly SandboxGitEntry[]): SandboxGitEntry[] {
+  return entries.flatMap((entry) => {
+    try {
+      const p = fsSync.realpathSync(entry.path);
+      return [{ path: p, directory: fsSync.statSync(p).isDirectory() }];
+    } catch {
+      return [];
+    }
+  });
 }
 
 const LEAD = "The planner's shell runs without an OS sandbox on this machine";
@@ -500,6 +529,7 @@ export class PlannerShellSandbox {
       workspace: canonical(opts.workspace),
       ...(opts.writable ? { writable: canonical(opts.writable) } : {}),
       ...(opts.worktrees ? { worktrees: opts.worktrees.map(canonical) } : {}),
+      ...(opts.gitEntries ? { gitEntries: canonicalGitEntries(opts.gitEntries) } : {}),
       ...(opts.limits ? { limits: opts.limits } : {}),
     }));
   }

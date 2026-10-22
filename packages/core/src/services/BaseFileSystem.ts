@@ -21,7 +21,7 @@ import { resolveAll, vetEgress, type ResolveAll } from './egressGuard';
 import { carriesSecret, sensitiveEnvValues } from './outboundSecrets';
 import { READ_REFUSAL_HINT, disableWebCommandStartup, pinWebCommandAddresses, wgetVersionCommands } from './webCommands';
 import { NOT_APPROVED_HINT } from './effectRoute';
-import { removeOutwardLinks, removePlantedGit, snapshotGitEntries } from './outwardLinks';
+import { changedGitEntries, removeOutwardLinks, removePlantedGit, snapshotGitEntries, type GitBefore } from './outwardLinks';
 
 export { AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMANDS, classifyCommand, pathLikeArgs } from './commandPolicy';
 
@@ -51,7 +51,7 @@ interface ShellSite {
     worktree: boolean;
     sealed: boolean;
     /** The `.git` entries the writable directory held before the first sealed run (ADR-0046). */
-    gitBefore?: Set<string>;
+    gitBefore?: GitBefore;
     /** Why every later command is refused: a repository a sealed run planted could not be removed (ADR-0046). */
     stopped?: string;
   };
@@ -63,6 +63,7 @@ const TASK_CONTINUE = 'Continue without it, and say in your report if what it wo
 const OUTWARD_LINKS_REMOVED = 'Removed, since a read-only task may leave no link leading out of its worktree and the workspace:';
 const PLANTED_GIT_REMOVED = 'Removed, since a read-only task may leave no .git for git outside the sandbox to load:';
 const PLANTED_GIT_STUCK = "Could not remove a .git this command planted, so this task's shell is stopped, and every later command is refused:";
+const GIT_CHANGED = "A .git entry this task's checkout brought changed during a sealed run, though the sandbox forbids it, so this task's shell is stopped, and every later command is refused:";
 
 /** Why a read-only task's command was not run, from the decision that stood. */
 function taskRefusal(standing: StandingDecision | undefined): string {
@@ -494,11 +495,18 @@ export abstract class BaseFileSystem implements IFileSystem {
     // sweep can tell a repository the checkout brought from one a run planted
     // (ADR-0046). Taken lazily, here, before the first run can write.
     const { writable, workspace, worktrees } = site.sealed;
-    if (site.task && writable && !site.task.gitBefore) site.task.gitBefore = await snapshotGitEntries(writable);
+    if (site.task && writable && !site.task.gitBefore) {
+      site.task.gitBefore = { ...(await snapshotGitEntries(writable)), worktrees: worktrees ?? [writable] };
+    }
 
     let shell: ShellLaunch;
     try {
-      shell = await site.sandbox.launchSealed(this.researchShell, site.sealed);
+      // The entries and the worktree roots are held still by the profile; the
+      // check after the run catches a backend that failed to (ADR-0046).
+      const sealed = site.task?.gitBefore
+        ? { ...site.sealed, gitEntries: site.task.gitBefore.entries.map(({ path, directory }) => ({ path, directory })) }
+        : site.sealed;
+      shell = await site.sandbox.launchSealed(this.researchShell, sealed);
     } catch (err) {
       return refusal(`Command not run: its sealed sandbox could not be prepared (${err instanceof Error ? err.message : String(err)}).`);
     }
@@ -510,24 +518,32 @@ export abstract class BaseFileSystem implements IFileSystem {
     let removedLinks: string[] = [];
     let removedGit: string[] = [];
     let stuckGit: string[] = [];
+    let changedGit: string[] = [];
     if (site.task && writable) {
+      const before = site.task.gitBefore;
+      // The identity check first, before the sweep can change anything itself.
+      changedGit = before ? await changedGitEntries(before.entries, writable) : [];
       // The workspace root goes first, where a group's runner starts its own
       // git; the walk below then covers every subdirectory.
-      const planted = await removePlantedGit(writable, worktrees ?? [writable], site.task.gitBefore);
-      const sweep = await removeOutwardLinks(writable, [writable, workspace], { keep: site.task.gitBefore ?? new Set(), worktrees: worktrees ?? [writable] });
+      const planted = await removePlantedGit(writable, worktrees ?? [writable], before?.keep);
+      const sweep = await removeOutwardLinks(writable, [writable, workspace], before ?? { keep: new Set(), entries: [], worktrees: worktrees ?? [writable] });
       removedLinks = sweep.removedLinks;
       removedGit = [...(planted ? ['.git'] : []), ...sweep.removedGit];
       stuckGit = sweep.stuckGit;
       // A `.git` still where git would find it is what the sweep's removal
-      // could not take; every later command is refused rather than run beside
-      // a repository the run planted (ADR-0046).
+      // could not take; one of the checkout's entries that changed is a sandbox
+      // that did not hold. Either stops the shell rather than run beside a
+      // repository the run planted or armed (ADR-0046).
       if (stuckGit.length > 0) {
         site.task.stopped = `a repository a sealed run planted could not be removed (${stuckGit.join(', ')}), so this task's shell is stopped`;
+      } else if (changedGit.length > 0) {
+        site.task.stopped = `a .git entry the checkout brought changed during a sealed run (${changedGit.join(', ')}), so this task's shell is stopped`;
       }
     }
     const swept = `${removedLinks.length > 0 ? `\n\n[${OUTWARD_LINKS_REMOVED} ${removedLinks.join(', ')}]` : ''}`
       + `${removedGit.length > 0 ? `\n\n[${PLANTED_GIT_REMOVED} ${removedGit.join(', ')}]` : ''}`
-      + `${stuckGit.length > 0 ? `\n\n[${PLANTED_GIT_STUCK} ${stuckGit.join(', ')}]` : ''}`;
+      + `${stuckGit.length > 0 ? `\n\n[${PLANTED_GIT_STUCK} ${stuckGit.join(', ')}]` : ''}`
+      + `${changedGit.length > 0 ? `\n\n[${GIT_CHANGED} ${changedGit.join(', ')}]` : ''}`;
     if (signal?.aborted) return { ...outcome, output: `${outcome.output}${swept}` };
     const failed = outcome.timedOut && shell.wallTimeMs !== undefined
       ? sealedTimeLimitNote(shell.wallTimeMs, site.task !== undefined)

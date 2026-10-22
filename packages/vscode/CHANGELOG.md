@@ -57,13 +57,15 @@
   sealed too**, allowlisted ones included, so none can run a script a sealed
   run rewrote with the network and your files in reach.
 - **A read-only task's sealed runs cannot plant a git repository**: they cannot
-  rewrite or replace a worktree's `.git`, nor (on macOS) create a `.git`
-  anywhere they may write. In a repo group each worktree is writable but the
-  group's task workspace root is not, and a `.git` that was not there before
-  the task's first sealed run is removed after every run; one that cannot be
-  removed stops that task's shell. So git run later never loads a repository
-  with hooks or filters of the run's own, and `task_diff` refuses a read-only
-  task.
+  rename or remove the worktree root, rewrite or replace its `.git`, nor hold
+  on to any `.git` the checkout brought without it being checked after each
+  run, and on macOS they cannot create a `.git` anywhere they may write. In a
+  repo group each worktree is writable, while the group's task workspace root
+  is only writable inside bubblewrap's throwaway overlay and discarded with the
+  run, and a `.git` that was not there before the task's first sealed run is
+  removed after every run; one that cannot be removed, or one that changed,
+  stops that task's shell. So git run later never loads a repository with hooks
+  or filters of the run's own, and `task_diff` refuses a read-only task.
 - **An edit to an approved script task's body needs your consent again.**
 
 ## [0.10.10] - 2026-10-19
