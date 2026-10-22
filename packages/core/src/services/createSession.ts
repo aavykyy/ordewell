@@ -48,7 +48,7 @@ import { plannerContextFill } from '../models/Usage';
 import { TurnBudgets, contextLine, taskReadsLine, webReadsLine } from './PlannerBudgets';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
-import { approvalRecordOf, flattenTasks, keepExecutionState, stampOrigin, waitsForApproval, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
+import { approvalRecordOf, dropRetiredPlanFields, flattenTasks, keepExecutionState, stampOrigin, waitsForApproval, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
 import { installedPlannerAnswered, installedPlannerDetected } from './InstalledPlanner';
@@ -2270,6 +2270,9 @@ export class Session {
     for (const key of ['supervisorLevel', 'mergeAtGatesAutomatically', 'supervisorRetryLimit', 'wakeUpReadBudget']) {
       delete (plan as unknown as Record<string, unknown>)[key];
     }
+    // The per-message research budget is gone (ADR-0037); a plan saved before
+    // its removal is read once and written back without its keys.
+    dropRetiredPlanFields(plan);
     carryOverQueuedEdits(plan);
     // The run record is taken synchronously; the orphan prune and the look at
     // what the user has merged since are awaited in the background, and git

@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { LegacyPlanState, migrateLoadedTasks } from '../models/Task';
+import { dropRetiredPlanFields, LegacyPlanState, migrateLoadedTasks } from '../models/Task';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
 import { getStateDir, ensureDir } from './fsHelpers';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
@@ -29,6 +29,7 @@ export function saveState(plan: LegacyPlanState, baseDir?: string, sessionId?: s
   ensureDir(path.dirname(statePath));
   plan.lastUpdated = new Date().toISOString();
   const file = sessionId ? { ...plan, [SESSION_ID_KEY]: sessionId } : plan;
+  dropRetiredPlanFields(file);
   fs.writeFileSync(statePath, JSON.stringify(file, null, 2));
 }
 
@@ -48,6 +49,7 @@ export function loadState(baseDir?: string, logger: ILogger = defaultLogger): Sa
     const plan = parsed as LegacyPlanState;
     migratePlanStateIsolation(plan);
     migrateLoadedTasks(plan.tasks);
+    dropRetiredPlanFields(plan);
     return typeof sessionId === 'string' && sessionId ? { plan, sessionId } : { plan };
   } catch (err: unknown) {
     logger.warn('stateStore', `failed to load state from ${statePath}; falling back to empty state`, err);

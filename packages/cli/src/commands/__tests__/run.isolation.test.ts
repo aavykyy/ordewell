@@ -21,6 +21,7 @@ function liveDaemon(scripts: { execute?: Event[]; approve?: Event[]; stash?: Eve
   const settlers = new Set<() => void>();
   const broadcast = (events: Event[] = []) => { for (const event of events) for (const s of [...subscribers]) s(event); };
   const api = {
+    getSession: vi.fn().mockResolvedValue({ meta: {}, plan: { pendingTasks: [] } }),
     // Like ApiClient: a session has one execution stream, and a new one ends the old.
     streamExecution: vi.fn((_id: string, onEvent: (e: Event) => void, onReady?: (error?: Error) => void) => new Promise<void>((resolve) => {
       for (const settle of [...settlers]) settle();

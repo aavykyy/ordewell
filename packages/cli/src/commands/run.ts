@@ -2,7 +2,8 @@ import { flag, hasFlag, readLastSession } from '../utils';
 import { handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
 import { iconFor } from '../utils/output';
 import type { ApiClient, TaskStatus } from '../apiClient';
-import { loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, SCRIPT_RUNNER, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL } from '@ordewell/core';
+import { holdLabel, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, scriptTaskText, skippedLabel, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL } from '@ordewell/core';
+import { allTasksOf } from '../utils/tasks';
 import { connect } from './shared';
 
 const inLine = (label: string): string => label.charAt(0).toLowerCase() + label.slice(1);
@@ -66,8 +67,6 @@ export async function followExecution(
   let dirtyRepos: string[] = [];
   const taskStates = new Map<string, TaskStatus>();
   let lastPrinted = '';
-  // The status stream carries no task type; a script task shows itself when it starts, on the runner it is run by.
-  const scriptTasks = new Set<string>();
 
   function printStatus(tasks: TaskStatus[]): void {
     for (const t of tasks) {
@@ -84,7 +83,9 @@ export async function followExecution(
         : '';
       // Nothing starts it on its own (ADR-0035), so a line that only said "pending" would read as next in line.
       const waits = t.waitsForApproval ? `: ${inLine(WAITS_FOR_APPROVAL_LABEL)}: \`ordewell force-start <id>\` approves it, \`ordewell run\` approves all` : '';
-      lines.push(`  ${icon} ${refOf(t.id)}${scriptTasks.has(t.id) ? ' [SCR]' : t.research ? ' [RES]' : ''} ${t.status}${verdict}${waits}${loop ? ` · ↻ ${inLine(loop.text)}` : ''}`);
+      lines.push(`  ${icon} ${refOf(t.id)}${t.type === 'script' ? ' [SCR]' : t.research ? ' [RES]' : ''} ${t.status}${verdict}${waits}${loop ? ` · ↻ ${inLine(loop.text)}` : ''}`);
+      if (t.holdReason) lines.push(`      ${holdLabel(t.holdReason)}`);
+      if (t.status === 'skipped') lines.push(`      ${skippedLabel(t.skipReason ?? null)}`);
     }
     const output = lines.join('\n');
     if (output !== lastPrinted && output.trim()) {
@@ -106,7 +107,6 @@ export async function followExecution(
   });
   const stream = api.streamExecution(sessionId, (event) => {
     if (event.type === 'task_started') {
-      if (event.runner === SCRIPT_RUNNER) scriptTasks.add(event.taskId);
       process.stderr.write(`· ${taskStartedNotice(event.title, event.runner)}\n`);
     }
     if (event.type === 'checkpoint') {
@@ -181,9 +181,32 @@ export async function followExecution(
   await followExecution(api, sessionId, () => (onBlocked === 'stash' ? api.continueWithStash(sessionId) : api.continueWithoutIsolation(sessionId)));
 }
 
+/**
+ * A script task's body as `ordewell plan` shows it, printed before `run`
+ * hands the plan over: `executePlan` approves every waiting task (ADR-0035),
+ * so a headless user reads what they are approving before it can run.
+ */
+function printScriptBodies(plan: Record<string, unknown>): void {
+  for (const t of allTasksOf(plan)) {
+    if (t.type !== 'script' || t.status === 'completed' || t.status === 'skipped') continue;
+    console.log(`  Script ${refOf(t.id)} "${t.title}":`);
+    for (const line of scriptTaskText(t).split('\n')) console.log(line ? `        ${line.replace(/\t/g, '    ')}` : '');
+  }
+}
+
 export async function handleRun(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   const sessionId = resolveSessionId(subArgs);
+  const workspace = flag(subArgs, '--workspace') || process.cwd();
   const api = await connect(subArgs, injectedApi);
+
+  let plan: Record<string, unknown>;
+  try {
+    plan = (await api.getSession(sessionId, workspace)).plan as unknown as Record<string, unknown>;
+  } catch (err) {
+    console.error(`Failed to read the plan: ${(err as Error).message}`);
+    process.exit(1);
+  }
+  printScriptBodies(plan);
 
   console.error(`Executing plan...`);
   const onBlocked = hasFlag(subArgs, '--stash') ? 'stash' : hasFlag(subArgs, '--without-isolation') ? 'shared' : undefined;

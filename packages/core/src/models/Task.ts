@@ -120,6 +120,25 @@ export function migrateLoadedTasks(tasks: readonly Task[]): void {
 }
 
 /**
+ * Drop what a build before the per-message research budget was removed wrote
+ * for it (ADR-0037): the budget, its two run settings, its per-turn flag, and
+ * the report wait a task carried. The persisted types no longer name these,
+ * so a reopened session would otherwise spread them onto the wire and write
+ * them back; they are deleted by key, never widened into the types.
+ */
+export function dropRetiredPlanFields(plan: LegacyPlanState): void {
+  const raw = plan as unknown as Record<string, unknown>;
+  delete raw.researchBudget;
+  const settings = plan.runSettings as unknown as Record<string, unknown> | undefined;
+  if (settings) {
+    delete settings.researchMaxParallel;
+    delete settings.researchMaxPerMessage;
+  }
+  for (const turn of plan.pendingTurns ?? []) delete (turn as unknown as Record<string, unknown>).budgetStarted;
+  for (const task of flattenTasks(plan.tasks)) delete (task as unknown as Record<string, unknown>).researchWait;
+}
+
+/**
  * A task skill as one attempt received it: read from the task's own worktree
  * (or global) at spawn, kept so the user can see what the runner was told
  * even after the skill's file changes.
