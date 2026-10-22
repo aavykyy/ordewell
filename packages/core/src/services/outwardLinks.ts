@@ -7,13 +7,21 @@ import * as path from 'path';
  * where its runner's git starts.
  *
  * Links a read-only task's sealed runs left in its worktree that lead out of
- * it and the workspace. The task's runner reads that worktree with
- * its own tools, as the user and outside any sandbox, and its unsealed
+ * it and the workspace. The task's runner reads that worktree with its
+ * own tools, as the user and outside any sandbox, and its unsealed
  * commands read it in the planner's sandbox, which reads the whole host: a
  * link to `~/.ssh` there would hand either of them what a sealed run could
  * never read. Where the sandbox cannot refuse the link (bubblewrap), the task
  * shell removes it when the run ends, and nothing of the run is left to make
  * another, since the run's PID namespace ends with it.
+ *
+ * A `.git` the run planted is removed by the same walk. The runner's own git
+ * starts where its command does and loads a `.git` there before any parent,
+ * with whatever hooks, filters or `core.fsmonitor` the run gave it. One that
+ * was under the writable directory before the task's first sealed run is the
+ * checkout's: a submodule's `.git` file, a vendored repository, a worktree's
+ * own. One planted later goes, and one that cannot be removed stops the task's
+ * shell rather than stay for git to load.
  */
 
 async function canonical(p: string): Promise<string> {
@@ -25,6 +33,11 @@ function within(abs: string, roots: readonly string[]): boolean {
     const rel = path.relative(root, abs);
     return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
   });
+}
+
+/** Whether an entry is a `.git` git finds there; macOS's file system ignores case, so `.GIT` is one too. */
+function isGitName(name: string): boolean {
+  return name.toLowerCase() === '.git';
 }
 
 /** Where a link leads: its target on disk, or, dangling, the path it names. */
@@ -45,20 +58,90 @@ async function opened(dir: string): Promise<boolean> {
 }
 
 /**
- * Remove every link under `dir` that leads outside `roots`, and return the
- * paths removed, relative to `dir`, sorted. The walk never follows a link,
- * a directory the run left closed to its owner is opened to them, and a
+ * The canonical paths of the `.git` entries under `dir`, taken before a task's
+ * first sealed run (ADR-0046). Whatever the checkout brought and the run did
+ * not is in this set, and the sweep leaves it; anything else named `.git`
+ * later was planted.
+ */
+export async function snapshotGitEntries(dir: string): Promise<Set<string>> {
+  const top = await canonical(dir);
+  const found = new Set<string>();
+  const walk = async (at: string): Promise<void> => {
+    let entries;
+    try {
+      entries = await fs.readdir(at, { withFileTypes: true });
+    } catch {
+      if (!(await opened(at))) return;
+      try { entries = await fs.readdir(at, { withFileTypes: true }); } catch { return; }
+    }
+    await Promise.all(entries.map(async (entry) => {
+      const full = path.join(at, entry.name);
+      if (isGitName(entry.name)) {
+        // Record it, never walk in: a repository's own objects are not the
+        // task's `.git` problem, and one can hold thousands of files.
+        found.add(await canonical(full));
+        return;
+      }
+      if (entry.isDirectory()) return walk(full);
+    }));
+  };
+  await walk(top);
+  return found;
+}
+
+/** What the writable directory held before the task's first sealed run, and which of its entries are worktree roots. */
+export interface GitBefore {
+  /** What {@link snapshotGitEntries} found then. */
+  keep: ReadonlySet<string>;
+  /** The worktree roots whose own `.git` is the repository's: one per repo in a group. */
+  worktrees: readonly string[];
+}
+
+export interface SealedSweep {
+  /** Links removed, relative to the walk root, sorted. */
+  removedLinks: string[];
+  /** A `.git` the run planted that the sweep removed, relative to the walk root, sorted. */
+  removedGit: string[];
+  /** A `.git` the run planted that the sweep could not remove, relative to the walk root, sorted. */
+  stuckGit: string[];
+}
+
+/**
+ * Move a `.git` aside, which takes one write to its directory however the run
+ * left what it holds, then remove it. False when even the move failed: the
+ * name still resolves, so git outside would find it.
+ */
+async function removeGitEntry(entry: string): Promise<boolean> {
+  const dir = path.dirname(entry);
+  const aside = path.join(dir, `.removed-git-${process.pid}-${Date.now()}`);
+  try {
+    await fs.rename(entry, aside);
+  } catch {
+    if (!(await opened(dir))) return false;
+    try { await fs.rename(entry, aside); } catch { return false; }
+  }
+  await fs.rm(aside, { recursive: true, force: true }).catch(() => undefined);
+  return true;
+}
+
+/**
+ * Remove every link under `dir` that leads outside `roots`, and, when `git`
+ * says what was there before, every `.git` the run planted after it. Returns
+ * what was removed and what could not be. The walk never follows a link, a
+ * directory the run left closed to its owner is opened to them, and a
  * directory that no longer resolves to where the walk found it is skipped
  * rather than removed from.
  */
-export async function removeOutwardLinks(dir: string, roots: readonly string[]): Promise<string[]> {
+export async function removeOutwardLinks(dir: string, roots: readonly string[], git?: GitBefore): Promise<SealedSweep> {
   const top = await canonical(dir);
   const inside = await Promise.all(roots.map(canonical));
-  const removed: string[] = [];
+  const worktrees = new Set(await Promise.all((git?.worktrees ?? []).map(canonical)));
+  const sweep: SealedSweep = { removedLinks: [], removedGit: [], stuckGit: [] };
   // Every entry at once: it runs after each sealed command of a read-only
   // task, nearly all of its commands, and a worktree with its dependencies
   // installed holds thousands of directories, which one at a time is slow.
-  const walk = async (at: string): Promise<void> => {
+  const walk = async (at: string, checkGit: boolean): Promise<void> => {
+    const here = await canonical(at);
     let entries;
     try {
       entries = await fs.readdir(at, { withFileTypes: true });
@@ -71,7 +154,17 @@ export async function removeOutwardLinks(dir: string, roots: readonly string[]):
     }
     await Promise.all(entries.map(async (entry) => {
       const full = path.join(at, entry.name);
-      if (entry.isDirectory()) return walk(full);
+      if (checkGit && git && isGitName(entry.name)) {
+        // A worktree's own `.git` and what the checkout brought stay. One
+        // that is a directory is still walked for links, never for another
+        // `.git`, since a repository's admin directory is not a task's
+        // workspace; one the run planted where its runner's git starts goes.
+        if (worktrees.has(here) || git.keep.has(await canonical(full))) return entry.isDirectory() ? walk(full, false) : undefined;
+        const removed = await removeGitEntry(full);
+        (removed ? sweep.removedGit : sweep.stuckGit).push(path.relative(top, full));
+        return;
+      }
+      if (entry.isDirectory()) return walk(full, checkGit);
       if (!entry.isSymbolicLink() || within(await destination(full), inside)) return;
       if ((await canonical(at)) !== at) return;
       try {
@@ -81,11 +174,14 @@ export async function removeOutwardLinks(dir: string, roots: readonly string[]):
         if (!(await opened(at))) return;
         try { await fs.unlink(full); } catch { return; }
       }
-      removed.push(path.relative(top, full));
+      sweep.removedLinks.push(path.relative(top, full));
     }));
   };
-  await walk(top);
-  return removed.sort();
+  await walk(top, true);
+  sweep.removedLinks.sort();
+  sweep.removedGit.sort();
+  sweep.stuckGit.sort();
+  return sweep;
 }
 
 /**
@@ -95,13 +191,15 @@ export async function removeOutwardLinks(dir: string, roots: readonly string[]):
  * where it starts before any parent, so one planted there would be the
  * repository it loads, with whatever `core.fsmonitor` the run gave it. Where
  * the sandbox cannot refuse creating it (bubblewrap) it is removed when the
- * run ends. A worktree root's own `.git` is the repository's and stays.
+ * run ends. A worktree root's own `.git` is the repository's and stays, and so
+ * is one `keep` records from before the task's first sealed run.
  */
-export async function removePlantedGit(dir: string, worktrees: readonly string[]): Promise<boolean> {
+export async function removePlantedGit(dir: string, worktrees: readonly string[], keep?: ReadonlySet<string>): Promise<boolean> {
   const top = await canonical(dir);
   if ((await Promise.all(worktrees.map(canonical))).includes(top)) return false;
   const planted = path.join(top, '.git');
   try { await fs.lstat(planted); } catch { return false; }
+  if (keep?.has(await canonical(planted))) return false;
   // Renamed first, which takes one write to `dir` however the run left the
   // inside, so git never finds it even where what it holds cannot be removed.
   const aside = path.join(top, `.removed-git-${process.pid}-${Date.now()}`);

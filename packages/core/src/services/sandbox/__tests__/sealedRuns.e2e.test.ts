@@ -297,6 +297,11 @@ describe('sealed runs', async () => {
           expect(tried.output).toContain('fixed\ntest');
           expect(existsSync(join(worktree, 'added.test'))).toBe(true);
 
+          // Edit then test: the later command runs in the same worktree, sealed too.
+          const tested = await shell.run('test -f added.test && cat added.test');
+          expect(tested.success).toBe(true);
+          expect(tested.output).toContain('test');
+
           const escaped = await shell.run(`echo changed > '${join(repo, 'a.md')}'`);
           expect(escaped.success).toBe(false);
           expect(readFileSync(join(repo, 'a.md'), 'utf8')).toBe('one\n');
@@ -411,6 +416,46 @@ describe('sealed runs', async () => {
         } finally {
           rmSync(join(worktree, 'sub'), { recursive: true, force: true });
           rmSync(join(worktree, 'moved-git'), { recursive: true, force: true });
+        }
+      });
+
+      it("in a repo group, writes each worktree but not the group root, and sweeps a .git planted below one (ADR-0046)", async () => {
+        const group = join(repo, '.ordewell', 'worktrees', 'run', '3-group-write');
+        const alpha = join(group, 'alpha');
+        const beta = join(group, 'beta');
+        git(repo, 'worktree', 'add', '-q', '-b', 'ordewell/run/3-group-write-alpha', alpha);
+        git(repo, 'worktree', 'add', '-q', '-b', 'ordewell/run/3-group-write-beta', beta);
+        const fs = new HostFileSystem(repo, sandbox);
+        const shell = fs.taskShell({ cwd: group, writable: group, worktrees: [alpha, beta] });
+        try {
+          // The group root is where the runner's own git starts, and holds no
+          // worktree's `.git`: the profile leaves it read-only.
+          const root = await shell.run('echo nope > root.txt');
+          expect(root.success).toBe(false);
+          expect(existsSync(join(group, 'root.txt'))).toBe(false);
+
+          const inAlpha = await shell.run('echo changed > alpha/a.md && cat alpha/a.md');
+          expect(inAlpha.success).toBe(true);
+          expect(inAlpha.output).toContain('changed');
+          const inBeta = await shell.run('printf "one\\n" > beta/b.md && cat beta/b.md');
+          expect(inBeta.success).toBe(true);
+          expect(inBeta.output).toContain('one');
+
+          // Sealed git still reads the repository through each worktree's `.git` file.
+          const log = await shell.run('git -C alpha log --oneline -1 | cat');
+          expect(log.output).toContain('base');
+          expect((await shell.run('git -C beta status --short')).success).toBe(true);
+
+          // A `.git` below a worktree: refused by Seatbelt, planted and swept
+          // by the run under bubblewrap. Either way none is left for git.
+          const planted = await shell.run('mkdir -p alpha/sub && mkdir alpha/sub/.git');
+          if (process.platform === 'linux') expect(planted.output).toContain('alpha/sub/.git');
+          expect(existsSync(join(alpha, 'sub', '.git'))).toBe(false);
+        } finally {
+          shell.end();
+          git(repo, 'worktree', 'remove', '--force', alpha);
+          git(repo, 'worktree', 'remove', '--force', beta);
+          rmSync(group, { recursive: true, force: true });
         }
       });
 

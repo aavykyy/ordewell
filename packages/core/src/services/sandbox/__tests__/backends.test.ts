@@ -158,6 +158,22 @@ describe('SeatbeltBackend.wrap', () => {
       expect(profileText(seatbelt.wrap(SH, sealed({ gitWorktrees: ['/work/ws/alpha'] })).args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1))).not.toContain('GITLESS');
     });
 
+    it("keeps each worktree's .git protected when a repo group makes only its worktrees writable (ADR-0046)", () => {
+      const launch = seatbelt.wrap(SH, sealed({
+        read: ['/usr', '/bin', '/ws'],
+        write: [SCRATCH, '/ws/alpha', '/ws/beta'],
+        gitWorktrees: ['/ws/alpha', '/ws/beta'],
+        gitless: ['/ws'],
+      }));
+      const text = profileText(launch.args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1));
+      expect(launch.args).toEqual(expect.arrayContaining([
+        'WRITABLE_1=/ws/alpha', 'WRITABLE_2=/ws/beta', 'GIT_0=/ws/alpha/.git', 'GIT_1=/ws/beta/.git', 'GITLESS_0=/ws',
+      ]));
+      expect(launch.args).not.toContain('WRITABLE_1=/ws');
+      expect(text).toContain('(deny file-write* (literal (param "GIT_0")) (literal (param "GIT_1")))');
+      expect(text).toContain('(deny file-write-create (require-all (regex #"/\\.git$") (require-any (subpath (param "GITLESS_0")))))');
+    });
+
     it('keeps a hostile path out of the profile text in the read list too', () => {
       const launch = seatbelt.wrap(SH, sealed({ read: [HOSTILE] }));
       expect(launch.args.find((arg) => arg.startsWith('(version 1)'))).not.toContain('a"b');
@@ -295,6 +311,22 @@ describe('BubblewrapBackend.wrap', () => {
       // After the writable bind, so the overmount of the .git file stands.
       expect(joined.indexOf('--ro-bind /work/repo/wt/.git')).toBeGreaterThan(joined.indexOf('--bind /work/repo/wt /work/repo/wt'));
       expect(bwrap().wrap(SH, sealed()).args.join(' ')).not.toContain('/.git');
+    });
+
+    it("binds a repo group's worktrees, not its task workspace root, which the workspace read leaves read-only (ADR-0046)", () => {
+      const { args } = bwrap().wrap(SH, sealed({
+        read: ['/usr', '/bin', '/ws'],
+        write: [SCRATCH, '/ws/alpha', '/ws/beta'],
+        gitWorktrees: ['/ws/alpha', '/ws/beta'],
+      }));
+      const joined = args.join(' ');
+      expect(joined).toContain('--ro-bind /ws /ws');
+      expect(joined).toContain('--bind /ws/alpha /ws/alpha');
+      expect(joined).toContain('--bind /ws/beta /ws/beta');
+      expect(joined).not.toContain('--bind /ws /ws');
+      // A worktree's `.git` is still overmounted read-only after its writable bind.
+      expect(joined).toContain('--ro-bind /ws/alpha/.git /ws/alpha/.git');
+      expect(joined).toContain('--ro-bind /ws/beta/.git /ws/beta/.git');
     });
   });
 });

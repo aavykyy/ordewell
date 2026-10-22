@@ -227,15 +227,21 @@ export function sealedShellProfile(
   host: { platform: NodeJS.Platform; reads: readonly string[]; masked: readonly string[]; overlay: boolean },
   opts: SealedRunOptions & { scratch?: string },
 ): SandboxProfile {
-  const worktrees = opts.worktrees ?? (opts.writable ? [opts.writable] : []);
+  const writable = opts.writable;
+  const worktrees = opts.worktrees ?? (writable ? [writable] : []);
+  // A repo group's task workspace root holds no worktree's `.git`, and is where
+  // the runner's own git starts: binding only its worktrees leaves the root
+  // read-only, so a sealed run cannot plant a repository there (ADR-0046). One
+  // repository keeps its writable directory whole.
+  const groupRoot = writable !== undefined && worktrees.length > 0 && worktrees.every((worktree) => strictlyWithin(worktree, writable));
   return {
-    write: [opts.scratch, opts.writable, opts.tmpdir].filter((p): p is string => !!p),
+    write: [opts.scratch, ...(groupRoot ? worktrees : writable ? [writable] : []), opts.tmpdir].filter((p): p is string => !!p),
     // Seatbelt refuses a link by its type; under bubblewrap the task shell removes those leading out once the run ends (ADR-0046).
-    ...(opts.writable && host.platform === 'darwin' ? { linkless: [opts.writable] } : {}),
+    ...(writable && host.platform === 'darwin' ? { linkless: [writable] } : {}),
     // Keep each worktree's `.git` the repository's, so git run outside the sandbox never loads one a sealed run planted (ADR-0046).
     ...(worktrees.length ? { gitWorktrees: worktrees } : {}),
     // The whole writable directory, since a repo group's runner starts its git at the task workspace's root, which holds no worktree's `.git`.
-    ...(opts.writable && host.platform === 'darwin' ? { gitless: [opts.writable] } : {}),
+    ...(writable && host.platform === 'darwin' ? { gitless: [writable] } : {}),
     read: [...host.reads, opts.workspace],
     ...(host.overlay ? { throwaway: [opts.workspace] } : {}),
     masked: host.masked,
@@ -247,6 +253,12 @@ export function sealedShellProfile(
     inheritEnv: SEALED_ENV,
     limits: opts.limits ?? SEALED_LIMITS,
   };
+}
+
+/** Whether `child` lies below `parent` rather than being it. */
+function strictlyWithin(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
 const LEAD = "The planner's shell runs without an OS sandbox on this machine";
