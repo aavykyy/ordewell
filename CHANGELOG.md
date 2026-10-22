@@ -51,12 +51,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   its turn to a research task: a read-only task whose report comes back to the
   planner. Its end, passed, failed or blocked, opens a planner turn with the
   report at every supervisor level, Off included, and you can talk to the
-  planner while it runs. Research tasks start without asking, two at once and
-  four for each message you send unless you change it in `/settings`; the same
-  limit caps the report turns one message
-  opens, and further reports wait for your next message. Surfaces mark a
-  research row, say which limit holds one, and show its report in the run
-  update that delivered it
+  planner while it runs. Research tasks start without asking, the planner
+  decides how many a message starts, and they run within the run's Parallel
+  limit like any other task. Surfaces mark a research row and show its report in
+  the run update that delivered it
   ([ADR-0037](docs/adr/supervision/0037-research-tasks-wake-the-planner.md)).
 - **The planner chooses a strategy before it outlines a plan.** It first
   decides what kind of goal it has: a question it answers in its reply, with no

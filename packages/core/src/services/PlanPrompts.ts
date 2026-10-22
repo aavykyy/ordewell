@@ -74,14 +74,15 @@ function readOnlyGuide(runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefin
 
 /**
  * Research tasks (ADR-0037), as a read-only task's guide ends: when one is the
- * right tool, what its brief holds, and the limits that bound it. What a task
- * does is the read-only guide's; this only adds the report that comes back.
+ * right tool, what its brief holds, and that the planner decides how many run.
+ * What a task does is the read-only guide's; this only adds the report that
+ * comes back.
  */
 function researchTasksGuide(tools: boolean): string[] {
   return [
     'Add "research": true to a read-only top-level AI task whose report should come back to you: research that should outlive this turn, or that you would otherwise run in the background. Its report is its task_complete summary, and when the task ends (passes, fails or is blocked) it wakes you with that report, at every supervisor level, while you keep talking with the user meanwhile. Within a single turn, wait for your own subagents instead (see RESEARCH PHASE). Never on a subtask, an ops task or a loop\'s body.',
     'A research task may run anything sealed and try changes in its own throwaway worktree, but lands nothing. Write its prompt as a brief it can act on without this conversation: what to find out, where to start, what the report must contain (evidence for and against, file paths and line references, what it ran and what happened), and how you will check it. Prefer a command whose exit status settles a point over its prose.',
-    `You add a research task with the plan, or ${tools ? 'with edit_plan' : 'in a task-ops reply'} later, and it starts at once without asking. It is bounded by the run settings: by default 2 research tasks run at once and 4 start per user message, your report turns counted, and the rest wait for a slot or for the user's next message. The turn's input says how many are left. Spend them on the questions that decide the plan.`,
+    `You add a research task with the plan, or ${tools ? 'with edit_plan' : 'in a task-ops reply'} later, and it starts at once without asking. Start a research task for each independent thread worth running in the background; the run's Parallel limit bounds what runs at once. In a report turn, start another only when the report opens a genuinely new question.`,
   ];
 }
 
@@ -323,7 +324,7 @@ function strategySection(execution: boolean): string[] {
       ? '- A small effect you can state as exact commands: one script task. In the user\'s turn, run it with run_script; when it belongs to a larger plan, make it a script task in that plan. An effect that needs judgment is an ops task.'
       : '- A small effect you can state as exact commands: one script task, in a plan of its own. An effect that needs judgment is an ops task.',
     '- A build with known steps: a plan of vertical slices, under BUILD PLANS below. When the build must also meet a bar that can be checked (the tests pass, a review finds nothing), end it with a loop, under LOOPS below.',
-    '- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix. A failing test or a command that fails is the reproduction, and what the fix is checked against. Give each hypothesis a research task of its own that reports the evidence for and against it, so they run in parallel while you keep talking with the user, within the research limits (see READ-ONLY TASKS). Plan the fix once the reports name the cause. When the reproduction is a command you can run again, make it the check of a loop whose body is the fix, under LOOPS below.',
+    '- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix. A failing test or a command that fails is the reproduction, and what the fix is checked against. Give each hypothesis a research task of its own that reports the evidence for and against it, so they run in parallel while you keep talking with the user (see READ-ONLY TASKS). Plan the fix once the reports name the cause. When the reproduction is a command you can run again, make it the check of a loop whose body is the fix, under LOOPS below.',
     '- A goal that is done only when something passes ("until the tests pass", "until the review finds nothing"): a loop, under LOOPS below. It sits at the end of a build or a fix.',
     '- An open problem with no known path: plan only the first round of exploration, as research tasks that each report on one question. Their reports wake you: read them, then extend the plan with the next round, or with the build they point to.',
     'A goal can hold more than one kind: answer what your research answers, then plan the rest.',
@@ -344,7 +345,7 @@ const CONTEXT_SECTION = [
   '- Before going deep into anything that looks large, map it first (skim it, or send parallel read-only scouts), then split along the seams the map shows.',
   '- Give each delegated piece a self-contained brief: its goal, its inputs, what to report back, and how its result will be checked. A task never sees this conversation. Plan the integration step.',
   '- Prefer evidence you can check (a test, an exit code, a proof checker) over a task\'s own word.',
-  '- A turn\'s input may end with how full your context is, what remains of your reads, and how many research tasks you may still start for this message. Plan the turn around it.',
+  '- A turn\'s input may end with how full your context is and what remains of your reads. Plan the turn around it.',
   '',
 ];
 

@@ -55,8 +55,6 @@ export interface TaskView {
   ops?: boolean;
   /** A research task (ADR-0037): its report goes to the planner and wakes it. */
   research?: boolean;
-  /** The research limit a research task waits for, when that is what holds it (ADR-0037 R4). */
-  researchWait?: { kind: 'research-parallel' | 'research-message'; limit: number };
   /** A script task's body (ADR-0035): argument vectors run in order, or one script. Kept raw: the pane shows it with unseen characters spelled out. */
   commands?: string[][];
   script?: string;

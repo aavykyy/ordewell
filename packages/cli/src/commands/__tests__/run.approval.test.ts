@@ -91,25 +91,16 @@ describe('ordewell run on a research task (ADR-0037)', () => {
   };
   const done = { type: 'execution_complete', summary: { total: 2, completed: 1, failed: 0, blocked: 0, skipped: 0 } } as Event;
 
-  it('tags its line [RES], and says which research limit holds it back', async () => {
+  it('tags its line [RES]', async () => {
     const out = await run([
       { type: 'status_update', tasks: [
         { id: 'task-0001', status: 'in_progress', verdict: null },
-        { id: 'task-0002', status: 'pending', verdict: null, research: true, researchWait: { kind: 'research-parallel', limit: 2 } },
+        { id: 'task-0002', status: 'pending', verdict: null, research: true },
       ] },
       done,
     ]);
-    expect(out).toContain('#0002 [RES] pending: waits for a research slot: 2 research tasks run at once');
+    expect(out).toContain('#0002 [RES] pending');
     expect(out).not.toMatch(/#0001 [^\n]*(\[RES\]|research)/);
-  });
-
-  it('drops the wait once the task has started', async () => {
-    const out = await run([
-      { type: 'status_update', tasks: [{ id: 'task-0002', status: 'in_progress', verdict: null, research: true, researchWait: { kind: 'research-parallel', limit: 2 } }] },
-      done,
-    ]);
-    expect(out).toMatch(/#0002 \[RES\] in_progress/);
-    expect(out).not.toContain('research slot');
   });
 });
 

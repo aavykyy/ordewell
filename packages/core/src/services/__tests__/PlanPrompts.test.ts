@@ -278,10 +278,11 @@ describe('research tasks (ADR-0037)', () => {
     expect(guide).toMatch(/what to find out, where to start, what the report must contain .* and how you will check it/);
   });
 
-  it.each([false, true])('names the limits and where the planner reads what is left (harness: %s)', (harness) => {
+  it.each([false, true])('says the planner decides how many, bounded by Parallel (harness: %s)', (harness) => {
     const p = prompt(harness);
-    expect(section(p, 'READ-ONLY TASKS:')).toMatch(/by default 2 research tasks run at once and 4 start per user message, your report turns counted/);
-    expect(section(p, 'YOUR CONTEXT:')).toMatch(/how many research tasks you may still start for this message/);
+    expect(section(p, 'READ-ONLY TASKS:')).toMatch(/Start a research task for each independent thread worth running in the background; the run's Parallel limit bounds what runs at once/);
+    expect(section(p, 'READ-ONLY TASKS:')).toMatch(/In a report turn, start another only when the report opens a genuinely new question/);
+    expect(section(p, 'YOUR CONTEXT:')).not.toMatch(/research/);
   });
 
   it.each([false, true])('shows "research" in PLAN FORMAT, with an example the plan\'s own rules accept (harness: %s)', (harness) => {
@@ -584,7 +585,7 @@ describe('the strategy step and the context rules (#108)', () => {
     expect(rules).toMatch(/self-contained brief: its goal, its inputs, what to report back, and how its result will be checked/);
     expect(rules).toMatch(/Plan the integration step/);
     expect(rules).toMatch(/Prefer evidence you can check .* over a task's own word/);
-    expect(rules).toMatch(/how full your context is, what remains of your reads/);
+    expect(rules).toMatch(/how full your context is and what remains of your reads/);
   });
 
   it('keeps every slicing rule under BUILD PLANS, and nowhere a non-build goal would read it as its own', () => {

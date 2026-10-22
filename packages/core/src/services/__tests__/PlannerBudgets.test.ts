@@ -1,11 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { TurnBudgets, researchTasksLine, contextLine, taskReadsLine, webReadsLine, withTurnBudgets } from '../PlannerBudgets';
+import { TurnBudgets, contextLine, taskReadsLine, webReadsLine, withTurnBudgets } from '../PlannerBudgets';
 
 describe('budget lines', () => {
-  it('states the research allowance left for this message, including zero', () => {
-    expect(researchTasksLine(3)).toBe('Research tasks left for this message: 3.');
-    expect(researchTasksLine(-1)).toBe('Research tasks left for this message: 0.');
-  });
   it('shows the context against its window', () => {
     expect(contextLine({ usedTokens: 61_000, windowTokens: 1_000_000 })).toBe('Context: 61k of 1,000k tokens used (6%).');
   });

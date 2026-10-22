@@ -520,8 +520,6 @@ export type PlanTurnSource = 'user' | 'supervisor';
  * with it, whatever turns fail meanwhile.
  */
 export interface PendingPlanTurn {
-  /** Its user message already opened a budget: a usage-limit resend must keep the spending (ADR-0037 R4). */
-  budgetStarted?: true;
   id: string;
   source: PlanTurnSource;
   /** The user's message, or a wake-up batch's digest. */
@@ -552,8 +550,6 @@ export interface RunSettings {
   supervisorRetryLimit?: number;
   /** Absent on a run started before ADR-0030: the user's setting. */
   wakeUpReadBudget?: number;
-  researchMaxParallel?: number;
-  researchMaxPerMessage?: number;
   /** Why the supervisor stopped for the rest of this run, which carries on as Off; absent while it watches. */
   unsupervised?: string;
 }
@@ -582,8 +578,6 @@ export interface PlannerResendState {
 }
 
 export interface LegacyPlanState {
-  /** ADR-0037 R4: starts and automatic report turns since the last user message, kept across runs and reloads. */
-  researchBudget?: { tasks: number; reports: number };
   /** Research profiles the planner approved as they landed: lifting one withdraws its approval (ADR-0037 R4). */
   researchApprovals?: string[];
   runSettings?: RunSettings;

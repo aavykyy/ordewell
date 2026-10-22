@@ -278,15 +278,11 @@ read-only AI task whose `task_complete` report is addressed to the planner.
 It cannot be a loop body task. The planner approves it as it lands, and its
 end (passed, failed or blocked) joins the shared report wake-up path at Off,
 Watch and Act, with the authority of the turn that started it. Nothing lands
-(ADR-0046). The global, saved, live run settings default to two research
-attempts at once and four research starts per user message. That message's
-report turns share the start budget and have a separate counter capped by the
-same setting, including `run_script` reports. Excess tasks wait with a
-readiness reason; excess reports wait for the next user message. Both counters
-survive a reload and reset only for a new user message. Removing research or
-lifting read-only withdraws the approval granted as research landed.
-Surfaces mark its row as research, say which limit holds it, and draw its
-report in the run update that delivered it, folded when long.
+(ADR-0046). How many a message starts is the planner's judgement, and the run's
+Parallel limit bounds what runs at once: research tasks and every other task
+share the same slots. Removing research or lifting read-only withdraws the
+approval granted as research landed. Surfaces mark its row as research and draw
+its report in the run update that delivered it, folded when long.
 *Avoid:* "background agent" — a harness's subagents are awaited inside their
 turn; work across turns is a task in the plan.
 
@@ -1081,9 +1077,9 @@ one only after a retry or a skip.
 **Start rule** (`startWaits`, `StartWait`, `services/readiness.ts`) — whether a
 task can start now and, if not, every reason it waits, in a fixed order whose
 first is *the* reason (ADR-0034): it has started; Mark complete is landing it;
-it has no prompt; it is outside the user's approval record; it is a *Research
-task* at a research limit; it is on hold, with that reason shown on every
-surface; it is blocked; it is in a *Loop*'s body whose check has not failed this round
+it has no prompt; it is outside the user's approval record; it is on hold, with
+that reason shown on every surface; it is blocked; it is in a *Loop*'s body
+whose check has not failed this round
 (`loop-check`, "runs if #X fails"); its dependencies are not met, or, queued
 by a force start, are still under way; a Merge all is under way and it is an ops task; its runner
 waits on a usage limit's reset; a planner turn holds new starts; it is at its
@@ -2434,8 +2430,8 @@ setting; a Guarded session can have an Act supervisor. *Avoid:* "mandate" until
 
 **Run settings** — the machine-wide user settings that say how a run is
 started, watched and merged: **Supervisor level**, **Auto-merge at gates**,
-**Autorun**, the supervisor's retry limit, the wake-up read budget, and the
-research concurrency and per-message limits (ADR-0030, ADR-0037 R4). Saved in
+**Autorun**, the supervisor's retry limit and the wake-up read budget
+(ADR-0030). Saved in
 `settings.json`, changed only by the user through `/settings` (or the headless
 commands behind it) or `PATCH /api/settings`, never by the
 planner. A change applies at once to the session it is made in; another

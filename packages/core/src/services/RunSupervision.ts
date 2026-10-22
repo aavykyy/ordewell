@@ -122,8 +122,6 @@ export class RunSupervision {
         supervisorLevel: user.supervisorLevel,
         supervisorRetryLimit: user.supervisorRetryLimit,
         wakeUpReadBudget: user.wakeUpReadBudget,
-        researchMaxParallel: user.researchMaxParallel,
-        researchMaxPerMessage: user.researchMaxPerMessage,
       };
       this.guards.forget();
     }
@@ -153,8 +151,6 @@ export class RunSupervision {
     if (changes.mergeAtGatesAutomatically !== undefined) settings.mergeAtGatesAutomatically = changes.mergeAtGatesAutomatically;
     if (changes.supervisorRetryLimit !== undefined) settings.supervisorRetryLimit = changes.supervisorRetryLimit;
     if (changes.wakeUpReadBudget !== undefined) settings.wakeUpReadBudget = changes.wakeUpReadBudget;
-    if (changes.researchMaxParallel !== undefined) settings.researchMaxParallel = changes.researchMaxParallel;
-    if (changes.researchMaxPerMessage !== undefined) settings.researchMaxPerMessage = changes.researchMaxPerMessage;
     this.host.save();
   }
 

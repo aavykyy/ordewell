@@ -40,21 +40,8 @@ describe('plan pane — a research task (ADR-0037)', () => {
     expect(out).toContain('Read-only: it lands nothing. Its report wakes the planner when it ends.');
   });
 
-  it('shows the limit that holds it back, and says when it will start', () => {
-    expect(frame(plan([task({ research: true, researchWait: { kind: 'research-parallel', limit: 2 } })])))
-      .toContain('⏸ waits for a research slot: 2 research tasks run at once');
-    expect(frame(plan([task({ research: true, researchWait: { kind: 'research-message', limit: 4 } })])))
-      .toContain('⏸ waits for your next message: this message has used its 4 research tasks');
-  });
-
-  it('drops a wait the task has outlived', () => {
-    const out = frame(plan([task({ research: true, status: 'in_progress', researchWait: { kind: 'research-parallel', limit: 2 } })]));
-    expect(out).not.toContain('research slot');
-  });
-
   it('draws no mark on a task that is not research', () => {
-    const out = frame(plan([task({ researchWait: { kind: 'research-parallel', limit: 2 } })]));
+    const out = frame(plan([task()]));
     expect(out).not.toContain('RES');
-    expect(out).not.toContain('research slot');
   });
 });

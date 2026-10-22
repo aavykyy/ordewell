@@ -51,7 +51,7 @@ describe('/settings', () => {
   it('opens on Autonomy and pre-selects every current value', () => {
     let state = typed(base({ autonomous: false, maxParallel: 3 }), '/settings').state;
     const seen: { step: string; highlighted: string | undefined }[] = [];
-    for (let i = 0; i < 9; i += 1) {
+    for (let i = 0; i < 7; i += 1) {
       seen.push(onScreen(state));
       state = press(state, 'tab').state;
     }
@@ -63,8 +63,6 @@ describe('/settings', () => {
       { step: 'Automerge', highlighted: 'Off' },
       { step: 'Autorun', highlighted: 'Off' },
       { step: 'Parallel', highlighted: '3' },
-      { step: 'Research at once', highlighted: '2' },
-      { step: 'Research per message', highlighted: '4' },
     ]);
   });
 
@@ -134,11 +132,11 @@ describe('/settings', () => {
 
   it('hides the supervisor retries and reads steps as soon as the supervisor is saved Off', () => {
     const atOff = typed(base({ runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }), '/settings').state;
-    expect(stepper(atOff).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel', 'Research at once', 'Research per message']);
+    expect(stepper(atOff).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel']);
 
     const { state, effects } = press(walk(typed(base(), '/settings').state, 'tab', 'up'), 'enter');
     expect(effects).toEqual([save({ supervisorLevel: 'off' }, 'Settings: Supervisor Off')]);
-    expect(stepper(state).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel', 'Research at once', 'Research per message']);
+    expect(stepper(state).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel']);
     expect(onScreen(state).step).toBe('Supervisor');
     expect(onScreen(walk(state, 'right')).step).toBe('Automerge');
   });
@@ -198,26 +196,11 @@ describe('/settings', () => {
     expect(onScreen(retries.state)).toEqual({ step: 'Supervisor retries', highlighted: '0' });
   });
 
-  it('saves the research limits typed for them, and refuses 0 (ADR-0037 R4)', () => {
-    const at = (tabs: number) => walk(typed(base(), '/settings').state, ...Array<string>(tabs).fill('tab'));
-    const atOnce = press(type(at(7), '3'), 'enter');
-    expect(atOnce.effects).toEqual([save({ researchMaxParallel: 3 }, 'Settings: Research at once 3')]);
-    expect(onScreen(atOnce.state)).toEqual({ step: 'Research at once', highlighted: '3' });
-
-    const perMessage = press(type(at(8), '6'), 'enter');
-    expect(perMessage.effects).toEqual([save({ researchMaxPerMessage: 6 }, 'Settings: Research per message 6')]);
-
-    expect(onScreen(walk(type(at(7), '0'), 'enter'))).toEqual({ step: 'Research at once', highlighted: '0' });
-    expect(onScreen(walk(type(at(8), '0'), 'enter'))).toEqual({ step: 'Research per message', highlighted: '0' });
-  });
-
   it('↓ stops at each count\'s minimum', () => {
     const down = (tabs: number, presses: number): string | undefined =>
       onScreen(walk(typed(base(), '/settings').state, ...Array<string>(tabs).fill('tab'), ...Array<string>(presses).fill('down'))).highlighted;
     expect(down(2, 5)).toBe('0');
     expect(down(3, 20)).toBe('1');
     expect(down(6, 10)).toBe('1');
-    expect(down(7, 10)).toBe('1');
-    expect(down(8, 10)).toBe('1');
   });
 });

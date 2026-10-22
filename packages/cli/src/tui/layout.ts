@@ -655,7 +655,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ),
     setupRow('Autonomy', state.autonomous ? style.yellow('Full') : 'Guarded', '', cols),
     setupRow('Run', runSettingsValue(state), '/settings', cols),
-    setupRow('Research', `${state.runSettings.researchMaxParallel} at once, ${state.runSettings.researchMaxPerMessage} per message`, '/settings', cols),
+    setupRow('Research', 'runs within the Parallel limit', '/settings', cols),
     '',
   ];
   // Only once nothing usable was found: a key reaches the welcome with the catalog, after the probe.
@@ -980,9 +980,6 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   }
   if (row.holdReason) {
     lines.push(...statusLines(style.yellow, '⏸', `${inRow(holdLabel(row.holdReason))} · retry or f start when ready`, cols, bodyPad));
-  }
-  if (row.researchWait) {
-    lines.push(...statusLines(style.yellow, '⏸', inRow(row.researchWait), cols, bodyPad));
   }
   if (row.blockedBy) {
     lines.push(...statusLines(style.red, '⊘', `${inRow(blockedByLabel(row.blockedBy))}: runs once ${row.blockedBy.length === 1 ? 'it is retried and passes' : 'they are retried and pass'}`, cols, bodyPad));
