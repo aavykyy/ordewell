@@ -163,11 +163,46 @@ describe('the research mark', () => {
   });
 });
 
+describe('the compact handoff a row shows (ADR-0047)', () => {
+  const finding = (id: string, severity: 'blocker' | 'major' | 'minor' | 'info') => ({ id, severity, title: id });
+
+  it('is null for an attempt that handed nothing over, or a plan saved before handoffs', () => {
+    expect(taskRowView(subject()).handoff).toBeNull();
+  });
+
+  it('carries the summary, the whole finding count and the worst severity the digest keeps', () => {
+    const row = taskRowView(subject({
+      status: 'completed',
+      handoff: { summary: 'Added the route.', findings: [finding('F1', 'minor'), finding('F2', 'blocker'), finding('F3', 'major')], findingCount: 3 },
+    }));
+
+    expect(row.handoff).toEqual({ summary: 'Added the route.', findingCount: 3, severity: 'blocker' });
+    expect(row.status).toBe('done');
+  });
+
+  it('keeps a count whose findings the digest left out, and says the severity it can see', () => {
+    const row = taskRowView(subject({
+      status: 'failed',
+      handoff: { summary: 'The schema is missing.', findings: [finding('F1', 'major')], findingCount: 30 },
+    }));
+
+    expect(row.handoff).toEqual({ summary: 'The schema is missing.', findingCount: 30, severity: 'major' });
+    expect(row.status).toBe('failed');
+  });
+
+  it('has no severity for a handoff with no findings, as a script and a user task leave', () => {
+    expect(taskRowView(subject({ status: 'completed', type: 'script', handoff: { summary: 'exited 0 in 2.5 s', findings: [], findingCount: 0 } })).handoff)
+      .toEqual({ summary: 'exited 0 in 2.5 s', findingCount: 0, severity: null });
+    expect(taskRowView(subject({ status: 'completed', type: 'user', handoff: { summary: 'Completed by the user', findings: [], findingCount: 0 } })).handoff)
+      .toEqual({ summary: 'Completed by the user', findingCount: 0, severity: null });
+  });
+});
+
 describe('the row view, every status against every annotation', () => {
   const isolated = { branch: 'b', worktree: 'w', repos: ['.'] };
   const annotations: [string, Partial<TaskRowSubject>, (view: ReturnType<typeof taskRowView>, status: string) => void][] = [
     ['nothing', {}, (v) => {
-      expect(v).toMatchObject({ conflict: null, repairing: null, repaired: null, mergeGate: null, opsChangedFiles: false, forcedPastGate: null, approvals: null, autonomous: false, waitsForApproval: null, holdReason: null, research: false });
+      expect(v).toMatchObject({ conflict: null, repairing: null, repaired: null, mergeGate: null, opsChangedFiles: false, forcedPastGate: null, approvals: null, autonomous: false, waitsForApproval: null, holdReason: null, research: false, handoff: null });
     }],
     ['a conflict in a named repo', { isolation: { ...isolated, state: 'conflict', conflictRepo: 'api', conflictFiles: ['a', 'b', 'c', 'd', 'e', 'f'] } }, (v) => {
       expect(v.conflict).toEqual({ repo: 'api', files: 'a, b, c, d, e, +1 more' });

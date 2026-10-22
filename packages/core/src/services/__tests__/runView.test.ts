@@ -233,6 +233,7 @@ describe('reduceRun', () => {
       ['awaitingApproval', { awaitingApproval: 1 }],
       ['mergeGate', { mergeGate: ['t0'] }],
       ['forcedPastGate', { forcedPastGate: ['Add the limiter'] }],
+      ['handoff', { handoff: { summary: 'Done.', findings: [], findingCount: 0 } }],
     ];
 
     it.each(statusOnly)('keeps %s from the last status update', (_field, status) => {
@@ -255,6 +256,18 @@ describe('reduceRun', () => {
 
       expect(reduceRun(before, generated([planned('t1', 1, waiting)])).tasks[0].checkpoint).toBe('Keep the old API?');
       expect(reduceRun(before, generated([planned('t1', 1, { status: 'in_progress' })])).tasks[0].checkpoint).toBeUndefined();
+    });
+
+    it('takes a handoff from the status stream and clears it when the latest attempt left none', () => {
+      const handoff = { summary: 'Done.', findings: [], findingCount: 0 };
+      const handed = play([
+        generated([planned('t1', 1, { status: 'completed' })]),
+        { type: 'status_update', tasks: [{ id: 't1', status: 'completed', verdict: null, handoff }] },
+      ]);
+      expect(handed.tasks[0].handoff).toEqual(handoff);
+
+      const retried = reduceRun(handed, { type: 'status_update', tasks: [{ id: 't1', status: 'pending', verdict: null }] });
+      expect(retried.tasks[0].handoff).toBeUndefined();
     });
 
     it('takes plan fields from the plan, absent meaning none', () => {

@@ -1,4 +1,5 @@
 import type { ResearchStepOutcome, SkillLoadNotice, SubagentOutcome } from '../models/Task';
+import type { StoredHandoff } from '../models/Handoff';
 import type { ContextFill, ModelUsage, UsageTotals } from '../models/Usage';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from '../services/ApprovalPolicy';
@@ -13,7 +14,7 @@ import type { RunnerCommand, RunnerMcpServer } from '../models/RunnerCommand';
  */
 export type DisplayBlock =
   | MessageBlock | ThinkingDisplayBlock | ToolBlock | SubagentBlock | ApprovalBlock | PlanBlock | SkillLoadBlock | UsageBlock
-  | CommandBlock | CompactionBlock | RunnerLoadedBlock;
+  | CommandBlock | CompactionBlock | RunnerLoadedBlock | HandoffBlock;
 
 /**
  * `agent` is a task runner speaking in a structured task's log (ADR-0018); the
@@ -197,6 +198,19 @@ export interface RunnerLoadedBlock {
   id: string;
   commands: readonly RunnerCommand[];
   mcpServers: readonly RunnerMcpServer[];
+}
+
+/**
+ * What a task handed over (ADR-0047), as its attempt's log keeps it: the
+ * summary, every finding with its evidence, the artifacts and the report. The
+ * plan keeps only a digest, so a surface that reads this block may show more
+ * than the plan knows. Expanding the report is surface UI state, as it is for
+ * every block.
+ */
+export interface HandoffBlock {
+  type: 'handoff';
+  id: string;
+  handoff: StoredHandoff;
 }
 
 /** The usage line (context and cost). Token counts ride in `totals` but are not drawn. There is at most one, and it is always the last block. */

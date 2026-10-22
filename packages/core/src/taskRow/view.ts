@@ -1,5 +1,7 @@
 import { taskUsageSummary, type AttemptUsage, type TaskUsageSummary } from '../models/Usage';
 import type { AwaitingReason, TaskType } from '../models/Task';
+import type { FindingSeverity, HandoffDigest } from '../models/Handoff';
+import { worstSeverity } from '../models/Handoff';
 import type { TaskLoop } from '../models/Loop';
 import type { TaskIsolationState } from '../interfaces/IWorktreeIsolation';
 import { taskOrderLabel, taskRefOf } from '../services/TaskRefs';
@@ -48,6 +50,8 @@ export interface TaskRowSubject {
   loop?: TaskLoop;
   loopRound?: number;
   verdict?: { outcome: string; reported?: string } | null;
+  /** The latest attempt's handoff as the plan keeps it (ADR-0047); a row shows it without opening the task. */
+  handoff?: HandoffDigest;
 }
 
 export interface TaskRowIsolation {
@@ -102,6 +106,18 @@ export type TaskRowKind = 'ai' | 'user' | 'ops' | 'script';
 /** The task's whole spend (see `taskUsageSummary`); `attempt` is the latest one, 0 before any reported. */
 export interface TaskRowUsage extends Pick<TaskUsageSummary, 'totals' | 'contextFill'> {
   attempt: number;
+}
+
+/**
+ * What a task handed over, as a collapsed row says it (ADR-0047): the
+ * author's summary, how many findings the handoff holds (the digest's cut
+ * included) and the worst severity the plan still keeps. The whole handoff,
+ * with every finding and the report, is in the attempt's log.
+ */
+export interface TaskRowHandoff {
+  summary: string;
+  findingCount: number;
+  severity: FindingSeverity | null;
 }
 
 /**
@@ -174,6 +190,8 @@ export interface TaskRowView {
   forcedPastGate: readonly string[] | null;
   /** Where the task stands in a loop (ADR-0045); null for a task in none. */
   loop: TaskRowLoop | null;
+  /** What it handed over (ADR-0047); null for an attempt that left none, or a plan saved before handoffs. */
+  handoff: TaskRowHandoff | null;
   /** The task's dependencies, by reference. */
   dependencies: string[];
   /** What the row offers while a plan runs. */
@@ -238,6 +256,16 @@ function loopOf(task: TaskRowSubject, reading: PlanReading | null): TaskRowLoop 
   return { role: 'body', label: loopBodyLabel(check, round, owner.loop.maxRounds), check, round };
 }
 
+/** The compact handoff a row shows: a summary, its finding count and the worst severity the digest still holds. */
+function handoffOf(task: TaskRowSubject): TaskRowHandoff | null {
+  if (!task.handoff) return null;
+  return {
+    summary: task.handoff.summary,
+    findingCount: task.handoff.findingCount,
+    severity: worstSeverity(task.handoff.findings),
+  };
+}
+
 function flagOf(task: TaskRowSubject, scope: AssignmentScope | undefined): Pick<TaskRowView, 'assignmentFlag' | 'assignmentConsequence'> {
   const issue = scope && task.assignedRunner !== undefined ? assignmentIssue({ ...task, assignedRunner: task.assignedRunner }, scope) : null;
   return issue
@@ -290,6 +318,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     opsChangedFiles: task.status === 'awaiting_user' && task.awaitingReason === 'files-changed',
     forcedPastGate: task.forcedPastGate?.length ? task.forcedPastGate : null,
     loop,
+    handoff: handoffOf(task),
     dependencies: refsOf(task.dependencies, context.tasks),
     // A block read off the plan offers what a stored one does: Skip among them.
     actions: taskRowActions(blocked.length > 0 ? { ...task, status: 'blocked' } : task, context.placement ?? (parent ? 'subtask' : 'task')),
