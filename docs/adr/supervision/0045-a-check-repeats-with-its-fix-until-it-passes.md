@@ -111,7 +111,13 @@ round *r* and round *r* + 1 the body runs once.
   Out of rounds, the one `task_failed` the supervisor hears says "its loop ran
   out of rounds: it failed all *N*", and so does the report of a check whose
   result a planner turn asked for (ADR-0037, R2), which is owed only now: a
-  round's failure is no end it reports.
+  round's failure is no end it reports. An edit that leaves a check between
+  rounds with no rounds left (lowering `maxRounds` to the round in progress)
+  closes the loop as its last round failing does: the body task that has not
+  run ends skipped ("not run: the loop ran out of rounds"), and the check
+  settles once more, so the supervisor hears one attention event
+  (`TaskOrchestrator.planEdited`, called from `reconcilePlan` and from
+  `PlanEditor.commit`).
 - **What stops a loop, and what starts its rounds over (L7).** A body task that
   fails, is skipped or is blocked stops the loop: the check is then the
   failure it is stored as, and its dependents are blocked until what stopped
@@ -221,3 +227,4 @@ check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-21 — accepted; core implemented (#118).
 - 2026-10-21 — surfaces draw the rounds and the planner prompt teaches loops (#118); implemented.
 - 2026-10-21 — a check retried or force-started while a fix of its body is at work waits for it to land, then runs as round 1 of a new set of rounds (L5); a new round revives only the loop's own skips, never the user's (L7).
+- 2026-10-22 — an edit that leaves a check between rounds with no rounds left closes its loop (L6).
