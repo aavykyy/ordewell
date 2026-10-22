@@ -7,10 +7,11 @@ import { ApprovalPolicy } from '../ApprovalPolicy';
 import { ranSealed } from '../researchStepSummary';
 import type { ShellLaunch } from '../researchShell';
 import {
-  PlannerShellSandbox, plannerShellProfile, sealedShellProfile, type PlannerSandboxAvailability,
+  PlannerShellSandbox, SEALED_LIMITS, plannerShellProfile, sealedShellProfile, type PlannerSandboxAvailability,
 } from '../sandbox/plannerSandbox';
 import type { SandboxBackend, SandboxLaunch, SandboxProfile } from '../sandbox/SandboxBackend';
 import type { ToolOutcome } from '../../interfaces/IFileSystem';
+import { DEFAULT_SCRIPT_TIMEOUT_MS } from '../../models/ScriptTask';
 
 /**
  * A read-only task's `run_command` (ADR-0046): the planner's command rules at
@@ -55,6 +56,8 @@ class WorkspaceFileSystem extends BaseFileSystem {
   readonly ran: Ran[] = [];
   /** What a command does to the disk as it runs, for one that must leave something behind. */
   effect?: (ran: Ran) => Promise<void> | void;
+  /** What the next command returns, for a shell the test ends itself (a time limit); `ran` otherwise. */
+  result?: ToolOutcome;
 
   constructor(private readonly root: string, private readonly backend: RecordingBackend | null) {
     super(undefined, new PlannerShellSandbox(async () => (backend ? available(backend) : { available: false, notice: 'no sandbox in this test' })));
@@ -71,7 +74,7 @@ class WorkspaceFileSystem extends BaseFileSystem {
     const ran = { command, cwd, sealed: shell.file === '/sealed', ...(profile ? { profile } : {}) };
     this.ran.push(ran);
     await this.effect?.(ran);
-    return { success: true, output: 'ran', truncated: false };
+    return this.result ?? { success: true, output: 'ran', truncated: false };
   }
 }
 
@@ -133,6 +136,29 @@ describe("a read-only task's shell (ADR-0046)", () => {
       expect(outcome.output).toContain("This task's worktree is writable and is thrown away when the task ends.");
       expect(outcome.output).toContain('git can read the repository but not record anything in it');
     }
+  });
+
+  it("gives its sealed runs a task-sized time limit, not the planner's short one (ADR-0046)", async () => {
+    const fs = session();
+    await fs.taskShell({ cwd: worktree, writable: worktree }).run('npm test');
+    await fs.bash('for f in *.md; do wc -l "$f"; done');
+
+    expect(fs.ran[0].profile!.limits!.wallTimeMs).toBe(DEFAULT_SCRIPT_TIMEOUT_MS);
+    expect(fs.ran[1].profile!.limits!.wallTimeMs).toBe(SEALED_LIMITS.wallTimeMs);
+  });
+
+  it('says the time limit ran out, rather than blaming reach, when a sealed run was ended at it', async () => {
+    const fs = session();
+    fs.result = { success: false, output: 'Command exited 1:\nexited with code 1', truncated: false, timedOut: true };
+
+    const tests = await fs.taskShell({ cwd: worktree, writable: worktree }).run('npm test');
+    const loop = await fs.bash('for f in *.md; do wc -l "$f"; done');
+
+    expect(tests.output).toContain('ended at its time limit of 10 minutes');
+    expect(tests.output).toContain('Run less at a time');
+    expect(tests.output).not.toContain('cannot reach the network');
+    expect(loop.output).toContain('ended at its time limit of 1 minute');
+    expect(loop.output).toContain('belongs in the plan as a task');
   });
 
   it('runs what the classifier reads as read-only as the planner would, from the worktree, without the network', async () => {

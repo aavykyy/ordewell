@@ -29,7 +29,7 @@ const SEARCH_TIMEOUT_MS = 20_000;
 /** Generous, because an approved `bash` call may legitimately be a test suite. */
 const BASH_TIMEOUT_MS = 120_000;
 
-interface ExecResult { stdout: string; stderr: string; code: number | null }
+interface ExecResult { stdout: string; stderr: string; code: number | null; timedOut: boolean }
 
 /** How long a sealed run's output may trail its exit. */
 const SEALED_OUTPUT_GRACE_MS = 1_000;
@@ -64,7 +64,8 @@ function run(
         signal: opts.signal,
       }, (err, stdout, stderr) => {
         const code = err && typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : err ? 1 : 0;
-        resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code });
+        // Only Node's own timeout sets `killed`; an abort and a stdout overflow do not, so this names the limit exactly.
+        resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code, timedOut: err?.killed === true });
       });
       // A process that left a sealed run's process group can hold its output
       // open after the run has ended: the result is what arrived by then.
@@ -73,7 +74,7 @@ function run(
       // `code: null` rather than 1: the search adapters read 0 and 1 as "ran,
       // possibly no matches", so a 1 would surface a confident "No matches
       // found." for a search that never executed.
-      resolve({ stdout: '', stderr: (err as Error).message, code: null });
+      resolve({ stdout: '', stderr: (err as Error).message, code: null, timedOut: false });
     }
   });
 }
@@ -295,7 +296,7 @@ export class VsCodeFileSystem extends BaseFileSystem {
       const detail = err || out || `exited with code ${result.code}`;
       // A failing command is still research — the failure output is usually
       // the answer the model was diagnosing toward.
-      return { success: false, output: `Command exited ${result.code}:\n${detail.slice(0, 20_000)}`, truncated: detail.length > 20_000 };
+      return { success: false, output: `Command exited ${result.code}:\n${detail.slice(0, 20_000)}`, truncated: detail.length > 20_000, ...(result.timedOut ? { timedOut: true } : {}) };
     }
 
     const combined = err ? `${out}\n[stderr]\n${err}` : out;

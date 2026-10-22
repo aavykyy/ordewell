@@ -4,6 +4,8 @@ export interface ExecResult {
   stdout: string;
   stderr: string;
   code: number | null;
+  /** The child was killed at the call's time limit, rather than exiting on its own. */
+  timedOut: boolean;
 }
 
 /**
@@ -57,7 +59,8 @@ export function run(
         signal: opts.signal,
       }, (err, stdout, stderr) => {
         const code = err && typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : err ? 1 : 0;
-        resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code });
+        // Only Node's own timeout sets `killed`; an abort and a stdout overflow do not, so this names the limit exactly.
+        resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code, timedOut: err?.killed === true });
       });
       // A process that left a sealed run's process group can hold its output
       // open after the run has ended: the result is what arrived by then.
@@ -66,7 +69,7 @@ export function run(
       // `code: null` rather than 1 on purpose: the search adapters read 0 and 1
       // as "ran, possibly no matches", so a 1 here would report a confident
       // "No matches found." for a search that never executed.
-      resolve({ stdout: '', stderr: (err as Error).message, code: null });
+      resolve({ stdout: '', stderr: (err as Error).message, code: null, timedOut: false });
     }
   });
 }

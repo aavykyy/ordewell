@@ -131,7 +131,10 @@ process.
 - A sealed run sees only the workspace and the system's own files: a tool
   installed under your home directory (`~/.nvm`, `~/.cargo/bin`) does not
   start in one, and nothing it needs from the network or your accounts works.
-  It has 60 seconds, and its result says it ran sealed.
+  The planner's sealed runs have 60 seconds, and the result says it ran sealed.
+  A read-only task's sealed commands get ten minutes instead, the time limit a
+  script task gets, since running the project's tests is what its one shell is
+  for; one that runs out of time says so.
 
 ## Merge all refused: not on the base branch
 

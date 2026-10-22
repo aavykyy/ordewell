@@ -36,7 +36,7 @@ export interface PlanEditorDeps {
    * there is no plan or `op` changed nothing.
    */
   mutate: (op: () => boolean, notify?: () => void) => LegacyPlanState | null;
-  scheduler: Pick<TaskOrchestrator, 'tick' | 'releaseTask' | 'releaseMovedResume'>;
+  scheduler: Pick<TaskOrchestrator, 'tick' | 'releaseTask' | 'releaseMovedResume' | 'planEdited'>;
   runs: Pick<IsolationRunController, 'current' | 'linkResolver'>;
   broadcast: SessionBroadcaster;
   /** Whether the planner has Ordewell's tools, which changes how a merge or split is asked of it. */
@@ -426,8 +426,12 @@ export class PlanEditor {
    * turn's end instead (`PlanTurns`); it must not tick twice.
    */
   private async commit(op: () => boolean, notify?: () => void): Promise<LegacyPlanState | null> {
+    // The plan as it was, so the scheduler can see a loop this edit ends:
+    // `updateTaskInPlan` copies every task, so this view stays what it read.
+    const before = this.store.planTasks;
     const plan = this.mutate(op, notify);
     if (!plan) return null;
+    this.scheduler.planEdited(before);
     await this.scheduler.tick();
     return plan;
   }

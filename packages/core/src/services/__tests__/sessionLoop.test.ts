@@ -61,6 +61,27 @@ describe('a loop under supervision (ADR-0045)', () => {
     env.session.destroy();
   });
 
+  it('closes a loop a direct edit leaves out of rounds, and wakes its supervisor once', async () => {
+    const tasks = [
+      task('review', 1, { loop: { body: ['fix', 'fix2'], maxRounds: 3 } }),
+      task('fix', 2, { dependencies: ['review'] }),
+      task('fix2', 3, { dependencies: ['review', 'fix'] }),
+      task('ship', 4, { dependencies: ['review'] }),
+    ];
+    const env = await supervised(tasks, { settings: { supervisorLevel: 'act' } });
+    await finish(env, 'review', 1, 'failed', 'Round one finding.');
+    await until(() => spawns(env, 'fix') === 1);
+
+    await env.session.updateTask('review', { loop: { body: ['fix', 'fix2'], maxRounds: 1 } });
+
+    expect(taskOf(env.session, 'fix2')).toMatchObject({ status: 'skipped', skipReason: 'not run: the loop ran out of rounds' });
+    await finish(env, 'fix', 1, 'done');
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 1);
+    expect(env.planner.calls[0].message).toContain('its loop ran out of rounds: it failed all 1');
+    env.session.destroy();
+  });
+
   it('leaves the check between rounds to its loop: the supervisor neither retries nor skips it, and nothing is counted', async () => {
     const env = await supervised(looped(3), { settings: { supervisorLevel: 'act' } });
     await finish(env, 'review', 1, 'failed');

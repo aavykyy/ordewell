@@ -4,7 +4,7 @@ import { createServer, type Server } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { PlannerShellSandbox, resolvePlannerSandbox } from '../plannerSandbox';
+import { PlannerShellSandbox, resolvePlannerSandbox, TASK_SEALED_LIMITS } from '../plannerSandbox';
 import { BaseFileSystem } from '../../BaseFileSystem';
 import { ApprovalPolicy } from '../../ApprovalPolicy';
 import type { ResearchShell, ShellLaunch } from '../../researchShell';
@@ -276,6 +276,11 @@ describe('sealed runs', async () => {
 
       afterAll(() => {
         rmSync(repo, { recursive: true, force: true });
+      });
+
+      it('takes the task-sized time limit a read-only task gives its sealed runs', async () => {
+        const launch = await sandbox.launchSealed(POSIX, { workspace: repo, limits: TASK_SEALED_LIMITS });
+        expect(launch.wallTimeMs).toBe(TASK_SEALED_LIMITS.wallTimeMs);
       });
 
       it('writes its own worktree, sealed, and nothing of the checkout it was cut from', async () => {
