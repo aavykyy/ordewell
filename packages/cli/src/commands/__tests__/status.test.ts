@@ -140,7 +140,7 @@ describe('handleStatus --output', () => {
     srv.close();
   });
 
-  it('marks a research task, and says which research limit holds it back', async () => {
+  it('marks a research task', async () => {
     const session = {
       ...SESSION,
       plan: { pendingTasks: [
@@ -149,7 +149,7 @@ describe('handleStatus --output', () => {
       ] },
       run: {
         tasks: [
-          { id: 't1', order: 1, title: 'Scout the cache', status: 'pending', research: true, researchWait: { kind: 'research-message', limit: 4 } },
+          { id: 't1', order: 1, title: 'Scout the cache', status: 'pending', research: true },
           { id: 't2', order: 2, title: 'Plain task', status: 'pending' },
         ],
         runMerge: null,
@@ -166,7 +166,6 @@ describe('handleStatus --output', () => {
     const lines = stripAnsi(stdout).split('\n');
     expect(lines.find((l) => l.includes('Scout the cache'))).toContain(' [RES] ');
     expect(lines.find((l) => l.includes('Plain task'))).not.toContain('[RES]');
-    expect(stdout).toContain('Waits for your next message: this message has used its 4 research tasks');
     srv.close();
   });
 

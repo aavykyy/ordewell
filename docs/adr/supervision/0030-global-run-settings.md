@@ -44,11 +44,11 @@ on one machine can disagree.
 ## Decision
 
 **Full/Guarded, the supervisor level, merge at gates automatically, autorun,
-the retry limit, the wake-up read budget and the research limits are
-machine-wide user settings, saved in `settings.json` and changed through
-`/settings` (or the headless commands behind it). A change applies at once to
-the session it is made in, and to every other session from its next run.
-Autorun, a new setting, starts the plan when the planner submits it.**
+the retry limit and the wake-up read budget are machine-wide user settings,
+saved in `settings.json` and changed through `/settings` (or the headless
+commands behind it). A change applies at once to the session it is made in,
+and to every other session from its next run. Autorun, a new setting, starts
+the plan when the planner submits it.**
 
 ### One store, machine-wide
 
@@ -79,8 +79,6 @@ There is no per-plan value and no per-workspace override.
 | autorun | on, off | off |
 | supervisor retry limit | whole number ≥ 0 | 2 |
 | wake-up read budget | whole number ≥ 1 | 12 |
-| research tasks at once | whole number ≥ 1 | 2 |
-| research tasks and report turns per message | whole number ≥ 1 | 4 |
 
 Watch becomes the default because it only reads and writes notes to the user:
 it never acts, and it makes the planner's watching of a run something a new
@@ -102,8 +100,6 @@ The headless CLI keeps one command per value for scripts, where no panel exists.
 | `ordewell supervisor reads <n>` | wake-up read budget |
 | `ordewell automerge [on\|off]` | merge at gates automatically |
 | `ordewell autorun [on\|off]` | autorun |
-| `ordewell research parallel <n>` | concurrent research attempts |
-| `ordewell research per-message <n>` | research starts and automatic report turns per user message |
 | `ordewell parallel [<n>]` | tasks that run at once |
 
 Parallel is the exception to the one store: the TUI keeps it in `.env` and
@@ -350,3 +346,5 @@ the daemon reads it from there at generation.
   one-value slash commands are gone from both, and the headless CLI keeps them
   for scripts. The panel was already the one place a user saw them together,
   and two ways to set one value read as two products.
+- 2026-10-22 — the two research limits are removed: research starts are the
+  planner's judgement, bounded by the run's Parallel limit ([ADR-0037](0037-research-tasks-wake-the-planner.md) R4).

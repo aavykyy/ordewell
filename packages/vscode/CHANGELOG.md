@@ -19,7 +19,8 @@
   again, with no planner turn in between. The plan shows each loop's rounds.
 - **Research tasks.** The planner can hand a longer investigation to a
   read-only task whose report wakes it with the result, at every supervisor
-  level. Run settings limit how many run at once and start per message.
+  level. Research tasks run within the run's Parallel limit like any other
+  task.
 - **The planner chooses a strategy before it outlines a plan**, from answering
   a question with no plan to exploring an open problem one round at a time,
   and each of its turns tells it how full its context is and what remains of

@@ -362,8 +362,6 @@ describe('ordewell supervisor, automerge and autorun (ADR-0030)', () => {
 
   it.each([
     [['act'], 'handleSupervisor', { supervisorLevel: 'act' }],
-    [['parallel', '1'], 'handleResearch', { researchMaxParallel: 1 }],
-    [['per-message', '3'], 'handleResearch', { researchMaxPerMessage: 3 }],
     [['retries', '3'], 'handleSupervisor', { supervisorRetryLimit: 3 }],
     [['reads', '20'], 'handleSupervisor', { wakeUpReadBudget: 20 }],
     [['on'], 'handleAutomerge', { mergeAtGatesAutomatically: true }],
@@ -386,7 +384,6 @@ describe('ordewell supervisor, automerge and autorun (ADR-0030)', () => {
 
   it.each([
     ['handleSupervisor', ['boss']], ['handleSupervisor', ['reads', '0']], ['handleSupervisor', ['retries', 'many']],
-    ['handleResearch', ['parallel', '0']], ['handleResearch', ['per-message', 'x']],
     ['handleAutomerge', ['maybe']], ['handleAutorun', ['yes']],
   ] as const)('%s refuses %j, sending nothing', async (handler, args) => {
     const d = await fakeDaemon({ settings: { run: RUN } });

@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { selectReadyTasks, startWaits, unmetDependencies, mergeGate, type ReadinessInput, type Readiness, type StartWait } from '../readiness';
 import { createTask, type Task } from '../../models/Task';
 import type { IsolationTaskRecord, IsolationTaskStatus } from '../../interfaces/IWorktreeIsolation';
-import { ResearchTasks } from '../ResearchTasks';
 
 function storeOf(tasks: Task[]) {
   const byId = new Map(tasks.map((t) => [t.id, t]));
@@ -85,27 +84,13 @@ describe('selectReadyTasks', () => {
     expect(why(readiness, 'd1')).toEqual([{ kind: 'dependencies', waiting: ['missing'] }]);
   });
 
-  it('keeps research limits and the runner connection hold reason until each is released (ADR-0037 R4)', () => {
+  it('keeps the runner connection hold reason until it is released', () => {
     const task = createTask({ id: 'r1', order: 1, title: 'Research', prompt: 'investigate', taskMode: 'plan', research: true });
     const reason = 'could not connect to Ordewell\'s tools; start it again';
     const onHold = new Map([[task.id, reason]]);
-    let active = 2;
-    const research = new ResearchTasks({
-      plan: () => null,
-      settings: () => ({ researchMaxParallel: 2, researchMaxPerMessage: 4 }),
-      active: () => active,
-      owe: () => {},
-    });
-    const state = input([task], { research, onHold });
+    const state = input([task], { onHold });
 
     expect(selectReadyTasks(state).ready).toEqual([]);
-    expect(why(selectReadyTasks(state), task.id)).toEqual([
-      { kind: 'research-parallel', limit: 2 },
-      { kind: 'on-hold', reason },
-    ]);
-    expect(startWaits(task, state, { queued: false })).toEqual([{ kind: 'research-parallel', limit: 2 }]);
-
-    active = 0;
     expect(why(selectReadyTasks(state), task.id)).toEqual([{ kind: 'on-hold', reason }]);
     expect(startWaits(task, state, { queued: false })).toEqual([]);
 

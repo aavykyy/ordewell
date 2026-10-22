@@ -323,16 +323,8 @@ describe('a research task card (ADR-0037)', () => {
     expect(badges()).toEqual(['AI']);
   });
 
-  it('says which research limit holds it back, where its status reads', () => {
-    const { unmount } = render(<TaskCard task={research()} models={[]} run={{ researchWait: { kind: 'research-parallel', limit: 2 } }} />);
-    expect(badge()?.textContent).toBe('Waits for a research slot: 2 research tasks run at once');
-    unmount();
-    render(<TaskCard task={research()} models={[]} run={{ researchWait: { kind: 'research-message', limit: 4 } }} />);
-    expect(badge()?.textContent).toBe('Waits for your next message: this message has used its 4 research tasks');
-  });
-
-  it('reads its own status once it has started, whatever wait the stream last sent', () => {
-    render(<TaskCard task={research({ status: 'in_progress' })} models={[]} isExecuting run={{ researchWait: { kind: 'research-parallel', limit: 2 } }} />);
+  it('reads its own status once it has started', () => {
+    render(<TaskCard task={research({ status: 'in_progress' })} models={[]} isExecuting />);
     expect(badge()?.textContent).toBe('Running');
   });
 });

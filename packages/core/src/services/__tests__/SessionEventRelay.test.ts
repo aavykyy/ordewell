@@ -9,7 +9,7 @@ function plan(): LegacyPlanState {
   return { tasks: [], generatedAt: '2026-01-01T00:00:00Z', status: 'approved', runners: ['claude-code'], lastUpdated: '2026-01-01T00:00:00Z' };
 }
 
-function setup(holds: ReadonlyMap<string, string> = new Map(), waits: ReadonlyMap<string, { kind: 'research-parallel' | 'research-message'; limit: number }> = new Map()) {
+function setup(holds: ReadonlyMap<string, string> = new Map()) {
   const sent: SessionMessage[] = [];
   const notices: SessionNotice[] = [];
   const store = new PlanStore();
@@ -25,7 +25,7 @@ function setup(holds: ReadonlyMap<string, string> = new Map(), waits: ReadonlyMa
     broadcast: (m) => sent.push(m),
     onNotice: (n) => notices.push(n),
     store,
-    orchestrator: { getIdleSince: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], holdReason: (id) => holds.get(id) ?? null, researchWait: (id) => waits.get(id), runMergeView: () => null },
+    orchestrator: { getIdleSince: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], holdReason: (id) => holds.get(id) ?? null, runMergeView: () => null },
     runs: { taskIsolation: () => null },
     usage,
   });
@@ -56,15 +56,15 @@ describe('SessionEventRelay', () => {
       .toBe('could not connect to Ordewell\'s tools; start it again');
   });
 
-  it('carries what marks a research task, and the limit it waits for, to every surface', () => {
-    const { relay, sent, store } = setup(new Map(), new Map([['t3', { kind: 'research-message', limit: 4 }]]));
+  it('carries what marks a research task to every surface', () => {
+    const { relay, sent, store } = setup();
     store.update('t3', { research: true });
 
     relay.status(plan());
 
     const [update] = sent;
     const third = update.type === 'status_update' ? update.tasks.find((t) => t.id === 't3') : undefined;
-    expect(third).toMatchObject({ research: true, researchWait: { kind: 'research-message', limit: 4 } });
+    expect(third).toMatchObject({ research: true });
     expect(update.type === 'status_update' && update.tasks.find((t) => t.id === 't1')).not.toHaveProperty('research');
   });
 

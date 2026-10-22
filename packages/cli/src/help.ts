@@ -59,7 +59,6 @@ Planner, models and runners:
   ordewell supervisor [off|watch|act]  (headless) Whether the planner watches or acts on your runs;
                                   also: supervisor retries <n>, supervisor reads <n>; /settings covers it
   ordewell automerge [on|off]     (headless) Merge at merge gates and at the end of a run; /settings covers it
-  ordewell research [parallel <n>|per-message <n>]  (headless) Research and report-turn limits (defaults 2 at once, 4 per message); /settings covers it
   ordewell autorun [on|off]       (headless) Start each plan the planner submits, without review; /settings covers it
   ordewell parallel [<n>]         (headless) How many AI tasks run at once, a live run included; /settings covers it
   ordewell refresh                Re-discover runners and model catalogs

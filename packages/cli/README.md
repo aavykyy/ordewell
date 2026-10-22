@@ -23,15 +23,15 @@ with `/planner` (Harness › Model › Effort, each step saved as you go) and `/
 agent you already use.
 The welcome screen says it plainly: nothing runs until you approve the plan (unless autorun is on).
 
-`/settings` walks autonomy, supervisor, merge automatically, autorun, parallel
-and the research limits in one panel and saves only what you changed. `/planner` walks harness, model and
+`/settings` walks autonomy, supervisor, merge automatically, autorun and parallel
+(research uses the same Parallel slots) in one panel and saves only what you changed. `/planner` walks harness, model and
 effort in one flow, so there is no separate model or effort command. Press `?` in
 the plan pane for the full key sheet; the footer shows only the keys that apply
 to the selected task.
 
 Every command in the terminal UI is also a subcommand, except `/settings`: it is
 a panel over headless commands that remain for scripts (`ordewell auto`,
-`supervisor`, `automerge`, `autorun`, `research` and `parallel`). `/planner` has its own
+`supervisor`, `automerge`, `autorun` and `parallel`). `/planner` has its own
 `ordewell planner`, and its model and effort steps are `ordewell model` and
 `ordewell planner-effort`.
 

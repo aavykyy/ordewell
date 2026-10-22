@@ -50,7 +50,7 @@ describe('a run starting', () => {
 
     supervision.runStarted('user');
 
-    expect(plan.runSettings).toEqual({ supervisorLevel: 'act', mergeAtGatesAutomatically: true, supervisorRetryLimit: 4, wakeUpReadBudget: 7, researchMaxParallel: 2, researchMaxPerMessage: 4 });
+    expect(plan.runSettings).toEqual({ supervisorLevel: 'act', mergeAtGatesAutomatically: true, supervisorRetryLimit: 4, wakeUpReadBudget: 7 });
     expect(supervision.level).toBe('act');
   });
 
@@ -96,9 +96,9 @@ describe('the user\'s change', () => {
 
     const { supervision, plan, host, transcript } = harness({ supervisorLevel: 'act' });
     supervision.runStarted('user');
-    supervision.apply({ supervisorLevel: 'watch', mergeAtGatesAutomatically: true, supervisorRetryLimit: 0, wakeUpReadBudget: 30, researchMaxParallel: 1, researchMaxPerMessage: 3 });
+    supervision.apply({ supervisorLevel: 'watch', mergeAtGatesAutomatically: true, supervisorRetryLimit: 0, wakeUpReadBudget: 30 });
 
-    expect(plan.runSettings).toEqual({ supervisorLevel: 'watch', mergeAtGatesAutomatically: true, supervisorRetryLimit: 0, wakeUpReadBudget: 30, researchMaxParallel: 1, researchMaxPerMessage: 3 });
+    expect(plan.runSettings).toEqual({ supervisorLevel: 'watch', mergeAtGatesAutomatically: true, supervisorRetryLimit: 0, wakeUpReadBudget: 30 });
     expect(supervision.level).toBe('watch');
     expect(transcript).toEqual([{ text: 'You set the supervisor to Watch.', voice: 'system' }]);
     expect(host.save).toHaveBeenCalled();

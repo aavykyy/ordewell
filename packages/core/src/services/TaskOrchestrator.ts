@@ -30,7 +30,7 @@ import { completesTask, Landing, type LandingMessage, type LandingOutcome, type 
 import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import { RELAPSE_MS, RESUME_MARGIN_MS, UsageLimitWaits } from './UsageLimitWaits';
 import { landed, selectReadyTasks, startWaits, waitOf, type ForcedStart, type Readiness, type StartRuleInput, type StartWait, type StartWaitKind } from './readiness';
-import type { ResearchSchedule, ResearchWait } from './ResearchTasks';
+import type { ResearchTasks } from './ResearchTasks';
 import { blockingFailures, planBlocks, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 import {
@@ -249,7 +249,7 @@ interface QueuedStart {
 }
 
 /** What keeps a queued force start waiting, with nothing to say: it starts once these clear. */
-const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued', 'completing', 'merging', 'start-hold', 'unapproved', 'research-parallel', 'research-message']);
+const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued', 'completing', 'merging', 'start-hold', 'unapproved']);
 
 /** A force start the user made now: their own act, past the whole merge gate they confirmed. */
 const FORCED_NOW: ForcedStart = { queued: false };
@@ -300,7 +300,8 @@ export interface TaskAttemptSnapshot {
  * one place defaults live.
  */
 export interface TaskOrchestratorDeps {
-  research?: ResearchSchedule;
+  /** What starting a research task owes the planner (ADR-0037 R3); starts are bounded by the run's Parallel limit. */
+  research?: Pick<ResearchTasks, 'started'>;
   config: IConfig;
   notifications: INotification;
   runner: IRunner;
@@ -348,7 +349,8 @@ export interface TaskOrchestratorDeps {
  * resolved wiring the orchestrator itself runs on.
  */
 export interface TaskOrchestratorOptions {
-  research?: ResearchSchedule;
+  /** What starting a research task owes the planner (ADR-0037 R3). */
+  research?: Pick<ResearchTasks, 'started'>;
   config: IConfig;
   notifications: INotification;
   runner: IRunner;
@@ -458,7 +460,7 @@ export class TaskOrchestrator {
   private runSettings: () => SchedulerRunSettings | undefined;
   private isApproved: (taskId: string) => boolean;
   private taskShell: (site: TaskShellSite) => TaskShell | undefined;
-  private readonly research: ResearchSchedule | undefined;
+  private readonly research: Pick<ResearchTasks, 'started'> | undefined;
 
   constructor(deps: TaskOrchestratorDeps) {
     this.research = deps.research;
@@ -970,14 +972,6 @@ export class TaskOrchestrator {
     return this.onHold.get(taskId) ?? null;
   }
 
-  /** The research limit holding a research task back, when it is the first thing that does (ADR-0037 R4). */
-  researchWait(taskId: string): ResearchWait | undefined {
-    const task = this.store.get(taskId);
-    if (!task?.research) return;
-    const [first] = this.startWaits(task);
-    return first?.kind === 'research-parallel' || first?.kind === 'research-message' ? first : undefined;
-  }
-
   /**
    * Every reason a task cannot start now, from the one start rule
    * (ADR-0034); none when it can. `forced` judges a start the user forced.
@@ -993,7 +987,6 @@ export class TaskOrchestrator {
       store: this.store,
       onHold: this.onHold,
       approved: this.isApproved,
-      research: this.research,
       runs: this.runs,
       merging: this.merging,
       startsHeld: this.startHolds > 0,
@@ -1990,13 +1983,6 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task || task.type === 'user') return;
     if (this.attempts.has(taskId)) return;
-    const research = this.research?.wait(task);
-    if (research) {
-      this.startAtGate(taskId);
-      return research.kind === 'research-message'
-        ? `Task "${task.title}" waits for your next message: the research limit of ${research.limit} for this message has been reached.`
-        : `Task "${task.title}" waits for a research slot: ${research.limit} research tasks may run at once.`;
-    }
     this.refuseOpsDuringMerge(taskId, FORCED_NOW);
     const queued = this.queueBehindDependencies(task);
     if (queued) return queued;
@@ -2415,10 +2401,6 @@ export class TaskOrchestrator {
     if (!task) return `There is no task "${taskId}" in this plan any more.`;
     if (this.completing.has(taskId)) return `Task "${task.title}" is being marked complete: its work is landing.`;
     if (!this.isApproved(taskId)) return `Task "${task.title}" waits for the user's approval: they approve it by starting it, or by executing the plan.`;
-    const research = this.research?.wait(task);
-    if (research) return research.kind === 'research-message'
-      ? `Task "${task.title}" waits for your next message: the research limit of ${research.limit} for this message has been reached.`
-      : `Task "${task.title}" waits for a research slot: ${research.limit} research tasks may run at once.`;
     const live = this.attempts.size;
     if (live >= this.config.maxParallelSessions) {
       return `${live} ${live === 1 ? 'task is' : 'tasks are'} already running, the most this session runs at once. Wait for one to finish, or stop one first.`;

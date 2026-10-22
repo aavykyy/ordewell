@@ -410,8 +410,6 @@ describe('SettingsService', () => {
         autorun: false,
         supervisorRetryLimit: 2,
         wakeUpReadBudget: 12,
-        researchMaxParallel: 2,
-        researchMaxPerMessage: 4,
       });
     });
 
@@ -424,19 +422,7 @@ describe('SettingsService', () => {
         autorun: false,
         supervisorRetryLimit: 2,
         wakeUpReadBudget: 12,
-        researchMaxParallel: 2,
-        researchMaxPerMessage: 4,
       });
-    });
-
-    it('persists research limits and rejects invalid ones atomically', () => {
-      service.updateRunSettings({ researchMaxParallel: 1, researchMaxPerMessage: 3 });
-      expect(new SettingsService(tempFile).getRunSettings()).toMatchObject({ researchMaxParallel: 1, researchMaxPerMessage: 3 });
-      for (const value of [0, -1, 1.5, Infinity]) {
-        expect(() => service.updateRunSettings({ researchMaxParallel: value })).toThrow(/research parallel limit/);
-        expect(() => service.updateRunSettings({ researchMaxPerMessage: value })).toThrow(/research per-message limit/);
-      }
-      expect(new SettingsService(tempFile).getRunSettings()).toMatchObject({ researchMaxParallel: 1, researchMaxPerMessage: 3 });
     });
 
     it('refuses a value outside its range and saves nothing of that change', () => {

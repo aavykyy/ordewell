@@ -45,7 +45,7 @@ import { rewrittenScripts } from '../models/ScriptTask';
 import { SessionWindows, withContextWindows } from './ContextWindowFill';
 import { PlannerUsageLedger } from './PlannerUsage';
 import { plannerContextFill } from '../models/Usage';
-import { TurnBudgets, contextLine, taskReadsLine, webReadsLine, researchTasksLine } from './PlannerBudgets';
+import { TurnBudgets, contextLine, taskReadsLine, webReadsLine } from './PlannerBudgets';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
 import { approvalRecordOf, flattenTasks, keepExecutionState, stampOrigin, waitsForApproval, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
@@ -248,7 +248,6 @@ export function createSession(deps: SessionDeps): Session {
     () => contextLine(plannerContextFill(usage.snapshot())),
     () => taskReadsLine(conversation?.readsLeft),
     () => webReadsLine(webReads.remaining()),
-    () => researchTasksLine(session.researchTasksLeft),
   ]);
   const backend = new PlannerBackend(deps.aiService
     ? { pinned: deps.aiService, busy }
@@ -312,7 +311,6 @@ export function createSession(deps: SessionDeps): Session {
     runSettings: () => session.planState?.runSettings,
     isApproved: (taskId) => session.isApproved(taskId),
     research: {
-      wait: (task) => session.research.wait(task),
       started: (task) => session.research.started(task),
     },
     // The planner's command rules, at the read-only task's own working directory (ADR-0046).
@@ -463,12 +461,9 @@ export interface SessionParts {
 export class Session {
   readonly research = new ResearchTasks({
     plan: () => this.plan,
-    settings: () => ({ ...this.userRunSettings(), ...this.plan?.runSettings }),
-    active: () => this.store.allTasks.filter((t) => t.research && this.orchestrator.getAttempt(t.id)).length,
     owe: (id, to) => { this.store.update(id, { reportTo: to, researchOrigin: to }); },
   });
 
-  get researchTasksLeft(): number { return this.research.left; }
   private readonly backend: PlannerBackend;
   private readonly usage: PlannerUsageLedger;
   private readonly windows: SessionWindows;
@@ -630,17 +625,13 @@ export class Session {
     });
 
     this.turns = new PlanTurns({
-      turnStarting: (inputs) => {
-        const users = inputs.filter((t) => t.source === 'user');
-        if (users.some((t) => !t.budgetStarted)) this.research.userMessage();
-        for (const input of users) input.budgetStarted = true;
-        if (users.length === 0 && inputs.some((t) => t.report !== undefined)) this.research.reportTurn();
+      turnStarting: () => {
         this.persist();
       },
       plan: () => (this.closed ? null : this.plan),
       conversationBusy: () => this.conversation.isTurnInFlight,
       mayWake: () => this.supervision.mayWake(),
-      mayReport: () => this.supervision.mayReport() && this.research.mayReport(),
+      mayReport: () => this.supervision.mayReport(),
       persist: () => this.persist(),
       announce: () => {
         this.persist();
@@ -1539,7 +1530,7 @@ export class Session {
       return landed;
     } catch (err) {
       if (!(err instanceof PlannerUsageLimitError) || !this.plan) throw err;
-      this.turns.waitOnLimit({ source: 'user', ...this.resolveSkillInvocation(goal), budgetStarted: true });
+      this.turns.waitOnLimit({ source: 'user', ...this.resolveSkillInvocation(goal) });
       return this.plan;
     } finally {
       if (this.opening === pending) this.opening = null;
@@ -1832,10 +1823,6 @@ export class Session {
     this.supervision.apply(changes);
     // The scheduler reads the setting as it decides; a gate already reached merges now, not at the next event.
     if (changes.mergeAtGatesAutomatically) this.orchestrator.runSettingsChanged();
-    if (changes.researchMaxParallel !== undefined || changes.researchMaxPerMessage !== undefined) {
-      this.turns.pump();
-      void this.reschedule();
-    }
   }
 
   private idlePlan(): LegacyPlanState {

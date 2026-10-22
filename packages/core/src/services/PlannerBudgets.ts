@@ -73,7 +73,3 @@ export function taskReadsLine(reads: { left: number; hardStop?: number } | undef
 export function webReadsLine(left: number | undefined): string | undefined {
   return left === undefined ? undefined : `Web reads left this turn: ${Math.max(0, left)}.`;
 }
-
-export function researchTasksLine(left: number): string {
-  return `Research tasks left for this message: ${Math.max(0, left)}.`;
-}

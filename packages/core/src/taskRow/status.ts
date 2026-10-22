@@ -62,16 +62,6 @@ export function skippedLabel(reason: string | null): string {
  */
 export const WAITS_FOR_APPROVAL_LABEL = 'Waits for your approval';
 
-/**
- * Why a research task is not started although nothing else holds it
- * (ADR-0037 R4), in sentence case: the limit it waits for, and what ends the wait.
- */
-export function researchWaitLabel(wait: { kind: 'research-parallel' | 'research-message'; limit: number }): string {
-  return wait.kind === 'research-message'
-    ? `Waits for your next message: this message has used its ${wait.limit} research ${wait.limit === 1 ? 'task' : 'tasks'}`
-    : `Waits for a research slot: ${wait.limit === 1 ? '1 research task runs' : `${wait.limit} research tasks run`} at once`;
-}
-
 /** Runner requests a task waits on (ADR-0018, A1); null when none do. */
 export function approvalLabel(count: number | undefined): string | null {
   if (!count) return null;
