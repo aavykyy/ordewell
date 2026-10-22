@@ -307,6 +307,11 @@ export function createSession(deps: SessionDeps): Session {
     workspaceRoot: deps.workspaceRoot,
     skillsAt: (roots) => (deps.skillsService ?? new SkillsService(roots)).forRoot(roots),
     previousAttemptFromLog: (taskId) => lastAttemptDigest(session.taskLogLocation, taskId),
+    previousHandoffFromLog: (taskId) => {
+      const attempt = session.taskLogAttempts(taskId).at(-1);
+      if (attempt === undefined) return undefined;
+      return session.taskLog(taskId, attempt).filter((e): e is Extract<TaskLogEvent, { type: 'handoff' }> => e.type === 'handoff').at(-1)?.handoff;
+    },
     lastLoggedAttempt: (taskId) => session.taskLogAttempts(taskId).at(-1) ?? 0,
     runSettings: () => session.planState?.runSettings,
     isApproved: (taskId) => session.isApproved(taskId),

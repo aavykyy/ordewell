@@ -325,6 +325,7 @@ export interface TaskOrchestratorDeps {
   skillsAt: (roots: readonly string[]) => SkillLookup;
   /** What the task's last saved attempt did, or null when it left no log (ADR-0020). */
   previousAttemptFromLog: (taskId: string) => string | null;
+  previousHandoffFromLog: (taskId: string) => StoredHandoff | undefined;
   /**
    * The newest attempt the task has a saved log for, 0 for none. An attempt's
    * log is saved under its number, so a new one is numbered past a log kept
@@ -373,6 +374,7 @@ export interface TaskOrchestratorOptions {
   workspaceEnv?: (cwd: string) => Promise<WorkspaceEnv>;
   skillsAt?: (roots: readonly string[]) => SkillLookup;
   previousAttemptFromLog?: (taskId: string) => string | null;
+  previousHandoffFromLog?: (taskId: string) => StoredHandoff | undefined;
   lastLoggedAttempt?: (taskId: string) => number;
   runSettings?: () => SchedulerRunSettings | undefined;
   /** Every task is approved unless a Session supplies its record: an orchestrator on its own has no user to ask. */
@@ -468,6 +470,8 @@ export class TaskOrchestrator {
   private observers: OrchestratorObserver[] = [];
   private skillsAt: (roots: readonly string[]) => SkillLookup;
   private previousAttemptFromLog: (taskId: string) => string | null;
+  private previousHandoffFromLog: (taskId: string) => StoredHandoff | undefined;
+  private previousRounds = new Map<string, { round: number; report?: string }>();
   private lastLoggedAttempt: (taskId: string) => number;
   private runSettings: () => SchedulerRunSettings | undefined;
   private isApproved: (taskId: string) => boolean;
@@ -491,6 +495,7 @@ export class TaskOrchestrator {
     this.workspaceEnv = deps.workspaceEnv;
     this.skillsAt = deps.skillsAt;
     this.previousAttemptFromLog = deps.previousAttemptFromLog;
+    this.previousHandoffFromLog = deps.previousHandoffFromLog;
     this.lastLoggedAttempt = deps.lastLoggedAttempt;
     this.runSettings = deps.runSettings;
     this.isApproved = deps.isApproved;
@@ -566,6 +571,7 @@ export class TaskOrchestrator {
       workspaceEnv: options.workspaceEnv ?? ((cwd) => resolveWorkspaceEnv(cwd)),
       skillsAt: options.skillsAt ?? ((roots) => new SkillsService(roots)),
       previousAttemptFromLog: options.previousAttemptFromLog ?? (() => null),
+      previousHandoffFromLog: options.previousHandoffFromLog ?? (() => undefined),
       lastLoggedAttempt: options.lastLoggedAttempt ?? (() => 0),
       runSettings: options.runSettings ?? (() => undefined),
       isApproved: options.isApproved ?? (() => true),
@@ -1046,6 +1052,7 @@ export class TaskOrchestrator {
     this.reviewApproved = false;
     this.retryCounts.clear();
     this.spawnCounts.clear();
+    this.previousRounds.clear();
     this.onHold.clear();
     this.queuedStarts = new Map(queued.filter(([id]) => this.store.get(id)));
     this.recoverOrphans();
@@ -2373,6 +2380,7 @@ export class TaskOrchestrator {
     for (const id of repeatingChecks(this.store.planTasks)) {
       const check = this.store.get(id);
       if (!check?.loop || this.attempts.has(id) || !check.loop.body.every((b) => landed(b, this.store, this.runs))) continue;
+      this.previousRounds.set(id, { round: loopRoundOf(check), report: check.outputSummary?.report });
       this.store.repeat(id);
       this.onHold.delete(id);
       repeated = true;
@@ -2724,6 +2732,8 @@ export class TaskOrchestrator {
       skills: attempt.skills,
       repairPrompt: (t) => this.landing.repairPrompt(t),
       previousAttempt: (taskId) => this.opsPreviousAttempt(taskId),
+      previousHandoff: this.previousHandoffFromLog,
+      previousRound: this.previousRounds.get(task.id),
     });
     const env = await this.envForTask(cwd);
     if (landsNothing(kind)) {

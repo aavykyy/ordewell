@@ -9,6 +9,7 @@ import { fakeConfig, FakeRunnerSession, FakeWorktreeIsolation } from '../../test
 import { fakeNotification } from './sessionTestKit';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { waitOf } from '../readiness';
+import type { StoredHandoff } from '../../models/Handoff';
 
 /**
  * A loop in the scheduler (ADR-0045): a check that repeats with its fix
@@ -25,7 +26,7 @@ function recording() {
   return { runner: { spawn, stop: vi.fn(async () => {}), stopAll: vi.fn(), activeCount: 0 } satisfies IRunner, sessions, spawn };
 }
 
-function setup(tasks: Task[], opts: { isolation?: FakeWorktreeIsolation } = {}) {
+function setup(tasks: Task[], opts: { isolation?: FakeWorktreeIsolation; previousHandoffFromLog?: (taskId: string) => StoredHandoff | undefined } = {}) {
   const agents = recording();
   const scripts = recording();
   const notifications = fakeNotification();
@@ -35,6 +36,7 @@ function setup(tasks: Task[], opts: { isolation?: FakeWorktreeIsolation } = {}) 
     runner: agents.runner,
     scriptRunner: scripts.runner,
     output: new BufferedTaskOutputSource(),
+    previousHandoffFromLog: opts.previousHandoffFromLog,
     ...(opts.isolation ? { isolation: opts.isolation } : {}),
     workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
@@ -78,6 +80,49 @@ const reviewed = (maxRounds = 3, check: Partial<Task> = {}): Task[] => [
 ];
 
 describe('a loop: a check that repeats with its fix until it passes (ADR-0045)', () => {
+  it('gives the round-2 check its logged findings and the latest body claim', async () => {
+    const previousHandoffFromLog = vi.fn(() => ({ summary: 'Two holes.', findingCount: 2, findings: [
+      { id: 'F1', severity: 'major' as const, title: 'Trailing commas vanish' },
+      { id: 'F2', severity: 'minor' as const, title: 'Escapes are doubled' },
+    ] }));
+    const h = setup(reviewed(), { previousHandoffFromLog });
+    await h.orchestrator.approveReview();
+    await h.pass('build');
+    await h.fail('review');
+    await h.report('fix', 1, { status: 'done', summary: 'Fixed commas and escapes.' }, 'completed');
+    await vi.waitFor(() => expect(h.spawns('review')).toHaveLength(2));
+
+    const prompt = h.spawns('review')[1].prompt!;
+    expect(prompt).toContain('## Since your last round');
+    expect(prompt).toContain('F1 [major] Trailing commas vanish');
+    expect(prompt).toContain('F2 [minor] Escapes are doubled');
+    expect(prompt).toContain('Fixed commas and escapes.');
+    expect(prompt).toContain('You are the check, round 2 of 3. Verify the fix claims against the tree; do not trust its summary.');
+    expect(h.spawns('review')[0].prompt).not.toContain('## Since your last round');
+    expect(previousHandoffFromLog.mock.calls).toEqual([['review']]);
+    await h.pass('review', 2);
+    await h.pass('ship');
+  });
+
+  it('keeps a legacy failed round\'s report for the next check when its log has no handoff', async () => {
+    const h = setup(reviewed(3, {
+      status: 'failed',
+      verdict: { outcome: 'fail', reported: 'failed', reason: 'Found a parser bug.', checks: [], decidedAt: '2026-10-22T00:00:00Z' },
+      outputSummary: { reviewReason: 'Failed', report: 'Legacy finding: the parser drops trailing commas.', logTail: '', capturedAt: '2026-10-22T00:00:00Z' },
+    }).map((t) => t.id === 'build' ? { ...t, status: 'completed' } : t));
+    await h.orchestrator.approveReview();
+    await vi.waitFor(() => expect(h.spawns('fix')).toHaveLength(1));
+    expect(h.spawns('fix')[0].prompt).toContain('Legacy finding: the parser drops trailing commas.');
+    await h.pass('fix');
+    await vi.waitFor(() => expect(h.spawns('review')).toHaveLength(1));
+
+    expect(h.spawns('review')[0].prompt).toContain('Your previous findings are not structured.\nLegacy finding: the parser drops trailing commas.');
+    expect(h.spawns('review')[0].prompt).toContain('You are the check, round 2 of 3.');
+    expect(h.get('review').outputSummary).toBeUndefined();
+    await h.pass('review');
+    await h.pass('ship');
+  });
+
   it('skips the body as not needed when the check passes in round 1, and its dependents go on', async () => {
     const h = setup(reviewed());
     await h.orchestrator.approveReview();
@@ -306,6 +351,7 @@ describe('a loop: a check that repeats with its fix until it passes (ADR-0045)',
     await h.pass('fix');
     await h.exit('tests', 2, { outcome: 'passed' }, 'completed');
     expect(h.get('tests').loopRound).toBe(2);
+    expect(h.spawns('tests').map((s) => s.prompt)).toEqual(['', '']);
   });
 
   it('resumes a reloaded plan mid-round at the same round: the body runs, then the check, never the check first', async () => {
