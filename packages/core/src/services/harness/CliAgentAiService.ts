@@ -20,6 +20,7 @@ import type { IAiService, ConversationRequest, ConversationTurn, PlannerToolsOff
 import {
   buildConversationSystemPrompt,
   buildPlanWithResults,
+  NATIVE_SHELL_GUIDE,
 } from '../PlanPrompts';
 import { repairLoop, resubmitPlanPrompt } from '../PlanRepair';
 import { validatePlanTasks } from '../PlanValidator';
@@ -666,7 +667,13 @@ export class CliAgentAiService implements IAiService {
   private async startAdapter(opts: PlannerStartOptions, tools: PlannerToolsOffer, session: PlannerSession): Promise<AgentAdapter> {
     const server = this.mcpServer;
     // Decided once, here, so the token's tools and the session's config are the same decision.
-    const start: PlannerStartOptions = { ...opts, nativeSearch: this.nativeSearch(session), nativeShell: this.nativeShellOffered(session) };
+    const nativeShell = this.nativeShellOffered(session);
+    const start: PlannerStartOptions = {
+      ...opts,
+      nativeSearch: this.nativeSearch(session),
+      nativeShell,
+      systemPrompt: nativeShell ? `${opts.systemPrompt}\n\n${NATIVE_SHELL_GUIDE}` : opts.systemPrompt,
+    };
     const spawned = await spawnAttached({
       runner: this.runner,
       create: () => this.newAdapter(),

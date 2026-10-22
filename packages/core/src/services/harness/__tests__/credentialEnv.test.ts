@@ -17,7 +17,7 @@ describe('isCredentialVariable (ADR-0036 N2.2)', () => {
   it.each([
     'PATH', 'HOME', 'SHELL', 'LANG', 'TERM', 'NODE_OPTIONS', 'AWS_REGION', 'AWS_PROFILE',
     'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL',
-    'CLAUDE_CODE_USE_BEDROCK', 'GOOGLE_CLOUD_PROJECT', 'EDITOR', 'PWD',
+    'OPENCODE_API_KEY', 'CLAUDE_CODE_USE_BEDROCK', 'GOOGLE_CLOUD_PROJECT', 'EDITOR', 'PWD',
   ])('keeps %s', (name) => {
     expect(isCredentialVariable(name)).toBe(false);
   });

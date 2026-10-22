@@ -1,8 +1,6 @@
 ---
 status: accepted
-implemented: partial
 amends: ["0008", "0011", "0026"]
-note: "sealed runs are implemented (#109); the native-shell setting and its eligibility table are implemented (#110); Claude Code's shell is wired (#110); OpenCode's is pending"
 ---
 
 # 0036 — The planner's shell: sealed runs instead of refusals, and the harness's own shell as an opt-in
@@ -383,10 +381,10 @@ shell.
 - Homebrew's data directories are hidden from a sealed run on macOS; its
   configuration stays readable, since git and OpenSSL stop on a file the
   sandbox denies rather than one that is missing.
-- When this is implemented, SECURITY.md's envelope description and "What each
-  part can touch" name sealed runs and the opt-in, CONTEXT.md gains *Sealed
-  run*, and ADR-0008, ADR-0011 and ADR-0026 are rewritten where they say a
-  refused command never runs and a harness's shell is withheld.
+- SECURITY.md's envelope description and "What each part can touch" name
+  sealed runs and the opt-in, CONTEXT.md has *Sealed run* and *Native shell*,
+  and ADR-0008, ADR-0011 and ADR-0026 are rewritten where they said a refused
+  command never runs and a harness's shell is withheld.
 
 ## History
 
@@ -397,3 +395,5 @@ shell.
 - 2026-10-21 — live checks of N2 on Claude Code 2.1.304 and OpenCode 2.0.32 (#110), recorded under Live checks.
 - 2026-10-21 — the native-shell setting and its eligibility table implemented (#110): Claude Code 2.1.304–2.1.x and OpenCode 2.0.32–2.0.x on macOS; OpenCode 1.x and Linux stay on `run_command` until checked live.
 - 2026-10-21 — Claude Code's native shell wired (#110): `CLAUDE_CODE_SHELL_PREFIX` names a launcher built on the sealed profile, with the network (N3), the workspace read-only, the session scratch and a short `CLAUDE_CODE_TMPDIR` writable; both variables go in the `--settings` `env` block, Claude Code's own sandbox is off, `Bash` and `Monitor` are asked and allowed through the `native-shell` kind, and the planner process starts without the user's credential variables (N2.2), the keychain included. `Monitor` is withheld whenever the opt-in is off (N6), and its commands are `bash` steps on the timeline.
+- 2026-10-21 — OpenCode 2.x's native shell wired (#110): the launch environment and `OPENCODE_CONFIG_CONTENT` both name the same launcher, so a config layer cannot choose another shell; `bash` and `shell` ask instead of denying, the request becomes the `native-shell` kind, every `shell.created` is checked against the launcher and an escaped shell fails its call and the turn, the server starts without the user's credential variables (N2.2) but keeps its own login (N3), and its commands reach the timeline as `bash` steps. OpenCode 1.x keeps `run_command` alone. The setting is implemented in full.
+- 2026-10-21 — the native shell's network stops at the machine (N2.2): its profile refuses loopback addresses and local Unix sockets (but name resolution and syslog), since a command that read the harness server's password from its environment could otherwise have that server run a command outside the sandbox; bubblewrap, which cannot keep one without the other, refuses the profile. The planner is told of its own shell only in a process that was given one.

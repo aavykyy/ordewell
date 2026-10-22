@@ -108,7 +108,7 @@ describe('Claude Code with its own shell under Ordewell\'s sandbox (ADR-0036 N2)
 
       const script = readFileSync(settings.env!.CLAUDE_CODE_SHELL_PREFIX, 'utf8');
       expect(script).toContain(`'/usr/bin/sandbox-exec' '-p' 'PROFILE'`);
-      expect(script).toContain(`'/bin/zsh' '-c' "$1"`);
+      expect(script).toContain(`'/bin/zsh' '-c' "$command"`);
       // The harness's resolved PATH, not whatever the host process inherited.
       expect(script).toContain(`'PATH=/usr/bin'`);
 

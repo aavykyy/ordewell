@@ -118,6 +118,13 @@ const NETWORK_PROFILE = `(allow network-outbound network-inbound network-bind sy
   (global-name "com.apple.SystemConfiguration.configd"))`;
 
 /**
+ * The network without this machine's own services. Name resolution and
+ * logging still need their two sockets.
+ */
+const NO_LOCAL_NETWORK = `(deny network-outbound (remote ip "localhost:*") (remote unix-socket))
+(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")) (literal "/private/var/run/syslog"))`;
+
+/**
  * The keychain, where `gh` and git's credential helper keep the user's tokens.
  * An approved command gets it; a native shell does not, since N2.2 requires
  * that it cannot act on the user's accounts (ADR-0036).
@@ -206,6 +213,7 @@ export class SeatbeltBackend implements SandboxBackend {
     }
     if (profile.network) rules.push(NETWORK_PROFILE);
     if (profile.network && profile.keychain !== false) rules.push(KEYCHAIN_PROFILE);
+    if (profile.network && profile.localNetwork === false) rules.push(NO_LOCAL_NETWORK);
     // The last matching rule wins, so a writable directory inside a masked one stays writable, as under bubblewrap.
     if (profile.masked?.length) rules.push(`(deny file-read* file-write* ${filters('MASKED', 'subpath', profile.masked)})`);
     if (profile.write.length) rules.push(`(allow file-read* file-test-existence file-map-executable file-write* ${filters('WRITABLE', 'subpath', profile.write)})`);

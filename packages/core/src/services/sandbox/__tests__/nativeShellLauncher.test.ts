@@ -44,7 +44,7 @@ describe('nativeShellInvocation', () => {
 });
 
 describe('launcherScript', () => {
-  it('keeps the fixed launch as argv entries and hands the harness command over as $1', () => {
+  it('keeps the fixed launch as argv entries and hands the harness command over as one argument', () => {
     const script = launcherScript({
       file: '/usr/bin/sandbox-exec',
       args: ['-p', '(version 1)', '-D', "READ_0=/work/it's here", '/bin/zsh', '-c'],
@@ -53,7 +53,10 @@ describe('launcherScript', () => {
     expect(script.startsWith('#!/bin/sh\n')).toBe(true);
     expect(script).toContain('exec /usr/bin/env -i ');
     expect(script).toContain(`'-D' 'READ_0=/work/it'\\''s here'`);
-    expect(script.trimEnd().endsWith(`'/usr/bin/sandbox-exec' '-p' '(version 1)' '-D' 'READ_0=/work/it'\\''s here' '/bin/zsh' '-c' "$1"`)).toBe(true);
+    expect(script.trimEnd().endsWith(`'/usr/bin/sandbox-exec' '-p' '(version 1)' '-D' 'READ_0=/work/it'\\''s here' '/bin/zsh' '-c' "$command"`)).toBe(true);
+    // Claude Code passes the whole command; OpenCode names a shell and appends
+    // `-c <command>` (checked live on OpenCode 2.0.32).
+    expect(script).toContain('case "$1" in\n  -c) command="$2" ;;\n  *) command="$1" ;;\nesac');
   });
 
   it('drops an environment name that cannot be an assignment', () => {
@@ -72,7 +75,7 @@ describe('createNativeShellLauncher (ADR-0036 N2)', () => {
     const launcher = await createNativeShellLauncher({ workspace: tmpdir(), sandbox, platform, env });
     try {
       const script = readFileSync(launcher.prefix, 'utf8');
-      expect(script).toContain(`'${shell}' '-c' "$1"`);
+      expect(script).toContain(`'${shell}' '-c' "$command"`);
       expect(statSync(launcher.prefix).mode & 0o777).toBe(0o700);
       expect(statSync(launcher.tmpdir).isDirectory()).toBe(true);
       expect(launcher.tmpdir.length).toBeLessThan(30);
@@ -96,6 +99,9 @@ describe('createNativeShellLauncher (ADR-0036 N2)', () => {
       expect(profile.write).toContain(realpathSync(launcher.tmpdir));
       expect(profile.write).toContain(profile.env.TMPDIR);
       expect(profile.network).toBe(true);
+      // The harness's own server and Ordewell's daemon listen on loopback and
+      // run what they are asked outside the sandbox.
+      expect(profile.localNetwork).toBe(false);
       // The launcher itself is outside every writable directory: a command
       // must not be able to rewrite what the next command starts through.
       expect(profile.write).not.toContain(launcher.prefix);

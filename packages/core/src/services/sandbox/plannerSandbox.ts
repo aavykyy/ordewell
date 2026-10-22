@@ -40,6 +40,8 @@ export interface SealedRunOptions {
    * for an approved command; a native shell passes false (N2.2).
    */
   keychain?: boolean;
+  /** Whether that network reaches loopback and this machine's Unix sockets. Defaults to true; a native shell passes false (N2). */
+  localNetwork?: boolean;
 }
 
 export type SealedAvailability =
@@ -214,6 +216,7 @@ export function sealedShellProfile(
     masked: host.masked,
     network: opts.network === true,
     ...(opts.keychain === undefined ? {} : { keychain: opts.keychain }),
+    ...(opts.localNetwork === undefined ? {} : { localNetwork: opts.localNetwork }),
     privateTmp: true,
     env: opts.scratch ? { ...scratchEnv(opts.scratch, host.platform), HOME: opts.scratch } : {},
     inheritEnv: SEALED_ENV,
@@ -478,6 +481,9 @@ export class PlannerShellSandbox {
       network: true,
       // N2.2: the user's keychain stays out of reach even with the network.
       keychain: false,
+      // N2: the harness's server and Ordewell's daemon would run a command
+      // outside the sandbox for a shell that read their passwords.
+      localNetwork: false,
     });
     // A sealed run's limits come with a prelude that kills the command when
     // the caller's stdin pipe closes, since that is how a run learns Ordewell

@@ -29,14 +29,28 @@ function run(launch: ShellLaunch, command: string, cwd: string): Promise<{ code:
   });
 }
 
+/**
+ * CI sets this on a host that is meant to run the sandbox, so a probe that
+ * fails there fails the suite: a green run must mean the real sandbox ran,
+ * not that every test skipped again.
+ */
+const REQUIRE_SANDBOX = process.env.ORDEWELL_REQUIRE_SANDBOX === '1';
+
 // The probe is asynchronous and the skip is decided when the suite is collected, so the outer suite awaits it.
 describe("the planner's sandbox", async () => {
   const availability = await resolvePlannerSandbox();
   const title = availability.available
     ? `on this host (${availability.backend.name})`
-    : `skipped: ${availability.notice.split('\n')[0]}`;
+    : `${REQUIRE_SANDBOX ? 'required' : 'skipped'}: ${availability.notice.split('\n')[0]}`;
 
-  describe.skipIf(!availability.available)(title, () => {
+  describe.skipIf(!availability.available && !REQUIRE_SANDBOX)(title, () => {
+    if (!availability.available) {
+      it('has a sandbox on this host (ORDEWELL_REQUIRE_SANDBOX=1)', () => {
+        throw new Error(availability.notice);
+      });
+      return;
+    }
+
     let workspace: string;
     const sandbox = new PlannerShellSandbox();
 
@@ -157,6 +171,38 @@ describe("the planner's sandbox", async () => {
         const connect = `'${process.execPath}' connect.js ${port}`;
         expect((await sh(connect, { network: false })).code).not.toBe(0);
         expect((await sh(connect, { network: true })).code).toBe(0);
+      });
+
+      // OpenCode's server takes a new MCP command from whoever has its
+      // password, and a macOS command can read that password from the
+      // server's environment: so the native shell must not reach it (N2).
+      it("keeps a native shell, which has the network, off loopback and this machine's Unix sockets (ADR-0036 N2)", async () => {
+        const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-native-tmp-')));
+        const socketDir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-native-sock-')));
+        const socketPath = join(socketDir, 'api.sock');
+        const local = createServer((socket) => socket.end());
+        await new Promise<void>((resolve) => local.listen(socketPath, resolve));
+        try {
+          const native = sandbox.launchNativeShell({ workspace, tmpdir: tmp, shell: '/bin/sh' });
+          if (availability.backend.name !== 'Seatbelt') {
+            // Bubblewrap has no way to keep the network but drop loopback, so it refuses (N4).
+            await expect(native).rejects.toThrow();
+            return;
+          }
+          const launch = await native;
+          expect((await run(launch, `'${process.execPath}' connect.js ${port}`, workspace)).code).toBe(3);
+          writeFileSync(join(tmp, 'unix.js'),
+            `const s = require('net').connect(${JSON.stringify(socketPath)});\n`
+            + "s.on('connect', () => process.exit(0)); s.on('error', () => process.exit(3));\n"
+            + 'setTimeout(() => process.exit(4), 5000);\n');
+          expect((await run(launch, `'${process.execPath}' '${join(tmp, 'unix.js')}'`, workspace)).code).toBe(3);
+          // The same socket is reachable from outside, so the refusal above is the sandbox's.
+          expect((await run({ file: '/bin/sh', args: ['-c'], env: process.env }, `'${process.execPath}' '${join(tmp, 'unix.js')}'`, workspace)).code).toBe(0);
+        } finally {
+          await new Promise<void>((resolve) => local.close(() => resolve()));
+          rmSync(tmp, { recursive: true, force: true });
+          rmSync(socketDir, { recursive: true, force: true });
+        }
       });
     });
 

@@ -136,6 +136,17 @@ function researchPhaseBlock(harnessMode: boolean): string {
 }
 
 /**
+ * Said only to a planner process that was given its harness's own shell
+ * (ADR-0036 N1, N2). The setting alone does not give one: an unchecked
+ * version, Codex, and a first process whose version is not known yet keep
+ * `run_command` alone, so the line goes with the spawn, not the conversation.
+ */
+export const NATIVE_SHELL_GUIDE = [
+  'YOUR OWN SHELL:',
+  '- In this session your own shell is available too, for local reads, loops and scripts, in place of the research phase\'s "not a shell of your own". It runs under Ordewell\'s sandbox: the workspace read-only, only a scratch folder writable, and none of the user\'s credentials. Its commands reach the timeline as bash steps. It has the internet but not this machine\'s own services (localhost, local sockets), so reach those, the user\'s accounts and anything that needs their credentials through run_command.',
+].join('\n');
+
+/**
  * Facts about who plans and where tasks will run, as opposed to the user's
  * choices: they change what the prompt can promise, not what it asks for.
  */
