@@ -60,6 +60,22 @@ nothing.
   fix, or add a failing test and run the suite. The repository's `.git` stays
   read-only, since a worktree's `.git` is a file pointing into it: git reads
   the history and records nothing, and each sealed result says so.
+- **No link out of the worktree.** A sealed run may leave no link leading out
+  of its worktree and the workspace. The runner's native reads, and the task's
+  unsealed commands, which run in the planner's sandbox and read the whole
+  host, are outside the sealed profile and would follow it. On macOS the
+  sandbox refuses it: the profile is `linkless` for the writable worktree
+  (`sealedShellProfile`, only on darwin), and Seatbelt denies creating a
+  symlink there, or moving one in, by the file's type. Bubblewrap cannot refuse
+  a link by type and refuses a `linkless` profile, so on every platform
+  `runSealed` calls `removeOutwardLinks` after each run and names what it
+  removed in the result. The task shell runs one command at a time, so no
+  unsealed command reads the worktree while a sealed one writes it.
+- **Ten minutes.** A sealed command of a task has ten minutes
+  (`TASK_SEALED_LIMITS`, the script task's default); the planner's own sealed
+  runs keep one minute. A run ended at its limit says so, and does not blame
+  the network (`sealedTimeLimitNote`). The task can run the suite because of
+  it.
 - **Without a worktree**, where the run does not isolate, the working
   directory is the workspace root and a sealed run has nothing of it writable.
 - **Without a sandbox** (ADR-0036 S6), what would run sealed is refused, and
@@ -92,9 +108,13 @@ nothing.
   resumes a session with old permissions.
 - **Codex** keeps its read-only sandbox setting and declines native file
   changes, with `features.shell_tool = false` and `features.unified_exec =
-  false` (ADR-0033). Its code-mode tool discovery and MCP tools remain;
-  file reads and repository searches that would use its shell instead go
-  through `run_command`. The profile needs no native sandbox probe, so it
+  false` (ADR-0033). Its code-mode tool discovery remains. Of its MCP servers
+  only Ordewell's own stays, as for Claude Code and OpenCode:
+  `CodexAdapter.openThread` reads Codex's effective configuration
+  (`config/read`) and disables every other configured server for the thread,
+  and a task whose servers Codex cannot report does not start. File reads and
+  repository searches that would use its shell instead go through
+  `run_command`. The profile needs no native sandbox probe, so it
   stays available on hosts where Guarded is unavailable. Project config is
   untrusted, as for the planner. No model is replaced.
 - **Native web tools are refused.** ADR-0027's unasked web reads require the
@@ -171,6 +191,10 @@ nothing.
   jobs, the shared here-document files), and a process that leaves a sealed
   run's process group outlives it, still sealed, and can still be writing the
   worktree while it is removed.
+- A sealed `python -m venv` in the worktree fails on macOS, because a venv's
+  links point outside it. On Linux a native read at the same moment as a sealed
+  run could follow a link in the instant before it is removed; closing that
+  needs a seccomp filter in the bubblewrap backend.
 - A failed or stopped read-only attempt leaves its log and its report to look
   at, and no worktree.
 - Where no sandbox runs, a read-only task runs only the classifier's read-only
@@ -184,3 +208,5 @@ nothing.
 - 2026-10-21 — accepted; implemented in core, the per-runner part pending.
 
 - 2026-10-21 — implemented on every built-in runner; native plan modes replaced, native web tools refused without a task web-policy channel, and the planner told commands can run.
+
+- 2026-10-22 — a sealed run leaves no link out of its worktree (refused on macOS, removed after the run on every platform); a task's sealed commands have ten minutes; a Codex read-only task keeps only Ordewell's MCP server.
