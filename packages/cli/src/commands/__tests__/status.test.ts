@@ -379,6 +379,81 @@ describe('handleStatus --output', () => {
   });
 });
 
+describe('handleStatus with a handoff (ADR-0047)', () => {
+  const handoff = {
+    summary: 'The cache key omits the tenant.',
+    findings: [
+      { id: 'F1', severity: 'blocker', title: 'Cache key leaks across tenants' },
+      { id: 'F2', severity: 'major', title: 'No regression test' },
+    ],
+    findingCount: 4,
+    artifacts: [{ kind: 'file', path: 'src/cache.ts', line: 42 }, { kind: 'url', url: 'https://example.com/pr/7' }],
+  };
+
+  async function statusOf(plan: unknown): Promise<string> {
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ...SESSION, plan }));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
+    srv.close();
+    return stripAnsi(stdout);
+  }
+
+  it('prints a completed task\'s summary, finding titles and artifacts under its row', async () => {
+    const out = await statusOf({ pendingTasks: [
+      { id: 't1', order: 1, type: 'ai', title: 'Fix the cache', status: 'completed', dependencies: [], handoff },
+      { id: 't2', order: 2, type: 'ai', title: 'Ship it', status: 'pending', dependencies: ['t1'] },
+    ] });
+
+    const lines = out.split('\n');
+    const row = lines.findIndex((l) => l.includes('Fix the cache'));
+    expect(lines.slice(row + 1, row + 6)).toEqual([
+      '      ↳ Handoff: The cache key omits the tenant.',
+      '      F1 [blocker] Cache key leaks across tenants',
+      '      F2 [major] No regression test',
+      '      +2 more findings, in the attempt\'s log',
+      '      Artifacts: src/cache.ts:42; https://example.com/pr/7',
+    ]);
+    expect(out).not.toMatch(/Ship it[\s\S]*↳ Handoff/);
+  });
+
+  it('prints a script task\'s derived summary after the body it ran', async () => {
+    const out = await statusOf({ pendingTasks: [{
+      id: 't1', order: 1, type: 'script', title: 'Tag the release', status: 'completed', dependencies: [],
+      commands: [['git', 'tag', 'v1.2.3']], timeoutMs: 90_000,
+      handoff: { summary: 'exited 0 in 1.2 s', findings: [], findingCount: 0 },
+    }] });
+
+    const lines = out.split('\n');
+    expect(lines).toContain('      ↳ Handoff: exited 0 in 1.2 s');
+    expect(lines.indexOf('      ↳ Handoff: exited 0 in 1.2 s')).toBeGreaterThan(lines.findIndex((l) => l.includes('git tag v1.2.3')));
+  });
+
+  it('prints a user task\'s derived summary', async () => {
+    const out = await statusOf({ pendingTasks: [{
+      id: 't1', order: 1, type: 'user', title: 'Add the DNS record', status: 'completed', dependencies: [],
+      handoff: { summary: 'Completed by the user', findings: [], findingCount: 0 },
+    }] });
+
+    expect(out).toContain('      ↳ Handoff: Completed by the user');
+  });
+
+  it('carries the handoff in --json', async () => {
+    const plan = { pendingTasks: [{ id: 't1', order: 1, type: 'ai', title: 'Fix the cache', status: 'completed', dependencies: [], handoff }] };
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ...SESSION, plan }));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1', '--json'], new ApiClient(srv.port)));
+
+    expect(JSON.parse(stdout).plan.pendingTasks[0].handoff).toEqual(handoff);
+    srv.close();
+  });
+});
+
 describe('handleStatus on a loop (ADR-0045)', () => {
   const found = { outcome: 'fail', reason: 'two problems', checks: [], reported: 'failed' };
   const loopSession = (tasks: unknown[]) => ({ meta: { ...SESSION.meta, status: 'approved' }, plan: { pendingTasks: tasks } });

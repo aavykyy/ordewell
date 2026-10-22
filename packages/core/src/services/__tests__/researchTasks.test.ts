@@ -77,7 +77,7 @@ describe('research reports and authority (ADR-0037 R2, R3)', () => {
     expect(env.planner.calls[1].message).toContain('Report 1');
   });
 
-  it.each(['off', 'watch', 'act'] as const)('wakes at %s with the whole task_complete report and user authority', async (supervisorLevel) => {
+  it.each(['off', 'watch', 'act'] as const)('wakes at %s with the whole task_complete summary and user authority', async (supervisorLevel) => {
     const env = await supervised([task('t1', 1)], { settings: { supervisorLevel } });
     await userTurn(env);
     await add(env);
@@ -90,6 +90,31 @@ describe('research reports and authority (ADR-0037 R2, R3)', () => {
     expect(env.planner.calls[1].message).toContain('You act as in that turn');
     await land(env, [{ op: 'add', task: { title: 'Fix the cache', prompt: 'fix', sliceType: 'AFK' } }]);
     expect(flattenTasks(env.session.planTasks).some((t) => t.title === 'Fix the cache')).toBe(true);
+  });
+
+  it('wakes with the handoff summary and top findings, and leaves its report in the log', async () => {
+    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' } });
+    await userTurn(env);
+    await add(env);
+    const r = research(env)[0];
+    await until(() => env.run.spawnedIds().includes(r.id));
+    env.run.of(r.id).reportComplete({
+      status: 'done',
+      summary: 'The cache key omits the tenant.',
+      findings: [{ severity: 'blocker', title: 'Cache key leaks across tenants', detail: 'A second tenant reads the first one\'s entry.' }],
+      report: 'The long report, which a wake-up never carries.',
+    });
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 2);
+
+    const message = env.planner.calls[1].message;
+    expect(message).toContain('It passed.');
+    expect(message).toContain('The cache key omits the tenant.');
+    expect(message).toContain('- F1 [blocker] Cache key leaks across tenants');
+    expect(message).toContain('  A second tenant reads the first one\'s entry.');
+    expect(message).toContain('The report, if the task wrote one, is in the attempt\'s log: read it with task_output.');
+    expect(message).not.toContain('The long report, which a wake-up never carries.');
   });
 
   it.each(['failed', 'blocked'] as const)('wakes at Off on a %s result with its reason', async (status) => {

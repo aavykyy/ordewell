@@ -202,6 +202,39 @@ describe('the end-of-run handoff', () => {
   });
 });
 
+describe('a finished task\'s handoff in a run update (ADR-0047)', () => {
+  const reported = (): Task => ({
+    ...task('t1', 1, {
+      status: 'completed',
+      verdict: { outcome: 'pass', reason: 'said so', checks: [], decidedAt: '2026-10-13T00:00:00Z' },
+      handoff: {
+        summary: 'The cache key omits the tenant.',
+        findings: [{ id: 'F1', severity: 'blocker', title: 'Cache key leaks across tenants' }],
+        findingCount: 1,
+      },
+      outputSummary: { reviewReason: '', report: 'The long report, which a wake-up never carries.', logTail: '', capturedAt: '' },
+    }),
+    reportTo: { actor: 'planner-turn', consent: { by: 'autorun' } },
+  });
+
+  it('carries the summary and findings, and leaves the report in the attempt\'s log', async () => {
+    vi.useFakeTimers();
+    const { supervision, tasks, host } = harness({ supervisorLevel: 'off' });
+    supervision.runStarted('user');
+
+    tasks[0] = reported();
+    supervision.taskSettled(tasks[0]);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const calls = host.deliver.mock.calls as unknown as [string, string?][];
+    const digest = calls[0]![0];
+    expect(digest).toContain('The cache key omits the tenant.');
+    expect(digest).toContain('- F1 [blocker] Cache key leaks across tenants');
+    expect(digest).toContain('The report, if the task wrote one, is in the attempt\'s log: read it with task_output.');
+    expect(digest).not.toContain('The long report, which a wake-up never carries.');
+  });
+});
+
 describe('a loop\'s check whose result a planner turn asked for (ADR-0045 L3, L6; ADR-0037 R2)', () => {
   const failedRound = (loopRound: number): Partial<Task> => ({
     status: 'failed',
