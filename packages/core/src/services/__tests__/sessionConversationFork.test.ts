@@ -20,7 +20,11 @@ function runningPlan(): LegacyPlanState {
   return {
     tasks: [
       { ...task('done', 1, 'completed'), verdict: { outcome: 'pass', reason: 'marker seen', checks: [], decidedAt: '2026-01-01T00:01:00Z' } },
-      { ...task('running', 2, 'in_progress'), outputSummary: { reviewReason: 'mid-run', logTail: '…', capturedAt: '2026-01-01T00:02:00Z' } },
+      {
+        ...task('running', 2, 'in_progress'),
+        outputSummary: { reviewReason: 'mid-run', logTail: '…', capturedAt: '2026-01-01T00:02:00Z' },
+        handoff: { summary: 'An earlier attempt.', findings: [], findingCount: 0 },
+      },
       { ...task('checkpoint', 3, 'awaiting_user'), awaitingReason: 'checkpoint' },
       task('broken', 4, 'failed'),
       task('later', 5, 'pending'),
@@ -103,6 +107,7 @@ describe('Session.forkConversation', () => {
     ]);
     expect(saved.tasks[0].verdict?.reason).toBe('marker seen');
     expect(saved.tasks[1].outputSummary).toBeUndefined();
+    expect(saved.tasks[1].handoff).toBeUndefined();
     expect(saved.tasks[2]).not.toHaveProperty('awaitingReason');
     expect(saved.pendingTurns).toBeUndefined();
     expect(session.planTasks.map((t) => t.status)).toEqual(['completed', 'in_progress', 'awaiting_user', 'pending', 'pending']);

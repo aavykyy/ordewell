@@ -351,17 +351,19 @@ describe('applyTaskOps', () => {
 });
 
 describe('applyTaskOps — rearm', () => {
-  it('re-arms a failed task: pending, verdict and output summary cleared', () => {
+  it('re-arms a failed task: pending, verdict, output summary and handoff cleared', () => {
     const plan = samplePlan();
     plan[0].status = 'failed';
     plan[0].verdict = { outcome: 'fail', reason: 'broke', checks: [], decidedAt: 'now' };
     plan[0].outputSummary = { reviewReason: 'broke', logTail: 'oops', capturedAt: 'now' };
+    plan[0].handoff = { summary: 'It broke.', findings: [], findingCount: 0 };
     const res = applyTaskOps(plan, [{ op: 'rearm', taskId: 'a' }], ['claude-code']);
     expect(res.ok).toBe(true);
     const rearmed = res.tasks.find((t) => t.id === 'a')!;
     expect(rearmed.status).toBe('pending');
     expect(rearmed.verdict).toBeUndefined();
     expect(rearmed.outputSummary).toBeUndefined();
+    expect(rearmed.handoff).toBeUndefined();
     expect(res.summary[0]).toContain('Re-armed');
   });
 

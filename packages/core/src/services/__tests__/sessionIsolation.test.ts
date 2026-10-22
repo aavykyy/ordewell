@@ -725,7 +725,7 @@ describe('Session with worktree isolation', () => {
       const answer = String(continueConversation.mock.calls[1][0]);
       const [conflicted, running] = answer.split(/^#3 /m);
       expect(conflicted).toMatch(/\[awaiting_user\]/);
-      expect(conflicted).toMatch(/not running — read "outputSummary" and "verdict"/);
+      expect(conflicted).toMatch(/not running — read "outputSummary", "handoff" and "verdict"/);
       expect(running).toMatch(/output: \(running;/);
       expect(running).toContain('building in the worktree');
     });

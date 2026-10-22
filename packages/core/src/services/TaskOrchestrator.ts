@@ -48,6 +48,7 @@ import type { RunMergeView } from './SessionMessage';
 import { resumeTime } from '../taskRow/status';
 import { scriptBodyOf } from '../models/ScriptTask';
 import { SCRIPT_RUNNER, ScriptRunner } from './ScriptRunner';
+import { checkHandoff, handoffLines, type StoredHandoff } from '../models/Handoff';
 
 /** What ran an automatic Merge all: a task reaching its merge gate, or the run settling with landed work unmerged. */
 export type AutoMergeTrigger = { kind: 'gate'; taskId: string } | { kind: 'run_end' };
@@ -341,6 +342,8 @@ export interface TaskOrchestratorDeps {
   isApproved: (taskId: string) => boolean;
   /** A read-only attempt's shell (ADR-0046); absent, its runner is given no `run_command`. */
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
+  /** Write an attempt's whole handoff into the log of the attempt `sessionId` ran (ADR-0047). */
+  recordHandoff: (sessionId: string, taskId: string, handoff: StoredHandoff) => void;
 }
 
 /**
@@ -368,6 +371,7 @@ export interface TaskOrchestratorOptions {
   /** Every task is approved unless a Session supplies its record: an orchestrator on its own has no user to ask. */
   isApproved?: (taskId: string) => boolean;
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
+  recordHandoff?: (sessionId: string, taskId: string, handoff: StoredHandoff) => void;
 }
 
 /**
@@ -460,6 +464,7 @@ export class TaskOrchestrator {
   private runSettings: () => SchedulerRunSettings | undefined;
   private isApproved: (taskId: string) => boolean;
   private taskShell: (site: TaskShellSite) => TaskShell | undefined;
+  private recordHandoff: (sessionId: string, taskId: string, handoff: StoredHandoff) => void;
   private readonly research: Pick<ResearchTasks, 'started'> | undefined;
 
   constructor(deps: TaskOrchestratorDeps) {
@@ -481,6 +486,7 @@ export class TaskOrchestrator {
     this.runSettings = deps.runSettings;
     this.isApproved = deps.isApproved;
     this.taskShell = deps.taskShell ?? (() => undefined);
+    this.recordHandoff = deps.recordHandoff;
 
     this.store.onMutate = () => this.emit('onTaskChanged');
     this.verifier.onVerdict((taskId, verdict) => { void this.deliverVerdict(taskId, verdict); });
@@ -555,6 +561,7 @@ export class TaskOrchestrator {
       isApproved: options.isApproved ?? (() => true),
       research: options.research,
       ...(options.taskShell ? { taskShell: options.taskShell } : {}),
+      recordHandoff: options.recordHandoff ?? (() => undefined),
     });
     return orchestrator;
   }
@@ -1295,7 +1302,9 @@ export class TaskOrchestrator {
     await Promise.resolve();
     if (this.attempts.get(taskId) !== attempt) return;
     const summary = this.output.finalText(taskId);
-    const report = this.output.report(taskId);
+    const handoff = this.output.handoff(taskId);
+    // A reader of the output summary from before handoffs gets the whole handoff, as one text (ADR-0047).
+    const report = handoff && handoffLines(handoff, (id) => taskRefOf(this.store.planTasks, id)).join('\n');
     const landing = verdict.outcome === 'pass' ? await this.land(attempt, () => this.landing.landPassed(task, attempt)) : null;
     const changedFiles = landing && checksTree(attempt.kind) ? await this.runs.filesChangedSince(attempt.snapshot) : [];
     const unresumedReason = this.unresumed(attempt) ? unresumedMessage(task, `${attempt.runner} could not find its saved session`) : null;
@@ -1323,7 +1332,8 @@ export class TaskOrchestrator {
       if (attempt.worktree) await this.runs.release(taskId, { keep: true });
     }
 
-    this.store.setTaskOutputSummary(taskId, summarizeOutput(unresumedReason ?? verdict.reason, summary, report));
+    this.store.setTaskOutputSummary(taskId, summarizeOutput(unresumedReason ?? verdict.reason, summary, report), handoff);
+    if (handoff && attempt.session) this.recordHandoff(attempt.session.id, taskId, handoff);
 
     this.logAndArchive(task, verdict);
     await this.afterVerdict(taskId);
@@ -2720,6 +2730,7 @@ export class TaskOrchestrator {
       attempt: attempt.attempt,
       ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
       ...(shell ? { shell } : {}),
+      checkHandoff: (completion) => checkHandoff(completion, task.id, this.store.planTasks),
       workspaceRoot: this.workspaceRootFn(),
       onNotice: (message) => this.tell('warn', `Task "${task.title}": ${message}`),
     });

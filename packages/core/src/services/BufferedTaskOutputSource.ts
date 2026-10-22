@@ -1,6 +1,8 @@
 import type { IRunnerSession } from '../interfaces/IRunner';
 import type { LiveTail, LiveTailOptions, TaskOutputSource } from '../interfaces/TaskOutputSource';
 import { outputLines } from '../conversation/format';
+import { storedHandoff, type StoredHandoff } from '../models/Handoff';
+import type { TaskCompleteArgs } from './mcp/tools';
 
 /** Enough output for a summary tail and a live read, without holding a long run's whole log. */
 const DEFAULT_MAX_BUFFER_CHARS = 256 * 1024;
@@ -13,8 +15,8 @@ interface Capture {
   dropped: number;
   attached: boolean;
   exited: boolean;
-  /** What the runner said it did in its `task_complete` call (ADR-0022, V4). */
-  reported?: string;
+  /** The runner's `task_complete` call, whole: its handoff is what it said it did (ADR-0047). */
+  completion?: TaskCompleteArgs;
   turnStart?: number;
 }
 
@@ -44,12 +46,12 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
       // A message read mid-turn starts the account of the work afresh, as a new turn does (ADR-0023).
       // Ordewell's completion reminder asks for no new work, so the report before it stays.
       if (capture.attached && (event.type === 'turn_start' || event.type === 'message_delivered') && event.from !== 'ordewell') {
-        capture.reported = undefined;
+        capture.completion = undefined;
         capture.turnStart = capture.dropped + capture.raw.length;
       }
     });
-    session.onTaskComplete(({ summary }) => {
-      if (capture.attached) capture.reported = summary.trim() || undefined;
+    session.onTaskComplete((completion) => {
+      if (capture.attached) capture.completion = completion;
     });
   }
 
@@ -66,12 +68,18 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
   finalText(taskId: string): string {
     const capture = this.captures.get(taskId);
     if (!capture) return '';
-    if (capture.reported) return capture.reported;
+    const reported = this.report(taskId);
+    if (reported) return reported;
     return clean(capture.raw.slice(Math.max(0, (capture.turnStart ?? 0) - capture.dropped)));
   }
 
   report(taskId: string): string | undefined {
-    return this.captures.get(taskId)?.reported;
+    return this.captures.get(taskId)?.completion?.summary.trim() || undefined;
+  }
+
+  handoff(taskId: string): StoredHandoff | undefined {
+    const completion = this.captures.get(taskId)?.completion;
+    return completion && storedHandoff(completion);
   }
 
   liveTail(taskId: string, opts: LiveTailOptions): LiveTail | null {

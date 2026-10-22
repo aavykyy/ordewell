@@ -7,6 +7,7 @@ import type { RunnerCommand } from '../models/RunnerCommand';
 import type { RunnerSessionCost } from '../models/Usage';
 import type { ScriptBody } from '../models/ScriptTask';
 import type { TaskShell } from './IFileSystem';
+import type { HandoffCheck } from '../models/Handoff';
 /** How a structured turn ended. `failed` carries the agent's own words in the preceding `error` event. */
 export type StructuredTurnEnd = 'completed' | 'interrupted' | 'failed';
 /**
@@ -250,6 +251,12 @@ export interface IRunner {
      * from it, and only an attempt that has one is given that tool.
      */
     shell?: TaskShell;
+    /**
+     * Checks a `task_complete` call's handoff against the plan as the call
+     * arrives (ADR-0047): a refusal is the call's result, and nothing is
+     * recorded. Without one, a `task` reference resolves against no plan.
+     */
+    checkHandoff?: (completion: TaskCompleteArgs) => HandoffCheck<TaskCompleteArgs>;
   }): Promise<IRunnerSession>;
 
   /** Wind one session down ({@link IRunnerSession.stop}); resolves once its process is gone. */

@@ -364,6 +364,15 @@ describe('keepExecutionState', () => {
     ]);
   });
 
+  it('keeps the handoff of a failed task the rewrite restates, as it keeps its output summary', () => {
+    const handoff = { summary: 'The schema is missing.', findings: [{ id: 'F1', severity: 'blocker' as const, title: 'No schema' }], findingCount: 1 };
+    const failed = { ...todo('a', 1), status: 'failed' as const, handoff };
+
+    const [result] = keepExecutionState([failed], [todo('a', 1)]);
+
+    expect(result.handoff).toEqual(handoff);
+  });
+
   it('keeps the runner a task\'s saved session belongs to, with the session', () => {
     const stopped = { ...todo('a', 1), runnerSessionId: 'sess-1', runnerSessionOwner: 'claude-code' };
 

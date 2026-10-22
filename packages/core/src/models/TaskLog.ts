@@ -4,6 +4,7 @@ import { commandLine } from './ScriptTask';
 import type { SubagentOutcome, TaskSkillNotice, TaskSkillSnapshot } from './Task';
 import type { UsageRecord } from './Usage';
 import type { RunnerCommand, RunnerMcpServer, RunnerModelRef } from './RunnerCommand';
+import type { StoredHandoff } from './Handoff';
 
 /**
  * One entry of a structured task's log (ADR-0018, P1): what a runner did,
@@ -104,7 +105,13 @@ export type TaskLogEvent =
   /** What it printed; `omittedChars` on the tail of an output too long to keep, for the middle left out. */
   | { type: 'script_output'; text: string; omittedChars?: number }
   /** How it ended — exit code, or the signal that ended it — and after how long; `timedOut` when the task's limit ended it. */
-  | ({ type: 'script_exit'; durationMs: number; timedOut?: true } & ScriptStatus);
+  | ({ type: 'script_exit'; durationMs: number; timedOut?: true } & ScriptStatus)
+  /**
+   * The handoff the attempt ended with (ADR-0047), whole: every finding and
+   * the report, which the plan's digest leaves out. Written once, as its
+   * verdict settles.
+   */
+  | { type: 'handoff'; handoff: StoredHandoff };
 
 const HEAD_LINES = 60;
 const TAIL_LINES = 40;

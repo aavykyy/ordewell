@@ -6,6 +6,7 @@ import type { SkillSource } from '../services/SkillsService';
 import type { SupervisionMemorySnapshot } from '../services/LoopGuards';
 import type { SupervisorSnapshot } from '../services/Supervisor';
 import type { TaskLoop } from './Loop';
+import type { HandoffDigest } from './Handoff';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
 import { subtreeIds, walkPlan } from '../services/PlanTree';
 
@@ -166,6 +167,13 @@ export interface Task {
   subtasks: Task[];
   verdict?: Verdict;
   outputSummary?: TaskOutputSummary;
+  /**
+   * The latest attempt's handoff, as the plan keeps it (ADR-0047): its
+   * summary, first findings and artifacts. The whole handoff, report and all,
+   * is in that attempt's log. Absent when the attempt handed none over, and
+   * on a plan saved before handoffs, which reads `outputSummary` instead.
+   */
+  handoff?: HandoffDigest;
   assignedModel?: TaskModelAssignment;
   assignedRunner: RunnerId;
   taskMode?: TaskMode;
@@ -795,6 +803,7 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     subtasks: overrides.subtasks ?? [],
     verdict: overrides.verdict,
     outputSummary: overrides.outputSummary,
+    ...(overrides.handoff ? { handoff: structuredClone(overrides.handoff) } : {}),
     ...(overrides.attemptUsage ? { attemptUsage: structuredClone(overrides.attemptUsage) } : {}),
     assignedModel: overrides.assignedModel,
     assignedRunner: overrides.assignedRunner ?? DEFAULT_RUNNERS[0],
@@ -1081,6 +1090,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
         skipReason: prior?.skipReason,
         verdict: prior?.verdict,
         outputSummary: prior?.outputSummary,
+        handoff: prior?.handoff,
         runnerSessionId: prior?.runnerSessionId,
         runnerSessionOwner: prior?.runnerSessionOwner,
         carriedFrom: prior?.carriedFrom,

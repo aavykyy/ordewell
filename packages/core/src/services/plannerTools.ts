@@ -6,7 +6,7 @@ import { autonomyLevelLabel, readOnlyMode } from './ModeResolver';
 import { validatePlanTasks } from './PlanValidator';
 import type { AssignmentAdjustment } from './TaskAssignment';
 import {
-  fitTail, taskQuerySignature, OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, OUTPUT_TAIL_MAX_CHARS, TASK_QUERY_TASK_FIELDS, TASK_READ_ANSWER_OR_EDIT,
+  fitTail, handoffRest, taskQuerySignature, OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, OUTPUT_TAIL_MAX_CHARS, TASK_QUERY_TASK_FIELDS, TASK_READ_ANSWER_OR_EDIT,
   type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog, type TaskQueryField,
 } from './TaskQuery';
 import type { TaskOp } from './TaskOps';
@@ -14,6 +14,7 @@ import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
 import type { PlanChange, ToolRead } from './PlannerConversation';
 import { commandReply, type McpToolReply, type PlannerToolHandler } from './mcp/tools';
 import type { TaskLogEvent } from '../models/TaskLog';
+import type { HandoffDigest, HandoffEvidence } from '../models/Handoff';
 import { renderTaskLog } from './taskLogRead';
 import { taskReadPage } from './taskReadPage';
 import type { TaskDiffRead, TaskDiffResult } from './taskDiffRead';
@@ -227,6 +228,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
           reason: 'This task is not running, so there is no live output: its outcome is below.',
           verdict: verdictDetail(task.verdict),
           outputSummary: outputSummaryDetail(task),
+          handoff: endedHandoffDetail(host, task),
           lastAttempt: host.lastAttempt(task.id),
         };
       });
@@ -288,10 +290,39 @@ function verdictDetail(verdict: Verdict | undefined) {
   };
 }
 
-function outputSummaryDetail({ outputSummary }: Task) {
+function outputSummaryDetail({ outputSummary, handoff }: Task) {
   if (!outputSummary) return null;
-  const { reviewReason, report, logTail } = outputSummary;
+  const { reviewReason, logTail } = outputSummary;
+  // A task with a handoff carries its report there (ADR-0047).
+  const report = handoff ? undefined : outputSummary.report;
   return { reviewReason, ...(report ? { report } : {}), ...(logTail ? { logTail } : {}) };
+}
+
+/** A handoff with the tasks it cites named by their references, as the planner names them. */
+function namedHandoff<H extends HandoffDigest>(plan: readonly Task[], handoff: H): H {
+  const named = (refs: readonly HandoffEvidence[]) => refs.map((r) => (r.kind === 'task' ? { ...r, task: taskRefOf(plan, r.task) ?? r.task } : r));
+  return {
+    ...handoff,
+    findings: handoff.findings.map((f) => (f.evidence ? { ...f, evidence: named(f.evidence) } : f)),
+    ...(handoff.artifacts ? { artifacts: named(handoff.artifacts) } : {}),
+  };
+}
+
+/** A task's handoff digest, and where the rest is. */
+function handoffDetail(plan: readonly Task[], { handoff }: Task) {
+  return handoff ? { ...namedHandoff(plan, handoff), rest: handoffRest(handoff) } : null;
+}
+
+/**
+ * The whole handoff of the task's latest attempt, every finding and the
+ * report, from that attempt's log; its digest where the log has none.
+ */
+function endedHandoffDetail(host: PlannerToolsHost, task: Task) {
+  if (!task.handoff) return null;
+  const attempt = host.taskLogAttempts(task.id).at(-1);
+  const events = attempt === undefined ? [] : host.taskLog(task.id, attempt);
+  const logged = events.filter((e): e is Extract<TaskLogEvent, { type: 'handoff' }> => e.type === 'handoff').at(-1);
+  return logged ? namedHandoff(host.tasks(), logged.handoff) : handoffDetail(host.tasks(), task);
 }
 
 /** A subtask's order restarts under its parent, so a read names it by its dotted reference, never a bare order. */
@@ -319,6 +350,7 @@ function taskDetail(plan: readonly Task[], ref: string, fields: readonly TaskQue
       : {}),
     ...(wants('verdict') ? { verdict: verdictDetail(task.verdict) } : {}),
     ...(wants('outputSummary') ? { outputSummary: outputSummaryDetail(task) } : {}),
+    ...(wants('handoff') ? { handoff: handoffDetail(plan, task) } : {}),
     ...(wants('userStoriesCovered') ? { userStoriesCovered: task.userStoriesCovered?.length ? task.userStoriesCovered : null } : {}),
     ...(wants('skills') ? { skills: task.skills?.length ? task.skills : null } : {}),
   };

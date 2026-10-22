@@ -315,11 +315,14 @@ describe('composeAugmentedPrompt', () => {
     expect(TASK_COMPLETION_CONTRACT).not.toContain('marker');
   });
 
-  it('says the task_complete summary is the report the planner and dependents read, never a file', () => {
+  it('teaches the handoff: the summary for the next task, findings to act on with their evidence, the report read on demand and never a file (ADR-0047)', () => {
     const out = TASK_COMPLETION_CONTRACT;
-    expect(out).toContain('summary is this task\'s report');
+    expect(out).toContain('Call it once, as your last action.');
+    expect(out).toContain('`summary` is this task\'s handoff to the next task');
     expect(out).toContain('the planner and the tasks that depend on this one');
-    expect(out).toMatch(/findings, decisions/);
+    expect(out).toMatch(/`findings`.*most important first/);
+    expect(out).toMatch(/a file \(and line\), a commit, a task \(and one of its findings, as "F3"\) or a URL/);
+    expect(out).toMatch(/`report`.*read only on demand/);
     expect(out).toMatch(/read-only task/);
     expect(out).toMatch(/do not write the report to a file/);
   });
