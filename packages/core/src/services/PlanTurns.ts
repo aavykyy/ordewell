@@ -196,8 +196,10 @@ export class PlanTurns {
    * A plan adopted off disk keeps its inputs until a new input asks for a
    * turn. A report the planner asked for is one (ADR-0037, R2): saved behind
    * a turn that never landed, it wakes the planner once the load is done, as
-   * one still in the supervisor's batch does. A saved usage-limit wait or a
-   * spent budget keeps it for the user's next message.
+   * one still in the supervisor's batch does. Only a saved usage-limit wait
+   * keeps it for the user's next message; `mayReport` holds it once two
+   * automatic turns have failed, and a chain of reports is not capped per
+   * message (ADR-0037, R4).
    */
   restoreResend(): void {
     this.restored = true;

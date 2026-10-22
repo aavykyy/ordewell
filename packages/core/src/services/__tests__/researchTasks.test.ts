@@ -210,6 +210,23 @@ describe('research starts (ADR-0037 R4)', () => {
     expect(env.planner.calls).toHaveLength(0);
   });
 
+  it('keeps a report → research → report chain going at Off with no user message, with no per-message cap', async () => {
+    const env = await supervised([], { execute: false, settings: { supervisorLevel: 'off' } });
+    await userTurn(env);
+    await add(env);
+    await until(() => env.run.spawnedIds().includes(research(env)[0].id));
+
+    // Each report turn starts the next round; no user message opens any of them.
+    for (let round = 1; round <= 3; round++) {
+      await report(env, research(env)[round - 1].id, 'done', `Report ${round}`);
+      await until(() => env.planner.calls.length === round + 1);
+      expect(env.planner.calls.at(-1)!.message).toContain(`Report ${round}`);
+      await land(env, [{ op: 'add', task: spec(`Scout ${round}`, round + 1) }]);
+      await until(() => env.run.spawnedIds().includes(research(env)[round].id));
+    }
+    expect(env.planner.calls).toHaveLength(4);
+  });
+
   it('reloads research tasks and an undelivered report', async () => {
     const env = await supervised([], { execute: false, settings: { supervisorLevel: 'off' } });
     await userTurn(env);
