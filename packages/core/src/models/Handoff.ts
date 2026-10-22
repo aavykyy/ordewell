@@ -12,6 +12,29 @@ import { resolveTaskRef, taskRefOf, titledTaskRefOf } from '../services/TaskRefs
 /** Advice to the reader of how much a finding matters; it never reaches the verdict. */
 export type FindingSeverity = 'blocker' | 'major' | 'minor' | 'info';
 
+/** A severity as a surface labels it, so both task views word it the same. */
+export const SEVERITY_LABEL: Record<FindingSeverity, string> = {
+  blocker: 'Blocker',
+  major: 'Major',
+  minor: 'Minor',
+  info: 'Info',
+};
+
+export function severityLabel(severity: FindingSeverity): string {
+  return SEVERITY_LABEL[severity];
+}
+
+const SEVERITY_RANK: Record<FindingSeverity, number> = { blocker: 0, major: 1, minor: 2, info: 3 };
+
+/** The worst severity among `findings`, or null for none: what a compact row says at a glance. */
+export function worstSeverity(findings: readonly Pick<HandoffFinding, 'severity'>[]): FindingSeverity | null {
+  let worst: FindingSeverity | null = null;
+  for (const { severity } of findings) {
+    if (worst === null || SEVERITY_RANK[severity] < SEVERITY_RANK[worst]) worst = severity;
+  }
+  return worst;
+}
+
 /**
  * A typed reference a reader can check rather than trust. A `task` names the
  * task by id once the call is accepted, and `finding` one of its findings.
@@ -115,7 +138,8 @@ export function namedHandoff<H extends HandoffDigest>(plan: readonly Task[], han
   };
 }
 
-function referenceText(ref: HandoffEvidence, taskName: HandoffTaskName): string {
+/** A typed reference as a reader says it: `src/a.ts:42`, `commit abc`, `task #2 F1`, a URL. */
+export function handoffReferenceText(ref: HandoffEvidence, taskName: HandoffTaskName = () => undefined): string {
   switch (ref.kind) {
     case 'file': return ref.line !== undefined ? `${ref.path}:${ref.line}` : ref.path;
     case 'commit': return `commit ${ref.sha}${ref.repo ? ` in ${ref.repo}` : ''}`;
@@ -129,13 +153,13 @@ export function findingLines(f: HandoffFinding, taskName: HandoffTaskName = () =
   return [
     `- ${f.id} [${f.severity}] ${f.title}`,
     ...(f.detail ? f.detail.split('\n').map((l) => `  ${l}`) : []),
-    ...(f.evidence?.length ? [`  Evidence: ${f.evidence.map((e) => referenceText(e, taskName)).join('; ')}`] : []),
+    ...(f.evidence?.length ? [`  Evidence: ${f.evidence.map((e) => handoffReferenceText(e, taskName)).join('; ')}`] : []),
   ];
 }
 
 /** A handoff's artifacts as one line, or none when it lists none. */
 export function artifactLines(handoff: HandoffDigest, taskName: HandoffTaskName = () => undefined): string[] {
-  return handoff.artifacts?.length ? [`Artifacts: ${handoff.artifacts.map((a) => referenceText(a, taskName)).join('; ')}`] : [];
+  return handoff.artifacts?.length ? [`Artifacts: ${handoff.artifacts.map((a) => handoffReferenceText(a, taskName)).join('; ')}`] : [];
 }
 
 /**

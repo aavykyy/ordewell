@@ -1,8 +1,9 @@
 import {
-  diffRows, diffSummary, formatTokenCount, loadedSkillTokens, outputPreview, usageText, wakeUpItems, REPORT_PREVIEW_LINES,
+  diffRows, diffSummary, formatTokenCount, handoffReferenceText, loadedSkillTokens, outputPreview, severityLabel, usageText, wakeUpItems, worstSeverity, REPORT_PREVIEW_LINES,
   type DiffRow, type DiffStat,
   type ApprovalBlock, type ApprovalKind, type ApprovalSource, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
   type CommandBlock, type CommandStatus, type CompactionBlock, type RunnerLoadedBlock,
+  type FindingSeverity, type HandoffBlock, type HandoffFinding,
   type SkillLoadBlock, type SubagentBlock, type SubagentStatus, type ThinkingDisplayBlock, type ToolBlock,
 } from '@ordewell/core';
 import { graphemes, pad, sanitize, style, truncate, width, wrap, wrapLines } from './ansi';
@@ -643,6 +644,91 @@ function runnerLoadedLines(block: RunnerLoadedBlock, cols: number, detailAll: bo
   ];
 }
 
+// ── A task's handoff (ADR-0047) ───────────────────────────────────────────────
+
+const SEVERITY_PAINT: Record<FindingSeverity, Paint> = {
+  blocker: style.red,
+  major: style.yellow,
+  minor: style.cyan,
+  info: style.grey,
+};
+
+const HANDOFF_INDENT = '  ';
+const FINDING_INDENT = '      ';
+
+/** `F1 · Blocker · Title`, its title wrapped under itself so the id and severity stay on the first row. */
+function findingHeadLines(f: HandoffFinding, cols: number): string[] {
+  const id = sanitize(f.id);
+  const severity = severityLabel(f.severity);
+  const label = `${id} · ${severity} · `;
+  const room = Math.max(1, cols - width(HANDOFF_INDENT) - width(label));
+  return wrap(sanitize(f.title), room).map((line, i) => (i === 0
+    ? `${HANDOFF_INDENT}${style.grey(id)} · ${SEVERITY_PAINT[f.severity](severity)} · ${line}`
+    : `${HANDOFF_INDENT}${' '.repeat(width(label))}${line}`));
+}
+
+/** A finding whole: its id, severity and title, then its detail and evidence beneath it. */
+function findingLines(f: HandoffFinding, cols: number): string[] {
+  const room = Math.max(1, cols - FINDING_INDENT.length);
+  const detail = f.detail
+    ? sanitize(f.detail).replace(/\n+$/, '').split('\n').flatMap((line) => wrap(line, room)).map((line) => `${FINDING_INDENT}${line}`)
+    : [];
+  const evidence = f.evidence?.length
+    ? wrap(`Evidence: ${f.evidence.map((e) => sanitize(handoffReferenceText(e))).join('; ')}`, room).map((line) => `${FINDING_INDENT}${style.grey(line)}`)
+    : [];
+  return [...findingHeadLines(f, cols), ...detail, ...evidence];
+}
+
+/** Each artifact as its own path or URL, so a reader can copy one without the others. */
+function handoffArtifactLines(block: HandoffBlock, cols: number): string[] {
+  if (!block.handoff.artifacts?.length) return [];
+  const room = Math.max(1, cols - FINDING_INDENT.length - 2);
+  const rows = [`${HANDOFF_INDENT}${style.grey('Artifacts:')}`];
+  for (const artifact of block.handoff.artifacts) {
+    const [first, ...rest] = wrap(sanitize(handoffReferenceText(artifact)), room);
+    rows.push(`${FINDING_INDENT}- ${first}`, ...rest.map((line) => `${FINDING_INDENT}  ${line}`));
+  }
+  return rows;
+}
+
+/**
+ * The long form, folded as a research report is: the first lines and a count,
+ * or all of it under full detail with how to fold it back. The report stays in
+ * the attempt's log, so this is the only place a surface reads it from.
+ */
+function handoffReportLines(report: string, cols: number, detailAll: boolean): string[] {
+  const all = sanitize(report).replace(/\n+$/, '').split('\n');
+  const shown = detailAll ? all : all.slice(0, REPORT_PREVIEW_LINES);
+  const room = Math.max(1, cols - FINDING_INDENT.length);
+  const rows = [
+    `${HANDOFF_INDENT}${style.grey('Report:')}`,
+    ...shown.flatMap((line) => wrap(line, room)).map((line) => `${FINDING_INDENT}${line}`),
+  ];
+  const hidden = all.length - shown.length;
+  if (hidden > 0) rows.push(style.grey(`${FINDING_INDENT}… +${countOf(hidden, 'line')} of the report (ctrl+o to expand)`));
+  else if (detailAll && all.length > REPORT_PREVIEW_LINES) rows.push(style.grey(`${FINDING_INDENT}… (ctrl+o to collapse)`));
+  return rows;
+}
+
+function handoffLines(block: HandoffBlock, cols: number, detailAll: boolean): string[] {
+  const { handoff } = block;
+  const severity = worstSeverity(handoff.findings);
+  const summary = handoff.findingCount > 0
+    ? `${countOf(handoff.findingCount, 'finding')}${severity ? ` · ${severityLabel(severity).toLowerCase()}` : ''}`
+    : null;
+  const rows = [`${style.brand('◆')} ${style.bold('Handoff')}${summary ? style.grey(` · ${summary}`) : ''}`];
+  const said = sanitize(handoff.summary).trim();
+  if (said) rows.push(...wrap(said, Math.max(1, cols - HANDOFF_INDENT.length)).map((line) => `${HANDOFF_INDENT}${line}`));
+  if (handoff.findings.length > 0) {
+    rows.push(`${HANDOFF_INDENT}${style.grey('Findings:')}`, ...handoff.findings.flatMap((f) => findingLines(f, cols)));
+  }
+  const more = handoff.findingCount - handoff.findings.length;
+  if (more > 0) rows.push(style.grey(`${HANDOFF_INDENT}+${more} more finding${more === 1 ? '' : 's'}, in the attempt's log`));
+  rows.push(...handoffArtifactLines(block, cols));
+  if (handoff.report) rows.push(...handoffReportLines(handoff.report, cols, detailAll));
+  return rows;
+}
+
 function planLine(block: PlanBlock, cols: number): string {
   const count = block.taskCount === undefined ? '' : ` (${countOf(block.taskCount, 'task')})`;
   const text = block.status === 'building' ? 'Building plan…' : `Plan ${block.status}${count}`;
@@ -671,6 +757,8 @@ function blockLines(block: DisplayBlock, cols: number, detailAll: boolean): stri
       return [compactionLine(block, cols)];
     case 'runner_loaded':
       return runnerLoadedLines(block, cols, detailAll);
+    case 'handoff':
+      return handoffLines(block, cols, detailAll);
     // Pinned under the pane rather than drawn in it — see `tokenLine`.
     case 'usage':
       return [];

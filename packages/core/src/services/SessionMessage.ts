@@ -2,6 +2,7 @@ import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, P
 import type { SessionBilling, AttemptUsage, ContextFill, ModelUsage, PlanUsage, UsageTotals } from '../models/Usage';
 import type { ExecutionRecord } from '../models/Execution';
 import type { TaskLoop } from '../models/Loop';
+import type { HandoffDigest } from '../models/Handoff';
 import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from './ApprovalPolicy';
@@ -58,6 +59,8 @@ export type SerializedTaskStatus = {
   holdReason?: string;
   /** Set only on a research task, so a stream of statuses alone can say which task is one (ADR-0037). */
   research?: true;
+  /** The latest attempt's handoff, as the plan keeps it (ADR-0047); absent when the attempt left none. */
+  handoff?: HandoffDigest;
   attemptUsage?: AttemptUsage[];
   /** Set only on a loop's check, so a stream of statuses alone can say which task is one (ADR-0045). */
   loop?: TaskLoop;
@@ -102,6 +105,8 @@ export type SerializedTask = {
   /** Set only on an ops task (ADR-0020). */
   ops?: true;
   research?: boolean;
+  /** The latest attempt's handoff, as the plan keeps it (ADR-0047); absent when the attempt left none. */
+  handoff?: HandoffDigest;
   /** Task skills attached by name; absent when none. */
   skills?: string[];
   /** Set only on a task an Act supervisor added (ADR-0029). */
@@ -368,7 +373,7 @@ export type PlanSnapshot = { type: 'plan_snapshot'; plan: SurfacePlan | SurfaceP
 /** What only the status stream says about a task; a plan refresh keeps these as they were. */
 export type RunTaskStatus = Partial<Pick<
   SerializedTaskStatus,
-  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason'
+  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'handoff'
 >>;
 
 /** A task in the run view: the plan's fields, then the status stream's. */
@@ -426,6 +431,7 @@ export function serializeTask(t: SurfaceTask): SerializedTask {
     ...(t.status === 'skipped' && t.skipReason ? { skipReason: t.skipReason } : {}),
     ...(t.ops ? { ops: true as const } : {}),
     ...(t.research !== undefined ? { research: t.research } : {}),
+    ...(t.handoff ? { handoff: structuredClone(t.handoff) } : {}),
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(t.skills?.length ? { skills: [...t.skills] } : {}),
     ...(t.addedBy ? { addedBy: t.addedBy } : {}),
@@ -470,6 +476,7 @@ export function serializeTaskStatus(
     ...(waitsForApproval ? { waitsForApproval: true as const } : {}),
     ...(holdReason ? { holdReason } : {}),
     ...(t.research ? { research: true as const } : {}),
+    ...(t.handoff ? { handoff: structuredClone(t.handoff) } : {}),
     ...(t.loop ? { loop: { body: [...t.loop.body], maxRounds: t.loop.maxRounds } } : {}),
     ...(t.loop && t.loopRound !== undefined ? { loopRound: t.loopRound } : {}),
   };

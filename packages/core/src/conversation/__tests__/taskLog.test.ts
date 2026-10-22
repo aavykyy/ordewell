@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog } from '../taskLog';
 import type { TaskLogEvent } from '../../models/TaskLog';
+import type { StoredHandoff } from '../../models/Handoff';
 import type { SubagentBlock, ToolBlock } from '../blocks';
 import { unkeyed } from './helpers';
 
@@ -436,6 +437,62 @@ describe('reduceTaskLog', () => {
 
   it('starts from nothing', () => {
     expect(EMPTY_TASK_LOG).toMatchObject({ blocks: [], queued: [], working: false });
+  });
+
+  describe('the handoff an attempt ended with (ADR-0047)', () => {
+    const handoff: StoredHandoff = {
+      summary: 'Added the route.',
+      findings: [
+        {
+          id: 'F1', severity: 'blocker', title: 'Missing auth', detail: 'Add a guard.',
+          evidence: [{ kind: 'file', path: 'src/route.ts', line: 12 }, { kind: 'commit', sha: 'abc123' }],
+        },
+        {
+          id: 'F2', severity: 'minor', title: 'Rename x',
+          evidence: [{ kind: 'task', task: 't2', finding: 'F1' }, { kind: 'url', url: 'https://example.com/pr/1' }],
+        },
+      ],
+      findingCount: 2,
+      artifacts: [{ kind: 'file', path: 'src/route.ts' }],
+      report: 'The full story.',
+    };
+
+    it('shows the whole handoff, before the usage line and after the turn', () => {
+      const view = replayTaskLog([
+        start,
+        { type: 'turn_end', reason: 'completed' },
+        { type: 'usage', record: { source: 'claude-code', inputTokens: 10 } },
+        { type: 'handoff', handoff },
+      ]);
+
+      expect(view.blocks.map((b) => b.type)).toEqual(['message', 'handoff', 'usage']);
+      expect(unkeyed(view.blocks)[1]).toEqual({ type: 'handoff', handoff });
+    });
+
+    it('draws a user task\'s log, which is its handoff alone', () => {
+      const view = replayTaskLog([{ type: 'handoff', handoff }]);
+      expect(unkeyed(view.blocks)).toEqual([{ type: 'handoff', handoff }]);
+      expect(view.working).toBe(false);
+    });
+
+    it('folds the same handoff once when the live stream repeats what the reload already held', () => {
+      const view = replayTaskLog([start, { type: 'handoff', handoff }]);
+      const copy = JSON.parse(JSON.stringify({ type: 'handoff', handoff })) as TaskLogEvent;
+
+      expect(reduceTaskLog(view, copy)).toBe(view);
+      expect(replayTaskLog([start, { type: 'handoff', handoff }, start, { type: 'handoff', handoff }]).blocks
+        .filter((b) => b.type === 'handoff')).toHaveLength(1);
+    });
+
+    it('replaces a restated handoff in place rather than adding a second block', () => {
+      const view = replayTaskLog([start, { type: 'handoff', handoff }]);
+      const restated = { ...handoff, summary: 'Added the route and the guard.' };
+
+      const next = reduceTaskLog(view, { type: 'handoff', handoff: restated });
+
+      expect(next.blocks.filter((b) => b.type === 'handoff')).toHaveLength(1);
+      expect(next.blocks.find((b) => b.type === 'handoff')).toMatchObject({ handoff: restated });
+    });
   });
 });
 
