@@ -12,7 +12,7 @@ import { mcpClientConfig } from '../mcp';
 import { CODEX_ORDEWELL } from '../harness/codexOrdewell';
 import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from '../ApprovalPolicy';
 import { WebReadPolicy } from '../webReadPolicy';
-import { modeIds, fakeSpawn, fixture, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
+import { codexAnswer, modeIds, fakeSpawn, fixture, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 
 /**
  * Codex's task mode (ADR-0018, #54) over `codex app-server`. The traffic is
@@ -52,7 +52,7 @@ function taskStart(mode: string, overrides: Partial<TaskStartOptions> = {}): Tas
   };
 }
 
-const handshake = (): ScriptedReply[] => [fixture('codex', 'handshake'), fixture('codex', 'task-thread')];
+const handshake = (): ScriptedReply[] => [fixture('codex', 'handshake'), codexAnswer('task-thread')];
 
 function line(msg: RpcLine): string {
   return `${JSON.stringify({ jsonrpc: '2.0', ...msg })}\n`;

@@ -332,6 +332,11 @@ const NO_MEMORIES = ['-c', 'features.memories=false'];
  */
 const NO_OWN_SHELL = { shell_tool: false, unified_exec: false };
 
+/** Thread config that keeps these of the user's MCP servers from starting; Codex merges it over their own entries. */
+function withheld(servers: readonly string[]): Record<string, { enabled: false }> {
+  return Object.fromEntries(servers.map((name) => [name, { enabled: false }]));
+}
+
 /**
  * Codex as a planner (ADR-0009) and as a task's runner (ADR-0018, #54), over
  * its `app-server` stdio JSON-RPC transport. The start switch decides the
@@ -394,6 +399,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   private sandbox: CodexSandboxDecision = 'default';
   /** A planner on a host where no sandbox starts: Codex's own shell is off, and `run_command` is its only one (ADR-0033). */
   private ownShellOff = false;
+  /** A read-only task's: every MCP server Codex would start beside Ordewell's, each switched off for its thread (ADR-0046). */
+  private withheldServers: string[] = [];
   /** The Ordewell server's startup state, as Codex last reported it for this thread. */
   private mcpStartup: string | null = null;
   private mcpStartupSettled: (() => void) | null = null;
@@ -463,6 +470,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       throw initialized.closed ? this.handshakeIncomplete() : new Error(`The Codex app-server rejected initialize: ${initialized.message ?? 'unknown error'}`);
     }
 
+    if (readOnlyTask(opts)) this.withheldServers = await this.configuredServers(opts.cwd);
     const resumeId = opts.resumeSessionId;
     let opened = await this.requestThread(resumeId);
     if ('reason' in opened && resumeId) {
@@ -520,6 +528,24 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     this.announce({ type: 'runner_loaded', commands: this.commands(), mcpServers });
   }
 
+  /**
+   * The MCP servers Codex's own configuration would start, every layer of it,
+   * less Ordewell's. A read-only task may change nothing, and a user's server
+   * can: one set to approve its tools runs them under any approval policy, so
+   * none of them starts (ADR-0046), as Claude's and OpenCode's deny theirs.
+   * Not knowing them, the task does not start.
+   */
+  private async configuredServers(cwd: string): Promise<string[]> {
+    const response = await this.rpc.call('config/read', { cwd });
+    const config = response.ok ? response.result.config as { mcp_servers?: unknown } | undefined : undefined;
+    const servers = config?.mcp_servers ?? {};
+    if (!response.ok || typeof servers !== 'object' || servers === null || Array.isArray(servers)) {
+      if (!response.ok && response.closed) throw this.handshakeIncomplete();
+      throw new Error(`Codex did not report the MCP servers it would start${response.ok ? '' : ` (${response.message ?? 'no answer'})`}, so a read-only task cannot keep them off and did not start.`);
+    }
+    return Object.keys(servers).filter((name) => name !== ORDEWELL_MCP_SERVER_NAME);
+  }
+
   private async requestThread(resumeSessionId?: string): Promise<{ id: string; model: string | null } | { reason: string }> {
     const response = await this.rpc.call(resumeSessionId ? 'thread/resume' : 'thread/start', {
       ...(resumeSessionId ? { threadId: resumeSessionId } : {}),
@@ -559,7 +585,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         ...(approvalsReviewer ? { approvalsReviewer } : {}),
         ...(opts.mcp ? { developerInstructions: CODEX_ORDEWELL.taskInstructions(readOnlyTask(opts)) } : {}),
         ...threadConfig,
-        ...(readOnlyTask(opts) ? { config: { ...config, projects: untrustedProjects(opts.cwd), web_search: 'disabled' } } : {}),
+        ...(readOnlyTask(opts) ? { config: { ...config, mcp_servers: { ...withheld(this.withheldServers), ...config.mcp_servers }, projects: untrustedProjects(opts.cwd), web_search: 'disabled' } } : {}),
       };
     }
     const nativeSearch = opts?.nativeSearch ?? false;

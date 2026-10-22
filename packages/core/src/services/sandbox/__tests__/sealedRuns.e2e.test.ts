@@ -1,5 +1,5 @@
 import { execFile, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -276,6 +276,20 @@ describe('sealed runs', async () => {
           expect(readFileSync(join(repo, 'a.md'), 'utf8')).toBe('one\n');
         } finally {
           shell.end();
+        }
+      });
+
+      it('leaves no link out of its worktree for a later command, or a native read tool, to follow', async () => {
+        const fs = new HostFileSystem(repo, sandbox);
+        const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+        try {
+          await shell.run(`ln -s '${elsewhere}' leak`);
+          const read = await shell.run('cat leak/secret.txt');
+          expect(read.output).not.toContain('other-repo-secret');
+          expect(() => lstatSync(join(worktree, 'leak'))).toThrow();
+        } finally {
+          shell.end();
+          rmSync(join(worktree, 'leak'), { force: true });
         }
       });
 

@@ -14,7 +14,7 @@ import { resolveAssignment } from '../TaskAssignment';
 import { createTask } from '../../models/Task';
 import { mcpClientConfig } from '../mcp';
 import { decideReadOnlyTaskPermission } from '../harness/plannerPermissions';
-import { fakeSpawn, fixture, type ScriptedReply } from './harnessTestKit';
+import { codexAnswer, fakeSpawn, fixture, type ScriptedReply } from './harnessTestKit';
 
 const mcp = mcpClientConfig({ token: 'test', url: 'http://127.0.0.1:4555/mcp', readOnly: true });
 const dirs: string[] = [];
@@ -96,7 +96,7 @@ describe('read-only runner profiles (ADR-0046)', () => {
   });
 
   it('starts Codex without a sandbox probe or native shell, keeping discovery and declining changes', async () => {
-    const { spawned, processDeps } = deps([fixture('codex', 'handshake'), fixture('codex', 'task-thread')]);
+    const { spawned, processDeps } = deps([fixture('codex', 'handshake'), codexAnswer('task-thread')]);
     const adapter = new CodexAdapter(processDeps);
     try {
       await adapter.start({ kind: 'task', cwd: '/task', model: 'chosen-model', mode: 'plan', flags: resolveTaskRunnerFlags(CODEX_MANIFEST, { mode: 'plan' }), mcp });
@@ -115,6 +115,42 @@ describe('read-only runner profiles (ADR-0046)', () => {
         expect(response?.result).toEqual(i === 2 ? { permissions: {}, scope: 'turn' } : { decision: 'decline' });
       }
       expect(events.filter((e) => e.type === 'permission_request').every((e) => e.decided?.decision === 'deny')).toBe(true);
+    } finally { adapter.dispose(); }
+  });
+
+  it("keeps every MCP server of the user's Codex configuration from starting on a read-only task, as Claude and OpenCode deny theirs", async () => {
+    const configured = { mcp_servers: { github: { url: 'https://example.test/mcp', default_tools_approval_mode: 'approve' }, notes: { command: 'notes-mcp' }, ordewell: { url: 'http://127.0.0.1:1/mcp' } } };
+    const spawned = fakeSpawn([fixture('codex', 'handshake'), codexAnswer('task-thread')], {
+      codexDiscovery: (method) => (method === 'config/read' ? { result: { config: configured, origins: {} } } : { data: [], nextCursor: null }),
+    });
+    const adapter = new CodexAdapter({ ...deps().processDeps, spawn: spawned.spawn });
+    try {
+      await adapter.start({ kind: 'task', cwd: '/task', mode: 'plan', flags: resolveTaskRunnerFlags(CODEX_MANIFEST, { mode: 'plan' }), mcp });
+      const written = spawned.processes[0].written.map((w) => JSON.parse(w) as { method?: string; params?: { cwd?: string; config?: { mcp_servers?: Record<string, Record<string, unknown>> } } });
+      expect(written.find((w) => w.method === 'config/read')?.params).toEqual({ cwd: '/task' });
+      const servers = written.find((w) => w.method === 'thread/start')?.params?.config?.mcp_servers;
+      expect(servers).toMatchObject({ github: { enabled: false }, notes: { enabled: false }, ordewell: { url: mcp.url } });
+      expect(servers?.ordewell.enabled).toBeUndefined();
+    } finally { adapter.dispose(); }
+  });
+
+  it('does not start a read-only Codex task whose configured MCP servers it cannot learn', async () => {
+    const spawned = fakeSpawn([fixture('codex', 'handshake'), codexAnswer('task-thread')], {
+      codexDiscovery: (method) => (method === 'config/read' ? { error: { code: -32601, message: 'method not found' } } : { data: [], nextCursor: null }),
+    });
+    const adapter = new CodexAdapter({ ...deps().processDeps, spawn: spawned.spawn });
+    try {
+      await expect(adapter.start({ kind: 'task', cwd: '/task', mode: 'plan', flags: resolveTaskRunnerFlags(CODEX_MANIFEST, { mode: 'plan' }), mcp })).rejects.toThrow(/read-only task cannot keep them off/);
+      expect(spawned.processes[0].written.some((w) => w.includes('"thread/start"'))).toBe(false);
+    } finally { adapter.dispose(); }
+  });
+
+  it('asks a change task\'s Codex nothing about its servers', async () => {
+    const { spawned, processDeps } = deps([fixture('codex', 'handshake'), fixture('codex', 'task-thread')]);
+    const adapter = new CodexAdapter({ ...processDeps, platform: 'darwin' });
+    try {
+      await adapter.start({ kind: 'task', cwd: '/task', mode: 'fullAccess', flags: resolveTaskRunnerFlags(CODEX_MANIFEST, { mode: 'fullAccess' }), mcp: mcpClientConfig({ token: 'test', url: 'http://127.0.0.1:4555/mcp' }) });
+      expect(spawned.processes[0].written.some((w) => w.includes('"config/read"'))).toBe(false);
     } finally { adapter.dispose(); }
   });
 });

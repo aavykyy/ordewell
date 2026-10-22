@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -53,6 +53,8 @@ interface Ran {
 
 class WorkspaceFileSystem extends BaseFileSystem {
   readonly ran: Ran[] = [];
+  /** What a command does to the disk as it runs, for one that must leave something behind. */
+  effect?: (ran: Ran) => Promise<void> | void;
 
   constructor(private readonly root: string, private readonly backend: RecordingBackend | null) {
     super(undefined, new PlannerShellSandbox(async () => (backend ? available(backend) : { available: false, notice: 'no sandbox in this test' })));
@@ -66,7 +68,9 @@ class WorkspaceFileSystem extends BaseFileSystem {
 
   protected async execBashImpl(command: string, shell: ShellLaunch, _signal: AbortSignal | undefined, cwd: string): Promise<ToolOutcome> {
     const profile = shell.file === null ? undefined : this.backend?.profiles[Number(shell.args[0])];
-    this.ran.push({ command, cwd, sealed: shell.file === '/sealed', ...(profile ? { profile } : {}) });
+    const ran = { command, cwd, sealed: shell.file === '/sealed', ...(profile ? { profile } : {}) };
+    this.ran.push(ran);
+    await this.effect?.(ran);
     return { success: true, output: 'ran', truncated: false };
   }
 }
@@ -221,6 +225,67 @@ describe("a read-only task's shell (ADR-0046)", () => {
     expect(existsSync(taskScratch)).toBe(false);
     expect(existsSync(plannerScratch)).toBe(true);
     fs.endSession();
+  });
+
+  it('removes a link a sealed run left leading out of the worktree and the workspace, and says so', async () => {
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-task-shell-outside-')));
+    try {
+      writeFileSync(join(outside, 'secret.txt'), 'outside\n');
+      mkdirSync(join(worktree, 'src'));
+      const fs = session();
+      fs.effect = ({ command, sealed }) => {
+        if (!sealed || !command.startsWith('ln ')) return;
+        symlinkSync(outside, join(worktree, 'leak'));
+        symlinkSync(join(outside, 'secret.txt'), join(worktree, 'src', 'deep'));
+        symlinkSync(join(outside, 'missing'), join(worktree, 'dangling'));
+        symlinkSync('../a.md', join(worktree, 'src', 'local'));
+        symlinkSync(join(workspace, 'a.md'), join(worktree, 'workspace-file'));
+      };
+      const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+
+      const linked = await shell.run(`ln -s '${outside}' leak`);
+      await shell.run('cat leak/secret.txt');
+
+      expect(fs.ran.map((r) => r.sealed)).toEqual([true, false]);
+      expect(linked.output).toContain('may leave no link leading out of its worktree');
+      for (const gone of ['leak', 'src/deep', 'dangling']) {
+        expect(linked.output).toContain(gone);
+        expect(() => lstatSync(join(worktree, gone))).toThrow();
+      }
+      expect(lstatSync(join(worktree, 'src', 'local')).isSymbolicLink()).toBe(true);
+      expect(lstatSync(join(worktree, 'workspace-file')).isSymbolicLink()).toBe(true);
+      expect(existsSync(join(outside, 'secret.txt'))).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('runs one command at a time, so none reads the worktree while a sealed run still writes it', async () => {
+    const fs = session();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    fs.effect = ({ sealed }) => (sealed ? held : undefined);
+    const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+
+    const writing = shell.run('npm test');
+    const reading = shell.run('cat a.md');
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fs.ran.map((r) => r.command)).toEqual(['npm test']);
+
+    release();
+    await Promise.all([writing, reading]);
+    expect(fs.ran.map((r) => r.command)).toEqual(['npm test', 'cat a.md']);
+  });
+
+  it('asks the sandbox to refuse links in its worktree where it can, and only there (macOS)', async () => {
+    const backend = new RecordingBackend();
+    const fs = session(backend);
+    await fs.taskShell({ cwd: worktree, writable: worktree }).run('npm test');
+    await fs.taskShell({ cwd: workspace }).run('npm test');
+    await fs.bash('for f in *.md; do wc -l "$f"; done');
+
+    const sealedProfiles = fs.ran.filter((r) => r.sealed).map((r) => r.profile);
+    expect(sealedProfiles.map((p) => p?.linkless)).toEqual([[worktree], undefined, undefined]);
   });
 
   it('where no sandbox runs, runs what the classifier reads as read-only and refuses the rest, asking nobody', async () => {

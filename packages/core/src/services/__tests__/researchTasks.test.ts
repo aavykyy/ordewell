@@ -244,6 +244,27 @@ describe('research starts and limits (ADR-0037 R4)', () => {
     expect(env.session.planState!.researchBudget).toEqual({ tasks: 0, reports: 0 });
   });
 
+  it('wakes the planner after reload with a report already queued behind a turn, when the budget has room (R2)', async () => {
+    const env = await supervised([], { execute: false, settings: { supervisorLevel: 'off' }, plan: {
+      researchBudget: { tasks: 0, reports: 0 },
+      pendingTurns: [{ id: 'report', source: 'supervisor', text: 'Run update: the queued research report', report: 'user', timestamp: NOW.toISOString() }],
+    } });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await until(() => env.planner.calls.length === 1);
+    expect(env.planner.calls[0].message).toContain('the queued research report');
+    expect(env.session.planState!.researchBudget).toEqual({ tasks: 0, reports: 1 });
+  });
+
+  it('keeps a queued report idle after reload while a planner usage-limit wait is saved', async () => {
+    const env = await supervised([], { execute: false, settings: { supervisorLevel: 'off' }, plan: {
+      researchBudget: { tasks: 0, reports: 0 },
+      plannerResend: { runner: 'claude-code', at: new Date(NOW.getTime() + 3_600_000).toISOString() },
+      pendingTurns: [{ id: 'report', source: 'supervisor', text: 'Run update: the queued research report', report: 'user', timestamp: NOW.toISOString() }],
+    } });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(env.planner.calls).toHaveLength(0);
+  });
+
   it('holds an indefinite run_script report chain at Off, and resumes it only with a new user message', async () => {
     const env = await supervised([], { execute: false, settings: { supervisorLevel: 'off', researchMaxPerMessage: 2 }, config: { effectAllowlist: ['git status'] } });
     await userTurn(env);

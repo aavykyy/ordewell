@@ -21,6 +21,7 @@ import { resolveAll, vetEgress, type ResolveAll } from './egressGuard';
 import { carriesSecret, sensitiveEnvValues } from './outboundSecrets';
 import { READ_REFUSAL_HINT, disableWebCommandStartup, pinWebCommandAddresses, wgetVersionCommands } from './webCommands';
 import { NOT_APPROVED_HINT } from './effectRoute';
+import { removeOutwardLinks } from './outwardLinks';
 
 export { AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMANDS, classifyCommand, pathLikeArgs } from './commandPolicy';
 
@@ -49,6 +50,7 @@ interface ShellSite {
 /** Why a read-only task's command did not run where the planner's would have asked or run sealed (ADR-0046). */
 const TASK_UNSEALED = 'A read-only task asks nobody, so this command could only run sealed, and this machine has no sandbox to seal it in.';
 const TASK_CONTINUE = 'Continue without it, and say in your report if what it would have shown matters.';
+const OUTWARD_LINKS_REMOVED = 'Removed, since a read-only task may leave no link leading out of its worktree and the workspace:';
 
 /** Why a read-only task's command was not run, from the decision that stood. */
 function taskRefusal(standing: StandingDecision | undefined): string {
@@ -325,7 +327,15 @@ export abstract class BaseFileSystem implements IFileSystem {
       sealed: { workspace: this.getWorkspaceRoot(), ...(writable ? { writable } : {}) },
       task: { worktree: writable !== undefined },
     };
-    return { run: (command, signal) => this.runIn(site, command, signal), end: () => sandbox.end() };
+    // One command at a time: an unsealed one must never read the worktree
+    // while a sealed one is still writing it, before its links are checked.
+    let last: Promise<unknown> = Promise.resolve();
+    const run = (command: string, signal?: AbortSignal): Promise<ToolOutcome> => {
+      const next = last.then(() => this.runIn(site, command, signal));
+      last = next.catch(() => undefined);
+      return next;
+    };
+    return { run, end: () => sandbox.end() };
   }
 
   private async runIn(site: ShellSite, command: string, signal?: AbortSignal, opts: BashOptions = {}): Promise<ToolOutcome> {
@@ -466,9 +476,11 @@ export abstract class BaseFileSystem implements IFileSystem {
       return refusal(`Command not run: its sealed sandbox could not be prepared (${err instanceof Error ? err.message : String(err)}).`);
     }
     const outcome = await this.execBashImpl(command, shell, signal, site.root);
-    if (signal?.aborted) return outcome;
+    const removed = site.task && site.sealed.writable ? await removeOutwardLinks(site.sealed.writable, [site.sealed.writable, site.sealed.workspace]) : [];
+    const swept = removed.length > 0 ? `\n\n[${OUTWARD_LINKS_REMOVED} ${removed.join(', ')}]` : '';
+    if (signal?.aborted) return { ...outcome, output: `${outcome.output}${swept}` };
     const failed = site.task ? TASK_SEALED_FAILURE_NOTE : SEALED_FAILURE_NOTE;
-    const output = `${sealedRunHeader(why, site.task)}\n${outcome.output}${outcome.success ? '' : `\n\n[${failed}]`}`;
+    const output = `${sealedRunHeader(why, site.task)}\n${outcome.output}${outcome.success ? '' : `\n\n[${failed}]`}${swept}`;
     return { ...outcome, output };
   }
 

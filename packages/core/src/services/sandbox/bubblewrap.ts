@@ -6,6 +6,7 @@ import {
   execProbe,
   launchEnv,
   probeByRunning,
+  SandboxUnsupportedError,
   type ProbeExec,
   type SandboxBackend,
   type SandboxInvocation,
@@ -94,6 +95,8 @@ export class BubblewrapBackend implements SandboxBackend {
   }
 
   wrap(invocation: SandboxInvocation, profile: SandboxProfile): SandboxLaunch {
+    // A mount grants a directory whole; refusing one kind of file in it would take a seccomp filter.
+    if (profile.linkless?.length) throw new SandboxUnsupportedError(this.name, 'a writable directory without links');
     assertProfilePaths(this.name, profile);
     if (profile.limits) assertLimits(this.name, profile.limits);
 

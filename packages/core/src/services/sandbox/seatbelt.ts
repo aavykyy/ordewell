@@ -209,6 +209,8 @@ export class SeatbeltBackend implements SandboxBackend {
     // The last matching rule wins, so a writable directory inside a masked one stays writable, as under bubblewrap.
     if (profile.masked?.length) rules.push(`(deny file-read* file-write* ${filters('MASKED', 'subpath', profile.masked)})`);
     if (profile.write.length) rules.push(`(allow file-read* file-test-existence file-map-executable file-write* ${filters('WRITABLE', 'subpath', profile.write)})`);
+    // A rename lands as a create too, so a link made elsewhere cannot be moved in, nor one already there moved to resolve elsewhere.
+    if (profile.linkless?.length) rules.push(`(deny file-write-create (require-all (vnode-type SYMLINK) (require-any ${filters('LINKLESS', 'subpath', profile.linkless)})))`);
 
     const sandboxed = [SANDBOX_EXEC, '-p', rules.join('\n'), ...params, invocation.shell, ...invocation.shellArgs];
     const env = launchEnv(invocation, profile);

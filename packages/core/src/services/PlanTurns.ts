@@ -136,7 +136,8 @@ function authorityOf(input: PendingPlanTurn | undefined): TurnAuthority {
  * it (ADR-0023, F5): a turn it stopped keeps its wake-ups waiting, undelivered,
  * for the supervisor's next turn. The user's Stop also drops the user's inputs
  * waiting behind the turn it stopped ({@link stopQueued}). A reload keeps
- * what no turn answered for the next input, without opening a turn.
+ * what no turn answered for the next input, without opening a turn unless a
+ * report the planner asked for waits ({@link restoreResend}).
  */
 export class PlanTurns {
   private readonly waiters = new Map<string, Waiter>();
@@ -149,6 +150,8 @@ export class PlanTurns {
   private quiet = false;
   /** A loaded session stays idle even if an outgoing turn's release pumps the queue. */
   private restored = false;
+  /** A saved report's wake-up after a load, which waits for the load to finish. */
+  private reportWake: ReturnType<typeof setTimeout> | null = null;
   private seq = 0;
   private readonly resend: PlannerResend;
 
@@ -190,10 +193,25 @@ export class PlanTurns {
     for (const t of plan.pendingTurns) if (t.source === 'user') this.settle(t.id, (w) => w.resolve(plan));
   }
 
-  /** A plan adopted off disk keeps its inputs until a new input asks for a turn. */
+  /**
+   * A plan adopted off disk keeps its inputs until a new input asks for a
+   * turn. A report the planner asked for is one (ADR-0037, R2): saved behind
+   * a turn that never landed, it wakes the planner once the load is done, as
+   * one still in the supervisor's batch does. A saved usage-limit wait or a
+   * spent budget keeps it for the user's next message.
+   */
   restoreResend(): void {
     this.restored = true;
     this.resend.restore();
+    if (this.reportWake) clearTimeout(this.reportWake);
+    this.reportWake = null;
+    if (!this.host.plan()?.pendingTurns?.some((t) => t.report !== undefined)) return;
+    this.reportWake = setTimeout(() => {
+      this.reportWake = null;
+      if (!this.restored || this.resend.holds() || !this.host.mayReport()) return;
+      this.restored = false;
+      this.pump();
+    }, 0);
   }
 
   /** Whether a turn this module opened is in flight. */
@@ -370,6 +388,8 @@ export class PlanTurns {
    */
   abandon(): void {
     this.resend.reset();
+    if (this.reportWake) clearTimeout(this.reportWake);
+    this.reportWake = null;
     this.running?.release();
     this.running = null;
     this.quiet = false;
