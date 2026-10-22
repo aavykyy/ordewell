@@ -31,31 +31,31 @@ async function destination(link: string): Promise<string> {
 
 /**
  * Remove every link under `dir` that leads outside `roots`, and return the
- * paths removed, relative to `dir`. The walk never follows a link, and a
- * directory that no longer resolves to where the walk found it is skipped
- * rather than removed from.
+ * paths removed, relative to `dir`, sorted. The walk never follows a link,
+ * and a directory that no longer resolves to where the walk found it is
+ * skipped rather than removed from.
  */
 export async function removeOutwardLinks(dir: string, roots: readonly string[]): Promise<string[]> {
   const top = await canonical(dir);
   const inside = await Promise.all(roots.map(canonical));
   const removed: string[] = [];
+  // Every entry at once: it runs after each sealed command of a read-only
+  // task, nearly all of its commands, and a worktree with its dependencies
+  // installed holds thousands of directories, which one at a time is slow.
   const walk = async (at: string): Promise<void> => {
     let entries;
     try { entries = await fs.readdir(at, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
+    await Promise.all(entries.map(async (entry) => {
       const full = path.join(at, entry.name);
-      if (entry.isDirectory()) {
-        await walk(full);
-        continue;
-      }
-      if (!entry.isSymbolicLink() || within(await destination(full), inside)) continue;
-      if ((await canonical(at)) !== at) continue;
+      if (entry.isDirectory()) return walk(full);
+      if (!entry.isSymbolicLink() || within(await destination(full), inside)) return;
+      if ((await canonical(at)) !== at) return;
       try {
         await fs.unlink(full);
         removed.push(path.relative(top, full));
       } catch { /* gone already */ }
-    }
+    }));
   };
   await walk(top);
-  return removed;
+  return removed.sort();
 }

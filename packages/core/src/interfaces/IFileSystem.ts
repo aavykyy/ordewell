@@ -86,7 +86,8 @@ export interface TaskShellSite {
 /**
  * A read-only task's `run_command` (ADR-0046): the planner's command rules at
  * the task's working directory, with nobody to ask. One per attempt, with a
- * scratch directory of its own.
+ * scratch directory of its own; once one of its commands has run sealed,
+ * every later one does.
  */
 export interface TaskShell {
   run(command: string, signal?: AbortSignal): Promise<ToolOutcome>;

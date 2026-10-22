@@ -77,8 +77,9 @@ their own repositories. The parts most worth your attention:
   command sealed that a `!` allowlist exclusion names or that you denied. A
   read-only task's sealed runs may also write its own worktree
   ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md));
-  a way for one to write anywhere else, or for anything a read-only task
-  changed to land, is in scope.
+  a way for one to write anywhere else, for anything a read-only task
+  changed to land, or for a command of the task to run outside the sealed
+  profile once one of its commands has run sealed, is in scope.
 
   On Linux that profile is the whole guarantee: the PID namespace leaves a
   sealed run no other process to look at. **On macOS, three things no Seatbelt
@@ -220,11 +221,13 @@ except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-s
   whatever it changed, and its result is its `task_complete` report, which
   Ordewell stores with the verdict. Its shell is Ordewell's `run_command`,
   under the planner's command rules and asking nobody: a read-only command,
-  or one your allowlist covers, runs as the planner's would, and anything else
-  runs sealed, where the workspace is readable, nothing is writable but the
-  task's worktree and a scratch directory of its own, the repository's `.git`
-  stays read-only, and there is no network and no home directory, so none of
-  your credentials. On macOS the three gaps listed under Sealed runs stay
+  or one your allowlist covers, runs as the planner's would until the task's
+  first sealed run, and anything else runs sealed. After that run every
+  command runs sealed, allowlisted ones included, since the run may have
+  rewritten a script or config file a later command uses. Sealed, the
+  workspace is readable, nothing is writable but the task's worktree and a
+  scratch directory of its own, the repository's `.git` stays read-only, and
+  there is no network and no home directory, so none of your credentials. On macOS the three gaps listed under Sealed runs stay
   open to these runs too. Where no sandbox runs, what would run sealed is
   refused.
   Native writes and the native shell are withheld on every runner. Claude

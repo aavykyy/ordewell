@@ -2036,7 +2036,9 @@ shell is Ordewell's `run_command`, on its token alone (`BaseFileSystem.taskShell
 the planner's command rules from the task's working directory, asking
 nobody, where what would ask or be refused is a *sealed run* with the
 worktree writable, so it can try a fix or add a failing test and run the
-suite; git there reads and records nothing. It stays read-only through a
+suite; git there reads and records nothing. From the attempt's first sealed
+run on, every command of its shell runs sealed, what the allowlist covers
+included, since a sealed run may have rewritten what a later command runs. It stays read-only through a
 planner's move or split unless the planner lifts it with `readOnly: false`.
 Its AI subtasks are read-only too unless one says otherwise; a manual task
 and an ops task cannot be one. The planner's only say over a task's mode; a

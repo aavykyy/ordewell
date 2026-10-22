@@ -195,6 +195,149 @@ describe("a read-only task's shell (ADR-0046)", () => {
     expect(ranSealed(outcome.output)).toBe(false);
   });
 
+  describe('once a sealed run has started, every later command of the attempt runs sealed', () => {
+    /** Each command as it ran: sealed or not, and with the network or not. */
+    const how = (fs: WorkspaceFileSystem) => fs.ran.map(({ command, sealed, profile }) => ({ command, sealed, network: profile?.network }));
+
+    it('an allowlisted command keeps the network until then, and loses it after', async () => {
+      const fs = session(new RecordingBackend(), guarded({ preApproved: ['gh issue list'] }));
+      const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+
+      await shell.run('gh issue list');
+      await shell.run('echo draft > notes.txt');
+      const after = await shell.run('gh issue list');
+
+      expect(asked).toEqual([]);
+      expect(how(fs)).toEqual([
+        { command: 'gh issue list', sealed: false, network: true },
+        { command: 'echo draft > notes.txt', sealed: true, network: false },
+        { command: 'gh issue list', sealed: true, network: false },
+      ]);
+      expect(ranSealed(after.output)).toBe(true);
+    });
+
+    it("so does a command the classifier reads as read-only, with or without a worktree, and a continue's fresh shell starts unsealed", async () => {
+      const fs = session();
+      for (const site of [{ cwd: worktree, writable: worktree }, { cwd: workspace }]) {
+        const shell = fs.taskShell(site);
+        await shell.run('git status');
+        await shell.run('npm test');
+        await shell.run('git status');
+      }
+
+      expect(asked).toEqual([]);
+      const run = [
+        { command: 'git status', sealed: false, network: false },
+        { command: 'npm test', sealed: true, network: false },
+        { command: 'git status', sealed: true, network: false },
+      ];
+      expect(how(fs)).toEqual([...run, ...run]);
+    });
+
+    it('holds after a sealed run that failed, timed out or was aborted, which may still have written', async () => {
+      const ends: Array<{ result?: ToolOutcome; abort?: boolean }> = [
+        { result: { success: false, output: 'Command exited 1:\nfailed', truncated: false } },
+        { result: { success: false, output: 'Command exited 1:\n', truncated: false, timedOut: true } },
+        { abort: true },
+      ];
+      for (const end of ends) {
+        const fs = session(new RecordingBackend(), guarded({ preApproved: ['gh issue list'] }));
+        const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+        const stop = new AbortController();
+        fs.result = end.result;
+        fs.effect = () => { if (end.abort) stop.abort(); };
+
+        await shell.run('npm test', stop.signal);
+        fs.result = undefined;
+        fs.effect = undefined;
+        await shell.run('gh issue list');
+
+        expect(how(fs)).toEqual([
+          { command: 'npm test', sealed: true, network: false },
+          { command: 'gh issue list', sealed: true, network: false },
+        ]);
+      }
+    });
+
+    it('still refuses what an exclusion names and what the user denied on the card, wrapped or not (ADR-0036 S3)', async () => {
+      const fs = session(new RecordingBackend(), guarded({ preApproved: ['!kubectl *secret*', '!cat *secret*', 'gh issue list'] }));
+      await fs.bash('npm test');
+      expect(asked).toEqual(['npm test']);
+      const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+      await shell.run('echo draft > notes.txt');
+
+      const excluded = await shell.run('kubectl get secrets');
+      const excludedRead = await shell.run('cat secret.txt');
+      const denied = await shell.run('npm test');
+      const wrapped = await shell.run('for i in 1 2; do npm test; done');
+
+      expect(excluded.output).toContain('the planner allowlist excludes it ("!kubectl *secret*")');
+      expect(excludedRead.output).toContain('the planner allowlist excludes it ("!cat *secret*")');
+      expect(denied.output).toContain('The user denied it this session');
+      expect(wrapped.output).toContain('The user denied "npm test" this session');
+      expect(fs.ran.map((r) => r.command)).toEqual(['echo draft > notes.txt']);
+      expect(asked).toEqual(['npm test']);
+    });
+
+    it('is explained once, in the header of the run that started it, and named in every later one', async () => {
+      const fs = session(new RecordingBackend(), guarded({ preApproved: ['gh issue list'] }));
+      const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+      const scratchOnly = fs.taskShell({ cwd: workspace });
+
+      const first = await shell.run('npm test');
+      const later = [await shell.run('gh issue list'), await shell.run('for f in *.md; do wc -l "$f"; done')];
+      const firstWithout = await scratchOnly.run('npm test');
+
+      const header = (outcome: ToolOutcome) => outcome.output.split('\n')[0];
+      expect(header(first)).toMatch(/^\[Ran sealed instead of being refused: .*\]$/);
+      expect(header(first)).toContain("It may have written this task's worktree, so every later command of this task runs sealed too, without the network.");
+      expect(header(firstWithout)).toContain("It may have written this task's scratch directory, so every later command of this task runs sealed too, without the network.");
+      for (const outcome of later) {
+        expect(header(outcome)).toMatch(/^\[Ran sealed, as every command of this task is after its first sealed run: no network and no home directory\. .*\]$/);
+        expect(header(outcome)).not.toContain('may have written');
+      }
+    });
+
+    it('never happens where no sandbox can seal, since no sealed run ever started', async () => {
+      const fs = session(null, guarded({ preApproved: ['gh issue list'] }));
+      const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+
+      const tests = await shell.run('npm test');
+      const loop = await shell.run('for f in *.md; do wc -l "$f"; done');
+      await shell.run('gh issue list');
+      await shell.run('git status');
+
+      expect(tests.output).toContain('this machine has no sandbox to seal it in');
+      expect(loop.output).toContain('this machine has no sandbox to seal it in');
+      expect(fs.ran).toEqual([
+        { command: 'gh issue list', cwd: worktree, sealed: false },
+        { command: 'git status', cwd: worktree, sealed: false },
+      ]);
+    });
+
+    it("leaves the planner's own shell as it was, its sealed runs included", async () => {
+      const fs = session(new RecordingBackend(), guarded({ preApproved: ['gh issue list'] }));
+      const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+      await shell.run('npm test');
+
+      await fs.bash('gh issue list');
+      await fs.bash('for f in *.md; do wc -l "$f"; done');
+      await fs.bash('git status');
+      const plannerSealed = await fs.bash('for f in *.md; do wc -l "$f"; done');
+      await fs.bash('gh issue list');
+
+      expect(how(fs).slice(1)).toEqual([
+        { command: 'gh issue list', sealed: false, network: true },
+        { command: 'for f in *.md; do wc -l "$f"; done', sealed: true, network: false },
+        { command: 'git status', sealed: false, network: false },
+        { command: 'for f in *.md; do wc -l "$f"; done', sealed: true, network: false },
+        { command: 'gh issue list', sealed: false, network: true },
+      ]);
+      expect(fs.ran.slice(1).every((r) => r.cwd === workspace)).toBe(true);
+      expect(plannerSealed.output).toMatch(/^\[Ran sealed instead of being refused: no network, no home directory, and nothing it writes reaches the workspace\./);
+    });
+  });
+
   it('runs sealed what the user let the planner run on the card: that grant was the planner\'s', async () => {
     const fs = session(new RecordingBackend(), guarded({ yes: ['npm ls --all'] }));
     await fs.bash('npm ls --all');
@@ -272,7 +415,7 @@ describe("a read-only task's shell (ADR-0046)", () => {
       const linked = await shell.run(`ln -s '${outside}' leak`);
       await shell.run('cat leak/secret.txt');
 
-      expect(fs.ran.map((r) => r.sealed)).toEqual([true, false]);
+      expect(fs.ran.map((r) => r.sealed)).toEqual([true, true]);
       expect(linked.output).toContain('may leave no link leading out of its worktree');
       for (const gone of ['leak', 'src/deep', 'dangling']) {
         expect(linked.output).toContain(gone);

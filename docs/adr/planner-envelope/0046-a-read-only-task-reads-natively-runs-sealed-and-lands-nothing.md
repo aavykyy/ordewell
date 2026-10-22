@@ -27,7 +27,8 @@ without approval only once read-only means one thing on every runner (R4).
 **A read-only task is defined by Ordewell, the same on every runner. It keeps
 its runner's native read tools; its only shell is Ordewell's `run_command`,
 which runs sealed whatever the planner's envelope would ask about or refuse,
-with the task's own worktree writable and nobody asked; and it lands nothing:
+and every command once one has run sealed, with the task's own worktree
+writable and nobody asked; and it lands nothing:
 its worktree is thrown away when it ends, and its `task_complete` report is
 its result.** The plan flag stays `readOnly`, and means a task that lands
 nothing.
@@ -41,17 +42,38 @@ nothing.
   command gate moved to the task's working directory: the same classifier,
   path confinement, `!` exclusions and allowlist
   ([ADR-0026](0026-one-envelope-for-every-planner.md)).
-- **Nobody is asked.** A command the classifier reads as read-only, naming
-  nothing outside the task's working directory, and one the allowlist covers,
-  run as the planner's would, in the planner's sandbox
-  ([ADR-0011](0011-sandboxing-the-planners-shell.md)) with the network its
-  tier gives. Everything else — what would ask, what the classifier refuses, a
-  path outside the working directory — runs sealed
+- **Nobody is asked.** Until the attempt's first sealed run, a command the
+  classifier reads as read-only, naming nothing outside the task's working
+  directory, and one the allowlist covers, run as the planner's would, in the
+  planner's sandbox ([ADR-0011](0011-sandboxing-the-planners-shell.md)) with
+  the network its tier gives. Everything else — what would ask, what the
+  classifier refuses, a path outside the working directory — runs sealed
   ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md)), as
   a research subagent's does (S5). An exclusion, and a denial the user gave on
-  the card, still refuse (S3). A grant the user gave the planner on the card,
-  and the `allow` approval mode, stay the planner's: they were given to its
-  commands.
+  the card, still refuse (S3), a denied command inside a wrapper included. A
+  grant the user gave the planner on the card, and the `allow` approval mode,
+  stay the planner's: they were given to its commands.
+- **Sealed from its first sealed run on.** Once a sealed run has started in an
+  attempt's task shell, every later command of that shell runs sealed, the
+  read-only tier and the allowlist included, so none has the network. A sealed
+  run may have written what a later command runs or reads as config: the
+  worktree's `package.json` `test` script, which an allowlisted `npm test`
+  runs, a Makefile, a `conftest.py`, a tool's dotfile, a cache in the scratch
+  directory. Run as the planner's would, that command reads the whole host,
+  and an allowlisted one has the network, so the user's credentials could
+  leave the machine with nobody asked. Until then the worktree holds only what
+  Ordewell checked out, since native writes and the native shell are
+  withheld, so an allowlisted command there is as safe as the planner's own,
+  and a task that only reads keeps allowlisted network commands such as `gh`.
+  The switch is one piece of the task shell's state, set when a sealed run
+  starts rather than when it succeeds, since one that fails, times out or is
+  aborted may have written. It is set with or without a worktree, since a
+  sealed run still writes the attempt's scratch directory. Every command after
+  it goes through the sealed run's checks, so S3 holds. The result of the run
+  that sets it says once why later commands are sealed, and each later sealed
+  result names it. Where no sandbox can seal, no sealed run starts and nothing
+  switches. A continue has a fresh worktree and shell and starts unsealed; the
+  planner's own shell is unaffected.
 - **Its sealed runs** have ADR-0036's profile with its one writable directory
   set to the task's own worktree (its task workspace, in a repo group): the
   workspace readable, the worktree writable, no network, no home directory,
@@ -61,16 +83,16 @@ nothing.
   read-only, since a worktree's `.git` is a file pointing into it: git reads
   the history and records nothing, and each sealed result says so.
 - **No link out of the worktree.** A sealed run may leave no link leading out
-  of its worktree and the workspace. The runner's native reads, and the task's
-  unsealed commands, which run in the planner's sandbox and read the whole
-  host, are outside the sealed profile and would follow it. On macOS the
-  sandbox refuses it: the profile is `linkless` for the writable worktree
-  (`sealedShellProfile`, only on darwin), and Seatbelt denies creating a
-  symlink there, or moving one in, by the file's type. Bubblewrap cannot refuse
-  a link by type and refuses a `linkless` profile, so on every platform
-  `runSealed` calls `removeOutwardLinks` after each run and names what it
+  of its worktree and the workspace. The runner's native reads run as the
+  user, outside the sealed profile, and would follow it. On macOS the profile
+  is `linkless` for the writable worktree (`sealedShellProfile`, only on
+  darwin), and Seatbelt denies creating a symlink there, or moving one in, by
+  the file's type; it does not see a directory moved in that holds one.
+  Bubblewrap cannot refuse a link by type and refuses a `linkless` profile. So
+  on every platform `runSealed` calls `removeOutwardLinks` after each run,
+  which reads the worktree's directories concurrently, and names what it
   removed in the result. The task shell runs one command at a time, so no
-  unsealed command reads the worktree while a sealed one writes it.
+  unsealed command runs alongside the first sealed one.
 - **Ten minutes.** A sealed command of a task has ten minutes
   (`TASK_SEALED_LIMITS`, the script task's default); the planner's own sealed
   runs keep one minute. A run ended at its limit says so, and does not blame
@@ -177,6 +199,21 @@ nothing.
 - **Keeping a read-only task's changes on a branch, as a removal keeps a
   change task's.** Rejected: nothing in it is work to keep, and keeping it means
   running git, as the user, in a tree its sealed commands wrote.
+- **Every command of a read-only task sealed, from its first.** Rejected: a
+  task that never writes, such as a research task reading issues with `gh`,
+  would lose the allowlist's network commands, though until a sealed run its
+  worktree holds only what Ordewell checked out.
+- **Sealing only the allowlisted and read-only commands that run or read
+  worktree content.** Rejected: which those are cannot be decided from a
+  command line. `npm test`, `make`, `pytest`, `cargo` and `npx` run what the
+  worktree says, and many tools read a config file they find there.
+- **Skipping the link walk where the profile is `linkless` (macOS).**
+  Rejected: Seatbelt refuses a link made or moved into the worktree, but not a
+  directory moved in that holds one, which only the walk finds.
+- **Unsealed commands in the planner's sandbox after a sealed run, with links
+  removed first.** The design until 2026-10-22. Rejected: a sealed run could
+  rewrite a script an allowlisted command then ran with the network and the
+  host readable.
 
 ## Consequences
 
@@ -191,9 +228,14 @@ nothing.
   jobs, the shared here-document files), and a process that leaves a sealed
   run's process group outlives it, still sealed, and can still be writing the
   worktree while it is removed.
+- Once a task has run anything sealed, it has no network command left for the
+  rest of its attempt: an allowlisted `gh` it runs after that fails, and an
+  allowlisted `npm test` runs under the sealed profile's limits, without the
+  user's home directory. A task that needs both fetches first.
 - A sealed `python -m venv` in the worktree fails on macOS, because a venv's
-  links point outside it. On Linux a native read at the same moment as a sealed
-  run could follow a link in the instant before it is removed; closing that
+  links point outside it. A native read at the same moment as a sealed run
+  could follow a link in the instant before it is removed: any link on Linux,
+  and on macOS one inside a directory the run moved in. Closing that on Linux
   needs a seccomp filter in the bubblewrap backend.
 - A failed or stopped read-only attempt leaves its log and its report to look
   at, and no worktree.
@@ -210,3 +252,5 @@ nothing.
 - 2026-10-21 — implemented on every built-in runner; native plan modes replaced, native web tools refused without a task web-policy channel, and the planner told commands can run.
 
 - 2026-10-22 — a sealed run leaves no link out of its worktree (refused on macOS, removed after the run on every platform); a task's sealed commands have ten minutes; a Codex read-only task keeps only Ordewell's MCP server.
+
+- 2026-10-22 — every command of a read-only task's shell runs sealed after its first sealed run; the link walk stays on macOS, where Seatbelt misses a directory moved in that holds a link.

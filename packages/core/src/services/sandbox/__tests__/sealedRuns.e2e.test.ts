@@ -7,6 +7,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { PlannerShellSandbox, resolvePlannerSandbox, TASK_SEALED_LIMITS } from '../plannerSandbox';
 import { BaseFileSystem } from '../../BaseFileSystem';
 import { ApprovalPolicy } from '../../ApprovalPolicy';
+import { ranSealed } from '../../researchStepSummary';
 import type { ResearchShell, ShellLaunch } from '../../researchShell';
 import type { ToolOutcome } from '../../../interfaces/IFileSystem';
 
@@ -312,9 +313,49 @@ describe('sealed runs', async () => {
           const read = await shell.run('cat leak/secret.txt');
           expect(read.output).not.toContain('other-repo-secret');
           expect(() => lstatSync(join(worktree, 'leak'))).toThrow();
+
+          // Seatbelt refuses a link made or moved into the worktree, but not a
+          // directory moved in that holds one, so the walk runs on macOS too.
+          await shell.run(`mkdir "$TMPDIR/d" && ln -s '${elsewhere}' "$TMPDIR/d/leak" && mv "$TMPDIR/d" moved`);
+          expect(existsSync(join(worktree, 'moved'))).toBe(true);
+          expect(() => lstatSync(join(worktree, 'moved', 'leak'))).toThrow();
         } finally {
           shell.end();
           rmSync(join(worktree, 'leak'), { force: true });
+          rmSync(join(worktree, 'moved'), { recursive: true, force: true });
+        }
+      });
+
+      it('runs an allowlisted command sealed once a sealed run may have rewritten what it runs', async () => {
+        // A file outside the workspace that the planner's sandbox, which reads the whole host, can read.
+        const canaryDir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-sealed-canary-')));
+        const canary = join(canaryDir, 'canary.txt');
+        writeFileSync(canary, `canary-${process.pid}\n`);
+        const fs = new HostFileSystem(repo, sandbox);
+        fs.setApproval(new ApprovalPolicy({ preApproved: ['sh check.sh'] }));
+        const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+        const fresh = fs.taskShell({ cwd: worktree, writable: worktree });
+        try {
+          writeFileSync(join(worktree, 'check.sh'), 'echo checked\n');
+          const before = await shell.run('sh check.sh');
+          expect(ranSealed(before.output)).toBe(false);
+          expect(before.output).toContain('checked');
+
+          const rewrite = await shell.run(`echo "cat '${canary}'" > check.sh`);
+          expect(ranSealed(rewrite.output)).toBe(true);
+          expect(readFileSync(join(worktree, 'check.sh'), 'utf8')).toContain(canary);
+
+          const after = await shell.run('sh check.sh');
+          expect(ranSealed(after.output)).toBe(true);
+          expect(after.output).not.toContain(`canary-${process.pid}`);
+
+          // What the rewritten script would have read outside the sealed profile, in an attempt's shell that never ran one sealed.
+          expect((await fresh.run('sh check.sh')).output).toContain(`canary-${process.pid}`);
+        } finally {
+          shell.end();
+          fresh.end();
+          rmSync(join(worktree, 'check.sh'), { force: true });
+          rmSync(canaryDir, { recursive: true, force: true });
         }
       });
 
