@@ -379,6 +379,33 @@ describe('sealed runs', async () => {
           shell.end();
         }
       });
+
+      it("cannot write, replace, rename or remove its worktree's .git, so git outside loads no planted repository (ADR-0046)", async () => {
+        const original = readFileSync(join(worktree, '.git'), 'utf8');
+        const launch = await sandbox.launchSealed(POSIX, { workspace: repo, writable: worktree, worktrees: [worktree], limits: TASK_SEALED_LIMITS });
+        const inWorktree = (command: string) => run(launch, command, worktree);
+        try {
+          // git still reads the repository inside the sealed run.
+          expect((await inWorktree('git log --oneline -1 | cat')).out).toContain('base');
+
+          for (const command of ['rm -f .git', 'mv .git moved-git', 'rm -f .git && mkdir .git', 'echo planted >> .git', 'printf "gitdir: planted\\n" > .git']) {
+            expect((await inWorktree(command)).code).not.toBe(0);
+          }
+          // Untouched: still the repository's gitdir pointer, never removed or moved.
+          expect(readFileSync(join(worktree, '.git'), 'utf8')).toBe(original);
+          expect(existsSync(join(worktree, 'moved-git'))).toBe(false);
+
+          // Creating a `.git` beneath the worktree: refused on macOS; a residual bubblewrap cannot close on Linux.
+          const beneath = await inWorktree('mkdir -p sub && mkdir sub/.git');
+          if (process.platform === 'darwin') {
+            expect(beneath.code).not.toBe(0);
+            expect(existsSync(join(worktree, 'sub', '.git'))).toBe(false);
+          }
+        } finally {
+          rmSync(join(worktree, 'sub'), { recursive: true, force: true });
+          rmSync(join(worktree, 'moved-git'), { recursive: true, force: true });
+        }
+      });
     });
   });
 });

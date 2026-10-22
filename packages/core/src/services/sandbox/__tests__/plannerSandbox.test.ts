@@ -208,6 +208,12 @@ describe('sealedShellProfile (ADR-0036 S1)', () => {
     expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/work/repo', writable: '/work/tree' }).linkless).toBeUndefined();
   });
 
+  it("protects each worktree's .git, from the worktrees given or the single writable one (ADR-0046)", () => {
+    expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/work/repo', writable: '/work/tree' }).gitWorktrees).toEqual(['/work/tree']);
+    expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/ws', writable: '/ws', worktrees: ['/ws/alpha', '/ws/beta'] }).gitWorktrees).toEqual(['/ws/alpha', '/ws/beta']);
+    expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/work/repo' }).gitWorktrees).toBeUndefined();
+  });
+
   it('keeps its network off unless a native shell asks for the harness\'s own (N3)', () => {
     expect(sealedShellProfile(host, { workspace: '/w' }).network).toBe(false);
     expect(sealedShellProfile(host, { workspace: '/w', network: true }).network).toBe(true);

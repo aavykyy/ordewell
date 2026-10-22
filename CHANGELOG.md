@@ -145,6 +145,15 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   script an allowlisted `npm test` runs, and that command would otherwise have
   run it with the network and your files readable
   ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
+- **A read-only task's sealed runs cannot plant a git repository for later git
+  to load.** A sealed run can write the task's worktree, but not its `.git`: it
+  cannot write, replace, rename or remove the worktree's own `.git` file, nor —
+  on macOS — create a `.git` beneath the worktree. So git run later in the
+  worktree outside the sandbox, Ordewell's own or the runner's, never loads a
+  repository the run planted with its own hooks or filters, and `task_diff`
+  refuses a read-only task. On Linux, a `.git` planted in a subdirectory of the
+  worktree remains a residual
+  ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
 - **Consent to a script task is consent to what it runs.** An edit that
   changes an approved script task's commands, script or time limit, or turns
   it into another type of task, takes it out of the approved set. Autorun in

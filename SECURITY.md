@@ -76,10 +76,16 @@ their own repositories. The parts most worth your attention:
   a credential, or outlive its limits is in scope, as is a way to run a
   command sealed that a `!` allowlist exclusion names or that you denied. A
   read-only task's sealed runs may also write its own worktree
-  ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md));
-  a way for one to write anywhere else, for anything a read-only task
-  changed to land, or for a command of the task to run outside the sealed
-  profile once one of its commands has run sealed, is in scope.
+  ([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)),
+  but not its `.git`: a sealed run cannot write, replace, rename or remove the
+  worktree's own `.git` file, nor (on macOS) create a `.git` beneath the
+  worktree, so git run later in that worktree outside the sandbox loads no
+  repository the run planted. A way for one to write anywhere else, for
+  anything a read-only task changed to land, for a command of the task to run
+  outside the sealed profile once one of its commands has run sealed, or for a
+  sealed run to make git outside the sandbox load a repository it planted, is
+  in scope. On Linux, creating a `.git` in a subdirectory of the worktree is a
+  known residual (ADR-0046).
 
   On Linux that profile is the whole guarantee: the PID namespace leaves a
   sealed run no other process to look at. **On macOS, three things no Seatbelt
@@ -226,9 +232,15 @@ except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-s
   command runs sealed, allowlisted ones included, since the run may have
   rewritten a script or config file a later command uses. Sealed, the
   workspace is readable, nothing is writable but the task's worktree and a
-  scratch directory of its own, the repository's `.git` stays read-only, and
-  there is no network and no home directory, so none of your credentials. On macOS the three gaps listed under Sealed runs stay
-  open to these runs too. Where no sandbox runs, what would run sealed is
+  scratch directory of its own, the repository's `.git` and the worktree's own
+  `.git` file stay read-only, and there is no network and no home directory, so
+  none of your credentials. Because the worktree's `.git` cannot be rewritten
+  or replaced, and no `.git` can be planted beneath the worktree on macOS, git
+  run later in the worktree — Ordewell's or the runner's own — loads no
+  repository a sealed run planted; `task_diff` refuses a read-only task
+  outright. On macOS the three gaps listed under Sealed runs stay
+  open to these runs too, and on Linux a `.git` planted in a subdirectory of
+  the worktree is a residual. Where no sandbox runs, what would run sealed is
   refused.
   Native writes and the native shell are withheld on every runner. Claude
   Code decides native reads against the real paths of the task worktree and

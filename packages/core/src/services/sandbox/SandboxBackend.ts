@@ -30,6 +30,17 @@ export interface SandboxProfile {
    */
   linkless?: readonly string[];
   /**
+   * Of `write`, the worktree roots whose own `.git` a command may neither
+   * write, replace, rename nor remove, and — where the backend can — beneath
+   * which it may not create a new `.git` either (ADR-0046). A worktree's `.git`
+   * is a file pointing into its repository; a command that rewrote it, or
+   * planted a `.git` of its own, would make git load that repository when it
+   * runs outside the sandbox, as the user. A backend that cannot refuse
+   * creating one beneath the worktree protects the existing file and leaves
+   * the rest a residual.
+   */
+  gitWorktrees?: readonly string[];
+  /**
    * What the command may read besides `write`. `'host'` is the whole
    * filesystem: the planner's reads are confined by ADR-0008's path check,
    * not here (ADR-0011 B2). A list confines reads to those paths, for a
@@ -137,7 +148,7 @@ export class SandboxUnsupportedError extends Error {
  * an option.
  */
 export function assertProfilePaths(backend: string, profile: SandboxProfile): void {
-  const paths = [...profile.write, ...(profile.linkless ?? []), ...(profile.read === 'host' ? [] : profile.read), ...(profile.throwaway ?? []), ...(profile.masked ?? [])];
+  const paths = [...profile.write, ...(profile.linkless ?? []), ...(profile.gitWorktrees ?? []), ...(profile.read === 'host' ? [] : profile.read), ...(profile.throwaway ?? []), ...(profile.masked ?? [])];
   for (const p of paths) {
     if (!path.posix.isAbsolute(p) || p.includes('\0')) throw new SandboxUnsupportedError(backend, `the path ${JSON.stringify(p)}`);
   }

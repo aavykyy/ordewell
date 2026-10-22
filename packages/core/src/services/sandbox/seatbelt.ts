@@ -222,6 +222,14 @@ export class SeatbeltBackend implements SandboxBackend {
     if (profile.write.length) rules.push(`(allow file-read* file-test-existence file-map-executable file-write* ${filters('WRITABLE', 'subpath', profile.write)})`);
     // A rename lands as a create too, so a link made elsewhere cannot be moved in, nor one already there moved to resolve elsewhere.
     if (profile.linkless?.length) rules.push(`(deny file-write-create (require-all (vnode-type SYMLINK) (require-any ${filters('LINKLESS', 'subpath', profile.linkless)})))`);
+    // A worktree's `.git` stays the repository's: the file cannot be written,
+    // replaced, renamed or removed, and no `.git` may be created beneath the
+    // worktree, so git outside the sandbox never loads a planted one (ADR-0046).
+    if (profile.gitWorktrees?.length) {
+      const gitDirs = profile.gitWorktrees.map((worktree) => path.posix.join(worktree, '.git'));
+      rules.push(`(deny file-write* ${filters('GIT', 'literal', gitDirs)})`);
+      rules.push(`(deny file-write-create (require-all (regex #"/\\.git$") (require-any ${filters('GITROOT', 'subpath', profile.gitWorktrees)})))`);
+    }
 
     const sandboxed = [SANDBOX_EXEC, '-p', rules.join('\n'), ...params, invocation.shell, ...invocation.shellArgs];
     const env = launchEnv(invocation, profile);

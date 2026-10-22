@@ -136,6 +136,21 @@ describe('SeatbeltBackend.wrap', () => {
       expect(profileText(seatbelt.wrap(SH, sealed()).args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1))).not.toContain('LINKLESS');
     });
 
+    it("protects a writable worktree's .git and, on macOS, refuses creating one beneath it, after the writable allow (ADR-0046)", () => {
+      const launch = seatbelt.wrap(SH, sealed({ write: [SCRATCH, '/work/repo/wt'], gitWorktrees: ['/work/repo/wt'] }));
+      const text = profileText(launch.args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1));
+      const write = '(deny file-write* (literal (param "GIT_0")))';
+      const create = '(deny file-write-create (require-all (regex #"/\\.git$") (require-any (subpath (param "GITROOT_0")))))';
+      expect(text).toContain(write);
+      expect(text).toContain(create);
+      // Both after the rule that made the worktree writable, so the last-match-wins deny stands.
+      expect(text.indexOf(write)).toBeGreaterThan(text.indexOf('(param "WRITABLE_1")'));
+      expect(text.indexOf(create)).toBeGreaterThan(text.indexOf('(param "WRITABLE_1")'));
+      expect(launch.args).toContain('GIT_0=/work/repo/wt/.git');
+      expect(launch.args).toContain('GITROOT_0=/work/repo/wt');
+      expect(profileText(seatbelt.wrap(SH, sealed()).args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1))).not.toContain('GIT_0=');
+    });
+
     it('keeps a hostile path out of the profile text in the read list too', () => {
       const launch = seatbelt.wrap(SH, sealed({ read: [HOSTILE] }));
       expect(launch.args.find((arg) => arg.startsWith('(version 1)'))).not.toContain('a"b');
@@ -262,6 +277,16 @@ describe('BubblewrapBackend.wrap', () => {
     it('keeps only the environment the profile names, then sets its own', () => {
       const { env } = bwrap().wrap({ ...SH, env: { PATH: '/usr/bin', GITHUB_TOKEN: 'x', HOME: '/home/me' } }, sealed());
       expect(env).toEqual({ PATH: '/usr/bin', TMPDIR: SCRATCH, HOME: SCRATCH });
+    });
+
+    it("binds a worktree's .git read-only after the writable bind, so the file cannot be rewritten (ADR-0046)", () => {
+      const { args } = bwrap().wrap(SH, sealed({ write: [SCRATCH, '/work/repo/wt'], gitWorktrees: ['/work/repo/wt'] }));
+      const joined = args.join(' ');
+      expect(joined).toContain('--bind /work/repo/wt /work/repo/wt');
+      expect(joined).toContain('--ro-bind /work/repo/wt/.git /work/repo/wt/.git');
+      // After the writable bind, so the overmount of the .git file stands.
+      expect(joined.indexOf('--ro-bind /work/repo/wt/.git')).toBeGreaterThan(joined.indexOf('--bind /work/repo/wt /work/repo/wt'));
+      expect(bwrap().wrap(SH, sealed()).args.join(' ')).not.toContain('/.git');
     });
   });
 });

@@ -2922,6 +2922,25 @@ describe.skipIf(!hasGit)('task diff reads', () => {
     expect(await iso.taskDiff!(run, 'absent', {})).toMatchObject({ available: false, reason: expect.stringContaining('not available for this run') });
   });
 
+  it('refuses a read-only task, running no git in a worktree whose .git a sealed run could have rewritten (ADR-0046)', async () => {
+    const root = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Review');
+    const { cwd } = await iso.prepare(t, run, 'fresh', { readOnly: true });
+    // A gitdir of the task's own, whose config would run a program the moment git reads it.
+    const marker = join(root, 'ran-outside');
+    mkdirSync(join(cwd, 'planted'));
+    writeFileSync(join(cwd, 'planted', 'config'), `[core]\n\tfsmonitor = touch ${marker}\n\thooksPath = ${join(cwd, 'planted')}\n`);
+    writeFileSync(join(cwd, '.git'), 'gitdir: planted\n');
+    writeFileSync(join(cwd, 'tried-fix.ts'), 'export const fixed = true;\n');
+
+    const diff = await iso.taskDiff!(run, t.id, {});
+
+    expect(diff).toMatchObject({ available: false, reason: expect.stringContaining('read-only task') });
+    expect(existsSync(marker)).toBe(false);
+  });
+
   it('does not run clean filters, textconv, external diff drivers, or fsmonitor while reading', async () => {
     const root = repo({ 'README.md': 'hello\n', '.gitattributes': 'README.md filter=owned diff=owned\n' });
     const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
