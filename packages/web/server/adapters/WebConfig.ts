@@ -48,8 +48,8 @@ export class WebConfig extends BaseConfig {
 
   /**
    * Read live, not fixed at construction: a session's WebConfig lives for the
-   * whole session while /model, /planner and /key mutate process.env under
-   * it. `routedProvider` keeps that cheap.
+   * whole session while /planner and /key (or the headless `ordewell model`)
+   * mutate process.env under it. `routedProvider` keeps that cheap.
    */
   get planner(): ResolvedPlanner {
     return this.resolvePlanner({ ...this.configuredPlanner(), override: this._modelOverride }, this._providerModelLists());

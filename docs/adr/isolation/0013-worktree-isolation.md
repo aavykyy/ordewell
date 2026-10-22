@@ -174,8 +174,9 @@ everything below applies per repo of the group.
   branch the run started on, and only while it is checked out
   ([ADR-0042](0042-merge-all-lands-only-on-the-branch-the-run-started-on.md)),
   when the user presses Merge all, or has opted into one of two settings:
-  *merge automatically* (`/automerge`), and the supervisor at Act
-  (`/supervisor act`), which may call `merge_all` in its wake-up turns
+  *merge automatically* (in `/settings`; `ordewell automerge` headless), and the
+  supervisor at Act (also in `/settings`; `ordewell supervisor act` headless),
+  which may call `merge_all` in its wake-up turns
   ([ADR-0029](../supervision/0029-the-supervisor.md)). Both are global user
   settings, opted into once rather than per plan, and a change applies at once to
   the session it is made in ([ADR-0030](../supervision/0030-global-run-settings.md)).
@@ -472,3 +473,4 @@ literal git command lines or private fields.
 - 2026-10-18 — the Session says when it closed the run (`run_closed`), and a surface re-told by a load or refresh takes `runSnapshot()` instead of reading the run record.
 - 2026-10-18 — a run held on a usage limit is no longer closed when its last attempt ends; it stays open for the reset (ADR-0034).
 - 2026-10-19 — adopting a saved run asks git what the user merged since and clears up a settled run left with nothing to hand over; a gone integration branch counts as merged.
+- 2026-10-22: merge automatically and supervisor Act are set in `/settings`; the one-value slash commands are gone from the TUI and VS Code.

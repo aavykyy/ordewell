@@ -6,14 +6,6 @@ import ChatInput, { getLeadingSlashToken } from '../ChatInput';
 // jsdom has no layout engine; the suggestion list calls scrollIntoView on nav.
 (Element.prototype as never).scrollIntoView = vi.fn();
 
-type ModelOption = NonNullable<React.ComponentProps<typeof ChatInput>['modelOptions']>[number];
-
-const MODELS: ModelOption[] = [
-  { id: 'deepseek/deepseek-chat', label: 'DeepSeek Chat', provider: 'Deepseek', apiProvider: 'openrouter' },
-  { id: 'anthropic/claude-sonnet-4', label: 'Claude Sonnet 4', provider: 'Anthropic', apiProvider: 'openrouter' },
-  { id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', provider: 'Google', apiProvider: 'google' },
-];
-
 function renderInput(props: Partial<React.ComponentProps<typeof ChatInput>> = {}) {
   const onSend = props.onSend ?? vi.fn();
   const onStop = props.onStop ?? vi.fn();
@@ -25,8 +17,6 @@ function renderInput(props: Partial<React.ComponentProps<typeof ChatInput>> = {}
       onSend={onSend}
       onStop={onStop}
       disabled={props.disabled ?? false}
-      modelOptions={props.modelOptions ?? MODELS}
-      configuredProviders={props.configuredProviders ?? ['openrouter', 'google']}
       placeholder={props.placeholder}
       {...rest}
     />,
@@ -46,118 +36,6 @@ function typeAt(value: string, cursor: number) {
   fireEvent.change(textarea, { target: { value, selectionStart: cursor, selectionEnd: cursor } });
   return textarea;
 }
-
-describe('ChatInput two-step model picker', () => {
-  it('/model set lists only the coding agent\'s models while one plans', () => {
-    renderInput({
-      configuredProviders: ['openrouter'],
-      harnessPlannerModels: [{ id: 'opus', label: 'Opus', provider: 'claude-code' }],
-    });
-    type('/model set ');
-    expect(screen.getByText('Opus')).toBeTruthy();
-    expect(screen.queryByText('DeepSeek Chat')).toBeNull();
-    expect(screen.queryByText('Use OpenRouter models')).toBeNull();
-  });
-
-  it('/model set with two providers shows provider entries, not models', () => {
-    renderInput({ configuredProviders: ['openrouter', 'google'] });
-    type('/model set ');
-    expect(screen.getByText('Use OpenRouter models')).toBeTruthy();
-    expect(screen.getByText('Use Gemini models')).toBeTruthy();
-    expect(screen.queryByText('DeepSeek Chat')).toBeNull();
-    expect(screen.queryByText('Gemini 2.5 Pro')).toBeNull();
-  });
-
-  it('selecting a provider entry shows that provider\'s models plus a back entry', () => {
-    renderInput({ configuredProviders: ['openrouter', 'google'] });
-    type('/model set ');
-    fireEvent.mouseDown(screen.getByText('Use OpenRouter models'));
-    expect(screen.getByText('DeepSeek Chat')).toBeTruthy();
-    expect(screen.getByText('Claude Sonnet 4')).toBeTruthy();
-    // Gemini model is filtered out — wrong provider.
-    expect(screen.queryByText('Gemini 2.5 Pro')).toBeNull();
-    expect(screen.getByText('← Back to providers')).toBeTruthy();
-  });
-
-  it('back entry returns to provider selection', () => {
-    renderInput({ configuredProviders: ['openrouter', 'google'] });
-    type('/model set ');
-    fireEvent.mouseDown(screen.getByText('Use Gemini models'));
-    expect(screen.getByText('Gemini 2.5 Pro')).toBeTruthy();
-    fireEvent.mouseDown(screen.getByText('← Back to providers'));
-    expect(screen.getByText('Use OpenRouter models')).toBeTruthy();
-    expect(screen.getByText('Use Gemini models')).toBeTruthy();
-    expect(screen.queryByText('Gemini 2.5 Pro')).toBeNull();
-  });
-
-  it('one configured provider skips the provider step and lists models directly', () => {
-    renderInput({ configuredProviders: ['openrouter'] });
-    type('/model set ');
-    expect(screen.queryByText('Use OpenRouter models')).toBeNull();
-    expect(screen.getByText('DeepSeek Chat')).toBeTruthy();
-    expect(screen.queryByText('← Back to providers')).toBeNull();
-  });
-
-  it('no configured providers shows a hint, not models', () => {
-    renderInput({ configuredProviders: [] });
-    type('/model set ');
-    expect(screen.getByText('No API keys configured')).toBeTruthy();
-    expect(screen.queryByText('DeepSeek Chat')).toBeNull();
-  });
-
-  it('selecting a model sends the slash command with the model id', () => {
-    const { onSend } = renderInput({ configuredProviders: ['openrouter'] });
-    type('/model set ');
-    fireEvent.mouseDown(screen.getByText('Claude Sonnet 4'));
-    expect(onSend).toHaveBeenCalledWith('/model set anthropic/claude-sonnet-4');
-  });
-
-  it('Tab on a highlighted model row fills the command without sending it', () => {
-    const { onSend } = renderInput({ configuredProviders: ['openrouter'] });
-    const ta = type('/model set sonnet');
-    fireEvent.keyDown(ta, { key: 'Tab' });
-    expect(onSend).not.toHaveBeenCalled();
-    expect((ta as HTMLTextAreaElement).value).toBe('/model set anthropic/claude-sonnet-4');
-  });
-
-  it('filters models by search term once a provider is chosen', () => {
-    renderInput({ configuredProviders: ['openrouter'] });
-    type('/model set sonnet');
-    expect(screen.getByText('Claude Sonnet 4')).toBeTruthy();
-    expect(screen.queryByText('DeepSeek Chat')).toBeNull();
-  });
-
-  it('does not commit a free-typed model id — only selections from the list are sent', () => {
-    const { onSend } = renderInput({ configuredProviders: ['openrouter'] });
-    // A search term that matches nothing in the list.
-    const ta = type('/model set totally-made-up-model');
-    fireEvent.keyDown(ta, { key: 'Enter' });
-    // Must never send the raw typed id; at most it opens the picker (bare cmd).
-    for (const call of onSend.mock.calls) {
-      expect(call[0]).not.toContain('totally-made-up-model');
-    }
-  });
-
-  it('Enter on a filtered match applies that model (selection from the list)', () => {
-    const { onSend } = renderInput({ configuredProviders: ['openrouter'] });
-    const ta = type('/model set sonnet');
-    fireEvent.keyDown(ta, { key: 'Enter' });
-    expect(onSend).toHaveBeenCalledWith('/model set anthropic/claude-sonnet-4');
-  });
-
-  it('always displays which API serves each model, disambiguating collisions', () => {
-    // The same model offered by both APIs (distinct ids) must be tellable apart.
-    const collide: ModelOption[] = [
-      { id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', provider: 'Google', apiProvider: 'openrouter' },
-      { id: 'gemini:gemini-2.5-pro', label: 'Gemini 2.5 Pro', provider: 'Google', apiProvider: 'google' },
-    ];
-    renderInput({ modelOptions: collide, configuredProviders: ['openrouter', 'google'] });
-    type('/model set ');
-    fireEvent.mouseDown(screen.getByText('Use Gemini models'));
-    expect(screen.getByText(/via Gemini/)).toBeTruthy();
-    expect(screen.queryByText(/via OpenRouter/)).toBeNull();
-  });
-});
 
 describe('ChatInput send/stop button', () => {
   it('shows send arrow when not processing', () => {
@@ -363,10 +241,10 @@ describe('mid-prompt skill highlight', () => {
 });
 
 describe('getLeadingSlashToken', () => {
-  const KNOWN = new Set(['model', 'grilling']);
+  const KNOWN = new Set(['refresh', 'grilling']);
 
   it('matches a known command name at the start of the text', () => {
-    expect(getLeadingSlashToken('/model set foo', KNOWN)).toBe('/model');
+    expect(getLeadingSlashToken('/refresh now', KNOWN)).toBe('/refresh');
   });
 
   it('matches a known skill name with nothing else typed', () => {
@@ -385,9 +263,9 @@ describe('getLeadingSlashToken', () => {
 describe('slash token highlight', () => {
   it('renders a mark around a recognized command token', () => {
     const { container } = renderInput({});
-    type('/model set foo');
+    type('/refresh now');
     const mark = container.querySelector('.chat-input-highlight-backdrop mark');
-    expect(mark?.textContent).toBe('/model');
+    expect(mark?.textContent).toBe('/refresh');
   });
 
   it('renders a mark around a recognized skill token', () => {

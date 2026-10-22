@@ -27,8 +27,8 @@ describe('run settings in the chat', () => {
     send({ type: 'setRunSettings', autonomous: true, run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act' } });
 
     const setup = document.querySelector('.empty-state-setup')!.textContent!;
-    expect(setup).toMatch(/Autonomy\s*Full\s*\/auto/);
-    expect(setup).toMatch(/Run\s*supervisor Act · auto-merge off · autorun off\s*\/supervisor · \/automerge · \/autorun/);
+    expect(setup).toMatch(/Autonomy\s*Full\s*\/settings/);
+    expect(setup).toMatch(/Run\s*supervisor Act · auto-merge off · autorun off\s*\/settings/);
   });
 
   it('shows them on the plan bar, and the run\'s own level where it differs', () => {

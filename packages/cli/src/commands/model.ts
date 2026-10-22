@@ -10,8 +10,8 @@ const USAGE = 'Usage: ordewell model [show | set <model-id>]';
 /**
  * The planner's model. Unlike `ordewell models --set`, which only ever wrote
  * `.env` and told the user to restart, this pushes to the live daemon first and
- * persists second — the same seam the TUI's `/model` uses, so the change lands
- * on the next plan without a restart.
+ * persists second, the same seam the TUI's `/planner` model step uses, so the
+ * change lands on the next plan without a restart.
  */
 export async function handleModel(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   const [action, modelId] = positionals(subArgs);

@@ -6,7 +6,6 @@ import {
   DEFAULT_RUNNERS, ModelResolver, RunnerRegistry, saveState, clearState,
   listSessions, loadSession,
   SettingsService, installedPlannerDetected,
-  type AiProvider,
   type ExecutionCommand,
 } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -35,8 +34,6 @@ export interface CommandDeps {
   handleStartPlanning: (text: string) => Promise<void>;
   sendRunnerAndModels: () => Promise<void>;
   runApiKeyWizard: (preselected?: ApiProvider) => Promise<void>;
-  discoverOrchestratorModelOptions: () => Promise<{ id: string; label: string; provider: string; apiProvider?: AiProvider; description?: string; pricing?: string }[]>;
-  pickModelWithProvider: (options: { id: string; label: string; provider: string; apiProvider?: AiProvider; description?: string; pricing?: string }[], configuredProviders: ApiProvider[], placeHolder: string, extraItems?: { label: string; detail?: string; modelId: string }[]) => Promise<string | undefined>;
   persistState: () => void;
   saveCurrentSession: () => void;
   log: (msg: string) => void;

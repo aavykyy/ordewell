@@ -2,12 +2,23 @@
 
 ## [Unreleased]
 
+## [0.10.11] - 2026-10-22
+
 ### Changed
 
+- **Run settings and planner steps live in one place each.** `/settings` covers
+  autonomy, supervisor, merging, autorun and parallel tasks; `/planner` covers
+  harness, model and effort. The one-value slash commands and the "Set Parallel
+  Tasks" palette command are gone.
 - **The Marketplace listing is rewritten.** Its description and overview lead
   with planning once and running across Claude Code, Codex and OpenCode, say
   that nothing runs until you approve the plan, and make an installed coding
   agent the default way to plan, with API keys as a secondary note.
+
+### Fixed
+
+- **A completed task's `task_complete` call shows as a success, not a
+  rejection.** The tool reply now reaches the runner before Ordewell stops it.
 
 ## [0.10.10] - 2026-10-19
 

@@ -148,7 +148,11 @@ export class FakeRunnerSession implements IRunnerSession {
   onTurnEnd(cb: (reason: StructuredTurnEnd) => void): void { this.turnEndCbs.push(cb); }
   onEvent(cb: (event: StructuredEvent) => void): void { this.eventCbs.push(cb); }
   onTaskComplete(cb: (report: TaskCompleteArgs) => void): void { this.completeCbs.push(cb); }
-  /** The runner calls `task_complete`, as `StructuredSession` relays it. */
+  /**
+   * The runner calls `task_complete`, as `StructuredSession` relays it. Here it
+   * is published at once; a test that needs the real session's turn-end
+   * ordering drives `StructuredSession` itself.
+   */
   reportComplete(report: TaskCompleteArgs): void {
     for (const cb of this.completeCbs) cb(report);
   }

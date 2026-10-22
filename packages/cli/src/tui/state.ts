@@ -182,8 +182,6 @@ export interface PickerItem {
 
 /** What the runtime should do with the item(s) the user picks. */
 export type PickerAction =
-  | { kind: 'set-model' }
-  | { kind: 'set-planner-effort' }
   | { kind: 'set-key' }
   | { kind: 'load-session' }
   | { kind: 'delete-session' }
@@ -296,8 +294,6 @@ export type ConfirmAction =
   | { kind: 'new-session' }
   | { kind: 'remove-task'; taskId: string }
   | { kind: 'force-start-gated'; taskId: string }
-  | { kind: 'supervisor-act' }
-  | { kind: 'autorun-on' }
   /** `menu` is the `/settings` stepper the question was asked from, reopened once it is answered. */
   | { kind: 'save-settings'; effect: SaveSettingsEffect; menu?: StepperState }
   | { kind: 'merge-run' }
@@ -428,7 +424,7 @@ export interface TuiState {
   orchestratorModel: string;
   /**
    * Who plans (ADR-0009): a vendor provider id, or one of the three harness
-   * planners. Drives `/planner`, and decides whether `/model` offers the
+   * planners. Drives `/planner`, and decides whether its model step offers the
    * cross-provider catalog or that coding agent's own models.
    */
   plannerProvider: string;

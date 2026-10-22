@@ -94,8 +94,8 @@ export type TaskLogEvent =
   | { type: 'approval_withdrawn'; approvalId: string }
   /**
    * The runner's process ended. A call it had not reported back on is not
-   * running any more: a task's runner is ended the moment its `task_complete`
-   * lands, often before it reports that call's result.
+   * running any more: a stopped runner can end with a call still open, a
+   * killed turn or a process that exits before its last result.
    */
   | { type: 'runner_ended' };
 

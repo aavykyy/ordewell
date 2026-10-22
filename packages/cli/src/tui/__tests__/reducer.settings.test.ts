@@ -141,7 +141,7 @@ describe('/settings', () => {
     expect(onScreen(walk(state, 'right')).step).toBe('Automerge');
   });
 
-  it('asks before Act, as /supervisor act does, and returns to the step once confirmed', () => {
+  it('asks before Act, as the old /supervisor act did, and returns to the step once confirmed', () => {
     const asked = press(walk(typed(base(), '/settings').state, 'tab', 'down'), 'enter');
     expect(asked.effects).toEqual([]);
     expect(asked.state.overlay).toMatchObject({ kind: 'confirm', message: 'Settings: Supervisor Act' });

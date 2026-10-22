@@ -3748,52 +3748,6 @@ body.vscode-high-contrast-light .task-card.expanded {
   text-overflow: ellipsis;
 }
 
-.slash-suggestions-group-header {
-  padding: 4px 12px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  border-top: 1px solid var(--border-muted);
-}
-
-/* ---- Model Info Panel ---- */
-.model-info-panel {
-  margin: 8px 14px;
-  padding: 10px 14px;
-  border: 1px solid rgba(57, 197, 207, 0.25);
-  border-radius: var(--radius-md);
-  background: var(--cyan-subtle);
-}
-
-.model-info-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--cyan);
-  margin-bottom: 6px;
-  letter-spacing: -0.01em;
-}
-
-.model-info-warning {
-  font-size: 11px;
-  color: var(--orange, #ffa657);
-  background: rgba(210, 153, 29, 0.08);
-  border: 1px solid rgba(210, 153, 29, 0.2);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  margin-bottom: 8px;
-}
-
-.model-info-warning code {
-  background: var(--bg-primary);
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10px;
-  color: var(--accent);
-}
-
 .model-discovery-error {
   font-size: 11px;
   color: var(--orange, #ffa657);
@@ -3801,41 +3755,6 @@ body.vscode-high-contrast-light .task-card.expanded {
   border: 1px solid rgba(210, 153, 29, 0.2);
   border-radius: var(--radius-sm);
   padding: 6px 10px;
-}
-
-.model-info-row {
-  font-size: 11px;
-  color: var(--text-secondary);
-  padding: 2px 0;
-}
-
-.model-info-key {
-  display: inline-block;
-  width: 92px;
-  color: var(--text-muted);
-  margin-right: 6px;
-}
-
-.model-info-val {
-  color: var(--cyan);
-  font-family: var(--font-mono, ui-monospace, monospace);
-}
-
-.model-info-provider {
-  margin-left: 6px;
-  padding: 0 6px;
-  border-radius: 8px;
-  font-size: 10px;
-  color: var(--text-muted);
-  background: rgba(57, 197, 207, 0.12);
-}
-
-.model-info-footer {
-  font-size: 10px;
-  color: var(--text-muted);
-  margin-top: 8px;
-  padding-top: 6px;
-  border-top: 1px solid rgba(57, 197, 207, 0.12);
 }
 
 /* ---- Slash Command Output ---- */

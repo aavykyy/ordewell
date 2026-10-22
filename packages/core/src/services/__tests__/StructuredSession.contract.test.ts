@@ -494,7 +494,7 @@ describe('the Ordewell task tools (ADR-0022)', () => {
   });
 
   /** {@link byHand}, with a server of the test's own for the tokens. */
-  function served(configure: (adapter: HandAdapter) => void = () => {}) {
+  function served(configure: (adapter: HandAdapter) => void = () => {}, interruptGraceMs = 20) {
     const server = new OrdewellMcpServer();
     servers.push(server);
     const adapters: HandAdapter[] = [];
@@ -505,7 +505,7 @@ describe('the Ordewell task tools (ADR-0022)', () => {
         adapters.push(adapter);
         return adapter;
       },
-      interruptGraceMs: 20,
+      interruptGraceMs,
       mcp: server,
     });
     return { runner, adapters };
@@ -535,8 +535,87 @@ describe('the Ordewell task tools (ADR-0022)', () => {
     const result = await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Built it.' } });
 
     expect(result.isError).toBe(false);
+    expect(reports).toEqual([]);
+    adapters[0].endTurn();
+    await until(() => reports.length === 1);
     expect(reports).toEqual([{ status: 'done', summary: 'Built it.' }]);
     session.kill();
+  });
+
+  it('does not publish the completion until the turn that reported it has closed', async () => {
+    const { runner, adapters } = served(() => {}, 1_000);
+    const session = await runner.spawn(options());
+    const client = await connect(servedConfig(adapters[0]));
+    const reports: unknown[] = [];
+    session.onTaskComplete((report) => reports.push(report));
+
+    const result = await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Done.' } });
+
+    // The reply is recorded, but the verdict waits for the turn's own close.
+    expect(result).toMatchObject({ isError: false });
+    expect(reports).toEqual([]);
+    expect(session.turnState()).toBe('working');
+    expect(adapters[0].interrupts).toBe(0);
+
+    adapters[0].endTurn();
+    await until(() => reports.length === 1);
+    expect(adapters[0].interrupts).toBe(0);
+  });
+
+  it('publishes a completion whose turn never closes after the interrupt grace', async () => {
+    const { runner, adapters } = served(() => {}, 10);
+    const session = await runner.spawn(options());
+    const client = await connect(servedConfig(adapters[0]));
+    const reports: unknown[] = [];
+    session.onTaskComplete((report) => reports.push(report));
+
+    await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Done.' } });
+    await until(() => reports.length === 1);
+    expect(session.turnState()).toBe('working');
+    session.kill();
+  });
+
+  it('voids a completion the runner reports before reading a new message', async () => {
+    const { runner, adapters } = served(() => {}, 1_000);
+    const session = await runner.spawn(options());
+    const reports: unknown[] = [];
+    session.onTaskComplete((report) => reports.push(report));
+    await until(() => adapters[0].sent.length === 1);
+    const messageId = session.sendMessage('Also add tests');
+    const client = await connect(servedConfig(adapters[0]));
+
+    await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Original work' } });
+    expect(reports).toEqual([]);
+    adapters[0].emit({ type: 'message_delivered', id: messageId });
+    adapters[0].endTurn();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(reports).toEqual([]);
+
+    session.sendMessage('Continue with the tests');
+    await until(() => adapters[0].sent.length === 2);
+    await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'With tests' } });
+    adapters[0].endTurn();
+    await until(() => reports.length === 1);
+    expect(reports).toEqual([{ status: 'done', summary: 'With tests' }]);
+    session.kill();
+  });
+
+  it('publishes a completion held behind a queued message when the runner exits', async () => {
+    const { runner, adapters } = served(() => {}, 1_000);
+    const session = await runner.spawn(options());
+    const reports: unknown[] = [];
+    const undelivered: string[] = [];
+    session.onTaskComplete((report) => reports.push(report));
+    session.onEvent((event) => { if (event.type === 'message_undelivered') undelivered.push(event.messageId); });
+    await until(() => adapters[0].sent.length === 1);
+    session.sendMessage('Also add tests');
+    const client = await connect(servedConfig(adapters[0]));
+
+    await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Original work' } });
+    adapters[0].exit(0);
+    await until(() => reports.length === 1);
+    expect(reports).toEqual([{ status: 'done', summary: 'Original work' }]);
+    expect(undelivered).toHaveLength(1);
   });
 
   it('delivers a queued final-turn message before settling, with the same task token valid for the next report', async () => {
@@ -557,7 +636,8 @@ describe('the Ordewell task tools (ADR-0022)', () => {
     expect(adapters[0].sent).toEqual(['Do the task', 'Also add tests']);
     expect(verdicts).toEqual([]);
     expect(await client.callTool({ name: 'task_complete', arguments: { status: 'failed', summary: 'Tests failed', reason: 'Assertion failed' } })).toMatchObject({ isError: false });
-    expect(verdicts).toHaveLength(1);
+    adapters[0].endTurn();
+    await until(() => verdicts.length === 1);
     expect(verdicts[0].outcome).toBe('fail');
     expect(verdicts[0].reason).toContain('Assertion failed');
     engine.reset();

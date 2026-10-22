@@ -5,10 +5,9 @@ import { openStepper, reopenStepper, type StepChoices, type StepperDefinition } 
 import { step, type Effect, type Step } from './shared';
 
 /**
- * `/settings`: the run settings `/auto`, `/supervisor`, `/automerge`,
- * `/autorun` and `/parallel` set one at a time, as one stepped panel. Each
- * enter saves its step, and only if it changed, through the same paths those
- * commands use.
+ * `/settings`: autonomy, supervisor, merging, autorun and parallel tasks in one
+ * stepped panel. Each enter saves its step, and only if it changed, through the
+ * same paths the headless commands save them.
  */
 
 export type SaveSettingsEffect = Extract<Effect, { type: 'saveSettings' }>;
@@ -144,8 +143,9 @@ function saveChoices(state: TuiState, choices: StepChoices): Step {
   const effect: SaveSettingsEffect = { ...save, message: `Settings: ${changed.join(' · ')}` };
   const risks = [...(run.supervisorLevel === 'act' ? [ACT_RISK] : []), ...(run.autorun ? [AUTORUN_RISK] : [])];
   if (risks.length === 0) return saveSettings(state, effect);
-  // The same warning `/supervisor act` and `/autorun on` ask behind; picking
-  // the row in a list is no more considered than typing the command.
+  // The same warning the headless `ordewell supervisor act` and
+  // `ordewell autorun on` ask behind; picking the row in a list is no more
+  // considered than typing the command.
   return step({
     ...state,
     overlay: {
@@ -166,8 +166,8 @@ export function answerSaveSettings(state: TuiState, action: SaveSettingsAction, 
 }
 
 /**
- * Everything is updated here, not when the save lands: the flags `/auto` and
- * `/parallel` set because the daemon never answers them back, the run
+ * Everything is updated here, not when the save lands: the flags the autonomy
+ * and parallel saves set because the daemon never answers them back, the run
  * settings so the open menu marks the new value at once. The daemon's answer
  * then replaces the run settings with the same values.
  */

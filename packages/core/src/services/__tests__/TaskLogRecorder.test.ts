@@ -142,8 +142,8 @@ describe('TaskLogRecorder', () => {
     expect(file.saved).toEqual([{ type: 'error', message: 'boom' }, { type: 'runner_ended' }]);
   });
 
-  // The orchestrator ends a runner as soon as its task_complete call lands,
-  // often before the runner reports that call's result.
+  // A stopped runner can end with a call still open: a killed turn, or a
+  // process that exits before its last result.
   it('closes a call still open when its runner ends, so no surface shows it running', async () => {
     const session = new FakeRunnerSession('s1', 't1');
     const file = memoryFile();
@@ -159,6 +159,21 @@ describe('TaskLogRecorder', () => {
       expect(tools).toHaveLength(1);
       expect(tools[0]).toMatchObject({ toolCallId: 'call-1', status: 'interrupted' });
     }
+  });
+
+  it('records a completed task_complete call as a success before the turn ends', async () => {
+    const session = new FakeRunnerSession('s1', 't1');
+    const file = memoryFile();
+    const recorder = new TaskLogRecorder({ broadcast: vi.fn(), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open: () => file });
+    await recorder.wrap(handing(session)).spawn(spawnOpts);
+    session.emitEvent({ type: 'turn_start', text: 'Do it' });
+    session.emitEvent({ type: 'tool_call', id: 'call-1', name: 'mcp__ordewell__task_complete', args: { status: 'done', summary: 'ok' } });
+    session.emitEvent({ type: 'tool_result', id: 'call-1', name: 'mcp__ordewell__task_complete', output: 'Recorded. End your turn now.', success: true });
+    session.emitEvent({ type: 'turn_end', reason: 'completed' });
+
+    const tools = replayTaskLog(file.saved).blocks.filter((b) => b.type === 'tool');
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toMatchObject({ status: 'ok', output: 'Recorded. End your turn now.' });
   });
 
   it('keeps streaming when the log cannot be saved', async () => {

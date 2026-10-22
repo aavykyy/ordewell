@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { initialState, reduce, type Action, type Step } from '../reducer';
 import type { StepperState } from '../reducers/stepper';
 import type { SessionMessage } from '@ordewell/core';
-import type { PickerItem, TuiState } from '../state';
+import type { TuiState } from '../state';
 import { lastMessage, messagesOf } from './chat';
 
 /**
@@ -15,21 +15,6 @@ function run(text: string, overrides: Partial<TuiState> = {}) {
   const base = initialState(overrides);
   const state = { ...base, editor: { ...base.editor, text, cursor: text.length } };
   return reduce(state, { type: 'key', key: { name: 'enter' } });
-}
-
-function items(state: TuiState): PickerItem[] {
-  if (state.overlay?.kind !== 'picker') throw new Error('expected a picker overlay');
-  return state.overlay.picker.items;
-}
-
-/** Move the picker cursor onto `id`, then press enter. */
-function pick(state: TuiState, id: string) {
-  const index = items(state).findIndex((i) => i.id === id);
-  if (index < 0) throw new Error(`no picker row for "${id}"`);
-  const positioned: TuiState = state.overlay?.kind === 'picker'
-    ? { ...state, overlay: { kind: 'picker', picker: { ...state.overlay.picker, index } } }
-    : state;
-  return reduce(positioned, { type: 'key', key: { name: 'enter' } });
 }
 
 const installedAll: Partial<TuiState> = {
@@ -260,6 +245,23 @@ describe('/planner', () => {
     expect(stepperOf(state).items.map((i) => i.id)).toEqual(['opus', 'haiku']);
   });
 
+  it('names a provider whose catalog failed in the model step, without offering it', () => {
+    const state = run('/planner', {
+      ...ready,
+      plannerProvider: 'openrouter',
+      orchestratorModel: 'deepseek/v4',
+      providerErrors: { openai: 'Failed to fetch models: 401 Unauthorized' },
+    }).state;
+    const modelStep = press(state, 'enter').state;
+
+    expect(stepperOf(modelStep).items[0]).toMatchObject({
+      label: 'Some providers are unavailable',
+      detail: expect.stringContaining('OpenAI'),
+      disabled: true,
+    });
+    expect(stepperOf(modelStep).items.map((i) => i.id)).toContain('deepseek/v4');
+  });
+
   it('/planner <id> switches directly, leaving the model to the daemon', () => {
     const { state, effects } = run('/planner opencode', installedAll);
     expect(effects).toEqual([{ type: 'setPlanner', provider: 'opencode' }]);
@@ -284,118 +286,9 @@ describe('/planner', () => {
   });
 });
 
-describe('/model follows the planner backend', () => {
-  const models = [
-    { id: 'sonnet', label: 'Sonnet', provider: 'anthropic', runners: ['claude-code'], variants: [{ id: 'high', label: 'High' }] },
-    { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol', provider: 'openai', runners: ['codex'] },
-  ];
-
-  it('offers a harness planner only that agent\'s own models', () => {
-    const { state } = run('/model', {
-      plannerProvider: 'claude-code',
-      models,
-      orchestratorModels: [{ id: 'deepseek/deepseek-v4-flash', label: 'V4 Flash', provider: 'openrouter' }],
-    });
-
-    expect(items(state).map((i) => i.id)).toEqual(['sonnet']);
-  });
-
-  it('shows the model provider so same-runner models from different providers stay distinguishable', () => {
-    const { state } = run('/model', {
-      plannerProvider: 'opencode',
-      models: [
-        { id: 'opencode/claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'opencode', runners: ['opencode'] },
-        { id: 'opencode-go/deepseek-v4-flash', label: 'DeepSeek V4 Flash', provider: 'opencode-go', runners: ['opencode'] },
-      ],
-    });
-
-    expect(items(state).find((i) => i.id === 'opencode/claude-sonnet-4-6')?.detail).toContain('opencode');
-    expect(items(state).find((i) => i.id === 'opencode-go/deepseek-v4-flash')?.detail).toContain('opencode-go');
-  });
-
-  it('offers a vendor planner the cross-provider catalog', () => {
-    const { state } = run('/model', {
-      plannerProvider: 'openrouter',
-      models,
-      orchestratorModels: [{ id: 'deepseek/deepseek-v4-flash', label: 'V4 Flash', provider: 'openrouter' }],
-    });
-
-    expect(items(state).map((i) => i.id)).toEqual(['deepseek/deepseek-v4-flash']);
-  });
-
-  it('explains an empty agent catalog instead of showing a blank list', () => {
-    const { state } = run('/model', { plannerProvider: 'codex', models: [] });
-    const row = items(state)[0];
-    expect(row.disabled).toBe(true);
-    expect(row.detail).toContain('/refresh');
-  });
-});
-
-/**
- * `/planner-effort` (ADR-0009, story 8): the planning agent's thinking effort,
- * traded against latency and subscription tokens. The levels are the selected
- * model's own variants — never a fixed low/medium/high the agent may not have.
- */
-describe('/planner-effort', () => {
-  const models = [
-    { id: 'sonnet', label: 'Sonnet', provider: 'anthropic', runners: ['claude-code'], variants: [{ id: 'low', label: 'Low' }, { id: 'high', label: 'High' }] },
-    { id: 'haiku', label: 'Haiku', provider: 'anthropic', runners: ['claude-code'], variants: [] },
-  ];
-  const harness: Partial<TuiState> = { plannerProvider: 'claude-code', orchestratorModel: 'sonnet', models };
-
-  it("lists the selected model's variants plus the runner default", () => {
-    const { state } = run('/planner-effort', harness);
-    expect(state.overlay).toMatchObject({ kind: 'picker', picker: { action: { kind: 'set-planner-effort' } } });
-    expect(items(state).map((i) => i.label)).toEqual(['Runner default', 'Low', 'High']);
-  });
-
-  it('marks the current effort as selected, and the default when none is set', () => {
-    expect(items(run('/planner-effort', harness).state)[0].selected).toBe(true);
-    const withEffort = run('/planner-effort', { ...harness, plannerEffort: 'high' }).state;
-    expect(items(withEffort).find((i) => i.id === 'high')?.selected).toBe(true);
-    expect(items(withEffort)[0].selected).toBe(false);
-  });
-
-  it('persists the chosen level', () => {
-    const { effects, state } = pick(run('/planner-effort', harness).state, 'high');
-    expect(effects).toEqual([{ type: 'setPlannerEffort', effort: 'high' }]);
-    expect(state.overlay).toBeNull();
-  });
-
-  it('sends an empty effort for the runner default rather than a fake level', () => {
-    const opened = run('/planner-effort', { ...harness, plannerEffort: 'high' }).state;
-    expect(pick(opened, items(opened)[0].id).effects).toEqual([{ type: 'setPlannerEffort', effort: '' }]);
-  });
-
-  it('/planner-effort <level> sets it without opening the picker', () => {
-    const { state, effects } = run('/planner-effort low', harness);
-    expect(effects).toEqual([{ type: 'setPlannerEffort', effort: 'low' }]);
-    expect(state.overlay).toBeNull();
-  });
-
-  it('rejects a level the model does not declare, naming the ones it does', () => {
-    const { state, effects } = run('/planner-effort xhigh', harness);
-    expect(effects).toEqual([]);
-    expect(lastMessage(state)?.role).toBe('error');
-    expect(lastMessage(state)?.text).toContain('low, high');
-  });
-
-  it('says so when the selected model exposes no effort levels', () => {
-    const { state } = run('/planner-effort', { ...harness, orchestratorModel: 'haiku' });
-    expect(items(state)[0].disabled).toBe(true);
-    expect(items(state)[0].label).toMatch(/no effort levels/i);
-  });
-
-  it('explains that a vendor planner has no separate effort axis', () => {
-    const { state } = run('/planner-effort', { plannerProvider: 'openrouter', models });
-    expect(items(state)[0].disabled).toBe(true);
-    expect(items(state)[0].detail).toContain('/planner');
-  });
-
-  it('tracks the effort the daemon reports', () => {
-    const { state } = reduce(initialState(), { type: 'settingsLoaded', settings: { plannerThinkingEffort: 'high' } });
-    expect(state.plannerEffort).toBe('high');
-  });
+it('tracks the effort the daemon reports', () => {
+  const { state } = reduce(initialState(), { type: 'settingsLoaded', settings: { plannerThinkingEffort: 'high' } });
+  expect(state.plannerEffort).toBe('high');
 });
 
 describe('streamed planner text', () => {

@@ -33,7 +33,7 @@ describe('plan pane — autonomous task marking', () => {
   it('names the setting that controls autonomy once the task is expanded', () => {
     const out = text({ tasks: [task()], modesByRunner: modes, expandedTaskId: 't1' });
     expect(out).toContain('Autonomy');
-    expect(out).toContain('/auto');
+    expect(out).toContain('/settings');
   });
 
   it('shows no marking for a task whose mode carries no autonomous tag', () => {

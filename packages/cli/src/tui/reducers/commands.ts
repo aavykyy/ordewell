@@ -1,13 +1,12 @@
 import {
-  EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, TERMINAL_UI_COMMANDS, autonomyLevelLabel, parseAutonomyLevel, parseMaxParallel, runnerForProvider, getProviderMeta, isApiProvider, isPlannerBackend, type AiProvider,
+  EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, getProviderMeta, isApiProvider, isPlannerBackend, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
-import { vendorModelRefusal } from '../../plannerModelSwitch';
 import { findCommand, type ParsedCommand } from '../slash';
 import { findTask, plannerInFlight, type PickerItem, type TuiState } from '../state';
 import { modelsForRunner } from '../taskAssignment';
 import { say } from '../transcript';
-import { DEFAULT_EFFORT, picker, pickerItemsFor, plannerEffortItems, providerErrorHint } from './pickers';
+import { picker, pickerItemsFor } from './pickers';
 import { plannerStepper } from './plannerStepper';
 import { openStepper } from './stepper';
 import { taskActionEffect } from './planPane';
@@ -17,7 +16,6 @@ import {
 } from './taskEdits';
 import { stopPlanning } from './turnQueue';
 import { withRun } from './incoming';
-import { automergeCommand, autorunCommand, supervisorCommand } from './runSettings';
 import { openSettings } from './settings';
 import { fail, step, withSession, type Effect, type Step, type TaskAction } from './shared';
 
@@ -52,28 +50,14 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
           : step(state, [{ type: 'stopExecution', sessionId }]),
       );
 
-    case 'model':
-      return setModel(state, args);
     case 'planner':
       return setPlanner(state, args);
-    case 'planner-effort':
-      return setPlannerEffort(state, args);
     case 'key':
       return setKey(state, args);
     case 'allowlist':
       return allowlist(state, args);
     case 'runners':
       return runners(state, args);
-    case 'auto':
-      return setAutonomous(state, args[0]);
-    case 'supervisor':
-      return supervisorCommand(state, args);
-    case 'automerge':
-      return automergeCommand(state, args[0]);
-    case 'autorun':
-      return autorunCommand(state, args[0]);
-    case 'parallel':
-      return setMaxParallel(state, args[0]);
     case 'settings':
       return openSettings(state);
     case 'mouse':
@@ -233,35 +217,6 @@ export function newSession(state: TuiState): Step {
   }, EMPTY_RUN), closeEffects);
 }
 
-function setModel(state: TuiState, args: string[]): Step {
-  if (args[0] === 'set' && args[1]) {
-    // A harness planner can only run its own agent's models (ADR-0009), so the
-    // typed path gets the same scoping the picker does.
-    const runner = runnerForProvider(state.plannerProvider);
-    const known = runner ? modelsForRunner(state.models, runner) : [];
-    if (runner && known.length > 0 && !known.some((m) => m.id === args[1])) {
-      return fail(state, `${args[1]} was not discovered for ${runner}.`);
-    }
-    // A cold catalog cannot vouch for an id, but a vendor's is plainly not the agent's.
-    const refusal = known.length === 0 ? vendorModelRefusal(state.plannerProvider, args[1], TERMINAL_UI_COMMANDS.pickPlanner) : null;
-    if (refusal) return fail(state, refusal);
-    return step(state, [{ type: 'setModel', modelId: args[1] }]);
-  }
-  if (args.length > 0 && args[0] !== 'set') return fail(state, 'Usage: /model [set <model-id>]');
-
-  const items = pickerItemsFor(state, { kind: 'set-model' });
-  return step(
-    {
-      ...state,
-      overlay: {
-        kind: 'picker',
-        picker: picker('Planner model', items, { kind: 'set-model' }, { hint: providerErrorHint(state), filterable: true }),
-      },
-    },
-    [{ type: 'loadModels' }],
-  );
-}
-
 function setPlanner(state: TuiState, args: string[]): Step {
   if (args[0]) {
     const id = args[0].toLowerCase();
@@ -274,30 +229,6 @@ function setPlanner(state: TuiState, args: string[]): Step {
   // The model step lists the chosen backend's catalog, so fetch it fresh; the
   // open stepper refills when it lands.
   return { ...opened, effects: [...opened.effects, { type: 'loadModels' }] };
-}
-
-function setPlannerEffort(state: TuiState, args: string[]): Step {
-  const items = plannerEffortItems(state, state.plannerProvider, state.orchestratorModel, state.plannerEffort);
-  if (args[0]) {
-    const wanted = args[0].toLowerCase();
-    const match = items.find((i) => !i.disabled && (i.id === wanted || (wanted === 'default' && i.id === DEFAULT_EFFORT)));
-    if (!match) {
-      const available = items.filter((i) => !i.disabled && i.id !== DEFAULT_EFFORT).map((i) => i.id);
-      return fail(state, available.length > 0
-        ? `Unknown effort: ${args[0]}. Available: ${available.join(', ')}, default.`
-        : (items[0]?.label ?? 'No effort levels available.'));
-    }
-    return step(state, [{ type: 'setPlannerEffort', effort: match.id === DEFAULT_EFFORT ? '' : match.id }]);
-  }
-  return step({
-    ...state,
-    overlay: {
-      kind: 'picker',
-      picker: picker('Planner thinking effort', items, { kind: 'set-planner-effort' }, {
-        hint: "How hard the planning agent thinks per turn. Higher costs latency and tokens against your subscription.",
-      }),
-    },
-  });
 }
 
 function setKey(state: TuiState, args: string[]): Step {
@@ -413,23 +344,6 @@ function runners(state: TuiState, args: string[]): Step {
       chosen: state.runners.filter((r) => r.enabled).map((r) => r.id),
     }),
   } }, [{ type: 'loadRunners' }]);
-}
-
-function setMaxParallel(state: TuiState, arg: string | undefined): Step {
-  if (!arg) return step(say(state, 'system', `Up to ${state.maxParallel} AI task${state.maxParallel === 1 ? '' : 's'} run at once: /parallel <n> changes it.`));
-  const limit = parseMaxParallel(arg);
-  if (limit === null) return fail(state, 'Usage: /parallel [<number of tasks, 1 or more>]');
-  return step({ ...state, maxParallel: limit }, [{ type: 'setMaxParallel', limit }]);
-}
-
-function setAutonomous(state: TuiState, arg: string | undefined): Step {
-  if (arg === undefined) return step(say(state, 'system', `Autonomy level: ${autonomyLevelLabel(state.autonomous)}. /auto full or /auto guarded changes it for new plans.`));
-  const enabled = parseAutonomyLevel(arg);
-  if (enabled === null) return fail(state, 'Usage: /auto [full|guarded]');
-  // Updated here, not from the effect: the daemon never answers this setting
-  // back (it is written to the settings file locally), and a stale flag would
-  // freeze the toggle and the badge.
-  return step({ ...state, autonomous: enabled }, [{ type: 'setAutonomous', enabled }]);
 }
 
 /**

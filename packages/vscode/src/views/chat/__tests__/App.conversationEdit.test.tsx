@@ -16,8 +16,8 @@ const textarea = () => document.querySelector('.chat-input-row textarea') as HTM
 
 // Every first word SlashParser answers, written out rather than read from it.
 const HOST_COMMANDS = [
-  '/refresh', '/model', '/planner', '/planner-effort', '/key', '/sessions', '/allowlist', '/help', '/new', '/auto',
-  '/fork', '/rewind', '/compact', '/parallel',
+  '/refresh', '/planner', '/key', '/sessions', '/allowlist', '/help', '/new',
+  '/fork', '/rewind', '/compact', '/settings',
 ];
 
 describe('App — a compaction redraws the transcript', () => {

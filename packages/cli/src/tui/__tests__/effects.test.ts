@@ -983,7 +983,7 @@ describe('planner switch', () => {
     expect(notice.message).toContain('Restored sonnet.');
   });
 
-  it('names the catalog default and points at /model when nothing was remembered', async () => {
+  it('names the catalog default and points at /planner when nothing was remembered', async () => {
     const h = harness({
       updateSettings: vi.fn().mockResolvedValue({ orchestratorModel: 'sonnet', switchRecall: { model: 'sonnet', effort: '', source: 'catalog-default' } }),
     });
@@ -992,7 +992,7 @@ describe('planner switch', () => {
 
     const notice = h.actions.find((a) => a.type === 'notice') as Extract<Action, { type: 'notice' }>;
     expect(notice.message).toContain('default model, sonnet');
-    expect(notice.message).toContain('/model');
+    expect(notice.message).toContain('/planner');
   });
 
   it('keeps the "pick a model" guidance when the daemon resolved nothing', async () => {
@@ -1001,7 +1001,7 @@ describe('planner switch', () => {
     await runEffect({ type: 'setPlanner', provider: 'claude-code' }, h.deps);
 
     const notice = h.actions.find((a) => a.type === 'notice') as Extract<Action, { type: 'notice' }>;
-    expect(notice.message).toContain('Pick a model with /model.');
+    expect(notice.message).toContain('Pick a model with /planner.');
   });
 });
 
@@ -1054,31 +1054,6 @@ describe('planner choice', () => {
 });
 
 describe('settings', () => {
-  it('persists the planner model to .env as well as the running daemon', async () => {
-    const h = harness();
-    await runEffect({ type: 'setModel', modelId: 'a/b' }, h.deps);
-
-    expect(h.env.ORCHESTRATOR_MODEL).toBe('a/b');
-    expect(h.api.updateSettings).toHaveBeenCalledWith({ orchestratorModel: 'a/b' });
-  });
-
-  it('persists the effort the daemon settled on for the new model, not the old model\'s', async () => {
-    const h = harness({ updateSettings: vi.fn().mockResolvedValue({ orchestratorModel: 'haiku', plannerThinkingEffort: '' }) });
-    h.env.ORDEWELL_PLANNER_EFFORT = 'max';
-    await runEffect({ type: 'setModel', modelId: 'haiku' }, h.deps);
-
-    expect(h.env.ORDEWELL_PLANNER_EFFORT).toBe('');
-    expect(h.actions).toContainEqual({ type: 'settingsLoaded', settings: { orchestratorModel: 'haiku', plannerThinkingEffort: '' } });
-  });
-
-  it('clears the persisted effort when the daemon reported none, rather than writing "undefined"', async () => {
-    const h = harness({ updateSettings: vi.fn().mockResolvedValue({ orchestratorModel: 'haiku' }) });
-    h.env.ORDEWELL_PLANNER_EFFORT = 'max';
-    await runEffect({ type: 'setModel', modelId: 'haiku' }, h.deps);
-
-    expect(h.env.ORDEWELL_PLANNER_EFFORT).toBe('');
-  });
-
   it('stores an api key under that provider env var', async () => {
     const h = harness();
     await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-1' }, h.deps);
@@ -1133,21 +1108,6 @@ describe('settings', () => {
     expect(h.api.setRunnerEnabled.mock.calls).toEqual([['claude-code', false], ['opencode', true]]);
     expect(types(h.actions).filter((t) => t === 'runnersLoaded')).toHaveLength(1);
     expect(h.actions).toContainEqual({ type: 'notice', message: 'Runners enabled: OpenCode.' });
-  });
-
-  it('saves the autonomy level in the user\'s settings, not in .env (ADR-0030)', async () => {
-    const saved: boolean[] = [];
-    const h = harness({}, { saveAutonomy: (enabled) => { saved.push(enabled); return { overridden: false }; } });
-    await runEffect({ type: 'setAutonomous', enabled: false }, h.deps);
-    expect(saved).toEqual([false]);
-    expect(h.env.ORDEWELL_AUTONOMOUS_MODE).toBeUndefined();
-    expect(h.actions).toContainEqual({ type: 'notice', message: 'Autonomy level: Guarded for new plans.' });
-  });
-
-  it('says when ORDEWELL_AUTONOMOUS_MODE in the environment overrides the saved level', async () => {
-    const h = harness({}, { saveAutonomy: () => ({ overridden: true }) });
-    await runEffect({ type: 'setAutonomous', enabled: false }, h.deps);
-    expect(h.actions).toContainEqual({ type: 'notice', message: expect.stringMatching(/Guarded is saved, but ORDEWELL_AUTONOMOUS_MODE in the environment decides the level until it is unset/) });
   });
 
   it('/settings saves the run settings in one update, then parallel and autonomy, with one notice', async () => {
@@ -1399,7 +1359,7 @@ describe('a daemon that went away mid-session', () => {
 
   it('says what it did, so a silent retry is not mistaken for a slow one', async () => {
     const h = harness({ updateSettings: vi.fn().mockRejectedValueOnce(refused()).mockResolvedValue({}) });
-    await runEffect({ type: 'setModel', modelId: 'haiku' }, h.deps);
+    await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-x' }, h.deps);
     expect(messageOf(h.actions, 'notice')).toMatch(/server had stopped/i);
   });
 
@@ -1484,9 +1444,8 @@ describe('settings persistence ordering', () => {
   });
 
   it.each([
-    ['setModel', { type: 'setModel', modelId: 'haiku' } as Effect, 'ORCHESTRATOR_MODEL'],
-    ['setPlannerEffort', { type: 'setPlannerEffort', effort: 'high' } as Effect, 'ORDEWELL_PLANNER_EFFORT'],
     ['setApiKey', { type: 'setApiKey', provider: 'openrouter', key: 'sk-x' } as Effect, 'OPENROUTER_API_KEY'],
+    ['setPlannerChoice', { type: 'setPlannerChoice', provider: 'claude-code', modelId: 'sonnet', effort: 'high', notice: 'Planner set.' } as Effect, 'ORCHESTRATOR_MODEL'],
   ])('%s does not persist a rejected change either', async (_name, effect, key) => {
     const h = harness({ updateSettings: vi.fn().mockRejectedValue(new Error('nope')) });
     await runEffect(effect, h.deps);
@@ -2219,22 +2178,6 @@ describe('a structured task\'s log, messages and interrupt', () => {
   });
 });
 
-
-describe('run settings effect (ADR-0030)', () => {
-  it('saves the change, applies it to the session\'s run, and takes the settings the daemon answers', async () => {
-    const answered = { run: { supervisorLevel: 'act', mergeAtGatesAutomatically: false, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12 } };
-    const h = harness({
-      updateRunSettings: vi.fn().mockResolvedValue(answered),
-      getSession: vi.fn().mockResolvedValue({ plan: { tasks: [], runSettings: { mergeAtGatesAutomatically: false, supervisorLevel: 'act' } } }),
-    });
-
-    await runEffect({ type: 'setRunSettings', changes: { supervisorLevel: 'act' }, sessionId: 's1' }, h.deps);
-
-    expect(h.api.updateRunSettings).toHaveBeenCalledWith({ supervisorLevel: 'act' }, 's1');
-    expect(h.actions).toContainEqual({ type: 'settingsLoaded', settings: answered });
-    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'planRefreshed', sessionId: 's1' }));
-  });
-});
 
 describe('following the session', () => {
   /** A harness whose follow socket the test drives, and can end. */

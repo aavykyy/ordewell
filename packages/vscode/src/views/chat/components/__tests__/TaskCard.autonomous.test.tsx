@@ -32,7 +32,7 @@ const modes: RunnerMode[] = [
 describe('TaskCard — autonomous mode marking', () => {
   it('marks a task whose resolved mode is tagged autonomous in the manifest', () => {
     render(<TaskCard task={makeTask()} models={emptyModels} modes={modes} isExecuting={false} expanded onModeChange={noop} />);
-    expect(screen.getByTitle(/Full: runs without permission prompts. \/auto changes the level/)).toBeTruthy();
+    expect(screen.getByTitle(/Full: runs without permission prompts. \/settings changes the level/)).toBeTruthy();
   });
 
   it('puts the marking on the mode editor, not the collapsed header', () => {

@@ -638,7 +638,7 @@ describe('overlays', () => {
         kind: 'picker',
         picker: {
           title: 'Planner model', items: [{ id: 'a/1', label: 'Alpha' }],
-          filter: '', index: 0, multi: false, chosen: [], filterable: true, action: { kind: 'set-model' },
+          filter: '', index: 0, multi: false, chosen: [], filterable: true, action: { kind: 'delete-session' },
         },
       },
     });
@@ -784,7 +784,7 @@ describe('overlays', () => {
 
   it('lists every command in the help sheet', () => {
     const out = text({ overlay: { kind: 'help' }, rows: 60 });
-    for (const name of ['/allowlist', '/key', '/model']) {
+    for (const name of ['/allowlist', '/key', '/settings']) {
       expect(out).toContain(name);
     }
   });

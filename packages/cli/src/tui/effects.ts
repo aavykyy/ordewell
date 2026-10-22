@@ -1,6 +1,6 @@
 import { execSync } from 'child_process';
 import {
-  autonomyLevelLabel, clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, markRequestFor, newTaskFields, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
+  clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, markRequestFor, newTaskFields, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
   type PlannerModelRecall,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
@@ -159,9 +159,9 @@ function plannerModelNotice(recall: PlannerModelRecall): string {
     case 'remembered':
       return `Restored ${recall.model}.`;
     case 'catalog-default':
-      return `Using its default model, ${recall.model}. Pick another with /model.`;
+      return `Using its default model, ${recall.model}. Pick another with /planner.`;
     case 'none':
-      return 'Pick a model with /model.';
+      return 'Pick a model with /planner.';
   }
 }
 
@@ -269,13 +269,6 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       return;
     }
 
-    case 'setRunSettings': {
-      const settings = await api.updateRunSettings(effect.changes, effect.sessionId);
-      dispatch({ type: 'settingsLoaded', settings });
-      if (effect.sessionId) await refreshPlan(deps, effect.sessionId);
-      return;
-    }
-
     case 'updateTask':
       await api.updateTask(effect.sessionId, effect.taskId, effect.changes);
       await refreshPlan(deps, effect.sessionId);
@@ -376,19 +369,6 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       await api.interruptTask(effect.sessionId, effect.taskId);
       return;
 
-    case 'setModel': {
-      // Daemon first, `.env` second — see `persistAfterDaemon` below. The
-      // effort is the daemon's to settle: it survives only where the new
-      // model offers it.
-      const settled = await api.updateSettings({ orchestratorModel: effect.modelId });
-      // An effort the daemon did not report is cleared, not written as the word "undefined".
-      const plannerThinkingEffort = typeof settled.plannerThinkingEffort === 'string' ? settled.plannerThinkingEffort : '';
-      persistAfterDaemon(deps, { ORCHESTRATOR_MODEL: effect.modelId, ORDEWELL_PLANNER_EFFORT: plannerThinkingEffort });
-      dispatch({ type: 'settingsLoaded', settings: { orchestratorModel: effect.modelId, plannerThinkingEffort } });
-      dispatch({ type: 'notice', message: `Planner model set to ${effect.modelId}.` });
-      return;
-    }
-
     case 'setPlanner': {
       const meta = getProviderMeta(effect.provider);
       if (!meta) throw new Error(`Unknown planner: ${effect.provider}`);
@@ -444,13 +424,6 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       return;
     }
 
-    case 'setPlannerEffort':
-      await api.updateSettings({ env: { ORDEWELL_PLANNER_EFFORT: effect.effort } });
-      deps.setEnvVar('ORDEWELL_PLANNER_EFFORT', effect.effort);
-      dispatch({ type: 'settingsLoaded', settings: { plannerThinkingEffort: effect.effort } });
-      dispatch({ type: 'notice', message: `Planner effort set to ${effect.effort || 'the runner default'}.` });
-      return;
-
     case 'setApiKey': {
       const meta = isApiProvider(effect.provider) ? getProviderMeta(effect.provider) : undefined;
       if (!meta) throw new Error(`Unknown provider: ${effect.provider}`);
@@ -494,11 +467,6 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       return;
     }
 
-    case 'setMaxParallel':
-      await saveMaxParallel(deps, effect.limit);
-      dispatch({ type: 'notice', message: `Up to ${effect.limit} AI task${effect.limit === 1 ? '' : 's'} now run at once.` });
-      return;
-
     case 'saveSettings': {
       if (Object.keys(effect.run).length > 0) {
         const settings = await api.updateRunSettings(effect.run, effect.sessionId);
@@ -510,15 +478,6 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       dispatch({ type: 'notice', message: overridden
         ? `${effect.message}: ORDEWELL_AUTONOMOUS_MODE in the environment decides the autonomy level until it is unset.`
         : effect.message });
-      return;
-    }
-
-    case 'setAutonomous': {
-      const { overridden } = deps.saveAutonomy(effect.enabled);
-      const level = autonomyLevelLabel(effect.enabled);
-      dispatch({ type: 'notice', message: overridden
-        ? `${level} is saved, but ORDEWELL_AUTONOMOUS_MODE in the environment decides the level until it is unset.`
-        : `Autonomy level: ${level} for new plans.` });
       return;
     }
 

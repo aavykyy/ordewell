@@ -177,20 +177,23 @@ and completion evidence.
 - **Lifetime (L1).** The process ends with its attempt, and at a verdict as
   soon as the verdict is accepted, not once the work has landed: the log lives
   in Ordewell, and work after the verdict would go unverified. It ends the way
-  the runner ends a turn. A turn still open gets the soft interrupt, and what
-  the runner reports as that turn closes still belongs to the attempt that
-  ended: Claude Code states a turn's cost and its model's window only on its
-  `result` line, which comes after the `task_complete` call. What the runner
-  would still have written after that call is cut short with its turn: the
-  attempt's output is the call's summary, which the verdict already holds
-  ([ADR-0022](0022-ordewell-mcp-server.md) V4), and the completion contract
-  tells the runner nothing else it writes reaches anyone. Then a runner that
-  can end by itself is told nothing more is coming — Claude Code exits on
-  stdin's end, and only an exit of its own saves the session's running totals
-  for `--resume` — and one that cannot is killed. A runner still there once the
-  interrupt grace runs out is killed. Nothing waits on that
-  wind-down but a continue of the same session (K1), which starts once it is
-  over. A plan adopted under it is a new scope: what the old runner still
+  the runner ends a turn. A turn still open gets the soft interrupt, except the
+  turn that reported `task_complete`: its tool reply is still in flight, so
+  that turn is left to close by itself within the interrupt grace. The report
+  is published once it closes; if it is still open at the grace, the report is
+  published then, and the stop the verdict orders gives the runner one more
+  grace to close before it is killed. In the common path the attempt lands only
+  after the reporting turn has closed. What the runner reports as that turn closes still
+  belongs to the attempt that ended: Claude Code states a turn's cost and its
+  model's window only on its `result` line, which comes after the
+  `task_complete` call. The attempt's output is the call's summary, which the
+  verdict already holds ([ADR-0022](0022-ordewell-mcp-server.md) V4), and the
+  completion contract tells the runner nothing else it writes reaches anyone.
+  Then a runner that can end by itself is told nothing more is coming (Claude
+  Code exits on stdin's end, and only an exit of its own saves the session's
+  running totals for `--resume`), and one that cannot is killed. A runner still
+  there once the interrupt grace runs out is killed. A continue waits on that
+  wind-down (K1). A plan adopted under it is a new scope: what the old runner still
   reports is dropped, never written to a task of the new plan that reuses its
   id. The native session id is saved per attempt, with the count of its
   cost the session ended on.
@@ -481,3 +484,4 @@ transport is retained for take-over.
 - 2026-10-18 — O1: a run's late copy that adds to its deltas after another run or a tool line was written starts its addition on a line of its own.
 - 2026-10-18 — U1: loading a session clears saved resume times and keeps paused tasks idle until explicitly resumed.
 - 2026-10-19 — L1: an attempt's runner stops at its verdict, before the landing, by interrupting the turn and taking the runner's last report (Claude Code's cost and window) before the process goes; a continue waits for that wind-down, and what the runner would still write after `task_complete` is cut short. A plan adopted during one is a new scope, and the old runner's late reports are dropped.
+- 2026-10-22: the turn that reported `task_complete` closes itself within the interrupt grace before its report is published, so the tool reply reaches the runner; a turn still open at the grace has its report published then and is stopped.

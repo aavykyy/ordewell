@@ -65,6 +65,7 @@ function rig() {
       adapters.push(adapter);
       return adapter;
     },
+    interruptGraceMs: 20,
     mcp: server,
   });
   const orchestrator = TaskOrchestrator.compose({

@@ -69,11 +69,13 @@ export interface PlannerCommandSyntax {
 export const TERMINAL_UI_COMMANDS: PlannerCommandSyntax = {
   pickPlanner: '/planner',
   setKey: () => '/key',
-  setModel: '/model',
+  // `/planner` walks harness, model and effort in one flow; there is no
+  // separate `/model` (or `/planner-effort`) to point at.
+  setModel: '/planner',
 };
 
-/** The VS Code chat shares the terminal's slash commands, except that its `/model` needs `set`. */
-export const CHAT_COMMANDS: PlannerCommandSyntax = { ...TERMINAL_UI_COMMANDS, setModel: '/model set' };
+/** The VS Code chat shares the terminal's slash commands: its Planner panel and `/planner` own the model. */
+export const CHAT_COMMANDS: PlannerCommandSyntax = { ...TERMINAL_UI_COMMANDS };
 
 export const HEADLESS_CLI_COMMANDS: PlannerCommandSyntax = {
   pickPlanner: 'ordewell planner <id>',
@@ -98,7 +100,11 @@ export const PLANNER_ESCAPE_HINT = `or pick a coding agent with ${TERMINAL_UI_CO
 
 export function describePlannerNotReady(reason: PlannerNotReady, commands: PlannerCommandSyntax): string {
   if (reason.code === 'no_model') {
-    return `No planner model selected for ${reason.label}. Pick one with ${commands.setModel}, or switch planner with ${commands.pickPlanner}.`;
+    // The TUI and VS Code pick the model inside `/planner`; the headless CLI
+    // has its own `ordewell model set`. Name the one place, not two.
+    return commands.setModel === commands.pickPlanner
+      ? `No planner model selected for ${reason.label}. Pick one with ${commands.setModel}.`
+      : `No planner model selected for ${reason.label}. Pick one with ${commands.setModel}, or switch planner with ${commands.pickPlanner}.`;
   }
   const lead = `No planner is ready. Pick one with ${commands.pickPlanner}: ${harnessPlannerNames()} plan with no API key.`;
   if (reason.code === 'no_base_url') {
