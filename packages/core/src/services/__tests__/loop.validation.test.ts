@@ -282,6 +282,22 @@ describe('what the rest of core reads of a loop', () => {
     expect(startWaits(rule.store.get('fix')!, rule)).toEqual([]);
   });
 
+  it('names the AI check\'s findings and round while keeping the instruction to fix its report', () => {
+    const all = tasks();
+    all[0] = { ...all[0], type: 'ai', prompt: 'Review', loopRound: 2,
+      handoff: { summary: 'Two holes.', findings: [
+        { id: 'F1', severity: 'major', title: 'Comma lost' },
+        { id: 'F2', severity: 'minor', title: 'Escape doubled' },
+      ], findingCount: 2 },
+    };
+
+    const prompt = renderPriorOutputs(collectDirectDependencyOutputs(all[1], all));
+
+    expect(prompt).toContain('it failed round 2 of 3, and you are part of the fix. Answer its findings F1 and F2. Fix what its report found; it runs again once the fix has landed.');
+    expect(prompt).toContain('F1 [major] Comma lost');
+    expect(prompt).toContain('F2 [minor] Escape doubled');
+  });
+
   it('holds a check that runs outside a worktree at its merge gate for its body\'s landed work', () => {
     const all = tasks().map((t) => (t.id === 'review' ? { ...t, status: 'pending' as const, verdict: undefined, loopRound: 2 } : { ...t, status: 'completed' as const }));
     const rule = input(all, (id) => id === 'fix');

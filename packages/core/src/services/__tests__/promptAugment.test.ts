@@ -165,7 +165,7 @@ describe('prior outputs of a dependency with a handoff (ADR-0047)', () => {
 
     expect(out).toContain([
       '### Task 1: Review auth',
-      '- The check of your loop: it failed round 1 of 3, and you are part of the fix. Answer its findings F1 to F3 and fix what its report found; it runs again once the fix has landed.',
+      '- The check of your loop: it failed round 1 of 3, and you are part of the fix. Answer its findings F1 to F3. Fix what its report found; it runs again once the fix has landed.',
       '- Review: The runner reported failed: three holes.',
       '- Handoff:',
       '  Three holes.',
@@ -183,6 +183,65 @@ describe('prior outputs of a dependency with a handoff (ADR-0047)', () => {
 
     expect(out).toContain(`## Prior task outputs\n\n### Task 1: Old review\n- Review: Verified\n- Report:\n  ${'k'.repeat(4000)}\n  (report cut here: 10 more characters)`);
     expect(out).not.toContain('read_task');
+  });
+});
+
+describe('a check sees what changed since its last round (ADR-0047)', () => {
+  it('puts its previous findings and the body claims before the map and existing dependencies', () => {
+    const build = createTask({ id: 'build', order: 1, title: 'Build', handoff: { summary: 'Built it.', findings: [], findingCount: 0 } });
+    const check = createTask({ id: 'check', order: 2, title: 'Review', prompt: 'Review the parser.', dependencies: ['build'], loop: { body: ['fix'], maxRounds: 3 } });
+    const fix = createTask({ id: 'fix', order: 3, title: 'Fix', dependencies: ['check'], handoff: { summary: 'Fixed commas and escapes.', findings: [], findingCount: 0 } });
+
+    const out = composeAugmentedPrompt(check, [build, check, fix], { loop: {
+      round: 2,
+      previousHandoff: { summary: 'Two holes.', findings: [
+        { id: 'F1', severity: 'major', title: 'Trailing commas vanish' },
+        { id: 'F2', severity: 'minor', title: 'Escapes are doubled' },
+      ], findingCount: 2, report: 'Do not push the long report.' },
+    } });
+
+    expect(out).toContain('## Since your last round');
+    expect(out).toContain('F1 [major] Trailing commas vanish');
+    expect(out).toContain('F2 [minor] Escapes are doubled');
+    expect(out).toContain('### Task 3: Fix\n- Handoff:\n  Fixed commas and escapes.');
+    expect(out).toContain('You are the check, round 2 of 3. Verify the fix claims against the tree; do not trust its summary. Answer each previous finding by its F number: fixed, still open, or superseded. Report only what still fails and anything new.');
+    expect(out.indexOf('## Since your last round')).toBeLessThan(out.indexOf('## Plan map'));
+    expect(out).toContain('### Task 1: Build');
+    expect(out.endsWith('Review the parser.')).toBe(true);
+    expect(out).not.toContain('Do not push the long report.');
+  });
+
+  it('gives each body task the dependency budget and points omitted findings at that body task', () => {
+    const check = createTask({ id: 'check', order: 1, prompt: 'Check.', loop: { body: ['fix', 'retest'], maxRounds: 3 } });
+    const claim: HandoffDigest = { summary: 'c'.repeat(1000), findings: [
+      { id: 'F1', severity: 'info', title: 'First claim', detail: 'a'.repeat(1800) },
+      { id: 'F2', severity: 'info', title: 'Second claim', detail: 'b'.repeat(1800) },
+    ], findingCount: 27 };
+    const fix = createTask({ id: 'fix', order: 2, title: 'Fix', handoff: claim });
+    const retest = createTask({ id: 'retest', order: 3, title: 'Retest', handoff: claim });
+
+    const out = composeAugmentedPrompt(check, [check, fix, retest], { planMapEnabled: false, loop: { round: 2 } });
+
+    expect(out.match(/F1 \[info\] First claim/g)).toHaveLength(2);
+    expect(out.match(/a{1800}/g)).toHaveLength(2);
+    expect(out).not.toContain('Second claim');
+    expect(out).toContain('(+26 more findings; read task #2)');
+    expect(out).toContain('(+26 more findings; read task #3)');
+  });
+
+  it('keeps the check\'s own legacy report whole when its findings are not structured', () => {
+    const check = createTask({ id: 'check', prompt: 'Check.', loop: { body: ['fix'], maxRounds: 3 } });
+    const report = 'A legacy finding.\n'.repeat(250) + 'Last finding: the escape is doubled.';
+
+    const out = composeAugmentedPrompt(check, [check], { loop: { round: 2, previousReport: report } });
+
+    expect(out).toContain(`Your previous findings are not structured.\n${report}`);
+  });
+
+  it('omits the block for round 1 and for a script check', () => {
+    const check = createTask({ id: 'check', prompt: 'Check.', loop: { body: ['fix'], maxRounds: 3 } });
+    expect(composeAugmentedPrompt(check, [check], { loop: { round: 1 } })).not.toContain('## Since your last round');
+    expect(composeAugmentedPrompt({ ...check, type: 'script', prompt: undefined }, [check], { loop: { round: 2 } })).not.toContain('## Since your last round');
   });
 });
 

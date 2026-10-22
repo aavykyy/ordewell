@@ -4,7 +4,7 @@ import type { PreservedWork, PreviousWork } from '../interfaces/IWorktreeIsolati
 import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
-import { REPORT_MAX_CHARS, artifactLines, findingLines, namedHandoff, type HandoffDigest } from '../models/Handoff';
+import { REPORT_MAX_CHARS, artifactLines, findingLines, namedHandoff, type HandoffDigest, type StoredHandoff } from '../models/Handoff';
 
 const MAX_TAIL_CHARS = 500;
 /** Each dependency's share of a dependent's prompt, which carries every direct dependency's handoff (ADR-0047). */
@@ -135,9 +135,9 @@ export function renderPriorOutputs(outputs: PriorOutput[]): string {
       const output = o.handoff ? `- Handoff:\n${indent(handoffText(o.handoff, o.label))}`
         : o.report ? `- Report:\n${indent(dependencyReport(o.report))}`
         : `- Tail:\n${o.logTail ? indent(o.logTail) : '  (no output captured)'}`;
-      const answer = o.handoff?.findingCount ? `Answer its findings ${findingRange(o.handoff.findingCount)} and fix` : 'Fix';
+      const answer = o.handoff?.findingCount ? `Answer its findings ${findingRange(o.handoff.findingCount)}. ` : '';
       const round = o.round
-        ? `- The check of your loop: it failed round ${o.round.round} of ${o.round.maxRounds}, and you are part of the fix. ${answer} what its report found; it runs again once the fix has landed.\n`
+        ? `- The check of your loop: it failed round ${o.round.round} of ${o.round.maxRounds}, and you are part of the fix. ${answer}Fix what its report found; it runs again once the fix has landed.\n`
         : '';
       return `${heading}\n${skip ? `${skip}\n` : ''}${round}- Review: ${reason}\n${output}`;
     });
@@ -235,6 +235,26 @@ export interface ComposeOptions {
   previousAttempt?: string;
   /** A carry-over: the runner whose usage-limit-paused attempt this one starts from, and what became of that work. */
   carriedOver?: { from: string; work?: PreviousWork };
+  /** The AI check's next round, after its body has landed (ADR-0047). */
+  loop?: { round: number; previousHandoff?: StoredHandoff; previousReport?: string };
+}
+
+function renderSinceLastRound(task: Task, allTasks: readonly Task[], loop: NonNullable<ComposeOptions['loop']>): string {
+  const lines = ['## Since your last round', '', '### Your previous handoff'];
+  if (loop.previousHandoff) {
+    lines.push(loop.previousHandoff.summary, ...loop.previousHandoff.findings.flatMap(({ id, severity, title }) => findingLines({ id, severity, title })));
+  } else {
+    lines.push('Your previous findings are not structured.', loop.previousReport || '(no previous report captured)');
+  }
+  const body = new Set(task.loop?.body);
+  for (const { task: fix, label } of flattenTasksWithParents(allTasks)) {
+    if (!body.has(fix.id)) continue;
+    lines.push('', `### Task ${label}: ${fix.title}`);
+    if (fix.handoff) lines.push(`- Handoff:\n${indent(handoffText(namedHandoff(allTasks, fix.handoff), label))}`);
+    else if (fix.outputSummary?.report) lines.push(`- Report:\n${indent(dependencyReport(fix.outputSummary.report))}`);
+  }
+  lines.push('', `You are the check, round ${loop.round} of ${task.loop?.maxRounds}. Verify the fix claims against the tree; do not trust its summary. Answer each previous finding by its F number: fixed, still open, or superseded. Report only what still fails and anything new.`);
+  return lines.join('\n');
 }
 
 /**
@@ -314,6 +334,10 @@ function isHitlTask(task: Task): boolean {
 export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], opts?: ComposeOptions): string {
   const basePrompt = task.prompt ?? '';
   const blocks: string[] = [];
+
+  if (opts?.loop && task.type === 'ai' && task.loop && opts.loop.round > 1) {
+    blocks.push(renderSinceLastRound(task, allTasks, opts.loop));
+  }
 
   if (opts?.planMapEnabled !== false) {
     const map = renderPlanMap(allTasks, task.id, { maxEntries: opts?.planMapMaxEntries });
