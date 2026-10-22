@@ -6,10 +6,6 @@ amends: ["0009", "0029"]
 
 # 0037 — Research that outlives a planner turn is a research task, and its report wakes the planner
 
-*Pending:* [ADR-0047](0047-structured-task-handoffs.md) — a research task's
-report is its handoff: a summary and findings, the long form in the handoff's
-`report` (R1, R2, R6). Waits on #120.
-
 ## Problem
 
 A planner turn holds the conversation, and its end gives the conversation
@@ -39,15 +35,18 @@ harness subagents stay as they are, awaited before the turn ends.**
 
 - **What it is (R1).** A read-only AI task (ADR-0031) marked `research: true`,
   with a self-contained brief: what to find out, where to start, and what the
-  report must contain. Its report is its `task_complete` summary (ADR-0022,
-  V4). Like every read-only task
+  report must contain. Its result is its `task_complete` handoff: a short
+  summary and optional findings and artifacts; the long form stays in the handoff's
+  `report`, pulled with `task_output`
+  ([ADR-0047](0047-structured-task-handoffs.md); ADR-0022 V4). Like every
+  read-only task
   ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md))
   it lands nothing: it works in a worktree of its own where the run isolates,
   which its sealed commands may write and which is thrown away when it ends,
   and in the workspace, which its commands cannot write, where the run does
   not.
 - **Its end wakes the planner (R2).** A research task that passes, fails or is
-  blocked opens a planner turn with a run update carrying its report, or the
+  blocked opens a planner turn with a run update carrying its handoff, or the
   reason it did not pass. Reports from tasks that end close together are
   batched, as `WakePolicy` batches events today. Unlike the supervisor's
   wake-ups these come at every supervisor level, Off included: the planner
@@ -81,7 +80,7 @@ harness subagents stay as they are, awaited before the turn ends.**
   research task for anything it would otherwise run in the background.
 - **On the surfaces (R6)**, a research task is a row in the plan, marked as
   research, with its log, usage, stop and retry like any task. It waits for a
-  free slot like any other task. Its report is drawn in the conversation as the
+  free slot like any other task. Its handoff is drawn in the conversation as the
   run update that delivered it: whole when short, folded after a few lines when
   long with the lines left out counted, and opened by the conversation's one
   detail switch. A chain continues in the conversation as its reports arrive,
@@ -129,3 +128,4 @@ harness subagents stay as they are, awaited before the turn ends.**
 - 2026-10-22 — the per-message research budget and its two run settings are gone: the planner decides how many a message starts, bounded by the run's Parallel limit, and a research task waits for a slot like any other (R4, R6).
 - 2026-10-22 — the report chain is deliberately unbounded per message: a report turn may start further research whose report wakes the planner again, and its only bounds are the planner's judgement, the run's Parallel limit, `mayReport` and the user's Stop (R4, R6).
 - 2026-10-22 — decided, not built: a research task's report is its handoff ([ADR-0047](0047-structured-task-handoffs.md), #120).
+- 2026-10-22 — implemented research handoffs in report wake-ups and their surfaces (R1, R2, R6; ADR-0047, #120).

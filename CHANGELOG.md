@@ -10,6 +10,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- **Task handoffs.** Every task leaves a short summary, with optional numbered
+  findings, evidence and artifacts. Dependents receive whole findings within
+  the prompt limit and can pull the rest with `read_task`, including earlier
+  dependencies and previous attempts. A loop's check sees its own last handoff
+  and its body's latest handoffs. Full reports stay in attempt logs; the TUI,
+  VS Code, headless commands and planner run updates show the digest. Script
+  and user tasks hand over too
+  ([ADR-0047](docs/adr/supervision/0047-structured-task-handoffs.md)).
 - **Script tasks.** A plan can hold a task with no runner and no model: a list
   of commands, run in order with no shell and stopping at the first that
   fails, or one script. Ordewell runs it where and when it runs an ops task: at
