@@ -6,11 +6,13 @@ import { createTask, type Task } from '../../models/Task';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { StructuredRunner } from '../StructuredRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { OrdewellMcpServer, type McpClientConfig } from '../mcp';
+import { OrdewellMcpServer, READ_ONLY_TASK_TOOLS, TASK_TOOLS, type McpClientConfig } from '../mcp';
 import { fakeConfig } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import type { AgentEvent, AgentStartOptions, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
+import type { TaskLogEvent } from '../../models/TaskLog';
+import { handoffDigest, type StoredHandoff } from '../../models/Handoff';
 
 /**
  * A task run end to end over the real transport: the orchestrator spawns a
@@ -55,7 +57,10 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((s) => s.dispose()));
 });
 
-function rig() {
+/** Each task's saved attempts, oldest first, as the session's task log reader returns them. */
+type SavedLogs = Record<string, TaskLogEvent[][]>;
+
+function rig(logs: SavedLogs = {}) {
   const server = new OrdewellMcpServer({ heartbeatMs: 50 });
   servers.push(server);
   const adapters: IdleAdapter[] = [];
@@ -76,6 +81,12 @@ function rig() {
     registry: new RunnerRegistry(),
     workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
+    // One saved attempt per task: enough for a dependent to read what its dependency's call recorded.
+    recordHandoff: (_sessionId, taskId, handoff) => { (logs[taskId] ??= [[]]).at(-1)!.push({ type: 'handoff', handoff }); },
+    taskLog: {
+      attempts: (taskId) => (logs[taskId] ?? []).map((_, i) => i + 1),
+      events: (taskId, attempt) => logs[taskId]?.[attempt - 1] ?? [],
+    },
   });
   const get = (id: string): Task => orchestrator.storeInstance.get(id)!;
   return { orchestrator, adapters, server, get };
@@ -420,5 +431,161 @@ describe('the handoff a task_complete call carries (ADR-0047)', () => {
     await orchestrator.retryTask('t1');
 
     expect(get('t1').handoff).toBeUndefined();
+  });
+});
+
+describe('read_task over HTTP: a task pulls a handoff it may read (ADR-0047)', () => {
+  async function reading(plan: Task[], readerId: string, logs: SavedLogs = {}) {
+    const rigged = rig(logs);
+    rigged.orchestrator.loadPlan(plan);
+    await rigged.orchestrator.forceStartTask(readerId);
+    const client = await connect(rigged.adapters.at(-1)!.config);
+    const read = (args: Record<string, unknown>) => client.callTool({ name: 'read_task', arguments: args });
+    return { ...rigged, read };
+  }
+
+  const thirty: StoredHandoff = {
+    summary: 'Thirty things.',
+    findings: Array.from({ length: 30 }, (_, i) => ({ id: `F${i + 1}`, severity: 'minor' as const, title: `Finding ${i + 1}` })),
+    findingCount: 30,
+    report: 'The long form.',
+  };
+
+  it('returns every finding from the attempt\'s log, past the plan\'s first 25, and the report only when asked for', async () => {
+    const done = task('t1', 1, { status: 'completed', handoff: handoffDigest(thirty) });
+    const { read } = await reading([done, task('t2', 2, { dependencies: ['t1'] })], 't2', { t1: [[{ type: 'handoff', handoff: thirty }]] });
+
+    const plain = await read({ task: '#1' });
+
+    expect(plain.isError).toBe(false);
+    expect(text(plain)).toBe([
+      '#1 Task t1, attempt 1 of 1:',
+      '',
+      'Thirty things.',
+      '',
+      'Findings:',
+      ...Array.from({ length: 30 }, (_, i) => `- F${i + 1} [minor] Finding ${i + 1}`),
+      '',
+      'It also wrote a report of 14 characters, left out here: call read_task again with include_report: true to read it.',
+    ].join('\n'));
+
+    const whole = await read({ task: '#1', include_report: true });
+
+    expect(text(whole)).toContain('- F30 [minor] Finding 30\n\nReport:\nThe long form.');
+    expect(text(whole)).not.toContain('left out here');
+  });
+
+  it('reads a dependency of a dependency, and refuses a sibling it was never given, naming what it may read', async () => {
+    const handed = (summary: string): StoredHandoff => ({ summary, findings: [], findingCount: 0 });
+    const plan = [
+      task('a', 1, { status: 'completed', handoff: handed('First.') }),
+      task('b', 2, { dependencies: ['a'], status: 'completed', handoff: handed('Second.') }),
+      task('c', 3, { dependencies: ['b'] }),
+      task('d', 4, { dependencies: ['a'], status: 'completed', handoff: handed('Sibling.') }),
+    ];
+    const { read } = await reading(plan, 'c', { a: [[{ type: 'handoff', handoff: handed('First.') }]], d: [[{ type: 'handoff', handoff: handed('Sibling.') }]] });
+
+    expect(text(await read({ task: '#1' }))).toContain('First.');
+
+    const refused = await read({ task: 'Task d' });
+
+    expect(refused.isError).toBe(true);
+    expect(text(refused)).toBe('#4 Task d is not a task this one may read. It may read itself, the tasks it depends on, directly or not, and its loop\'s other end: #1 Task a, #2 Task b and #3 Task c.');
+    expect(text(refused)).not.toContain('Sibling.');
+  });
+
+  it('lets a loop\'s check read its body task, which does not depend on it the other way', async () => {
+    const fixed: StoredHandoff = { summary: 'Fixed F1 of #1.', findings: [], findingCount: 0 };
+    const plan = [
+      task('check', 1, { loop: { body: ['fix'], maxRounds: 3 } }),
+      task('fix', 2, { dependencies: ['check'], status: 'completed', handoff: fixed }),
+      task('other', 3, { status: 'completed' }),
+    ];
+    const { read } = await reading(plan, 'check', { fix: [[{ type: 'handoff', handoff: fixed }]] });
+
+    expect(text(await read({ task: '#2' }))).toBe('#2 Task fix, attempt 1 of 1:\n\nFixed F1 of #1.');
+    expect((await read({ task: '#3' })).isError).toBe(true);
+  });
+
+  it('says when a task has no handoff, and gives what the plan keeps of it instead', async () => {
+    const old = task('old', 1, { status: 'completed', outputSummary: { reviewReason: 'Verified', report: 'The old free text.', logTail: '', capturedAt: 'x' } });
+    const { read } = await reading([old, task('next', 2, { dependencies: ['old'] })], 'next', { old: [[{ type: 'turn_end', reason: 'completed' }]] });
+
+    const answer = await read({ task: '#1' });
+
+    expect(answer.isError).toBeFalsy();
+    expect(text(answer)).toBe([
+      '#1 Task old has no handoff from attempt 1 of 1: it ended without a task_complete call, or ran before handoffs. Its output summary, as the plan keeps it:',
+      '',
+      'Review: Verified',
+      'Report:',
+      'The old free text.',
+    ].join('\n'));
+  });
+
+  it('gives a dependent what its dependency\'s task_complete call recorded, the tasks it cites named', async () => {
+    const { orchestrator, adapters, get } = rig();
+    orchestrator.loadPlan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
+    await orchestrator.forceStartTask('t1');
+    const producer = await connect(adapters[0].config);
+    await producer.callTool({ name: 'task_complete', arguments: {
+      status: 'done', summary: 'Reviewed.', report: 'All of it.',
+      findings: [{ severity: 'major', title: 'A hole', evidence: [{ kind: 'task', task: 't1' }] }],
+    } });
+    await vi.waitFor(() => expect(get('t1').status).toBe('completed'));
+    await orchestrator.forceStartTask('t2');
+
+    const reader = await connect(adapters[1].config);
+    const answer = await reader.callTool({ name: 'read_task', arguments: { task: 't1', include_report: true } });
+
+    expect(text(answer)).toBe('#1 Task t1, attempt 1 of 1:\n\nReviewed.\n\nFindings:\n- F1 [major] A hole\n  Evidence: task #1\n\nReport:\nAll of it.');
+  });
+
+  it('never returns the end of a task\'s output in place of a handoff: that is output, not what it handed over', async () => {
+    const quiet = task('quiet', 1, { status: 'completed', outputSummary: { reviewReason: 'The script exited with code 0.', logTail: '12 passing', capturedAt: 'x' } });
+    const { read } = await reading([quiet, task('next', 2, { dependencies: ['quiet'] })], 'next', { quiet: [[]] });
+
+    expect(text(await read({ task: '#1' }))).toBe([
+      '#1 Task quiet has no handoff from attempt 1 of 1: it ended without a task_complete call, or ran before handoffs. Its output summary, as the plan keeps it:',
+      '',
+      'Review: The script exited with code 0.',
+    ].join('\n'));
+  });
+
+  it('reads an earlier attempt when asked, and names the saved attempts when asked for one there is not', async () => {
+    const first: StoredHandoff = { summary: 'First try.', findings: [], findingCount: 0 };
+    const second: StoredHandoff = { summary: 'Second try.', findings: [], findingCount: 0 };
+    const done = task('t1', 1, { status: 'completed', handoff: second });
+    const logs: SavedLogs = { t1: [[{ type: 'handoff', handoff: first }], [{ type: 'handoff', handoff: second }]] };
+    const { read } = await reading([done, task('t2', 2, { dependencies: ['t1'] })], 't2', logs);
+
+    expect(text(await read({ task: '#1' }))).toBe('#1 Task t1, attempt 2 of 2:\n\nSecond try.');
+    expect(text(await read({ task: '#1', attempt: 1 }))).toBe('#1 Task t1, attempt 1 of 2:\n\nFirst try.');
+    const missing = await read({ task: '#1', attempt: 3 });
+    expect(missing.isError).toBe(true);
+    expect(text(missing)).toBe('#1 Task t1 has no saved attempt 3: its saved attempts are 1 and 2.');
+  });
+
+  it('says a task reading itself mid-attempt has handed nothing over yet', async () => {
+    const { read } = await reading([task('t1', 1)], 't1');
+
+    expect(text(await read({ task: '#1' }))).toBe('#1 Task t1 has no handoff yet: it is still running.');
+  });
+
+  it('falls back to the plan\'s digest where no saved log holds the handoff, as in a forked session', async () => {
+    const done = task('t1', 1, { status: 'completed', handoff: handoffDigest(thirty) });
+    const { read } = await reading([done, task('t2', 2, { dependencies: ['t1'] })], 't2');
+
+    const answer = text(await read({ task: '#1' }));
+
+    expect(answer.startsWith('#1 Task t1: no saved log of this session holds its handoff, so this is what the plan keeps of it.\n\nThirty things.\n')).toBe(true);
+    expect(answer).toContain('- F25 [minor] Finding 25\n\nIts other 5 findings, and any report, were not kept in the plan.');
+    expect(answer).not.toContain('F26');
+    expect(answer).not.toContain("in the attempt's log");
+  });
+
+  it('is on a read-only task\'s token too: it reads Ordewell\'s record, not the tree', async () => {
+    expect(READ_ONLY_TASK_TOOLS.map((t) => t.name)).toEqual(['task_complete', 'checkpoint', 'read_task', 'run_command']);
+    expect(TASK_TOOLS.find((t) => t.name === 'read_task')?.annotations).toEqual({ readOnlyHint: true });
   });
 });

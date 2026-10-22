@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { createTask, resolveTaskRef, type TaskSkillSnapshot } from '../../models/Task';
+import { createTask, resolveTaskRef, type Task, type TaskSkillSnapshot } from '../../models/Task';
+import type { HandoffDigest, HandoffFinding } from '../../models/Handoff';
 import { TASK_COMPLETION_CONTRACT } from '../mcp';
 import { augmentPromptWithPriorOutputs, composeAugmentedPrompt, composeContinuationPrompt, renderPlanMap, summarizeOutput } from '../promptAugment';
 
@@ -56,6 +57,132 @@ describe('prior outputs of a subtask dependency', () => {
 
     expect(out).toContain('### Task 1.1: Add and export mul\n- Review: ok\n- Report:\n  Added mul to src/calc.js.');
     expect(out).not.toContain('### Task 1:');
+  });
+});
+
+describe('prior outputs of a dependency with a handoff (ADR-0047)', () => {
+  const review = (handoff: HandoffDigest, extra: Partial<Task> = {}) => createTask({
+    id: 'rev', order: 1, title: 'Review auth', prompt: 'review', status: 'completed', handoff,
+    outputSummary: { reviewReason: 'Verified', report: 'THE WHOLE HANDOFF AS ONE TEXT', logTail: '', capturedAt: 'x' },
+    ...extra,
+  });
+  const fix = createTask({ id: 'fix', order: 2, title: 'Fix auth', prompt: 'fix it', dependencies: ['rev'] });
+
+  it('gives the summary, then each finding whole with its id, severity, detail and evidence, then the artifacts', () => {
+    const dep = review({
+      summary: 'Two holes in the token flow; the rest is sound.',
+      findings: [
+        { id: 'F1', severity: 'blocker', title: 'Tokens never expire', detail: 'issue() sets no exp claim.\nrefresh() neither.', evidence: [{ kind: 'file', path: 'src/auth.ts', line: 42 }, { kind: 'commit', sha: 'a1b2c3d' }] },
+        { id: 'F2', severity: 'major', title: 'No rate limit on login', evidence: [{ kind: 'url', url: 'https://owasp.org/rate-limits' }] },
+        { id: 'F3', severity: 'info', title: 'The docs still describe v1' },
+      ],
+      findingCount: 3,
+      artifacts: [{ kind: 'file', path: 'docs/auth-review.md' }, { kind: 'task', task: 'rev', finding: 'F1' }],
+    });
+
+    const out = composeAugmentedPrompt(fix, [dep, fix], { planMapEnabled: false });
+
+    expect(out).toContain([
+      '### Task 1: Review auth',
+      '- Review: Verified',
+      '- Handoff:',
+      '  Two holes in the token flow; the rest is sound.',
+      '',
+      '  Findings:',
+      '  - F1 [blocker] Tokens never expire',
+      '    issue() sets no exp claim.',
+      '    refresh() neither.',
+      '    Evidence: src/auth.ts:42; commit a1b2c3d',
+      '  - F2 [major] No rate limit on login',
+      '    Evidence: https://owasp.org/rate-limits',
+      '  - F3 [info] The docs still describe v1',
+      '',
+      '  Artifacts: docs/auth-review.md; task #1 F1',
+      '',
+      'fix it',
+    ].join('\n'));
+    expect(out).not.toContain('THE WHOLE HANDOFF AS ONE TEXT');
+    expect(out).not.toContain('more findings');
+  });
+
+  it('tells the dependent it can read any of them in full with read_task', () => {
+    const dep = review({ summary: 'Done.', findings: [], findingCount: 0 });
+    const out = composeAugmentedPrompt(fix, [dep, fix], { planMapEnabled: false });
+    expect(out).toContain('## Prior task outputs\n\n`read_task` reads any of these tasks in full, every finding and its report, and the tasks they depend on too.\n\n### Task 1: Review auth');
+  });
+
+  it('keeps every finding whole: past 4000 characters it stops before the next one and counts the rest', () => {
+    const findings = Array.from({ length: 12 }, (_, i): HandoffFinding => ({
+      id: `F${i + 1}`, severity: 'major', title: `Finding ${String(i + 1).padStart(2, '0')}`, detail: `${i + 1}`.padEnd(600, '.'),
+    }));
+    const dep = review({ summary: 'Twelve findings.', findings, findingCount: 12 });
+
+    const out = composeAugmentedPrompt(fix, [dep, fix], { planMapEnabled: false });
+
+    // Each finding renders in about 630 characters, so six fit under 4000 and a seventh would not.
+    for (let i = 1; i <= 6; i++) expect(out).toContain(`  - F${i} [major] Finding 0${i}\n    ${`${i}`.padEnd(600, '.')}\n`);
+    expect(out).not.toContain('F7');
+    expect(out).not.toContain('Finding 07');
+    expect(out).toContain('  (+6 more findings; read task #1)\n\nfix it');
+    expect(out).not.toContain('report cut here');
+  });
+
+  it('counts the findings the plan\'s digest left out, from its finding count', () => {
+    const findings = Array.from({ length: 25 }, (_, i): HandoffFinding => ({ id: `F${i + 1}`, severity: 'minor', title: `Small ${i + 1}` }));
+    const dep = review({ summary: 'Thirty findings.', findings, findingCount: 30 });
+
+    const out = composeAugmentedPrompt(fix, [dep, fix], { planMapEnabled: false });
+
+    expect(out).toContain('  - F25 [minor] Small 25\n  (+5 more findings; read task #1)');
+  });
+
+  it('points a subtask\'s reader at its dotted reference, and says one finding left out as one', () => {
+    const findings: HandoffFinding[] = [
+      { id: 'F1', severity: 'major', title: 'Big', detail: 'b'.repeat(2_000) },
+      { id: 'F2', severity: 'major', title: 'Bigger', detail: 'c'.repeat(2_000) },
+    ];
+    const sub = createTask({ id: 'sub', order: 1, title: 'Review part', prompt: 'r', status: 'completed', handoff: { summary: 'Two.', findings, findingCount: 2 } });
+    const after = createTask({ id: 'after', order: 2, title: 'Fix part', prompt: 'f', dependencies: ['sub'] });
+    const parent = createTask({ id: 'p', order: 1, title: 'Part', prompt: 'p', subtasks: [sub, after] });
+
+    const out = composeAugmentedPrompt(after, [parent], { planMapEnabled: false });
+
+    expect(out).toContain('  - F1 [major] Big');
+    expect(out).not.toContain('Bigger');
+    expect(out).toContain('  (+1 more finding; read task #1.1)');
+  });
+
+  it('tells a loop\'s body task which of its check\'s findings to answer, and that the check runs again', () => {
+    const findings = Array.from({ length: 3 }, (_, i): HandoffFinding => ({ id: `F${i + 1}`, severity: 'major', title: `Hole ${i + 1}` }));
+    const check = createTask({
+      id: 'rev', order: 1, title: 'Review auth', prompt: 'review', status: 'failed', loop: { body: ['fix'], maxRounds: 3 },
+      verdict: { outcome: 'fail', reason: 'found problems', checks: [], decidedAt: 'x', reported: 'failed' },
+      outputSummary: { reviewReason: 'The runner reported failed: three holes.', logTail: '', capturedAt: 'x' },
+      handoff: { summary: 'Three holes.', findings, findingCount: 3 },
+    });
+
+    const out = composeAugmentedPrompt(fix, [check, fix], { planMapEnabled: false });
+
+    expect(out).toContain([
+      '### Task 1: Review auth',
+      '- The check of your loop: it failed round 1 of 3, and you are part of the fix. Answer its findings F1 to F3 and fix what its report found; it runs again once the fix has landed.',
+      '- Review: The runner reported failed: three holes.',
+      '- Handoff:',
+      '  Three holes.',
+    ].join('\n'));
+  });
+
+  it('renders a dependency saved before handoffs from its output summary, as before', () => {
+    const legacy = createTask({
+      id: 'old', order: 1, title: 'Old review', prompt: 'r', status: 'completed',
+      outputSummary: { reviewReason: 'Verified', report: 'k'.repeat(4000) + 'z'.repeat(10), logTail: '', capturedAt: 'x' },
+    });
+    const next = createTask({ id: 'next', order: 2, title: 'Next', prompt: 'n', dependencies: ['old'] });
+
+    const out = composeAugmentedPrompt(next, [legacy, next], { planMapEnabled: false });
+
+    expect(out).toContain(`## Prior task outputs\n\n### Task 1: Old review\n- Review: Verified\n- Report:\n  ${'k'.repeat(4000)}\n  (report cut here: 10 more characters)`);
+    expect(out).not.toContain('read_task');
   });
 });
 

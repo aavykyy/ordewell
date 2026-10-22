@@ -102,6 +102,12 @@ const loadSkillInput = z.object({
 
 const taskRef = z.union([z.string().min(1), z.number().int().min(0)]).describe('A task id, "#order" ("#2.1" for a subtask), a bare order, or a title.');
 
+const readTaskInput = z.object({
+  task: taskRef,
+  attempt: z.number().int().min(1).optional().describe('One of its saved attempts; omit for the latest.'),
+  include_report: z.boolean().optional().describe(`Also return its report, the long form, of at most ${HANDOFF_LIMITS.report} characters.`),
+});
+
 const modelAssignment = z.looseObject({
   modelId: z.string(),
   modelLabel: z.string().optional(),
@@ -226,6 +232,7 @@ const answerApprovalInput = z.object({
 
 export type TaskCompleteArgs = z.infer<typeof taskCompleteInput>;
 export type CheckpointArgs = z.infer<typeof checkpointInput>;
+export type ReadTaskArgs = z.infer<typeof readTaskInput>;
 export type ListRunnersArgs = z.infer<typeof listRunnersInput>;
 export type ListModelsArgs = z.infer<typeof listModelsInput>;
 export type LoadSkillArgs = z.infer<typeof loadSkillInput>;
@@ -286,6 +293,8 @@ type Run<A> = (args: A, context: McpToolContext) => Promise<McpToolReply>;
 export interface TaskToolHandler {
   taskComplete?: Run<TaskCompleteArgs>;
   checkpoint?: Run<CheckpointArgs>;
+  /** A handoff the task may read (ADR-0047), from its attempt's log. */
+  readTask?: Run<ReadTaskArgs>;
   /** A read-only task's shell (ADR-0046); only its token lists `run_command`. */
   runCommand?: Run<TaskRunCommandArgs>;
 }
@@ -365,6 +374,9 @@ export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
     taskCompleteInput, (h) => h.taskComplete?.bind(h)),
   tool('checkpoint', "Ask the user a question and wait for the answer, which is this call's result.",
     checkpointInput, (h) => h.checkpoint?.bind(h)),
+  // It reads Ordewell's own record, not the tree, so a read-only task has it too (ADR-0047).
+  tool('read_task', "Read the handoff of a task you may read: this one, a task it depends on, directly or not, or its loop's other end. Returns what that task handed over, as its attempt's log keeps it: the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them.",
+    readTaskInput, (h) => h.readTask?.bind(h), { readOnlyHint: true }),
 ];
 
 /**

@@ -97,10 +97,10 @@ this decision, an attempt that ended without a completion call) falls back to
 
 ### Pulling the rest
 
-A task token gains **`read_task({task, attempt?, report?})`**: the full handoff
-of one task, from its attempt log, and its `report` when `report` is true. It
-reads a handoff and nothing else: no transcript, no tool calls, no diff, no
-command output.
+A task token gains **`read_task({task, attempt?, include_report?})`**: the full
+handoff of one task, from its attempt log, and its `report` when
+`include_report` is true. It reads a handoff and nothing else: no transcript,
+no tool calls, no diff, no command output.
 
 The **readable set** of a task is itself, its transitive dependencies, and its
 loop's other end in either direction: a check reads its body tasks, and a body
@@ -247,3 +247,4 @@ merges findings; and any new setting.
 ## History
 
 - 2026-10-22 — accepted. Not yet implemented (#120).
+- 2026-10-22 — `read_task`'s switch for the report is named `include_report`.

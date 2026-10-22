@@ -4,11 +4,11 @@ import type { PreservedWork, PreviousWork } from '../interfaces/IWorktreeIsolati
 import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
-import { REPORT_MAX_CHARS } from '../models/Handoff';
+import { REPORT_MAX_CHARS, artifactLines, findingLines, namedHandoff, type HandoffDigest } from '../models/Handoff';
 
 const MAX_TAIL_CHARS = 500;
-/** Each dependency's share of a dependent's prompt, which carries every direct dependency's report. */
-const MAX_DEPENDENCY_REPORT_CHARS = 4_000;
+/** Each dependency's share of a dependent's prompt, which carries every direct dependency's handoff (ADR-0047). */
+const MAX_HANDOFF_CHARS = 4_000;
 const DEFAULT_PLAN_MAP_MAX_ENTRIES = 30;
 const PLAN_MAP_MIN_TASKS = 3;
 
@@ -17,6 +17,8 @@ export interface PriorOutput {
   label: string;
   title: string;
   reviewReason: string;
+  /** What the dependency handed over (ADR-0047), the tasks it cites named as the plan names them; absent on a plan saved before handoffs. */
+  handoff?: HandoffDigest;
   report?: string;
   logTail: string;
   /** Set for a dependency that was skipped: nothing of it landed. `reason` is the skipper's, when they gave one. */
@@ -48,13 +50,14 @@ export function collectDirectDependencyOutputs(task: Task, allTasks: readonly Ta
   for (const { task: dep, label } of flattenTasksWithParents(allTasks)) {
     const skipped = dep.status === 'skipped' ? { ...(dep.skipReason ? { reason: dep.skipReason } : {}) } : undefined;
     // A skip is said even of a task that never ran: the dependent starts without it.
-    if (!deps.has(dep.id) || (!dep.outputSummary && !skipped)) continue;
+    if (!deps.has(dep.id) || (!dep.outputSummary && !dep.handoff && !skipped)) continue;
     // A check's summary is its latest round's: the loop clears it as the check runs again.
     const round = dep.loop?.body.includes(task.id) && betweenRounds(dep) ? { round: loopRoundOf(dep), maxRounds: dep.loop.maxRounds } : undefined;
     out.push({
       label,
       title: dep.title,
       reviewReason: dep.outputSummary?.reviewReason ?? '',
+      ...(dep.handoff ? { handoff: namedHandoff(allTasks, dep.handoff) } : {}),
       report: dep.outputSummary?.report,
       logTail: dep.outputSummary?.logTail ?? '',
       ...(skipped ? { skipped } : {}),
@@ -65,12 +68,40 @@ export function collectDirectDependencyOutputs(task: Task, allTasks: readonly Ta
 }
 
 function indent(text: string): string {
-  return text.split('\n').map((l) => '  ' + l).join('\n');
+  return text.split('\n').map((l) => (l ? '  ' + l : l)).join('\n');
 }
 
+/**
+ * A dependency's handoff within its share of the prompt (ADR-0047): the
+ * summary, then whole findings in the producer's order, stopping before the
+ * first that would pass the ceiling, then the artifacts, which it does not
+ * count. A finding is never cut. Those left out are counted from
+ * `findingCount`, which includes the ones the plan's digest does not hold,
+ * and pointed at where `read_task` finds them.
+ */
+function handoffText(handoff: HandoffDigest, label: string): string {
+  const lines = [handoff.summary];
+  let used = handoff.summary.length;
+  let shown = 0;
+  for (const finding of handoff.findings) {
+    const next = [...(shown === 0 ? ['', 'Findings:'] : []), ...findingLines(finding)];
+    const cost = next.reduce((n, l) => n + 1 + l.length, 0);
+    if (used + cost > MAX_HANDOFF_CHARS) break;
+    lines.push(...next);
+    used += cost;
+    shown += 1;
+  }
+  const more = handoff.findingCount - shown;
+  if (more > 0) lines.push(`(+${more} more finding${more === 1 ? '' : 's'}; read task #${label})`);
+  const artifacts = artifactLines(handoff);
+  if (artifacts.length > 0) lines.push('', ...artifacts);
+  return lines.join('\n');
+}
+
+/** A plan saved before handoffs has only the report, so its share is cut as it always was. */
 function dependencyReport(report: string): string {
-  if (report.length <= MAX_DEPENDENCY_REPORT_CHARS) return report;
-  return `${report.slice(0, MAX_DEPENDENCY_REPORT_CHARS)}\n(report cut here: ${report.length - MAX_DEPENDENCY_REPORT_CHARS} more characters)`;
+  if (report.length <= MAX_HANDOFF_CHARS) return report;
+  return `${report.slice(0, MAX_HANDOFF_CHARS)}\n(report cut here: ${report.length - MAX_HANDOFF_CHARS} more characters)`;
 }
 
 /** Plan order of two path labels: `2` before `10`, and `1.2` before `1.10`. */
@@ -84,6 +115,14 @@ function compareLabels(a: string, b: string): number {
   return 0;
 }
 
+/** A handoff's findings by their ids, which Ordewell numbers from F1 without gaps. */
+function findingRange(count: number): string {
+  return count === 1 ? 'F1' : count === 2 ? 'F1 and F2' : `F1 to F${count}`;
+}
+
+/** The pull beside the push (ADR-0047): the readable set reaches past the direct dependencies the prompt carries. */
+const READ_TASK_NOTE = '`read_task` reads any of these tasks in full, every finding and its report, and the tasks they depend on too.';
+
 export function renderPriorOutputs(outputs: PriorOutput[]): string {
   if (outputs.length === 0) return '';
   const blocks = outputs
@@ -91,15 +130,20 @@ export function renderPriorOutputs(outputs: PriorOutput[]): string {
     .map((o) => {
       const heading = `### Task ${o.label}: ${o.title}`;
       const skip = o.skipped ? `- Skipped${o.skipped.reason ? `: ${o.skipped.reason.replace(/\.$/, '')}` : ' (no reason given)'}. None of its work landed, so it is not in your tree; do not count on it.` : '';
-      if (o.skipped && !o.reviewReason && !o.report && !o.logTail) return `${heading}\n${skip}`;
+      if (o.skipped && !o.handoff && !o.reviewReason && !o.report && !o.logTail) return `${heading}\n${skip}`;
       const reason = o.reviewReason || '(no review note)';
-      const output = o.report ? `- Report:\n${indent(dependencyReport(o.report))}` : `- Tail:\n${o.logTail ? indent(o.logTail) : '  (no output captured)'}`;
+      const output = o.handoff ? `- Handoff:\n${indent(handoffText(o.handoff, o.label))}`
+        : o.report ? `- Report:\n${indent(dependencyReport(o.report))}`
+        : `- Tail:\n${o.logTail ? indent(o.logTail) : '  (no output captured)'}`;
+      const answer = o.handoff?.findingCount ? `Answer its findings ${findingRange(o.handoff.findingCount)} and fix` : 'Fix';
       const round = o.round
-        ? `- The check of your loop: it failed round ${o.round.round} of ${o.round.maxRounds}, and you are part of the fix. Fix what its report found; it runs again once the fix has landed.\n`
+        ? `- The check of your loop: it failed round ${o.round.round} of ${o.round.maxRounds}, and you are part of the fix. ${answer} what its report found; it runs again once the fix has landed.\n`
         : '';
       return `${heading}\n${skip ? `${skip}\n` : ''}${round}- Review: ${reason}\n${output}`;
     });
-  return `## Prior task outputs\n\n${blocks.join('\n\n')}`;
+  // Only beside a handoff: a plan saved before them reads as it always did.
+  const pull = outputs.some((o) => o.handoff) ? `${READ_TASK_NOTE}\n\n` : '';
+  return `## Prior task outputs\n\n${pull}${blocks.join('\n\n')}`;
 }
 
 export function augmentPromptWithPriorOutputs(task: Task, allTasks: readonly Task[]): string {

@@ -1,5 +1,5 @@
 import type { AgentEvent } from '../services/harness/AgentAdapter';
-import type { CheckpointAnswer, TaskCompleteArgs } from '../services/mcp/tools';
+import type { CheckpointAnswer, McpToolReply, ReadTaskArgs, TaskCompleteArgs } from '../services/mcp/tools';
 import type { ApprovalDecision } from './IApproval';
 import type { TaskSkillSnapshot } from '../models/Task';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
@@ -257,6 +257,11 @@ export interface IRunner {
      * recorded. Without one, a `task` reference resolves against no plan.
      */
     checkHandoff?: (completion: TaskCompleteArgs) => HandoffCheck<TaskCompleteArgs>;
+    /**
+     * Answers the attempt's `read_task` calls (ADR-0047), against the plan
+     * and the session's task logs. Without one the call says it is not available.
+     */
+    readTask?: (args: ReadTaskArgs) => McpToolReply;
   }): Promise<IRunnerSession>;
 
   /** Wind one session down ({@link IRunnerSession.stop}); resolves once its process is gone. */

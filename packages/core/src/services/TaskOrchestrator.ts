@@ -49,6 +49,7 @@ import { resumeTime } from '../taskRow/status';
 import { scriptBodyOf } from '../models/ScriptTask';
 import { SCRIPT_RUNNER, ScriptRunner } from './ScriptRunner';
 import { checkHandoff, handoffLines, type StoredHandoff } from '../models/Handoff';
+import { readTask, type TaskLogReader } from './readTask';
 
 /** What ran an automatic Merge all: a task reaching its merge gate, or the run settling with landed work unmerged. */
 export type AutoMergeTrigger = { kind: 'gate'; taskId: string } | { kind: 'run_end' };
@@ -344,6 +345,8 @@ export interface TaskOrchestratorDeps {
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
   /** Write an attempt's whole handoff into the log of the attempt `sessionId` ran (ADR-0047). */
   recordHandoff: (sessionId: string, taskId: string, handoff: StoredHandoff) => void;
+  /** The session's saved task logs, which a task's `read_task` reads handoffs from (ADR-0047). */
+  taskLog: TaskLogReader;
 }
 
 /**
@@ -372,6 +375,7 @@ export interface TaskOrchestratorOptions {
   isApproved?: (taskId: string) => boolean;
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
   recordHandoff?: (sessionId: string, taskId: string, handoff: StoredHandoff) => void;
+  taskLog?: TaskLogReader;
 }
 
 /**
@@ -465,6 +469,7 @@ export class TaskOrchestrator {
   private isApproved: (taskId: string) => boolean;
   private taskShell: (site: TaskShellSite) => TaskShell | undefined;
   private recordHandoff: (sessionId: string, taskId: string, handoff: StoredHandoff) => void;
+  private taskLog: TaskLogReader;
   private readonly research: Pick<ResearchTasks, 'started'> | undefined;
 
   constructor(deps: TaskOrchestratorDeps) {
@@ -487,6 +492,7 @@ export class TaskOrchestrator {
     this.isApproved = deps.isApproved;
     this.taskShell = deps.taskShell ?? (() => undefined);
     this.recordHandoff = deps.recordHandoff;
+    this.taskLog = deps.taskLog;
 
     this.store.onMutate = () => this.emit('onTaskChanged');
     this.verifier.onVerdict((taskId, verdict) => { void this.deliverVerdict(taskId, verdict); });
@@ -562,6 +568,7 @@ export class TaskOrchestrator {
       research: options.research,
       ...(options.taskShell ? { taskShell: options.taskShell } : {}),
       recordHandoff: options.recordHandoff ?? (() => undefined),
+      taskLog: options.taskLog ?? { attempts: () => [], events: () => [] },
     });
     return orchestrator;
   }
@@ -2731,6 +2738,7 @@ export class TaskOrchestrator {
       ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
       ...(shell ? { shell } : {}),
       checkHandoff: (completion) => checkHandoff(completion, task.id, this.store.planTasks),
+      readTask: (args) => readTask(args, task.id, this.store.planTasks, this.taskLog),
       workspaceRoot: this.workspaceRootFn(),
       onNotice: (message) => this.tell('warn', `Task "${task.title}": ${message}`),
     });

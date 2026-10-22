@@ -316,6 +316,7 @@ export function createSession(deps: SessionDeps): Session {
     // The planner's command rules, at the read-only task's own working directory (ADR-0046).
     taskShell: (site) => deps.fsAdapter.taskShell?.(site),
     recordHandoff: (sessionId, taskId, handoff) => taskLogs.note(sessionId, taskId, { type: 'handoff', handoff }),
+    taskLog: { attempts: (taskId) => session.taskLogAttempts(taskId), events: (taskId, attempt) => session.taskLog(taskId, attempt) },
   });
   const usage = new PlannerUsageLedger(windows);
   const events = new SessionEventRelay({
