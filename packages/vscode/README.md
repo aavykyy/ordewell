@@ -49,6 +49,22 @@ The Command Palette offers **Ordewell: Rewind Conversation**, **Fork
 Conversation** and **Compact Conversation**. Isolation can be configured under
 `ordewell.worktreeIsolation` and related settings.
 
+## What the extension sends
+
+Once a day, the extension asks ordewell.ai whether a newer version is out. The
+request carries the version you run and a random install ID, kept in
+`~/.ordewell/version-check.json` and shared with the command line. Nothing else
+is sent: no code, prompts, paths, file names or account details. Like any
+server, ordewell.ai sees the IP address the request comes from.
+
+The first time Ordewell starts on a machine, the extension shows a notice saying
+this and sends nothing. The Marketplace handles updates, so the extension shows
+no update line.
+
+Turn it off by turning off VS Code's telemetry (`telemetry.telemetryLevel`).
+`ORDEWELL_NO_VERSION_CHECK=1` and `DO_NOT_TRACK=1` turn it off too. Turned off,
+nothing is sent and no install ID is written.
+
 ## Also available
 
 The same project ships a command line and a terminal UI:
