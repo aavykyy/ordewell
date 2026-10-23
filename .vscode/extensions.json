@@ -1,5 +1,6 @@
 {
     "recommendations": [
-        "ordewell.ordewell"
+        "ordewell.ordewell",
+        "sst-dev.opencode"
     ]
 }
