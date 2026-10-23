@@ -1,7 +1,5 @@
 ---
 status: accepted
-implemented: partial
-note: "The CLI, the TUI and the VS Code extension run it; the ordewell.ai endpoint follows."
 ---
 
 # 0048 — A daily version check, with a notice first and one install per machine

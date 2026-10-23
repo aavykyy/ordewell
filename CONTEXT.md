@@ -1029,6 +1029,44 @@ unresolved, not refused, when it cannot be.
 *Avoid:* "proof" or "citation" — a reader weighs a reference, and it settles
 nothing about a verdict.
 
+**Commit message** (`commit` on the *Completion call*; ADR-0047, ADR-0013) — the
+optional `{subject, body?}` a change task states for the commit that lands its
+work: a one-line subject of 1 to 100 characters and a body of at most 500, for a
+human reviewer reading git history. It counts only with `done`. Ordewell writes
+the commits that land the task from it (the sweep-up commit, the merge, a
+conflict repair's merge, a rescue commit as `WIP: <subject>`), and a task that
+states none falls back to its title's first line. It is not the *Handoff*
+summary, which is for the next task and says what to know, not what changed; a
+`Planned-with` line in the body is removed, since Ordewell writes the trailers.
+*Avoid:* "commit summary" or "commit description" (the *Handoff* `summary` is a
+different field), "PR title".
+
+**Planned-with trailer** (`plannedWithTrailer`; ADR-0030, ADR-0013) — the git
+trailer `Planned-with: Ordewell` that ends each commit message Ordewell itself
+writes, on by default and off by the user's setting. It is read as each message
+is written, so a change reaches the next landing in any session. A commit a
+*Runner* made itself is never given one.
+*Avoid:* "signature", "watermark", "Co-authored-by" (that is a different
+trailer and names a person or model).
+
+**Install ID** (`installId`; ADR-0048) — the random UUID that stands for one
+machine's Ordewell installs, kept in `version-check.json` in `globalDataDir()`
+and shared by the CLI and the VS Code extension. It is created only after the
+*Version check* notice has been shown, is sent with the running version and
+nothing else, and does not exist when an off switch is set.
+*Avoid:* "user ID", "machine ID", "telemetry ID" (it derives from nothing on
+the machine and identifies no person).
+
+**Version check** (`startVersionCheck`; ADR-0048) — the one request Ordewell
+makes on its own: once a day, `GET https://ordewell.ai/api/v1/ping` with the
+version and the *Install ID*, answered by the latest version, which a surface
+shows as one line when it is newer. The first start on a machine shows a notice
+and sends nothing. `ORDEWELL_NO_VERSION_CHECK`, `DO_NOT_TRACK` or VS Code's
+telemetry setting turn it off entirely. It runs in the process the user started,
+never in the daemon, and never holds up a start.
+*Avoid:* "telemetry" or "analytics" (nothing about use is sent), "auto-update"
+(it only tells; it installs nothing), "phone home".
+
 **Spawn toolkit** — the shared process policy behind the runner adapters:
 `planDirectLaunch` (`utils/launch.ts`), runner environment cleanup
 (`services/harness/runnerEnv.ts`), and process-group launch and disposal

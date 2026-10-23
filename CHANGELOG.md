@@ -103,6 +103,30 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   versions checked live, Claude Code 2.1.304–2.1.x and OpenCode 2.0.32–2.0.x;
   other versions, OpenCode 1.x and Linux keep `run_command` alone, and a
   notice says why. Codex already has its own shell. A workspace cannot set it.
+- **A daily version check, off with one variable.** Once a day Ordewell asks
+  `https://ordewell.ai/api/v1/ping` whether a newer version is out, and shows
+  one line when it is. The request carries two things: the version you run and
+  a random install ID, kept in `~/.ordewell/version-check.json` and shared by
+  the CLI and the VS Code extension. Nothing else is sent: no code, prompts,
+  paths, file names or account details, though ordewell.ai sees the IP address
+  of any request. The first start on a machine shows a notice and sends
+  nothing. To turn it off, set `ORDEWELL_NO_VERSION_CHECK=1` or
+  `DO_NOT_TRACK=1`; off, Ordewell shows no notice, creates no ID and sends no
+  request. The VS Code extension also follows VS Code's telemetry setting
+  ([ADR-0048](docs/adr/platform/0048-a-daily-version-check-with-a-notice-first-and-one-install-per-machine.md)).
+- **Real commit messages.** A change task can state a `commit` (a subject and
+  a short body) in its `task_complete` call, and the commits Ordewell writes to
+  land it use that message in place of git's default `Merge branch 'ordewell/…'`.
+  Without one, the task title stands in. The handoff summary then stops
+  repeating what changed, and handoffs on every surface show the commit
+  ([ADR-0013](docs/adr/isolation/0013-worktree-isolation.md),
+  [ADR-0047](docs/adr/supervision/0047-structured-task-handoffs.md)).
+- **A `Planned-with: Ordewell` trailer on the commits Ordewell writes.** It is
+  on by default and is a git trailer `git interpret-trailers` reads. Commits a
+  coding agent made itself are not changed. Turn it off with *Planned-with
+  line in commits Ordewell writes* in `/settings` or `ordewell trailer off`, or in the
+  VS Code settings panel
+  ([ADR-0030](docs/adr/supervision/0030-global-run-settings.md)).
 
 ### Changed
 
