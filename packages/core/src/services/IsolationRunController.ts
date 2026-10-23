@@ -1,5 +1,6 @@
 import { TASK_DIFF_UNAVAILABLE, type TaskDiffRead, type TaskDiffResult } from './taskDiffRead';
 import type { Task } from '../models/Task';
+import type { HandoffCommit } from '../models/Handoff';
 import type { IConfig } from '../interfaces/IConfig';
 import type { INotification } from '../interfaces/INotification';
 import type {
@@ -432,10 +433,10 @@ export class IsolationRunController {
    * a crash mid-landing leaves the tips to roll back to, and again once it
    * settles. A git error is `failed`, never a throw.
    */
-  async integrate(task: Task): Promise<IsolationOutcome> {
+  async integrate(task: Task, commit?: HandoffCommit): Promise<IsolationOutcome> {
     const run = this.run;
     if (!run) return 'failed';
-    const outcome = await this.isolation.integrate(task, run, () => this.listener.changed()).catch((): IsolationOutcome => 'failed');
+    const outcome = await this.isolation.integrate(task, run, () => this.listener.changed(), commit).catch((): IsolationOutcome => 'failed');
     this.listener.changed();
     return outcome;
   }

@@ -6,6 +6,10 @@ import { SELF_REPO } from './isolationRecord';
 import { taskRefOf } from './TaskRefs';
 import type { SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, modelInvocableTaskSkills } from './skillInvocation';
+import { quotedMessageArgs } from './landingMessage';
+
+// Keeps the message the merge was given; `strip` drops the `# Conflicts:` lines git adds to it.
+const COMMIT_MERGE = 'git commit --no-edit --cleanup=strip';
 
 export function buildResearchToolsPrompt(): string {
   const lines = [
@@ -839,27 +843,28 @@ export function buildSplitPrompt(taskId: string, tasks: readonly Task[], tools =
  */
 export function buildConflictResolutionPrompt(
   task: Task,
-  conflict: { branch: string; repos: string[]; conflictRepo?: string },
+  conflict: { branch: string; message: string; repos: string[]; conflictRepo?: string },
   integrationBranch: string,
   plan?: readonly Task[],
 ): string {
   const { branch } = conflict;
   const ref = taskRefOf(plan ?? [], task.id) ?? `#${task.order}`;
   const asked = `What the task was asked to do:\n${task.prompt ?? task.description}`;
+  const merge = `git merge --no-ff ${quotedMessageArgs(conflict.message)} ${branch}`;
   const repos = conflict.repos.filter((repo) => repo !== SELF_REPO);
   if (repos.length === 0) {
     return [
       `Task ${ref} "${task.title}" passed, but merging its branch \`${branch}\` into \`${integrationBranch}\` conflicted.`,
-      `This working tree starts at the tip of \`${integrationBranch}\`. Run \`git merge --no-ff ${branch}\` here and resolve every conflict so that both sides' intent survives: keep the work already integrated and add what the task contributed. Do not drop either side wholesale.`,
-      'Build and test the result the way this project does, then commit the merge.',
+      `This working tree starts at the tip of \`${integrationBranch}\`. Run \`${merge}\` here and resolve every conflict so that both sides' intent survives: keep the work already integrated and add what the task contributed. Do not drop either side wholesale.`,
+      `Build and test the result the way this project does, then commit the merge with \`${COMMIT_MERGE}\`.`,
       '',
       asked,
     ].join('\n');
   }
   return [
     `Task ${ref} "${task.title}" passed, but landing its branch \`${branch}\` on \`${integrationBranch}\` conflicted in ${conflict.conflictRepo ?? repos[0]}. A task lands in every repository it changed or in none, so none of its work has landed yet.`,
-    `This workspace holds every repository at its usual path, each starting at the tip of \`${integrationBranch}\`. In each repository the task changed — ${repos.join(', ')} — run \`git merge --no-ff ${branch}\` inside that repository's directory, and resolve every conflict so that both sides' intent survives: keep the work already integrated and add what the task contributed. Do not drop either side wholesale.`,
-    'Build and test the result the way this project does, then commit the merge in each repository.',
+    `This workspace holds every repository at its usual path, each starting at the tip of \`${integrationBranch}\`. In each repository the task changed — ${repos.join(', ')} — run \`${merge}\` inside that repository's directory, and resolve every conflict so that both sides' intent survives: keep the work already integrated and add what the task contributed. Do not drop either side wholesale.`,
+    `Build and test the result the way this project does, then commit the merge in each repository with \`${COMMIT_MERGE}\`.`,
     '',
     asked,
   ].join('\n');
@@ -874,21 +879,22 @@ export function buildConflictResolutionPrompt(
  */
 export function buildConflictRepairPrompt(
   task: Task,
-  conflict: { branch: string; repos: string[]; conflictRepo?: string; conflictFiles?: string[] },
+  conflict: { branch: string; message: string; repos: string[]; conflictRepo?: string; conflictFiles?: string[] },
   integrationBranch: string,
   plan?: readonly Task[],
 ): string {
   const { branch } = conflict;
   const ref = taskRefOf(plan ?? [], task.id) ?? `#${task.order}`;
   const files = conflict.conflictFiles ?? [];
+  const merge = `git merge --no-edit ${quotedMessageArgs(conflict.message)} ${integrationBranch}`;
   const asked = `What the task was asked to do:\n${task.prompt ?? task.description}`;
   const resolve = 'resolve every conflict so that both sides\' intent survives: keep the work already integrated and add what the task contributed.';
   const repos = conflict.repos.filter((repo) => repo !== SELF_REPO);
   if (repos.length === 0) {
     return [
       `Task ${ref} "${task.title}" passed, but merging its branch \`${branch}\` into \`${integrationBranch}\` conflicted${files.length > 0 ? ` in ${files.join(', ')}` : ''}. None of its work has landed yet.`,
-      `This is the task's own worktree, on \`${branch}\`, with its work committed. Run \`git merge --no-edit ${integrationBranch}\` here and ${resolve} Never drop either side wholesale, and never abort the merge or reset it away.`,
-      'Build and test the result the way this project does, commit the merge, and only then call `task_complete`.',
+      `This is the task's own worktree, on \`${branch}\`, with its work committed. Run \`${merge}\` here and ${resolve} Never drop either side wholesale, and never abort the merge or reset it away.`,
+      `Build and test the result the way this project does, commit the merge with \`${COMMIT_MERGE}\`, and only then call \`task_complete\`.`,
       '',
       asked,
     ].join('\n');
@@ -896,8 +902,8 @@ export function buildConflictRepairPrompt(
   const stoppedIn = conflict.conflictRepo ?? repos[0];
   return [
     `Task ${ref} "${task.title}" passed, but landing its branch \`${branch}\` on \`${integrationBranch}\` conflicted in ${stoppedIn}${files.length > 0 ? ` (${files.join(', ')})` : ''}. A task lands in every repository it changed or in none, so none of its work has landed yet.`,
-    `This is the task's own workspace, with each repository at its usual path on \`${branch}\` and the task's work committed. In each repository the task changed — ${repos.join(', ')} — run \`git merge --no-edit ${integrationBranch}\` inside that repository's directory, and ${resolve} Never drop either side wholesale, and never abort a merge or reset it away.`,
-    'Build and test the result the way this project does, commit the merge in each repository, and only then call `task_complete`.',
+    `This is the task's own workspace, with each repository at its usual path on \`${branch}\` and the task's work committed. In each repository the task changed — ${repos.join(', ')} — run \`${merge}\` inside that repository's directory, and ${resolve} Never drop either side wholesale, and never abort a merge or reset it away.`,
+    `Build and test the result the way this project does, commit the merge in each repository with \`${COMMIT_MERGE}\`, and only then call \`task_complete\`.`,
     '',
     asked,
   ].join('\n');

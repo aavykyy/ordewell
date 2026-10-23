@@ -653,7 +653,7 @@ describe('Session with worktree isolation', () => {
 
     const { prompt } = session.planTasks[1];
     expect(prompt).toContain('conflicted in web');
-    expect(prompt).toContain('In each repository the task changed — api, web — run `git merge --no-ff ordewell/run1/1-t1`');
+    expect(prompt).toContain('In each repository the task changed — api, web — run `git merge --no-ff -m \'Merge: Task t1 (resolve conflicts with integration)\' ordewell/run1/1-t1`');
   });
 
   it('refuses to resolve a task that did not conflict', async () => {

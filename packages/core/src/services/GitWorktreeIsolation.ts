@@ -28,6 +28,7 @@ import type {
   TreeSnapshot,
 } from '../interfaces/IWorktreeIsolation';
 import type { Task } from '../models/Task';
+import type { HandoffCommit } from '../models/Handoff';
 import { augmentedPath } from '../utils/shellPath';
 import { ensureStateDirIgnored, STATE_DIR } from '../utils/fsHelpers';
 import { sanitizeSlug } from '../utils/prdStore';
@@ -36,6 +37,7 @@ import { defaultExecFile, git, tryGit, type GitExecFn, type GitInvoker, type Git
 import { IsolationLocks } from './isolationLocks';
 import { bootstrap, installDirs, isEnvFile, lexists, LINKED_ARTIFACTS, listDir, SetupCommandError } from './worktreeBootstrap';
 import { linkPath } from './worktreeLink';
+import { landingMessage, messageArgs } from './landingMessage';
 import { childDirs, groupPaths, hasGitEntry } from './repoGroup';
 
 export type { GitExecFn } from './gitExec';
@@ -548,7 +550,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const entry = record.repos[repo.path];
       if (!entry) continue;
       try {
-        await this.commitWorktree(repo, entry, firstLine(record.title));
+        await this.commitWorktree(repo, entry, landingMessage('work', record));
       } catch {
         return { ok: false, reason: 'failed', repo: repo.path };
       }
@@ -581,8 +583,9 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return (await this.git(repo.root, ['rev-parse', '--show-prefix'])).trim();
   }
 
-  integrate(task: Task, run: IsolationRun, persist: () => void = () => undefined): Promise<IsolationOutcome> {
+  integrate(task: Task, run: IsolationRun, persist: () => void = () => undefined, commit?: HandoffCommit): Promise<IsolationOutcome> {
     const record = run.tasks[task.id];
+    if (record && commit) record.commit = commit;
     if (record?.readOnly) {
       // Whatever a read-only task changed was never meant to land (ADR-0046).
       record.status = 'failed';
@@ -998,7 +1001,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         return this.stopLanding(record, 'failed', repo, undefined, `its worktree is gone (${entry.worktree})`);
       }
       try {
-        await this.commitWorktree(repo, entry, firstLine(record.title));
+        await this.commitWorktree(repo, entry, landingMessage('work', record));
         entry.taskTip = (await this.git(repo.root, ['rev-parse', '--verify', `refs/heads/${record.branch}^{commit}`])).trim();
       } catch (err) {
         const detail = firstLine(err instanceof Error ? err.message : String(err));
@@ -1066,7 +1069,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     } catch (err) {
       return { outcome: 'failed', files: [], error: await this.integrationWorktreeError(repo, err) };
     }
-    const merge = await this.tryGit(dir, ['merge', '--no-ff', '--no-edit', '-m', `Merge: ${firstLine(record.title)}`, record.branch]);
+    const merge = await this.tryGit(dir, ['merge', '--no-ff', '--no-edit', ...messageArgs(landingMessage('merge', record)), record.branch]);
     if (merge.ok) return { outcome: 'merged', files: [] };
     // A hook that refuses the merge commit leaves a merge in progress with nothing unmerged: a failure, not a conflict.
     const files = await this.unmergedPaths(dir);
@@ -1163,7 +1166,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     // A rescue exists only so a removal deletes nothing: a hook that refuses
     // the commit, or a signing prompt nobody will answer, must not stop it.
     const commit = opts.rescue ? ['-c', 'commit.gpgsign=false', 'commit', '--no-verify'] : ['commit'];
-    await this.git(entry.worktree, [...commit, '-q', '-m', message]);
+    await this.git(entry.worktree, [...commit, '-q', ...messageArgs(message)]);
   }
 
   private integrationDir(run: IsolationRun, repo: IsolationRepo): string {

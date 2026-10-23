@@ -89,6 +89,21 @@ describe('TaskOrchestrator with worktree isolation', () => {
     });
   });
 
+  it('lands a passed task with the commit its handoff stated, before the handoff is on the task', async () => {
+    const { orchestrator, isolation, sessionFor } = setup();
+    const t1 = task('t1', 1);
+    orchestrator.loadPlan([t1]);
+    await orchestrator.approveReview();
+    const openMerge = isolation.holdIntegration('t1');
+
+    sessionFor('t1')!.reportComplete({ status: 'done', summary: 'Next: wire it up.', commit: { subject: 'Greet the user', body: 'Why it changed.' } });
+    await vi.waitFor(() => expect(isolation.taskIdsFor('integrate')).toEqual(['t1']));
+    expect(orchestrator.runs.current?.tasks.t1.commit).toEqual({ subject: 'Greet the user', body: 'Why it changed.' });
+
+    openMerge();
+    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
+  });
+
   it('holds a dependent back until its predecessor is integrated, then starts it from the new tip', async () => {
     const { orchestrator, isolation, pass, spawn } = setup();
     const t1 = task('t1', 1);
@@ -966,7 +981,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
       const [first, repair] = spawn.mock.calls.map(([o]) => o);
       expect(repair).toMatchObject({ taskId: 't1', cwd: first.cwd, runner: first.runner, modelId: 'opus', thinkingEffort: 'high', mode: 'acceptEdits' });
       expect(repair.prompt).toContain('conflicted in a.ts');
-      expect(repair.prompt).toContain('git merge --no-edit ordewell/run1/integration');
+      expect(repair.prompt).toContain("git merge --no-edit -m 'Merge: Task t1 (resolve conflicts with integration)' ordewell/run1/integration");
       expect(repair.prompt).toContain('What the task was asked to do:\ndo t1');
       expect(repair.prompt).toContain('only then call `task_complete`');
       expect(isolation.taskIdsFor('prepare')).toEqual(['t1']);
@@ -1122,7 +1137,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
       await orchestrator.approveReview();
       pass(t1);
       await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
-      expect(spawn.mock.calls[1][0].prompt).toContain('In each repository the task changed — api, web — run `git merge --no-edit ordewell/run1/integration`');
+      expect(spawn.mock.calls[1][0].prompt).toContain('In each repository the task changed — api, web — run `git merge --no-edit -m \'Merge: Task t1 (resolve conflicts with integration)\' ordewell/run1/integration`');
       expect(messages(notifications.info)).toContain('Repairing the conflict of task "Task t1" in its own worktrees (repair 1 of 2).');
       isolation.outcomes.set('t1', 'merged');
 

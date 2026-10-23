@@ -1321,7 +1321,7 @@ export class TaskOrchestrator {
     if (this.attempts.get(taskId) !== attempt) return;
     const summary = this.output.finalText(taskId);
     const handoff = this.output.handoff(taskId);
-    const landing = verdict.outcome === 'pass' ? await this.land(attempt, () => this.landing.landPassed(task, attempt)) : null;
+    const landing = verdict.outcome === 'pass' ? await this.land(attempt, () => this.landing.landPassed(task, attempt, handoff?.commit)) : null;
     const changedFiles = landing && checksTree(attempt.kind) ? await this.runs.filesChangedSince(attempt.snapshot) : [];
     const unresumedReason = this.unresumed(attempt) ? unresumedMessage(task, `${attempt.runner} could not find its saved session`) : null;
     if (this.attempts.get(taskId) !== attempt) return;
