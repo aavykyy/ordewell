@@ -268,6 +268,25 @@ describe('VersionCheck', () => {
       expect(readState()).toEqual({ installId: expect.any(String), noticeShownAt: '2026-10-23T09:00:00.000Z' });
     });
 
+    it.each([
+      ['no install ID', {}],
+      ['an install ID of the wrong type', { installId: 7 }],
+      ['an empty install ID', { installId: '' }],
+    ])('starts over when it has a notice but %s, so the check is not off for good', async (_, broken) => {
+      fs.writeFileSync(stateFile(), JSON.stringify({ noticeShownAt: new Date(T0 - 2 * DAY).toISOString(), ...broken }));
+      const net = fakeFetch(reply(204));
+      const first = start({ fetch: net.fetch });
+      await first.check.settled();
+      expect(first.notices).toEqual([NOTICE]);
+      expect(net.calls).toEqual([]);
+      const { installId } = readState();
+      expect(installId).toMatch(/^[0-9a-f-]{36}$/);
+
+      now += 60_000;
+      await start({ fetch: net.fetch }).check.settled();
+      expect(net.calls.map((call) => call.url)).toEqual([`${VERSION_CHECK_URL}?v=0.10.12&id=${installId}`]);
+    });
+
     it('is created with its directory', async () => {
       const nested = path.join(stateDir, 'not', 'yet');
       const { notices } = start({ fetch: fakeFetch(reply(204)).fetch, stateDir: nested });
@@ -292,6 +311,21 @@ describe('VersionCheck', () => {
       try {
         const net = fakeFetch(reply(204));
         await start({ fetch: net.fetch }).check.settled();
+        expect(net.calls).toEqual([]);
+      } finally {
+        fs.chmodSync(stateDir, 0o700);
+      }
+    });
+
+    // POSIX permissions: Windows ignores the chmod.
+    it.skipIf(process.platform === 'win32')('shows no notice when it cannot record one, since every start would show it again', async () => {
+      fs.chmodSync(stateDir, 0o500);
+      try {
+        const net = fakeFetch(reply(204));
+        const first = start({ fetch: net.fetch });
+        const second = start({ fetch: net.fetch });
+        await Promise.all([first.check.settled(), second.check.settled()]);
+        expect([...first.notices, ...second.notices]).toEqual([]);
         expect(net.calls).toEqual([]);
       } finally {
         fs.chmodSync(stateDir, 0o700);

@@ -182,13 +182,17 @@ export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
   };
 
   const state = readState(file);
-  if (!state.noticeShownAt) {
-    writeState(file, { ...state, installId: state.installId ?? randomUUID(), noticeShownAt: new Date(now()).toISOString() });
+  // A notice without an install ID starts over too: no ID means no ping, so
+  // keeping the notice would leave the check off for good.
+  if (!state.noticeShownAt || !state.installId) {
+    // A notice that cannot be recorded would be shown on every start; nothing
+    // is ever sent from such a machine, so there is nothing to tell.
+    const recorded = writeState(file, { ...state, installId: state.installId ?? randomUUID(), noticeShownAt: new Date(now()).toISOString() });
     // Nothing is sent from this process, timer included: the off switches are
     // read once at start, so only a later start can honour one the notice
     // just told the user about.
     try {
-      options.onNotice(VERSION_CHECK_NOTICE);
+      if (recorded) options.onNotice(VERSION_CHECK_NOTICE);
     } catch {
       // A closed stderr is the caller's problem, not a reason to fail its start.
     }
