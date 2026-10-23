@@ -9,8 +9,8 @@ function findingCount(count: number): string {
 export function HandoffPeek({ handoff }: { handoff: TaskRowHandoff | null }) {
   if (!handoff) return null;
   return (
-    <div className="task-handoff-peek" title={handoff.summary}>
-      Handed over · {findingCount(handoff.findingCount)}{handoff.severity ? ` · ${severityLabel(handoff.severity)}` : ''} · {handoff.summary.split('\n')[0]}
+    <div className="task-handoff-peek" title={handoff.commit ? `${handoff.commit.subject}\n\n${handoff.summary}` : handoff.summary}>
+      Handed over · {findingCount(handoff.findingCount)}{handoff.severity ? ` · ${severityLabel(handoff.severity)}` : ''}{handoff.commit ? ` · Commit: ${handoff.commit.subject}` : ''}{handoff.summary ? ` · ${handoff.summary.split('\n')[0]}` : ''}
     </div>
   );
 }
@@ -31,7 +31,13 @@ export default function TaskHandoff({ handoff, expanded = false, taskName, onRea
   return (
     <section className="task-handoff" aria-label="Handoff">
       <div className="task-handoff-heading">Handoff · {findingCount(handoff.findingCount)}{severity ? ` · ${severityLabel(severity)}` : ''}</div>
-      <div className="task-handoff-summary">{handoff.summary}</div>
+      {handoff.commit && (
+        <div className="task-handoff-commit">
+          <div className="task-handoff-commit-subject">Commit: {handoff.commit.subject}</div>
+          {handoff.commit.body && <div className="task-handoff-commit-body">{handoff.commit.body}</div>}
+        </div>
+      )}
+      {handoff.summary && <div className="task-handoff-summary">{handoff.summary}</div>}
       {handoff.findings.map((finding) => (
         <div key={finding.id} className="task-handoff-finding" data-severity={finding.severity}>
           <div className="task-handoff-finding-heading">{finding.id} · {severityLabel(finding.severity)} · {finding.title}</div>

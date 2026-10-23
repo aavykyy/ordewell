@@ -717,6 +717,12 @@ function handoffLines(block: HandoffBlock, cols: number, detailAll: boolean): st
     ? `${countOf(handoff.findingCount, 'finding')}${severity ? ` · ${severityLabel(severity).toLowerCase()}` : ''}`
     : null;
   const rows = [`${style.brand('◆')} ${style.bold('Handoff')}${summary ? style.grey(` · ${summary}`) : ''}`];
+  if (handoff.commit) {
+    const room = Math.max(1, cols - HANDOFF_INDENT.length);
+    const body = handoff.commit.body ? sanitize(handoff.commit.body).trim() : '';
+    rows.push(...wrap(`Commit: ${sanitize(handoff.commit.subject).trim()}`, room).map((line) => `${HANDOFF_INDENT}${style.bold(line)}`));
+    if (body) rows.push(...body.split('\n').flatMap((line) => wrap(line, room)).map((line) => `${HANDOFF_INDENT}${line}`));
+  }
   const said = sanitize(handoff.summary).trim();
   if (said) rows.push(...wrap(said, Math.max(1, cols - HANDOFF_INDENT.length)).map((line) => `${HANDOFF_INDENT}${line}`));
   if (handoff.findings.length > 0) {

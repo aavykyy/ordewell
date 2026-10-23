@@ -62,6 +62,14 @@ describe('a task\'s handoff in its row (ADR-0047)', () => {
     expect(planText(state)).toContain('handed over · 2 findings · blocker · OK');
   });
 
+  it('leads with the commit subject, and shows a commit-only handoff', () => {
+    const commit = { subject: 'Add the route' };
+    const both = initialState({ rows: 24, cols: 140, focus: 'plan', tasks: [task({ handoff: { ...handoff, summary: 'OK', commit } })] });
+    expect(planText(both)).toContain('handed over · 2 findings · blocker · commit: Add the rou');
+    const only = initialState({ rows: 24, cols: 140, focus: 'plan', tasks: [task({ handoff: { summary: '', findings: [], findingCount: 0, commit } })] });
+    expect(planText(only)).toContain('handed over · no findings · commit: Add the route');
+  });
+
   it('takes the digest from a plan refresh and from a live status update', () => {
     const planned = reduce(initialState({ sessionId: 's1', rows: 24, cols: 100, focus: 'plan' }), {
       type: 'planUpdated',
@@ -106,6 +114,20 @@ describe('a task\'s handoff in its view (ADR-0047)', () => {
     expect(out).toContain('report line 8');
     expect(out).not.toContain('report line 9');
     expect(out).toContain('+6 lines of the report (ctrl+o to expand)');
+  });
+
+  it('draws the commit, subject then body, before the summary', () => {
+    const commit = { subject: 'Add the route', body: 'Guards it.\nNo schema change.' };
+    const out = plain(opened([{ type: 'handoff', handoff: { ...handoff, commit } }])).split('\n').map((l) => l.trim());
+    const at = (text: string) => out.findIndex((l) => l.includes(text));
+    expect(at('Commit: Add the route')).toBeGreaterThan(-1);
+    expect(at('Commit: Add the route')).toBeLessThan(at('Guards it.'));
+    expect(at('No schema change.')).toBeLessThan(at('Added the route.'));
+  });
+
+  it('draws a handoff with only a commit', () => {
+    const only: StoredHandoff = { summary: '', findings: [], findingCount: 0, commit: { subject: 'Just this' } };
+    expect(plain(opened([{ type: 'handoff', handoff: only }]))).toContain('Commit: Just this');
   });
 
   it('folds the report back and forth with ctrl-o, the same switch as every long block', () => {

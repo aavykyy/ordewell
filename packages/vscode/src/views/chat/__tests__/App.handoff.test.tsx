@@ -43,6 +43,20 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     expect(document.querySelector('.task-handoff-peek')).toBeNull();
   });
 
+  it('shows the commit before the summary, and a handoff with only a commit', () => {
+    update({ ...task, handoff: { ...handoff, commit: { subject: 'Scope the token', body: 'Reads stay in the tenant.' } } });
+    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Commit: Scope the token · Keep the token scoped.');
+    fireEvent.click(screen.getByText('Review boundary'));
+    const section = document.querySelector('.task-handoff')!;
+    expect(section.querySelector('.task-handoff-commit')).toHaveTextContent('Commit: Scope the tokenReads stay in the tenant.');
+    expect(section.querySelector('.task-handoff-commit')!.compareDocumentPosition(section.querySelector('.task-handoff-summary')!))
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    fireEvent.click(screen.getByText('Review boundary'));
+    update({ ...task, handoff: { summary: '', findings: [], findingCount: 0, commit: { subject: 'Only a commit' } } });
+    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Handed over · no findings · Commit: Only a commit');
+    expect(document.querySelector('.task-handoff-summary')).toBeNull();
+  });
+
   it.each(['script', 'user'] as const)('shows the %s handoff from a saved plan with no findings', (type) => {
     post({ type: 'planUpdated', plan: {
       tasks: [{ ...task, type, handoff: { summary: 'Finished', findings: [], findingCount: 0 } }],

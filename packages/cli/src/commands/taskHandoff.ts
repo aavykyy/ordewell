@@ -9,7 +9,6 @@ import { handoffPreviewLines, type HandoffDigest } from '@ordewell/core';
 export function taskHandoffLines(handoff: HandoffDigest, indent: string): string[] {
   const preview = handoffPreviewLines(handoff);
   const [first = '', ...body] = preview;
-  const summary = handoff.summary.trim();
-  if (!summary) return [`${indent}↳ Handoff`, ...preview.map((line) => `${indent}${line}`)];
+  if (!handoff.summary.trim() || handoff.commit) return [`${indent}↳ Handoff`, ...preview.map((line) => `${indent}${line}`)];
   return [`${indent}↳ Handoff: ${first}`, ...body.map((line) => `${indent}${line}`)];
 }
