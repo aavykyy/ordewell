@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
-import { landingMessage, messageArgs, quotedMessageArgs } from '../landingMessage';
+import { landingMessage, messageArgs, quotedMessageArgs, runMergeMessage } from '../landingMessage';
 
 describe('landingMessage', () => {
   const stated = { title: 'Add greeting', commit: { subject: 'Greet the user on start', body: 'The banner was empty.\nNow it says hi.' } };
@@ -14,6 +14,11 @@ describe('landingMessage', () => {
     expect(landingMessage('repair-merge', stated)).toBe('Merge: Greet the user on start (resolve conflicts with integration)');
   });
 
+  it('names a rescue and the merge that restores it for the task, with no stated body', () => {
+    expect(landingMessage('rescue', stated)).toBe('WIP: Greet the user on start\n\nWork left uncommitted when its worktree was removed, kept so that nothing is lost.');
+    expect(landingMessage('restore-merge', stated)).toBe('Merge: Greet the user on start (resume its kept work)');
+  });
+
   it('falls back to the first line of the title when no commit was stated', () => {
     const untitled = { title: '  Add greeting  \nand more' };
     expect(landingMessage('work', untitled)).toBe('Add greeting');
@@ -22,12 +27,24 @@ describe('landingMessage', () => {
   });
 });
 
+describe('runMergeMessage', () => {
+  it('names one task by its subject, several by the first and a line each, in the order given', () => {
+    expect(runMergeMessage([{ title: 'Add alpha', commit: { subject: 'Greet', body: 'Not repeated.' } }])).toBe('Merge: Greet');
+    expect(runMergeMessage([{ title: 'Add alpha' }, { title: 'Add beta\nmore' }, { title: 'Add gamma' }])).toBe('Merge: Add alpha and 2 more\n\n- Add alpha\n- Add beta\n- Add gamma');
+  });
+
+  it('still names the change when no task is known, and takes the trailer like the rest', () => {
+    expect(runMergeMessage([], true)).toBe('Merge planned changes\n\nPlanned-with: Ordewell');
+    expect(runMergeMessage([{ title: 'A' }, { title: 'B' }], true)).toBe('Merge: A and 1 more\n\n- A\n- B\n\nPlanned-with: Ordewell');
+  });
+});
+
 describe('landingMessage with the Planned-with trailer', () => {
   const stated = { title: 'Add greeting', commit: { subject: 'Greet the user on start', body: 'The banner was empty.' } };
 
   const trailerOf = (message: string): string => execFileSync('git', ['interpret-trailers', '--parse'], { input: message, encoding: 'utf8' });
 
-  it.each(['work', 'merge', 'repair-merge'] as const)('ends a %s message with the trailer as its own paragraph', (kind) => {
+  it.each(['work', 'merge', 'repair-merge', 'rescue', 'restore-merge'] as const)('ends a %s message with the trailer as its own paragraph', (kind) => {
     const message = landingMessage(kind, stated, true);
     expect(message.endsWith('\n\nPlanned-with: Ordewell')).toBe(true);
     expect(trailerOf(message)).toBe('Planned-with: Ordewell\n');

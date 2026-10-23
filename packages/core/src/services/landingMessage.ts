@@ -2,11 +2,14 @@ import type { HandoffCommit } from '../models/Handoff';
 
 /**
  * The commits Ordewell itself writes for a task (ADR-0013): its leftover
- * `work`, the `merge` that lands it, and the `repair-merge` that brings the
- * integration tip into its branch when a landing conflicted (ADR-0015). A
- * commit the runner made is never rewritten, so it is not one of these.
+ * `work`, the `merge` that lands it, the `repair-merge` that brings the
+ * integration tip into its branch when a landing conflicted (ADR-0015), the
+ * `rescue` of edits a removal would otherwise delete, and the `restore-merge`
+ * that brings that kept work back into a continued task's branch. The last
+ * two land with the task's branch, so they read like the rest. A commit the
+ * runner made is never rewritten, so it is not one of these.
  */
-export type LandingCommit = 'work' | 'merge' | 'repair-merge';
+export type LandingCommit = 'work' | 'merge' | 'repair-merge' | 'rescue' | 'restore-merge';
 
 /** What a landing message is written from: the task's title, and the commit its done handoff stated, if any. */
 export interface LandingSubject {
@@ -26,19 +29,41 @@ function firstLine(text: string): string {
 /**
  * The whole message of a commit Ordewell writes for a task: the stated
  * subject, or the task title when none was stated, then the stated body
- * after a blank line. A repair merge carries no body: the body describes the
- * task's work, which the landing merge after it carries. With `plannedWith`
- * the {@link PLANNED_WITH_TRAILER} closes it; the caller reads the user's
- * setting as it writes (ADR-0030). The one place a landing's message text is
- * decided.
+ * after a blank line. A repair or restore merge carries no body: the body
+ * describes the task's work, which the landing merge after it carries. With
+ * `plannedWith` the {@link PLANNED_WITH_TRAILER} closes it; the caller reads
+ * the user's setting as it writes (ADR-0030). The one place a landing's
+ * message text is decided.
  */
 export function landingMessage(kind: LandingCommit, from: LandingSubject, plannedWith = false): string {
   const subject = firstLine(from.commit?.subject ?? '') || firstLine(from.title);
   const head = kind === 'work' ? subject
     : kind === 'merge' ? `Merge: ${subject}`
+    : kind === 'rescue' ? `WIP: ${subject}`
+    : kind === 'restore-merge' ? `Merge: ${subject} (resume its kept work)`
     : `Merge: ${subject} (resolve conflicts with integration)`;
-  const body = kind === 'repair-merge' ? '' : from.commit?.body?.trim() ?? '';
-  const text = body ? `${head}\n\n${body}` : head;
+  const body = kind === 'rescue' ? RESCUE_BODY
+    : kind === 'repair-merge' || kind === 'restore-merge' ? ''
+    : from.commit?.body?.trim() ?? '';
+  return finish(body ? `${head}\n\n${body}` : head, body, plannedWith);
+}
+
+const RESCUE_BODY = 'Work left uncommitted when its worktree was removed, kept so that nothing is lost.';
+
+/**
+ * The message of Merge all's merge into the user's branch, from the tasks it
+ * brings there in plan order: the one task's subject, or the first's with a
+ * line per task below. Never git's default, which names the integration branch.
+ */
+export function runMergeMessage(landed: LandingSubject[], plannedWith = false): string {
+  const subjects = landed.map((from) => firstLine(from.commit?.subject ?? '') || firstLine(from.title)).filter(Boolean);
+  if (subjects.length === 0) return finish('Merge planned changes', '', plannedWith);
+  const head = subjects.length === 1 ? `Merge: ${subjects[0]}` : `Merge: ${subjects[0]} and ${subjects.length - 1} more`;
+  const body = subjects.length === 1 ? '' : subjects.map((subject) => `- ${subject}`).join('\n');
+  return finish(body ? `${head}\n\n${body}` : head, body, plannedWith);
+}
+
+function finish(text: string, body: string, plannedWith: boolean): string {
   return plannedWith ? withTrailer(text, body) : text;
 }
 

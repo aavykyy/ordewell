@@ -268,6 +268,18 @@ describe('a check sees what changed since its last round (ADR-0047)', () => {
     expect(out).toContain(`Your previous findings are not structured.\n${report}`);
   });
 
+  it('opens its previous handoff with the commit it stated, so a commit-only handoff is not blank', () => {
+    const check = createTask({ id: 'check', order: 1, title: 'Review', prompt: 'Review.', loop: { body: ['fix'], maxRounds: 3 } });
+    const fix = createTask({ id: 'fix', order: 2, title: 'Fix', dependencies: ['check'] });
+
+    const out = composeAugmentedPrompt(check, [check, fix], { loop: {
+      round: 2,
+      previousHandoff: { commit: { subject: 'Tighten the parser', body: 'It accepted blank lines.' }, summary: '', findings: [], findingCount: 0, artifacts: [{ kind: 'file', path: 'src/parser.ts' }] },
+    } });
+
+    expect(out).toContain('### Your previous handoff\nCommit: Tighten the parser\nIt accepted blank lines.\nArtifacts: src/parser.ts (unresolved)\n');
+  });
+
   it('omits the block for round 1 and for a script check', () => {
     const check = createTask({ id: 'check', prompt: 'Check.', loop: { body: ['fix'], maxRounds: 3 } });
     expect(composeAugmentedPrompt(check, [check], { loop: { round: 1 } })).not.toContain('## Since your last round');

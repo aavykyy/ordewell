@@ -159,17 +159,6 @@ function withoutTrailers({ subject, body }: HandoffCommit): HandoffCommit {
   return { subject, ...(cleaned ? { body: cleaned } : {}) };
 }
 
-/**
- * The message a done change task's work is committed with, as its handoff
- * states it: the subject, then the body after a blank line. Undefined when
- * the handoff states no commit, so the landing falls back to its own.
- */
-export function commitMessage(handoff: HandoffDigest | undefined): string | undefined {
-  const commit = handoff?.commit;
-  if (!commit) return undefined;
-  return commit.body ? `${commit.subject}\n\n${commit.body}` : commit.subject;
-}
-
 /** What the plan keeps of a handoff: no report, and at most {@link DIGEST_FINDINGS} findings. */
 export function handoffDigest(handoff: StoredHandoff): HandoffDigest {
   return {
@@ -219,7 +208,7 @@ export function artifactLines(handoff: HandoffDigest, taskName: HandoffTaskName 
 }
 
 /** A handoff's opening as text: its commit, subject then body, then the summary. */
-function openingLines(handoff: HandoffDigest): string[] {
+export function openingLines(handoff: HandoffDigest): string[] {
   const { commit, summary } = handoff;
   if (!commit) return [summary];
   return [`Commit: ${commit.subject}`, ...(commit.body ? commit.body.split('\n') : []), ...(summary ? ['', summary] : [])];

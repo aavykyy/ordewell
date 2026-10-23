@@ -77,7 +77,7 @@ There is no per-plan value and no per-workspace override.
 | supervisor level | Off, Watch, Act | **Watch** |
 | merge at gates automatically | on, off | off |
 | autorun | on, off | off |
-| Planned-with line in merge commits | on, off | **on** |
+| Planned-with line in commits Ordewell writes | on, off | **on** |
 | supervisor retry limit | whole number ≥ 0 | 2 |
 | wake-up read budget | whole number ≥ 1 | 12 |
 
@@ -100,7 +100,7 @@ The headless CLI keeps one command per value for scripts, where no panel exists.
 | `ordewell supervisor retries <n>` | retry limit |
 | `ordewell supervisor reads <n>` | wake-up read budget |
 | `ordewell automerge [on\|off]` | merge at gates automatically |
-| `ordewell trailer [on\|off]` | Planned-with line in merge commits |
+| `ordewell trailer [on\|off]` | Planned-with line in commits Ordewell writes |
 | `ordewell autorun [on\|off]` | autorun |
 | `ordewell parallel [<n>]` | tasks that run at once |
 

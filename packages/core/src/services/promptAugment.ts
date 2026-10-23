@@ -4,7 +4,7 @@ import type { PreservedWork, PreviousWork } from '../interfaces/IWorktreeIsolati
 import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
-import { REPORT_MAX_CHARS, boundedHandoffLines, findingLines, namedHandoff, type HandoffDigest, type StoredHandoff } from '../models/Handoff';
+import { REPORT_MAX_CHARS, artifactLines, boundedHandoffLines, findingLines, namedHandoff, openingLines, type HandoffDigest, type StoredHandoff } from '../models/Handoff';
 
 const MAX_TAIL_CHARS = 500;
 /** Each dependency's share of a dependent's prompt, which carries every direct dependency's handoff (ADR-0047). */
@@ -227,7 +227,9 @@ export interface ComposeOptions {
 function renderSinceLastRound(task: Task, allTasks: readonly Task[], loop: NonNullable<ComposeOptions['loop']>): string {
   const lines = ['## Since your last round', '', '### Your previous handoff'];
   if (loop.previousHandoff) {
-    lines.push(loop.previousHandoff.summary, ...loop.previousHandoff.findings.flatMap(({ id, severity, title }) => findingLines({ id, severity, title })));
+    // The opening the shared renderer writes, so a commit-only handoff is not blank; the findings stay one line each.
+    const previous = namedHandoff(allTasks, loop.previousHandoff);
+    lines.push(...openingLines(previous), ...previous.findings.flatMap(({ id, severity, title }) => findingLines({ id, severity, title })), ...artifactLines(previous));
   } else {
     lines.push('Your previous findings are not structured.', loop.previousReport || '(no previous report captured)');
   }

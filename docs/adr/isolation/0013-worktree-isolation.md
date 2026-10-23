@@ -88,8 +88,14 @@ everything below applies per repo of the group.
   with the same body, the same in every repo the task changed. Without a stated
   commit, the task title's first line stands in for the subject. A conflict
   repair is told to merge the integration tip in with
-  `Merge: <subject> (resolve conflicts with integration)`, so git's default
-  `Merge branch 'ordewell/…'` never reaches history. A multi-line message goes
+  `Merge: <subject> (resolve conflicts with integration)`. A continued task's
+  kept work comes back into its branch with
+  `Merge: <subject> (resume its kept work)`, and the rescue commit that kept
+  it is `WIP: <subject>` with a line on why; both land with the task. Merge
+  all's merge into the user's branch is `Merge: <subject>` of the one task it
+  brings there, or of the first in plan order with `and N more` and a line
+  per task. So git's default `Merge branch 'ordewell/…'` or
+  `Merge commit '<sha>' into ordewell/…` never reaches history. A multi-line message goes
   to git as one `-m` per paragraph, never through a shell; a commit the Runner
   made itself is never rewritten. Each message Ordewell writes ends with the
   git trailer `Planned-with: Ordewell` unless the user turned that off in
@@ -498,3 +504,4 @@ literal git command lines or private fields.
 - 2026-10-22: merge automatically and supervisor Act are set in `/settings`; the one-value slash commands are gone from the TUI and VS Code.
 - 2026-10-23 — landing commits and merges are written from the commit the task's handoff stated, falling back to its title; a conflict repair's merge names the task, not Ordewell's branches.
 - 2026-10-23 — the commits and merges Ordewell writes end with a `Planned-with: Ordewell` trailer, which the user can turn off (ADR-0030).
+- 2026-10-23 — Merge all's merge, a continue's merge of kept work and the rescue commit are named for the tasks and carry the trailer, like the landing.
