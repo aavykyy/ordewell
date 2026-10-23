@@ -36,7 +36,7 @@ describe('run settings over /api/settings', () => {
   it('answers the run settings, each at its default until the user sets it', async () => {
     const body = await (await app.request('/api/settings')).json() as SettingsResponse;
 
-    expect(body.run).toEqual({ supervisorLevel: 'watch', mergeAtGatesAutomatically: false, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12 });
+    expect(body.run).toEqual({ supervisorLevel: 'watch', mergeAtGatesAutomatically: false, plannedWithTrailer: true, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12 });
   });
 
   it('saves a change for every session and answers the settings as they now stand', async () => {
@@ -45,6 +45,15 @@ describe('run settings over /api/settings', () => {
     expect(res.status).toBe(200);
     expect((await res.json() as SettingsResponse).run).toMatchObject({ supervisorLevel: 'act', autorun: true });
     expect(new SettingsService().getRunSettings()).toMatchObject({ supervisorLevel: 'act', autorun: true });
+  });
+
+  it('turns the Planned-with line off for every later commit, and refuses anything but on or off', async () => {
+    expect((await patch({ run: { plannedWithTrailer: false } })).status).toBe(200);
+    expect(new SettingsService().getRunSettings().plannedWithTrailer).toBe(false);
+
+    const refused = await patch({ run: { plannedWithTrailer: 'off' } });
+    expect(refused.status).toBe(400);
+    expect(new SettingsService().getRunSettings().plannedWithTrailer).toBe(false);
   });
 
   it('applies the change to the named session\'s run at once', async () => {

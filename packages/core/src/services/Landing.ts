@@ -58,6 +58,8 @@ export interface LandingDeps {
   config: Pick<IConfig, 'conflictRepairAttempts'>;
   /** Read-only: only the orchestrator changes a task. `planTasks` labels a subtask by its dotted reference. */
   tasks: Pick<PlanStore, 'get' | 'planTasks'>;
+  /** Whether a repair merge's message ends with the Planned-with trailer; read as the prompt is built. */
+  plannedWith?: () => boolean;
 }
 
 const NOTHING_TO_LAND: LandingOutcome = { kind: 'nothing-to-land', messages: [] };
@@ -76,8 +78,10 @@ export class Landing {
   private readonly runs: IsolationRunController;
   private readonly config: Pick<IConfig, 'conflictRepairAttempts'>;
   private readonly tasks: Pick<PlanStore, 'get' | 'planTasks'>;
+  private readonly plannedWith: () => boolean;
 
   constructor(deps: LandingDeps) {
+    this.plannedWith = deps.plannedWith ?? (() => false);
     this.runs = deps.runs;
     this.config = deps.config;
     this.tasks = deps.tasks;
@@ -176,7 +180,7 @@ export class Landing {
     const record = run.tasks[task.id];
     const conflict = {
       branch: record?.branch ?? '',
-      message: landingMessage('repair-merge', record ?? task),
+      message: landingMessage('repair-merge', record ?? task, this.plannedWith()),
       repos: Object.keys(record?.repairBase ?? {}),
       ...(record?.conflictRepo ? { conflictRepo: record.conflictRepo } : {}),
       ...(record?.conflictFiles ? { conflictFiles: record.conflictFiles } : {}),
@@ -271,13 +275,13 @@ export class Landing {
  * task's landing is in conflict. Linking the two, so the conflicted task lands
  * once the resolver has, stays with the caller.
  */
-export function conflictResolverTask(task: Readonly<Task>, run: IsolationRun | null, plan?: readonly Task[]): Partial<Task> | null {
+export function conflictResolverTask(task: Readonly<Task>, run: IsolationRun | null, plan?: readonly Task[], plannedWith = false): Partial<Task> | null {
   const record = run?.tasks[task.id];
   if (!run || record?.status !== 'conflict') return null;
   const integrationBranch = integrationBranchNameOf(run);
   const conflict = {
     branch: record.branch,
-    message: landingMessage('repair-merge', record),
+    message: landingMessage('repair-merge', record, plannedWith),
     repos: changedReposOf(record),
     ...(record.conflictRepo ? { conflictRepo: record.conflictRepo } : {}),
   };

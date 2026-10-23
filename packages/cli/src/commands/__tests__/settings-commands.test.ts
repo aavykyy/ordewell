@@ -344,18 +344,19 @@ describe('ordewell auto (ADR-0030)', () => {
   });
 });
 
-describe('ordewell supervisor, automerge and autorun (ADR-0030)', () => {
-  const RUN = { supervisorLevel: 'watch', mergeAtGatesAutomatically: false, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12 };
+describe('ordewell supervisor, automerge, trailer and autorun (ADR-0030)', () => {
+  const RUN = { supervisorLevel: 'watch', mergeAtGatesAutomatically: false, plannedWithTrailer: true, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12 };
 
   it('shows the user\'s run settings', async () => {
     const d = await fakeDaemon({ settings: { run: { ...RUN, supervisorLevel: 'act', supervisorRetryLimit: 1 } } });
-    const { handleSupervisor, handleAutomerge, handleAutorun } = await import('../runSettings');
+    const { handleSupervisor, handleAutomerge, handleAutorun, handleTrailer } = await import('../runSettings');
     const supervisor = await capture(() => handleSupervisor([], new ApiClient(d.port)));
     const automerge = await capture(() => handleAutomerge([], new ApiClient(d.port)));
     const autorun = await capture(() => handleAutorun([], new ApiClient(d.port)));
     expect(supervisor.stdout).toContain('Supervisor: Act, 1 retry per task, 12 reads per wake-up');
     expect(automerge.stdout).toContain('Merge automatically (gates, end of run): off');
     expect(autorun.stdout).toContain('Autorun: off');
+    expect((await capture(() => handleTrailer([], new ApiClient(d.port)))).stdout).toContain('Planned-with line in merge commits: on');
     expect(d.sent).toEqual([]);
     d.close();
   });
@@ -366,6 +367,8 @@ describe('ordewell supervisor, automerge and autorun (ADR-0030)', () => {
     [['reads', '20'], 'handleSupervisor', { wakeUpReadBudget: 20 }],
     [['on'], 'handleAutomerge', { mergeAtGatesAutomatically: true }],
     [['on'], 'handleAutorun', { autorun: true }],
+    [['off'], 'handleTrailer', { plannedWithTrailer: false }],
+    [['on'], 'handleTrailer', { plannedWithTrailer: true }],
   ] as const)('saves %j through %s', async (args, handler, run) => {
     const d = await fakeDaemon({ settings: { run: RUN } });
     const commands = await import('../runSettings');
@@ -384,7 +387,7 @@ describe('ordewell supervisor, automerge and autorun (ADR-0030)', () => {
 
   it.each([
     ['handleSupervisor', ['boss']], ['handleSupervisor', ['reads', '0']], ['handleSupervisor', ['retries', 'many']],
-    ['handleAutomerge', ['maybe']], ['handleAutorun', ['yes']],
+    ['handleAutomerge', ['maybe']], ['handleAutorun', ['yes']], ['handleTrailer', ['sometimes']],
   ] as const)('%s refuses %j, sending nothing', async (handler, args) => {
     const d = await fakeDaemon({ settings: { run: RUN } });
     const commands = await import('../runSettings');

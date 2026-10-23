@@ -16,7 +16,7 @@ const passed = verdict('pass', 'Completion marker found');
 const CHANGE: AttemptKind = { kind: 'change' };
 const READ_ONLY: AttemptKind = { kind: 'readOnly' };
 
-async function setup(opts: { isolation?: FakeWorktreeIsolation; conflictRepairAttempts?: number; tasks?: Task[] } = {}) {
+async function setup(opts: { isolation?: FakeWorktreeIsolation; conflictRepairAttempts?: number; tasks?: Task[]; plannedWith?: () => boolean } = {}) {
   const isolation = opts.isolation ?? new FakeWorktreeIsolation();
   const listener: IsolationRunListener = { changed: vi.fn(), blocked: vi.fn(), handoff: vi.fn(), closed: vi.fn(), notice: vi.fn() };
   const config = fakeConfig({ conflictRepairAttempts: opts.conflictRepairAttempts ?? 2 });
@@ -24,14 +24,14 @@ async function setup(opts: { isolation?: FakeWorktreeIsolation; conflictRepairAt
   const store = new PlanStore();
   store.load(opts.tasks ?? [], ['claude-code']);
   await runs.decide(async () => undefined);
-  const landing = new Landing({ runs, config, tasks: store });
+  const landing = new Landing({ runs, config, tasks: store, ...(opts.plannedWith ? { plannedWith: opts.plannedWith } : {}) });
   const prepare = (t: Task) => runs.attemptCwd(t, 'fresh');
   const record = (taskId: string) => runs.current?.tasks[taskId];
   return { landing, runs, isolation, listener, store, prepare, record };
 }
 
 /** A task whose first landing conflicted in `a.ts`, as a repair finds it. */
-async function conflicted(opts: { conflictRepairAttempts?: number; commit?: HandoffCommit } = {}) {
+async function conflicted(opts: { conflictRepairAttempts?: number; commit?: HandoffCommit; plannedWith?: () => boolean } = {}) {
   const env = await setup(opts);
   const t1 = task('t1', 1);
   env.isolation.outcomes.set('t1', 'conflict');
@@ -184,7 +184,7 @@ describe('Landing', () => {
   });
 
   describe('a conflict repair', () => {
-    async function repairing(opts: { conflictRepairAttempts?: number; commit?: HandoffCommit } = {}) {
+    async function repairing(opts: { conflictRepairAttempts?: number; commit?: HandoffCommit; plannedWith?: () => boolean } = {}) {
       const env = await conflicted(opts);
       await env.runs.attemptCwd(env.t1, 'repair');
       return env;
@@ -286,6 +286,18 @@ describe('Landing', () => {
       expect(landing.repairPrompt(t1)).toContain(`git merge --no-edit -m 'Merge: Fix the user'\\''s greeting (resolve conflicts with integration)' ordewell/run1/integration`);
     });
 
+    it('is asked to end its merge message with the Planned-with trailer while the setting is on, and to stop when it is turned off', async () => {
+      let on = true;
+      const { landing, t1 } = await repairing({ plannedWith: () => on });
+
+      expect(landing.repairPrompt(t1)).toContain(
+        "git merge --no-edit -m 'Merge: Task t1 (resolve conflicts with integration)' -m 'Planned-with: Ordewell' ordewell/run1/integration",
+      );
+
+      on = false;
+      expect(landing.repairPrompt(t1)).not.toContain('Planned-with');
+    });
+
     it('is asked to name the task by its title when its landing stated no commit', async () => {
       const { landing, t1 } = await repairing();
 
@@ -356,6 +368,14 @@ describe('Landing', () => {
         dependencies: [],
       });
       expect(resolver?.prompt).toContain("git merge --no-ff -m 'Merge: Task t1 (resolve conflicts with integration)' ordewell/run1/1-t1");
+    });
+
+    it('is asked to end its merge message with the Planned-with trailer when the setting is on', async () => {
+      const { runs } = await resolving();
+
+      expect(conflictResolverTask(task('t1', 1), runs.current, undefined, true)?.prompt)
+        .toContain("git merge --no-ff -m 'Merge: Task t1 (resolve conflicts with integration)' -m 'Planned-with: Ordewell' ordewell/run1/1-t1");
+      expect(conflictResolverTask(task('t1', 1), runs.current)?.prompt).not.toContain('Planned-with');
     });
 
     it('is not built for a task that is not in conflict, or without a run', async () => {
