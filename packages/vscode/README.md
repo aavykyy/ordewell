@@ -58,8 +58,9 @@ is sent: no code, prompts, paths, file names or account details. Like any
 server, ordewell.ai sees the IP address the request comes from.
 
 The first time Ordewell starts on a machine, the extension shows a notice saying
-this and sends nothing. The Marketplace handles updates, so the extension shows
-no update line.
+this and sends nothing. If it cannot write that file, it shows no notice and
+never sends anything. The Marketplace handles updates, so the extension shows no
+update line.
 
 Turn it off by turning off VS Code's telemetry (`telemetry.telemetryLevel`).
 `ORDEWELL_NO_VERSION_CHECK=1` and `DO_NOT_TRACK=1` turn it off too. Turned off,

@@ -100,7 +100,8 @@ code, prompts, paths, file names or account details. Like any server, ordewell.a
 sees the IP address the request comes from.
 
 The first time Ordewell starts on a machine, it shows a notice saying this and
-sends nothing. The first check happens on a later start. When a newer version is
+sends nothing. The first check happens on a later start. If Ordewell cannot write
+that file, it shows no notice and never sends anything. When a newer version is
 out, Ordewell shows one line naming it.
 
 To turn the check off, set:
