@@ -57,10 +57,17 @@ const NOT_RUNNING = 'Execution is not running.';
  * changed since the turn before, and the catalog only when it changed.
  * Whenever the live context may not hold an intact copy, the next turn sends
  * the whole block again: a stale plan in the planner's head costs more than a
- * long turn.
+ * long turn. An emptied plan has no whole block to send, so it is stated
+ * plainly, and again until a turn that carried that lands.
  */
 export class PromptBlocks {
   private held: Held | null = null;
+  /**
+   * Whether the planner may still hold rows of this plan. A failed, stopped or
+   * compacted turn drops `held` while the model's context keeps what it was
+   * sent, so an empty plan can only be stated, never diffed.
+   */
+  private mayHoldTasks = false;
 
   constructor(private readonly source: PromptBlocksSource) {}
 
@@ -75,28 +82,44 @@ export class PromptBlocks {
     this.held = null;
     const catalog = this.source.catalog();
     const plan = this.source.plan();
+    const rows = plan?.rows ?? [];
     const blocks = [
       catalog !== null && catalog !== held?.catalog ? catalog : null,
-      plan ? planBlock(plan, held?.plan ?? null) : null,
+      plan ? planBlock(plan, held?.plan ?? null, this.mayHoldTasks) : null,
     ].filter((block): block is string => block !== null);
+    if (rows.length > 0) this.mayHoldTasks = true;
     // A plan with no tasks has no line to hold; re-adding one sends the whole
     // block, since the planner never held this plan's protocol.
-    const sent: Held = { catalog, plan: plan && plan.rows.length > 0 ? new Map(plan.rows.map((row) => [row.id, row])) : null, compactions };
+    const sent: Held = { catalog, plan: rows.length > 0 ? new Map(rows.map((row) => [row.id, row])) : null, compactions };
     return {
       blocks,
-      heard: () => { this.held = sent; },
+      heard: () => {
+        this.held = sent;
+        // Only a heard no-tasks turn proves the planner now holds the empty
+        // plan: any other turn may have been cut off before it read one.
+        if (rows.length === 0) this.mayHoldTasks = false;
+      },
     };
   }
 
-  /** The live context is gone or replaced: it holds none of the blocks. */
+  /** The live context is gone or replaced: it holds none of the blocks. What it was told of a plan with tasks is kept: a replay may still carry that. */
   forget(): void {
     this.held = null;
   }
+
+  /** A fresh plan takes this conversation's place: the model holds none of the blocks and never saw the old plan. */
+  restart(): void {
+    this.held = null;
+    this.mayHoldTasks = false;
+  }
 }
 
-/** The whole block where the planner holds none, else what changed since its last view; nothing when the plan has no tasks and none were held. */
-function planBlock(plan: PlanView, held: ReadonlyMap<string, PlanRow> | null): string | null {
-  if (plan.rows.length === 0) return held && held.size > 0 ? changesBlock(plan, [], [...held.values()]) : null;
+/** The whole block where the planner holds none, else what changed since its last view; nothing when the plan has no tasks and the planner was never sent any. */
+function planBlock(plan: PlanView, held: ReadonlyMap<string, PlanRow> | null, mayHoldTasks: boolean): string | null {
+  if (plan.rows.length === 0) {
+    if (held && held.size > 0) return changesBlock(plan, [], [...held.values()]);
+    return mayHoldTasks ? noTasksBlock(plan) : null;
+  }
   if (!held || renumbered(plan.rows, held)) return plan.full;
   const now = new Set(plan.rows.map((row) => row.id));
   const changed = plan.rows.filter((row) => held.get(row.id)?.line !== row.line);
@@ -129,5 +152,13 @@ function changesBlock(plan: PlanView, changed: readonly PlanRow[], removed: read
     ...(plan.rows.length === 0 ? ['The plan now has no tasks.'] : []),
     plan.running || NOT_RUNNING,
     `Tasks not listed are as last shown, and the protocol sent with the last <current_plan> still applies. If you no longer have that block, ${reread} before editing.`,
+  ].join('\n');
+}
+
+/** The empty plan stated where its last rows are not in hand to name, so the ones in the planner's context are not read as current. */
+function noTasksBlock(plan: PlanView): string {
+  return [
+    'The plan now has no tasks. The task list you were last shown is no longer current.',
+    plan.running || NOT_RUNNING,
   ].join('\n');
 }

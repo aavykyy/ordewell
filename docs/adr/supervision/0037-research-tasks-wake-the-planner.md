@@ -80,10 +80,10 @@ ends.**
     outline, when only the conclusion matters and no later task acts on it. It
     stays in the turn: the planner's own reads, or its own agents awaited
     before the turn ends ([ADR-0005](../planner/0005-parallel-research-subagents.md)'s
-    `spawn_research_agent` for an API planner, the harness's own subagents
-    for a harness planner as ADR-0009 T8 says, none for an OpenCode planner),
-    each briefed to return a digest of the conclusion and file:line
-    references.
+    `spawn_research_agent` for an API planner whose service can run
+    subagents, the harness's own subagents for a harness planner as ADR-0009
+    T8 says, none for an OpenCode or a Gemini planner), each briefed to
+    return a digest of the conclusion and file:line references.
   - *Evidence* is a research task: when finding out needs a worktree (a
     failing test, a build, a reproduction), another runner or model should
     judge it, the user should see it and be able to stop it, or a later task
@@ -157,3 +157,4 @@ ends.**
 - 2026-10-22 — decided, not built: a research task's report is its handoff ([ADR-0047](0047-structured-task-handoffs.md), #120).
 - 2026-10-22 — implemented research handoffs in report wake-ups and their surfaces (R1, R2, R6; ADR-0047, #120).
 - 2026-10-23 — who explores is decided by what the result is: orientation in the turn, evidence a research task that a task acting on it depends on, search the explore skill; the duration line is dropped (R4, R5).
+- 2026-10-23 — a Gemini planner has no in-turn agents: it neither declares nor is taught `spawn_research_agent`, as ADR-0005 now says (R5).

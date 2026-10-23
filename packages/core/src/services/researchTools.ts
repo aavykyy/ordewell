@@ -37,8 +37,8 @@ export interface ResearchToolSpec {
 export const SPAWN_RESEARCH_AGENT = 'spawn_research_agent';
 
 /**
- * Subagent tool (issue #34), opencode-style: one stateless read-only research
- * agent per call. Kept out of RESEARCH_TOOLS since it is projected in
+ * Subagent tool (issue #34, ADR-0005), opencode-style: one stateless read-only
+ * research agent per call. Kept out of RESEARCH_TOOLS since it is projected in
  * separately via withSpawn().
  */
 export const SPAWN_RESEARCH_AGENT_SPEC: ResearchToolSpec = {
@@ -264,7 +264,7 @@ const SCHEMA_TYPE: Record<ParamType, SchemaType> = {
 /**
  * Project the canonical tools into Gemini's function-declaration format;
  * `plannerTools` adds the task reads and the execution tools, and `subagents`
- * withholds the spawn tool, which this backend cannot run.
+ * withholds the spawn tool, which this backend cannot run (ADR-0005).
  */
 export function toGeminiToolDeclarations(plannerTools = false, subagents = true): FunctionDeclaration[] {
   const tools = conversationSpecs(plannerTools, subagents).map((t) => {

@@ -337,7 +337,7 @@ describe('who explores: orientation, evidence, search (ADR-0037 R5)', () => {
     expect(rule).toMatch(inTurn);
     expect(rule).toMatch(/- Evidence: a research task, when any of these holds: finding out needs a worktree \(write a failing test, build, reproduce\); another runner or model should judge it.*; the user should see it and be able to stop it; or a later task will act on its findings\./);
     expect(rule).toMatch(/the later task depends on the research task, so the findings reach it in the research task's handoff: do not re-type them into the later task's brief/);
-    expect(rule).toMatch(/A loop's fix cannot depend on the research task directly: make the check depend on it, and the fix reads the report with `read_task`\./);
+    expect(rule).toMatch(/A loop's fix may depend on the research task only when the check does: make the check depend on it, and the fix reads the report with `read_task`\./);
     expect(rule).toMatch(/- Search: a problem that needs rounds of branching.* is the explore skill/);
     for (const text of ['WHO EXPLORES:', '- Orientation:', '- Evidence:', '- Search:', 'file:line references, no pasted file bodies']) {
       expect(count(p, text)).toBeLessThanOrEqual(1);
