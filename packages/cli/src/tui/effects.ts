@@ -4,10 +4,11 @@ import {
   type PlannerModelRecall,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
-import { DaemonError, WorkspaceInitNeededError, type ApiClient, type SessionFollow } from '../apiClient';
+import { DaemonError, WorkspaceInitNeededError, deliveryOf, type ApiClient, type SessionFollow } from '../apiClient';
 import { normalizeCatalog } from '../catalog';
 import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
+import type { ChatRestored } from './reducers/shared';
 import type { SessionView } from './state';
 import { mergeOutcome } from '../isolation';
 import { inboundFor } from './inbound';
@@ -173,15 +174,16 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       const sessionId = deps.newSessionId();
       dispatch({ type: 'sessionStarted', sessionId, goal: effect.goal });
       try {
-        await converse(deps, sessionId, () => api.startConversation(sessionId, effect.goal, undefined, workspace, effect.allowInit));
+        await converse(deps, sessionId, () => api.startConversation(sessionId, effect.goal, undefined, workspace, effect.allowInit), true);
       } catch (err) {
         // The daemon registers a session before the opening turn runs, so a
         // stopped one — by a force send, whose forced turn carries on — leaves
         // a session the next reply belongs to.
         if (err instanceof DaemonError && err.code === 'planner_turn_stopped') throw err;
-        // Any other failure means planning never completed and the daemon
-        // dropped it, so this id points at nothing — keeping it would 404
-        // every following message.
+        // What reaches here is a refusal the daemon answered, or a request that
+        // never went out (a lost reply is settled inside `converse`, the
+        // session kept). Neither leaves a conversation a reply could continue,
+        // so the id is let go: keeping it would 404 every following message.
         unfollow(deps, sessionId);
         dispatch({ type: 'sessionCleared' });
         // Offer to initialize instead of just reporting failure — but only
@@ -196,6 +198,11 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       }
       return;
     }
+
+    // The stream said a turn whose reply was lost has ended: read it back.
+    case 'reconcileTurn':
+      await readBackSession(deps, effect.sessionId, { opening: false, turnEnded: true });
+      return;
 
     case 'sendMessage':
       await converse(deps, effect.sessionId, () => api.sendConversationMessage(effect.sessionId, effect.message));
@@ -584,7 +591,14 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       return;
     }
     case 'compactConversation': {
-      const { plan } = await api.compactConversation(effect.sessionId);
+      let plan: unknown;
+      try {
+        ({ plan } = await api.compactConversation(effect.sessionId));
+      } catch (err) {
+        if (deliveryOf(err) !== 'unknown') throw err;
+        await settleLostReply(deps, effect.sessionId, { opening: false });
+        return;
+      }
       const inbound = inboundFor(deps.api, deps.dispatch, effect.sessionId);
       dispatch(restoredChat(plan, effect.sessionId));
       const summary = compactionSummary(plan);
@@ -828,12 +842,15 @@ function unfollow(deps: EffectDeps, sessionId: string): void {
  * One planner turn: its messages stream over the websocket while the REST call
  * is in flight, and the reply is either a question or a plan.
  */
-async function converse(deps: EffectDeps, sessionId: string, call: () => Promise<unknown>): Promise<void> {
+async function converse(deps: EffectDeps, sessionId: string, call: () => Promise<unknown>, opening = false): Promise<void> {
   const inbound = inboundFor(deps.api, deps.dispatch, sessionId);
   const stream = deps.api.streamPlanning(sessionId, inbound.planning());
+  let sent = false;
+  let lost = false;
 
   try {
     await Promise.all([stream.ready, follow(deps, sessionId)]);
+    sent = true;
     const plan = await call();
     inbound.flush();
     // Speak the turn before `planUpdated` settles it: the settle is also what
@@ -842,14 +859,55 @@ async function converse(deps: EffectDeps, sessionId: string, call: () => Promise
     // delivered the same words; the backfill is dropped when it did.
     for (const reply of turnReplies(plan)) inbound.backfill(reply.content, reply.timestamp, reply.runs);
     deps.dispatch({ type: 'planUpdated', plan, sessionId });
+  } catch (err) {
+    // Only a failure of the call itself can leave the turn running: one before
+    // it went out, or one the daemon answered, is the turn's own end.
+    if (!sent || deliveryOf(err) !== 'unknown') throw err;
+    lost = true;
   } finally {
     inbound.flush();
     stream.close();
   }
+  if (lost) await settleLostReply(deps, sessionId, { opening });
+}
+
+/**
+ * The reply to a planner turn's call never came back, so whether the turn is
+ * running, finished or never arrived is the daemon's to say. The session and
+ * the queue stay as they are, nothing is sent again, and the session is read
+ * back to show what the daemon holds. Cleared only when the daemon holds none.
+ */
+async function settleLostReply(deps: EffectDeps, sessionId: string, how: { opening: boolean }): Promise<void> {
+  deps.dispatch({ type: 'turnLost', sessionId });
+  await readBackSession(deps, sessionId, { ...how, turnEnded: false });
+}
+
+/**
+ * Adopting a live session returns the daemon's current state without
+ * disturbing it. `turnEnded` is whether the stream has already said the turn is
+ * over: only then is a failure to read back one that ends it.
+ */
+async function readBackSession(deps: EffectDeps, sessionId: string, how: { opening: boolean; turnEnded: boolean }): Promise<void> {
+  try {
+    const { plan } = await deps.api.adoptSession(sessionId, deps.workspace);
+    deps.dispatch({ type: 'turnReconciled', plan, chat: restoredChat(plan, sessionId), sessionId });
+  } catch (err) {
+    if (err instanceof DaemonError && err.code === 'session_not_found' && how.opening) {
+      unfollow(deps, sessionId);
+      deps.dispatch({ type: 'sessionCleared' });
+      deps.dispatch({ type: 'failed', message: 'The reply was lost and the server holds no session for it. Send your goal again to start over.', code: err.code, turn: true });
+      return;
+    }
+    if (how.turnEnded || (err instanceof DaemonError && err.code === 'session_not_found')) {
+      deps.dispatch({ ...failedFrom(err), turn: true });
+      return;
+    }
+    deps.dispatch({ type: 'notice', level: 'error', message: `Could not read the session back from the server: ${explain(err)}` });
+  }
 }
 
 /** The conversation a saved plan reopens with: its transcript, research log and token line. */
-function restoredChat(plan: unknown, sessionId: string): Action {
+function restoredChat(plan: unknown, sessionId: string): ChatRestored {
   const saved = plan as Pick<SurfacePlan, 'conversationHistory' | 'researchLog' | 'plannerUsage' | 'pendingTurns'> | null;
   return {
     type: 'chatRestored',

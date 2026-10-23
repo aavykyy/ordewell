@@ -1,6 +1,6 @@
 import http from 'http';
 import WebSocket from 'ws';
-import { DEFAULT_PORT } from './daemon';
+import { DEFAULT_PORT, isConnectionRefused } from './daemon';
 import { bearerHeaderValue, readDaemonToken, tokenSubprotocols, mintSessionId } from '@ordewell/core';
 import type {
   AdoptSessionResponse,
@@ -77,6 +77,21 @@ export class DaemonError extends Error {
     super(message);
     this.name = 'DaemonError';
   }
+}
+
+/**
+ * What a rejected call says about whether the daemon got the request. The one
+ * place that decides it, so a caller never re-guesses from an error's wording:
+ * - `answered`: the daemon replied with a refusal ({@link DaemonError}).
+ * - `refused`: nothing was listening, so the request never arrived and may be replayed.
+ * - `unknown`: a timeout, reset or hang-up after the request went out; the daemon
+ *   may be running it or have finished it, and replaying it could run it twice.
+ */
+export type Delivery = 'answered' | 'refused' | 'unknown';
+
+export function deliveryOf(err: unknown): Delivery {
+  if (err instanceof DaemonError) return 'answered';
+  return isConnectionRefused(err) ? 'refused' : 'unknown';
 }
 
 /** A workspace the daemon rejected for lacking a project marker, distinguished from other 400s so the TUI can offer to initialize it instead of just reporting failure. */
@@ -200,30 +215,44 @@ export class ApiClient {
     method: string,
     urlPath: string,
     body?: object,
+    turn = false,
   ): Promise<{ status: number; data: T }> {
-    const res = await this.rawRequest<T>(method, urlPath, body);
+    const res = await this.rawRequest<T>(method, urlPath, body, turn);
     const sessionId = urlPath.match(SESSION_PATH)?.[1];
     const missing = res.status === 404 && (res.data as Partial<ErrorBody> | undefined)?.code === 'session_not_found';
     if (!missing || !sessionId || urlPath.split('?')[0].endsWith('/load')) return res;
     const adopted = await this.rawRequest('POST', `/api/sessions/${sessionId}/load?workspace=${encodeURIComponent(this.workspace)}`);
-    return adopted.status === 200 ? this.rawRequest<T>(method, urlPath, body) : res;
+    return adopted.status === 200 ? this.rawRequest<T>(method, urlPath, body, turn) : res;
   }
 
   /** One request whose only good answer is a 200: anything else becomes a {@link DaemonError} carrying the daemon's code. */
-  private async call<T>(method: string, urlPath: string, fallback: string, body?: object): Promise<T> {
-    const res = await this.httpRequest<T>(method, urlPath, body);
+  private async call<T>(method: string, urlPath: string, fallback: string, body?: object, turn = false): Promise<T> {
+    const res = await this.httpRequest<T>(method, urlPath, body, turn);
     if (res.status !== 200) throw daemonError(res.status, res.data, fallback);
     return res.data;
+  }
+
+  /**
+   * A call that answers when a planner turn ends. The daemon sends nothing until
+   * then, and a turn that awaits exploration agents routinely idles past any
+   * bound a short call would want, so a socket-idle timeout here reports a turn
+   * that is still running as failed. The user stops a turn with Stop, which is
+   * the bound; `ORDEWELL_HTTP_TIMEOUT_MS` still applies when set.
+   */
+  private turn<T>(method: string, urlPath: string, fallback: string, body?: object): Promise<T> {
+    return this.call<T>(method, urlPath, fallback, body, true);
   }
 
   private rawRequest<T = unknown>(
     method: string,
     urlPath: string,
     body?: object,
+    turn = false,
   ): Promise<{ status: number; data: T }> {
     return new Promise((resolve, reject) => {
       const url = new URL(urlPath, `http://127.0.0.1:${this.port}`);
       const configuredTimeout = Number.parseInt(process.env.ORDEWELL_HTTP_TIMEOUT_MS || '', 10);
+      const hasConfiguredTimeout = Number.isFinite(configuredTimeout) && configuredTimeout > 0;
       const token = this.token();
       const options: http.RequestOptions = {
         hostname: url.hostname,
@@ -234,12 +263,11 @@ export class ApiClient {
           ...(body ? { 'Content-Type': 'application/json' } : {}),
           ...(token ? { Authorization: bearerHeaderValue(token) } : {}),
         },
-        // Planner research on a real repository regularly exceeds two minutes;
-        // keep the env override for callers that need a tighter/looser bound.
-        timeout:
-          Number.isFinite(configuredTimeout) && configuredTimeout > 0
-            ? configuredTimeout
-            : DEFAULT_HTTP_TIMEOUT_MS,
+        // The env override is explicit, so it bounds a turn too; without it a
+        // turn has no idle bound (see `turn`) and anything else gets the default.
+        ...(hasConfiguredTimeout
+          ? { timeout: configuredTimeout }
+          : turn ? {} : { timeout: DEFAULT_HTTP_TIMEOUT_MS }),
       };
       const req = http.request(options, (res) => {
         // Decoded once at the end: per-chunk decoding turns a character split
@@ -272,7 +300,7 @@ export class ApiClient {
     workspace?: string,
     sessionId: string = mintSessionId(),
   ): Promise<PlanResult> {
-    const { plan, models, modelsByRunner, notes } = await this.call<GeneratePlanResponse>('POST', `/api/plans/${sessionId}/generate`, 'Plan generation failed', {
+    const { plan, models, modelsByRunner, notes } = await this.turn<GeneratePlanResponse>('POST', `/api/plans/${sessionId}/generate`, 'Plan generation failed', {
       goal,
       runners: runners || undefined,
       workspace,
@@ -292,7 +320,7 @@ export class ApiClient {
     workspace?: string,
     allowInit?: boolean,
   ): Promise<PlanResponse['plan']> {
-    const res = await this.call<PlanResponse>('POST', `/api/plans/${sessionId}/converse/start`, 'Planning failed', {
+    const res = await this.turn<PlanResponse>('POST', `/api/plans/${sessionId}/converse/start`, 'Planning failed', {
       goal,
       runners: runners || undefined,
       workspace,
@@ -302,13 +330,13 @@ export class ApiClient {
   }
 
   async sendConversationMessage(sessionId: string, message: string): Promise<PlanResponse['plan']> {
-    const res = await this.call<PlanResponse>('POST', `/api/plans/${sessionId}/converse/message`, 'Planner message failed', { message });
+    const res = await this.turn<PlanResponse>('POST', `/api/plans/${sessionId}/converse/message`, 'Planner message failed', { message });
     return res.plan;
   }
 
   /** Send now (ADR-0023, F5): stop the planner turn in flight and answer `message` in the turn that replaces it. */
   async forceSendPlannerMessage(sessionId: string, message: string): Promise<PlanResponse['plan']> {
-    const res = await this.call<PlanResponse>('POST', `/api/plans/${sessionId}/converse/message/now`, 'Send now failed', { message });
+    const res = await this.turn<PlanResponse>('POST', `/api/plans/${sessionId}/converse/message/now`, 'Send now failed', { message });
     return res.plan;
   }
 
@@ -473,7 +501,7 @@ export class ApiClient {
    * as long as a reply; a refusal or failure leaves the conversation as it was.
    */
   compactConversation(sessionId: string): Promise<ConversationCompactResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/conversation/compact`, 'Compaction failed');
+    return this.turn('POST', `/api/plans/${sessionId}/conversation/compact`, 'Compaction failed');
   }
 
   /** The ancestors a task waits on at its merge gate (ADR-0020); empty when nothing gates it. */

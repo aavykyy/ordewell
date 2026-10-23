@@ -225,6 +225,13 @@ the backend named its own — `PlannerTurnStoppedError` or
 included, so a surface checks the type, never an SDK's abort error. The daemon
 answers both as 409 (`planner_turn_stopped`, `planner_turn_discarded`) without
 logging a fault.
+A **lost reply** is a turn's call that died on the wire after the request went
+out (a timeout, a reset, a hang-up) rather than being answered. It is neither a
+failed turn nor an ended one: the daemon runs a turn to its end whether or not
+anyone waits, so the client keeps its session, sends nothing again, holds its
+queued prompts and reads the session back (`deliveryOf`: `answered`, `refused`
+or `unknown`). The planner-turn calls carry no idle timeout for that reason; the
+user's Stop is their bound.
 *Avoid:* "planning abort" or "generating" for it — both named a surface's copy
 of this state, and the copies drifted; *Avoid:* confusing it with **Turn**, the
 streamed span a surface draws under one `turnId`: every user turn is a planner

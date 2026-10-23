@@ -90,6 +90,60 @@ afterEach(() => {
   }
 });
 
+describe('handlePlan — a planner call whose reply never comes back', () => {
+  /** Takes the request, then drops the connection without answering: the outcome is the daemon's alone. */
+  async function hangUpOn(fragment: string, hits: string[], answer: unknown = COMMITTED) {
+    return startServer((req, res) => {
+      const url = req.url || '';
+      hits.push(`${req.method} ${url}`);
+      if (url.includes(fragment)) return req.socket.destroy();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(url.includes('/api/runners') ? RUNNERS : { plan: answer }));
+    });
+  }
+
+  const sessionOf = (hits: string[]): string => hits.find((h) => h.includes('/converse/'))!.match(/\/api\/plans\/([^/]+)\//)![1];
+
+  it('names the session it minted, so the user resumes it instead of starting over', async () => {
+    const hits: string[] = [];
+    const srv = await hangUpOn('/converse/start', hits);
+    const { handlePlan } = await import('../plan');
+    const { stderr, exitCode } = await capture(() => handlePlan(['--goal', 'ship it', '--workspace', '/tmp'], { api: new ApiClient(srv.port) }));
+    srv.close();
+
+    const id = sessionOf(hits);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain(`ordewell sessions load ${id}`);
+    expect(stderr).toMatch(/may still be running|may have finished/);
+  });
+
+  it('says the same when a reply to the planner\'s question is the call that was lost', async () => {
+    const hits: string[] = [];
+    const srv = await hangUpOn('/converse/message', hits, { tasks: [], conversationHistory: [{ role: 'assistant', content: 'Which database?' }] });
+    const { handlePlan } = await import('../plan');
+    const { stderr } = await capture(() => handlePlan(['--goal', 'ship it', '--workspace', '/tmp'], {
+      api: new ApiClient(srv.port),
+      reader: { ask: async () => 'postgres', close: () => {} },
+    }));
+    srv.close();
+
+    expect(stderr).toContain(`ordewell sessions load ${sessionOf(hits)}`);
+  });
+
+  it('adds no resume hint when the daemon answered with a refusal', async () => {
+    const srv = await startServer((req, res) => {
+      res.writeHead(/\/api\/runners/.test(req.url || '') ? 200 : 500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(/\/api\/runners/.test(req.url || '') ? RUNNERS : { error: 'planner down' }));
+    });
+    const { handlePlan } = await import('../plan');
+    const { stderr, exitCode } = await capture(() => handlePlan(['--goal', 'ship it', '--workspace', '/tmp'], { api: new ApiClient(srv.port) }));
+    srv.close();
+
+    expect(exitCode).toBe(1);
+    expect(stderr).not.toContain('sessions load');
+  });
+});
+
 describe('handlePlan', () => {
   it('uses the conversational endpoint by default', async () => {
     const hits: string[] = [];

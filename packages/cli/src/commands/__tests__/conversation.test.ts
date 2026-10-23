@@ -221,6 +221,27 @@ describe('ordewell compact', () => {
     expect(stderr).toMatch(expected);
   });
 
+  it('names the session when the connection drops before the condense is answered', async () => {
+    const srv = await new Promise<{ port: number; close: () => void }>((resolve) => {
+      const server = http.createServer((req, res) => {
+        if (req.url?.includes('/compact')) return req.socket.destroy();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(adopted));
+      });
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        resolve({ port: typeof addr === 'object' && addr ? addr.port : 0, close: () => server.close() });
+      });
+    });
+    const { handleCompact } = await import('../conversation');
+
+    const { stderr, exitCode } = await capture(() => handleCompact(['--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    srv.close();
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('ordewell sessions load session-1');
+  });
+
   it('words a planner that cannot plan with the shell\'s commands, not the terminal UI\'s', async () => {
     const plannerNotReady = { code: 'no_key', provider: 'openrouter', label: 'OpenRouter', keyEnvVar: 'OPENROUTER_API_KEY' };
     const srv = await daemon(({ url }) => url.includes('/load')

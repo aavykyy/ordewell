@@ -411,7 +411,7 @@ describe('planning', () => {
   it('dispatches a burst still held when the turn fails, ahead of the failure', async () => {
     const h = streaming(async (emit) => {
       emit({ type: 'planner_text_delta', turnId: 't1', segmentId: 's1', text: 'Half a' });
-      throw new Error('no key');
+      throw new DaemonError('no key', 400);
     });
 
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
@@ -471,9 +471,9 @@ describe('planning', () => {
   });
 
   it('clears the optimistic session id when the very first planning call fails', async () => {
-    // The daemon registers a session only after planning succeeds, so keeping
-    // the id would route every following message to a session that is not there.
-    const h = harness({ startConversation: vi.fn().mockRejectedValue(new Error('no key')) });
+    // A refusal the daemon answered leaves no conversation a reply could
+    // continue, so keeping the id would route every following message to nothing.
+    const h = harness({ startConversation: vi.fn().mockRejectedValue(new DaemonError('no key', 400)) });
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
 
     expect(types(h.actions)).toContain('sessionCleared');
@@ -484,7 +484,7 @@ describe('planning', () => {
     const close = vi.fn();
     const h = harness({
       streamPlanning: vi.fn().mockReturnValue({ close }),
-      startConversation: vi.fn().mockRejectedValue(new Error('no key')),
+      startConversation: vi.fn().mockRejectedValue(new DaemonError('no key', 400)),
     });
 
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
@@ -1525,7 +1525,7 @@ describe('loading an in-flight conversation', () => {
     state = { ...state, editor: { ...state.editor, text: 'check tests', cursor: 11 } };
     const sent = reduce(state, { type: 'key', key: { name: 'enter' } });
     state = sent.state;
-    const h = harness({ sendConversationMessage: vi.fn().mockRejectedValue(new Error('planner down')) }, {
+    const h = harness({ sendConversationMessage: vi.fn().mockRejectedValue(new DaemonError('planner down', 500)) }, {
       dispatch: (action) => { state = reduce(state, action).state; },
     });
     await runEffect(sent.effects[0], h.deps);
@@ -1747,7 +1747,7 @@ describe('conversation compact effect', () => {
   });
 
   it('reports a refusal, and a busy planner goes back to idle', async () => {
-    const h = harness({ compactConversation: vi.fn().mockRejectedValue(new Error('The conversation is too short to condense.')) });
+    const h = harness({ compactConversation: vi.fn().mockRejectedValue(new DaemonError('The conversation is too short to condense.', 400)) });
     let state: TuiState = initialState({ sessionId: 'session-1', planner: 'condensing' });
 
     await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
@@ -2322,7 +2322,7 @@ describe('following the session', () => {
   });
 
   it('drops the follow of a first turn the daemon never registered', async () => {
-    const h = following({ startConversation: vi.fn().mockRejectedValue(new Error('planner down')) });
+    const h = following({ startConversation: vi.fn().mockRejectedValue(new DaemonError('planner down', 500)) });
     await runEffect({ type: 'startConversation', goal: 'ship it' }, h.deps);
 
     expect(h.follows[0].close).toHaveBeenCalled();

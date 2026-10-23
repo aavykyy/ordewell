@@ -73,9 +73,11 @@ function reduceAction(state: TuiState, action: Action): Step {
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
       }, EMPTY_RUN));
 
-    // The daemon registers a session only once planning succeeds; when it does
-    // not, holding on to the id would send every next message to a session the
-    // server never had.
+    // The daemon registers a session before its opening turn runs, and drops it
+    // itself when it refuses the turn or the goal is discarded; any other
+    // failure it answered leaves no conversation a reply could continue, so the
+    // id is let go rather than guessed at. A reply that was merely lost is not
+    // this: the session is the daemon's and the turn may be running (`turnLost`).
     case 'sessionCleared':
       // Prompts belong to the session that raised them; the old planner is gone,
       // and the turn gate it held with it.
@@ -120,12 +122,41 @@ function reduceAction(state: TuiState, action: Action): Step {
       return drainQueue(state, settled);
     }
 
+    // The call that carried the turn's reply died, so nothing will say the turn
+    // is over but the daemon. The prompts held behind it, and the turn itself,
+    // wait for that; a send-now in doubt is not given back, as the daemon may
+    // have taken it.
+    case 'turnLost': {
+      if (stale(state, action.sessionId) || !plannerInFlight(state)) return step(state);
+      const awaiting: TuiState = { ...state, planner: 'awaiting', forceSendPending: null };
+      return step(say(awaiting, 'system', 'The reply was lost on the way: the planner may still be running this turn or may have finished it. Showing what the server holds.'));
+    }
+
+    // The daemon's own word on the session. A turn its stream still holds open
+    // is running, and ends through `sessionMessage` below; otherwise it is
+    // over, and settles as any turn that returned its plan.
+    case 'turnReconciled': {
+      if (stale(state, action.sessionId)) return step(state);
+      if (state.turnGate.open !== null) return step(showPlan(state, action.plan));
+      const redrawn = reduceAction(state, action.chat).state;
+      const settled = reduceAction(redrawn, { type: 'planUpdated', plan: action.plan, sessionId: action.sessionId });
+      // The redraw replaced the line `turnLost` spoke, and with it the reason a message may be missing.
+      return { ...settled, state: say(settled.state, 'system', 'The reply to your last message was lost on the way; this is what the server holds.') };
+    }
+
     // A message never ends a turn: `planUpdated` does (see `converse`), so a
     // queued prompt drains onto a settled state. Until then the status only
-    // says whether a call is out.
-    case 'sessionMessage':
+    // says whether a call is out. The exception is a turn whose call was lost:
+    // there is no `planUpdated` coming, so the stream's end of it sends for the
+    // session to be read back.
+    case 'sessionMessage': {
       if (stale(state, action.sessionId)) return step(state);
-      return step(followSession(state, action.message));
+      const next = followSession(state, action.message);
+      const { sessionId } = state;
+      const lostTurnEnded = action.message.type === 'planner_turn_ended' && state.planner === 'awaiting'
+        && next.turnGate.open === null && !state.forceSendPending;
+      return step(next, lostTurnEnded && sessionId ? [{ type: 'reconcileTurn', sessionId }] : []);
+    }
 
     // The run as the daemon sends it when a socket connects: the whole view is
     // adopted, so a surface joining mid-run has it before the next update — and

@@ -10,8 +10,11 @@ export type RunStatus = 'idle' | 'executing';
  * This surface's own planner call: a turn, a /compact, or none. Apart from
  * `status` because the two overlap — a prompt sent mid-run, a run autorun
  * starts inside the turn that landed its plan — and neither may end the other.
+ * `awaiting` is a call whose reply was lost in transit: the daemon runs a turn
+ * to its end whether or not anyone waits, so the turn is neither failed nor
+ * over until the daemon says so.
  */
-export type PlannerStatus = 'idle' | 'planning' | 'condensing';
+export type PlannerStatus = 'idle' | 'planning' | 'condensing' | 'awaiting';
 
 export interface TaskView {
   attemptUsage?: AttemptUsage[];
