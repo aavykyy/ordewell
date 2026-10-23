@@ -1699,6 +1699,23 @@ describe('CliAgentAiService — OpenCode', () => {
     expect(posted).toContain('http://127.0.0.1:44100/permission/per_child/reply');
   });
 
+  // ADR-0012 T10: a compaction may take the plan block out of the planner's context.
+  it('counts a compaction of its own session, and not another session\'s', async () => {
+    const compacted = (sessionID: string) => `data: ${JSON.stringify({ type: 'session.compacted', properties: { sessionID } })}\n`;
+    const { svc } = openCodeService(
+      (url) => {
+        if (url.endsWith('/session')) return { id: 'ses_mine' };
+        return new Promise((resolve) => setTimeout(() => resolve({ info: { id: 'msg_a' }, parts: [{ id: 'p1', messageID: 'msg_a', type: 'text', text: 'ok' }] }), 0));
+      },
+      [compacted('ses_someone_else'), compacted('ses_mine')],
+    );
+
+    expect(svc.compactions()).toBe(0);
+    await svc.startConversation(request({ runners: ['opencode'] }));
+
+    expect(svc.compactions()).toBe(1);
+  });
+
   it('ignores a permission raised for a different session', async () => {
     const posted: string[] = [];
     const ask = {
@@ -2695,5 +2712,46 @@ describe('createAiService', () => {
   it('leaves vendor providers on their HTTP transports', () => {
     expect(createAiService(fakeConfig({ aiProvider: 'openrouter' }))).not.toBeInstanceOf(CliAgentAiService);
     expect(createAiService(fakeConfig({ aiProvider: 'google' }))).not.toBeInstanceOf(CliAgentAiService);
+  });
+});
+
+// ADR-0012 T10: a compaction may take the plan block out of the planner's
+// context, so the conversation is told of each one the agent reports. The
+// OpenCode case sits with its other server-event scenarios above.
+describe('CliAgentAiService — compactions of the planner\'s own context', () => {
+  const line = (value: unknown) => `${JSON.stringify(value)}\n`;
+
+  it('counts Claude Code\'s compact boundary, and not a subagent\'s', async () => {
+    const boundary = (extra: Record<string, unknown>) => line({ type: 'system', subtype: 'compact_boundary', session_id: 'sess-c', compact_metadata: { trigger: 'auto', pre_tokens: 150_000, post_tokens: 9_000 }, ...extra });
+    const turn = [
+      line({ type: 'system', subtype: 'init', session_id: 'sess-c', cwd: '/repo', permissionMode: 'plan' }),
+      boundary({ parent_tool_use_id: 'toolu_agent' }),
+      boundary({}),
+      line({ type: 'assistant', session_id: 'sess-c', message: { id: 'msg_c', role: 'assistant', content: [{ type: 'text', text: 'Carrying on.' }] } }),
+      line({ type: 'result', subtype: 'success', session_id: 'sess-c', is_error: false, result: 'Carrying on.' }),
+    ].join('');
+    const { svc } = service('claude-code', [claudeSays('Which cache?'), turn]);
+
+    await svc.startConversation(request());
+    expect(svc.compactions()).toBe(0);
+    await svc.continueConversation('Redis, please.', () => {});
+
+    expect(svc.compactions()).toBe(1);
+  });
+
+  it('counts a Codex context compaction on its own thread, and not on another', async () => {
+    const compaction = (threadId: string, id: string) => line({ jsonrpc: '2.0', method: 'item/completed', params: { threadId, turnId: 'turn-1', completedAtMs: 1, item: { id, type: 'contextCompaction' } } });
+    const turn = [
+      line({ jsonrpc: '2.0', method: 'turn/started', params: { threadId: 'thr-codex-1', turnId: 'turn-1' } }),
+      compaction('thr-unrelated', 'item_other'),
+      compaction('thr-codex-1', 'item_mine'),
+      line({ jsonrpc: '2.0', method: 'item/completed', params: { threadId: 'thr-codex-1', turnId: 'turn-1', completedAtMs: 2, item: { id: 'item_m1', type: 'agentMessage', text: 'Carrying on.' } } }),
+      line({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: 'thr-codex-1', turn: { id: 'turn-1', status: 'completed', items: [] } } }),
+    ].join('');
+    const { svc } = service('codex', [...codexHandshake(), turn]);
+
+    await svc.startConversation(request({ runners: ['codex'] }));
+
+    expect(svc.compactions()).toBe(1);
   });
 });

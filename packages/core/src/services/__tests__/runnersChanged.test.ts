@@ -182,7 +182,9 @@ describe('runners changed — the planner is told on its next turn', () => {
     await session.continueConversation('go on');
 
     expect(outgoing(1)).not.toContain('<runners_changed>');
-    expect(outgoing(1)).toMatch(/^claude-code: .*claude-opus-4/m);
+    expect(outgoing(0)).toMatch(/^claude-code: .*claude-opus-4/m);
+    // A catalog block goes again only when it changed (ADR-0012 T10): the allowlist took nothing out.
+    expect(outgoing(1)).not.toContain('<available_models>');
   });
 
   it('names a runner switched on', async () => {

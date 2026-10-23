@@ -216,6 +216,8 @@ export class CliAgentAiService implements IAiService {
   private readonly turnBudgets: TurnBudgets | undefined;
   private readonly projectServerApprovals: ProjectServerApprovals;
   private activeAbort: AbortController | null = null;
+  /** See {@link compactions}. */
+  private compacted = 0;
 
   constructor(private config: IConfig, deps: CliAgentAiServiceDeps = {}) {
     const runner = runnerForProvider(config.aiProvider);
@@ -264,6 +266,9 @@ export class CliAgentAiService implements IAiService {
 
   /** The agent's own session id, a resumption hint only — Ordewell's transcript is authoritative (T4). */
   nativeSessionId(): string | null { return this.session?.adapter?.nativeSessionId() ?? null; }
+
+  /** The compactions the agents reported of their own context, never a subagent's or another thread's: their adapters drop those (ADR-0012 T10). */
+  compactions(): number { return this.compacted; }
 
   heldSecrets(): readonly string[] { return this.environmentSecrets; }
 
@@ -577,6 +582,10 @@ export class CliAgentAiService implements IAiService {
 
         case 'background_agent':
           backgroundAgents++;
+          return;
+
+        case 'compaction':
+          this.compacted++;
           return;
 
         case 'permission_request': {

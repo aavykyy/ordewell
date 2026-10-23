@@ -2099,3 +2099,42 @@ describe('run_command, sealed (ADR-0036)', () => {
     expect(tool.inputSchema.required).toEqual(['command']);
   });
 });
+
+// ADR-0012 T10 end to end, on a harness planner: its session keeps every turn,
+// so the plan goes whole once, then as what changed, and whole again after the
+// agent compacts its context.
+describe('the plan block a harness planner is sent', () => {
+  const WHOLE = /^<current_plan>$/m;
+
+  it('goes whole once, then as what changed, and whole again after Claude Code compacts its context', async () => {
+    const messages: string[] = [];
+    let planned = false;
+    let compactThisTurn = false;
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp, message, emit) => {
+        messages.push(message);
+        if (!planned) {
+          planned = true;
+          return submitted(mcp, TWO_TASKS);
+        }
+        if (compactThisTurn) emit({ type: 'system', subtype: 'compact_boundary', session_id: 'sess-1', compact_metadata: { trigger: 'auto', pre_tokens: 150_000, post_tokens: 9_000 } });
+        return 'Ok.';
+      },
+    }));
+    await session.startPlanning('add a cache', ['claude-code']);
+
+    await session.continueConversation('what is there?');
+    await session.continueConversation('anything new?');
+    compactThisTurn = true;
+    await session.continueConversation('and now?');
+    compactThisTurn = false;
+    await session.continueConversation('still there?');
+
+    expect(messages).toHaveLength(5);
+    expect(messages[1]).toMatch(WHOLE);
+    expect(messages[2]).not.toMatch(WHOLE);
+    expect(messages[2]).toMatch(/<plan_changes>[^\n]*unchanged/);
+    expect(messages[3]).not.toMatch(WHOLE);
+    expect(messages[4]).toMatch(WHOLE);
+  });
+});

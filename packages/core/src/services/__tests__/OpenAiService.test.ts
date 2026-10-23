@@ -20,6 +20,9 @@ import { OpenAiService } from '../OpenAiService';
 import { PlannerUsageLedger } from '../PlannerUsage';
 import { SessionWindows } from '../ContextWindowFill';
 import { TurnBudgets } from '../PlannerBudgets';
+import { COMPACTION_LIMITS } from '../contextCompaction';
+import { createTask, type LegacyPlanState } from '../../models/Task';
+import { makeSession, testWorkspace } from './sessionTestKit';
 
 function streamOf(chunks: unknown[]): AsyncIterable<unknown> {
   return (async function* () {
@@ -236,6 +239,109 @@ describe('OpenAiService conversation history', () => {
 
     const sent = createSpy.mock.calls.at(-1)?.[0] as { messages: Parameters<typeof unansweredCalls>[0] };
     expect(unansweredCalls(sent.messages)).toEqual([]);
+  });
+});
+
+// ADR-0012 T10: a history pruned in place may have lost what a turn was sent,
+// so the conversation is told of every pruning that removed something.
+describe('OpenAiService compactions', () => {
+  beforeEach(() => { createSpy.mockReset(); });
+
+  const readsAFile = () => streamOf([
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-read', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } }] }, finish_reason: 'tool_calls' }] },
+    { choices: [], usage: { prompt_tokens: 1000, completion_tokens: 5 } },
+  ]);
+  const answers = (promptTokens: number) => streamOf([
+    { choices: [{ delta: { content: 'Read it.' }, finish_reason: 'stop' }] },
+    { choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: 5 } },
+  ]);
+  const start = (service: OpenAiService) => service.startConversation({
+    goal: 'add a cache', runners: ['claude-code'], modelsByRunner: {}, onProgress: () => {},
+    fs: fakeFileSystem({ readFile: async () => ({ success: true, output: 'x'.repeat(5000), truncated: false }) }),
+  });
+
+  it('counts a turn\'s proactive pruning of its history, and no call that found nothing to prune', async () => {
+    createSpy.mockReturnValueOnce(readsAFile()).mockReturnValueOnce(answers(COMPACTION_LIMITS.proactivePromptTokens));
+    const service = new OpenAiService(cfg());
+
+    expect(service.compactions()).toBe(0);
+    await start(service);
+    expect(service.compactions()).toBe(1);
+
+    createSpy.mockReturnValueOnce(answers(COMPACTION_LIMITS.proactivePromptTokens));
+    await service.continueConversation('go on', () => {});
+    expect(service.compactions()).toBe(1);
+  });
+
+  it('counts a pruning asked for through pruneContext', async () => {
+    createSpy.mockReturnValueOnce(readsAFile()).mockReturnValueOnce(answers(50));
+    const service = new OpenAiService(cfg());
+    await start(service);
+    expect(service.compactions()).toBe(0);
+
+    expect(service.pruneContext()).toBeGreaterThan(0);
+    expect(service.compactions()).toBe(1);
+  });
+});
+
+// ADR-0012 T10 end to end, through a session: the message list keeps every
+// turn, so the plan goes whole once, then as what changed.
+describe('the plan block an API planner is sent', () => {
+  beforeEach(() => { createSpy.mockReset(); });
+
+  const WHOLE = /^<current_plan>$/m;
+  const reply = (promptTokens = 50) => streamOf([
+    { choices: [{ delta: { content: 'Noted.' }, finish_reason: 'stop' }] },
+    { choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: 5 } },
+  ]);
+  const readsAFile = () => streamOf([
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-read', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } }] }, finish_reason: 'tool_calls' }] },
+    { choices: [], usage: { prompt_tokens: 1000, completion_tokens: 5 } },
+  ]);
+
+  function twoTaskPlan(): LegacyPlanState {
+    return {
+      tasks: [
+        createTask({ id: 'a', order: 1, title: 'Setup', prompt: 'p', assignedRunner: 'claude-code' }),
+        createTask({ id: 'b', order: 2, title: 'Build', prompt: 'p', dependencies: ['a'], assignedRunner: 'claude-code' }),
+      ],
+      generatedAt: '2026-10-23T09:00:00Z',
+      status: 'draft',
+      runners: ['claude-code'],
+      lastUpdated: '2026-10-23T09:00:00Z',
+      conversationHistory: [
+        { role: 'user', content: 'add a cache', timestamp: '2026-10-23T09:00:00Z' },
+        { role: 'assistant', content: 'Two tasks.', timestamp: '2026-10-23T09:00:01Z' },
+      ],
+    };
+  }
+
+  it('goes whole into the replay, then as what changed, and whole again after a turn pruned the history', async () => {
+    // The history is one array the service keeps appending to, so each user message is read as it is sent.
+    const sent: string[] = [];
+    const calls: Array<() => AsyncIterable<unknown>> = [reply, reply, readsAFile, () => reply(COMPACTION_LIMITS.proactivePromptTokens), reply];
+    createSpy.mockImplementation(({ messages }: { messages: Array<{ role: string; content: string }> }) => {
+      const last = messages.at(-1);
+      if (last?.role === 'user') sent.push(last.content);
+      return calls.shift()!();
+    });
+    const session = makeSession({
+      aiService: new OpenAiService(cfg()),
+      fsAdapter: fakeFileSystem({ readFile: async () => ({ success: true, output: 'x'.repeat(5000), truncated: false }) }),
+    });
+    session.loadPlan(twoTaskPlan(), 'add a cache', testWorkspace, { persist: false });
+
+    await session.continueConversation('what is there?');
+    await session.continueConversation('anything new?');
+    await session.continueConversation('read a.ts');
+    await session.continueConversation('and now?');
+
+    expect(sent).toHaveLength(4);
+    expect(sent[0]).toMatch(WHOLE);
+    expect(sent[1]).not.toMatch(WHOLE);
+    expect(sent[1]).toMatch(/<plan_changes>[^\n]*unchanged/);
+    expect(sent[2]).not.toMatch(WHOLE);
+    expect(sent[3]).toMatch(WHOLE);
   });
 });
 

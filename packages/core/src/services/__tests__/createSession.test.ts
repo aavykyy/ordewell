@@ -1321,7 +1321,7 @@ describe('session id stability (persist seam)', () => {
 });
 
 // Nothing from one session may bleed into another: not the PlanStore tasks
-// (planContextBlock would present them to the model as the CURRENT plan),
+// (the plan block would present them to the model as the CURRENT plan),
 // not the live LLM conversation (the next message would continue the old
 // session's thread and re-emit its plan), not the execution log or queue.
 describe('cross-session isolation', () => {

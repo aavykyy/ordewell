@@ -176,6 +176,16 @@ export interface IAiService {
   pruneContext?(): number;
 
   /**
+   * Optional: how many times, over this service's life, a conversation's
+   * context was compacted in place — by a harness agent itself, or by
+   * {@link pruneContext} and the proactive pruning of a vendor backend. A
+   * context compacted since a turn was sent the plan may no longer hold it, so
+   * the conversation sends the whole plan again when this moves (ADR-0012
+   * T10). Absent where nothing compacts a context in place.
+   */
+  compactions?(): number;
+
+  /**
    * One-shot research + plan for non-conversational surfaces (CLI `plan --goal`,
    * web REST). Never asks questions — it plans with what it can find.
    */

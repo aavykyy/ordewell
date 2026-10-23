@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { makeSession } from './sessionTestKit';
 
-describe('planContextBlock task-shape fields', () => {
+describe('the plan block\'s task-shape fields', () => {
   function planWithMixedTasks(): LegacyPlanState {
     return {
       tasks: [
