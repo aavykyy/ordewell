@@ -91,6 +91,27 @@ extension bundles its own core and needs nothing from npm.
 **Requirements:** Node.js 20 or newer, at least one of Claude Code, Codex or
 OpenCode, and git for task isolation. On Windows, run the terminal UI under WSL.
 
+## What Ordewell sends
+
+Once a day, Ordewell asks ordewell.ai whether a newer version is out. The request
+carries two things: the version you run and a random install ID, kept in
+`~/.ordewell/version-check.json` and shared by the CLI and the VS Code extension. Nothing else is sent: no
+code, prompts, paths, file names or account details. Like any server, ordewell.ai
+sees the IP address the request comes from.
+
+The first time Ordewell starts on a machine, it shows a notice saying this and
+sends nothing. The first check happens on a later start. When a newer version is
+out, Ordewell shows one line naming it.
+
+To turn the check off, set:
+
+```bash
+export ORDEWELL_NO_VERSION_CHECK=1
+```
+
+`DO_NOT_TRACK=1` turns it off too, and so does turning off VS Code's telemetry
+for the extension. Turned off, Ordewell sends nothing and writes no install ID.
+
 ## Quick start
 
 Run `ordewell` in your project to open the terminal UI, then type a goal. The first

@@ -6,6 +6,7 @@ import { describeConnectionRefused, isConnectionRefused, resolvePort } from './d
 import { ApiClient } from './apiClient';
 import { COMMANDS } from './commands/registry';
 import { cliVersion } from './version';
+import { startCliVersionCheck, toStderr } from './versionCheck';
 import { expandSessionId, flag } from './utils';
 
 const TUI_FLAGS = new Set(['--workspace', '--port']);
@@ -43,6 +44,8 @@ async function main(): Promise<void> {
     console.error('Run `ordewell --help` for usage.');
     process.exit(1);
   }
+  // The TUI starts its own, to draw it in its frame: one check per start either way.
+  if (command !== 'tui') startCliVersionCheck(toStderr);
   try {
     await handler(argv.slice(1));
   } catch (err) {

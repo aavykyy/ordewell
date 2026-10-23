@@ -1,5 +1,10 @@
 import { vi } from 'vitest';
 
+// No test reaches ordewell.ai (ADR-0048). A test of the version check passes
+// its own env, so this only silences the CLI, daemon and extension code that
+// starts one as a side effect, and every child process they spawn.
+process.env.ORDEWELL_NO_VERSION_CHECK = '1';
+
 // vi.waitFor gives up after one second, and vitest has no setting for that.
 // Much here waits on real I/O (git, file-system events, child processes), which
 // a loaded machine slows past a second: the full suite, under coverage, on a CI

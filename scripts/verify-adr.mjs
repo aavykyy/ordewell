@@ -29,7 +29,7 @@ const FOLDERS = {
   isolation: 'worktrees, repo groups, conflicts, ops tasks and merge gates',
   supervision: 'the supervisor, run settings, failure policy, consent and research tasks',
   surfaces: 'the TUI and the shared conversation view',
-  platform: 'Windows and the per-workspace environment',
+  platform: 'Windows, the per-workspace environment and what Ordewell sends from the machine',
 };
 
 // Level-2 headings, in order. Any other level-2 heading is a topic section:

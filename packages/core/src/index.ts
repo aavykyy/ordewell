@@ -67,6 +67,8 @@ export { WebResponseCache, sharedWebResponseCache } from './services/WebResponse
 export type { CachedPage, WebResponseCacheOptions } from './services/WebResponseCache';
 export { HttpWebFetcher } from './services/HttpWebFetcher';
 export type { HttpWebFetcherOptions, WebResponse, WebTransport } from './services/HttpWebFetcher';
+export { startVersionCheck, VERSION_CHECK_URL, VERSION_CHECK_NOTICE } from './services/VersionCheck';
+export type { PingFetch, VersionCheck, VersionCheckOptions } from './services/VersionCheck';
 export type { ApprovalMode, ApprovalModeSetting, ApprovalPolicyOptions, ApprovalSource } from './services/ApprovalPolicy';
 export { DEFAULT_PLANNER_ALLOWLIST, parseAllowlist, commandAllowedBy, toolAllowed, scopeAllowed } from './services/plannerAllowlist';
 export type { PlannerAllowlist, CommandWords } from './services/plannerAllowlist';
