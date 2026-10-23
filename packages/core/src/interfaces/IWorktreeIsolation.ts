@@ -1,5 +1,6 @@
 import type { TaskDiffRead, TaskDiffResult } from '../services/taskDiffRead';
 import type { Task } from '../models/Task';
+import type { HandoffCommit } from '../models/Handoff';
 
 /**
  * Why isolated execution is unavailable for a workspace. The orchestrator needs
@@ -96,6 +97,13 @@ export interface IsolationTaskRecord {
    * so a stale reason cannot outlive the failure it explains.
    */
   landingError?: string;
+  /**
+   * The commit the task's done handoff stated, kept from the landing that
+   * first brought it: what Ordewell's own commits for the task are written
+   * from (ADR-0013), a repair's merge and every later landing included,
+   * though a repair's handoff states none.
+   */
+  commit?: HandoffCommit;
   /** Repo-relative paths, in `conflictRepo`, that conflicted; set only while `status` is `conflict` or `repairing`. */
   conflictFiles?: string[];
   /**
@@ -481,8 +489,13 @@ export interface IWorktreeIsolation {
    * `persist` is called once `run.landing` is set and before the first
    * merge; the caller saves the run there, synchronously, which is what
    * lets `pruneOrphans` finish a landing a crash interrupted.
+   *
+   * `commit`, the one the task's done handoff stated, is kept on the record,
+   * and what Ordewell commits and merges for the task is written from it;
+   * without one, the record's earlier commit, else the task title. A commit
+   * the runner made is never rewritten.
    */
-  integrate(task: Task, run: IsolationRun, persist?: () => void): Promise<IsolationOutcome>;
+  integrate(task: Task, run: IsolationRun, persist?: () => void, commit?: HandoffCommit): Promise<IsolationOutcome>;
 
   /**
    * `keep: false` removes the task's worktree, branch and record (retry, task

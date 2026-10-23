@@ -3,6 +3,7 @@ import type { IFileSystem, ToolOutcome } from './interfaces/IFileSystem';
 import type { InvokedCommand, IRunnerSession, QueuedTaskMessage, ScriptExit, StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from './interfaces/IRunner';
 import type { RunnerCommand } from './models/RunnerCommand';
 import type { RunnerSessionCost } from './models/Usage';
+import type { HandoffCommit } from './models/Handoff';
 import type { ApprovalDecision } from './interfaces/IApproval';
 import type { CheckpointAnswer, TaskCompleteArgs } from './services/mcp/tools';
 import type {
@@ -426,10 +427,11 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   }
 
   /** Like git: the landing is recorded and persisted before the (held) merge, and cleared once it settles. */
-  async integrate(task: Task, run: IsolationRun, persist: () => void = () => undefined): Promise<IsolationOutcome> {
+  async integrate(task: Task, run: IsolationRun, persist: () => void = () => undefined, commit?: HandoffCommit): Promise<IsolationOutcome> {
     this.log({ op: 'integrate', taskId: task.id });
     const record = run.tasks[task.id];
     if (!record) return 'failed';
+    if (commit) record.commit = commit;
     if (record.readOnly) {
       record.status = 'failed';
       record.landingError = 'a read-only task lands nothing';

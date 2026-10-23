@@ -78,11 +78,22 @@ everything below applies per repo of the group.
   module merges one task at a time with `git merge --no-ff` — a merge commit per
   task preserves any commits a Runner made itself, makes attribution visible, and
   makes the task branch an ancestor so it is safe to delete. A landing is atomic
-  across the repos a task changed (ADR-0014). Subjects name the change, not the
-  plan: the merge commit is `Merge: <task title>` and the sweep-up commit (for
-  work a Runner left uncommitted) is the title alone. The plan's task `order` and
-  the run id are Ordewell-internal and never enter a message that can reach the
-  user's branch. Among tasks already waiting, the lowest plan `order` merges
+  across the repos a task changed (ADR-0014). Messages name the change, not the
+  plan, and are written by one function (`landingMessage`): from the commit the
+  task's `done` handoff stated
+  ([ADR-0047](../supervision/0047-structured-task-handoffs.md)), kept on the
+  task's run record, so a conflict repair (whose own handoff states none) and
+  every later landing reuse it. The sweep-up commit (for work a Runner left
+  uncommitted) is that subject and body; the merge commit is `Merge: <subject>`
+  with the same body, the same in every repo the task changed. Without a stated
+  commit, the task title's first line stands in for the subject. A conflict
+  repair is told to merge the integration tip in with
+  `Merge: <subject> (resolve conflicts with integration)`, so git's default
+  `Merge branch 'ordewell/…'` never reaches history. A multi-line message goes
+  to git as one `-m` per paragraph, never through a shell; a commit the Runner
+  made itself is never rewritten. The plan's task `order`, the run id and
+  Ordewell's branch names are internal and never enter a message that can
+  reach the user's branch. Among tasks already waiting, the lowest plan `order` merges
   first. It never waits for a task that has not finished: a dependent cannot run
   until its predecessor integrates, so blocking on a lower-order task that is
   waiting on the queue would deadlock. Ordering is therefore deterministic for
@@ -481,3 +492,4 @@ literal git command lines or private fields.
 - 2026-10-19 — adopting a saved run asks git what the user merged since and clears up a settled run left with nothing to hand over; a gone integration branch counts as merged.
 - 2026-10-21 — a read-only task's worktree lands nothing and is never kept, and removing a worktree follows no link a task put on the way (ADR-0046).
 - 2026-10-22: merge automatically and supervisor Act are set in `/settings`; the one-value slash commands are gone from the TUI and VS Code.
+- 2026-10-23 — landing commits and merges are written from the commit the task's handoff stated, falling back to its title; a conflict repair's merge names the task, not Ordewell's branches.

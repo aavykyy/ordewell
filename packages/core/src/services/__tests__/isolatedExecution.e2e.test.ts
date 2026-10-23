@@ -292,7 +292,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
           if (hold(opts.taskId, n)) return;
           const job = jobFor(opts.taskId, n);
           if (job?.merge) {
-            const integration = spawns.map((s) => s.prompt.match(/git merge --no-edit ([^`\n\s]+)/)?.[1]).find(Boolean)!;
+            const integration = spawns.map((s) => s.prompt.match(/git merge --no-edit [^`\n]*?(\S+)`/)?.[1]).find(Boolean)!;
             let conflicted = false;
             try { git(opts.cwd, 'merge', '--no-edit', integration); } catch { conflicted = true; }
             // A conflicted merge resolves itself the way the repair is told to: keep both sides' work, commit.

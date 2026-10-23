@@ -7,6 +7,8 @@ import { changedReposOf, integrationBranchNameOf, SELF_REPO } from './isolationR
 import { capConflictFiles } from './conflictFiles';
 import { buildConflictRepairPrompt, buildConflictResolutionPrompt } from './PlanPrompts';
 import { landsNothing, type AttemptKind } from './attemptKind';
+import type { HandoffCommit } from '../models/Handoff';
+import { landingMessage } from './landingMessage';
 
 /** Which repair of a task an attempt is, of the most `conflictRepairAttempts` allows. */
 export interface RepairAttempt {
@@ -85,13 +87,14 @@ export class Landing {
    * Land a passed attempt's work. One whose worktree has no unlanded record
    * behind it any more — the run was discarded under it — cannot land. A
    * read-only attempt's worktree goes instead, whatever it changed: its
-   * report is its result (ADR-0046).
+   * report is its result (ADR-0046). `commit` is the one the attempt's done
+   * handoff stated, which Ordewell's own commits for the task are written from.
    */
-  async landPassed(task: Task, attempt: { worktree: boolean; kind: AttemptKind }): Promise<LandingOutcome> {
+  async landPassed(task: Task, attempt: { worktree: boolean; kind: AttemptKind }, commit?: HandoffCommit): Promise<LandingOutcome> {
     if (landsNothing(attempt.kind)) return this.discard(task, attempt.worktree);
     if (!attempt.worktree) return NOTHING_TO_LAND;
     if (!this.hasUnlandedWork(task.id)) return this.unmerged(task, 'failed');
-    const landing = await this.runs.integrate(task);
+    const landing = await this.runs.integrate(task, commit);
     return landing === 'merged' ? { kind: 'landed', messages: [] } : this.unmerged(task, landing);
   }
 
@@ -173,6 +176,7 @@ export class Landing {
     const record = run.tasks[task.id];
     const conflict = {
       branch: record?.branch ?? '',
+      message: landingMessage('repair-merge', record ?? task),
       repos: Object.keys(record?.repairBase ?? {}),
       ...(record?.conflictRepo ? { conflictRepo: record.conflictRepo } : {}),
       ...(record?.conflictFiles ? { conflictFiles: record.conflictFiles } : {}),
@@ -273,6 +277,7 @@ export function conflictResolverTask(task: Readonly<Task>, run: IsolationRun | n
   const integrationBranch = integrationBranchNameOf(run);
   const conflict = {
     branch: record.branch,
+    message: landingMessage('repair-merge', record),
     repos: changedReposOf(record),
     ...(record.conflictRepo ? { conflictRepo: record.conflictRepo } : {}),
   };
