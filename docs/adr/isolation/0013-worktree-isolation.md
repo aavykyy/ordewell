@@ -96,8 +96,9 @@ everything below applies per repo of the group.
   brings there, or of the first in plan order with `and N more` and a line
   per task. So git's default `Merge branch 'ordewell/…'` or
   `Merge commit '<sha>' into ordewell/…` never reaches history. A multi-line message goes
-  to git as one `-m` per paragraph, never through a shell; a commit the Runner
-  made itself is never rewritten. Each message Ordewell writes ends with the
+  to git as one `-m` per paragraph, never through a shell, and lands as written
+  whatever the user's `commit.cleanup` (whose `strip` would drop a `#42 …`
+  subject); a commit the Runner made itself is never rewritten. Each message Ordewell writes ends with the
   git trailer `Planned-with: Ordewell` unless the user turned that off in
   `/settings` ([ADR-0030](../supervision/0030-global-run-settings.md)); the
   setting is read as the message is written, so a change reaches the next
@@ -505,3 +506,4 @@ literal git command lines or private fields.
 - 2026-10-23 — landing commits and merges are written from the commit the task's handoff stated, falling back to its title; a conflict repair's merge names the task, not Ordewell's branches.
 - 2026-10-23 — the commits and merges Ordewell writes end with a `Planned-with: Ordewell` trailer, which the user can turn off (ADR-0030).
 - 2026-10-23 — Merge all's merge, a continue's merge of kept work and the rescue commit are named for the tasks and carry the trailer, like the landing.
+- 2026-10-23 — the messages Ordewell writes land as written, whatever the user's `commit.cleanup`.

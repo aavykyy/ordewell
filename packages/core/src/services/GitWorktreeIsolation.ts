@@ -55,6 +55,12 @@ export interface WorktreeIsolationDeps {
 
 const INTEGRATION_DIR = 'integration';
 
+// Ordewell's own messages land as written: the user's `commit.cleanup` would
+// otherwise apply, and `strip` drops a stated `#42 Fix …` subject or a
+// `# Changes` line. A config override rather than `--cleanup`, which `git
+// merge` only learned in 2.23.
+const VERBATIM = ['-c', 'commit.cleanup=whitespace'];
+
 // The names Ordewell gives its own branches and task workspaces; the run id is
 // the one segment it owns. Greedy, so a workspace that itself sits in a task
 // workspace resolves to the innermost run.
@@ -505,7 +511,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const { worktree } = record.repos[kept.repo];
       try {
         // Named for the task: git's default names the internal branch, and this merge lands with the task.
-        await this.git(worktree, ['merge', '--no-edit', ...messageArgs(this.message('restore-merge', record)), kept.commit]);
+        await this.git(worktree, [...VERBATIM, 'merge', '--no-edit', ...messageArgs(this.message('restore-merge', record)), kept.commit]);
       } catch (err) {
         const unmerged = await this.git(worktree, ['diff', '--name-only', '--diff-filter=U']);
         if (!unmerged.trim()) throw err;
@@ -880,7 +886,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       // throw away their resolution as if it were ours.
       if (await this.mergeInProgress(repo.root)) return stopped('failed', repo);
       const message = runMergeMessage(this.bringsToHead(run, repo), this.deps.plannedWith?.() ?? false);
-      const merge = await this.tryGit(repo.root, ['merge', '--no-edit', ...messageArgs(message), repo.integrationBranch]);
+      const merge = await this.tryGit(repo.root, [...VERBATIM, 'merge', '--no-edit', ...messageArgs(message), repo.integrationBranch]);
       if (merge.ok) {
         landed.push(repo.path);
         continue;
@@ -1080,7 +1086,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     } catch (err) {
       return { outcome: 'failed', files: [], error: await this.integrationWorktreeError(repo, err) };
     }
-    const merge = await this.tryGit(dir, ['merge', '--no-ff', '--no-edit', ...messageArgs(this.message('merge', record)), record.branch]);
+    const merge = await this.tryGit(dir, [...VERBATIM, 'merge', '--no-ff', '--no-edit', ...messageArgs(this.message('merge', record)), record.branch]);
     if (merge.ok) return { outcome: 'merged', files: [] };
     // A hook that refuses the merge commit leaves a merge in progress with nothing unmerged: a failure, not a conflict.
     const files = await this.unmergedPaths(dir);
@@ -1177,7 +1183,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     // A rescue exists only so a removal deletes nothing: a hook that refuses
     // the commit, or a signing prompt nobody will answer, must not stop it.
     const commit = opts.rescue ? ['-c', 'commit.gpgsign=false', 'commit', '--no-verify'] : ['commit'];
-    await this.git(entry.worktree, [...commit, '-q', ...messageArgs(message)]);
+    await this.git(entry.worktree, [...VERBATIM, ...commit, '-q', ...messageArgs(message)]);
   }
 
   /** A message Ordewell writes, with the trailer if the user's setting says so right now. */
