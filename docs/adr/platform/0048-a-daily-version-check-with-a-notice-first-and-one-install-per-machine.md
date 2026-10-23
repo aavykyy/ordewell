@@ -42,7 +42,8 @@ the update line, and decides only where they appear.
   extension read and write the same file. It is written atomically and owner
   only. A field of the wrong type counts as absent, and a file without an
   `installId` or a `noticeShownAt` (missing, not JSON, or that field absent) is
-  recreated as on a first start, notice included: with no install ID nothing
+  recreated as on a first start, notice included and `lastCheckAt` dropped, so
+  the next start pings: with no install ID nothing
   would ever be sent, so keeping the old notice would leave the check off for
   good.
 - **Once a day.** A start pings only when `lastCheckAt` is a day or more ago,

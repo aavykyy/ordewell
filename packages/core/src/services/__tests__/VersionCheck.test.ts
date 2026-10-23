@@ -272,6 +272,7 @@ describe('VersionCheck', () => {
       ['no install ID', {}],
       ['an install ID of the wrong type', { installId: 7 }],
       ['an empty install ID', { installId: '' }],
+      ['no install ID and a check an hour ago', { lastCheckAt: new Date(T0 - 60 * 60_000).toISOString() }],
     ])('starts over when it has a notice but %s, so the check is not off for good', async (_, broken) => {
       fs.writeFileSync(stateFile(), JSON.stringify({ noticeShownAt: new Date(T0 - 2 * DAY).toISOString(), ...broken }));
       const net = fakeFetch(reply(204));
