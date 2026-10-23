@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as vscode from 'vscode';
-import { detectInstalledPlanner, resetInstalledPlanner, type RunnerInstallation } from '@ordewell/core';
+import { detectInstalledPlanner, resetInstalledPlanner, RunnerRegistry, type RunnerInstallation } from '@ordewell/core';
 import { registerCommands, type CommandDeps } from '../CommandRegistry';
+import { enableRunner, type EnableRunnerDeps } from '../enabledRunners';
 
 const registerCommand = vscode.commands.registerCommand as unknown as ReturnType<typeof vi.fn>;
 
@@ -53,5 +54,53 @@ describe('ordewell.toggleRunner', () => {
     answer(false);
     await toggled;
     expect(settingsService.updateEnabledRunners).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** The host's enable path over a settings service that applies the change to a list the test holds. */
+function enableOver(saved: string[] | undefined, defaults: string[]) {
+  const settingsService = {
+    updateEnabledRunners: vi.fn((change: (saved: string[] | undefined) => string[]) => change(saved)),
+  };
+  const sendRunnerAndModels = vi.fn(async () => {});
+  const deps: EnableRunnerDeps = {
+    runnerRegistry: new RunnerRegistry(),
+    settingsService,
+    config: { enabledRunners: defaults },
+    sendRunnerAndModels,
+  };
+  return { enable: (runnerId: string) => enableRunner(deps, runnerId), settingsService, sendRunnerAndModels };
+}
+
+describe('enabling an installed runner from the chat header', () => {
+  afterEach(() => resetInstalledPlanner());
+
+  it('adds it to the saved enabled runners and re-sends the list', async () => {
+    const { enable, settingsService, sendRunnerAndModels } = enableOver(['claude-code'], ['claude-code']);
+
+    const saved = await enable('codex');
+
+    expect(saved).toEqual(['claude-code', 'codex']);
+    expect(settingsService.updateEnabledRunners.mock.results[0]!.value).toEqual(['claude-code', 'codex']);
+    expect(sendRunnerAndModels).toHaveBeenCalled();
+  });
+
+  it('never turns one off: a repeated or stale click leaves the saved list as it is', async () => {
+    const { enable, settingsService } = enableOver(['claude-code', 'codex'], ['claude-code']);
+
+    const saved = await enable('codex');
+
+    expect(saved).toEqual(['claude-code', 'codex']);
+    expect(settingsService.updateEnabledRunners.mock.results[0]!.value).toEqual(['claude-code', 'codex']);
+  });
+
+  it('refuses an id no manifest names, saving and sending nothing', async () => {
+    const { enable, settingsService, sendRunnerAndModels } = enableOver(['claude-code'], ['claude-code']);
+
+    const saved = await enable('no-such-agent');
+
+    expect(saved).toBeNull();
+    expect(settingsService.updateEnabledRunners).not.toHaveBeenCalled();
+    expect(sendRunnerAndModels).not.toHaveBeenCalled();
   });
 });

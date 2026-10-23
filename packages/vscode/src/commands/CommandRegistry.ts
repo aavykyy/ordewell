@@ -14,6 +14,7 @@ import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import { SecretStore, type ApiProvider } from '../adapters/SecretStore';
 import { configureModelAllowlist } from './configureModelAllowlist';
+import { toggleRunner } from './enabledRunners';
 import { executeUserCommand, forceStartPastGate, handleNewSession } from '../plan/PlanManager';
 
 export interface CommandDeps {
@@ -119,11 +120,14 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       }
       if (!target) return;
 
-      const newEnabled = deps.settingsService.updateEnabledRunners((saved) => {
-        const enabled = saved ?? deps.config.enabledRunners;
-        return enabled.includes(target) ? enabled.filter((r) => r !== target) : [...enabled, target];
-      });
-      await deps.sendRunnerAndModels();
+      const newEnabled = await toggleRunner(
+        {
+          settingsService: deps.settingsService,
+          config: deps.config,
+          sendRunnerAndModels: deps.sendRunnerAndModels,
+        },
+        target,
+      );
       vscode.window.showInformationMessage(`Enabled runners: ${newEnabled.length === 0 ? '(none: enable at least one)' : newEnabled.join(', ')}`);
     }),
   );

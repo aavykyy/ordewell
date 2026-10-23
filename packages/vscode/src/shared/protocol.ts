@@ -155,6 +155,12 @@ export type WebviewToHost =
   | { type: 'openTaskLog'; taskId: string }
   /** The plan dock's dragged height in px, saved on release so every later session opens at it. */
   | { type: 'setPlanDockHeight'; height: number }
+  /**
+   * A click on an installed runner that is off: enable it in the settings file
+   * every surface shares and re-send the runner list. Add-only by design, so a
+   * repeated or stale click can never turn a runner off.
+   */
+  | { type: 'enableRunner'; runnerId: RunnerId }
   /** Who plans (ADR-0009) — a vendor provider id or one of the harness planners. */
   | { type: 'setPlanner'; provider: string }
   /** The planner's own model and thinking effort, a pair so neither can outlive the other. */

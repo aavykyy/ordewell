@@ -135,6 +135,30 @@ describe('reduceHost runView isolation', () => {
   });
 });
 
+describe('a runner enabled from the Runners block', () => {
+  const installed = (enabled: string[]) => [
+    { id: 'claude-code', displayName: 'Claude Code', enabled: enabled.includes('claude-code') },
+    { id: 'codex', displayName: 'Codex', enabled: enabled.includes('codex') },
+  ];
+
+  it('joins the plan\'s runner set at once, and an older runner list cannot drop it again', () => {
+    const known = reduceHost(INITIAL_HOST_STATE, msg({ type: 'setRunners', runners: installed(['claude-code']) }));
+
+    const enabling = reduceHost(known, { type: 'enableRunnerRequested', runnerId: 'codex' });
+    expect(enabling.runners).toEqual(['claude-code', 'codex']);
+
+    // Discovery started before the host saved the choice: its list still says Codex is off.
+    const stale = reduceHost(enabling, msg({ type: 'setRunners', runners: installed(['claude-code']) }));
+    expect(stale.runners).toEqual(['claude-code', 'codex']);
+    expect(stale.enabledRunnerIds).toEqual(['claude-code', 'codex']);
+
+    // The list for the saved choice settles it.
+    const saved = reduceHost(stale, msg({ type: 'setRunners', runners: installed(['claude-code', 'codex']) }));
+    expect(saved.runners).toEqual(['claude-code', 'codex']);
+    expect(saved.pendingRunnerEnables).toEqual([]);
+  });
+});
+
 describe('setModesByRunner', () => {
   it('keeps the host\'s one-line notice for a runner whose modes are off, and drops it once they are back', () => {
     const notice = { line: 'Codex sandbox unavailable on this host: read-only and Guarded modes are off', docs: 'https://example.test/docs' };

@@ -218,6 +218,14 @@ export default function App() {
     });
   }, []);
 
+  const handleEnableRunner = useCallback((runnerId: RunnerId) => {
+    // Optimistic here as well as at the host: the save is quick but the
+    // discovery behind the re-sent list can take a while, and the click has to
+    // read as done.
+    dispatch({ type: 'enableRunnerRequested', runnerId });
+    vscode.postMessage({ type: 'enableRunner', runnerId });
+  }, []);
+
   const handleConfigureApiKey = useCallback(() => {
     vscode.postMessage({ type: 'sendMessage', text: '/key', runners });
   }, [runners]);
@@ -583,7 +591,6 @@ export default function App() {
     () => (runnersKnown ? { enabledRunners: enabledRunnerIds, allowlist: modelAllowlist, models: modelsByRunner } : undefined),
     [runnersKnown, enabledRunnerIds, modelAllowlist, modelsByRunner],
   );
-  const visibleRunners = runnerList.filter((r) => enabledRunnerIds.includes(r.id));
 
   // An API key is one of two ways in (ADR-0009): an installed coding agent
   // plans on its own subscription, so key-less is a working setup, not a
@@ -853,10 +860,19 @@ export default function App() {
         <section className="setup-block">
           <div className="setup-block-title">Runners</div>
           <div className="setup-block-hint">
-            Coding agents that execute the plan's tasks. Toggle which ones the planner may assign.
+            Coding agents that execute the plan's tasks. Toggle which ones the planner may assign; click a disabled agent to enable it on every surface.
           </div>
           <div className="runner-pills">
-            {visibleRunners.map((r) => {
+            {runnerList.map((r) => {
+              if (!enabledRunnerIds.includes(r.id)) {
+                return (
+                  <button key={r.id} className="runner-pill disabled"
+                    onClick={() => handleEnableRunner(r.id)}
+                    title={`Click to enable ${r.displayName} as a runner on every surface`}>
+                    <span className="runner-dot" /> {r.displayName}
+                  </button>
+                );
+              }
               const isToggled = runners.includes(r.id);
               return (
                 <button key={r.id} className={`runner-pill ${isToggled ? 'on' : 'off'}`}
@@ -866,10 +882,10 @@ export default function App() {
                 </button>
               );
             })}
-            {visibleRunners.length === 0 && !runnersKnown && (
+            {runnerList.length === 0 && !runnersKnown && (
               <span className="setup-block-empty">{DETECTING}</span>
             )}
-            {visibleRunners.length === 0 && runnersKnown && (
+            {runnerList.length === 0 && runnersKnown && (
               <span className="setup-block-empty">
                 No coding agent detected: install {orNames(agentNames, 'a coding agent')}, then run <code>/refresh</code>.
               </span>
