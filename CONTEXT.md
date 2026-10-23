@@ -172,9 +172,17 @@ note). A turn that never lands — failed, stopped before settling, abandoned �
 takes them with it, whatever saves were made while it ran, so there is nothing
 to take back. It is the only writer of the transcript; every write is made in
 the host's mutation ritual. It builds the per-turn prompt
-blocks (the always-on catalog block and the current-plan block, whose edit
+blocks (the catalog block and the current-plan block, whose edit
 protocol prose lives beside the applier as `taskOpsProtocol` in `TaskOps.ts`),
-and the **Planner briefing** after them.
+and the **Planner briefing** after them. A block the live context already
+holds is not sent again: the plan block goes whole once per live context, with
+its read and edit protocol, and every later turn carries a `<plan_changes>`
+block of the tasks added or changed, the tasks removed and what runs now. It
+goes whole again when a task's reference changed (a reorder, or an insert or
+removal that renumbers) and after anything that drops the live context or
+leaves the last whole block uncertain: a reset, a compaction, a turn that
+failed, was stopped or was abandoned (ADR-0012 T10). The catalog block follows
+the same rule.
 The live model context — a vendor service's message list, a harness planner's
 process and native session id — is disposable: dropping it makes the next turn
 replay from the transcript (it is dropped before every replay, so a harness
@@ -283,8 +291,17 @@ Parallel limit bounds what runs at once: research tasks and every other task
 share the same slots. Removing research or lifting read-only withdraws the
 approval granted as research landed. Surfaces mark its row as research and draw
 its report in the run update that delivered it, folded when long.
+The planner starts one for evidence: finding out needs a worktree (a failing
+test, a build, a reproduction), another runner or model should judge it, the
+user should see it and be able to stop it, or a later task will act on its
+findings, in which case that task depends on it and reads the findings in its
+handoff. Orientation, a conclusion the planner needs this turn that no task
+acts on, stays in the turn, in its own reads or its own agents; a search, rounds
+of research each deciding the next, is the `explore` skill (ADR-0037 R5).
 *Avoid:* "background agent" — a harness's subagents are awaited inside their
-turn; work across turns is a task in the plan.
+turn; work across turns is a task in the plan. *Avoid:* choosing between a
+research task and the planner's own agents by how long a lookup will take —
+the planner cannot know that before it starts; choose by what the result is.
 
 **ResearchStep outcome** — how one research tool call ended, as data:
 `success | failure | refused | denied | not_executed`, derived once by
@@ -469,7 +486,7 @@ through git). On a name clash global wins and the workspace copy is reported
 as shadowed. The built-in `grilling`, `to-spec` and `improve-codebase-architecture` are user-only; the built-in `diagnose` and `explore` planner skills and the `tdd` task skill are model-invocable (ADR-0024). Ordewell never ships, reads, or
 references runner-native skill mechanisms (`.claude/skills`, OpenCode plugins,
 etc.) to deliver a skill. Research subagents (`spawn_research_agent`, ADR-0005)
-are always-on for the planner, not a skill.
+are a tool of an API planner whose service can run them, not a skill.
 *Avoid:* "mode toggle", "skill toggle" — a skill is chosen per message or per
 task, never switched on in settings; "skill file", "slash command" for these —
 those are runner-side concepts.
