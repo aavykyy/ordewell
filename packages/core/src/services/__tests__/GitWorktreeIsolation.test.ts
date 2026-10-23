@@ -84,6 +84,13 @@ function branches(root: string, pattern = 'ordewell/*'): string[] {
 
 const execFileAsync = promisify(execFile);
 
+/** The git subcommand an invocation runs, past any `-c key=value` it starts with. */
+function subcommand(args: string[]): string | undefined {
+  let i = 0;
+  while (args[i] === '-c') i += 2;
+  return args[i];
+}
+
 /** Real git, except that `git worktree add` fails in the given repositories. */
 function refuseWorktreesIn(...repoRoots: string[]): GitExecFn {
   return async (file, args, opts) => {
@@ -476,6 +483,23 @@ describe.skipIf(!hasGit)('WorktreeIsolation integration queue', () => {
     const integration = run.repos[0].integrationBranch;
     expect(git(root, 'log', '-1', '--format=%B', integration)).toBe('Merge: Greet the user on start\n\nThe banner was empty.\nNow it says hi.');
     expect(git(root, 'log', '-1', '--format=%B', `${integration}^2`)).toBe('Greet the user on start\n\nThe banner was empty.\nNow it says hi.');
+  });
+
+  it.each([true, false])('writes the stated commit verbatim when the user\'s commit.cleanup strips # lines (trailer %s)', async (plannedWith) => {
+    const root = repo();
+    git(root, 'config', 'commit.cleanup', 'strip');
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }), plannedWith: () => plannedWith });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Fix the parser');
+    const { cwd } = await iso.prepare(t, run);
+    writeFileSync(join(cwd, 'parser.txt'), 'fixed\n');
+
+    expect(await iso.integrate(t, run, undefined, { subject: '#42 Fix the parser', body: '# Changes\n- one' })).toBe('merged');
+
+    const integration = run.repos[0].integrationBranch;
+    const trailer = plannedWith ? '\n\nPlanned-with: Ordewell' : '';
+    expect(git(root, 'log', '-1', '--format=%B', `${integration}^2`)).toBe(`#42 Fix the parser\n\n# Changes\n- one${trailer}`);
+    expect(git(root, 'log', '-1', '--format=%B', integration)).toBe(`Merge: #42 Fix the parser\n\n# Changes\n- one${trailer}`);
   });
 
   it('falls back to the task title when the task stated no commit', async () => {
@@ -1660,7 +1684,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
     const intruders: Array<() => void> = [];
     let handing: Promise<unknown> = Promise.resolve();
     const exec: GitExecFn = async (file, args, opts) => {
-      const isMerge = args[0] === 'merge' && args.includes('--no-ff');
+      const isMerge = subcommand(args) === 'merge' && args.includes('--no-ff');
       if (isMerge) {
         reachMerge();
         await mergeReleased;
@@ -2033,7 +2057,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation for merge gates and ops tasks (ADR-0
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
     const execFileImpl: GitExecFn = async (file, args, opts) => {
-      if (args[0] === 'merge' && args.includes('--no-ff')) {
+      if (subcommand(args) === 'merge' && args.includes('--no-ff')) {
         reached();
         await held;
       }
@@ -2658,7 +2682,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
         const dir = trio();
         const { persisted, tips, workspace } = await crashDuringLanding(dir, {
           conflict: false,
-          at: (run) => (args, cwd) => args[0] === 'merge' && cwd === integrationDir(dir, run, 'web'),
+          at: (run) => (args, cwd) => subcommand(args) === 'merge' && cwd === integrationDir(dir, run, 'web'),
         });
         expect(tip(dir, 'api', persisted)).not.toBe(tips.api);
         expect(persisted.landing).toEqual({ taskId: 'task-2', tips });
@@ -2712,7 +2736,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
         const dir = trio();
         const { persisted, tips } = await crashDuringLanding(dir, {
           conflict: false,
-          at: (run) => (args, cwd) => args[0] === 'merge' && cwd === integrationDir(dir, run, 'web'),
+          at: (run) => (args, cwd) => subcommand(args) === 'merge' && cwd === integrationDir(dir, run, 'web'),
         });
         // Something other than this landing committed on top of it.
         const api = join(dir, 'api');
