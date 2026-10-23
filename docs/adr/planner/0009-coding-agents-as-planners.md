@@ -182,9 +182,11 @@ model's behalf, which is precisely what a coding agent replaces.
 - **Research subagents are inert on this backend (T8).** `spawn_research_agent`
   is a Ordewell-executed tool with no meaning when the agent owns its own
   subagent mechanism. It is hidden rather than silently ignored. A harness's
-  own subagents are awaited before the turn ends (`MAX_AGENT_WAITS`); research
-  that outlives a turn is a read-only research task in the plan whose report
-  returns to the planner ([ADR-0037](../supervision/0037-research-tasks-wake-the-planner.md), R1, R5).
+  own subagents are awaited before the turn ends (`MAX_AGENT_WAITS`), and
+  serve orientation: what the planner needs this turn and no later task acts
+  on. Evidence, what needs a worktree, another runner or model, the user's
+  sight, or a later task to act on, is a read-only research task in the plan
+  whose report returns to the planner ([ADR-0037](../supervision/0037-research-tasks-wake-the-planner.md), R1, R5).
 - **An unusable agent fails before the goal is typed (T9).** `RunnerInstallation`
   probes the binary and credentials; a planner picker offers only the agents
   that are usable, and states what to install when none is. A turn
@@ -354,3 +356,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-21 — the planner performs an exact effect itself as a script task through `run_script`, a further execution tool; T1 now says repository files are the runners' alone ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
 
 - 2026-10-21 — research that outlives a turn uses research tasks; harness subagents stay awaited inside the turn (ADR-0037 R5).
+- 2026-10-23 — harness subagents serve orientation and research tasks evidence, decided by what the result is rather than how long it takes (ADR-0037 R5).

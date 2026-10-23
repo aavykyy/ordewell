@@ -28,10 +28,11 @@ addressed to the planner.
 
 ## Decision
 
-**Research meant to outlive the planner's turn is a research task: a read-only
-task in the plan whose report is addressed to the planner. When it ends, the
-planner wakes with the report, at every supervisor level. Inside a turn,
-harness subagents stay as they are, awaited before the turn ends.**
+**Research whose result is evidence is a research task: a read-only task in
+the plan whose report is addressed to the planner. When it ends, the planner
+wakes with the report, at every supervisor level. Orientation stays in the
+turn, with the planner's own reads and its own agents, awaited before the turn
+ends.**
 
 - **What it is (R1).** A read-only AI task (ADR-0031) marked `research: true`,
   with a self-contained brief: what to find out, where to start, and what the
@@ -60,8 +61,8 @@ harness subagents stay as they are, awaited before the turn ends.**
   lands and starts without asking, under ADR-0046's shared read-only profile.
   Removing research or lifting read-only withdraws that approval. How many
   research tasks a message starts is the planner's judgement: it starts a
-  research task for each independent thread worth running in the background,
-  and in a report turn starts another when the report opens a genuinely new
+  research task for each independent question, and in a report turn starts
+  another when the report opens a genuinely new
   question. That research's own report opens the next planner turn, so a
   report → research → report chain continues with no user message in between.
   **The chain is deliberately not bounded per message.**
@@ -72,12 +73,30 @@ harness subagents stay as they are, awaited before the turn ends.**
   turns failed), which holds reports for the user's next message, and the
   user's Stop. A research report does not spend a separate allowance. Each
   task counts against its runner's usage like any task.
-- **Harness subagents stay in the turn (R5).** A harness's own subagents are
-  still awaited before the turn ends (ADR-0009). #24 draws a line at the task
-  boundary: inside a task the harness decides, and across tasks Ordewell does.
-  This draws the same line at the turn: inside a turn, the harness's agents;
-  across turns, a research task. The planner's instructions say to use a
-  research task for anything it would otherwise run in the background.
+- **Who explores is decided by what the result is (R5).** A planner cannot
+  know how long a lookup takes before it starts, so the line is drawn by what
+  the result is, never by its duration.
+  - *Orientation* is what the planner needs this turn to answer, ask or
+    outline, when only the conclusion matters and no later task acts on it. It
+    stays in the turn: the planner's own reads, or its own agents awaited
+    before the turn ends ([ADR-0005](../planner/0005-parallel-research-subagents.md)'s
+    `spawn_research_agent` for an API planner, the harness's own subagents
+    for a harness planner as ADR-0009 T8 says, none for an OpenCode planner),
+    each briefed to return a digest of the conclusion and file:line
+    references.
+  - *Evidence* is a research task: when finding out needs a worktree (a
+    failing test, a build, a reproduction), another runner or model should
+    judge it, the user should see it and be able to stop it, or a later task
+    will act on its findings. In the last case the later task depends on the
+    research task, so the findings reach it in its handoff (ADR-0047) instead
+    of being re-typed by the planner into the later task's brief.
+  - *Search*, a problem that needs rounds of branching where each round's
+    reports decide the next, is the `explore` skill: rounds of research tasks.
+
+  #24 draws a line at the task boundary: inside a task the harness decides,
+  and across tasks Ordewell does. This keeps it: what another task acts on, or
+  the user should see and stop, is Ordewell's. The planner prompt states the
+  rule once, in `whoExploresSection`, and every other section refers to it.
 - **On the surfaces (R6)**, a research task is a row in the plan, marked as
   research, with its log, usage, stop and retry like any task. It waits for a
   free slot like any other task. Its handoff is drawn in the conversation as the
@@ -88,6 +107,14 @@ harness subagents stay as they are, awaited before the turn ends.**
 
 ## Considered options
 
+- **Draw the line by duration** (the design until 2026-10-23): research that
+  should outlive the turn, or that the planner would otherwise run in the
+  background, is a research task, and the rest stays with the planner's own
+  agents. Dropped: a planner cannot know how long something takes before it
+  starts, so the same brief ("map subsystem X") fit both sides. It sent
+  lookups to cold runner sessions, and kept evidence the plan rested on in the
+  planner's context, from where only re-typing it into later briefs passed it
+  on.
 - **Let a harness's background agents outlive the turn**, and treat the turn
   the harness opens when they finish as a planner turn. Rejected: only some
   harnesses open one, the work is invisible to the plan and to its limits, and
@@ -129,3 +156,4 @@ harness subagents stay as they are, awaited before the turn ends.**
 - 2026-10-22 — the report chain is deliberately unbounded per message: a report turn may start further research whose report wakes the planner again, and its only bounds are the planner's judgement, the run's Parallel limit, `mayReport` and the user's Stop (R4, R6).
 - 2026-10-22 — decided, not built: a research task's report is its handoff ([ADR-0047](0047-structured-task-handoffs.md), #120).
 - 2026-10-22 — implemented research handoffs in report wake-ups and their surfaces (R1, R2, R6; ADR-0047, #120).
+- 2026-10-23 — who explores is decided by what the result is: orientation in the turn, evidence a research task that a task acting on it depends on, search the explore skill; the duration line is dropped (R4, R5).
