@@ -734,6 +734,7 @@ export class PlannerConversation {
    */
   reset(): void {
     this.dropContext();
+    this.blocks.restart();
     this.briefing.clear();
   }
 
@@ -912,7 +913,7 @@ export class PlannerConversation {
       const now = new Date().toISOString();
       this.holdWrites(userTurn, this.userEntries(goal, now), [this.userPrompt(goal.text, now)]);
       this.briefing.opened(opening.autorun ?? false);
-      this.blocks.forget();
+      this.blocks.restart();
       const turn = await this.host.aiService().startConversation({
         ...opening,
         // The system prompt's goal is the text as typed; skill bodies ride the

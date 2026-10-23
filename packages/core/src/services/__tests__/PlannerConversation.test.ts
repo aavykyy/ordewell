@@ -1190,6 +1190,60 @@ describe('the plan block: whole once per live context, then what changed', () =>
     expect(sent[2]).toMatch(WHOLE);
   });
 
+  /** Turn one over two tasks, then the plan emptied and a second turn that ends as `second` makes it. */
+  async function emptiedAfter(second: (made: ReturnType<typeof planned>) => Promise<void>) {
+    const [a, b] = [task('a', 1), task('b', 2)];
+    const made = planned([a, b]);
+    await made.conversation.reply('one');
+    made.live.tasks = [];
+    await second(made);
+    return made;
+  }
+
+  it('states the empty plan again after a stopped turn that may not have read it, until a turn that does lands', async () => {
+    const made = await emptiedAfter(async ({ conversation, host }) => {
+      vi.mocked(host.aiService().continueConversation).mockImplementationOnce(async () => {
+        conversation.stopTurn();
+        return { kind: 'message', text: '', researchLog: [], aborted: true };
+      });
+      await conversation.reply('two');
+    });
+
+    await made.conversation.reply('what is left in the plan?');
+    expect(made.sent.at(-1)).toContain('The plan now has no tasks.');
+    expect(made.sent.at(-1)).not.toMatch(WHOLE);
+
+    await made.conversation.reply('and now?');
+    expect(made.sent.at(-1)).not.toContain('The plan now has no tasks.');
+  });
+
+  it('states the empty plan again after a failed turn that may not have read it, until a turn that does lands', async () => {
+    const made = await emptiedAfter(async ({ conversation, host }) => {
+      vi.mocked(host.aiService().continueConversation).mockRejectedValueOnce(new Error('planner transport down'));
+      await expect(conversation.reply('two')).rejects.toThrow('planner transport down');
+    });
+
+    await made.conversation.reply('what is left in the plan?');
+    expect(made.sent.at(-1)).toContain('The plan now has no tasks.');
+
+    await made.conversation.reply('and now?');
+    expect(made.sent.at(-1)).not.toContain('The plan now has no tasks.');
+  });
+
+  it('states the empty plan after the backend compacted the turn that showed its tasks', async () => {
+    let compactions = 0;
+    const made = await emptiedAfter(async ({ conversation, host }) => {
+      host.aiService().compactions = () => compactions;
+      compactions++;
+      await conversation.reply('two');
+    });
+
+    expect(made.sent[1]).toContain('The plan now has no tasks.');
+
+    await made.conversation.reply('and now?');
+    expect(made.sent[2]).not.toContain('The plan now has no tasks.');
+  });
+
   it('sends the line of a task whose status changed, and no other', async () => {
     const [a, b] = [task('a', 1), task('b', 2)];
     const { conversation, sent, live } = planned([a, b]);

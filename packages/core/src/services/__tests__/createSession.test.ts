@@ -1357,6 +1357,27 @@ describe('cross-session isolation', () => {
     expect(outgoing).not.toContain('<current_plan>');
   });
 
+  it('startPlanning does not announce the new plan as emptied to a planner that never saw the old one', async () => {
+    const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
+    const session = makeSession({
+      aiService: {
+        startConversation: vi.fn().mockResolvedValue({ kind: 'message', text: 'What storage?', researchLog: [] }),
+        continueConversation,
+        hasActiveConversation: () => true,
+      },
+    });
+
+    // A turn over the old plan leaves its rows in that planner's context.
+    session.loadPlan(planWith('old-1', 'Old task'), 'Old goal', '/repo');
+    await session.continueConversation('and now?');
+    expect(continueConversation.mock.calls[0][0]).toContain('<current_plan>');
+
+    await session.startPlanning('new unrelated goal', ['claude-code']);
+    await session.continueConversation('sounds good, proceed');
+
+    expect(continueConversation.mock.calls[1][0]).not.toContain('The plan now has no tasks.');
+  });
+
   it('startPlanning drops a live conversation left over from the previous session', async () => {
     let active = true;
     const reset = vi.fn(() => { active = false; });

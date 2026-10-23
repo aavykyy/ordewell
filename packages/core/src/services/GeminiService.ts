@@ -28,7 +28,7 @@ import type { TurnBudgets } from './PlannerBudgets';
 import { BaseAiService, ResearchChat, ResearchTurn, ToolResult, ConversationTurnContext } from './BaseAiService';
 import { toGeminiToolDeclarations } from './researchTools';
 
-/** No spawn tool: this service has no `createSubagentChat`, so a spawn would fail on every call. */
+/** No spawn tool (ADR-0005): this service has no `createSubagentChat`, so a spawn would fail on every call. */
 const TOOL_DEFINITIONS = toGeminiToolDeclarations(false, false);
 /** With the task reads and execution tools a session offers its conversation (ADR-0029). */
 const CONVERSATION_TOOL_DEFINITIONS = toGeminiToolDeclarations(true, false);
