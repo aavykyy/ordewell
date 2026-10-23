@@ -15,6 +15,10 @@ import { join } from 'node:path';
 
 const MOCK_PROVIDER_PORT = 3799;
 
+// Nothing in a CI run may reach ordewell.ai (ADR-0048); every step below
+// inherits this. ci.yml sets it for the job too.
+process.env.ORDEWELL_NO_VERSION_CHECK = '1';
+
 const sh = (cmd, args, env) => spawnSync(cmd, args, { stdio: 'inherit', env: { ...process.env, ...env } }).status ?? 1;
 const npm = (...args) => sh('npm', args);
 

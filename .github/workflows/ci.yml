@@ -29,6 +29,11 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
+    # Nothing in CI may reach ordewell.ai (ADR-0048): the integration test
+    # starts the real extension, and every step's children inherit this.
+    env:
+      ORDEWELL_NO_VERSION_CHECK: '1'
+
     steps:
       - uses: actions/checkout@v7
 

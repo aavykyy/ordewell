@@ -667,7 +667,10 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
       ),
       '',
     ];
-  const tail = [...notice, style.grey('/help   all commands'), workspaceLine(state.workspace, cols)];
+  const versionCheck = state.versionCheckNotice
+    ? [...wrap(style.grey(state.versionCheckNotice), Math.max(1, cols - 1)), '']
+    : [];
+  const tail = [...notice, ...versionCheck, style.grey('/help   all commands'), workspaceLine(state.workspace, cols)];
 
   const rest = ['', ...prompt, ...approval, '', ...setup, ...tail];
   const logo = welcomeLogo(rest.length, rows, cols);

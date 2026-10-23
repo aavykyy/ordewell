@@ -7,6 +7,7 @@ import { createApp } from './app';
 import { runEffect } from './effects';
 import { registerSkillCommands } from './slash';
 import { openTerminal } from './terminal';
+import { startCliVersionCheck } from '../versionCheck';
 
 /**
  * `ordewell tui` — the full-screen terminal client. By default each launch
@@ -67,6 +68,15 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   // mouse back for drag-select, and this env var makes that stick.
   const mouseCapture = process.env.ORDEWELL_TUI_MOUSE !== 'false' && process.env.ORDEWELL_TUI_MOUSE !== '0';
 
+  // Started once the daemon is up, with nothing awaited between here and
+  // `createApp`: the notice is synchronous and lands in the first frame, and an
+  // update line, which only a later tick can bring, always finds the app.
+  let versionCheckNotice = '';
+  startCliVersionCheck({
+    onNotice: (text) => { versionCheckNotice = text; },
+    onUpdate: (line) => app.dispatch({ type: 'notice', message: line }),
+  });
+
   const settings = new SettingsService();
   const app = createApp({
     // The level the daemon plans with: the saved one, unless the environment overrides it (ADR-0030).
@@ -82,6 +92,7 @@ export async function handleTui(subArgs: string[]): Promise<void> {
       ...(ownedAtLaunch ? { runSettings: settings.getRunSettings(), runSettingsKnown: true } : {}),
       mouseCapture,
       taskSkills,
+      versionCheckNotice,
     },
     draw: (frame) => terminal?.draw(frame),
     perform: (effect) =>
