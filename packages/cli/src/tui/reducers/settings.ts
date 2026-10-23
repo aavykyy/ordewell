@@ -1,11 +1,11 @@
 import type { GlobalRunSettings, SupervisorLevel } from '@ordewell/core';
-import { ACT_RISK, AUTORUN_RISK, PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, autonomyLevelLabel, codexSandboxNotice } from '@ordewell/core';
+import { ACT_RISK, AUTORUN_RISK, SUPERVISOR_LEVEL_LABEL, autonomyLevelLabel, codexSandboxNotice } from '@ordewell/core';
 import type { ConfirmAction, PickerItem, TuiState } from '../state';
 import { openStepper, reopenStepper, type StepChoices, type StepperDefinition } from './stepper';
 import { step, type Effect, type Step } from './shared';
 
 /**
- * `/settings`: autonomy, supervisor, merging, the Planned-with line, autorun and parallel tasks in one
+ * `/settings`: autonomy, supervisor, merging, autorun and parallel tasks in one
  * stepped panel. Each enter saves its step, and only if it changed, through the
  * same paths the headless commands save them.
  */
@@ -79,15 +79,6 @@ export const SETTINGS: StepperDefinition = {
       ),
     },
     {
-      id: 'trailer',
-      label: PLANNED_WITH_LABEL,
-      items: (state) => switchItems(
-        state.runSettings.plannedWithTrailer,
-        'End the commits Ordewell writes with "Planned-with: Ordewell"',
-        'Leave the line out',
-      ),
-    },
-    {
       id: 'autorun',
       label: 'Autorun',
       items: (state) => switchItems(
@@ -136,11 +127,6 @@ function saveChoices(state: TuiState, choices: StepChoices): Step {
   if (automerge !== state.runSettings.mergeAtGatesAutomatically) {
     run.mergeAtGatesAutomatically = automerge;
     changed.push(`Automerge ${onOff(automerge)}`);
-  }
-  const trailer = choices.trailer === 'on';
-  if (trailer !== state.runSettings.plannedWithTrailer) {
-    run.plannedWithTrailer = trailer;
-    changed.push(`${PLANNED_WITH_LABEL} ${onOff(trailer)}`);
   }
   const autorun = choices.autorun === 'on';
   if (autorun !== state.runSettings.autorun) {

@@ -51,7 +51,7 @@ describe('/settings', () => {
   it('opens on Autonomy and pre-selects every current value', () => {
     let state = typed(base({ autonomous: false, maxParallel: 3 }), '/settings').state;
     const seen: { step: string; highlighted: string | undefined }[] = [];
-    for (let i = 0; i < 8; i += 1) {
+    for (let i = 0; i < 7; i += 1) {
       seen.push(onScreen(state));
       state = press(state, 'tab').state;
     }
@@ -61,7 +61,6 @@ describe('/settings', () => {
       { step: 'Supervisor retries', highlighted: '2' },
       { step: 'Supervisor reads', highlighted: '12' },
       { step: 'Automerge', highlighted: 'Off' },
-      { step: 'Planned-with line in commits Ordewell writes', highlighted: 'On' },
       { step: 'Autorun', highlighted: 'Off' },
       { step: 'Parallel', highlighted: '3' },
     ]);
@@ -85,18 +84,6 @@ describe('/settings', () => {
     const back = walk(next, 'left');
     expect(onScreen(back)).toEqual({ step: 'Automerge', highlighted: 'On' });
     expect(marked(back)).toBe('On');
-  });
-
-  it('turns the Planned-with line off and back on, saving each at once', () => {
-    const atTrailer = walk(typed(base(), '/settings').state, 'tab', 'tab', 'tab', 'tab', 'tab', 'down');
-    const off = press(atTrailer, 'enter');
-    expect(off.effects).toEqual([save({ plannedWithTrailer: false }, 'Settings: Planned-with line in commits Ordewell writes off')]);
-    expect(off.state.runSettings.plannedWithTrailer).toBe(false);
-    expect(marked(off.state)).toBe('Off');
-
-    const on = press(walk(off.state, 'up'), 'enter');
-    expect(on.effects).toEqual([save({ plannedWithTrailer: true }, 'Settings: Planned-with line in commits Ordewell writes on')]);
-    expect(on.state.overlay).toMatchObject({ kind: 'stepper' });
   });
 
   it('keeps the saved value when the daemon answers with it', () => {
@@ -130,7 +117,7 @@ describe('/settings', () => {
     const highlighted = press(walk(typed(base(), '/settings').state, 'down'), 'escape');
     expect(highlighted.effects).toEqual([]);
     expect(highlighted.state.autonomous).toBe(true);
-    const typedOnly = press(type(walk(typed(base(), '/settings').state, ...Array<string>(7).fill('tab')), '9'), 'escape');
+    const typedOnly = press(type(walk(typed(base(), '/settings').state, ...Array<string>(6).fill('tab')), '9'), 'escape');
     expect(typedOnly.effects).toEqual([]);
     expect(typedOnly.state.maxParallel).toBe(5);
   });
@@ -145,11 +132,11 @@ describe('/settings', () => {
 
   it('hides the supervisor retries and reads steps as soon as the supervisor is saved Off', () => {
     const atOff = typed(base({ runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }), '/settings').state;
-    expect(stepper(atOff).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Planned-with line in commits Ordewell writes', 'Autorun', 'Parallel']);
+    expect(stepper(atOff).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel']);
 
     const { state, effects } = press(walk(typed(base(), '/settings').state, 'tab', 'up'), 'enter');
     expect(effects).toEqual([save({ supervisorLevel: 'off' }, 'Settings: Supervisor Off')]);
-    expect(stepper(state).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Planned-with line in commits Ordewell writes', 'Autorun', 'Parallel']);
+    expect(stepper(state).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel']);
     expect(onScreen(state).step).toBe('Supervisor');
     expect(onScreen(walk(state, 'right')).step).toBe('Automerge');
   });
@@ -175,7 +162,7 @@ describe('/settings', () => {
   });
 
   it('asks before Autorun on, and returns to the step either way', () => {
-    const atAutorun = walk(typed(base(), '/settings').state, ...Array<string>(6).fill('tab'), 'up');
+    const atAutorun = walk(typed(base(), '/settings').state, ...Array<string>(5).fill('tab'), 'up');
     const asked = press(atAutorun, 'enter');
     expect(asked.state.overlay).toMatchObject({ kind: 'confirm', message: 'Settings: Autorun on' });
 
@@ -190,7 +177,7 @@ describe('/settings', () => {
   });
 
   it('saves any whole number typed for Parallel, staying on the step', () => {
-    const state = walk(typed(base(), '/settings').state, ...Array<string>(7).fill('tab'));
+    const state = walk(typed(base(), '/settings').state, ...Array<string>(6).fill('tab'));
     expect(onScreen(state)).toEqual({ step: 'Parallel', highlighted: '5' });
     const done = press(type(state, '17'), 'enter');
     expect(done.effects).toEqual([save({}, 'Settings: Parallel 17', { maxParallel: 17 })]);
@@ -199,7 +186,7 @@ describe('/settings', () => {
   });
 
   it('refuses 0 for Parallel and Supervisor reads, and takes it for Supervisor retries', () => {
-    const parallel = walk(type(walk(typed(base(), '/settings').state, ...Array<string>(7).fill('tab')), '0'), 'enter');
+    const parallel = walk(type(walk(typed(base(), '/settings').state, ...Array<string>(6).fill('tab')), '0'), 'enter');
     expect(onScreen(parallel)).toEqual({ step: 'Parallel', highlighted: '0' });
     const reads = walk(type(walk(typed(base(), '/settings').state, 'tab', 'tab', 'tab'), '0'), 'enter');
     expect(onScreen(reads)).toEqual({ step: 'Supervisor reads', highlighted: '0' });
@@ -214,6 +201,6 @@ describe('/settings', () => {
       onScreen(walk(typed(base(), '/settings').state, ...Array<string>(tabs).fill('tab'), ...Array<string>(presses).fill('down'))).highlighted;
     expect(down(2, 5)).toBe('0');
     expect(down(3, 20)).toBe('1');
-    expect(down(7, 10)).toBe('1');
+    expect(down(6, 10)).toBe('1');
   });
 });
