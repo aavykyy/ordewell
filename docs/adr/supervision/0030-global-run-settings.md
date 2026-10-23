@@ -44,13 +44,14 @@ on one machine can disagree.
 ## Decision
 
 **Full/Guarded, the supervisor level, merge at gates automatically, autorun,
-the retry limit, the wake-up read budget and the Planned-with line are machine-wide user settings,
+the retry limit and the wake-up read budget are machine-wide user settings,
 saved in `settings.json` and changed through `/settings` (or the headless
-commands behind it). A change applies at once to the session it is made in,
-and to every other session from its next run, except the Planned-with line,
-which every session reads as it writes a commit, so a change reaches the next
-landing in any session. Autorun, a new setting, starts the plan when the
-planner submits it.**
+commands behind it). The Planned-with line is saved there too but is not in the
+panels: only `ordewell trailer` or an edit of the file sets it. A change applies
+at once to the session it is made in, and to every other session from its next
+run, except the Planned-with line, which every session reads as it writes a
+commit, so a change reaches the next landing in any session. Autorun, a new
+setting, starts the plan when the planner submits it.**
 
 ### One store, machine-wide
 
@@ -79,7 +80,7 @@ There is no per-plan value and no per-workspace override.
 | supervisor level | Off, Watch, Act | **Watch** |
 | merge at gates automatically | on, off | off |
 | autorun | on, off | off |
-| Planned-with line in commits Ordewell writes | on, off | **on** |
+| Planned-with line in commits Ordewell writes (not in the panels) | on, off | **on** |
 | supervisor retry limit | whole number ≥ 0 | 2 |
 | wake-up read budget | whole number ≥ 1 | 12 |
 
@@ -94,6 +95,7 @@ The settings change in the planner chat, through `/settings`: a stepped panel in
 the TUI and the Run block of the chat's Settings panel in VS Code. A change is
 saved as it is made; there is no one-slash-command-per-setting on either surface.
 The headless CLI keeps one command per value for scripts, where no panel exists.
+The Planned-with line has the command and no panel row.
 
 | headless command | sets |
 |---|---|
@@ -124,7 +126,8 @@ level would make the level its own consent.
 `plannedWithTrailer` is not about a run's supervision: it decides whether the
 commits Ordewell itself writes (ADR-0013) end with the git trailer
 `Planned-with: Ordewell`. It is a run setting only in being the user's, saved in
-`settings.json` and set where the others are. On by default, because the line
+`settings.json` and set with `ordewell trailer [on|off]` or by editing the file;
+the panels do not show it, being a preference set once, not a run control. On by default, because the line
 is how a reader of the history learns a change was planned and landed by
 Ordewell; off for those who would rather keep history free of it. The run keeps
 no copy: the line is read from the user's setting as each message is written,
@@ -308,6 +311,11 @@ the daemon reads it from there at generation.
   row show them on every surface.
 - **Rejected: an "Autonomy" label over all of them.** The glossary keeps
   *autonomy* for Full/Guarded; a Guarded session can have an Act supervisor.
+- **Rejected: a row in the /settings panels for the Planned-with line.** A
+  preference most users set once, or never, would take up space in the main
+  settings menu beside the values that change how a run is supervised. The
+  headless command and the file are enough, as with the daily version check
+  (ADR-0048).
 - **Rejected: keep the old routes as aliases.** One in-repo client, before 1.0.
 
 ## Consequences
@@ -364,3 +372,4 @@ the daemon reads it from there at generation.
 - 2026-10-22 — the two research limits are removed: research starts are the
   planner's judgement, bounded by the run's Parallel limit ([ADR-0037](0037-research-tasks-wake-the-planner.md) R4).
 - 2026-10-23 — the Planned-with line, a seventh value: whether Ordewell's own commits end with `Planned-with: Ordewell` (ADR-0013). On by default, read as each message is written, not copied onto the run.
+- 2026-10-23 — the Planned-with line is not in the `/settings` panels or VS Code's Run block: it is set with `ordewell trailer` or in `settings.json`.

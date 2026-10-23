@@ -104,14 +104,9 @@ sends nothing. The first check happens on a later start. If Ordewell cannot writ
 that file, it shows no notice and never sends anything. When a newer version is
 out, Ordewell shows one line naming it.
 
-To turn the check off, set:
-
-```bash
-export ORDEWELL_NO_VERSION_CHECK=1
-```
-
-`DO_NOT_TRACK=1` turns it off too, and so does turning off VS Code's telemetry
-for the extension. Turned off, Ordewell sends nothing and writes no install ID.
+To turn the check off, set `ORDEWELL_NO_VERSION_CHECK=1` or `DO_NOT_TRACK=1`, or
+turn off VS Code's telemetry for the extension. Turned off, Ordewell sends
+nothing and writes no install ID.
 
 ## Quick start
 
@@ -164,9 +159,9 @@ Tried it? [Tell us how your first run went](https://github.com/ordewell/ordewell
 The commits Ordewell writes (a task's merge, work a task left uncommitted, a
 conflict repair, the merge into your branch) end with a `Planned-with: Ordewell`
 line, a git trailer that `git interpret-trailers` reads. Commits a coding agent
-made itself are not changed. To leave the line out, turn off *Planned-with line
-in commits Ordewell writes* in `/settings` (or run `ordewell trailer off`); the
-next commit follows it.
+made itself are not changed. To leave the line out, run `ordewell trailer off`
+(or set `"plannedWithTrailer": false` in `settings.json`); the next commit
+follows it.
 
 The planner only reads; tasks run as you, in the mode the plan assigns. For
 exactly what each part can touch and what to use for untrusted repositories, see
