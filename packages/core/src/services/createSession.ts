@@ -315,6 +315,7 @@ export function createSession(deps: SessionDeps): Session {
     },
     lastLoggedAttempt: (taskId) => session.taskLogAttempts(taskId).at(-1) ?? 0,
     runSettings: () => session.planState?.runSettings,
+    plannedWith: () => session.plannedWithTrailer(),
     isApproved: (taskId) => session.isApproved(taskId),
     research: {
       started: (task) => session.research.started(task),
@@ -711,6 +712,7 @@ export class Session {
       taskSkills: () => this.workspaceSkills(),
       notice: (level, message) => this.notice(level, message),
       approve: (taskIds) => this.approve(taskIds),
+      plannedWith: () => this.plannedWithTrailer(),
     });
 
     this.commands = new ExecutionCommands({
@@ -1011,6 +1013,11 @@ export class Session {
     const wakeUp = this.conversation.currentWakeUp;
     if (!wakeUp) return { kind: 'planner-turn' };
     return wakeUp.actor?.() ?? { kind: 'supervisor', level: this.supervision.level };
+  }
+
+  /** Whether the commits Ordewell writes carry the Planned-with trailer now; the user's setting, not the run's copy, so a change reaches the next landing. */
+  plannedWithTrailer(): boolean {
+    return this.userRunSettings().plannedWithTrailer;
   }
 
   /** The user's run settings as they stand now (ADR-0030). */

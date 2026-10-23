@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LegacyPlanState } from '../../models/Task';
+import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { makeSession, saves, testWorkspace } from './sessionTestKit';
 import { WAKE_DEBOUNCE_MS } from '../Supervisor';
 import { WAKE_UP_RATE } from '../LoopGuards';
@@ -33,6 +34,18 @@ describe('run settings', () => {
     expect(saved).not.toHaveProperty('mergeAtGatesAutomatically');
     expect(saved).not.toHaveProperty('supervisorRetryLimit');
     expect(saved).not.toHaveProperty('wakeUpReadBudget');
+  });
+});
+
+describe('the Planned-with line', () => {
+  it('is on until the user turns it off, and follows their setting as each commit is written, not the run\'s copy', () => {
+    const run = { ...RUN_SETTINGS_DEFAULTS };
+    const session = makeSession({ settings: () => ({ run }) });
+    expect(session.plannedWithTrailer()).toBe(true);
+
+    run.plannedWithTrailer = false;
+
+    expect(session.plannedWithTrailer()).toBe(false);
   });
 });
 

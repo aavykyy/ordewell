@@ -35,7 +35,7 @@ function tasks(): Task[] {
  * is the session's contract in miniature — the op runs, and only a change is
  * saved and announced — so what the editor hands it is all that is asserted.
  */
-function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; run?: IsolationRun | null; skills?: SkillInfo[]; uncommitted?: SkillLookup['uncommitted']; live?: (taskId: string) => boolean } = {}) {
+function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; run?: IsolationRun | null; skills?: SkillInfo[]; uncommitted?: SkillLookup['uncommitted']; live?: (taskId: string) => boolean; plannedWith?: () => boolean } = {}) {
   const store = new PlanStore();
   const now = '2026-01-01T00:00:00Z';
   const plan: LegacyPlanState | null = opts.plan === false ? null : { tasks: [], generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now };
@@ -84,6 +84,7 @@ function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Recor
     taskSkills: () => ({ findSkill: (name) => opts.skills?.find((s) => s.name === name), searchedDirs: () => [], uncommitted: opts.uncommitted }),
     notice,
     approve,
+    ...(opts.plannedWith ? { plannedWith: opts.plannedWith } : {}),
   });
   const task = (id: string) => store.get(id);
   return { editor, store, plan, events, sent, catalog, remembered, mutate, scheduler, runs, plannerTools, notice, approve, task };
@@ -460,6 +461,14 @@ describe('PlanEditor.addConflictResolver', () => {
     expect(resolver.prompt).toContain('ordewell/run1/1-t1');
     expect(runs.linkResolver).toHaveBeenCalledWith(resolver.id, 't1');
     expect(events).toEqual(['saved', 'plan announced', 'tick']);
+  });
+
+  it('writes the resolver\'s merge message with the Planned-with trailer when the setting is on', async () => {
+    const { editor, store } = setup({ run: conflicted, plannedWith: () => true });
+
+    await editor.addConflictResolver('t1');
+
+    expect(store.planTasks.at(-1)!.prompt).toContain("-m 'Merge: Setup (resolve conflicts with integration)' -m 'Planned-with: Ordewell'");
   });
 
   it('refuses a task that did not conflict, or a plan with no run', async () => {

@@ -10,6 +10,8 @@ import { DEFAULT_WAKE_UP_READ_BUDGET } from './Supervisor';
 export interface GlobalRunSettings {
   supervisorLevel: SupervisorLevel;
   mergeAtGatesAutomatically: boolean;
+  /** End the commits Ordewell writes with a `Planned-with: Ordewell` trailer (ADR-0013). */
+  plannedWithTrailer: boolean;
   /** Start a plan when the planner submits it, approved as if the user had pressed Execute. */
   autorun: boolean;
   /** Retries an Act supervisor may make of one task in a run (a loop guard). */
@@ -21,6 +23,7 @@ export interface GlobalRunSettings {
 export const RUN_SETTINGS_DEFAULTS: Readonly<GlobalRunSettings> = {
   supervisorLevel: 'watch',
   mergeAtGatesAutomatically: false,
+  plannedWithTrailer: true,
   autorun: false,
   supervisorRetryLimit: DEFAULT_SUPERVISOR_RETRY_LIMIT,
   wakeUpReadBudget: DEFAULT_WAKE_UP_READ_BUDGET,
@@ -44,6 +47,10 @@ const RUN_SETTING_CHECKS: { [K in keyof GlobalRunSettings]: { valid: (v: unknown
   mergeAtGatesAutomatically: {
     valid: (v): v is boolean => typeof v === 'boolean',
     refusal: 'Merge at gates automatically must be on or off.',
+  },
+  plannedWithTrailer: {
+    valid: (v): v is boolean => typeof v === 'boolean',
+    refusal: 'The Planned-with line must be on or off.',
   },
   autorun: {
     valid: (v): v is boolean => typeof v === 'boolean',
@@ -74,6 +81,7 @@ export interface UserSettings {
   autonomousMode?: boolean;
   supervisorLevel?: SupervisorLevel;
   mergeAtGatesAutomatically?: boolean;
+  plannedWithTrailer?: boolean;
   autorun?: boolean;
   supervisorRetryLimit?: number;
   wakeUpReadBudget?: number;

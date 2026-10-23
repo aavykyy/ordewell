@@ -511,6 +511,61 @@ describe.skipIf(!hasGit)('WorktreeIsolation integration queue', () => {
     expect(git(root, 'log', '-1', '--format=%B', integration)).toBe('Merge: Stated subject');
   });
 
+  describe('the Planned-with trailer (ADR-0030)', () => {
+    const trailers = (cwd: string, ref: string): string =>
+      execFileSync('git', ['interpret-trailers', '--parse'], { input: git(cwd, 'log', '-1', '--format=%B', ref), encoding: 'utf8' });
+
+    async function landOne(deps: Partial<WorktreeIsolationDeps>, title: string) {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }), ...deps });
+      const run = await iso.startRun(root);
+      const t = task(1, title);
+      const { cwd } = await iso.prepare(t, run);
+      writeFileSync(join(cwd, 'committed.txt'), 'a\n');
+      git(cwd, 'add', 'committed.txt');
+      git(cwd, 'commit', '-q', '-m', 'runner commit');
+      writeFileSync(join(cwd, 'loose.txt'), 'b\n');
+      expect(await iso.integrate(t, run, undefined, { subject: 'Stated subject', body: 'Stated body.' })).toBe('merged');
+      return { root, integration: run.repos[0].integrationBranch };
+    }
+
+    it('is parsed by git on the landing merge and on the leftover work, and never on the runner\'s commit', async () => {
+      const { root, integration } = await landOne({ plannedWith: () => true }, 'Mixed');
+
+      expect(trailers(root, integration)).toBe('Planned-with: Ordewell\n');
+      expect(trailers(root, `${integration}^2`)).toBe('Planned-with: Ordewell\n');
+      expect(git(root, 'log', '-1', '--format=%B', integration)).toBe('Merge: Stated subject\n\nStated body.\n\nPlanned-with: Ordewell');
+      expect(trailers(root, `${integration}^2^`)).toBe('');
+      expect(git(root, 'log', '-1', '--format=%B', `${integration}^2^`)).toBe('runner commit');
+    });
+
+    it('is left off when the setting is off, or when nothing says', async () => {
+      const off = await landOne({ plannedWith: () => false }, 'Off');
+      expect(git(off.root, 'log', '--format=%B', `${off.integration}^1..${off.integration}`)).not.toContain('Planned-with');
+
+      const unsaid = await landOne({}, 'Unsaid');
+      expect(git(unsaid.root, 'log', '--format=%B', `${unsaid.integration}^1..${unsaid.integration}`)).not.toContain('Planned-with');
+    });
+
+    it('follows the setting as each landing is written, with no new isolation', async () => {
+      const root = repo();
+      let on = true;
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }), plannedWith: () => on });
+      const run = await iso.startRun(root);
+      const integration = run.repos[0].integrationBranch;
+      for (const [order, setting] of [[1, true], [2, false], [3, true]] as const) {
+        on = setting;
+        const t = task(order, `Task ${order}`);
+        const { cwd } = await iso.prepare(t, run);
+        writeFileSync(join(cwd, `f${order}.txt`), 'x\n');
+        expect(await iso.integrate(t, run)).toBe('merged');
+      }
+
+      const merges = git(root, 'log', '--merges', '--format=%H', integration).split('\n');
+      expect(merges.map((sha) => trailers(root, sha))).toEqual(['Planned-with: Ordewell\n', '', 'Planned-with: Ordewell\n']);
+    });
+  });
+
   it('treats a task that changed nothing as merged', async () => {
     const root = repo();
     const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });

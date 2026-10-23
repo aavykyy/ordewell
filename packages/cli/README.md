@@ -31,7 +31,7 @@ to the selected task.
 
 Every command in the terminal UI is also a subcommand, except `/settings`: it is
 a panel over headless commands that remain for scripts (`ordewell auto`,
-`supervisor`, `automerge`, `autorun` and `parallel`). `/planner` has its own
+`supervisor`, `automerge`, `trailer`, `autorun` and `parallel`). `/planner` has its own
 `ordewell planner`, and its model and effort steps are `ordewell model` and
 `ordewell planner-effort`.
 

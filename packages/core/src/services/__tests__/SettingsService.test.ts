@@ -407,6 +407,7 @@ describe('SettingsService', () => {
       expect(service.getRunSettings()).toEqual({
         supervisorLevel: 'watch',
         mergeAtGatesAutomatically: false,
+        plannedWithTrailer: true,
         autorun: false,
         supervisorRetryLimit: 2,
         wakeUpReadBudget: 12,
@@ -419,6 +420,7 @@ describe('SettingsService', () => {
       expect(new SettingsService(tempFile).getRunSettings()).toEqual({
         supervisorLevel: 'act',
         mergeAtGatesAutomatically: true,
+        plannedWithTrailer: true,
         autorun: false,
         supervisorRetryLimit: 2,
         wakeUpReadBudget: 12,
@@ -431,6 +433,23 @@ describe('SettingsService', () => {
       expect(() => service.updateRunSettings({ wakeUpReadBudget: 2.5 })).toThrow(/read budget/i);
 
       expect(service.getRunSettings().supervisorLevel).toBe('watch');
+    });
+
+    it('has the Planned-with line on for a file that never mentioned it, and keeps a choice to turn it off', () => {
+      fs.writeFileSync(tempFile, JSON.stringify({ autorun: true }));
+      expect(new SettingsService(tempFile).getRunSettings().plannedWithTrailer).toBe(true);
+
+      service.updateRunSettings({ plannedWithTrailer: false });
+
+      expect(new SettingsService(tempFile).getRunSettings().plannedWithTrailer).toBe(false);
+      expect(JSON.parse(fs.readFileSync(tempFile, 'utf8')).plannedWithTrailer).toBe(false);
+    });
+
+    it('refuses a Planned-with value that is not on or off, and reads one in a hand-edited file as on', () => {
+      expect(() => service.updateRunSettings({ plannedWithTrailer: 'off' as unknown as boolean })).toThrow(/planned-with/i);
+
+      fs.writeFileSync(tempFile, JSON.stringify({ plannedWithTrailer: 'no' }));
+      expect(new SettingsService(tempFile).getRunSettings().plannedWithTrailer).toBe(true);
     });
 
     it('reads a hand-edited value it cannot use as the default, keeping the rest', () => {

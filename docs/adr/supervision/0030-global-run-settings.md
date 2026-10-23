@@ -44,7 +44,7 @@ on one machine can disagree.
 ## Decision
 
 **Full/Guarded, the supervisor level, merge at gates automatically, autorun,
-the retry limit and the wake-up read budget are machine-wide user settings,
+the retry limit, the wake-up read budget and the Planned-with line are machine-wide user settings,
 saved in `settings.json` and changed through `/settings` (or the headless
 commands behind it). A change applies at once to the session it is made in,
 and to every other session from its next run. Autorun, a new setting, starts
@@ -77,6 +77,7 @@ There is no per-plan value and no per-workspace override.
 | supervisor level | Off, Watch, Act | **Watch** |
 | merge at gates automatically | on, off | off |
 | autorun | on, off | off |
+| Planned-with line in merge commits | on, off | **on** |
 | supervisor retry limit | whole number ≥ 0 | 2 |
 | wake-up read budget | whole number ≥ 1 | 12 |
 
@@ -99,6 +100,7 @@ The headless CLI keeps one command per value for scripts, where no panel exists.
 | `ordewell supervisor retries <n>` | retry limit |
 | `ordewell supervisor reads <n>` | wake-up read budget |
 | `ordewell automerge [on\|off]` | merge at gates automatically |
+| `ordewell trailer [on\|off]` | Planned-with line in merge commits |
 | `ordewell autorun [on\|off]` | autorun |
 | `ordewell parallel [<n>]` | tasks that run at once |
 
@@ -114,6 +116,17 @@ left, since lowering the supervisor now lowers the run at once.
 never reach the planner as a message, and no planner tool, MCP tool or route the
 planner can reach sets a run setting. A supervisor that could raise its own
 level would make the level its own consent.
+
+### The Planned-with line
+
+`plannedWithTrailer` is not about a run's supervision: it decides whether the
+commits Ordewell itself writes (ADR-0013) end with the git trailer
+`Planned-with: Ordewell`. It is a run setting only in being the user's, saved in
+`settings.json` and set where the others are. On by default, because the line
+is how a reader of the history learns a change was planned and landed by
+Ordewell; off for those who would rather keep history free of it. The run keeps
+no copy: the line is read from the user's setting as each message is written,
+so a change reaches the next landing, in any session, without a restart.
 
 ### Seeing them
 
@@ -348,3 +361,4 @@ the daemon reads it from there at generation.
   and two ways to set one value read as two products.
 - 2026-10-22 — the two research limits are removed: research starts are the
   planner's judgement, bounded by the run's Parallel limit ([ADR-0037](0037-research-tasks-wake-the-planner.md) R4).
+- 2026-10-23 — the Planned-with line, a seventh value: whether Ordewell's own commits end with `Planned-with: Ordewell` (ADR-0013). On by default, read as each message is written, not copied onto the run.

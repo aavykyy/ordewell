@@ -1,6 +1,6 @@
 import React, { forwardRef, useEffect, useId, useState } from 'react';
 import type { GlobalRunSettings, SupervisorLevel } from '@ordewell/core';
-import { SUPERVISOR_LEVEL_LABEL, parseCount } from '@ordewell/core/plan-utils';
+import { PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, parseCount } from '@ordewell/core/plan-utils';
 import type { SettingsChange } from '../../../shared/protocol';
 
 export interface RunSettingsValue {
@@ -93,6 +93,11 @@ const AUTOMERGE: PillOption<boolean>[] = [
   { label: 'Off', value: false, hint: 'Wait for you at every merge.' },
 ];
 
+const PLANNED_WITH: PillOption<boolean>[] = [
+  { label: 'On', value: true, hint: 'End the commits Ordewell writes with "Planned-with: Ordewell".' },
+  { label: 'Off', value: false, hint: 'Leave the line out.' },
+];
+
 const AUTORUN: PillOption<boolean>[] = [
   { label: 'On', value: true, hint: 'A plan the planner submits starts at once.' },
   { label: 'Off', value: false, hint: 'Each plan waits for you to press Execute.' },
@@ -149,6 +154,7 @@ function RunSettingsRows({ value, onChange }: { value: RunSettingsValue; onChang
         </>
       )}
       <PillRow label="Automerge" options={AUTOMERGE} current={run.mergeAtGatesAutomatically} onPick={(mergeAtGatesAutomatically) => onChange({ run: { mergeAtGatesAutomatically } })} />
+      <PillRow label={PLANNED_WITH_LABEL} options={PLANNED_WITH} current={run.plannedWithTrailer} onPick={(plannedWithTrailer) => onChange({ run: { plannedWithTrailer } })} />
       <PillRow label="Autorun" options={AUTORUN} current={run.autorun} onPick={(autorun) => onChange({ run: { autorun } })} />
       <NumberRow
         label="Parallel tasks" value={value.maxParallel} min={1} host={value}

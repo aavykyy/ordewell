@@ -22,6 +22,45 @@ describe('landingMessage', () => {
   });
 });
 
+describe('landingMessage with the Planned-with trailer', () => {
+  const stated = { title: 'Add greeting', commit: { subject: 'Greet the user on start', body: 'The banner was empty.' } };
+
+  const trailerOf = (message: string): string => execFileSync('git', ['interpret-trailers', '--parse'], { input: message, encoding: 'utf8' });
+
+  it.each(['work', 'merge', 'repair-merge'] as const)('ends a %s message with the trailer as its own paragraph', (kind) => {
+    const message = landingMessage(kind, stated, true);
+    expect(message.endsWith('\n\nPlanned-with: Ordewell')).toBe(true);
+    expect(trailerOf(message)).toBe('Planned-with: Ordewell\n');
+  });
+
+  it('adds nothing when the setting is off, which is how a message is written unless asked', () => {
+    expect(landingMessage('merge', stated, false)).toBe('Merge: Greet the user on start\n\nThe banner was empty.');
+    expect(landingMessage('merge', stated)).toBe(landingMessage('merge', stated, false));
+  });
+
+  it('carries the trailer on a message with no body', () => {
+    const message = landingMessage('merge', { title: 'Add greeting' }, true);
+    expect(message).toBe('Merge: Add greeting\n\nPlanned-with: Ordewell');
+    expect(trailerOf(message)).toBe('Planned-with: Ordewell\n');
+  });
+
+  it('joins a body that already ends in trailers instead of starting a second block git would not read with it', () => {
+    const signed = { title: 'T', commit: { subject: 'S', body: 'Why.\n\nSigned-off-by: A <a@x.y>' } };
+    const message = landingMessage('work', signed, true);
+    expect(message).toBe('S\n\nWhy.\n\nSigned-off-by: A <a@x.y>\nPlanned-with: Ordewell');
+    expect(trailerOf(message)).toBe('Signed-off-by: A <a@x.y>\nPlanned-with: Ordewell\n');
+  });
+
+  it('does not repeat a trailer the stated body already carries', () => {
+    const said = { title: 'T', commit: { subject: 'S', body: 'Planned-with: Ordewell' } };
+    expect(landingMessage('work', said, true)).toBe('S\n\nPlanned-with: Ordewell');
+  });
+
+  it('reaches git as one -m per paragraph with the trailer last', () => {
+    expect(messageArgs(landingMessage('merge', stated, true)).slice(-2)).toEqual(['-m', 'Planned-with: Ordewell']);
+  });
+});
+
 describe('messageArgs', () => {
   it('passes each paragraph as its own -m, keeping the lines inside one', () => {
     expect(messageArgs('Subject\n\nLine one\nLine two\n\n\nTrailer: x')).toEqual(['-m', 'Subject', '-m', 'Line one\nLine two', '-m', 'Trailer: x']);

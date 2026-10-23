@@ -37,7 +37,7 @@ import { defaultExecFile, git, tryGit, type GitExecFn, type GitInvoker, type Git
 import { IsolationLocks } from './isolationLocks';
 import { bootstrap, installDirs, isEnvFile, lexists, LINKED_ARTIFACTS, listDir, SetupCommandError } from './worktreeBootstrap';
 import { linkPath } from './worktreeLink';
-import { landingMessage, messageArgs } from './landingMessage';
+import { landingMessage, messageArgs, type LandingCommit, type LandingSubject } from './landingMessage';
 import { childDirs, groupPaths, hasGitEntry } from './repoGroup';
 
 export type { GitExecFn } from './gitExec';
@@ -49,6 +49,8 @@ export interface WorktreeIsolationDeps {
   resolvePath?: () => Promise<string>;
   platform?: NodeJS.Platform;
   mintRunId?: () => string;
+  /** Whether the commits Ordewell writes end with the Planned-with trailer; read as each is written, so a change reaches the next landing. */
+  plannedWith?: () => boolean;
 }
 
 const INTEGRATION_DIR = 'integration';
@@ -550,7 +552,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const entry = record.repos[repo.path];
       if (!entry) continue;
       try {
-        await this.commitWorktree(repo, entry, landingMessage('work', record));
+        await this.commitWorktree(repo, entry, this.message('work', record));
       } catch {
         return { ok: false, reason: 'failed', repo: repo.path };
       }
@@ -1001,7 +1003,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         return this.stopLanding(record, 'failed', repo, undefined, `its worktree is gone (${entry.worktree})`);
       }
       try {
-        await this.commitWorktree(repo, entry, landingMessage('work', record));
+        await this.commitWorktree(repo, entry, this.message('work', record));
         entry.taskTip = (await this.git(repo.root, ['rev-parse', '--verify', `refs/heads/${record.branch}^{commit}`])).trim();
       } catch (err) {
         const detail = firstLine(err instanceof Error ? err.message : String(err));
@@ -1069,7 +1071,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     } catch (err) {
       return { outcome: 'failed', files: [], error: await this.integrationWorktreeError(repo, err) };
     }
-    const merge = await this.tryGit(dir, ['merge', '--no-ff', '--no-edit', ...messageArgs(landingMessage('merge', record)), record.branch]);
+    const merge = await this.tryGit(dir, ['merge', '--no-ff', '--no-edit', ...messageArgs(this.message('merge', record)), record.branch]);
     if (merge.ok) return { outcome: 'merged', files: [] };
     // A hook that refuses the merge commit leaves a merge in progress with nothing unmerged: a failure, not a conflict.
     const files = await this.unmergedPaths(dir);
@@ -1167,6 +1169,11 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     // the commit, or a signing prompt nobody will answer, must not stop it.
     const commit = opts.rescue ? ['-c', 'commit.gpgsign=false', 'commit', '--no-verify'] : ['commit'];
     await this.git(entry.worktree, [...commit, '-q', ...messageArgs(message)]);
+  }
+
+  /** A message Ordewell writes, with the trailer if the user's setting says so right now. */
+  private message(kind: LandingCommit, from: LandingSubject): string {
+    return landingMessage(kind, from, this.deps.plannedWith?.() ?? false);
   }
 
   private integrationDir(run: IsolationRun, repo: IsolationRepo): string {

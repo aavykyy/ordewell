@@ -377,6 +377,8 @@ export interface TaskOrchestratorOptions {
   previousHandoffFromLog?: (taskId: string) => StoredHandoff | undefined;
   lastLoggedAttempt?: (taskId: string) => number;
   runSettings?: () => SchedulerRunSettings | undefined;
+  /** Whether the commits Ordewell writes end with the Planned-with trailer, read as each is written (ADR-0030). */
+  plannedWith?: () => boolean;
   /** Every task is approved unless a Session supplies its record: an orchestrator on its own has no user to ask. */
   isApproved?: (taskId: string) => boolean;
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
@@ -538,7 +540,7 @@ export class TaskOrchestrator {
   static compose(options: TaskOrchestratorOptions): TaskOrchestrator {
     const store = options.store ?? new PlanStore();
     const output = options.output ?? new BufferedTaskOutputSource();
-    const isolation = options.isolation ?? createWorktreeIsolation({ config: options.config });
+    const isolation = options.isolation ?? createWorktreeIsolation({ config: options.config, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}) });
     const workspaceRoot = options.workspaceRoot ?? (() => process.cwd());
     // The listener callbacks fire only after construction, so the reference
     // below is settled by the time any of them runs.
@@ -556,7 +558,7 @@ export class TaskOrchestrator {
       },
       liveTasks: (): ReadonlySet<string> => orchestrator.liveTaskIds(),
     });
-    const landing = new Landing({ runs, config: options.config, tasks: store });
+    const landing = new Landing({ runs, config: options.config, tasks: store, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}) });
     const orchestrator = new TaskOrchestrator({
       config: options.config,
       notifications: options.notifications,

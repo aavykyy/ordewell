@@ -17,7 +17,7 @@ import { handleHandoff } from './handoff';
 import { handlePlanner, handlePlannerEffort } from './planner';
 import { handleModel } from './model';
 import { handleParallel } from './parallel';
-import { handleAutomerge, handleAutorun, handleSupervisor } from './runSettings';
+import { handleAutomerge, handleAutorun, handleSupervisor, handleTrailer } from './runSettings';
 import { handleKey } from './key';
 import { handleAuto, handleRefresh, handleRunners } from './runners';
 import { handleApprove } from './approve';
@@ -53,6 +53,7 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   auto: handleAuto,
   supervisor: handleSupervisor,
   automerge: handleAutomerge,
+  trailer: handleTrailer,
   autorun: handleAutorun,
   refresh: handleRefresh,
   setup: handleSetup,
