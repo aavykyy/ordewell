@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createApp, type App } from '../app';
+import { DaemonError } from '../../apiClient';
 import { openTerminal, type Terminal } from '../terminal';
 import { runEffect, type OrdewellApi } from '../effects';
 import { stripAnsi, width } from '../ansi';
@@ -706,7 +707,7 @@ describe('TUI end to end', () => {
 
   it('a failed planner turn reports in the transcript, clears the session, and the TUI keeps working', async () => {
     const h = harness();
-    h.daemon.mocks.startConversation.mockRejectedValueOnce(new Error('planner exploded'));
+    h.daemon.mocks.startConversation.mockRejectedValueOnce(new DaemonError('planner exploded', 500));
 
     h.type('Build the login flow');
     h.type('\r');

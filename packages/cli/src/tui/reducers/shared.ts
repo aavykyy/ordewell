@@ -11,6 +11,8 @@ export type Effect =
   /** `allowInit` is only ever set on the retry after the user confirms the "initialize this as a new workspace?" prompt — see `workspaceNeedsInit`. */
   | { type: 'startConversation'; goal: string; allowInit?: boolean }
   | { type: 'sendMessage'; sessionId: string; message: string }
+  /** Read the session back from the daemon after a planner turn's reply was lost, and settle the turn if the daemon is done with it. */
+  | { type: 'reconcileTurn'; sessionId: string }
   /** Send now in the planner chat (ADR-0023, F5): stop the turn in flight and answer `message` next. */
   | { type: 'forceSendPlannerMessage'; sessionId: string; message: string }
   | { type: 'setPlanner'; provider: string }
@@ -86,6 +88,8 @@ export type Effect =
   | { type: 'loadScope' }
   | { type: 'exit' };
 
+export type ChatRestored = { type: 'chatRestored'; history: SerializedConversationMessage[]; researchLog?: ResearchLogEntry[]; plannerUsage?: PlannerUsage; pendingTurns?: SerializedPendingTurn[]; sessionId?: string };
+
 export type TaskAction = 'complete' | 'uncomplete' | 'skip' | 'retry' | 'cancel' | 'force-start' | 'cancel-resume' | 'resume-now';
 
 export type Action =
@@ -94,7 +98,15 @@ export type Action =
   | { type: 'sessionCleared' }
   | { type: 'sessionDeleted'; sessionId: string }
   /** A saved session's records, which the conversation is rebuilt from as a reload would show it. */
-  | { type: 'chatRestored'; history: SerializedConversationMessage[]; researchLog?: ResearchLogEntry[]; plannerUsage?: PlannerUsage; pendingTurns?: SerializedPendingTurn[]; sessionId?: string }
+  | ChatRestored
+  /**
+   * A planner turn's call died after the request went out (a timeout, a reset):
+   * the daemon may still be running the turn or have finished it, so it is
+   * neither a failure nor an end.
+   */
+  | { type: 'turnLost'; sessionId: string }
+  /** The session as the daemon holds it after a lost reply, with the conversation to redraw from it. */
+  | { type: 'turnReconciled'; plan: unknown; chat: ChatRestored; sessionId: string }
   /** A planner turn's call returned its plan: the one action that ends the turn. */
   | { type: 'planUpdated'; plan: unknown; sessionId?: string }
   /** The plan as the daemon holds it after a request that is not a planner turn; a turn out stays out. */

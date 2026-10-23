@@ -7,7 +7,7 @@ import { createStepLog, type LogLine } from './researchLog';
 import type { SerializedTask, DiscoveredModel } from '@ordewell/core';
 import { loopRowParts, mintSessionId, scriptTaskText, taskOrderLabel, taskRowView } from '@ordewell/core';
 import type { PlanBody, WsEvent } from '../apiClient';
-import { fail, headlessPlannerRefusal } from './shared';
+import { fail, headlessPlannerRefusal, lostReplyHint } from './shared';
 
 // The one-shot endpoint answers with the stored plan state (`pendingTasks`),
 // the conversation with the wire plan (`tasks`); read as `tasks` alone, a
@@ -365,6 +365,8 @@ export async function handlePlan(
       console.error(refusal);
     } else {
       console.error(`Plan generation failed: ${err instanceof Error ? (err as Error).message : String(err)}`);
+      const hint = lostReplyHint(err, sessionId);
+      if (hint) console.error(hint);
     }
     process.exit(1);
   }

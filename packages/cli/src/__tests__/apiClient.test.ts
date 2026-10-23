@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import http from 'http';
 import { WebSocketServer } from 'ws';
-import { ApiClient } from '../apiClient';
+import { ApiClient, DaemonError, deliveryOf } from '../apiClient';
 
 /** Spin up a throwaway server that records which port served each request. */
 function startServer(label: string): Promise<{ port: number; close: () => void }> {
@@ -297,38 +297,69 @@ describe('ApiClient — endpoints the TUI drives', () => {
     });
   });
 
-  it('allows a normal long planner turn instead of failing with Request timed out', async () => {
+  // The planner-turn routes send nothing until the turn ends, so a socket-idle
+  // timeout reads a turn that is still running as a failure.
+  describe('socket idle timeout', () => {
     const previous = process.env.ORDEWELL_HTTP_TIMEOUT_MS;
-    delete process.env.ORDEWELL_HTTP_TIMEOUT_MS;
-
-    vi.spyOn(http, 'request').mockImplementation(((options: http.RequestOptions, respond: (res: http.IncomingMessage) => void) => {
-      const req = new EventEmitter() as EventEmitter & http.ClientRequest;
-      req.write = vi.fn();
-      req.destroy = vi.fn();
-      req.end = () => {
-        process.nextTick(() => {
-          if (Number(options.timeout) < 900_000) {
-            req.emit('timeout');
-            return;
-          }
-          const res = new EventEmitter() as EventEmitter & http.IncomingMessage;
-          res.statusCode = 200;
-          respond(res);
-          res.emit('data', Buffer.from(JSON.stringify({ plan: { tasks: [] } })));
-          res.emit('end');
-        });
-        return req;
-      };
-      return req;
-    }) as typeof http.request);
-
-    try {
-      await expect(new ApiClient(3742).sendConversationMessage('s1', 'remove the header label'))
-        .resolves.toEqual({ tasks: [] });
-    } finally {
+    afterEach(() => {
       if (previous === undefined) delete process.env.ORDEWELL_HTTP_TIMEOUT_MS;
       else process.env.ORDEWELL_HTTP_TIMEOUT_MS = previous;
+    });
+
+    /** Answers `{}` and records the `timeout` option each request was given. */
+    function recordTimeouts(): Array<number | undefined> {
+      const seen: Array<number | undefined> = [];
+      vi.spyOn(http, 'request').mockImplementation(((options: http.RequestOptions, respond: (res: http.IncomingMessage) => void) => {
+        seen.push(options.timeout);
+        const req = new EventEmitter() as EventEmitter & http.ClientRequest;
+        req.write = vi.fn();
+        req.destroy = vi.fn();
+        req.end = () => {
+          process.nextTick(() => {
+            const res = new EventEmitter() as EventEmitter & http.IncomingMessage;
+            res.statusCode = 200;
+            respond(res);
+            res.emit('data', Buffer.from(JSON.stringify({ plan: { tasks: [] }, runners: [] })));
+            res.emit('end');
+          });
+          return req;
+        };
+        return req;
+      }) as typeof http.request);
+      return seen;
     }
+
+    const turnCalls: Array<[string, (c: ApiClient) => Promise<unknown>]> = [
+      ['startConversation', (c) => c.startConversation('s1', 'goal')],
+      ['sendConversationMessage', (c) => c.sendConversationMessage('s1', 'hi')],
+      ['forceSendPlannerMessage', (c) => c.forceSendPlannerMessage('s1', 'hi')],
+      ['compactConversation', (c) => c.compactConversation('s1')],
+      ['generatePlan', (c) => c.generatePlan('goal')],
+    ];
+
+    it.each(turnCalls)('does not bound %s by socket idleness', async (_name, call) => {
+      delete process.env.ORDEWELL_HTTP_TIMEOUT_MS;
+      const seen = recordTimeouts();
+      await call(new ApiClient(3742));
+      expect(seen).toHaveLength(1);
+      expect(seen[0] ?? 0).toBe(0);
+    });
+
+    it('still bounds a short call by the default idle timeout', async () => {
+      delete process.env.ORDEWELL_HTTP_TIMEOUT_MS;
+      const seen = recordTimeouts();
+      await new ApiClient(3742).getRunners();
+      expect(seen).toEqual([900_000]);
+    });
+
+    it('lets ORDEWELL_HTTP_TIMEOUT_MS override both', async () => {
+      process.env.ORDEWELL_HTTP_TIMEOUT_MS = '1234';
+      const seen = recordTimeouts();
+      const client = new ApiClient(3742);
+      await client.getRunners();
+      await client.sendConversationMessage('s1', 'hi');
+      expect(seen).toEqual([1234, 1234]);
+    });
   });
 });
 
@@ -529,3 +560,17 @@ describe('ApiClient — adopting a saved session', () => {
   });
 });
 
+
+describe('deliveryOf', () => {
+  it('reads a daemon refusal as an answer', () => {
+    expect(deliveryOf(new DaemonError('no key', 400))).toBe('answered');
+  });
+
+  it('reads a refused connection as never delivered', () => {
+    expect(deliveryOf(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:3742'), { code: 'ECONNREFUSED' }))).toBe('refused');
+  });
+
+  it.each(['Request timed out', 'socket hang up', 'read ECONNRESET', 'write EPIPE'])('reads "%s" as an unknown outcome', (message) => {
+    expect(deliveryOf(new Error(message))).toBe('unknown');
+  });
+});
