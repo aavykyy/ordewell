@@ -142,6 +142,15 @@ describe('rendering the output read', () => {
     expect(answer).not.toContain('The handoff, as one text.');
   });
 
+  it('answers a task\'s handoff with its commit first, subject then body', () => {
+    const changed = tasks();
+    changed[0].handoff = { commit: { subject: 'Add the parser', body: 'The old one choked on commas.' }, summary: 'parse() is in src/csv.ts.', findings: [], findingCount: 0 };
+
+    const answer = renderTaskQueryAnswer({ tasks: ['#1'], fields: ['handoff'], catalog: false }, changed, catalog);
+
+    expect(answer).toContain('handoff:\nCommit: Add the parser\nThe old one choked on commas.\n\nparse() is in src/csv.ts.\n(The whole handoff');
+  });
+
   it('says when a task has never run in this session instead of answering silence', () => {
     const { asked, liveOutput } = fakeLive({});
     const answer = renderTaskQueryAnswer(

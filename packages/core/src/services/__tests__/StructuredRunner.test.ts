@@ -8,7 +8,7 @@ import type { IRunnerSession, StructuredEvent, StructuredTurnEnd } from '../../i
 import type { AgentEvent, SpawnFn, AgentStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
 import type { OrdewellMcpServer, TaskTokenScope } from '../mcp/OrdewellMcpServer';
 import type { TaskToolHandler } from '../mcp/tools';
-import { TASK_COMPLETION_CONTRACT } from '../mcp';
+import { TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../mcp';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import { McpAttachTimeout } from '../harness/ordewellBinding';
 import { claudeTurnEndQueue, claudeSteerRecording, fakeSpawn, fixture, type FakeSpawnResult, type ScriptedReply } from './harnessTestKit';
@@ -173,6 +173,19 @@ describe('StructuredRunner spawn', () => {
     expect(args[args.indexOf('--append-system-prompt') + 1]).toContain('call the `task_complete` tool with status `done`');
     expect(args).not.toContain('--dangerously-skip-permissions');
     session.kill();
+  });
+
+  it('asks a change task for its commit in its system prompt, and no other task (ADR-0047)', async () => {
+    const { runner, spawned } = harness([]);
+    const prompts: string[] = [];
+    for (const commits of [undefined, true] as const) {
+      const session = await runner.spawn(options(commits ? { commits } : {}));
+      const args = spawned.lastArgs();
+      prompts.push(args[args.indexOf('--append-system-prompt') + 1]);
+      session.kill();
+    }
+
+    expect(prompts).toEqual([TASK_COMPLETION_CONTRACT, taskCompletionContract({ commits: true })]);
   });
 
   it('builds the full command line: protocol, mode, effort from the manifest, model, resume and the Ordewell server', async () => {

@@ -4,9 +4,10 @@ import { resolveTaskRef, taskRefOf, titledTaskRefOf } from '../services/TaskRefs
 
 /*
  * A task's handoff (ADR-0047): what it tells the tasks that read it, as its
- * `task_complete` call stated it. A short summary, atomic findings Ordewell
- * numbers, typed artifacts, and a long report kept in the attempt's log and
- * never pushed. A handoff is neither the verdict nor evidence of passing.
+ * `task_complete` call stated it. A change task's commit message, a short
+ * summary, atomic findings Ordewell numbers, typed artifacts, and a long
+ * report kept in the attempt's log and never pushed. A handoff is neither
+ * the verdict nor evidence of passing.
  */
 
 /** Advice to the reader of how much a finding matters; it never reaches the verdict. */
@@ -59,8 +60,18 @@ export interface HandoffFinding {
   evidence?: HandoffEvidence[];
 }
 
+/**
+ * A change task's commit message, as its author wrote it for a human
+ * reviewer: what changed and why. The summary is for the next agent.
+ */
+export interface HandoffCommit {
+  subject: string;
+  body?: string;
+}
+
 /** What the plan keeps on a task: enough for a surface or a dependent's prompt without reading a log. */
 export interface HandoffDigest {
+  commit?: HandoffCommit;
   summary: string;
   /** The first {@link DIGEST_FINDINGS} findings; the rest are in the attempt's log. */
   findings: HandoffFinding[];
@@ -75,6 +86,9 @@ export interface StoredHandoff extends HandoffDigest {
 
 /** A handoff as its author sends it, before Ordewell numbers the findings. */
 export interface Handoff {
+  /** How the attempt ended, as the call said: a commit counts only with `done`. */
+  status?: 'done' | 'blocked' | 'failed';
+  commit?: HandoffCommit;
   summary: string;
   findings?: Omit<HandoffFinding, 'id'>[];
   artifacts?: HandoffArtifact[];
@@ -90,6 +104,8 @@ export const REPORT_MAX_CHARS = 20_000;
  */
 export const HANDOFF_LIMITS = {
   summary: 1_500,
+  commitSubject: 100,
+  commitBody: 500,
   findings: 50,
   title: 200,
   detail: 2_000,
@@ -108,8 +124,11 @@ export function storedHandoff(handoff: Handoff): StoredHandoff | undefined {
   const findings = (handoff.findings ?? []).map((f, i): HandoffFinding => ({ id: `F${i + 1}`, ...f }));
   const artifacts = handoff.artifacts ?? [];
   const report = handoff.report?.trim();
-  if (!summary && findings.length === 0 && artifacts.length === 0 && !report) return undefined;
+  // A blocked or failed attempt lands nothing, so its summary carries everything.
+  const commit = handoff.status === 'done' && handoff.commit ? withoutTrailers(handoff.commit) : undefined;
+  if (!commit && !summary && findings.length === 0 && artifacts.length === 0 && !report) return undefined;
   return {
+    ...(commit ? { commit } : {}),
     summary,
     findings,
     findingCount: findings.length,
@@ -118,9 +137,43 @@ export function storedHandoff(handoff: Handoff): StoredHandoff | undefined {
   };
 }
 
+/** `Co-Authored-By: …`, `Signed-off-by: …`: git trailer form with a hyphenated token, which prose never has. */
+const ATTRIBUTION_TRAILER = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+:\s*\S/;
+const GENERATED_WITH = /^\W*Generated (?:with|by)\b/i;
+const TRAILER = /^[A-Za-z0-9-]+:\s*\S/;
+
+/**
+ * A commit with no trailers in its body. The trailers a landed commit
+ * carries are Ordewell's to decide, so an author's attribution is dropped,
+ * not refused: it is a habit, not a mistake worth a resend. An attribution line
+ * goes wherever it stands; any other `Token: value` line only in a closing
+ * paragraph of nothing else, as git would read a trailer block, so a body of
+ * one `Why: …` line keeps it.
+ */
+function withoutTrailers({ subject, body }: HandoffCommit): HandoffCommit {
+  const kept = (body ?? '').split('\n').filter((line) => !ATTRIBUTION_TRAILER.test(line.trim()) && !GENERATED_WITH.test(line.trim()));
+  const paragraphs = kept.join('\n').trim().split(/\n\s*\n/);
+  const last = paragraphs.at(-1)!.split('\n');
+  if (paragraphs.length > 1 && last.every((line) => TRAILER.test(line.trim()))) paragraphs.pop();
+  const cleaned = paragraphs.join('\n\n').trim();
+  return { subject, ...(cleaned ? { body: cleaned } : {}) };
+}
+
+/**
+ * The message a done change task's work is committed with, as its handoff
+ * states it: the subject, then the body after a blank line. Undefined when
+ * the handoff states no commit, so the landing falls back to its own.
+ */
+export function commitMessage(handoff: HandoffDigest | undefined): string | undefined {
+  const commit = handoff?.commit;
+  if (!commit) return undefined;
+  return commit.body ? `${commit.subject}\n\n${commit.body}` : commit.subject;
+}
+
 /** What the plan keeps of a handoff: no report, and at most {@link DIGEST_FINDINGS} findings. */
 export function handoffDigest(handoff: StoredHandoff): HandoffDigest {
   return {
+    ...(handoff.commit ? { commit: handoff.commit } : {}),
     summary: handoff.summary,
     findings: handoff.findings.slice(0, DIGEST_FINDINGS),
     findingCount: handoff.findingCount,
@@ -165,12 +218,19 @@ export function artifactLines(handoff: HandoffDigest, taskName: HandoffTaskName 
   return handoff.artifacts?.length ? [`Artifacts: ${handoff.artifacts.map((a) => handoffReferenceText(a, taskName)).join('; ')}`] : [];
 }
 
+/** A handoff's opening as text: its commit, subject then body, then the summary. */
+function openingLines(handoff: HandoffDigest): string[] {
+  const { commit, summary } = handoff;
+  if (!commit) return [summary];
+  return [`Commit: ${commit.subject}`, ...(commit.body ? commit.body.split('\n') : []), ...(summary ? ['', summary] : [])];
+}
+
 /** Each pushed handoff's text ceiling, excluding artifacts (ADR-0047). */
 export const HANDOFF_PUSH_CHARS = 4_000;
 
 /** Shared push rendering: reserve the closing pointer before accepting each whole finding. */
 export function boundedHandoffLines(handoff: HandoffDigest, omission: (more: number) => string, taskName: HandoffTaskName = () => undefined, footer = ''): string[] {
-  const lines = [handoff.summary];
+  const lines = openingLines(handoff);
   let shown = 0;
   const closing = (count: number) => [
     ...(handoff.findingCount > count ? [omission(handoff.findingCount - count)] : []),
@@ -214,9 +274,9 @@ export function handoffPreviewLines(handoff: HandoffDigest, options: HandoffPrev
 }
 
 /**
- * A handoff as a wake-up carries it (ADR-0029, ADR-0037): the summary, its
- * findings whole within the shared ceiling, how many are left out, and the
- * artifacts. The report is never pushed; it waits in the attempt's log.
+ * A handoff as a wake-up carries it (ADR-0029, ADR-0037): the commit and
+ * summary, its findings whole within the shared ceiling, how many are left
+ * out, and the artifacts. The report is never pushed; it waits in the attempt's log.
  */
 export function handoffWakeLines(handoff: HandoffDigest, taskName: HandoffTaskName = () => undefined): string[] {
   return boundedHandoffLines(handoff,
@@ -226,11 +286,12 @@ export function handoffWakeLines(handoff: HandoffDigest, taskName: HandoffTaskNa
 
 /**
  * A handoff as text, for a reader with no structure to render it from: the
- * summary, every finding it holds with its id, severity, detail and evidence,
- * how many the digest left out, the artifacts, and the report when it has one.
+ * commit and summary, every finding it holds with its id, severity, detail
+ * and evidence, how many the digest left out, the artifacts, and the report
+ * when it has one.
  */
 export function handoffLines(handoff: HandoffDigest | StoredHandoff, taskName: HandoffTaskName = () => undefined): string[] {
-  const lines = [handoff.summary];
+  const lines = openingLines(handoff);
   if (handoff.findings.length > 0) lines.push('', 'Findings:', ...handoff.findings.flatMap((f) => findingLines(f, taskName)));
   const more = handoff.findingCount - handoff.findings.length;
   if (more > 0) lines.push(`+${more} more finding${more === 1 ? '' : 's'}, in the attempt's log`);

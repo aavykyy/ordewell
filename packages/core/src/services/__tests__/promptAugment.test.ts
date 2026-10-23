@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createTask, resolveTaskRef, type Task, type TaskSkillSnapshot } from '../../models/Task';
 import type { HandoffDigest, HandoffFinding } from '../../models/Handoff';
-import { TASK_COMPLETION_CONTRACT } from '../mcp';
+import { TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../mcp';
 import { augmentPromptWithPriorOutputs, composeAugmentedPrompt, composeContinuationPrompt, renderPlanMap, summarizeOutput } from '../promptAugment';
 
 describe('summarizeOutput', () => {
@@ -103,6 +103,36 @@ describe('prior outputs of a dependency with a handoff (ADR-0047)', () => {
     ].join('\n'));
     expect(out).not.toContain('THE WHOLE HANDOFF AS ONE TEXT');
     expect(out).not.toContain('more findings');
+  });
+
+  it('gives the commit subject, then its body, then the summary', () => {
+    const dep = review({
+      commit: { subject: 'Add a daily version check', body: 'Users ran stale builds for weeks.\nNobody told them.' },
+      summary: 'The check is checkVersion() in core/src/version.ts.',
+      findings: [],
+      findingCount: 0,
+    });
+
+    const out = composeAugmentedPrompt(fix, [dep, fix], { planMapEnabled: false });
+
+    expect(out).toContain([
+      '- Handoff:',
+      '  Commit: Add a daily version check',
+      '  Users ran stale builds for weeks.',
+      '  Nobody told them.',
+      '',
+      '  The check is checkVersion() in core/src/version.ts.',
+      '',
+      'fix it',
+    ].join('\n'));
+  });
+
+  it('gives a handoff that is only a commit as that commit', () => {
+    const dep = review({ commit: { subject: 'Add a daily version check' }, summary: '', findings: [], findingCount: 0 });
+
+    const out = composeAugmentedPrompt(fix, [dep, fix], { planMapEnabled: false });
+
+    expect(out).toContain(['- Handoff:', '  Commit: Add a daily version check', '', 'fix it'].join('\n'));
   });
 
   it('tells the dependent it can read any of them in full with read_task', () => {
@@ -511,6 +541,19 @@ describe('composeAugmentedPrompt', () => {
     expect(out).toMatch(/`report`.*read only on demand/);
     expect(out).toMatch(/read-only task/);
     expect(out).toMatch(/do not write the report to a file/);
+  });
+
+  it('asks only a change task for its commit, and moves what changed and why out of its summary (ADR-0047)', () => {
+    const change = taskCompletionContract({ commits: true });
+
+    expect(taskCompletionContract({})).toBe(TASK_COMPLETION_CONTRACT);
+    expect(TASK_COMPLETION_CONTRACT).not.toContain('`commit`');
+    expect(change.startsWith(TASK_COMPLETION_CONTRACT)).toBe(true);
+    expect(change).toMatch(/`commit`.*72 characters or fewer.*imperative mood/);
+    expect(change).toMatch(/tells a human reviewer what changed and why/);
+    expect(change).toMatch(/summary no longer repeats that/);
+    expect(change).toMatch(/paths, symbols, decisions.*`artifacts`.*what is left and what to watch/);
+    expect(change).toMatch(/summary may be empty/);
   });
 
   it('leaves a continued task\'s report rule to the instructions its resumed session is started with', () => {

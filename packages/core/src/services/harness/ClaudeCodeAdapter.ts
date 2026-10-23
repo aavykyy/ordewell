@@ -10,7 +10,7 @@ import { claudeThinkingArgs } from '../../plugins/resolveArgs';
 import type { AgentEvent, AgentStartOptions, PlannerAsk, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines, structuredPatchText } from './fileDiff';
-import { ORDEWELL_MCP_SERVER_NAME, TASK_COMPLETION_CONTRACT, type McpClientConfig, type OwnerOnlyFile } from '../mcp';
+import { ORDEWELL_MCP_SERVER_NAME, taskCompletionContract, type McpClientConfig, type OwnerOnlyFile } from '../mcp';
 import { CLAUDE_ORDEWELL } from './claudeOrdewell';
 import { PermissionLedger } from './permissionLedger';
 import { ReplyRuns } from './replyRuns';
@@ -653,7 +653,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       this.countFrom(opts.resumeSessionId, opts.resumeCost);
       this.pendingResume = opts.resumeSessionId;
     }
-    if (opts.mcp) args.push('--append-system-prompt', TASK_COMPLETION_CONTRACT, ...this.ordewellServerArgs(opts.mcp, readOnly ? 'readOnlyTask' : 'task'));
+    if (opts.mcp) args.push('--append-system-prompt', taskCompletionContract(opts), ...this.ordewellServerArgs(opts.mcp, readOnly ? 'readOnlyTask' : 'task'));
     return { command: 'claude', args, env: NO_AUTO_MEMORY };
   }
 

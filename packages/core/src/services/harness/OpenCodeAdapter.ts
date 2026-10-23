@@ -11,7 +11,7 @@ import { RunnerProcess } from './runnerProcess';
 import { OpenCodeV2 } from './OpenCodeV2';
 import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV, OPENCODE_READ_ONLY_PERMISSION } from './openCodeOrdewell';
 import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
-import { TASK_COMPLETION_CONTRACT, type McpClientConfig } from '../mcp';
+import { taskCompletionContract, type McpClientConfig } from '../mcp';
 import type { ProjectMcpServer } from './repoConfig';
 import { hunksOf, markedLines } from './fileDiff';
 import {
@@ -676,7 +676,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       // The manifest's meaning of the task's mode (ADR-0001): for OpenCode a mode is an agent.
       agent: task.flags.permissionMode,
       tools: readOnlyTask(task) ? READ_ONLY_DISABLED_TOOLS : TASK_DISABLED_TOOLS,
-      ...(task.mcp ? { system: TASK_COMPLETION_CONTRACT } : {}),
+      ...(task.mcp ? { system: taskCompletionContract(task) } : {}),
       ...(model ? { model } : {}),
       ...(task.flags.effort ? { variant: task.flags.effort } : {}),
       ...(messageID ? { messageID } : {}),

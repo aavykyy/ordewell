@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { handoffPreviewLines, handoffReferenceText, handoffWakeLines, readableTaskIds, severityLabel, worstSeverity, type HandoffDigest } from '../Handoff';
+import { handoffPreviewLines, handoffReferenceText, handoffWakeLines, readableTaskIds, commitMessage, severityLabel, storedHandoff, worstSeverity, type HandoffDigest } from '../Handoff';
 import { createTask } from '../Task';
 
 describe('the tasks a task may read (ADR-0047)', () => {
@@ -85,5 +85,41 @@ describe('a handoff a headless surface prints (ADR-0047)', () => {
       '  Evidence: src/cache.ts:42 (unresolved)',
     ]);
     expect(handoffWakeLines(handoff)).toContain('+2 more findings; read with task_output.');
+  });
+});
+
+describe('the commit a done call states', () => {
+  const done = (body: string) => storedHandoff({ status: 'done', summary: '', commit: { subject: 'Add the check', body } })?.commit;
+
+  it('drops attribution trailers wherever they stand, and keeps the prose around them', () => {
+    expect(done([
+      'Users ran stale builds for weeks.',
+      'Co-Authored-By: Claude <noreply@anthropic.com>',
+      'The check runs once a day.',
+      'Signed-off-by: A Dev <dev@example.com>',
+      '🤖 Generated with [Claude Code](https://claude.com/claude-code)',
+    ].join('\n'))).toEqual({ subject: 'Add the check', body: 'Users ran stale builds for weeks.\nThe check runs once a day.' });
+  });
+
+  it('drops a closing paragraph of trailers, and keeps a line of prose that only looks like one', () => {
+    expect(done('Why: the old check ran on every start.\n\nFixes: #12\nRefs: #9')).toEqual({ subject: 'Add the check', body: 'Why: the old check ran on every start.' });
+  });
+
+  it('keeps no body when only trailers were in it', () => {
+    expect(done('Co-authored-by: Someone <a@b.c>\n')).toEqual({ subject: 'Add the check' });
+  });
+});
+
+describe('the commit message a landed task\'s work is committed with', () => {
+  const none: HandoffDigest = { summary: 'Done.', findings: [], findingCount: 0 };
+
+  it('is the subject, a blank line and the body, or the subject alone', () => {
+    expect(commitMessage({ ...none, commit: { subject: 'Add the check', body: 'Users ran stale builds.\nNobody told them.' } })).toBe('Add the check\n\nUsers ran stale builds.\nNobody told them.');
+    expect(commitMessage({ ...none, commit: { subject: 'Add the check' } })).toBe('Add the check');
+  });
+
+  it('is none for a handoff that states no commit, or no handoff', () => {
+    expect(commitMessage(none)).toBeUndefined();
+    expect(commitMessage(undefined)).toBeUndefined();
   });
 });

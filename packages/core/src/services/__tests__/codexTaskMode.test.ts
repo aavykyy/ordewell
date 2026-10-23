@@ -8,7 +8,7 @@ import { StructuredRunner } from '../StructuredRunner';
 import type { StructuredEvent } from '../../interfaces/IRunner';
 import { toTaskLogEvent } from '../../models/TaskLog';
 import { replayTaskLog } from '../../conversation/taskLog';
-import { mcpClientConfig } from '../mcp';
+import { mcpClientConfig, TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../mcp';
 import { CODEX_ORDEWELL } from '../harness/codexOrdewell';
 import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from '../ApprovalPolicy';
 import { WebReadPolicy } from '../webReadPolicy';
@@ -1229,6 +1229,22 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
         config: { mcp_servers: { ordewell: ordewellServer } },
       };
       expect(opened.map((msg) => msg.params)).toEqual([expected, { threadId: 'thr-task-1', ...expected }]);
+    });
+
+    it('asks a change task thread for its commit, and no other (ADR-0047)', async () => {
+      const { spawned, processDeps } = deps([...handshake(), ...handshake()]);
+      const instructions: string[] = [];
+      for (const commits of [undefined, true] as const) {
+        const adapter = new CodexAdapter(processDeps);
+        await adapter.start(taskStart('agent', { mcp, ...(commits ? { commits } : {}) }));
+        const [thread] = sentNamed(spawned.processes.at(-1)!.written, 'thread/start');
+        instructions.push((thread.params as { developerInstructions: string }).developerInstructions);
+        adapter.dispose();
+      }
+
+      expect(instructions[0]).toBe(CODEX_ORDEWELL.taskInstructions());
+      expect(instructions[0].endsWith(TASK_COMPLETION_CONTRACT)).toBe(true);
+      expect(instructions[1].endsWith(taskCompletionContract({ commits: true }))).toBe(true);
     });
 
     it('is never live, which opens pages the model chose', () => {
