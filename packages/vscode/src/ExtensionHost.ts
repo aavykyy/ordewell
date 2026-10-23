@@ -4,6 +4,7 @@ import {
   type PlannerBackendId, type GlobalRunSettings, type LegacyPlanState, type RunnerId, type Session, type SessionDeps,
 } from '@ordewell/core';
 import { registerCommands, type CommandDeps } from './commands/CommandRegistry';
+import { enableRunner } from './commands/enabledRunners';
 import { handleSlashCommand, type SlashDeps } from './commands/SlashParser';
 import { confirmRisks } from './commands/runSettings';
 import { handleApprovePlan, handleSessionMessage, handleStartPlanning, type PlanManagerDeps } from './plan/PlanManager';
@@ -203,6 +204,20 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       openTaskLog: (taskId) => taskLogs.open(taskId),
       setPlanDockHeight: (height) => { void services.context.globalState.update(PLAN_DOCK_HEIGHT_KEY, height); },
       changeSettings,
+      enableRunner: async (runnerId) => {
+        const saved = await enableRunner(
+          {
+            runnerRegistry: services.runnerRegistry,
+            settingsService: services.settingsService,
+            config: services.config,
+            sendRunnerAndModels: () => discovery.refresh(),
+          },
+          runnerId,
+        );
+        // An id nothing names is a stale click or a hand-made message: no
+        // manifest owns it, so there is nothing to save.
+        if (!saved) log(`Ignored a request to enable the unknown runner "${runnerId}".`);
+      },
     },
     getPendingRunners: () => state.pendingRunners,
     setPendingRunners: (runners) => { state.pendingRunners = runners; },

@@ -86,6 +86,7 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
       openTaskLog: vi.fn(),
       setPlanDockHeight: vi.fn(),
       changeSettings: vi.fn(async () => {}),
+      enableRunner: vi.fn(async () => {}),
     },
     getPendingRunners: () => pending,
     setPendingRunners: (r) => { pending = r; },
@@ -499,6 +500,7 @@ describe('webview messages reach the session through one entry point each', () =
     [{ type: 'openTaskLog', taskId: 't1' }, 'openTaskLog', ['t1']],
     [{ type: 'setPlanDockHeight', height: 320 }, 'setPlanDockHeight', [320]],
     [{ type: 'changeSettings', change: { run: { autorun: true } } }, 'changeSettings', [{ run: { autorun: true } }]],
+    [{ type: 'enableRunner', runnerId: 'codex' }, 'enableRunner', ['codex']],
   ] as const)('hands %o to the extension', async (msg, handler, args) => {
     await h.route(msg as WebviewToHost);
 
