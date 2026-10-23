@@ -47,8 +47,10 @@ on one machine can disagree.
 the retry limit, the wake-up read budget and the Planned-with line are machine-wide user settings,
 saved in `settings.json` and changed through `/settings` (or the headless
 commands behind it). A change applies at once to the session it is made in,
-and to every other session from its next run. Autorun, a new setting, starts
-the plan when the planner submits it.**
+and to every other session from its next run, except the Planned-with line,
+which every session reads as it writes a commit, so a change reaches the next
+landing in any session. Autorun, a new setting, starts the plan when the
+planner submits it.**
 
 ### One store, machine-wide
 
