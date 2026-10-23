@@ -19,6 +19,7 @@ import { classifyRunnerStop, type TurnFailure } from './runnerExit';
 import type { PlannerLimit } from './PlannerResend';
 import type { AssignmentScope } from './AssignmentScope';
 import { PlannerBriefing, type TurnBriefing } from './PlannerBriefing';
+import { PromptBlocks, type PlanRow, type PlanView, type TurnBlocks } from './PromptBlocks';
 import { joinRuns, noteRun, writtenOver as writtenOverRuns } from './settleReply';
 import type { StartWait, StartWaitKind } from './readiness';
 import { SubagentRuns } from './SubagentRuns';
@@ -184,6 +185,10 @@ interface UserTurn {
   wakeUp?: WakeUpTurn;
   /** What the turn tells the planner besides its inputs; told only if the turn lands an answer the planner gave. */
   briefing?: TurnBriefing;
+  /** The catalog and plan blocks it sends, held by the live context once it lands normally. */
+  blocks?: TurnBlocks;
+  /** A corrective retry was sent in it: the planner misread something, so its next turn is sent the whole plan again (ADR-0012 T10). */
+  repaired?: boolean;
   /** Its message was force sent. */
   forced?: boolean;
   /** Handed in since the backend last answered; see {@link PlannerConversation.submit}. */
@@ -476,6 +481,7 @@ const WHOLE_PLAN_WHILE_RUNNING =
  */
 export class PlannerConversation {
   private readonly briefing: PlannerBriefing;
+  private readonly blocks: PromptBlocks;
   private live: PlannerTurn | null = null;
   private openTurn: UserTurn | null = null;
 
@@ -485,6 +491,11 @@ export class PlannerConversation {
       scope: () => host.assignmentScope(),
       tasks: () => host.tasks(),
       plannerTools: () => host.aiService().plannerToolsAttached?.() ?? false,
+    });
+    this.blocks = new PromptBlocks({
+      catalog: () => this.catalogBlock(),
+      plan: () => this.planView(),
+      compactions: () => host.aiService().compactions?.() ?? 0,
     });
   }
 
@@ -722,6 +733,7 @@ export class PlannerConversation {
   /** Drop the live model context alone: the next turn replays from the transcript. */
   private dropContext(): void {
     this.host.aiService().reset();
+    this.blocks.forget();
   }
 
   /**
@@ -792,7 +804,7 @@ export class PlannerConversation {
 
   private async summarize(signal: AbortSignal): Promise<string> {
     const ai = this.host.aiService();
-    const request = summaryRequest(this.currentPlanLines());
+    const request = summaryRequest(this.planRows()?.map(({ line }) => line) ?? null);
     // Only liveness and spend get through: streamed prose or research steps
     // from this turn would land in the chat as if the planner had said them.
     // Its calls are counted like any turn's, but the context they measure is
@@ -888,6 +900,7 @@ export class PlannerConversation {
       const now = new Date().toISOString();
       this.holdWrites(userTurn, this.userEntries(goal, now), [this.userPrompt(goal.text, now)]);
       this.briefing.opened(opening.autorun ?? false);
+      this.blocks.forget();
       const turn = await this.host.aiService().startConversation({
         ...opening,
         // The system prompt's goal is the text as typed; skill bodies ride the
@@ -940,9 +953,11 @@ export class PlannerConversation {
     const reopened = this.canContinueLive() ? null : await this.reopen(userTurn);
     userTurn.briefing = this.briefing.brief();
     // The persisted transcript keeps the raw user message; the model gets the
-    // live catalog (always) and the current plan (tasks, statuses, edit
-    // protocol — once tasks exist) alongside it.
-    const contextBlock = [this.catalogBlock(), this.planContextBlock(), ...userTurn.briefing.blocks].filter(Boolean).join('\n\n');
+    // catalog and the current plan (tasks, statuses, edit protocol — once
+    // tasks exist) alongside it, whole where its live context holds no copy
+    // and as what changed where it does (ADR-0012 T10).
+    userTurn.blocks = this.blocks.next();
+    const contextBlock = [...userTurn.blocks.blocks, ...userTurn.briefing.blocks].join('\n\n');
     const said = fromUser ? plannerMessage(message.text, message.skills) : '';
     const outgoing = [contextBlock, ...wakeUps, userTurn.wakeUp?.brief, said].filter(Boolean).join('\n\n');
 
@@ -1151,7 +1166,10 @@ export class PlannerConversation {
       }
       announce?.();
     });
-    if (!unheard) userTurn.briefing?.heard();
+    if (!unheard) {
+      userTurn.briefing?.heard();
+      if (!userTurn.repaired) userTurn.blocks?.heard();
+    }
     this.warnSkills(skillWarnings);
     return plan!;
   }
@@ -1326,6 +1344,7 @@ export class PlannerConversation {
       // plan display it streamed, never of the narration before its calls,
       // nor of the calls themselves: the turn lands with their research.
       resend: async (corrective) => {
+        userTurn.repaired = true;
         userTurn.narration.push(...(discarding.runs ?? []).filter((run) => run.narration));
         stream.retract(new Set(userTurn.narration.map((run) => run.segmentId)));
         const retry = await this.drainTaskQueries(await ai.continueConversation(corrective, stream.sink(), signal), userTurn);
@@ -1459,10 +1478,10 @@ export class PlannerConversation {
 
   /**
    * The catalog the planner may actually draw from — model ids and task-mode
-   * ids, per runner in the plan — emitted on EVERY turn, before any plan exists
-   * or after. The system prompt shows this once at conversation start; a long
-   * clarifying conversation outlives that single showing and the planner
-   * starts misquoting it, so this re-states it per turn instead.
+   * ids, per runner in the plan — before any plan exists or after. The system
+   * prompt shows it in another shape, which the planner starts misquoting once
+   * a long conversation has outlived it, so it is stated in a turn's message
+   * as well: once per live context, and again when it changes (ADR-0012 T10).
    *
    * The host's catalog is allowlist-filtered, so a restricted allowlist stays a
    * hard bound on every turn, and reads the plan's runners live, so a runner
@@ -1493,41 +1512,42 @@ export class PlannerConversation {
   }
 
   /**
-   * The "you are here" block for post-plan chat: current tasks with stable
-   * references, plus the read and edit protocols. Injected per turn (never
-   * persisted) so the model always sees live statuses — including which tasks
-   * are locked by a running execution.
+   * The "you are here" view for post-plan chat: current tasks with stable
+   * references, plus the read and edit protocols. Never persisted, and built
+   * fresh for every turn so the model sees live statuses — including which
+   * tasks are locked by a running execution — whether its turn sends the
+   * whole block or what changed (ADR-0012 T10).
    */
-  private planContextBlock(): string | null {
-    const tasks = this.host.tasks();
-    const lines = this.currentPlanLines();
-    if (!lines) return null;
+  private planView(): PlanView | null {
+    const rows = this.planRows();
+    if (!rows) return null;
     const tools = this.host.aiService().plannerToolsAttached?.() ?? false;
     // Gated on live runners, not on an armed scheduler: a paused-but-armed run
     // has nothing running to lock, and takes a whole plan as well as an edit.
-    const locked = flattenTasksWithParents(tasks).filter(({ task }) => task.status === 'in_progress');
-    const execNote = this.host.isExecuting()
-      ? `\nExecution is RUNNING${locked.length ? ` — these tasks are locked: ${locked.map(({ ref }) => ref).join(', ')}` : ''}. No new task starts until your reply ends; your task edits apply then, to tasks that have not started. An edit aimed at a running task is refused — the user can stop it first, or you can change it after it finishes. Do not submit a whole new plan while tasks run.`
+    const locked = flattenTasksWithParents(this.host.tasks()).filter(({ task }) => task.status === 'in_progress');
+    const running = this.host.isExecuting()
+      ? `Execution is RUNNING${locked.length ? ` — these tasks are locked: ${locked.map(({ ref }) => ref).join(', ')}` : ''}. No new task starts until your reply ends; your task edits apply then, to tasks that have not started. An edit aimed at a running task is refused — the user can stop it first, or you can change it after it finishes. Do not submit a whole new plan while tasks run.`
       : '';
-    return [
+    const full = [
       '<current_plan>',
-      ...lines,
+      ...rows.map(({ line }) => line),
       '</current_plan>',
       'The block above is the CURRENT task plan — short fields only. Choose how to respond:',
       '- To answer a question or discuss, reply in plain prose (no JSON).',
       tools ? TASK_READ_TOOLS_REMINDER : TASK_QUERY_REMINDER,
-      ...taskOpsProtocol(execNote, tools),
+      ...taskOpsProtocol(running && `\n${running}`, tools),
     ].filter(Boolean).join('\n');
+    return { rows, full, running, tools };
   }
 
   /** One line per task, subtasks indented under their parent, with stable references — null until the plan has tasks. */
-  private currentPlanLines(): string[] | null {
+  private planRows(): PlanRow[] | null {
     const tasks = this.host.tasks();
     if (!this.host.plan() || tasks.length === 0) return null;
     const rows = flattenTasksWithParents(tasks);
     const refOf = new Map(rows.map(({ task, ref }) => [task.id, ref]));
     const { modes } = this.host.catalog();
-    return rows.map(({ task: t, parent }) => {
+    const lineOf = ({ task: t, parent }: (typeof rows)[number]): string => {
       const refs = (ids: readonly string[]) => `[${ids.map((d) => refOf.get(d) ?? d).join(', ')}]`;
       // A script task runs on no runner, model or mode (ADR-0035): what it runs is its line.
       if (t.type === 'script') {
@@ -1542,7 +1562,8 @@ export class PlannerConversation {
         ? `steps:${t.userSteps?.length ?? 0}`
         : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}${readOnly ? 'read-only ' : ''}effort:${t.assignedModel?.thinkingEffort ?? '-'}`;
       return `${parent ? '  ' : ''}${refOf.get(t.id)} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:${refs(t.dependencies)}${t.skills?.length ? ` skills:[${t.skills.join(', ')}]` : ''}${waitNote(this.host.startWaits(t), refs)}`;
-    });
+    };
+    return rows.map((row) => ({ id: row.task.id, ref: row.ref, title: row.task.title, line: lineOf(row) }));
   }
 }
 

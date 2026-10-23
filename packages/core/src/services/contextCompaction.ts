@@ -72,16 +72,23 @@ export function compactToolMessages(
  * emission itself) then runs against a pruned context instead of a saturated
  * one. Opencode-style auto-compact, but deterministic: no summarizer model.
  * Reactive truncation repair stays as the backstop for whatever this misses.
+ * `onCompacted` hears of every compaction through the wrapper, this one or
+ * the repair's, that removed something.
  */
-export function withProactiveCompaction(chat: ResearchChat): ResearchChat {
+export function withProactiveCompaction(chat: ResearchChat, onCompacted: () => void = () => {}): ResearchChat {
+  const compactHistory = chat.compactHistory && ((): number => {
+    const removed = chat.compactHistory?.() ?? 0;
+    if (removed > 0) onCompacted();
+    return removed;
+  });
   const check = (turn: ResearchTurn): ResearchTurn => {
-    if ((turn.promptTokens ?? 0) >= COMPACTION_LIMITS.proactivePromptTokens) chat.compactHistory?.();
+    if ((turn.promptTokens ?? 0) >= COMPACTION_LIMITS.proactivePromptTokens) compactHistory?.();
     return turn;
   };
   return {
     sendMessage: (text, signal) => chat.sendMessage(text, signal).then(check),
     sendToolResults: (results, signal) => chat.sendToolResults(results, signal).then(check),
-    compactHistory: chat.compactHistory?.bind(chat),
+    compactHistory,
   };
 }
 

@@ -841,9 +841,10 @@ export function modelContextBlock(
 
 /**
  * User-message prompt for a planner-driven merge: asks the model to combine the
- * selected tasks into one. Routed through the conversation loop, so the
- * task-ops protocol (with the "merge" op) is injected alongside it by
- * `planContextBlock`. The model emits a single taskOps merge op.
+ * selected tasks into one. Routed through the conversation loop, beside the
+ * plan block; it spells out the merge op itself, since a turn that sends only
+ * what changed in the plan restates none of the task-ops protocol (ADR-0012
+ * T10). The model emits a single taskOps merge op.
  */
 export function buildMergePrompt(taskIds: string[], tasks: readonly Task[], tools = false): string {
   const idSet = new Set(taskIds);

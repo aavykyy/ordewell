@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createTask, type ConversationMessage, type LegacyPlanState, type ResearchProgress, type SkillLoad } from '../../models/Task';
+import { createTask, type ConversationMessage, type LegacyPlanState, type ResearchProgress, type SkillLoad, type Task } from '../../models/Task';
 import type { SessionMessage } from '../SessionMessage';
 import type { ConversationTurn, IAiService, TurnRun } from '../AiService';
 import type { TaskOp } from '../TaskOps';
-import { ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, type PlannerConversationHost } from '../PlannerConversation';
+import { ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlannerConversationHost } from '../PlannerConversation';
 import type { SkillInfo } from '../SkillsService';
 import type { TurnFailure } from '../runnerExit';
 
@@ -1112,5 +1112,315 @@ describe('PlannerConversation reply runs', () => {
 
     expect(state.plan!.conversationHistory!.at(-1)).toMatchObject({ kind: 'supervisor', runs: [saved(looking), saved(answer)] });
     expect(replies(host)).toEqual([expect.objectContaining({ supervisor: true, runs: [saved(looking), saved(answer)] })]);
+  });
+});
+
+// ADR-0012 T10: the live context holds every message it was sent, so the plan
+// goes whole once per live context, and each later turn says what changed.
+describe('the plan block: whole once per live context, then what changed', () => {
+  const task = (id: string, order: number, over: Partial<Task> = {}): Task =>
+    createTask({ id, order, title: `Task ${id}`, prompt: 'p', assignedRunner: 'claude-code', ...over });
+
+  /** A conversation over a plan of `tasks`, keeping every message the planner is sent. */
+  function planned(tasks: Task[], ai: Partial<IAiService> = {}) {
+    const sent: string[] = [];
+    const made = fakeHost(fakeAi({
+      continueConversation: vi.fn(async (message: string): Promise<ConversationTurn> => {
+        sent.push(message);
+        return { kind: 'message', text: 'ok', researchLog: [] };
+      }),
+      ...ai,
+    }));
+    const live = { tasks, executing: false };
+    made.host.tasks = () => live.tasks;
+    made.host.isExecuting = () => live.executing;
+    return { ...made, sent, live };
+  }
+
+  /** The whole plan block opens on a line of its own. */
+  const WHOLE = /^<current_plan>$/m;
+
+  /** The lines of a message's change block, between its tags. */
+  const changes = (message: string): string[] => {
+    const block = /<plan_changes>\n([\s\S]*?)\n<\/plan_changes>/.exec(message);
+    return block ? block[1].split('\n') : [];
+  };
+
+  it('sends the whole plan on the first turn, and on a second with nothing changed only says so', async () => {
+    const { conversation, sent } = planned([task('a', 1), task('b', 2, { dependencies: ['a'] })]);
+
+    await conversation.reply('what is there?');
+    await conversation.reply('and now?');
+
+    expect(sent[0]).toMatch(WHOLE);
+    expect(sent[0]).toMatch(/^#2 id=b "Task b" \[pending\] .*deps:\[#1\]/m);
+    expect(sent[0]).toContain('"taskOps"');
+    expect(sent[1]).not.toMatch(WHOLE);
+    expect(sent[1]).not.toContain('"taskOps"');
+    expect(sent[1]).not.toMatch(/id=a|id=b/);
+    expect(sent[1]).toMatch(/<plan_changes>[^\n]*unchanged[^\n]*<\/plan_changes>/);
+    expect(sent[1]).toContain('and now?');
+  });
+
+  it('sends the line of a task whose status changed, and no other', async () => {
+    const [a, b] = [task('a', 1), task('b', 2)];
+    const { conversation, sent, live } = planned([a, b]);
+
+    await conversation.reply('one');
+    live.tasks = [{ ...a, status: 'completed' }, b];
+    await conversation.reply('two');
+
+    expect(sent[1]).not.toMatch(WHOLE);
+    expect(changes(sent[1])).toEqual([expect.stringMatching(/^#1 id=a "Task a" \[completed\] type:AI runner:claude-code /)]);
+  });
+
+  it('sends a wake-up turn what changed the same way', async () => {
+    const [a, b] = [task('a', 1), task('b', 2)];
+    const { conversation, sent, live } = planned([a, b]);
+
+    await conversation.reply('one');
+    live.tasks = [a, { ...b, status: 'failed' }];
+    await conversation.reply('', { wakeUps: ['Task 2 failed: tests did not pass.'], wakeUp: { readBudget: 12, refused: () => undefined } });
+
+    expect(sent[1]).not.toMatch(WHOLE);
+    expect(changes(sent[1])).toEqual([expect.stringMatching(/^#2 id=b "Task b" \[failed\]/)]);
+    expect(sent[1]).toContain('Task 2 failed: tests did not pass.');
+  });
+
+  it('sends an added task\'s line, an edited task\'s new line, and names a removed task', async () => {
+    const [a, b, c] = [task('a', 1), task('b', 2), task('c', 3)];
+    const { conversation, sent, live } = planned([a, b, c]);
+
+    await conversation.reply('one');
+    live.tasks = [a, b, c, task('d', 4, { dependencies: ['c'] })];
+    await conversation.reply('add one');
+    live.tasks = [a, { ...b, title: 'Build it all' }, c, task('d', 4, { dependencies: ['c'] })];
+    await conversation.reply('rename one');
+    live.tasks = [a, { ...b, title: 'Build it all' }, c];
+    await conversation.reply('drop one');
+
+    expect(changes(sent[1])).toEqual([expect.stringMatching(/^#4 id=d "Task d" \[pending\] .*deps:\[#3\]/)]);
+    expect(changes(sent[2])).toEqual([expect.stringMatching(/^#2 id=b "Build it all" \[pending\]/)]);
+    expect(changes(sent[3])).toEqual(['removed: #4 id=d "Task d"']);
+    expect(sent.slice(1).some((message) => WHOLE.test(message))).toBe(false);
+  });
+
+  it('says what runs in every change block, since the last whole block may have said otherwise', async () => {
+    const [a, b] = [task('a', 1), task('b', 2)];
+    const { conversation, sent, live } = planned([a, b]);
+
+    await conversation.reply('one');
+    live.executing = true;
+    live.tasks = [{ ...a, status: 'in_progress' }, b];
+    await conversation.reply('two');
+    live.executing = false;
+    live.tasks = [{ ...a, status: 'completed' }, b];
+    await conversation.reply('three');
+
+    expect(sent[0]).not.toMatch(/Execution is/);
+    expect(sent[1]).toMatch(/^Execution is RUNNING — these tasks are locked: #1\. /m);
+    expect(sent[2]).toMatch(/^Execution is not running\.$/m);
+  });
+
+  it.each([
+    ['a reorder', [task('b', 1), task('a', 2)]],
+    ['an insert that renumbers the tasks after it', [task('n', 1), task('a', 2), task('b', 3)]],
+    ['a removal that renumbers the tasks after it', [task('b', 1)]],
+    ['a new task taking a removed one\'s reference', [task('a', 1), task('n', 2)]],
+    ['a task moved under another', [{ ...task('a', 1), subtasks: [task('b', 1)] }]],
+  ])('sends the whole plan again after %s, since its references now name other tasks', async (_change, after) => {
+    const { conversation, sent, live } = planned([task('a', 1), task('b', 2)]);
+
+    await conversation.reply('one');
+    live.tasks = after;
+    await conversation.reply('two');
+
+    expect(sent[1]).toMatch(WHOLE);
+    expect(sent[1]).not.toContain('<plan_changes>');
+  });
+
+  it('sends the whole plan when saying what changed would take longer', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => task(`t${i + 1}`, i + 1, { title: `${'A long title to name the task by. '.repeat(8)}${i + 1}` }));
+    const { conversation, sent, live } = planned(many);
+
+    await conversation.reply('one');
+    live.tasks = many.slice(0, 1);
+    await conversation.reply('keep only the first');
+
+    expect(sent[1]).toMatch(WHOLE);
+    expect(sent[1]).not.toContain('<plan_changes>');
+    expect(sent[1].length).toBeLessThan(sent[0].length);
+  });
+
+  /** Turn one, then a turn that ends as `second` makes it, then turn three after a status change. */
+  async function afterSecond(second: (made: ReturnType<typeof planned>) => Promise<unknown>) {
+    const [a, b] = [task('a', 1), task('b', 2)];
+    const made = planned([a, b]);
+    await made.conversation.reply('one');
+    await second(made);
+    made.live.tasks = [{ ...a, status: 'completed' }, b];
+    await made.conversation.reply('three');
+    return made.sent.at(-1)!;
+  }
+
+  it('sends the whole plan after a turn the user stopped, which may not have read what it was sent', async () => {
+    const third = await afterSecond(async ({ conversation, host, sent }) => {
+      vi.mocked(host.aiService().continueConversation).mockImplementationOnce(async (message) => {
+        sent.push(message);
+        conversation.stopTurn();
+        return { kind: 'message', text: '', researchLog: [], aborted: true };
+      });
+      await conversation.reply('two');
+    });
+
+    expect(third).toMatch(WHOLE);
+  });
+
+  it('sends the whole plan after a turn that failed', async () => {
+    const third = await afterSecond(async ({ conversation, host }) => {
+      vi.mocked(host.aiService().continueConversation).mockRejectedValueOnce(new Error('planner transport down'));
+      await expect(conversation.reply('two')).rejects.toThrow('planner transport down');
+    });
+
+    expect(third).toMatch(WHOLE);
+  });
+
+  // ADR-0044: the inputs go again at the reset, in a turn of their own.
+  it('sends the whole plan in the resend after a turn ended on the planner\'s usage limit', async () => {
+    const third = await afterSecond(async ({ conversation, host }) => {
+      vi.mocked(host.aiService().continueConversation).mockResolvedValueOnce({
+        kind: 'message', text: "You've hit your usage limit · resets 8pm", researchLog: [], failed: true, usageLimit: {},
+      });
+      await expect(conversation.reply('two')).rejects.toThrow(PlannerUsageLimitError);
+    });
+
+    expect(third).toMatch(WHOLE);
+  });
+
+  it('sends the whole plan after a turn that landed only once a corrective retry repaired it', async () => {
+    const third = await afterSecond(async ({ conversation, host }) => {
+      vi.mocked(host.aiService().continueConversation)
+        .mockResolvedValueOnce({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#9' }], text: '', researchLog: [] })
+        .mockResolvedValueOnce({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#2' }], text: '', researchLog: [] });
+      vi.mocked(host.validateOps)
+        .mockReturnValueOnce({ ok: false, tasks: [], errors: ['#9 does not exist'], summary: [] })
+        .mockReturnValueOnce({ ok: true, tasks: [], errors: [], summary: ['removed #2'] });
+      await conversation.reply('drop the last one');
+    });
+
+    expect(third).toMatch(WHOLE);
+  });
+
+  it.each([
+    ['during a turn that landed', true],
+    ['between turns', false],
+  ])('sends the whole plan after the backend compacted its context %s', async (_when, duringTurn) => {
+    let compactions = 0;
+    const third = await afterSecond(async ({ conversation, host, sent }) => {
+      const ai = host.aiService();
+      ai.compactions = () => compactions;
+      vi.mocked(ai.continueConversation).mockImplementationOnce(async (message) => {
+        sent.push(message);
+        if (duringTurn) compactions++;
+        return { kind: 'message', text: 'ok', researchLog: [] };
+      });
+      await conversation.reply('two');
+      if (!duringTurn) compactions++;
+    });
+
+    expect(third).toMatch(WHOLE);
+  });
+
+  it('says only what changed while the backend reports no compaction', async () => {
+    const third = await afterSecond(async ({ conversation, host }) => {
+      host.aiService().compactions = () => 3;
+      await conversation.reply('two');
+    });
+
+    expect(third).not.toMatch(WHOLE);
+    expect(changes(third)).toHaveLength(1);
+  });
+
+  it('sends the whole plan after Ordewell condensed the conversation, whose live context it dropped', async () => {
+    const third = await afterSecond(async ({ conversation, host }) => {
+      await conversation.reply('two');
+      vi.mocked(host.aiService().continueConversation).mockResolvedValueOnce({ kind: 'message', text: '<conversation_summary>A parser, in two tasks.</conversation_summary>', researchLog: [] });
+      await conversation.compact();
+    });
+
+    expect(third).toMatch(WHOLE);
+  });
+
+  it('sends the whole plan in a turn replayed into a new live context, and what changed after it', async () => {
+    const [a, b] = [task('a', 1), task('b', 2)];
+    let active = true;
+    const { conversation, host, sent, live } = planned([a, b], { hasActiveConversation: () => active });
+
+    await conversation.reply('one');
+    active = false;
+    await conversation.reply('two');
+    active = true;
+    live.tasks = [{ ...a, status: 'completed' }, b];
+    await conversation.reply('three');
+
+    const replayed = vi.mocked(host.aiService().startConversation).mock.calls[0][0];
+    expect(replayed.initialMessage).toMatch(WHOLE);
+    expect(sent).toHaveLength(2);
+    expect(changes(sent[1])).toEqual([expect.stringMatching(/^#1 id=a "Task a" \[completed\]/)]);
+  });
+
+  it('sends the whole plan to a planner switched in, which replays the conversation', async () => {
+    const { conversation, host } = planned([task('a', 1), task('b', 2)]);
+    await conversation.reply('one');
+
+    const switched = fakeAi({ hasActiveConversation: () => false });
+    host.aiService = () => switched;
+    await conversation.reply('two');
+
+    expect(vi.mocked(switched.startConversation).mock.calls[0][0].initialMessage).toMatch(WHOLE);
+  });
+
+  describe('the catalog block', () => {
+    const CATALOG = /^<available_models>$/m;
+
+    it('is sent once, then again only when it changes', async () => {
+      const { conversation, host, sent } = planned([task('a', 1)]);
+
+      await conversation.reply('one');
+      await conversation.reply('two');
+      host.catalog = () => ({ runners: ['claude-code'], models: { 'claude-code': [{ modelId: 'claude-opus-4', modelLabel: 'Opus', variants: [] }] }, modes: {}, autonomousDefault: true });
+      await conversation.reply('three');
+      await conversation.reply('four');
+
+      expect(sent.map((message) => CATALOG.test(message))).toEqual([true, false, true, false]);
+      expect(sent[2]).toContain('claude-code: claude-opus-4');
+    });
+
+    it('is sent again once the live context is dropped, or a turn did not land', async () => {
+      const { conversation, host, sent } = planned([task('a', 1)]);
+
+      await conversation.reply('one');
+      vi.mocked(host.aiService().continueConversation).mockRejectedValueOnce(new Error('planner transport down'));
+      await expect(conversation.reply('two')).rejects.toThrow('planner transport down');
+      await conversation.reply('three');
+      await conversation.reply('four');
+      conversation.reset();
+      await conversation.reply('five');
+
+      expect(sent.map((message) => CATALOG.test(message))).toEqual([true, true, false, true]);
+    });
+
+    // The reminder never changes, and the system prompt tells such a planner
+    // to read the catalog before it submits (ADR-0022, L3).
+    it('stands in as the tools reminder for a planner with Ordewell\'s tools, sent by the same rule', async () => {
+      const { conversation, sent } = planned([task('a', 1)], { plannerToolsAttached: () => true });
+
+      await conversation.reply('one');
+      await conversation.reply('two');
+
+      expect(sent[0]).toContain('call list_runners and list_models just before submit_plan');
+      expect(sent[1]).not.toContain('list_runners');
+      expect(sent[1]).toContain('call task_query before editing');
+    });
   });
 });

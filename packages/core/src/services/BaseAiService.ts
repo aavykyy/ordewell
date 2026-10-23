@@ -110,6 +110,8 @@ export interface ConversationTurnContext {
 export abstract class BaseAiService {
   protected conversation: { ctx: ConversationTurnContext; setProgress: (fn: (p: ResearchProgress) => void) => void } | null = null;
   protected activeAbort: AbortController | null = null;
+  /** See {@link compactions}. */
+  private pruned = 0;
 
   constructor(protected config: IConfig, protected turnBudgets?: TurnBudgets) {}
 
@@ -118,7 +120,19 @@ export abstract class BaseAiService {
 
   hasActiveConversation(): boolean { return this.conversation !== null; }
 
-  pruneContext(): number { return this.conversation?.ctx.chat.compactHistory?.() ?? 0; }
+  pruneContext(): number {
+    const removed = this.conversation?.ctx.chat.compactHistory?.() ?? 0;
+    if (removed > 0) this.pruned++;
+    return removed;
+  }
+
+  /**
+   * The prunings of a conversation's history that removed something. A
+   * pruning stubs tool output alone, never the user messages a plan block
+   * rides in, but it counts all the same: the conversation would rather send
+   * the plan whole again than trust a context changed under it (ADR-0012 T10).
+   */
+  compactions(): number { return this.pruned; }
 
   protected startAbortScope(callerSignal?: AbortSignal): AbortSignal {
     this.activeAbort = abortScope(callerSignal);
@@ -364,7 +378,7 @@ export abstract class BaseAiService {
     // Turns reporting prompt-token pressure compact the underlying history
     // before the next call — the plan emission should never be the first
     // moment the context problem surfaces.
-    const chat = withProactiveCompaction(ctx.chat);
+    const chat = withProactiveCompaction(ctx.chat, () => this.pruned++);
     return settleReply({
       // The turn's own input carries the budgets, not the system prompt, which stays cacheable.
       message: withTurnBudgets(this.turnBudgets, message),
