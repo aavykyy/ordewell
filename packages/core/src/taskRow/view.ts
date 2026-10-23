@@ -1,6 +1,6 @@
 import { taskUsageSummary, type AttemptUsage, type TaskUsageSummary } from '../models/Usage';
 import type { AwaitingReason, TaskType } from '../models/Task';
-import type { FindingSeverity, HandoffDigest } from '../models/Handoff';
+import type { FindingSeverity, HandoffCommit, HandoffDigest } from '../models/Handoff';
 import { worstSeverity } from '../models/Handoff';
 import type { TaskLoop } from '../models/Loop';
 import type { TaskIsolationState } from '../interfaces/IWorktreeIsolation';
@@ -115,6 +115,8 @@ export interface TaskRowUsage extends Pick<TaskUsageSummary, 'totals' | 'context
  * with every finding and the report, is in the attempt's log.
  */
 export interface TaskRowHandoff {
+  /** The commit message the task stated, when it did. */
+  commit?: HandoffCommit;
   summary: string;
   findingCount: number;
   severity: FindingSeverity | null;
@@ -260,6 +262,7 @@ function loopOf(task: TaskRowSubject, reading: PlanReading | null): TaskRowLoop 
 function handoffOf(task: TaskRowSubject): TaskRowHandoff | null {
   if (!task.handoff) return null;
   return {
+    ...(task.handoff.commit ? { commit: task.handoff.commit } : {}),
     summary: task.handoff.summary,
     findingCount: task.handoff.findingCount,
     severity: worstSeverity(task.handoff.findings),

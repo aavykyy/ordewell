@@ -958,7 +958,8 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   // What it handed over (ADR-0047): one compact row, its count first so a long
   // summary can be cut without taking what a reader scans for with it.
   if (row.handoff) {
-    const summary = sanitize(row.handoff.summary).split('\n').map((line) => line.trim()).find((line) => line !== '') ?? '';
+    const said = sanitize(row.handoff.summary).split('\n').map((line) => line.trim()).find((line) => line !== '') ?? '';
+    const summary = row.handoff.commit ? [`commit: ${sanitize(row.handoff.commit.subject).trim()}`, said].filter(Boolean).join(' · ') : said;
     const findings = row.handoff.findingCount === 0
       ? 'no findings'
       : `${row.handoff.findingCount} finding${row.handoff.findingCount === 1 ? '' : 's'}${row.handoff.severity ? ` · ${inRow(severityLabel(row.handoff.severity))}` : ''}`;

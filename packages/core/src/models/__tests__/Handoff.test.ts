@@ -66,6 +66,14 @@ describe('a handoff a headless surface prints (ADR-0047)', () => {
     ]);
   });
 
+  it('puts the commit, subject then body, before the summary, and prints a commit-only handoff', () => {
+    const commit = { subject: 'Scope the cache key', body: 'Adds the tenant.\nKeeps the TTL.' };
+    expect(handoffPreviewLines({ ...handoff, commit }).slice(0, 4)).toEqual([
+      'Commit: Scope the cache key', 'Adds the tenant.', 'Keeps the TTL.', 'The cache key omits the tenant.',
+    ]);
+    expect(handoffPreviewLines({ summary: '', findings: [], findingCount: 0, commit: { subject: 'Only this' } })).toEqual(['Commit: Only this']);
+  });
+
   it('stops at a finding budget and counts the rest from the whole handoff', () => {
     expect(handoffPreviewLines(handoff, { maxFindings: 1 })).toEqual([
       'The cache key omits the tenant.',

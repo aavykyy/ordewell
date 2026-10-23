@@ -256,7 +256,7 @@ export interface HandoffPreviewOptions {
 }
 
 /**
- * A handoff as a compact surface prints it (ADR-0047): the summary, each
+ * A handoff as a compact surface prints it (ADR-0047): the commit, the summary, each
  * finding's title line (`F1 [blocker] Title`), how many the digest left out,
  * and the artifacts. The detail and evidence stay in the attempt's log.
  */
@@ -265,7 +265,9 @@ export function handoffPreviewLines(handoff: HandoffDigest, options: HandoffPrev
   const shown = handoff.findings.slice(0, limit);
   const more = handoff.findingCount - shown.length;
   const summary = handoff.summary.trim();
+  const { commit } = handoff;
   return [
+    ...(commit ? [`Commit: ${commit.subject}`, ...(commit.body ? commit.body.split('\n') : [])] : []),
     ...(summary ? summary.split('\n') : []),
     ...shown.map((f) => `${f.id} [${f.severity}] ${f.title}`),
     ...(more > 0 ? [`+${more} more finding${more === 1 ? '' : 's'}, in the attempt's log`] : []),
