@@ -76,8 +76,8 @@ const PRESERVED_BRANCHES = 'ordewell-preserved';
 const NESTED_REPO_DEPTH = 2;
 const GITLINK_MODE = '160000';
 
-/** One repo's share of a worktree about to be removed, as {@link GitWorktreeIsolation.preserve} reads it. */
-interface RemovalTarget {
+/** One repo's share of a worktree about to be removed, as {@link GitWorktreeIsolation.preserve} reads it; its rescue commit is named from the subject. */
+interface RemovalTarget extends LandingSubject {
   /** Absent once the worktree is gone, or for a branch no worktree has. */
   worktree?: string;
   /** Artifacts linked in from the real workspace, which are never the task's work. */
@@ -86,7 +86,6 @@ interface RemovalTarget {
   branch: string | null;
   /** The last segment of the branch it is kept on. */
   name: string;
-  title: string;
 }
 
 /**
@@ -422,6 +421,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const record: IsolationTaskRecord = {
         taskId: task.id, order: task.order, title: task.title, branch, workspace: dir, status: 'active', repos: {},
         ...(opts.readOnly ? { readOnly: true } : {}),
+        // A restore continues the same work, so its merges keep the subject its landing stated; a fresh attempt states its own.
+        ...(intent === 'restore' && previous?.commit ? { commit: previous.commit } : {}),
       };
       let cwd = dir;
       const copied: string[] = [];
@@ -1226,7 +1227,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     const removal = noRemoval();
     for (const repo of opts.preserve === false || record.readOnly ? [] : run.repos) {
       const entry = record.repos[repo.path];
-      const target: RemovalTarget = { worktree: entry?.worktree, linked: entry?.linked ?? [], branch: record.branch, name: path.basename(record.workspace), title: record.title };
+      const target: RemovalTarget = { worktree: entry?.worktree, linked: entry?.linked ?? [], branch: record.branch, name: path.basename(record.workspace), title: record.title, commit: record.commit };
       try {
         const kept = await this.preserve(run, repo, target, opts.intent);
         if (kept) removal.preserved.push({ task, ...kept });

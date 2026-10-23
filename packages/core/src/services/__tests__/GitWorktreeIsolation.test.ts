@@ -877,6 +877,37 @@ describe.skipIf(!hasGit)('WorktreeIsolation conflict repair', () => {
     expect(git(root, 'log', '-1', '--format=%B', `${integration}^2`)).toBe('Say right\n\nLeft was wrong.');
   });
 
+  it('names the rescue and the restore of a conflicted task\'s kept work for the commit its landing stated, not its title', async () => {
+    const root = repo({ 'shared.txt': 'base\n' });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const [t1, t2] = [task(1, 'Left'), task(2, 'Right')];
+    const a = await iso.prepare(t1, run);
+    const b = await iso.prepare(t2, run);
+    writeFileSync(join(a.cwd, 'shared.txt'), 'left\n');
+    writeFileSync(join(b.cwd, 'shared.txt'), 'right\n');
+    expect(await iso.integrate(t1, run)).toBe('merged');
+    expect(await iso.integrate(t2, run, undefined, { subject: 'Say right', body: 'Left was wrong.' })).toBe('conflict');
+    const integration = run.repos[0].integrationBranch;
+    await iso.reopen(t2, run);
+    mergeAndResolve(b.cwd, integration);
+    writeFileSync(join(b.cwd, 'note.txt'), 'not committed yet\n');
+    // Moves the tip, so the kept work comes back with a merge, not a fast-forward.
+    const t3 = task(3, 'Elsewhere');
+    const c = await iso.prepare(t3, run);
+    writeFileSync(join(c.cwd, 'other.txt'), 'other\n');
+    expect(await iso.integrate(t3, run)).toBe('merged');
+
+    const again = await iso.prepare(t2, run, 'restore');
+
+    expect(again.restoration).toBe('restored');
+    expect(readFileSync(join(again.cwd, 'note.txt'), 'utf8')).toBe('not committed yet\n');
+    expect(git(root, 'log', '-1', '--format=%s', again.preserved![0].commit)).toBe('WIP: Say right');
+    expect(git(again.cwd, 'log', '-1', '--format=%s')).toBe('Merge: Say right (resume its kept work)');
+    expect(await iso.integrate(t2, run)).toBe('merged');
+    expect(git(root, 'log', '-1', '--format=%B', integration)).toBe('Merge: Say right\n\nLeft was wrong.');
+  });
+
   it('leaves no internal branch name in history when the repair merges with the message its prompt gives', async () => {
     const { root, iso, run, t2, b, integration } = await conflicted();
     await iso.reopen(t2, run);

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
 import { landingMessage, messageArgs, quotedMessageArgs, runMergeMessage } from '../landingMessage';
+import { storedHandoff } from '../../models/Handoff';
 
 describe('landingMessage', () => {
   const stated = { title: 'Add greeting', commit: { subject: 'Greet the user on start', body: 'The banner was empty.\nNow it says hi.' } };
@@ -66,6 +67,13 @@ describe('landingMessage with the Planned-with trailer', () => {
     const message = landingMessage('work', signed, true);
     expect(message).toBe('S\n\nWhy.\n\nSigned-off-by: A <a@x.y>\nPlanned-with: Ordewell');
     expect(trailerOf(message)).toBe('Signed-off-by: A <a@x.y>\nPlanned-with: Ordewell\n');
+  });
+
+  it('keeps a body of one Token: value line as prose, as the stored handoff does, so the trailer starts its own paragraph', () => {
+    const commit = storedHandoff({ status: 'done', summary: '', commit: { subject: 'S', body: 'Why: the old check ran on every start.' } })!.commit!;
+    const message = landingMessage('work', { title: 'T', commit }, true);
+    expect(message).toBe('S\n\nWhy: the old check ran on every start.\n\nPlanned-with: Ordewell');
+    expect(trailerOf(message)).toBe('Planned-with: Ordewell\n');
   });
 
   it('does not repeat a trailer the stated body already carries', () => {

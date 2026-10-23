@@ -69,13 +69,15 @@ function finish(text: string, body: string, plannedWith: boolean): string {
 
 /**
  * git reads trailers from the last paragraph only, so a body that already ends
- * in a trailer block takes ours on the next line of it; any other message gets
- * a paragraph of its own.
+ * in a trailer block after its prose takes ours on the next line of it; any
+ * other message gets a paragraph of its own. A body of one paragraph is prose
+ * however it reads, as the stored handoff keeps it (ADR-0047).
  */
 function withTrailer(text: string, body: string): string {
   const lines = text.split(/\r?\n/);
   if (lines.includes(PLANNED_WITH_TRAILER)) return text;
-  const lastParagraph = body ? body.split(/\r?\n\s*\n/).pop()!.split(/\r?\n/) : [];
+  const paragraphs = body ? body.split(/\r?\n\s*\n/) : [];
+  const lastParagraph = paragraphs.length > 1 ? paragraphs.at(-1)!.split(/\r?\n/) : [];
   const endsInTrailers = lastParagraph.length > 0 && lastParagraph.every((line) => TRAILER_LINE.test(line));
   return `${text}${endsInTrailers ? '\n' : '\n\n'}${PLANNED_WITH_TRAILER}`;
 }
