@@ -4,7 +4,7 @@ implemented: full
 amends: ["0009", "0029"]
 ---
 
-# 0037 — Research that outlives a planner turn is a research task, and its report wakes the planner
+# 0037 — Evidence the planner needs is a research task, and its report wakes the planner
 
 ## Problem
 
@@ -156,5 +156,5 @@ ends.**
 - 2026-10-22 — the report chain is deliberately unbounded per message: a report turn may start further research whose report wakes the planner again, and its only bounds are the planner's judgement, the run's Parallel limit, `mayReport` and the user's Stop (R4, R6).
 - 2026-10-22 — decided, not built: a research task's report is its handoff ([ADR-0047](0047-structured-task-handoffs.md), #120).
 - 2026-10-22 — implemented research handoffs in report wake-ups and their surfaces (R1, R2, R6; ADR-0047, #120).
-- 2026-10-23 — who explores is decided by what the result is: orientation in the turn, evidence a research task that a task acting on it depends on, search the explore skill; the duration line is dropped (R4, R5).
+- 2026-10-23 — retitled from "Research that outlives a planner turn"; who explores is decided by what the result is: orientation in the turn, evidence a research task that a task acting on it depends on, search the explore skill; the duration line is dropped (R4, R5).
 - 2026-10-23 — a Gemini planner has no in-turn agents: it neither declares nor is taught `spawn_research_agent`, as ADR-0005 now says (R5).

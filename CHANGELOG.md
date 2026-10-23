@@ -127,6 +127,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   `ordewell trailer off` or `"plannedWithTrailer": false` in `settings.json`; it
   is not a row in the settings panels
   ([ADR-0030](docs/adr/supervision/0030-global-run-settings.md)).
+- **Installed coding agents that are switched off show in the VS Code Runners
+  block.** Clicking one enables it in the shared settings file and in the next
+  plan's runner set; before, it could only be enabled from the command palette
+  or the TUI.
 
 ### Changed
 
@@ -151,6 +155,18 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   is not shown.
 - **The VS Code Marketplace listing is rewritten**, and the README states the
   approval promise in its opening paragraph and links the first-run Discussion.
+- **The planner chooses between its own agents and a research task by what the
+  result is, not by how long it will take.** A conclusion it needs this turn
+  stays in the turn. Evidence that needs a worktree, another runner's
+  judgement, your eye or a later task's dependence is a research task, and the
+  findings reach that task in its handoff. A search that takes rounds is the
+  `explore` skill
+  ([ADR-0037](docs/adr/supervision/0037-research-tasks-wake-the-planner.md)).
+- **The planner is sent its plan whole once, then only what changed.** A later
+  turn carries the tasks added or changed, the tasks removed and what runs now.
+  The whole plan goes again after a reorder, a reset or compaction, or a turn
+  that did not land
+  ([ADR-0012](docs/adr/planner/0012-the-task-query-read-channel.md)).
 
 ### Security
 

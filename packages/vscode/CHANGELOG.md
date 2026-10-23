@@ -52,6 +52,10 @@
   message. Handoffs show the commit.
 - **A `Planned-with: Ordewell` trailer** ends the commits Ordewell writes. Turn
   it off with `ordewell trailer off` (it is not in the settings panel).
+- **Installed coding agents that are switched off now show in the Runners
+  block.** Clicking one enables it in the shared settings file and in the next
+  plan's runner set; before, it could only be enabled from the command palette
+  or the TUI.
 
 ### Changed
 
@@ -60,6 +64,15 @@
   run the tests, and lands nothing: its report is its result.
 - **A runner that cannot connect to Ordewell's tools holds its task** instead
   of failing it, and every hold shows its reason on the task's status badge.
+- **The planner chooses between its own agents and a research task by what the
+  result is, not by how long it will take.** A conclusion it needs this turn
+  stays in the turn; evidence that needs a worktree, another runner's judgement
+  or your eye is a research task, and a search that takes rounds is the
+  `explore` skill.
+- **The planner is sent its plan whole once, then only what changed.** The
+  whole plan goes again after a reorder, a reset or compaction, or a turn that
+  did not land.
+
 ## [0.10.12] - 2026-10-22
 
 ### Fixed
