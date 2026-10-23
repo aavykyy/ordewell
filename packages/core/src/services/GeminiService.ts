@@ -28,9 +28,10 @@ import type { TurnBudgets } from './PlannerBudgets';
 import { BaseAiService, ResearchChat, ResearchTurn, ToolResult, ConversationTurnContext } from './BaseAiService';
 import { toGeminiToolDeclarations } from './researchTools';
 
-const TOOL_DEFINITIONS = toGeminiToolDeclarations();
+/** No spawn tool: this service has no `createSubagentChat`, so a spawn would fail on every call. */
+const TOOL_DEFINITIONS = toGeminiToolDeclarations(false, false);
 /** With the task reads and execution tools a session offers its conversation (ADR-0029). */
-const CONVERSATION_TOOL_DEFINITIONS = toGeminiToolDeclarations(true);
+const CONVERSATION_TOOL_DEFINITIONS = toGeminiToolDeclarations(true, false);
 
 interface GeminiPart {
   text?: string;
@@ -241,7 +242,7 @@ export class GeminiService extends BaseAiService implements IAiService {
       req.modelsByRunner,
       req.runners,
       req.runnerModes,
-      { isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun },
+      { isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun, subagents: false },
     );
 
     // Gemini requires strict user/model alternation, so consecutive same-role
@@ -249,7 +250,7 @@ export class GeminiService extends BaseAiService implements IAiService {
     // the system-prompt user message never being followed by a model reply —
     // hence history seeding starts with a synthetic model ack when needed.
     const seededHistory: { role: 'user' | 'model'; parts: Part[] }[] = [
-      { role: 'user', parts: [{ text: `${systemPrompt}\n\n${buildResearchToolsPrompt()}` }] },
+      { role: 'user', parts: [{ text: `${systemPrompt}\n\n${buildResearchToolsPrompt(false)}` }] },
     ];
     for (const m of req.priorHistory ?? []) {
       const role = m.role === 'assistant' ? 'model' : 'user';
@@ -373,7 +374,7 @@ export class GeminiService extends BaseAiService implements IAiService {
 
     const contextStr = await BaseAiService.collectResearchContext(fs, runners);
     const systemPrompt = buildResearchPrompt(userDescription, contextStr, modelsByRunner, runners, runnerModes, modes);
-    const firstMessage = `${buildResearchToolsPrompt()}\n\nExplore the workspace to understand the codebase, then generate the plan.`;
+    const firstMessage = `${buildResearchToolsPrompt(false)}\n\nExplore the workspace to understand the codebase, then generate the plan.`;
 
     const open = (model: string, history: Content[] = [{ role: 'user', parts: [{ text: systemPrompt }] }]): ChatSession => this.getPlanningModel(model).startChat({
       history,

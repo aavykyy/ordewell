@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseTaskQueryJson, renderTaskQueryAnswer, TASK_QUERY_ANSWER_MAX_CHARS, TASK_QUERY_PROTOCOL, type TaskQueryCatalog } from '../TaskQuery';
+import { parseTaskQueryJson, renderTaskQueryAnswer, TASK_QUERY_ANSWER_MAX_CHARS, TASK_QUERY_PROTOCOL, TASK_READ_TOOLS_PROTOCOL, type TaskQueryCatalog } from '../TaskQuery';
 import { createTask, type Task } from '../../models/Task';
 import type { LiveTail } from '../../interfaces/TaskOutputSource';
 
@@ -208,5 +208,14 @@ describe('the protocol as the planner is taught it', () => {
     expect(protocol).toContain('outputSince');
     expect(protocol).toContain('running');
     expect(protocol).toContain('stuck');
+  });
+
+  it('says the plan block comes whole once, then as what changed, never every turn', () => {
+    for (const lines of [TASK_QUERY_PROTOCOL, TASK_READ_TOOLS_PROTOCOL]) {
+      const protocol = lines.join('\n');
+      expect(protocol).toMatch(/The plan block you are shown \(whole once per live context, then what changed\) carries only short fields/);
+      expect(protocol).not.toMatch(/each turn|every turn/);
+    }
+    expect(TASK_READ_TOOLS_PROTOCOL.join('\n')).toContain('the last whole plan block shows you its operations; later turns only say what changed');
   });
 });

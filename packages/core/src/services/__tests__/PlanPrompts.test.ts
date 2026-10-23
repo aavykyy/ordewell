@@ -337,6 +337,7 @@ describe('who explores: orientation, evidence, search (ADR-0037 R5)', () => {
     expect(rule).toMatch(inTurn);
     expect(rule).toMatch(/- Evidence: a research task, when any of these holds: finding out needs a worktree \(write a failing test, build, reproduce\); another runner or model should judge it.*; the user should see it and be able to stop it; or a later task will act on its findings\./);
     expect(rule).toMatch(/the later task depends on the research task, so the findings reach it in the research task's handoff: do not re-type them into the later task's brief/);
+    expect(rule).toMatch(/A loop's fix cannot depend on the research task directly: make the check depend on it, and the fix reads the report with `read_task`\./);
     expect(rule).toMatch(/- Search: a problem that needs rounds of branching.* is the explore skill/);
     for (const text of ['WHO EXPLORES:', '- Orientation:', '- Evidence:', '- Search:', 'file:line references, no pasted file bodies']) {
       expect(count(p, text)).toBeLessThanOrEqual(1);
@@ -373,12 +374,20 @@ describe('who explores: orientation, evidence, search (ADR-0037 R5)', () => {
     }
   });
 
+  it('tells an API planner whose service has no research subagents to read itself', () => {
+    const p = buildConversationSystemPrompt('goal', '', {}, ['gemini'], undefined, { subagents: false });
+    const rule = section(p, 'WHO EXPLORES:');
+    expect(rule).toMatch(/Find it with your own reads: you have no agents of your own here\./);
+    expect(rule).not.toContain('spawn_research_agent');
+  });
+
   it('frames spawn_research_agent as orientation, with no research-task text for the one-shot planner it also reaches', () => {
     const tools = buildResearchToolsPrompt();
     expect(tools).toMatch(/Use it for orientation: a subsystem to map, or a "how does X work here" question, when only the conclusion matters to you/);
     expect(tools).toMatch(/the conclusion and file:line references, no pasted file bodies, a few lines per point/);
     expect(tools).not.toMatch(/research task|WHO EXPLORES/);
     expect(oneShot(LONE_REPO)).not.toMatch(/WHO EXPLORES|research task/);
+    expect(buildResearchToolsPrompt(false)).not.toContain('spawn_research_agent');
   });
 });
 
@@ -657,7 +666,7 @@ describe('the strategy step and the context rules (#108)', () => {
     expect(rules).toMatch(/your context is the scarcest resource in the run/);
     expect(rules).toMatch(/Go deep yourself when the work is small, sequential/);
     expect(rules).toMatch(/Delegate the rest as WHO EXPLORES says, by what its result is/);
-    expect(rules).toMatch(/map it first \(skim it, or delegate the map as orientation\), then split along the seams the map shows/);
+    expect(rules).toMatch(/map it first \(skim it, or map it as WHO EXPLORES says\), then split along the seams the map shows/);
     expect(rules).toMatch(/self-contained brief: its goal, its inputs, what to report back, and how its result will be checked/);
     expect(rules).toMatch(/Plan the integration step/);
     expect(rules).toMatch(/Prefer evidence you can check .* over a task's own word/);
@@ -763,6 +772,7 @@ describe('loops in the conversation prompt (ADR-0045)', () => {
     expect(loops).toMatch(/Ordewell runs the rounds itself, with no turn of yours in between/);
     expect(loops).toContain('"loop": { "body": ["fix-id", ...], "maxRounds": 3 }');
     expect(loops).toMatch(/Each depends on the check, and otherwise only on what the check depends on or on other tasks of the body/);
+    expect(loops).toMatch(/A loop's body cannot depend on a research task directly\. When the fix acts on a research task's findings, make the check depend on the research task: the body may then depend on it too, and reads its report with `read_task` \(WHO EXPLORES\)\./);
     expect(loops).toMatch(/Whatever comes after the loop depends on the check, never on a body task/);
     expect(loops).toMatch(/top-level AI or script task with no subtasks/);
     expect(loops).toMatch(/never a manual task/);

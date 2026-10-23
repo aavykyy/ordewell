@@ -1162,6 +1162,34 @@ describe('the plan block: whole once per live context, then what changed', () =>
     expect(sent[1]).toContain('and now?');
   });
 
+  it.each([true, false])('never starts a turn with the user\'s text, which a CLI planner would run as its own command (tools: %s)', async (tools) => {
+    const { conversation, sent } = planned([], { plannerToolsAttached: () => tools });
+
+    await conversation.reply('JSON and YAML');
+    await conversation.reply('/clear');
+
+    expect(sent).toHaveLength(2);
+    expect(sent[1].startsWith('/')).toBe(false);
+    expect(sent[1]).toContain('/clear');
+  });
+
+  it('names every task when the plan is emptied, so the planner does not keep the ones it last saw', async () => {
+    const [a, b] = [task('a', 1), task('b', 2)];
+    const { conversation, sent, live } = planned([a, b]);
+
+    await conversation.reply('one');
+    live.tasks = [];
+    await conversation.reply('what is left in the plan?');
+
+    expect(sent[1]).not.toMatch(WHOLE);
+    expect(changes(sent[1])).toEqual(['removed: #1 id=a "Task a"', 'removed: #2 id=b "Task b"']);
+    expect(sent[1]).toContain('The plan now has no tasks.');
+
+    live.tasks = [task('c', 1)];
+    await conversation.reply('add one');
+    expect(sent[2]).toMatch(WHOLE);
+  });
+
   it('sends the line of a task whose status changed, and no other', async () => {
     const [a, b] = [task('a', 1), task('b', 2)];
     const { conversation, sent, live } = planned([a, b]);

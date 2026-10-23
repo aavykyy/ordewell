@@ -36,6 +36,18 @@ const PLANNER_TOOLS_REMINDER =
   'Runners, models and modes may have changed since you last read them: call list_runners and list_models just before submit_plan.';
 
 /**
+ * A planner message must never open with the user's text. Claude Code reads a
+ * leading `/name` as its own slash command, and before the plan has tasks a
+ * later turn carries neither the catalog nor a plan block to lead with
+ * (ADR-0012 T10), so an unknown `/clear` would run instead of being answered.
+ * The marker keeps the text intact and the command from being read as one.
+ */
+function plannerInput(parts: readonly (string | undefined)[]): string {
+  const message = parts.filter((part): part is string => Boolean(part)).join('\n\n');
+  return message.startsWith('/') ? `The user's message follows:\n\n${message}` : message;
+}
+
+/**
  * Reads a planner gets per user turn before every answer also carries an
  * instruction to land the turn. Three covers the realistic shape of a read —
  * look at a task, look at the catalog, look at a neighbour it now suspects —
@@ -906,7 +918,7 @@ export class PlannerConversation {
         // The system prompt's goal is the text as typed; skill bodies ride the
         // first message alone, so the planner holds each one once.
         goal: goal.text,
-        initialMessage: plannerMessage(goal.text, goal.skills),
+        initialMessage: plannerInput([plannerMessage(goal.text, goal.skills)]),
         onProgress: userTurn.stream.sink(),
         signal: userTurn.signal,
       });
@@ -959,7 +971,7 @@ export class PlannerConversation {
     userTurn.blocks = this.blocks.next();
     const contextBlock = [...userTurn.blocks.blocks, ...userTurn.briefing.blocks].join('\n\n');
     const said = fromUser ? plannerMessage(message.text, message.skills) : '';
-    const outgoing = [contextBlock, ...wakeUps, userTurn.wakeUp?.brief, said].filter(Boolean).join('\n\n');
+    const outgoing = plannerInput([contextBlock, ...wakeUps, userTurn.wakeUp?.brief, said]);
 
     const turn = reopened
       ? await this.resume(reopened, outgoing, priorHistory, signal, userTurn.stream.sink())
@@ -1519,8 +1531,8 @@ export class PlannerConversation {
    * whole block or what changed (ADR-0012 T10).
    */
   private planView(): PlanView | null {
-    const rows = this.planRows();
-    if (!rows) return null;
+    if (!this.host.plan()) return null;
+    const rows = this.planRows() ?? [];
     const tools = this.host.aiService().plannerToolsAttached?.() ?? false;
     // Gated on live runners, not on an armed scheduler: a paused-but-armed run
     // has nothing running to lock, and takes a whole plan as well as an edit.
