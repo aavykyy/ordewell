@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, landsNothing, mergeExcludes, takesSkills,
+  attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, landsNothing, mergeExcludes, takesSkills, writesCommit,
   type AttemptKind, type AttemptPromptSources,
 } from '../attemptKind';
 import type { AttemptIntent } from '../IsolationRunController';
@@ -59,15 +59,15 @@ describe('classifyAttempt', () => {
 });
 
 describe('what each kind decides', () => {
-  const table: Array<[string, { mergeExcludes: boolean; decidesIsolation: boolean; checksTree: boolean; cwd: string }]> = [
-    ['change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'fresh' }],
-    ['ops', { mergeExcludes: true, decidesIsolation: false, checksTree: true, cwd: 'workspace' }],
-    ['repair', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'kept' }],
-    ['continued change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'restored' }],
-    ['continued ops', { mergeExcludes: true, decidesIsolation: false, checksTree: true, cwd: 'workspace' }],
-    ['carried-over change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'restored' }],
-    ['read-only', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'throwaway' }],
-    ['continued read-only', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'throwaway' }],
+  const table: Array<[string, { writesCommit: boolean; mergeExcludes: boolean; decidesIsolation: boolean; checksTree: boolean; cwd: string }]> = [
+    ['change', { writesCommit: true, mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'fresh' }],
+    ['ops', { writesCommit: false, mergeExcludes: true, decidesIsolation: false, checksTree: true, cwd: 'workspace' }],
+    ['repair', { writesCommit: false, mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'kept' }],
+    ['continued change', { writesCommit: true, mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'restored' }],
+    ['continued ops', { writesCommit: false, mergeExcludes: true, decidesIsolation: false, checksTree: true, cwd: 'workspace' }],
+    ['carried-over change', { writesCommit: true, mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'restored' }],
+    ['read-only', { writesCommit: false, mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'throwaway' }],
+    ['continued read-only', { writesCommit: false, mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'throwaway' }],
   ];
 
   it.each(table)('a %s attempt', async (name, expected) => {
@@ -80,6 +80,7 @@ describe('what each kind decides', () => {
     const place = await attemptCwd(kind, createTask({ id: 't1' }), runs);
 
     expect({
+      writesCommit: writesCommit(kind),
       mergeExcludes: mergeExcludes(kind),
       decidesIsolation: decidesIsolation(kind),
       checksTree: checksTree(kind),

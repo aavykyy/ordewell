@@ -267,6 +267,17 @@ describe('the handoff a task_complete call carries (ADR-0047)', () => {
     return { ...rigged, client, complete };
   }
 
+  it('starts a change task\'s runner told to write its commit, and an ops task\'s not', async () => {
+    const { orchestrator, adapters } = rig();
+    orchestrator.loadPlan([task('t1', 1), task('t2', 2, { ops: true })]);
+
+    await orchestrator.forceStartTask('t1');
+    await orchestrator.forceStartTask('t2');
+    await vi.waitFor(() => expect(adapters.map((a) => a.start_ !== undefined)).toEqual([true, true]));
+
+    expect(adapters.map((a) => a.start_?.kind === 'task' && a.start_.commits === true)).toEqual([true, false]);
+  });
+
   it('keeps a call that sends only a summary as a handoff with no findings', async () => {
     const { complete, get } = await completing();
 
@@ -275,6 +286,51 @@ describe('the handoff a task_complete call carries (ADR-0047)', () => {
     expect(result.isError).toBe(false);
     await vi.waitFor(() => expect(get('t1').status).toBe('completed'));
     expect(get('t1').handoff).toEqual({ summary: 'Added the cache; eviction is still missing.', findings: [], findingCount: 0 });
+  });
+
+  it('keeps the commit a done call states, subject and body, in the handoff', async () => {
+    const { complete, get } = await completing();
+
+    const result = await complete({
+      summary: 'The check lives in core/src/version.ts.',
+      commit: { subject: 'Add a daily version check behind ORDEWELL_NO_VERSION_CHECK', body: 'Users ran stale builds for weeks without knowing.' },
+    });
+
+    expect(result.isError).toBe(false);
+    await vi.waitFor(() => expect(get('t1').status).toBe('completed'));
+    expect(get('t1').handoff).toEqual({
+      commit: { subject: 'Add a daily version check behind ORDEWELL_NO_VERSION_CHECK', body: 'Users ran stale builds for weeks without knowing.' },
+      summary: 'The check lives in core/src/version.ts.',
+      findings: [],
+      findingCount: 0,
+    });
+  });
+
+  it.each(['blocked', 'failed'])('ignores the commit of a %s call: its summary carries everything', async (status) => {
+    const { complete, get } = await completing();
+
+    await complete({ status, reason: 'The schema is missing.', summary: 'Half the parser is written.', commit: { subject: 'Add the parser' } });
+
+    await vi.waitFor(() => expect(get('t1').status).toBe('failed'));
+    expect(get('t1').handoff).toEqual({ summary: 'Half the parser is written.', findings: [], findingCount: 0 });
+  });
+
+  it.each([
+    ['a subject of two lines', { subject: 'Add the check\nand its setting' }, /commit subject is one line/],
+    ['a subject past 100 characters', { subject: 'A'.repeat(101) }, /commit subject is at most 100 characters: keep it to 72 or fewer/],
+    ['an empty subject', { subject: '  ' }, /commit subject is required/],
+    ['a body past 500 characters', { subject: 'Add the check', body: 'x'.repeat(501) }, /commit body is at most 500 characters/],
+  ])('refuses %s, saying what to fix, and keeps the attempt open for a resend', async (_name, commit, says) => {
+    const { complete, get } = await completing();
+
+    const refused = await complete({ summary: 'Done.', commit });
+
+    expect(refused.isError).toBe(true);
+    expect(text(refused)).toMatch(says);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(get('t1').status).toBe('in_progress');
+    expect((await complete({ summary: 'Done.', commit: { subject: 'Add the check', body: 'x'.repeat(500) } })).isError).toBe(false);
+    await vi.waitFor(() => expect(get('t1').status).toBe('completed'));
   });
 
   it('numbers the findings F1 to Fn in the order the author gave them, and keeps the artifacts', async () => {

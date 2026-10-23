@@ -34,9 +34,9 @@ found running adversary → fix → adversary plans
 ## Decision
 
 **Every task ends with a handoff: a short summary written for the next reader,
-optional atomic findings and artifacts, and an optional long report that is
-stored and pulled, never pushed. An AI task authors it in `task_complete`;
-Ordewell derives one for a script task and a user task. A dependent is given
+optional atomic findings and artifacts, a change task's commit message, and
+an optional long report that is stored and pulled, never pushed. An AI task
+authors it in `task_complete`; Ordewell derives one for a script task and a user task. A dependent is given
 the summary and as many whole findings as fit; the rest is read with a new
 `read_task` tool.**
 
@@ -46,7 +46,25 @@ the summary and as many whole findings as fit; the rest is read with a new
 handoff:
 
 - **`summary`** (required, at most 1,500 characters): written for the next
-  reader, not as a log. What changed, what is left, what to watch.
+  agent, not as a log. With a `commit`, it no longer repeats what changed and
+  why: it holds the exact specifics the next agent needs (paths, symbols,
+  decisions) beside the artifacts, what is left and what to watch, and may be
+  empty when there is nothing to add. Without one it says what changed too.
+- **`commit`** (`{subject, body?}`): the commit message, written for a human
+  reviewer: what changed and why. The subject is one line of 1 to 100
+  characters (the contract asks for 72 or fewer, in the imperative mood), the
+  body at most 500 characters, one to three lines on why. It counts only with
+  `done`: with `blocked` or `failed` nothing lands, so it is dropped and the
+  summary carries everything. Ordewell, not the author, decides a landed
+  commit's trailers, so trailer lines in the body are removed, not refused: an attribution line in
+  git trailer form with a hyphenated token (`Co-Authored-By:`,
+  `Signed-off-by:`) or a `Generated with …` line wherever it stands, and a
+  closing paragraph made only of `Token: value` lines, as git would read a
+  trailer block. A body of one `Why: …` line is prose and stays. Only a change
+  attempt's contract (fresh, continued or carried over) asks for it: an ops,
+  read-only, research or script task commits nothing, and a repair resolves a
+  merge. `commitMessage` reads it, subject then body, as the message for the
+  task's landed commit.
 - **`findings`**: atomic items, each with a `severity` of `blocker`, `major`,
   `minor` or `info`, a one-line `title`, a `detail` of at most 2,000
   characters, and optional `evidence`. Ordewell assigns the ids `F1` … `Fn` in
@@ -90,7 +108,8 @@ silently does not).
 ### What a dependent is given
 
 Each direct dependency contributes at most 4,000 characters to the dependent's
-*Prior task outputs*, built so: the summary first, then the findings **whole**,
+*Prior task outputs*, built so: the commit first, its subject then its body,
+then the summary, then the findings **whole**,
 in the producer's order, each with its evidence references, stopping before a
 finding that would pass the ceiling, reserving room for the closing pointer.
 When findings remain, one line closes the block:
@@ -127,8 +146,8 @@ planner's envelope (ADR-0008) does not widen.
 The full handoff is one **`handoff` event** at the end of the attempt's
 `.jsonl` task log ([ADR-0018](../runners/0018-structured-runner-transport.md)), so it is as durable as the attempt and goes with
 the session. The plan keeps a **bounded digest** on the task: the summary, the
-first 25 findings, the artifacts and `findingCount`, enough for every surface
-and for a dependent's prompt without reading a log. The full findings and the
+first 25 findings, the artifacts, the commit and `findingCount`, enough for
+every surface and for a dependent's prompt without reading a log. The full findings and the
 report stay in the log. `+N more` counts from `findingCount`. A retry or a
 loop round is a new attempt with its own handoff, and the digest is the
 latest attempt's. A restarted task clears its previous digest and output
@@ -160,7 +179,8 @@ The handoff is drawn, not just stored: the TUI and VS Code task views show the
 summary, the findings with their severity and evidence, the artifacts and
 `+N more`; `status`, `run` and `status --json` carry the digest; the
 planner's `task_query` and `task_output` return it; and the supervisor's run
-update and a research task's report wake carry it rendered by the rule above
+update and a research task's report wake carry it rendered by the rule above,
+the commit before the summary
 ([ADR-0029](0029-the-supervisor.md), [ADR-0037](0037-research-tasks-wake-the-planner.md)).
 Wake-ups use the same 4,000-character ceiling, including omission and report
 pull pointers; artifacts remain outside it. A surface reads the digest from
@@ -168,6 +188,9 @@ the plan and the rest through the same task log read as everything else.
 
 ## Key properties
 
+- **Two readers, two texts.** The commit is for the human who reviews the
+  change, the summary for the agent that builds on it; neither repeats the
+  other.
 - **The author writes it; Ordewell never summarises.** A
   second model summarising a first model's work is a second author whose
   mistakes nobody wrote, and a cut is no summary. The cost is that the author
@@ -221,6 +244,16 @@ merges findings; and any new setting.
   from a model's prose is guessing, and a wrong parse is invisible. The author
   states the structure.
 - **Let a model summarise, or rank findings.** Rejected for the reason above.
+- **One summary for both readers, and a commit message made from it.**
+  Rejected: an agent needs paths and symbols, a reviewer needs what changed
+  and why, and one text serves neither; a message cut from the summary is a
+  blind cut again.
+- **Refuse a commit body with trailers.** Rejected: an attribution line is a
+  harness habit, not a mistake worth a resend, and the trailers a landed
+  commit carries are Ordewell's to decide.
+- **Ask every task for a commit.** Rejected: an ops, read-only, research or
+  script task lands no commit, and a field it is told to fill but nothing
+  reads teaches it to write noise.
 - **Push every ancestor's report.** Rejected: the prompt grows with depth. The
   push stays at direct dependencies and the rest is pulled when it is needed.
 - **Keep the planner as courier.** Rejected: that is the fault, a planner turn
@@ -258,3 +291,4 @@ merges findings; and any new setting.
 - 2026-10-22 — `read_task`'s switch for the report is named `include_report`.
 - 2026-10-22 — bounded reference strings to keep artifacts and the plan digest bounded.
 - 2026-10-22 — implemented the completion envelope, scoped reads, loop context, derived handoffs and all surfaces (#120).
+- 2026-10-23 — a change task's handoff carries its commit message, and its summary stops repeating it.

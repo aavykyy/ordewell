@@ -79,6 +79,15 @@ export function landsNothing(kind: AttemptKind): boolean {
 }
 
 /**
+ * Whether the attempt's runner is told to write the commit message its work
+ * lands with (ADR-0047): a change task's, fresh, continued or carried over.
+ * Ops and read-only work commits nothing, and a repair resolves a merge.
+ */
+export function writesCommit(kind: AttemptKind): boolean {
+  return kind.kind === 'change' || kind.kind === 'carryOver' || (kind.kind === 'continuation' && kind.work === 'change');
+}
+
+/**
  * Merge all and ops work never overlap (ADR-0020): the merge rewrites the
  * checkout an ops attempt acts from, and it is the one collision the planner
  * cannot order, because the merge is the user's. Both sides read this: an

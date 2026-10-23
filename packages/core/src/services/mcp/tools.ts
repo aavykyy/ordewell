@@ -46,12 +46,24 @@ const handoffFinding = z.object({
   evidence: z.array(handoffReference).max(HANDOFF_LIMITS.evidence).optional().describe('Where a reader can check it.'),
 });
 
+const handoffCommit = z.object({
+  subject: z.string().trim()
+    .min(1, 'The commit subject is required: one line saying what changed.')
+    .max(HANDOFF_LIMITS.commitSubject, `The commit subject is at most ${HANDOFF_LIMITS.commitSubject} characters: keep it to 72 or fewer and put the why in body.`)
+    .regex(/^[^\r\n]*$/, 'The commit subject is one line: put the why in body.')
+    .describe('One line of 72 characters or fewer, in the imperative mood: "Add a daily version check behind ORDEWELL_NO_VERSION_CHECK".'),
+  body: z.string().max(HANDOFF_LIMITS.commitBody, `The commit body is at most ${HANDOFF_LIMITS.commitBody} characters: one to three lines on why; the specifics go in summary.`).optional()
+    .describe('One to three lines on why. No trailers: those are Ordewell\'s to add.'),
+});
+
 const taskCompleteInput = z.object({
   status: z.enum(['done', 'blocked', 'failed'])
     .describe("'done' only when the task is fully complete. 'blocked' or 'failed' end the attempt without passing."),
   summary: z.string().max(HANDOFF_LIMITS.summary, `The summary is at most ${HANDOFF_LIMITS.summary} characters: put the long form in report.`)
     .describe('The handoff the next task reads first, written for that reader: what changed, what is left, what to watch.'),
   reason: z.string().optional().describe("Why the task is blocked or failed. Expected for anything but 'done'."),
+  commit: handoffCommit.optional()
+    .describe("A change task's commit message, for a human reviewer: what changed and why. Only kept with status 'done'."),
   findings: z.array(handoffFinding).max(HANDOFF_LIMITS.findings).optional()
     .describe('What the next reader must act on, one item each, most important first. Ordewell numbers them F1, F2, … in this order.'),
   artifacts: z.array(handoffReference).max(HANDOFF_LIMITS.artifacts).optional()
@@ -369,13 +381,20 @@ export const TASK_COMPLETION_CONTRACT = [
   `The long story, if there is one, goes in \`report\`: it is kept with this attempt and read only on demand. A review or other read-only task especially: its findings are its result, so state each one, and do not write the report to a file.`,
 ].join('\n\n');
 
+const COMMIT_CONTRACT = 'This task\'s work lands as a commit, so with status `done` also give `commit`: a `subject` of one line, 72 characters or fewer, in the imperative mood ("Add a daily version check behind ORDEWELL_NO_VERSION_CHECK"), and a `body` of one to three lines on why, with no trailers. The commit tells a human reviewer what changed and why, so the summary no longer repeats that: it holds the exact specifics the next agent needs (paths, symbols, decisions) alongside `artifacts`, plus what is left and what to watch, and the summary may be empty when there is nothing to add.';
+
+/** The completion contract for one attempt: only one whose work lands as a commit is asked for its message (ADR-0047). */
+export function taskCompletionContract(opts: { commits?: true }): string {
+  return opts.commits ? `${TASK_COMPLETION_CONTRACT}\n\n${COMMIT_CONTRACT}` : TASK_COMPLETION_CONTRACT;
+}
+
 export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   tool(TASK_COMPLETE_TOOL, 'Report that this task has ended, and how, with its handoff for the tasks that read it. Call it once, as your last action.',
     taskCompleteInput, (h) => h.taskComplete?.bind(h)),
   tool('checkpoint', "Ask the user a question and wait for the answer, which is this call's result.",
     checkpointInput, (h) => h.checkpoint?.bind(h)),
   // It reads Ordewell's own record, not the tree, so a read-only task has it too (ADR-0047).
-  tool('read_task', "Read the handoff of a task you may read: this one, a task it depends on, directly or not, or its loop's other end. Returns what that task handed over, as its attempt's log keeps it: the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them.",
+  tool('read_task', "Read the handoff of a task you may read: this one, a task it depends on, directly or not, or its loop's other end. Returns what that task handed over, as its attempt's log keeps it: its commit, the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them.",
     readTaskInput, (h) => h.readTask?.bind(h), { readOnlyHint: true }),
 ];
 

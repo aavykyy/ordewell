@@ -232,6 +232,8 @@ export interface TaskStartOptions extends AgentStartCommon {
   /** The task's runner mode id, as the plan names it. */
   mode: string;
   flags: TaskRunnerFlags;
+  /** The attempt's work lands as a commit (ADR-0047): its completion contract asks for the message. */
+  commits?: true;
   /**
    * The Ordewell MCP server and this attempt's token (ADR-0022), injected
    * with its tools pre-approved. A task is never started without it: its

@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { OpenCodeAdapter } from '../OpenCodeAdapter';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions, TaskModeAgentAdapter } from '../AgentAdapter';
-import { mcpClientConfig } from '../../mcp';
+import { mcpClientConfig, TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../../mcp';
 import { OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
 import { OPENCODE_MANIFEST } from '../../../plugins/builtin/opencode.manifest';
 import { modeIds, fakeSpawn, sseResponse, type FakeEventStream } from '../../__tests__/harnessTestKit';
@@ -219,6 +219,24 @@ describe('OpenCodeAdapter task mode — the message', () => {
     });
     expect(server.requests.some((r) => r.path.endsWith('/message') && r.method === 'POST')).toBe(false);
     adapter.dispose();
+  });
+
+  it('carries the completion contract as its system, asking a change task for its commit (ADR-0047)', async () => {
+    const mcp = { name: 'ordewell' as const, url: 'http://127.0.0.1:1/mcp', headers: { authorization: 'Bearer tok' } };
+    const systems: unknown[] = [];
+    for (const commits of [undefined, true] as const) {
+      const server = fakeServer();
+      const { adapter } = await startTask(server, taskStart({ mcp, ...(commits ? { commits } : {}) }));
+      const turn = adapter.send('do the task', () => {});
+      const stream = await server.stream();
+      stream.push(status('busy'));
+      stream.push(status('idle'));
+      await turn;
+      systems.push((server.requests.find((r) => r.path === `/session/${SES}/prompt_async`)?.body as { system?: unknown }).system);
+      adapter.dispose();
+    }
+
+    expect(systems).toEqual([TASK_COMPLETION_CONTRACT, taskCompletionContract({ commits: true })]);
   });
 });
 

@@ -9,7 +9,7 @@ import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF } f
 import { PlannerShellSandbox, plannerShellProfile, sealedShellProfile, type SealedAvailability } from '../../sandbox/plannerSandbox';
 import type { SandboxBackend, SandboxProfile } from '../../sandbox/SandboxBackend';
 import { mapAgentTool } from '../agentTools';
-import { mcpClientConfig } from '../../mcp';
+import { mcpClientConfig, TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../../mcp';
 import type { ProjectMcpServer } from '../repoConfig';
 import type { StructuredEvent } from '../../../interfaces/IRunner';
 import { toTaskLogEvent } from '../../../models/TaskLog';
@@ -252,6 +252,20 @@ describe('OpenCode 2.x — start', () => {
       expect(value).not.toContain('tok-secret');
       adapter.dispose();
     }
+  });
+
+  it('asks a change task for its commit in that entry, and no other task (ADR-0047)', async () => {
+    const entry = `/api/experimental/session/${SES}/instructions/entries/ordewell-task`;
+    const mcp = { name: 'ordewell' as const, url: 'http://127.0.0.1:1/mcp', headers: { authorization: 'Bearer tok' } };
+    const values: unknown[] = [];
+    for (const commits of [undefined, true] as const) {
+      const server = fakeServer();
+      const { adapter } = await start(server, taskStart({ mcp, ...(commits ? { commits } : {}) }));
+      values.push((server.requests.find((r) => r.method === 'PUT' && r.path === entry)?.body as { value?: unknown }).value);
+      adapter.dispose();
+    }
+
+    expect(values).toEqual([TASK_COMPLETION_CONTRACT, taskCompletionContract({ commits: true })]);
   });
 
   it('degrades a stale planner session to a fresh one, and fails a task that cannot resume', async () => {

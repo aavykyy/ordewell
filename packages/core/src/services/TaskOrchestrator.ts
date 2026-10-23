@@ -34,7 +34,7 @@ import type { ResearchTasks } from './ResearchTasks';
 import { blockingFailures, planBlocks, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 import {
-  attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, landsNothing, mergeExcludes, takesSkills,
+  attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, landsNothing, mergeExcludes, takesSkills, writesCommit,
   type AttemptKind, type Continuation, type TaskWork,
 } from './attemptKind';
 import { resolveTaskSkills, TaskSkillsError, type SkillLookup } from './taskSkills';
@@ -2763,6 +2763,7 @@ export class TaskOrchestrator {
       attempt: attempt.attempt,
       ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
       ...(shell ? { shell } : {}),
+      ...(writesCommit(kind) ? { commits: true } : {}),
       checkHandoff: (completion) => checkHandoff(completion, task.id, this.store.planTasks),
       readTask: (args) => readTask(args, task.id, this.store.planTasks, this.taskLog),
       workspaceRoot: this.workspaceRootFn(),

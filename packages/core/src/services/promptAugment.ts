@@ -73,7 +73,7 @@ function indent(text: string): string {
 
 /**
  * A dependency's handoff within its share of the prompt (ADR-0047): the
- * summary, then whole findings in the producer's order, stopping before the
+ * commit and summary, then whole findings in the producer's order, stopping before the
  * first that would pass the ceiling, then the artifacts, which it does not
  * count. A finding is never cut. Those left out are counted from
  * `findingCount`, which includes the ones the plan's digest does not hold,

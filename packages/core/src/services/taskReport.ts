@@ -20,7 +20,7 @@ function endedText(task: Pick<Task, 'status' | 'awaitingReason' | 'verdict'>): s
   }
 }
 
-/** A handoff as a run update carries it: the summary, its top findings whole, and where the rest waits. */
+/** A handoff as a run update carries it: the commit and summary, its top findings whole, and where the rest waits. */
 function handoffWakeText(handoff: HandoffDigest, taskName?: HandoffTaskName): string {
   const lines = handoffWakeLines(handoff, taskName);
   while (lines[0] === '') lines.shift();

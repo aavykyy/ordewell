@@ -2,7 +2,7 @@ import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 import { realpathSync } from 'fs';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, PlannerStartOptions, TaskStartOptions } from './AgentAdapter';
-import { TASK_COMPLETION_CONTRACT } from '../mcp';
+import { taskCompletionContract } from '../mcp';
 import { OPENCODE_ORDEWELL, plannerPermission, readOnlySessionRules, OPENCODE_SEARCH_OFF, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
 import { hunksOf } from './fileDiff';
 import { heldServersNote } from './projectServers';
@@ -371,7 +371,7 @@ export class OpenCodeV2 {
   private async applyInstructions(): Promise<void> {
     if (this.opts.kind === 'task') {
       if (!this.opts.mcp) return;
-      const response = await this.host.request('PUT', `/api/experimental/session/${this.sessionId}/instructions/entries/ordewell-task`, { value: TASK_COMPLETION_CONTRACT });
+      const response = await this.host.request('PUT', `/api/experimental/session/${this.sessionId}/instructions/entries/ordewell-task`, { value: taskCompletionContract(this.opts) });
       if (!response.ok) throw new Error(`OpenCode did not take the task instructions: ${response.status} ${response.statusText}`);
       return;
     }

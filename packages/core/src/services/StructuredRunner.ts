@@ -996,6 +996,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
         flags: resolveTaskRunnerFlags(manifest, { mode: opts.mode ?? 'default', model: opts.modelId, thinkingEffort: opts.thinkingEffort }),
         resumeSessionId: opts.resumeSessionId,
         resumeCost: opts.resumeCost,
+        ...(opts.commits ? { commits: true } : {}),
       },
       interruptGraceMs: this.interruptGraceMs,
       tools: {

@@ -244,6 +244,8 @@ export interface IRunner {
     skills?: readonly TaskSkillSnapshot[];
     /** Something the user should know about how the spawn went that did not stop it — a respawn, most often. */
     onNotice?: (message: string) => void;
+    /** The attempt's work lands as a commit (ADR-0047): its runner is told to write the message in `task_complete`. */
+    commits?: true;
     /** A script task's body (ADR-0035): only the script runner reads it, and it runs nothing else. */
     script?: ScriptBody;
     /**
