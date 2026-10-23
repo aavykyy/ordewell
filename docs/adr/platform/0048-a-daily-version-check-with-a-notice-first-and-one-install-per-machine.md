@@ -1,7 +1,7 @@
 ---
 status: accepted
 implemented: partial
-note: "The CLI and TUI run it; the VS Code extension and the ordewell.ai endpoint follow."
+note: "The CLI, the TUI and the VS Code extension run it; the ordewell.ai endpoint follows."
 ---
 
 # 0048 — A daily version check, with a notice first and one install per machine
@@ -40,8 +40,11 @@ the update line, and decides only where they appear.
   `globalDataDir()` (`~/.ordewell/`), next to the global `settings.json`:
   `installId`, `noticeShownAt` and `lastCheckAt`. The CLI and the VS Code
   extension read and write the same file. It is written atomically and owner
-  only; a file that is missing, not JSON or holds a field of the wrong type is
-  recreated, field by field, as on a first start.
+  only. A field of the wrong type counts as absent, and a file without an
+  `installId` or a `noticeShownAt` (missing, not JSON, or that field absent) is
+  recreated as on a first start, notice included: with no install ID nothing
+  would ever be sent, so keeping the old notice would leave the check off for
+  good.
 - **Once a day.** A start pings only when `lastCheckAt` is a day or more ago,
   or absent, or in the future (a clock that went back). `lastCheckAt` is
   written before the request goes out, and a start that cannot write it does
@@ -52,8 +55,10 @@ the update line, and decides only where they appear.
 - **The notice first.** On a machine with no `noticeShownAt`, the start shows
   the notice, records `noticeShownAt` and the new install ID, and sends nothing,
   then or later from that process: the off switches are read once at start, so
-  only a later start could honour one the notice just told the user about. The
-  notice reads: "Ordewell checks for a new version once a day, sending only its
+  only a later start could honour one the notice just told the user about. A
+  start that cannot record the notice does not show it, since it would show
+  again on every start, and a machine with no install ID on disk sends nothing
+  to tell the user about. The notice reads: "Ordewell checks for a new version once a day, sending only its
   version and a random install ID. Set ORDEWELL_NO_VERSION_CHECK=1 to turn this
   off. Details: https://ordewell.ai/docs#version-check".
 - **Off switches.** `ORDEWELL_NO_VERSION_CHECK` or `DO_NOT_TRACK` set to `1`,
@@ -107,6 +112,11 @@ in the rendered welcome, like the rest of the welcome.
   their own day. Rejected: one person with both counts twice and the machine
   pings twice a day. One shared file makes the machine the install and the day
   shared.
+- **Lock the state file.** Take a lock, or compare-and-swap `lastCheckAt`, so
+  two surfaces starting together cannot both ping. Rejected: the race spans
+  one synchronous read and write of a small file, and a lock left by a process
+  that died would need staleness rules to stop it silencing the check. An
+  occasional second ping costs the count less.
 - **Ping from the daemon.** One long-lived process, which would check daily on
   its own. Rejected for the reasons under Where it runs: it cannot show the
   notice or the update line where the user sees them.
@@ -125,3 +135,4 @@ in the rendered welcome, like the rest of the welcome.
 ## History
 
 - 2026-10-23 — accepted.
+- 2026-10-23 — a file without an install ID starts over; a notice that cannot be recorded is not shown.
