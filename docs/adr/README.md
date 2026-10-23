@@ -362,7 +362,7 @@ Windows, the per-workspace environment and what Ordewell sends from the machine.
 |---|---|---|---|---|
 | [0010](platform/0010-windows-support.md) | Windows support: one launch seam, one shell seam, one dialect | accepted | — | — |
 | [0016](platform/0016-per-workspace-environment.md) | Per-workspace environment for the planner and agents | accepted | — | — |
-| [0048](platform/0048-a-daily-version-check-with-a-notice-first-and-one-install-per-machine.md) | A daily version check, with a notice first and one install per machine | accepted, partly implemented | — | — |
+| [0048](platform/0048-a-daily-version-check-with-a-notice-first-and-one-install-per-machine.md) | A daily version check, with a notice first and one install per machine | accepted | — | — |
 
 ### Retired numbers
 

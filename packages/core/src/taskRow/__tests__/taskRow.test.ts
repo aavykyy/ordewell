@@ -180,6 +180,14 @@ describe('the compact handoff a row shows (ADR-0047)', () => {
     expect(row.status).toBe('done');
   });
 
+  it('carries the commit message a task stated, and leaves the key out when it stated none', () => {
+    const commit = { subject: 'Add the route', body: 'Why it is needed.' };
+    const stated = taskRowView(subject({ status: 'completed', handoff: { summary: 's', findings: [], findingCount: 0, commit } }));
+
+    expect(stated.handoff).toEqual({ commit, summary: 's', findingCount: 0, severity: null });
+    expect(taskRowView(subject({ status: 'completed', handoff: { summary: 's', findings: [], findingCount: 0 } })).handoff).not.toHaveProperty('commit');
+  });
+
   it('keeps a count whose findings the digest left out, and says the severity it can see', () => {
     const row = taskRowView(subject({
       status: 'failed',

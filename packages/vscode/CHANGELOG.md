@@ -39,6 +39,19 @@
   macOS use its own shell**, off by default and on checked versions only, with
   every command run in Ordewell's sealed profile with the network. A
   workspace cannot set it.
+- **A daily version check.** Once a day Ordewell asks ordewell.ai whether a
+  newer version is out and shows one line when it is. The request carries the
+  version you run and a random install ID, shared with the CLI through
+  `~/.ordewell/version-check.json`; nothing else is sent, though ordewell.ai
+  sees the IP address of any request. The first start shows a notice and sends
+  nothing. Turn it off with VS Code's telemetry setting
+  (`telemetry.telemetryLevel`), `ORDEWELL_NO_VERSION_CHECK=1` or
+  `DO_NOT_TRACK=1`: off, no notice, no ID and no request.
+- **Real commit messages.** A change task can state a commit message, and the
+  commits Ordewell writes to land it use it instead of git's default merge
+  message. Handoffs show the commit.
+- **A `Planned-with: Ordewell` trailer** ends the commits Ordewell writes. Turn
+  it off in the settings panel.
 
 ### Changed
 
