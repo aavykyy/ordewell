@@ -61,7 +61,7 @@ describe('/settings', () => {
       { step: 'Supervisor retries', highlighted: '2' },
       { step: 'Supervisor reads', highlighted: '12' },
       { step: 'Automerge', highlighted: 'Off' },
-      { step: 'Planned-with line in merge commits', highlighted: 'On' },
+      { step: 'Planned-with line in commits Ordewell writes', highlighted: 'On' },
       { step: 'Autorun', highlighted: 'Off' },
       { step: 'Parallel', highlighted: '3' },
     ]);
@@ -90,12 +90,12 @@ describe('/settings', () => {
   it('turns the Planned-with line off and back on, saving each at once', () => {
     const atTrailer = walk(typed(base(), '/settings').state, 'tab', 'tab', 'tab', 'tab', 'tab', 'down');
     const off = press(atTrailer, 'enter');
-    expect(off.effects).toEqual([save({ plannedWithTrailer: false }, 'Settings: Planned-with line in merge commits off')]);
+    expect(off.effects).toEqual([save({ plannedWithTrailer: false }, 'Settings: Planned-with line in commits Ordewell writes off')]);
     expect(off.state.runSettings.plannedWithTrailer).toBe(false);
     expect(marked(off.state)).toBe('Off');
 
     const on = press(walk(off.state, 'up'), 'enter');
-    expect(on.effects).toEqual([save({ plannedWithTrailer: true }, 'Settings: Planned-with line in merge commits on')]);
+    expect(on.effects).toEqual([save({ plannedWithTrailer: true }, 'Settings: Planned-with line in commits Ordewell writes on')]);
     expect(on.state.overlay).toMatchObject({ kind: 'stepper' });
   });
 
@@ -145,11 +145,11 @@ describe('/settings', () => {
 
   it('hides the supervisor retries and reads steps as soon as the supervisor is saved Off', () => {
     const atOff = typed(base({ runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }), '/settings').state;
-    expect(stepper(atOff).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Planned-with line in merge commits', 'Autorun', 'Parallel']);
+    expect(stepper(atOff).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Planned-with line in commits Ordewell writes', 'Autorun', 'Parallel']);
 
     const { state, effects } = press(walk(typed(base(), '/settings').state, 'tab', 'up'), 'enter');
     expect(effects).toEqual([save({ supervisorLevel: 'off' }, 'Settings: Supervisor Off')]);
-    expect(stepper(state).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Planned-with line in merge commits', 'Autorun', 'Parallel']);
+    expect(stepper(state).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Planned-with line in commits Ordewell writes', 'Autorun', 'Parallel']);
     expect(onScreen(state).step).toBe('Supervisor');
     expect(onScreen(walk(state, 'right')).step).toBe('Automerge');
   });

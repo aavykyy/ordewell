@@ -46,7 +46,7 @@ describe('run settings in the Settings panel', () => {
     ['Supervisor', 'Off', { run: { supervisorLevel: 'off' } }],
     ['Supervisor', 'Act', { run: { supervisorLevel: 'act' } }],
     ['Automerge', 'On', { run: { mergeAtGatesAutomatically: true } }],
-    ['Planned-with line in merge commits', 'Off', { run: { plannedWithTrailer: false } }],
+    ['Planned-with line in commits Ordewell writes', 'Off', { run: { plannedWithTrailer: false } }],
     ['Autorun', 'On', { run: { autorun: true } }],
   ])('%s → %s posts %j', (name, label, change) => {
     fireEvent.click(row(name).getByRole('button', { name: label }));
@@ -56,7 +56,7 @@ describe('run settings in the Settings panel', () => {
   it('marks the current value and posts nothing when it is clicked again', () => {
     expect(row('Supervisor').getByRole('button', { name: 'Watch' })).toHaveAttribute('aria-pressed', 'true');
     expect(row('Automerge').getByRole('button', { name: 'Off' })).toHaveAttribute('aria-pressed', 'true');
-    expect(row('Planned-with line in merge commits').getByRole('button', { name: 'On' })).toHaveAttribute('aria-pressed', 'true');
+    expect(row('Planned-with line in commits Ordewell writes').getByRole('button', { name: 'On' })).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(row('Supervisor').getByRole('button', { name: 'Watch' }));
     expect(api.postMessage).not.toHaveBeenCalled();
   });

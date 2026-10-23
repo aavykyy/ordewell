@@ -37,7 +37,7 @@ import { defaultExecFile, git, tryGit, type GitExecFn, type GitInvoker, type Git
 import { IsolationLocks } from './isolationLocks';
 import { bootstrap, installDirs, isEnvFile, lexists, LINKED_ARTIFACTS, listDir, SetupCommandError } from './worktreeBootstrap';
 import { linkPath } from './worktreeLink';
-import { landingMessage, messageArgs, type LandingCommit, type LandingSubject } from './landingMessage';
+import { landingMessage, messageArgs, runMergeMessage, type LandingCommit, type LandingSubject } from './landingMessage';
 import { childDirs, groupPaths, hasGitEntry } from './repoGroup';
 
 export type { GitExecFn } from './gitExec';
@@ -504,7 +504,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     for (const kept of preserved) {
       const { worktree } = record.repos[kept.repo];
       try {
-        await this.git(worktree, ['merge', '--no-edit', kept.commit]);
+        // Named for the task: git's default names the internal branch, and this merge lands with the task.
+        await this.git(worktree, ['merge', '--no-edit', ...messageArgs(this.message('restore-merge', record)), kept.commit]);
       } catch (err) {
         const unmerged = await this.git(worktree, ['diff', '--name-only', '--diff-filter=U']);
         if (!unmerged.trim()) throw err;
@@ -798,13 +799,13 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     const repos = await this.reposWithWork(run);
     if (misplaced.length > 0) return { outcome: 'blocked', blocked: misplaced };
     // One repo needs no preflight: its merge lands or is aborted whole, as it always has.
-    if (run.repos.length === 1 || !(await this.canPreflight())) return this.mergeInTurn(repos);
+    if (run.repos.length === 1 || !(await this.canPreflight())) return this.mergeInTurn(run, repos);
     const blocked: IsolationMergeBlock[] = [];
     for (const repo of repos) {
       const block = await this.preflight(repo);
       if (block) blocked.push(block);
     }
-    return blocked.length > 0 ? { outcome: 'blocked', blocked } : this.mergeInTurn(repos);
+    return blocked.length > 0 ? { outcome: 'blocked', blocked } : this.mergeInTurn(run, repos);
   }
 
   /** Repos whose integration branch holds commits their base does not; one git cannot tell about is kept, so its merge says what is wrong. */
@@ -865,7 +866,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   /** Merge each repo in turn, stopping at the first that does not take its merge. Only a merge started here is ever aborted. */
-  private async mergeInTurn(repos: IsolationRepo[]): Promise<IsolationMergeResult> {
+  private async mergeInTurn(run: IsolationRun, repos: IsolationRepo[]): Promise<IsolationMergeResult> {
     const landed: string[] = [];
     const stopped = (outcome: 'conflict' | 'failed', repo: IsolationRepo, files?: string[]): IsolationMergeResult => ({
       outcome,
@@ -878,7 +879,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       // there is theirs: git refuses ours, and the abort below would otherwise
       // throw away their resolution as if it were ours.
       if (await this.mergeInProgress(repo.root)) return stopped('failed', repo);
-      const merge = await this.tryGit(repo.root, ['merge', '--no-edit', repo.integrationBranch]);
+      const message = runMergeMessage(this.bringsToHead(run, repo), this.deps.plannedWith?.() ?? false);
+      const merge = await this.tryGit(repo.root, ['merge', '--no-edit', ...messageArgs(message), repo.integrationBranch]);
       if (merge.ok) {
         landed.push(repo.path);
         continue;
@@ -890,6 +892,13 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       return files.length > 0 ? stopped('conflict', repo, files) : stopped('failed', repo);
     }
     return { outcome: 'merged' };
+  }
+
+  /** The landed tasks that changed `repo` and are not in the user's HEAD yet, in plan order: what Merge all brings there. */
+  private bringsToHead(run: IsolationRun, repo: IsolationRepo): IsolationTaskRecord[] {
+    return Object.values(run.tasks)
+      .filter((record) => record.status === 'merged' && !record.inHead && record.repos[repo.path]?.changed)
+      .sort((a, b) => a.order - b.order);
   }
 
   discard(run: IsolationRun, opts: { integration: IntegrationDisposal }): Promise<IsolationRemoval> {
@@ -1256,7 +1265,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       // Asked outside a worktree, git would answer for the repository around it.
       if (!hasGitEntry(worktree)) throw new Error('it is not a git worktree any more');
       if (await this.worktreeHasChanges({ worktree, linked: target.linked }, await this.prefixOf(repo))) {
-        await this.commitWorktree(repo, { worktree, linked: target.linked }, `WIP: ${firstLine(target.title)} (kept by Ordewell before removing its worktree)`, { rescue: true });
+        await this.commitWorktree(repo, { worktree, linked: target.linked }, this.message('rescue', target), { rescue: true });
       }
       return (await this.git(worktree, ['rev-parse', '--verify', 'HEAD'])).trim();
     }

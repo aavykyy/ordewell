@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { handoffPreviewLines, handoffReferenceText, handoffWakeLines, readableTaskIds, commitMessage, severityLabel, storedHandoff, worstSeverity, type HandoffDigest } from '../Handoff';
+import { handoffPreviewLines, handoffReferenceText, handoffWakeLines, readableTaskIds, severityLabel, storedHandoff, worstSeverity, type HandoffDigest } from '../Handoff';
 import { createTask } from '../Task';
 
 describe('the tasks a task may read (ADR-0047)', () => {
@@ -115,19 +115,5 @@ describe('the commit a done call states', () => {
 
   it('keeps no body when only trailers were in it', () => {
     expect(done('Co-authored-by: Someone <a@b.c>\n')).toEqual({ subject: 'Add the check' });
-  });
-});
-
-describe('the commit message a landed task\'s work is committed with', () => {
-  const none: HandoffDigest = { summary: 'Done.', findings: [], findingCount: 0 };
-
-  it('is the subject, a blank line and the body, or the subject alone', () => {
-    expect(commitMessage({ ...none, commit: { subject: 'Add the check', body: 'Users ran stale builds.\nNobody told them.' } })).toBe('Add the check\n\nUsers ran stale builds.\nNobody told them.');
-    expect(commitMessage({ ...none, commit: { subject: 'Add the check' } })).toBe('Add the check');
-  });
-
-  it('is none for a handoff that states no commit, or no handoff', () => {
-    expect(commitMessage(none)).toBeUndefined();
-    expect(commitMessage(undefined)).toBeUndefined();
   });
 });

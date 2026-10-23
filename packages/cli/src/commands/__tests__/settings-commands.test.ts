@@ -356,7 +356,7 @@ describe('ordewell supervisor, automerge, trailer and autorun (ADR-0030)', () =>
     expect(supervisor.stdout).toContain('Supervisor: Act, 1 retry per task, 12 reads per wake-up');
     expect(automerge.stdout).toContain('Merge automatically (gates, end of run): off');
     expect(autorun.stdout).toContain('Autorun: off');
-    expect((await capture(() => handleTrailer([], new ApiClient(d.port)))).stdout).toContain('Planned-with line in merge commits: on');
+    expect((await capture(() => handleTrailer([], new ApiClient(d.port)))).stdout).toContain('Planned-with line in commits Ordewell writes: on');
     expect(d.sent).toEqual([]);
     d.close();
   });

@@ -162,10 +162,11 @@ Tried it? [Tell us how your first run went](https://github.com/ordewell/ordewell
    needs your attention, Ordewell shows you where.
 
 The commits Ordewell writes (a task's merge, work a task left uncommitted, a
-conflict repair) end with a `Planned-with: Ordewell` line, a git trailer that
-`git interpret-trailers` reads. Commits a coding agent made itself are not
-changed. To leave the line out, turn off *Planned-with line in merge commits* in
-`/settings` (or run `ordewell trailer off`); the next commit follows it.
+conflict repair, the merge into your branch) end with a `Planned-with: Ordewell`
+line, a git trailer that `git interpret-trailers` reads. Commits a coding agent
+made itself are not changed. To leave the line out, turn off *Planned-with line
+in commits Ordewell writes* in `/settings` (or run `ordewell trailer off`); the
+next commit follows it.
 
 The planner only reads; tasks run as you, in the mode the plan assigns. For
 exactly what each part can touch and what to use for untrusted repositories, see

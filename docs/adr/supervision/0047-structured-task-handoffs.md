@@ -63,8 +63,8 @@ handoff:
   trailer block. A body of one `Why: …` line is prose and stays. Only a change
   attempt's contract (fresh, continued or carried over) asks for it: an ops,
   read-only, research or script task commits nothing, and a repair resolves a
-  merge. `commitMessage` reads it, subject then body, as the message for the
-  task's landed commit.
+  merge. The commits Ordewell writes to land the task are written from it by
+  `landingMessage` ([ADR-0013](../isolation/0013-worktree-isolation.md)).
 - **`findings`**: atomic items, each with a `severity` of `blocker`, `major`,
   `minor` or `info`, a one-line `title`, a `detail` of at most 2,000
   characters, and optional `evidence`. Ordewell assigns the ids `F1` … `Fn` in

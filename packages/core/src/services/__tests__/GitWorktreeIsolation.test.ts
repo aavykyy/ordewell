@@ -564,6 +564,67 @@ describe.skipIf(!hasGit)('WorktreeIsolation integration queue', () => {
       const merges = git(root, 'log', '--merges', '--format=%H', integration).split('\n');
       expect(merges.map((sha) => trailers(root, sha))).toEqual(['Planned-with: Ordewell\n', '', 'Planned-with: Ordewell\n']);
     });
+
+    it('closes Merge all\'s merge into a branch that moved, which names the tasks it brings and never the integration branch', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }), plannedWith: () => true });
+      const run = await iso.startRun(root);
+      for (const [order, title, commit] of [[1, 'Add alpha', { subject: 'Greet the user' }], [2, 'Add beta', undefined]] as const) {
+        const t = task(order, title);
+        const { cwd } = await iso.prepare(t, run);
+        writeFileSync(join(cwd, `f${order}.txt`), 'x\n');
+        expect(await iso.integrate(t, run, undefined, commit)).toBe('merged');
+      }
+      writeFileSync(join(root, 'mine.txt'), 'mine\n');
+      git(root, 'add', 'mine.txt');
+      git(root, 'commit', '-q', '-m', 'user work');
+
+      expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'merged' });
+
+      expect(git(root, 'log', '-1', '--format=%B')).toBe('Merge: Greet the user and 1 more\n\n- Greet the user\n- Add beta\n\nPlanned-with: Ordewell');
+      expect(trailers(root, 'HEAD')).toBe('Planned-with: Ordewell\n');
+      expect(git(root, 'log', '--format=%B')).not.toContain('ordewell/');
+    });
+
+    it('names Merge all\'s merge of one task for it alone, and leaves the trailer off when the setting is off', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }), plannedWith: () => false });
+      const run = await iso.startRun(root);
+      const t = task(1, 'Add alpha');
+      const { cwd } = await iso.prepare(t, run);
+      writeFileSync(join(cwd, 'alpha.txt'), 'alpha\n');
+      expect(await iso.integrate(t, run)).toBe('merged');
+      git(root, 'commit', '-q', '--allow-empty', '-m', 'user work');
+
+      expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'merged' });
+
+      expect(git(root, 'log', '-1', '--format=%B')).toBe('Merge: Add alpha');
+    });
+
+    it('closes the kept-work rescue and a continue\'s merge of it, both named for the task, as they land with it', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }), plannedWith: () => true });
+      const run = await iso.startRun(root);
+      const resumed = task(1, 'Resume me');
+      const first = await iso.prepare(resumed, run);
+      writeFileSync(join(first.cwd, 'half.txt'), 'half\n');
+      await iso.release(run, resumed.id, { keep: true });
+      const meanwhile = task(2, 'Land meanwhile');
+      const other = await iso.prepare(meanwhile, run);
+      writeFileSync(join(other.cwd, 'other.txt'), 'other\n');
+      expect(await iso.integrate(meanwhile, run)).toBe('merged');
+
+      const again = await iso.prepare(resumed, run, 'restore');
+      expect(readFileSync(join(again.cwd, 'half.txt'), 'utf8')).toBe('half\n');
+      expect(await iso.integrate(resumed, run, undefined, { subject: 'Finish it' })).toBe('merged');
+
+      const integration = run.repos[0].integrationBranch;
+      const subjects = git(root, 'log', '--format=%s', integration).split('\n');
+      expect(subjects).toEqual(expect.arrayContaining(['Merge: Finish it', 'Merge: Resume me (resume its kept work)', 'WIP: Resume me']));
+      expect(git(root, 'log', '--format=%B', integration)).not.toMatch(/ordewell\/|Merge commit/);
+      const ours = git(root, 'rev-list', integration, '--not', 'main').split('\n');
+      expect(ours.map((sha) => trailers(root, sha))).toEqual(ours.map(() => 'Planned-with: Ordewell\n'));
+    });
   });
 
   it('treats a task that changed nothing as merged', async () => {
@@ -1095,7 +1156,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation never deletes work that has not land
     expect(existsSync(stopped.cwd)).toBe(false);
     expect(git(root, 'show', `${branch}:half-done.txt`)).toBe('not committed yet');
     expect(git(root, 'show', `${branch}:README.md`)).toBe('edited');
-    expect(git(root, 'log', '-1', '--format=%s', branch)).toBe('WIP: Stopped mid-work (kept by Ordewell before removing its worktree)');
+    expect(git(root, 'log', '-1', '--format=%s', branch)).toBe('WIP: Stopped mid-work');
     expect(branches(root)).toEqual([]);
     // The state dir's own ignore file is meant to be committed (it carves out .ordewell/skills); nothing else may show.
     expect(git(root, 'status', '--porcelain', '--untracked-files=all')).toBe('?? .ordewell/.gitignore');

@@ -11,7 +11,7 @@ const onOff = (value: boolean): string => (value ? 'on' : 'off');
 export const supervisorSummary = (run: GlobalRunSettings): string =>
   `Supervisor: ${SUPERVISOR_LEVEL_LABEL[run.supervisorLevel]}, ${plural(run.supervisorRetryLimit, 'retry', 'retries')} per task, ${plural(run.wakeUpReadBudget, 'read', 'reads')} per wake-up`;
 export const automergeSummary = (run: GlobalRunSettings): string => `Merge automatically (gates, end of run): ${onOff(run.mergeAtGatesAutomatically)}`;
-export const PLANNED_WITH_LABEL = 'Planned-with line in merge commits';
+export const PLANNED_WITH_LABEL = 'Planned-with line in commits Ordewell writes';
 export const trailerSummary = (run: GlobalRunSettings): string => `${PLANNED_WITH_LABEL}: ${onOff(run.plannedWithTrailer)}`;
 export const autorunSummary = (run: GlobalRunSettings): string => `Autorun: ${onOff(run.autorun)}`;
 
