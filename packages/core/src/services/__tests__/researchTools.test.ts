@@ -43,6 +43,14 @@ describe('researchTools', () => {
     expect(params.properties!.paths.type).toBe(SchemaType.ARRAY);
     expect(params.properties!.paths.items!.type).toBe(SchemaType.STRING);
   });
+
+  it('withholds the spawn tool from a provider that cannot run subagents, keeping its reads', () => {
+    const names = (declarations: ReturnType<typeof toGeminiToolDeclarations>) => declarations.map((d) => d.name);
+    expect(names(toGeminiToolDeclarations())).toContain(SPAWN_RESEARCH_AGENT);
+    expect(names(toGeminiToolDeclarations(false, false))).not.toContain(SPAWN_RESEARCH_AGENT);
+    expect(names(toGeminiToolDeclarations(true, false))).not.toContain(SPAWN_RESEARCH_AGENT);
+    expect(names(toGeminiToolDeclarations(true, false))).toEqual(expect.arrayContaining(['read_file', 'task_query', 'run_plan']));
+  });
 });
 
 describe('planner task read tool projections', () => {

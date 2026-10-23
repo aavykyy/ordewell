@@ -11,7 +11,12 @@ import { quotedMessageArgs } from './landingMessage';
 // Keeps the message the merge was given; `strip` drops the `# Conflicts:` lines git adds to it.
 const COMMIT_MERGE = 'git commit --no-edit --cleanup=strip';
 
-export function buildResearchToolsPrompt(): string {
+/**
+ * The exploration tools as the planner reads them. The spawn tool is named
+ * only where the backend can run it: a Gemini planner cannot, so advertising
+ * it there would send it to a call that always fails.
+ */
+export function buildResearchToolsPrompt(subagents = true): string {
   const lines = [
     'You have access to the following tools to explore the workspace:',
     '',
@@ -28,9 +33,11 @@ export function buildResearchToolsPrompt(): string {
     '- grep: for searching inside file contents',
     '',
     'When multiple independent tool calls are needed, batch them in a single response to save round-trips. For example, if you need to read README.md and AGENTS.md, call read_files with both paths at once.',
-    '',
-    'spawn_research_agent(prompt: string) - Launch a stateless read-only research agent that explores the workspace with its own tools and returns a digest within your tool round. Use it for orientation: a subsystem to map, or a "how does X work here" question, when only the conclusion matters to you. To explore several independent areas, launch the agents CONCURRENTLY: put multiple spawn_research_agent calls in one reply and they run in parallel.',
-    'The agent sees nothing of this conversation, so its prompt must be self-contained: the area or question, the paths/symbols to start from, and exactly what the digest must report back: the conclusion and file:line references, no pasted file bodies, a few lines per point. Do NOT use it on small or single-subsystem repos, or to read one known file — direct tools are faster there.',
+    ...(subagents ? [
+      '',
+      'spawn_research_agent(prompt: string) - Launch a stateless read-only research agent that explores the workspace with its own tools and returns a digest within your tool round. Use it for orientation: a subsystem to map, or a "how does X work here" question, when only the conclusion matters to you. To explore several independent areas, launch the agents CONCURRENTLY: put multiple spawn_research_agent calls in one reply and they run in parallel.',
+      'The agent sees nothing of this conversation, so its prompt must be self-contained: the area or question, the paths/symbols to start from, and exactly what the digest must report back: the conclusion and file:line references, no pasted file bodies, a few lines per point. Do NOT use it on small or single-subsystem repos, or to read one known file — direct tools are faster there.',
+    ] : []),
   ];
   return lines.join('\n');
 }
@@ -144,13 +151,15 @@ function researchPhaseBlock(harnessMode: boolean, agents: InTurnAgents): string 
 /**
  * The agents a planner explores with inside its own turn, named as its backend
  * names them, or null when it has none: an OpenCode planner's subagents are
- * withheld (ADR-0009 T8, ADR-0026). An API planner's are Ordewell's own
+ * withheld (ADR-0009 T8, ADR-0026), and an API planner's service may have no
+ * research subagents to spawn (Gemini, which does not override
+ * `createSubagentChat`). An OpenAI-compatible planner's are Ordewell's own
  * (ADR-0005), which return within the tool round that started them.
  */
 export type InTurnAgents = string | null;
 
-export function inTurnAgents(harness: boolean, runner?: RunnerId): InTurnAgents {
-  if (!harness) return 'spawn_research_agent';
+export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = true): InTurnAgents {
+  if (!harness) return subagents ? 'spawn_research_agent' : null;
   switch (runner) {
     case 'claude-code': return 'your Agent tool';
     case 'codex': return 'your own subagents, if this session has them';
@@ -178,7 +187,7 @@ export function whoExploresSection(agents: InTurnAgents): string[] {
     'WHO EXPLORES:',
     'Decide who finds something out by what the result is, never by how long it may take.',
     `- Orientation: you need it this turn to answer, ask or outline, only its conclusion matters, and no later task acts on it. ${inTurn}${agents === null ? '' : ' Brief each agent to return a digest: the conclusion and file:line references, no pasted file bodies, a few lines per point.'}`,
-    '- Evidence: a research task, when any of these holds: finding out needs a worktree (write a failing test, build, reproduce); another runner or model should judge it, for a second view or a stronger model; the user should see it and be able to stop it; or a later task will act on its findings. In the last case the later task depends on the research task, so the findings reach it in the research task\'s handoff: do not re-type them into the later task\'s brief.',
+    '- Evidence: a research task, when any of these holds: finding out needs a worktree (write a failing test, build, reproduce); another runner or model should judge it, for a second view or a stronger model; the user should see it and be able to stop it; or a later task will act on its findings. In the last case the later task depends on the research task, so the findings reach it in the research task\'s handoff: do not re-type them into the later task\'s brief. A loop\'s fix cannot depend on the research task directly: make the check depend on it, and the fix reads the report with `read_task`.',
     '- Search: a problem that needs rounds of branching, where each round\'s reports decide the next, is the explore skill: rounds of research tasks.',
   ];
 }
@@ -221,6 +230,8 @@ export interface ConversationVariant {
   runner?: RunnerId;
   /** The skill catalog: task skills it can attach on every path, planner skills it can load only with tools. */
   skills?: readonly SkillInfo[];
+  /** Whether an API planner's service can run Ordewell's research subagents; Gemini cannot (it has no `createSubagentChat`). */
+  subagents?: boolean;
   /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order; of every repo of a group (ADR-0014). */
   isolatedExecution?: IsolatedExecution;
   /** The session offers the execution tools (ADR-0029), as MCP tools or the API planner's own. */
@@ -391,7 +402,7 @@ const CONTEXT_SECTION = [
   'You are the only one who sees every piece, so your context is the scarcest resource in the run. Spend it on understanding the problem and on integration.',
   '- Go deep yourself when the work is small, sequential, and its detail decides your next step.',
   '- Delegate the rest as WHO EXPLORES says, by what its result is.',
-  '- Before going deep into anything that looks large, map it first (skim it, or delegate the map as orientation), then split along the seams the map shows.',
+  '- Before going deep into anything that looks large, map it first (skim it, or map it as WHO EXPLORES says), then split along the seams the map shows.',
   '- Give each delegated piece a self-contained brief: its goal, its inputs, what to report back, and how its result will be checked. A task never sees this conversation. Plan the integration step.',
   '- Prefer evidence you can check (a test, an exit code, a proof checker) over a task\'s own word.',
   '- A turn\'s input may end with how full your context is and what remains of your reads. Plan the turn around it.',
@@ -408,7 +419,7 @@ function buildConversationBody(
 ): string {
   const tools = variant.harness ?? false;
   const autorun = variant.autorun ?? false;
-  const agents = inTurnAgents(tools, variant.runner);
+  const agents = inTurnAgents(tools, variant.runner, variant.subagents ?? true);
   const submit = tools
     ? 'call list_runners and list_models, then submit the final task plan with submit_plan'
     : 'emit the final task plan as a JSON object with a "tasks" array';
@@ -519,6 +530,7 @@ function buildConversationBody(
     'LOOPS:',
     'A loop repeats a check with its fix until the check passes. Ordewell runs the rounds itself, with no turn of yours in between: the check runs, and while it fails with rounds left, the body runs and then the check runs again. A build or a fix that must end on something checkable (the suite is green, the review finds nothing) takes one; a plan without such a bar does not.',
     '- Put "loop": { "body": ["fix-id", ...], "maxRounds": 3 } on the check. "body" names, by id, the top-level tasks that fix what the check finds. Each depends on the check, and otherwise only on what the check depends on or on other tasks of the body. Whatever comes after the loop depends on the check, never on a body task.',
+    '- A loop\'s body cannot depend on a research task directly. When the fix acts on a research task\'s findings, make the check depend on the research task: the body may then depend on it too, and reads its report with `read_task` (WHO EXPLORES).',
     '- The check is a top-level AI or script task with no subtasks. A body task is a top-level AI or script task in one loop only, never a manual task, and has no subtasks either: each round runs a task again whole, so give each step its own task.',
     '- Prefer a script task as the check wherever a command can judge the work: the test suite, the type checker, the linter, a benchmark against a threshold. Its exit status is evidence you can check: 0 passes, anything else fails and starts a round.',
     '- Otherwise the check is an AI task, such as an adversarial review. Write in its prompt that it calls task_complete with status "failed" and every confirmed problem in its report when it finds any, and "done" when it confirms none. Only a "failed" report starts a round: "blocked" (it could not do the check) and a run that ends without a report start none.',

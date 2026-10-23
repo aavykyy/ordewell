@@ -43,9 +43,9 @@ A hypothesis stands when its prediction was tested and held, and the rest are sh
 
 A change task for the fix, inside a loop, so it repeats until the reproduction passes:
 
-- If the reproduction is not yet a test the workspace holds, a first change task adds it and changes no production code. A research task's test was thrown away, so make that task depend on the research task: its report reaches the task in the handoff, and you do not copy the test into the brief.
+- If the reproduction is not yet a test the workspace holds, a first change task adds it and changes no production code. A research task's test was thrown away, so make the loop's check depend on the research task: the body tasks may then depend on it too, and read its report with `read_task`. You do not copy the test into the brief.
 - The check is a script task running the reproduction. Add the wider suite as a second command so a fix that breaks something else fails the round.
-- The fix task's brief gives the cause, the evidence and the files, and says to change the cause and nothing near it.
+- The fix task's brief names the cause and the files, and says to change the cause and nothing near it; it reads the evidence itself with `read_task`, so do not re-type it.
 - Choose the rounds deliberately. A check that runs out of rounds blocks what follows, which is the right outcome when the fix does not converge.
 
 When the loop ends, tell the user whether the reproduction passes and what changed.

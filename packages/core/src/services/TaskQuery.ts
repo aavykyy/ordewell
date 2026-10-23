@@ -9,7 +9,7 @@ import { handoffLines, type HandoffDigest } from '../models/Handoff';
 
 /**
  * The planner's read channel: a `{"taskQuery":{...}}` reply asking Ordewell to
- * show it what the per-turn plan block deliberately leaves out.
+ * show it what the plan block deliberately leaves out.
  *
  * The plan block carries only short fields, so a planner asked to "add a line
  * to task 3's prompt" would be rewriting text it has never read. Inlining every
@@ -193,7 +193,7 @@ export const TASK_READ_ANSWER_OR_EDIT =
  */
 export const TASK_QUERY_PROTOCOL: string[] = [
   'READING A TASK BEFORE YOU EDIT IT:',
-  'The plan block you are shown each turn carries only short fields — it never contains a task\'s prompt, its user steps, or a completed task\'s verdict. Never rewrite a field you have not read. To read one, reply with ONLY this JSON object:',
+  'The plan block you are shown (whole once per live context, then what changed) carries only short fields — it never contains a task\'s prompt, its user steps, or a completed task\'s verdict. Never rewrite a field you have not read. To read one, reply with ONLY this JSON object:',
   `  {"${TASK_QUERY_ENVELOPE_KEY}":{"tasks":["<id or #order>", "..."],"fields":[${TASK_QUERY_FIELDS.map((f) => `"${f}"`).join(', ')}],"catalog":true}}`,
   '- "tasks": one or more task references. Ask for everything you need in ONE query — each query costs a round-trip.',
   '- "fields": optional. Omit it to get every field above.',
@@ -209,15 +209,15 @@ export const TASK_QUERY_PROTOCOL: string[] = [
  */
 export const TASK_READ_TOOLS_PROTOCOL: string[] = [
   'READING A TASK BEFORE YOU EDIT IT:',
-  'The plan block you are shown each turn carries only short fields — it never contains a task\'s prompt, its user steps, or a completed task\'s verdict. Never rewrite a field you have not read. Read with these tools; they change nothing:',
+  'The plan block you are shown (whole once per live context, then what changed) carries only short fields — it never contains a task\'s prompt, its user steps, or a completed task\'s verdict. Never rewrite a field you have not read. Read with these tools; they change nothing:',
   '- task_query: "tasks" are one or more task references ("<id or #order>"). Ask for everything you need in ONE call. "fields" is optional (omit it to get description, prompt, userSteps, verdict, outputSummary, handoff, userStoriesCovered and skills). A handoff is what a task told the tasks after it: a summary, findings F1, F2, … and artifacts. "catalog": true also returns every runner with its models, thinking-effort variants and modes.',
   '- task_output: the recent output of a task that is running right now — the way to diagnose a task that looks stuck mid-execution. "lines" (default 80, at most 400) sets how many; pass an answer\'s "nextOffset" back as "since" to read only what follows. A task that is not running answers with its verdict, output summary, its whole handoff, its findings and report, and a digest of its last attempt. Supply "attempt" (a saved attempt number) or "kinds" (TaskLogEvent types such as tool_call, tool_result, error, text, approval_requested, approval_decided, usage) to read its structured log; attempt defaults to latest. Continue truncated entries with since/nextOffset.',
   '- task_diff: changes since a task started, with repo paths and file stats. Pass "path" for one file patch and "repo" to select a repository. Page with since/nextOffset. Shared runs without task-specific records report not available.',
   'Three reads per user message; after that every answer also tells you to land the turn, and after six they are refused. Do not ask the same question twice.',
-  'Once a plan exists, change it with edit_plan — every turn shows you its operations. Never reply with taskOps or taskQuery JSON.',
+  'Once a plan exists, change it with edit_plan — the last whole plan block shows you its operations; later turns only say what changed. Never reply with taskOps or taskQuery JSON.',
 ];
 
-/** The one-line reminder the per-turn plan block carries, so the protocol has a single owner. */
+/** The one-line reminder the whole plan block carries, so the protocol has a single owner. */
 export const TASK_QUERY_REMINDER =
   `- To READ a task in full (prompt, user steps, verdict, output, handoff, user stories) or the whole model/mode catalog before editing, reply with ONLY {"${TASK_QUERY_ENVELOPE_KEY}":{"tasks":["<id or #order>"],"catalog":true}} — it changes nothing, and you then reply again with your ops.`;
 

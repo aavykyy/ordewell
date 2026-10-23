@@ -23,7 +23,7 @@ export interface PlanView {
 export interface PromptBlocksSource {
   /** The catalog block, or the tools reminder in its place; null without a plan. */
   catalog(): string | null;
-  /** Null until the plan has tasks. */
+  /** Null without a plan; a plan with no tasks is a view with no rows. */
   plan(): PlanView | null;
   /** The compactions the backend has counted (`IAiService.compactions`). */
   compactions(): number;
@@ -77,9 +77,11 @@ export class PromptBlocks {
     const plan = this.source.plan();
     const blocks = [
       catalog !== null && catalog !== held?.catalog ? catalog : null,
-      plan && planBlock(plan, held?.plan ?? null),
+      plan ? planBlock(plan, held?.plan ?? null) : null,
     ].filter((block): block is string => block !== null);
-    const sent: Held = { catalog, plan: plan && new Map(plan.rows.map((row) => [row.id, row])), compactions };
+    // A plan with no tasks has no line to hold; re-adding one sends the whole
+    // block, since the planner never held this plan's protocol.
+    const sent: Held = { catalog, plan: plan && plan.rows.length > 0 ? new Map(plan.rows.map((row) => [row.id, row])) : null, compactions };
     return {
       blocks,
       heard: () => { this.held = sent; },
@@ -92,8 +94,9 @@ export class PromptBlocks {
   }
 }
 
-/** The whole block where the planner holds none, else what changed since its last view. */
-function planBlock(plan: PlanView, held: ReadonlyMap<string, PlanRow> | null): string {
+/** The whole block where the planner holds none, else what changed since its last view; nothing when the plan has no tasks and none were held. */
+function planBlock(plan: PlanView, held: ReadonlyMap<string, PlanRow> | null): string | null {
+  if (plan.rows.length === 0) return held && held.size > 0 ? changesBlock(plan, [], [...held.values()]) : null;
   if (!held || renumbered(plan.rows, held)) return plan.full;
   const now = new Set(plan.rows.map((row) => row.id));
   const changed = plan.rows.filter((row) => held.get(row.id)?.line !== row.line);
@@ -123,6 +126,7 @@ function changesBlock(plan: PlanView, changed: readonly PlanRow[], removed: read
   const reread = plan.tools ? 'call task_query' : 'read the tasks with a taskQuery';
   return [
     ...listed,
+    ...(plan.rows.length === 0 ? ['The plan now has no tasks.'] : []),
     plan.running || NOT_RUNNING,
     `Tasks not listed are as last shown, and the protocol sent with the last <current_plan> still applies. If you no longer have that block, ${reread} before editing.`,
   ].join('\n');
