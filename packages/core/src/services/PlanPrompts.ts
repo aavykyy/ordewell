@@ -29,8 +29,8 @@ export function buildResearchToolsPrompt(): string {
     '',
     'When multiple independent tool calls are needed, batch them in a single response to save round-trips. For example, if you need to read README.md and AGENTS.md, call read_files with both paths at once.',
     '',
-    'spawn_research_agent(prompt: string) - Launch a stateless read-only research agent that explores the workspace with its own tools and returns a digest. Use it to delegate an open-ended exploration thread — a subsystem to map, or a "how does X work here" question — whenever one emerges during research. To explore several independent areas, launch the agents CONCURRENTLY: put multiple spawn_research_agent calls in one reply and they run in parallel.',
-    'The agent sees nothing of this conversation, so its prompt must be self-contained: the area or question, the paths/symbols to start from, and exactly what the digest must report back. Do NOT use it on small or single-subsystem repos, or to read one known file — direct tools are faster there.',
+    'spawn_research_agent(prompt: string) - Launch a stateless read-only research agent that explores the workspace with its own tools and returns a digest within your tool round. Use it for orientation: a subsystem to map, or a "how does X work here" question, when only the conclusion matters to you. To explore several independent areas, launch the agents CONCURRENTLY: put multiple spawn_research_agent calls in one reply and they run in parallel.',
+    'The agent sees nothing of this conversation, so its prompt must be self-contained: the area or question, the paths/symbols to start from, and exactly what the digest must report back: the conclusion and file:line references, no pasted file bodies, a few lines per point. Do NOT use it on small or single-subsystem repos, or to read one known file — direct tools are faster there.',
   ];
   return lines.join('\n');
 }
@@ -52,7 +52,7 @@ export function buildSubagentSystemPrompt(): string {
     '- The key symbols/functions involved and how they connect',
     '- Constraints, gotchas, or conventions the planner must respect',
     '- Direct answers to every question the task asked',
-    'Plain prose/markdown only. No questions, no task plans, no JSON. Be dense and specific; vague summaries are useless to the planner.',
+    'Plain prose/markdown only. No questions, no task plans, no JSON, no pasted file bodies: name the path and line instead. Be dense and specific, a few lines per point; vague summaries are useless to the planner.',
   ].join('\n');
 }
 
@@ -77,16 +77,16 @@ function readOnlyGuide(runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefin
 }
 
 /**
- * Research tasks (ADR-0037), as a read-only task's guide ends: when one is the
- * right tool, what its brief holds, and that the planner decides how many run.
- * What a task does is the read-only guide's; this only adds the report that
- * comes back.
+ * Research tasks (ADR-0037), as a read-only task's guide ends: what its brief
+ * holds, and that the planner decides how many run. When one is the right tool
+ * is {@link whoExploresSection}'s to say; what a task does is the read-only
+ * guide's. This only adds the report that comes back.
  */
 function researchTasksGuide(tools: boolean): string[] {
   return [
-    'Add "research": true to a read-only top-level AI task whose report should come back to you: research that should outlive this turn, or that you would otherwise run in the background. Its report is its task_complete summary, and when the task ends (passes, fails or is blocked) it wakes you with that report, at every supervisor level, while you keep talking with the user meanwhile. Within a single turn, wait for your own subagents instead (see RESEARCH PHASE). Never on a subtask, an ops task or a loop\'s body.',
+    'Add "research": true to a read-only top-level AI task whose report should come back to you: evidence, as WHO EXPLORES defines it. Its report is its task_complete summary, and when the task ends (passes, fails or is blocked) it wakes you with that report, at every supervisor level, while you keep talking with the user meanwhile. Never on a subtask, an ops task or a loop\'s body.',
     'A research task may run anything sealed and try changes in its own throwaway worktree, but lands nothing. Write its prompt as a brief it can act on without this conversation: what to find out, where to start, what the report must contain (evidence for and against, file paths and line references, what it ran and what happened), and how you will check it. Prefer a command whose exit status settles a point over its prose.',
-    `You add a research task with the plan, or ${tools ? 'with edit_plan' : 'in a task-ops reply'} later, and it starts at once without asking. Start a research task for each independent thread worth running in the background; the run's Parallel limit bounds what runs at once. In a report turn, start another only when the report opens a genuinely new question.`,
+    `You add a research task with the plan, or ${tools ? 'with edit_plan' : 'in a task-ops reply'} later, and it starts at once without asking. Start one research task for each independent question; the run's Parallel limit bounds what runs at once. In a report turn, start another only when the report opens a genuinely new question.`,
   ];
 }
 
@@ -107,13 +107,14 @@ function sealedGuide(tool: 'bash' | 'run_command'): string {
  * them. A harness planner brings its own toolbox, so naming `list_dir` or
  * `glob` there would be telling a coding agent to call tools it does not have.
  *
- * Only this block and the tool-envelope appendix differ between the two: the
+ * Only this block, the agents WHO EXPLORES names, and the tool-envelope
+ * appendix differ between the two: the
  * plan schema, the runner and mode vocabulary, the model catalog, the
  * conversational protocol and the skill and mode blocks are shared verbatim. A
  * forked prompt would mean each future block gets written twice, or silently
  * works on one backend only.
  */
-function researchPhaseBlock(harnessMode: boolean): string {
+function researchPhaseBlock(harnessMode: boolean, agents: InTurnAgents): string {
   const shared = [
     'RESEARCH PHASE:',
     '- Start by reading README.md and any agent config files (AGENTS.md, CLAUDE.md)',
@@ -124,7 +125,7 @@ function researchPhaseBlock(harnessMode: boolean): string {
       '- You are planning, not implementing: do NOT edit, create, or delete any file, and do not run commands that change the workspace',
       '- Run commands — git, gh, cloud CLIs, the project\'s own tooling — with the run_command tool, not a shell of your own. MCP tools the user configured (issue trackers, todo lists) are yours to read from too. Reads run at once; anything else is approved or refused by the user\'s settings. When something the plan needs to change is refused, add it to the plan instead: a script task when you can state the exact commands, an ops task when it needs judgment',
       `- ${sealedGuide('run_command')}`,
-      '- If you delegate exploration to your own agents, WAIT for their results inside this reply. Do NOT launch them in the background or async and end your turn saying you will report back later: your turn ending is what hands the conversation back to the user, and anything you say after it never reaches them.',
+      ...(agents === null ? [] : ['- When you delegate orientation to your own agents (WHO EXPLORES below), WAIT for their results inside this reply. Do NOT launch them in the background or async and end your turn saying you will report back later: your turn ending is what hands the conversation back to the user, and anything you say after it never reaches them.']),
     ]
     : [
       '- Use list_dir with depth=2-3 for a tree overview',
@@ -138,6 +139,48 @@ function researchPhaseBlock(harnessMode: boolean): string {
     '- Synthesize tool findings into your messages. The user does not see raw tool output; only your synthesis reaches them.',
     '- Research and questions can interleave — you can explore a file, then ask a question grounded in it, in one response',
   ].join('\n');
+}
+
+/**
+ * The agents a planner explores with inside its own turn, named as its backend
+ * names them, or null when it has none: an OpenCode planner's subagents are
+ * withheld (ADR-0009 T8, ADR-0026). An API planner's are Ordewell's own
+ * (ADR-0005), which return within the tool round that started them.
+ */
+export type InTurnAgents = string | null;
+
+export function inTurnAgents(harness: boolean, runner?: RunnerId): InTurnAgents {
+  if (!harness) return 'spawn_research_agent';
+  switch (runner) {
+    case 'claude-code': return 'your Agent tool';
+    case 'codex': return 'your own subagents, if this session has them';
+    case 'opencode': return null;
+    default: return 'your own agents, if you have any';
+  }
+}
+
+/**
+ * Who finds something out, decided by what the result is (ADR-0037 R5). A
+ * planner cannot know how long a lookup takes before it starts, so a line
+ * drawn by duration sent lookups to cold task sessions and kept evidence the
+ * plan rests on in the planner's context, from where only re-typing passes it
+ * on. Every other section refers to this one instead of restating it, and it
+ * names no section around it, so a sub-planner's role prompt (#33, #112) can
+ * include it unchanged.
+ */
+export function whoExploresSection(agents: InTurnAgents): string[] {
+  const inTurn = agents === null
+    ? 'Find it with your own reads: you have no agents of your own here.'
+    : agents === 'spawn_research_agent'
+      ? 'Find it with your own reads, or with spawn_research_agent, whose agents return within your tool round.'
+      : `Find it with your own reads, or with ${agents}, awaited inside this turn.`;
+  return [
+    'WHO EXPLORES:',
+    'Decide who finds something out by what the result is, never by how long it may take.',
+    `- Orientation: you need it this turn to answer, ask or outline, only its conclusion matters, and no later task acts on it. ${inTurn}${agents === null ? '' : ' Brief each agent to return a digest: the conclusion and file:line references, no pasted file bodies, a few lines per point.'}`,
+    '- Evidence: a research task, when any of these holds: finding out needs a worktree (write a failing test, build, reproduce); another runner or model should judge it, for a second view or a stronger model; the user should see it and be able to stop it; or a later task will act on its findings. In the last case the later task depends on the research task, so the findings reach it in the research task\'s handoff: do not re-type them into the later task\'s brief.',
+    '- Search: a problem that needs rounds of branching, where each round\'s reports decide the next, is the explore skill: rounds of research tasks.',
+  ];
 }
 
 /**
@@ -174,6 +217,8 @@ export interface ConversationVariant {
    * tools (ADR-0022). An API planner speaks the JSON envelopes instead.
    */
   harness?: boolean;
+  /** A harness planner's runner, which names the agents it explores with in its turn ({@link inTurnAgents}). */
+  runner?: RunnerId;
   /** The skill catalog: task skills it can attach on every path, planner skills it can load only with tools. */
   skills?: readonly SkillInfo[];
   /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order; of every repo of a group (ADR-0014). */
@@ -328,9 +373,9 @@ function strategySection(execution: boolean): string[] {
       ? '- A small effect you can state as exact commands: one script task. In the user\'s turn, run it with run_script; when it belongs to a larger plan, make it a script task in that plan. An effect that needs judgment is an ops task.'
       : '- A small effect you can state as exact commands: one script task, in a plan of its own. An effect that needs judgment is an ops task.',
     '- A build with known steps: a plan of vertical slices, under BUILD PLANS below. When the build must also meet a bar that can be checked (the tests pass, a review finds nothing), end it with a loop, under LOOPS below.',
-    '- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix. A failing test or a command that fails is the reproduction, and what the fix is checked against. Give each hypothesis a research task of its own that reports the evidence for and against it, so they run in parallel while you keep talking with the user (see READ-ONLY TASKS). Plan the fix once the reports name the cause. When the reproduction is a command you can run again, make it the check of a loop whose body is the fix, under LOOPS below.',
+    '- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix. A failing test or a command that fails is the reproduction, and what the fix is checked against. When one sealed command settles a hypothesis, test it yourself this turn. Give each other hypothesis a research task of its own that reports the evidence for and against it (WHO EXPLORES). Plan the fix once the reports name the cause. When the reproduction is a command you can run again, make it the check of a loop whose body is the fix, under LOOPS below.',
     '- A goal that is done only when something passes ("until the tests pass", "until the review finds nothing"): a loop, under LOOPS below. It sits at the end of a build or a fix.',
-    '- An open problem with no known path: plan only the first round of exploration, as research tasks that each report on one question. Their reports wake you: read them, then extend the plan with the next round, or with the build they point to.',
+    '- An open problem with no known path: a search (WHO EXPLORES). Plan only the first round of exploration, as research tasks that each report on one question. Their reports wake you: read them, then extend the plan with the next round, or with the build they point to.',
     'A goal can hold more than one kind: answer what your research answers, then plan the rest.',
     '',
   ];
@@ -345,8 +390,8 @@ const CONTEXT_SECTION = [
   'YOUR CONTEXT:',
   'You are the only one who sees every piece, so your context is the scarcest resource in the run. Spend it on understanding the problem and on integration.',
   '- Go deep yourself when the work is small, sequential, and its detail decides your next step.',
-  '- Delegate when a piece is independent, large, or only its conclusion matters to you.',
-  '- Before going deep into anything that looks large, map it first (skim it, or send parallel read-only scouts), then split along the seams the map shows.',
+  '- Delegate the rest as WHO EXPLORES says, by what its result is.',
+  '- Before going deep into anything that looks large, map it first (skim it, or delegate the map as orientation), then split along the seams the map shows.',
   '- Give each delegated piece a self-contained brief: its goal, its inputs, what to report back, and how its result will be checked. A task never sees this conversation. Plan the integration step.',
   '- Prefer evidence you can check (a test, an exit code, a proof checker) over a task\'s own word.',
   '- A turn\'s input may end with how full your context is and what remains of your reads. Plan the turn around it.',
@@ -363,6 +408,7 @@ function buildConversationBody(
 ): string {
   const tools = variant.harness ?? false;
   const autorun = variant.autorun ?? false;
+  const agents = inTurnAgents(tools, variant.runner);
   const submit = tools
     ? 'call list_runners and list_models, then submit the final task plan with submit_plan'
     : 'emit the final task plan as a JSON object with a "tasks" array';
@@ -376,7 +422,9 @@ function buildConversationBody(
     '4. When the strategy calls for a plan and you have enough context, produce a prose outline — a short list describing each task in order.',
     autorun ? `5. Write the outline in your reply, then ${submit} in the same reply.` : `5. After the user confirms the outline, ${submit}.`,
     '',
-    researchPhaseBlock(tools),
+    researchPhaseBlock(tools, agents),
+    '',
+    ...whoExploresSection(agents),
     '',
     ...(tools ? ['Ordewell skills load only through load_skill; do not use the native Skill tool or read skill files directly.', ...plannerSkillsBlock(variant.skills ?? []), ''] : []),
     ...strategySection(variant.execution ?? false),

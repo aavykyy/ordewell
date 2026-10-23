@@ -13,6 +13,8 @@ Write down the question, what a finished answer looks like, and how a claim will
 
 Plan nothing beyond it. You do not yet know which questions matter, so a later task written now is a guess.
 
+A question one lookup answers is orientation, not a round: read it yourself, or ask one of your own agents if you have any, within the turn. A round is for what needs a worktree, another model or a report a later task will act on.
+
 Make the research tasks deliberately different: another approach, another source, a different assumption, one that questions the premise itself. Several variations on one idea are one task done several times. Keep the round within the run's Parallel limit, so none waits.
 
 Each brief stands alone and holds the question, where to start, and the report you want: a claim, the evidence for it, what would break it, and the commands it ran with their output. A claim that comes with a command is worth more than one that comes with an argument.

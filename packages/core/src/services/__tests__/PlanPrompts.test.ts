@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildConflictRepairPrompt, buildConflictResolutionPrompt, buildConversationSystemPrompt, buildPlanWithResults, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt, NATIVE_SHELL_GUIDE } from '../PlanPrompts';
+import { buildConflictRepairPrompt, buildConflictResolutionPrompt, buildConversationSystemPrompt, buildPlanWithResults, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt, inTurnAgents, NATIVE_SHELL_GUIDE, whoExploresSection } from '../PlanPrompts';
 import type { RepoGroupLayout } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type DiscoveredModel, type RunnerId } from '../../models/Task';
 
@@ -191,8 +191,14 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
   // closed, reaches no one. The API planner runs its own agents inside the turn
   // and has nothing to be told.
   it('tells the harness planner to await its own agents inside the turn', () => {
-    expect(variant(true)).toMatch(/WAIT for their results inside this reply/);
+    expect(variant(true)).toMatch(/When you delegate orientation to your own agents \(WHO EXPLORES below\), WAIT for their results inside this reply/);
     expect(variant(false)).not.toMatch(/WAIT for their results inside this reply/);
+  });
+
+  // An OpenCode planner's subagents are withheld (ADR-0026): there is nothing to await.
+  it('tells a planner with no agents of its own nothing about awaiting them', () => {
+    const opencode = buildConversationSystemPrompt('goal', '', {}, ['opencode'], undefined, { harness: true, runner: 'opencode' });
+    expect(opencode).not.toMatch(/WAIT for their results inside this reply/);
   });
 
   it('keeps the plan schema and runner vocabulary, reading the model catalog through list_models', () => {
@@ -266,9 +272,9 @@ describe('research tasks (ADR-0037)', () => {
 
   it.each([false, true])('teaches when to use one, and that its report wakes the planner (harness: %s)', (harness) => {
     const guide = section(prompt(harness), 'READ-ONLY TASKS:');
-    expect(guide).toMatch(/Add "research": true to a read-only top-level AI task whose report should come back to you: research that should outlive this turn, or that you would otherwise run in the background/);
+    expect(guide).toMatch(/Add "research": true to a read-only top-level AI task whose report should come back to you: evidence, as WHO EXPLORES defines it\./);
     expect(guide).toMatch(/wakes you with that report, at every supervisor level, while you keep talking with the user/);
-    expect(guide).toMatch(/Within a single turn, wait for your own subagents instead/);
+    expect(guide).not.toMatch(/outlive this turn|in the background/);
     expect(guide).toMatch(/Never on a subtask, an ops task or a loop's body/);
   });
 
@@ -280,7 +286,7 @@ describe('research tasks (ADR-0037)', () => {
 
   it.each([false, true])('says the planner decides how many, bounded by Parallel (harness: %s)', (harness) => {
     const p = prompt(harness);
-    expect(section(p, 'READ-ONLY TASKS:')).toMatch(/Start a research task for each independent thread worth running in the background; the run's Parallel limit bounds what runs at once/);
+    expect(section(p, 'READ-ONLY TASKS:')).toMatch(/Start one research task for each independent question; the run's Parallel limit bounds what runs at once/);
     expect(section(p, 'READ-ONLY TASKS:')).toMatch(/In a report turn, start another only when the report opens a genuinely new question/);
     expect(section(p, 'YOUR CONTEXT:')).not.toMatch(/research/);
   });
@@ -297,12 +303,82 @@ describe('research tasks (ADR-0037)', () => {
   it('sends the failure to explain and the open problem to research tasks', () => {
     const strategy = section(prompt(true), 'STRATEGY:');
     expect(strategy).toMatch(/reproduce it first, investigate competing hypotheses in parallel, then fix/);
-    expect(strategy).toMatch(/Give each hypothesis a research task of its own that reports the evidence for and against it, so they run in parallel while you keep talking with the user/);
-    expect(strategy).toMatch(/An open problem with no known path: plan only the first round of exploration, as research tasks that each report on one question\. Their reports wake you/);
+    expect(strategy).toMatch(/When one sealed command settles a hypothesis, test it yourself this turn\. Give each other hypothesis a research task of its own that reports the evidence for and against it \(WHO EXPLORES\)/);
+    expect(strategy).toMatch(/An open problem with no known path: a search \(WHO EXPLORES\)\. Plan only the first round of exploration, as research tasks that each report on one question\. Their reports wake you/);
   });
 
   it('is in the conversation prompt only, not the one-shot planner\'s', () => {
     expect(oneShot(LONE_REPO)).not.toMatch(/"research"|research task/);
+  });
+});
+
+describe('who explores: orientation, evidence, search (ADR-0037 R5)', () => {
+  const backends = [
+    { name: 'an API planner', harness: false, runner: undefined, inTurn: /Find it with your own reads, or with spawn_research_agent, whose agents return within your tool round\./ },
+    { name: 'Claude Code', harness: true, runner: 'claude-code', inTurn: /Find it with your own reads, or with your Agent tool, awaited inside this turn\./ },
+    { name: 'Codex', harness: true, runner: 'codex', inTurn: /Find it with your own reads, or with your own subagents, if this session has them, awaited inside this turn\./ },
+    { name: 'OpenCode', harness: true, runner: 'opencode', inTurn: /Find it with your own reads: you have no agents of your own here\./ },
+    { name: 'an unnamed harness', harness: true, runner: undefined, inTurn: /Find it with your own reads, or with your own agents, if you have any, awaited inside this turn\./ },
+  ] as const;
+  const prompt = (harness: boolean, runner?: RunnerId) => buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, runner });
+  const section = (p: string, header: string) => {
+    const at = p.indexOf(`\n${header}\n`);
+    expect(at).toBeGreaterThan(-1);
+    return p.slice(at + 1, p.indexOf('\n\n', at + 1));
+  };
+  const count = (p: string, text: string) => p.split(text).length - 1;
+
+  it.each(backends)('states the rule once, as its own section, for $name', ({ harness, runner, inTurn }) => {
+    const p = prompt(harness, runner);
+    const rule = section(p, 'WHO EXPLORES:');
+    expect(rule).toBe(whoExploresSection(inTurnAgents(harness, runner)).join('\n'));
+    expect(rule).toMatch(/by what the result is, never by how long it may take/);
+    expect(rule).toMatch(/- Orientation: you need it this turn to answer, ask or outline, only its conclusion matters, and no later task acts on it\./);
+    expect(rule).toMatch(inTurn);
+    expect(rule).toMatch(/- Evidence: a research task, when any of these holds: finding out needs a worktree \(write a failing test, build, reproduce\); another runner or model should judge it.*; the user should see it and be able to stop it; or a later task will act on its findings\./);
+    expect(rule).toMatch(/the later task depends on the research task, so the findings reach it in the research task's handoff: do not re-type them into the later task's brief/);
+    expect(rule).toMatch(/- Search: a problem that needs rounds of branching.* is the explore skill/);
+    for (const text of ['WHO EXPLORES:', '- Orientation:', '- Evidence:', '- Search:', 'file:line references, no pasted file bodies']) {
+      expect(count(p, text)).toBeLessThanOrEqual(1);
+    }
+    expect(p).not.toMatch(/should outlive this turn|otherwise run in the background|worth running in the background|Delegate when a piece is independent|parallel read-only scouts/);
+  });
+
+  it.each(backends)('asks for a digest only where there are agents to brief, for $name', ({ harness, runner }) => {
+    const rule = section(prompt(harness, runner), 'WHO EXPLORES:');
+    if (runner === 'opencode') expect(rule).not.toMatch(/digest/);
+    else expect(rule).toMatch(/Brief each agent to return a digest: the conclusion and file:line references, no pasted file bodies, a few lines per point\./);
+  });
+
+  it.each(backends)('has every section that delegates refer to the rule instead of restating it, for $name', ({ harness, runner }) => {
+    const p = prompt(harness, runner);
+    expect(section(p, 'YOUR CONTEXT:')).toMatch(/Delegate the rest as WHO EXPLORES says/);
+    expect(section(p, 'STRATEGY:')).toMatch(/research task of its own .*\(WHO EXPLORES\)/);
+    expect(section(p, 'STRATEGY:')).toMatch(/An open problem with no known path: a search \(WHO EXPLORES\)/);
+    expect(section(p, 'READ-ONLY TASKS:')).toMatch(/whose report should come back to you: evidence, as WHO EXPLORES defines it/);
+    if (harness && runner !== 'opencode') expect(section(p, 'RESEARCH PHASE:')).toMatch(/When you delegate orientation to your own agents \(WHO EXPLORES below\), WAIT/);
+  });
+
+  it('sits before the sections that refer to it', () => {
+    const p = prompt(true, 'claude-code');
+    expect(p.indexOf('\nWHO EXPLORES:\n')).toBeGreaterThan(p.indexOf('\nRESEARCH PHASE:\n'));
+    expect(p.indexOf('\nWHO EXPLORES:\n')).toBeLessThan(p.indexOf('\nSTRATEGY:\n'));
+  });
+
+  // The rule is written to be included unchanged in another planner's prompt (#33, #112).
+  it('names no section of the prompt around it', () => {
+    for (const agents of [inTurnAgents(false), inTurnAgents(true, 'claude-code'), inTurnAgents(true, 'opencode')]) {
+      const rule = whoExploresSection(agents).join('\n');
+      expect(rule).not.toMatch(/\b(?:STRATEGY|YOUR CONTEXT|READ-ONLY TASKS|RESEARCH PHASE|LOOPS|BUILD PLANS)\b/);
+    }
+  });
+
+  it('frames spawn_research_agent as orientation, with no research-task text for the one-shot planner it also reaches', () => {
+    const tools = buildResearchToolsPrompt();
+    expect(tools).toMatch(/Use it for orientation: a subsystem to map, or a "how does X work here" question, when only the conclusion matters to you/);
+    expect(tools).toMatch(/the conclusion and file:line references, no pasted file bodies, a few lines per point/);
+    expect(tools).not.toMatch(/research task|WHO EXPLORES/);
+    expect(oneShot(LONE_REPO)).not.toMatch(/WHO EXPLORES|research task/);
   });
 });
 
@@ -563,7 +639,7 @@ describe('the strategy step and the context rules (#108)', () => {
     expect(strategy).toMatch(/- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix\./);
     expect(strategy).toMatch(/failing test or a command that fails is the reproduction, and what the fix is checked against/);
     expect(strategy).toMatch(/Plan the fix once the reports name the cause/);
-    expect(strategy).toMatch(/- An open problem with no known path: plan only the first round of exploration, as research tasks/);
+    expect(strategy).toMatch(/- An open problem with no known path: a search \(WHO EXPLORES\)\. Plan only the first round of exploration, as research tasks/);
     expect(strategy).toMatch(/extend the plan with the next round/);
   });
 
@@ -580,8 +656,8 @@ describe('the strategy step and the context rules (#108)', () => {
     const rules = section(prompt(harness, { execution }), 'YOUR CONTEXT:');
     expect(rules).toMatch(/your context is the scarcest resource in the run/);
     expect(rules).toMatch(/Go deep yourself when the work is small, sequential/);
-    expect(rules).toMatch(/Delegate when a piece is independent, large, or only its conclusion matters/);
-    expect(rules).toMatch(/map it first .*then split along the seams the map shows/);
+    expect(rules).toMatch(/Delegate the rest as WHO EXPLORES says, by what its result is/);
+    expect(rules).toMatch(/map it first \(skim it, or delegate the map as orientation\), then split along the seams the map shows/);
     expect(rules).toMatch(/self-contained brief: its goal, its inputs, what to report back, and how its result will be checked/);
     expect(rules).toMatch(/Plan the integration step/);
     expect(rules).toMatch(/Prefer evidence you can check .* over a task's own word/);
