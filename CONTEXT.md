@@ -1043,7 +1043,9 @@ different field), "PR title".
 
 **Planned-with trailer** (`plannedWithTrailer`; ADR-0030, ADR-0013) — the git
 trailer `Planned-with: Ordewell` that ends each commit message Ordewell itself
-writes, on by default and off by the user's setting. It is read as each message
+writes, on by default and off by the user's setting, which is saved in
+`settings.json` and set with the headless `ordewell trailer on|off` or by editing
+the file; it is in no settings panel. It is read as each message
 is written, so a change reaches the next landing in any session. A commit a
 *Runner* made itself is never given one.
 *Avoid:* "signature", "watermark", "Co-authored-by" (that is a different
@@ -2516,7 +2518,7 @@ setting; a Guarded session can have an Act supervisor. *Avoid:* "mandate" until
 started, watched and merged: **Supervisor level**, **Auto-merge at gates**,
 **Autorun**, the supervisor's retry limit and the wake-up read budget
 (ADR-0030). Saved in
-`settings.json`, changed only by the user through `/settings` (or the headless
+`settings.json` beside the Planned-with trailer, which is not a panel value; changed only by the user through `/settings` (or the headless
 commands behind it) or `PATCH /api/settings`, never by the
 planner. A change applies at once to the session it is made in; another
 session's run under way keeps its values until it ends. A run's own copy is

@@ -123,9 +123,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   [ADR-0047](docs/adr/supervision/0047-structured-task-handoffs.md)).
 - **A `Planned-with: Ordewell` trailer on the commits Ordewell writes.** It is
   on by default and is a git trailer `git interpret-trailers` reads. Commits a
-  coding agent made itself are not changed. Turn it off with *Planned-with
-  line in commits Ordewell writes* in `/settings` or `ordewell trailer off`, or in the
-  VS Code settings panel
+  coding agent made itself are not changed. Turn it off with
+  `ordewell trailer off` or `"plannedWithTrailer": false` in `settings.json`; it
+  is not a row in the settings panels
   ([ADR-0030](docs/adr/supervision/0030-global-run-settings.md)).
 
 ### Changed

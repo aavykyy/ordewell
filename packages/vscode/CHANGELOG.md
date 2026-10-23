@@ -51,7 +51,7 @@
   commits Ordewell writes to land it use it instead of git's default merge
   message. Handoffs show the commit.
 - **A `Planned-with: Ordewell` trailer** ends the commits Ordewell writes. Turn
-  it off in the settings panel.
+  it off with `ordewell trailer off` (it is not in the settings panel).
 
 ### Changed
 

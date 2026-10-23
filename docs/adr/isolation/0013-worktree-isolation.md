@@ -99,8 +99,8 @@ everything below applies per repo of the group.
   to git as one `-m` per paragraph, never through a shell, and lands as written
   whatever the user's `commit.cleanup` (whose `strip` would drop a `#42 …`
   subject); a commit the Runner made itself is never rewritten. Each message Ordewell writes ends with the
-  git trailer `Planned-with: Ordewell` unless the user turned that off in
-  `/settings` ([ADR-0030](../supervision/0030-global-run-settings.md)); the
+  git trailer `Planned-with: Ordewell` unless the user turned that off with
+  `ordewell trailer` or in `settings.json` ([ADR-0030](../supervision/0030-global-run-settings.md)); the
   setting is read as the message is written, so a change reaches the next
   landing. The plan's task `order`, the run id and
   Ordewell's branch names are internal and never enter a message that can
