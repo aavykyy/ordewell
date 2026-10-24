@@ -205,6 +205,16 @@ describe('applyReply', () => {
     expect(text).toContain('- src/greet.ts: the file holds conflict markers');
   });
 
+  it('says git stopped part way, which files it changed, and that nothing is staged, and is an error', () => {
+    const { text, isError } = applyReply({ kind: 'stopped', reason: "error: unable to write file 'notes' mode 100644: Directory not empty", changed: ['src/added.ts', 'src/old.ts'] }, '#1 Task explore', saved);
+
+    expect(isError).toBe(true);
+    expect(text).toContain("Applied part of #1 Task explore's patch, then git stopped: error: unable to write file 'notes' mode 100644: Directory not empty.");
+    expect(text).toContain('Nothing is staged.');
+    expect(text).toContain('src/added.ts and src/old.ts');
+    expect(text).toContain(saved.path);
+  });
+
   it('names the patch file in a refusal, for a task that would rather apply part of it by hand', () => {
     const { text, isError } = applyReply({ kind: 'refused', reason: 'git applied none of it: error: gone.txt: patch does not apply.' }, '#1 Task explore', saved);
 

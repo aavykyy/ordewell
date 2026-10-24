@@ -1086,8 +1086,8 @@ Ordewell captures every change in the worktree as a git patch, inside the
 task's own seal, and keeps it only if it replays to the same tree at its base
 commit. It is kept as `<attempt>.patch` beside the attempt's *Task log* and
 named in the attempt's *Handoff* as a `patch` *Artifact*: the base, files,
-lines added and removed, size, a SHA-256 that `apply_patch` checks the file
-against, and flags (`excluded` links and submodules,
+lines added and removed, size, a SHA-256 that `apply_patch` and `task_diff`
+check the file against, and flags (`excluded` links and submodules,
 files `dropped` over the size cap, files git `normalized`). What Ordewell
 linked into the worktree never goes in; a case-only rename or an unreadable
 file refuses the save. A later save replaces it. It lands nothing and is no
@@ -1095,7 +1095,8 @@ file refuses the save. A later save replaces it. It lands nothing and is no
 change task brings it into its own worktree with `apply_patch`, a three-way
 merge of a patch from a task it may read: it answers that the patch applied
 cleanly and staged, or names each conflicted path (a binary one as binary) and
-leaves the markers for the task to resolve, or that git applied none of it.
+leaves the markers for the task to resolve, or that git applied none of it,
+or that git stopped part way, naming the files it had changed and staging none.
 *Avoid:* "candidate" (a change task held unlanded until one is chosen, which
 was deferred), "diff" for the kept file (`task_diff` reads a diff, live or
 saved), "export".

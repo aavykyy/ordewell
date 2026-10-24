@@ -137,14 +137,22 @@ whatever the listings say.
     which its first line need not. So Ordewell runs the same apply against a
     copy of the index, which writes no file, and refuses if the copy holds a
     link or a submodule the index does not, whichever path or header said so.
+    A trial git stops, short of a conflict, refuses the apply in git's words:
+    it leaves the copy as it was, so it says nothing of what the real apply
+    would write, and the real apply writes the patch's earlier files before it
+    stops at the same place. Git older than 2.32 takes no `--cached` with
+    `--3way`, so there every apply is refused this way.
   - *Each path, on disk.* Git checks a path's leading directories for a link
     in the index alone, and the links the bootstrap puts in a task's worktree
     are in no index: `.claude` and each mirrored `node_modules` entry lead into
     the user's own checkout, where a `.claude/settings.local.json` carries
     hooks. So every path whose entry the copy changed, new, renamed, copied,
-    deleted or merged, is walked under the worktree with no link followed. It
-    is refused under a link, or under something that is not a directory,
-    except a file the patch itself removes to put a directory in its place.
+    deleted or merged, and every path git parses from the patch, on either side
+    of a rename or a copy, is walked under the worktree with no link followed.
+    It is refused under a link; under a submodule the index holds, which on
+    disk is a directory like any other; or under something that is not a
+    directory, except a file the patch itself removes to put a directory in
+    its place.
   - *Each path, by name.* A path at or under a name Ordewell linked in
     (`IsolationTaskRepo.linked`) is refused whatever is on disk there, compared
     without case, since a case-insensitive file system finds a link by any
@@ -163,12 +171,19 @@ whatever the listings say.
     deletes or adds a file the worktree has changed, and for a patch to a file
     the task has changed and not yet staged. The answer gives git's errors,
     and the file the patch is in, to apply by hand.
+  - *Stopped*: git wrote some of the patch's files and then stopped at one it
+    could not write, such as a file where the task has a directory of its
+    own. Git stages only at the end, so nothing is staged. Ordewell reads
+    the patch's paths on disk before and after, so the answer names each one
+    git changed, left as git wrote it, and says how to put it back. A failed
+    apply is called *Refused* only when none changed.
 - **It refuses, applying nothing,** a task outside the readable set, a task or
   attempt that saved no patch, a patch whose file is gone or whose size or
   SHA-256 is not the artifact's (cut short, or changed since), a patch that
   would create or change a link or a submodule, a patch that would write a
-  path under a link or something that is not a directory, or at or under a
-  name Ordewell linked in, a call from a read-only task,
+  path under a link, a submodule or something that is not a directory, or at
+  or under a name Ordewell linked in, a patch git will not apply to a copy of
+  the index short of a conflict, a call from a read-only task,
   a caller with no worktree of its own or one across several repositories, a
   base commit this repository does not have, and a worktree that still holds
   an earlier conflict.
@@ -196,8 +211,9 @@ whatever the listings say.
 A patch that holds a link or a submodule anyway is refused, at the save and at
 the apply. The apply refuses more: a patch that would change a link the
 repository tracks, though a capture never carries a change to one, only its
-deletion; and a path under a link in the worktree, or at or under a name
-Ordewell linked in, which a capture leaves out by name.
+deletion; a path under a submodule, which git stages nowhere; and a path under
+a link in the worktree, or at or under a name Ordewell linked in, which a
+capture leaves out by name.
 
 A file's part is measured in the patch that is saved, not on disk. A small edit
 to a large file counts as small, and so does a large file that only moved,
@@ -223,7 +239,9 @@ a rename are kept or dropped together, as the one file the patch holds.
     CLI, and each surface offers its own way to open the file.
 - **The planner's `task_diff`** reads the patch for a task whose handoff names
   one: the file list with line counts, or one file's part. It still runs no
-  git in a read-only worktree.
+  git in a read-only worktree. It shows the file only while its size and
+  SHA-256 are the artifact's, as `apply_patch` checks them, since a change
+  task's commands can write the session's directory.
 
 ### Choosing among explorers
 
@@ -287,8 +305,11 @@ No field records the pick, and core reads nothing from the judge.
   out of the worktree (`.claude`, a mirrored `node_modules` entry), under a
   case variant of a linked name, under a linked name with nothing on disk
   yet, or under a file; when it makes a directory a link and writes beneath
-  it; and, git's own refusal, when a path holds `.git` in any spelling. A
-  patch that removes a file and puts a directory in its place still applies.
+  it; under a submodule; when a path holds `.git` in any spelling; when a
+  write under `.claude` comes before a path git refuses only as it stages it;
+  and when a git older than 2.32 cannot run the trial, simulated. A patch
+  that removes a file and puts a directory in its place still applies, and
+  one that git stops part way is answered with the files it wrote.
   `PatchApply.test.ts` shows what is refused before git runs, a patch with a
   link or a different hash among it, and how each outcome is worded.
 - **The seams around it.** `taskShell.test.ts` covers `TaskShell.hold` with the
@@ -362,3 +383,4 @@ No field records the pick, and core reads nothing from the judge.
 - 2026-10-24 — a review's fixes: Ordewell judges the saved patch on the bytes it reads (no link or submodule, counts and a SHA-256 taken from them, checked again at the apply), measures a rename as one section, and reads no global git configuration.
 - 2026-10-24 — the apply asks git, against a copy of the index, what the patch would leave, so a patch with no mode line cannot retarget a link the repository tracks.
 - 2026-10-24 — the apply refuses a path that would leave the worktree: under a link on disk, which git's check misses since it reads only the index, or at or under a name Ordewell linked in, in any case; sealing the apply is the follow-up.
+- 2026-10-24 — a second review's fixes: the apply refuses a patch whose trial git stops, walks every path git parses from the patch, refuses a path under a submodule, and answers *Stopped* with what git changed on disk; `task_diff` checks the patch's size and hash.
