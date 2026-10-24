@@ -39,10 +39,10 @@ import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
 import { SubagentRuns } from './SubagentRuns';
 import { saveSession } from '../utils/sessionStore';
-import { listTaskLogAttempts, readTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
+import { listTaskLogAttempts, prepareTaskOutputFile, readTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
 import { digestTaskLog, type TaskLogEvent } from '../models/TaskLog';
 import { TaskLogRecorder } from './TaskLogRecorder';
-import { ScriptRunner } from './ScriptRunner';
+import { ScriptRunner, type ScriptRunnerDeps } from './ScriptRunner';
 import { rewrittenScripts } from '../models/ScriptTask';
 import { SessionWindows, withContextWindows } from './ContextWindowFill';
 import { PlannerUsageLedger } from './PlannerUsage';
@@ -254,6 +254,10 @@ export function createSession(deps: SessionDeps): Session {
   // A window a runner or provider reports wins, and every later stream of the
   // session knows it; the catalogs the resolver already holds serve the rest.
   const windows = new SessionWindows((source, model) => deps.modelResolver.contextWindowFor?.(source, model));
+  // A caller that swaps the log's store keeps the disk untouched, so no output file is made either.
+  const scriptRunnerDeps: ScriptRunnerDeps = deps.openTaskLog
+    ? {}
+    : { fullOutputFile: (taskId, attempt) => prepareTaskOutputFile(session.taskLogLocation, taskId, attempt) };
   const taskLogs: TaskLogRecorder = new TaskLogRecorder({
     broadcast: deps.broadcast,
     // Read through the Session, whose id and workspace are the ones it saves
@@ -296,7 +300,7 @@ export function createSession(deps: SessionDeps): Session {
     config: deps.config,
     notifications: deps.notifications,
     runner: taskLogs.wrap(runnerApprovals.wrap(withContextWindows(deps.runner, windows))),
-    scriptRunner: taskLogs.wrap(deps.scriptRunner ?? new ScriptRunner()),
+    scriptRunner: taskLogs.wrap(deps.scriptRunner ?? new ScriptRunner(scriptRunnerDeps)),
     store,
     output: deps.taskOutput,
     isolation: deps.isolation,

@@ -27,10 +27,10 @@ function workspace(): string {
   return dir;
 }
 
-async function start(body: Partial<ScriptBody> & ({ commands: string[][] } | { script: string }), opts: { env?: Record<string, string>; deps?: ScriptRunnerDeps; cwd?: string } = {}) {
+async function start(body: Partial<ScriptBody> & ({ commands: string[][] } | { script: string }), opts: { env?: Record<string, string>; deps?: ScriptRunnerDeps; cwd?: string; attempt?: number } = {}) {
   const cwd = opts.cwd ?? workspace();
   const runner = new ScriptRunner(opts.deps);
-  const session = await runner.spawn({ taskId: 't1', runner: 'script', prompt: '', cwd, env: opts.env, script: { timeoutMs: DEFAULT_SCRIPT_TIMEOUT_MS, ...body } as ScriptBody });
+  const session = await runner.spawn({ taskId: 't1', runner: 'script', prompt: '', cwd, env: opts.env, attempt: opts.attempt, script: { timeoutMs: DEFAULT_SCRIPT_TIMEOUT_MS, ...body } as ScriptBody });
   const events: StructuredEvent[] = [];
   let output = '';
   session.onEvent((event) => events.push(event));
@@ -100,6 +100,67 @@ describe('ScriptRunner: commands', () => {
     expect(kept.endsWith('END')).toBe(true);
     expect(logged.at(-1)!.omittedChars).toBe(100_003 - kept.length);
     expect(run.output().length).toBe(100_003);
+  });
+});
+
+describe('ScriptRunner: the whole output', () => {
+  // The failure of a long command sits in the middle, which the log drops.
+  const middle = "process.stdout.write('a'.repeat(50000) + 'MIDDLE_FAILURE' + 'b'.repeat(50000)); process.exitCode = 2";
+
+  it('streams all of an attempt\'s output to its file, and names the file in the exit', async () => {
+    const cwd = workspace();
+    const file = path.join(cwd, 'out', '1.output.txt');
+    const run = await start({ commands: [js(middle)] }, { cwd, deps: { fullOutputFile: (taskId, attempt) => { expect([taskId, attempt]).toEqual(['t1', 1]); fs.mkdirSync(path.dirname(file)); return file; } }, attempt: 1 });
+
+    const exit = await run.exit;
+    await run.exited;
+    expect(exit).toMatchObject({ outcome: 'failed', fullOutput: { file, droppedChars: 0 } });
+    const saved = fs.readFileSync(file, 'utf8');
+    expect(saved).toBe(`${'a'.repeat(50000)}MIDDLE_FAILURE${'b'.repeat(50000)}`);
+    // The log still drops the middle: only the file is whole.
+    expect(ofType(run.events, 'script_output').map((e) => e.text).join('')).not.toContain('MIDDLE_FAILURE');
+  });
+
+  it('has the file complete by the time the end is handed on', async () => {
+    const cwd = workspace();
+    const file = path.join(cwd, '1.output.txt');
+    const run = await start({ commands: [js("process.stdout.write('done\\n')")] }, { cwd, deps: { fullOutputFile: () => file }, attempt: 1 });
+    let seen = '';
+    run.session.onScriptExit(() => { seen = fs.readFileSync(file, 'utf8'); });
+
+    expect(await run.exit).toMatchObject({ outcome: 'passed', fullOutput: { file } });
+    expect(seen).toBe('done\n');
+  });
+
+  it('counts what a hard cap does not keep, and says so at the end of the file', async () => {
+    const cwd = workspace();
+    const file = path.join(cwd, '1.output.txt');
+    const run = await start({ commands: [js("process.stdout.write('x'.repeat(1000))")] }, { cwd, deps: { fullOutputFile: () => file, fullOutputMaxChars: 400 }, attempt: 1 });
+
+    expect(await run.exit).toMatchObject({ fullOutput: { file, droppedChars: 600 } });
+    const saved = fs.readFileSync(file, 'utf8');
+    expect(saved.startsWith('x'.repeat(400))).toBe(true);
+    expect(saved).toContain('600 more characters were not saved');
+  });
+
+  it('runs on without a file when it cannot be written', async () => {
+    const warned = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cwd = workspace();
+    fs.writeFileSync(path.join(cwd, 'blocked'), '');
+    const file = path.join(cwd, 'blocked', '1.output.txt');
+    const run = await start({ commands: [js("console.log('still runs')")] }, { cwd, deps: { fullOutputFile: () => file }, attempt: 1 });
+
+    expect(await run.exit).toEqual({ outcome: 'passed' });
+    expect(run.output()).toBe('still runs\n');
+    expect(warned).toHaveBeenCalledTimes(1);
+    warned.mockRestore();
+  });
+
+  it('makes no file for an attempt with no number', async () => {
+    const cwd = workspace();
+    const run = await start({ commands: [js("console.log('x')")] }, { cwd, deps: { fullOutputFile: () => { throw new Error('asked'); } } });
+
+    expect(await run.exit).toEqual({ outcome: 'passed' });
   });
 });
 

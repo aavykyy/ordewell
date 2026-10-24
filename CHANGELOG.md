@@ -358,6 +358,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   prompt plan map and the `task-runner`, `task-model`, `task-effort` and
   `task-mode` commands (and their `/` forms) read a task's runner only for an
   AI task, and refuse the others instead of sending an edit nothing applies.
+- **A script task's whole output is kept.** Its log still holds only the ends
+  of a long output, which lost the failing package of a command such as
+  `npm run ci`; the attempt's complete output is now saved in a file beside the
+  log, and the verdict and the handoff name it
+  ([ADR-0035](docs/adr/supervision/0035-effects-are-consented-and-recorded.md)).
 
 ## [0.10.12] - 2026-10-22
 

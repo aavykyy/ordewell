@@ -8,7 +8,9 @@ import { idSegment, sessionDataDir } from './sessionStore';
  * A structured task's log on disk (ADR-0018, P1):
  * `.ordewell/sessions/<session>/tasks/<task>/<attempt>.jsonl`, one
  * append-only file per attempt, one event per line. Earlier attempts are
- * kept; the whole tree goes with its session (`deleteSession`).
+ * kept; the whole tree goes with its session (`deleteSession`). A script
+ * task's attempt keeps all of its output beside its log, in
+ * `<attempt>.output.txt`: the log holds only the ends of a long one.
  */
 
 /** Which session's logs, in which workspace. */
@@ -74,6 +76,18 @@ export function openTaskLog(location: TaskLogLocation, taskId: string, attempt?:
       },
     };
   }
+}
+
+/**
+ * Where a script task attempt's whole output goes, with its directory ready.
+ * The caller writes the file; it is named for the attempt's number so it sits
+ * beside the log, and is no attempt of its own.
+ */
+export function prepareTaskOutputFile(location: TaskLogLocation, taskId: string, attempt: number): string {
+  ensureStateDirIgnored(location.baseDir);
+  const dir = taskDir(location, taskId);
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, `${attempt}.output.txt`);
 }
 
 function isEvent(value: unknown): value is TaskLogEvent {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { listTaskLogAttempts, openTaskLog, readTaskLog, type TaskLogLocation } from '../taskLogStore';
+import { listTaskLogAttempts, openTaskLog, prepareTaskOutputFile, readTaskLog, type TaskLogLocation } from '../taskLogStore';
 import { deleteSession, saveSession, sessionDataDir } from '../sessionStore';
 import { createEmptyPlan } from '../../models/Task';
 import type { TaskLogEvent } from '../../models/TaskLog';
@@ -39,6 +39,16 @@ describe('taskLogStore', () => {
     expect(readTaskLog(where, 'task-1', 1)).toEqual(turn);
     const raw = fs.readFileSync(path.join(sessionDataDir('session-abc', baseDir), 'tasks', 'task-1', '1.jsonl'), 'utf-8');
     expect(raw.trimEnd().split('\n')).toHaveLength(2);
+  });
+
+  it('prepares a script attempt\u2019s whole-output file beside its log, which is not itself an attempt', () => {
+    const file = prepareTaskOutputFile(where, 'task-1', 2);
+
+    expect(file).toBe(path.join(sessionDataDir('session-abc', baseDir), 'tasks', 'task-1', '2.output.txt'));
+    expect(fs.statSync(path.dirname(file)).isDirectory()).toBe(true);
+    fs.writeFileSync(file, 'whole output');
+    expect(listTaskLogAttempts(where, 'task-1')).toEqual([]);
+    expect(fs.readFileSync(path.join(baseDir, '.ordewell', '.gitignore'), 'utf-8')).not.toBe('');
   });
 
   it('keeps one file per attempt, numbered on from what is already on disk', () => {
