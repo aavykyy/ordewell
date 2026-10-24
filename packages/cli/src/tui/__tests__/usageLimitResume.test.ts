@@ -114,27 +114,27 @@ describe('a task paused on a usage limit in the TUI', () => {
   });
 
   it('asks the daemon to resume it now', async () => {
-    const resumeNow = vi.fn().mockResolvedValue({ ok: true });
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Resumed.' });
     const deps: EffectDeps = {
-      api: { resumeNow } as unknown as OrdewellApi,
+      api: { execute } as unknown as OrdewellApi,
       workspace: '/ws', port: 3742, dispatch: vi.fn(), newSessionId: () => 's2', setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true, exit: vi.fn(),
       reviveDaemon: vi.fn(), setMouseCapture: vi.fn(), writeTerminal: vi.fn(),
     };
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'resume-now' }, deps).catch(() => undefined);
-    expect(resumeNow).toHaveBeenCalledWith('s1', 't1');
+    expect(execute).toHaveBeenCalledWith('s1', { command: 'retry_task', task: 't1', from: 'session' });
   });
 
   it('asks the daemon to cancel the resume, leaving what it says to the timeline', async () => {
-    const cancelResume = vi.fn().mockResolvedValue({ cancelled: true });
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'No longer resumes.' });
     const dispatch = vi.fn();
     const deps: EffectDeps = {
-      api: { cancelResume } as unknown as OrdewellApi,
+      api: { execute } as unknown as OrdewellApi,
       workspace: '/ws', port: 3742, dispatch, newSessionId: () => 's2', setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true, exit: vi.fn(),
       reviveDaemon: vi.fn(), setMouseCapture: vi.fn(), writeTerminal: vi.fn(),
     };
     // Only the request is pinned; the plan refresh after it has no daemon to reach.
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'cancel-resume' }, deps).catch(() => undefined);
-    expect(cancelResume).toHaveBeenCalledWith('s1', 't1');
+    expect(execute).toHaveBeenCalledWith('s1', { command: 'cancel_resume', task: 't1' });
     expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'notice' }));
   });
 });

@@ -51,8 +51,13 @@ function gatedServer(hits: string[]) {
       res.end(JSON.stringify({ mergeGate: [{ id: 'fix-1', order: 1, title: 'Fix' }] }));
       return;
     }
-    hits.push(`${req.method} ${req.url}`);
-    res.end(JSON.stringify({ ok: true, message: 'Started task #2 "Deploy".' }));
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      const sent = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { command: string; task: string };
+      hits.push(`${sent.command} ${sent.task}`);
+      res.end(JSON.stringify({ ok: true, message: 'Started task #2 "Deploy".' }));
+    });
   });
 }
 
@@ -66,7 +71,7 @@ describe('adversarial: a run-task confirmed past its merge gate', () => {
     await capture(() => handleRunTask(['--session-id', 'session-1', '2'], new ApiClient(srv.port), async (q) => { asked.push(q); return true; }));
 
     expect(asked).toEqual([expect.stringContaining('not merged into your branch yet')]);
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/2/force-start']);
+    expect(hits).toEqual(['force_start 2']);
     srv.close();
   });
 });

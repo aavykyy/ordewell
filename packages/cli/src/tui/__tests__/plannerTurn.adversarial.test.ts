@@ -17,7 +17,7 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
   const actions: Action[] = [];
   const deps: EffectDeps = {
     api: {
-      markTaskComplete: vi.fn().mockResolvedValue({ ok: true, message: 'Marked task #1 "Task t1" complete.' }),
+      execute: vi.fn().mockResolvedValue({ ok: true, message: 'Marked task #1 "Task t1" complete.' }),
       getSession: vi.fn().mockResolvedValue({ meta: { id: 's1', goal: 'g' }, plan: { tasks: [] }, run: { tasks: [], runMerge: null, handoff: null, mergeResult: null } }),
       ...api,
     } as OrdewellApi,

@@ -2,16 +2,9 @@ import { flag, hasFlag, positionals, readLastSession, resolveTaskId } from '../u
 import { askYesNo, fail } from './shared';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type PlanBody } from '../apiClient';
-import { pastGateConfirmation, titledTaskRef } from '@ordewell/core';
+import { pastGateConfirmation, taskActionCommand, titledTaskRef, type TaskAction } from '@ordewell/core';
 
-type Action = 'run' | 'force-start' | 'retry' | 'cancel';
-
-const PAST_TENSE: Record<Action, string> = {
-  run: 'Task started.',
-  'force-start': 'Task force-started.',
-  retry: 'Task retried.',
-  cancel: 'Task cancelled.',
-};
+type Action = Extract<TaskAction, 'run' | 'force-start' | 'retry' | 'cancel'>;
 
 /**
  * Resolve `--session-id` (falling back to the last planned session) and the
@@ -118,8 +111,8 @@ function makeHandler(action: Action, command: string = action) {
         const pastGate = PASSES_GATE.has(action) ? await confirmPastGate(subArgs, api, sessionId, ref, confirm) : false;
         const control: Action = pastGate && action === 'run' ? 'force-start' : action;
         try {
-          const { message, queued } = await api.taskControl(sessionId, ref, control);
-          console.log(message ?? queued ?? PAST_TENSE[control]);
+          const { message } = await api.execute(sessionId, taskActionCommand(control, ref));
+          console.log(message);
         } catch (err) {
           console.error(`Failed to ${control} task: ${(err as Error).message}`);
           process.exit(1);
@@ -143,8 +136,8 @@ export async function handleContinue(subArgs: string[], injectedApi?: ApiClient)
   }
   await withTaskRef(subArgs, usage, injectedApi, async (api, sessionId, ref) => {
     try {
-      const sent = await api.continueTask(sessionId, ref, message);
-      console.log(sent.message ?? 'Task continued.');
+      const sent = await api.execute(sessionId, { command: 'retry_task', task: ref, from: 'session', message });
+      console.log(sent.message);
     } catch (err) {
       console.error(`Failed to continue task: ${(err as Error).message}`);
       process.exit(1);

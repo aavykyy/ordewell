@@ -50,8 +50,13 @@ async function gatedServer(hits: string[]) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     if (req.url?.includes('/sessions/')) return res.end(JSON.stringify(PLAN));
     if (req.url?.endsWith('/merge-gate')) return res.end(JSON.stringify({ mergeGate: [{ id: 'fix-1', order: 1, title: 'Fix' }] }));
-    hits.push(`${req.method} ${req.url}`);
-    res.end(JSON.stringify({ ok: true, message: 'Thing started.' }));
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      const sent = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { command: string; task: string };
+      hits.push(`${sent.command} ${sent.task}`);
+      res.end(JSON.stringify({ ok: true, message: 'Thing started.' }));
+    });
   });
 }
 
@@ -67,7 +72,7 @@ describe('adversarial: a gated task confirmed by the user starts, whichever cont
 
     expect(stderr).toBe('');
     expect(exitCode).toBeNull();
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/2/force-start']);
+    expect(hits).toEqual(['force_start 2']);
     srv.close();
   });
 });

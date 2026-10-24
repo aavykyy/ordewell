@@ -35,12 +35,14 @@ async function capture(fn: () => Promise<void>): Promise<{ stdout: string; stder
 }
 
 /** A daemon that records what it is asked and answers each control in the seam's words. */
-async function daemon(answer: (url: string) => { status: number; body: unknown }, hits: string[] = []) {
+async function daemon(answer: (command: { command: string }) => { status: number; body: unknown }, hits: string[] = []) {
   return startServer((req, res) => {
-    req.resume();
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
-      hits.push(`${req.method} ${req.url}`);
-      const { status, body } = answer(req.url ?? '');
+      const sent = Buffer.concat(chunks).toString('utf8');
+      hits.push(`${req.method} ${req.url} ${sent}`);
+      const { status, body } = answer(sent ? JSON.parse(sent) : { command: '' });
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(body));
     });
@@ -56,29 +58,19 @@ describe('handleMarkComplete', () => {
 
     const { stdout } = await capture(() => handleMarkComplete(['--session-id', 'session-1', '2'], api));
 
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/2/complete']);
+    expect(hits).toEqual(['POST /api/plans/session-1/execute-command {"command":"mark_complete","task":"2"}']);
     expect(stdout).toBe('Marked task #2 "Second" complete.');
     srv.close();
   });
 
-  it('keeps a title or an order with a hash intact in the route', async () => {
+  it('keeps a title or an order with a hash intact in the command', async () => {
     const hits: string[] = [];
     const srv = await daemon(() => ({ status: 200, body: { ok: true, message: 'ok' } }), hits);
     const { handleMarkComplete } = await import('../mark-complete');
 
     await capture(() => handleMarkComplete(['--session-id', 'session-1', '#2.1'], new ApiClient(srv.port)));
 
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/%232.1/complete']);
-    srv.close();
-  });
-
-  it('falls back to its own words when an older daemon sends no line', async () => {
-    const srv = await daemon(() => ({ status: 200, body: { ok: true } }));
-    const { handleMarkComplete } = await import('../mark-complete');
-
-    const { stdout } = await capture(() => handleMarkComplete(['--session-id', 'session-1', '2'], new ApiClient(srv.port)));
-
-    expect(stdout).toBe('Task marked complete.');
+    expect(hits).toEqual(['POST /api/plans/session-1/execute-command {"command":"mark_complete","task":"#2.1"}']);
     srv.close();
   });
 
@@ -97,14 +89,17 @@ describe('handleMarkComplete', () => {
 describe('handleUncomplete and handleSkip', () => {
   it('print the seam\'s lines for Mark not done and Skip', async () => {
     const hits: string[] = [];
-    const srv = await daemon((url) => ({ status: 200, body: { ok: true, message: url.endsWith('/skip') ? 'Skipped task #2.' : 'Marked task #2 not done.' } }), hits);
+    const srv = await daemon(({ command }) => ({ status: 200, body: { ok: true, message: command === 'skip_task' ? 'Skipped task #2.' : 'Marked task #2 not done.' } }), hits);
     const mod = await import('../mark-complete');
     const api = new ApiClient(srv.port);
 
     const undone = await capture(() => mod.handleUncomplete(['--session-id', 'session-1', '2'], api));
     const skipped = await capture(() => mod.handleSkip(['--session-id', 'session-1', '2', '--reason', 'not needed'], api));
 
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/2/uncomplete', 'POST /api/plans/session-1/tasks/2/skip']);
+    expect(hits).toEqual([
+      'POST /api/plans/session-1/execute-command {"command":"mark_not_done","task":"2"}',
+      'POST /api/plans/session-1/execute-command {"command":"skip_task","task":"2","reason":"not needed"}',
+    ]);
     expect(undone.stdout).toBe('Marked task #2 not done.');
     expect(skipped.stdout).toBe('Skipped task #2.');
     srv.close();

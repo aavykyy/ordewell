@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, markRequestFor, opsEditable,
+  taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, taskActionCommand, opsEditable,
   titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, blockedByLabel, holdLabel, skippedLabel, type TaskRowSubject, type TaskRowAction,
 } from '..';
 import { taskRef, titledTaskRef } from '../../services/TaskRefs';
@@ -146,14 +146,22 @@ describe('actions per status', () => {
   });
 
   it.each([
-    ['complete', 'complete'],
-    ['skip', null],
-    ['uncomplete', 'uncomplete'],
-    ['cancel', null],
-    ['force-start', null],
-    ['retry', null],
-  ])('%s asks for the mark %s', (action, mark) => {
-    expect(markRequestFor(action)).toBe(mark);
+    ['run', { command: 'run_task', task: 't1' }],
+    ['retry', { command: 'retry_task', task: 't1', from: 'fresh' }],
+    ['cancel', { command: 'stop_task', task: 't1' }],
+    ['resume-now', { command: 'retry_task', task: 't1', from: 'session' }],
+    ['cancel-resume', { command: 'cancel_resume', task: 't1' }],
+    ['skip', { command: 'skip_task', task: 't1' }],
+    ['force-start', { command: 'force_start', task: 't1' }],
+    ['complete', { command: 'mark_complete', task: 't1' }],
+    ['uncomplete', { command: 'mark_not_done', task: 't1' }],
+  ] as const)('%s is the command %j', (action, command) => {
+    expect(taskActionCommand(action, 't1')).toEqual(command);
+  });
+
+  it('carries the reason only on a skip', () => {
+    expect(taskActionCommand('skip', 't1', 'not needed')).toEqual({ command: 'skip_task', task: 't1', reason: 'not needed' });
+    expect(taskActionCommand('cancel', 't1', 'not needed')).toEqual({ command: 'stop_task', task: 't1' });
   });
 });
 

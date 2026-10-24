@@ -22,7 +22,9 @@ ordewell web --daemon   # background; logs to ~/.ordewell/server.log
 
 `/api/sessions`, `/api/plans`, `/api/runners`, `/api/models`, `/api/settings`,
 `/api/commands`, `/api/workspaces`, `/api/approvals`, plus a WebSocket stream
-for live planner and execution events.
+for live planner and execution events. Execution controls (run, stop or retry a
+task, skip, mark complete, message) are one `POST /api/plans/:id/execute-command`
+whose body is core's `ExecutionCommand`.
 
 Skills are read by the planner and the task orchestrator, not served as a
 route; the format is in [Writing skills](https://github.com/ordewell/ordewell/blob/main/docs/skills.md).
