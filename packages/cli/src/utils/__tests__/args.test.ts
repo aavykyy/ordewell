@@ -17,6 +17,15 @@ describe('flag', () => {
   it('returns undefined for empty args', () => {
     expect(flag([], '--goal')).toBeUndefined();
   });
+
+  it('reads --name=value as the same flag', () => {
+    expect(flag(['--goal=my task', '--other'], '--goal')).toBe('my task');
+    expect(flag(['--port=4242'], '--port')).toBe('4242');
+  });
+
+  it('does not match a longer flag that starts with the same name', () => {
+    expect(flag(['--goal-file=x'], '--goal')).toBeUndefined();
+  });
 });
 
 describe('flags', () => {
@@ -38,6 +47,10 @@ describe('flags', () => {
 
   it('returns undefined for values that look like flags', () => {
     expect(flags(['--runner'], '--runner')).toEqual([undefined]);
+  });
+
+  it('reads repeated --name=value occurrences', () => {
+    expect(flags(['--runner=a', '--runner', 'b', '--runner=c'], '--runner')).toEqual(['a', 'b', 'c']);
   });
 });
 
@@ -70,5 +83,9 @@ describe('positionals', () => {
 
   it('returns an empty array when only flags are present', () => {
     expect(positionals(['--port', '4242', '--json'])).toEqual([]);
+  });
+
+  it('does not read the second half of --name=value as a positional', () => {
+    expect(positionals(['delete', '--workspace=/tmp', '--json'])).toEqual(['delete']);
   });
 });

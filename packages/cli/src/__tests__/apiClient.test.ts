@@ -118,6 +118,25 @@ describe('ApiClient', () => {
     expect(fromB[0].id).toBe('server-b');
   });
 
+  // Before this, each returned the error body as its success type: `stop`
+  // printed "Execution stopped." and exited 0 while nothing had stopped.
+  it.each([
+    ['stopExecution', (client: ApiClient) => client.stopExecution('s1')],
+    ['closeSession', (client: ApiClient) => client.closeSession('s1')],
+    ['cancelPlanning', (client: ApiClient) => client.cancelPlanning('s1')],
+    ['getSessions', (client: ApiClient) => client.getSessions()],
+  ])('turns a 500 from %s into a DaemonError', async (_name, call) => {
+    const srv = await startCustomServer((_req, res) => {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'boom' }));
+    });
+    servers.push(srv);
+
+    const result = call(new ApiClient(srv.port));
+    await expect(result).rejects.toBeInstanceOf(DaemonError);
+    await expect(result).rejects.toThrow('boom');
+  });
+
   it('reads a multi-byte character split across response chunks intact', async () => {
     const body = Buffer.from(JSON.stringify([{ id: 'prompt-😀-é', goal: '', runners: [], taskCount: 0, status: '', createdAt: '', updatedAt: '' }]));
     // Cut inside the 4-byte emoji so the first chunk ends on a partial sequence.

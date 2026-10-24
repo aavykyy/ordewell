@@ -101,7 +101,8 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = (server.address() as AddressInfo).port;
     const { token, file } = mintDaemonToken(port);
-    server.on('request', createRequestListener(createApp(pool, { port, token, tokenFile: file })));
+    const admission = { port, token, tokenFile: file };
+    server.on('request', createRequestListener(createApp(pool, admission), admission));
     client = new ApiClient(port, workspace);
   });
 

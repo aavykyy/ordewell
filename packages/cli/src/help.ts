@@ -67,7 +67,7 @@ Planner, models and runners:
 
 Other:
   ordewell web                    Start the API server (foreground; --daemon for background)
-  ordewell setup                  Interactive first-run setup wizard
+  ordewell setup                  Write a starter .env configuration file
   ordewell skills                 List installed skills and shadowed workspace duplicates
   ordewell --help               Show this help
   ordewell --version            Print the installed version (alias: version, -v)
@@ -92,9 +92,14 @@ Plan options:
   --runner <id>       Runner to use (repeatable; default: all enabled runners)
   --workspace /path   Workspace directory (default: cwd)
   --no-chat           One-shot plan; skips the planner dialogue
+  --yes               Start the plan as soon as it is generated, without a review pause
+  --verbose           Show each planning step as it happens
 
 Run options:
   --session-id <id>   Execute a specific session (default: last session)
+  --workspace /path   Workspace directory (default: cwd)
+  --stash             Stash a dirty tree and continue in the task's worktree
+  --without-isolation Run the plan in your checkout; tasks share it
 
 Status options:
   --session-id <id>   Show full detail for one session
@@ -114,7 +119,7 @@ Task options (add-task):
   --description "..." Task description (default: the title)
   --prompt "..."      AI instructions (AI tasks only; default: the description)
   --type ai|user      Task type (default: ai)
-  --depends-on <id>   Dependency task ID (repeatable)
+  --depends-on <ref>  Dependency task: an order number or a task ID (repeatable)
 
 Stop options:
   --server            Stop the background server daemon

@@ -18,6 +18,10 @@ describe('resolvePort', () => {
     expect(resolvePort(['--port', '4242'])).toBe(4242);
   });
 
+  it('reads --port=4242', () => {
+    expect(resolvePort(['--port=4242'])).toBe(4242);
+  });
+
   it('ignores a non-numeric --port and falls through', () => {
     expect(resolvePort(['--port', 'nope'])).toBe(DEFAULT_PORT);
   });

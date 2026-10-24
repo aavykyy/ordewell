@@ -231,7 +231,7 @@ describe('ordewell plan --no-chat with a named coding agent and a vendor model l
     const port = (server.address() as AddressInfo).port;
     const { token, file } = mintDaemonToken(port);
     const admission = { port, token, tokenFile: file };
-    server.on('request', createRequestListener(createApp(pool, admission)));
+    server.on('request', createRequestListener(createApp(pool, admission), admission));
     attachWsHandler(server, pool, admission);
     client = new ApiClient(port, workspace);
   });

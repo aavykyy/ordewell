@@ -162,7 +162,7 @@ describe('ordewell plan with an inherited planner model', () => {
     const port = (server.address() as AddressInfo).port;
     const { token, file } = mintDaemonToken(port);
     const admission = { port, token, tokenFile: file };
-    server.on('request', createRequestListener(createApp(pool, admission)));
+    server.on('request', createRequestListener(createApp(pool, admission), admission));
     attachWsHandler(server, pool, admission);
     client = new ApiClient(port, workspace);
   });
