@@ -18,6 +18,8 @@ export interface ExtensionHandlers {
   setPlannerModel(modelId: string, effort?: string): Promise<void>;
   /** Open (or focus) the on-demand task-log tab for a structured task (ADR-0018, V1). */
   openTaskLog(taskId: string): void;
+  /** Open a workspace-relative file Ordewell kept, such as a handoff's saved patch (ADR-0050). */
+  openFile(path: string): void;
   setPlanDockHeight(height: number): void;
   changeSettings(change: SettingsChange): Promise<void>;
   /** Turn on an installed runner the chat header offered; the host re-sends the list when it lands. */
@@ -142,6 +144,9 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
     // The panel is its own webview; the chat only asks for it to be opened.
     case 'openTaskLog':
       deps.extension.openTaskLog(msg.taskId);
+      return;
+    case 'openFile':
+      deps.extension.openFile(msg.path);
       return;
     case 'setPlanDockHeight':
       deps.extension.setPlanDockHeight(msg.height);

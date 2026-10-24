@@ -271,11 +271,79 @@ export function patchFlagText(flag: PatchFlag): string {
   return `${FLAG_WORDS[flag.kind]}: ${counted(flag.count, 'file')}${flag.paths.length ? ` (${flag.paths.join(', ')}${more > 0 ? `, +${more} more` : ''})` : ''}`;
 }
 
+/** What a saved patch changes, once: files, binary files, lines and size (ADR-0050). */
+export function patchChangesText(patch: HandoffPatch): string {
+  const binary = patch.binary > 0 ? `, ${patch.binary} binary` : '';
+  return `${counted(patch.files, 'file')}${binary}, +${patch.added} -${patch.removed}, ${byteSize(patch.bytes)}`;
+}
+
+/** The same without the size, for a row that already names the patch and has little room (ADR-0050). */
+export function patchLinesText(patch: HandoffPatch): string {
+  const binary = patch.binary > 0 ? `, ${patch.binary} binary` : '';
+  return `${counted(patch.files, 'file')}${binary}, +${patch.added} -${patch.removed}`;
+}
+
 /** A saved patch as one line: where, how big, from which commit, and its flags (ADR-0050). */
 export function patchText(patch: HandoffPatch): string {
-  const binary = patch.binary > 0 ? `, ${patch.binary} binary` : '';
   const flags = patch.flags?.length ? `; ${patch.flags.map(patchFlagText).join('; ')}` : '';
-  return `patch ${patch.path} (attempt ${patch.attempt}): ${counted(patch.files, 'file')}${binary}, +${patch.added} -${patch.removed}, ${byteSize(patch.bytes)}, from commit ${patch.base.slice(0, 12)}${flags}`;
+  return `patch ${patch.path} (attempt ${patch.attempt}): ${patchChangesText(patch)}, from commit ${patch.base.slice(0, 12)}${flags}`;
+}
+
+/**
+ * A saved patch as a preview block (ADR-0050): what it changes and the commit
+ * it applies to, the file to open, and every path it left out. The compact
+ * surfaces say it in one line with `patchText`; this is for a task's handoff,
+ * where there is room for the flags.
+ */
+export function patchLines(patch: HandoffPatch): string[] {
+  const view = patchView(patch);
+  return [`Patch: ${view.changes}, ${view.base}`, view.saved, ...view.flags];
+}
+
+/**
+ * A saved patch as every surface shows it (ADR-0050): what was saved, the
+ * files and lines it changes, where the file is, and what it left out. Each
+ * surface paints these words and offers its own way to open the file; none of
+ * them works out a count, a size or a flag for itself.
+ */
+export interface PatchView {
+  /** The patch file, relative to the workspace root: what a surface opens. */
+  path: string;
+  /** "attempt 1". */
+  attempt: string;
+  /** "3 files, 1 binary, +42 -7, 1.5 KB". */
+  changes: string;
+  /** "from commit abc123def456". */
+  base: string;
+  /** "saved as <path> (attempt 1)": the fact it was saved, and the file to open. */
+  saved: string;
+  /** One line per flag: what it left out, how many and which paths; empty when it left out nothing. */
+  flags: string[];
+  /** The compact row's part: "patch: 3 files, 1 binary, +42 -7". */
+  peek: string;
+}
+
+/** One saved patch, worded once for every surface. */
+export function patchView(patch: HandoffPatch): PatchView {
+  return {
+    path: patch.path,
+    attempt: `attempt ${patch.attempt}`,
+    changes: patchChangesText(patch),
+    base: `from commit ${patch.base.slice(0, 12)}`,
+    saved: `saved as ${patch.path} (attempt ${patch.attempt})`,
+    flags: (patch.flags ?? []).map(patchFlagText),
+    peek: `patch: ${patchLinesText(patch)}`,
+  };
+}
+
+/** Every patch a handoff names, in the order Ordewell added them. */
+export function savedPatchViews(handoff: HandoffDigest | undefined): PatchView[] {
+  return (handoff?.artifacts ?? []).filter((a): a is HandoffPatch => a.kind === 'patch').map(patchView);
+}
+
+/** The patch a handoff names, as a surface shows it; null when it names none. */
+export function savedPatchView(handoff: HandoffDigest | undefined): PatchView | null {
+  return savedPatchViews(handoff)[0] ?? null;
 }
 
 /** One finding as text: its id, severity and title, then its detail and evidence under it. */
@@ -340,12 +408,18 @@ export function handoffPreviewLines(handoff: HandoffDigest, options: HandoffPrev
   const more = handoff.findingCount - shown.length;
   const summary = handoff.summary.trim();
   const { commit } = handoff;
+  // A patch gets a block with its flags; the artifact list keeps one line per
+  // reference the author gave, so a path is never cut out of a joined line.
+  const patches = (handoff.artifacts ?? []).filter((a): a is HandoffPatch => a.kind === 'patch');
+  const others = (handoff.artifacts ?? []).filter((a) => a.kind !== 'patch');
+  const artifacts = others.length ? artifactLines({ ...handoff, artifacts: others }, options.taskName) : [];
   return [
     ...(commit ? [`Commit: ${commit.subject}`, ...(commit.body ? commit.body.split('\n') : [])] : []),
     ...(summary ? summary.split('\n') : []),
     ...shown.map((f) => `${f.id} [${f.severity}] ${f.title}`),
     ...(more > 0 ? [`+${more} more finding${more === 1 ? '' : 's'}, in the attempt's log`] : []),
-    ...artifactLines(handoff, options.taskName),
+    ...artifacts,
+    ...patches.flatMap(patchLines),
   ];
 }
 

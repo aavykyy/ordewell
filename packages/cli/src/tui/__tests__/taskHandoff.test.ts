@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { EMPTY_TASK_LOG_FOLLOW, replayTaskLog, type StoredHandoff, type TaskLogEvent } from '@ordewell/core';
+import { EMPTY_TASK_LOG_FOLLOW, replayTaskLog, type HandoffPatch, type StoredHandoff, type TaskLogEvent } from '@ordewell/core';
 import { stripAnsi, style, width } from '../ansi';
 import { footerHints } from '../layout';
 import { reduce } from '../reducer';
@@ -180,6 +180,38 @@ describe('a task\'s handoff in its view (ADR-0047)', () => {
     expect(out).toContain('Report:');
     expect(out).toContain('1. [x] Create the new key');
     expect(out).not.toContain('Findings:');
+  });
+
+  it('draws a saved patch in full: its changes, base, file and what it left out (ADR-0050)', () => {
+    const saved: HandoffPatch = {
+      kind: 'patch', path: '.ordewell/sessions/s1/tasks/t1/1.patch', attempt: 1,
+      base: 'a'.repeat(40), files: 2, added: 9, removed: 1, binary: 0, bytes: 900,
+      flags: [
+        { kind: 'excluded', count: 1, paths: ['docs/link'] },
+        { kind: 'dropped', count: 1, paths: ['big.bin'] },
+      ],
+    };
+    const out = plain(opened([{ type: 'handoff', handoff: { summary: 'Tried it.', findings: [], findingCount: 0, artifacts: [saved] } }])).replace(/\s+/g, ' ');
+
+    expect(out).toContain('Patch: 2 files, +9 -1, 900 B');
+    expect(out).toContain('saved as .ordewell/sessions/s1/tasks/t1/1.patch');
+    expect(out).toContain('not carried (links and submodules): 1 file');
+    expect(out).toContain('(docs/link)');
+    expect(out).toContain('dropped over the size cap: 1 file (big.bin)');
+    expect(out).not.toContain('Artifacts:');
+  });
+
+  it('names the patch in the plan row\'s handoff peek, before the summary', () => {
+    const saved: HandoffPatch = {
+      kind: 'patch', path: '.ordewell/sessions/s1/tasks/t1/1.patch', attempt: 1,
+      base: 'a'.repeat(40), files: 2, added: 9, removed: 1, binary: 0, bytes: 900,
+    };
+    const state = initialState({
+      rows: 24, cols: 240, focus: 'plan',
+      tasks: [task({ handoff: { summary: 'Tried it.', findings: [], findingCount: 0, artifacts: [saved] } })],
+    });
+
+    expect(planText(state)).toContain('handed over · no findings · patch: 2 files, +9 -1');
   });
 
   it('draws a script task\'s handoff after the step it ran', () => {

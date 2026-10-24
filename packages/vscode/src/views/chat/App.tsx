@@ -20,6 +20,7 @@ import type { GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerI
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 import { planSummaryLabel, nextDock } from './planDock';
 import { DetailContext } from './detail';
+import { OpenPatchContext } from './openPatch';
 import { useFollowOutput } from './followOutput';
 import { isBuiltinSlashCommand, slashHelp } from '../../commands/slashCommands';
 import type { HostToWebview, SettingsChange, WebviewToHost } from '../../shared/protocol';
@@ -361,6 +362,12 @@ export default function App() {
   // for it. Opening is idempotent host-side — an open tab is focused.
   const handleOpenTaskLog = useCallback((taskId: string) => {
     vscode.postMessage({ type: 'openTaskLog', taskId });
+  }, []);
+
+  // A handoff's saved patch is a workspace file beside the attempt's log
+  // (ADR-0050): the host opens it in an editor tab, as it opens a run's diff.
+  const handleOpenPatch = useCallback((path: string) => {
+    vscode.postMessage({ type: 'openFile', path });
   }, []);
 
   // A card's message box (ADR-0018, M1; ADR-0023, F1) uses the same routes the
@@ -774,6 +781,7 @@ export default function App() {
   };
 
   return (
+    <OpenPatchContext.Provider value={handleOpenPatch}>
     <DetailContext.Provider value={detail}>
     <div className="chat-container">
       <div className="setup-panel">
@@ -1005,5 +1013,6 @@ export default function App() {
       />
     </div>
     </DetailContext.Provider>
+    </OpenPatchContext.Provider>
   );
 }

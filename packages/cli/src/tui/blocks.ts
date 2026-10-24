@@ -1,5 +1,5 @@
 import {
-  approvalKindText, approvalStatusText, diffRows, diffSummary, formatTokenCount, handoffFindingsText, handoffReferenceText, loadedSkillTokens, outputPreview, planMarkerParts, severityLabel, usageText, wakeUpItems, worstSeverity, REPORT_PREVIEW_LINES,
+  approvalKindText, approvalStatusText, diffRows, diffSummary, formatTokenCount, handoffFindingsText, handoffReferenceText, loadedSkillTokens, outputPreview, planMarkerParts, savedPatchViews, severityLabel, usageText, wakeUpItems, worstSeverity, REPORT_PREVIEW_LINES,
   type DiffRow, type DiffStat,
   type ApprovalBlock, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
   type CommandBlock, type CommandStatus, type CompactionBlock, type RunnerLoadedBlock,
@@ -654,16 +654,32 @@ function findingLines(f: HandoffFinding, cols: number): string[] {
   return [...findingHeadLines(f, cols), ...detail, ...evidence];
 }
 
-/** Each artifact as its own path or URL, so a reader can copy one without the others. */
+/** Each artifact as its own path or URL, so a reader can copy one without the others. A patch gets the expanded block below. */
 function handoffArtifactLines(block: HandoffBlock, cols: number): string[] {
-  if (!block.handoff.artifacts?.length) return [];
+  const artifacts = block.handoff.artifacts?.filter((a) => a.kind !== 'patch') ?? [];
+  if (artifacts.length === 0) return [];
   const room = Math.max(1, cols - FINDING_INDENT.length - 2);
   const rows = [`${HANDOFF_INDENT}${style.grey('Artifacts:')}`];
-  for (const artifact of block.handoff.artifacts) {
+  for (const artifact of artifacts) {
     const [first, ...rest] = wrap(sanitize(handoffReferenceText(artifact)), room);
     rows.push(`${FINDING_INDENT}- ${first}`, ...rest.map((line) => `${FINDING_INDENT}  ${line}`));
   }
   return rows;
+}
+
+/**
+ * A saved prototype in full (ADR-0050): what it changes, the commit it applies
+ * to, the file to open, and every path it left out. The one-line artifact form
+ * stays in the compact surfaces; this block is for the attempt's log.
+ */
+function handoffPatchLines(block: HandoffBlock, cols: number): string[] {
+  const room = Math.max(1, cols - FINDING_INDENT.length);
+  return savedPatchViews(block.handoff).flatMap((patch) => [
+    ...wrap(`Patch: ${patch.changes}, ${patch.base}`, Math.max(1, cols - HANDOFF_INDENT.length))
+      .map((line, i) => `${HANDOFF_INDENT}${i === 0 ? style.grey(line) : line}`),
+    ...wrap(patch.saved, room).map((line) => `${FINDING_INDENT}${style.grey(line)}`),
+    ...patch.flags.flatMap((flag) => wrap(flag, room).map((line) => `${FINDING_INDENT}${style.grey(line)}`)),
+  ]);
 }
 
 /**
@@ -706,6 +722,7 @@ function handoffLines(block: HandoffBlock, cols: number, detailAll: boolean): st
   const more = handoff.findingCount - handoff.findings.length;
   if (more > 0) rows.push(style.grey(`${HANDOFF_INDENT}+${more} more finding${more === 1 ? '' : 's'}, in the attempt's log`));
   rows.push(...handoffArtifactLines(block, cols));
+  rows.push(...handoffPatchLines(block, cols));
   if (handoff.report) rows.push(...handoffReportLines(handoff.report, cols, detailAll));
   return rows;
 }

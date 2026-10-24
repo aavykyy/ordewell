@@ -24,6 +24,8 @@ export interface TaskLogPanelDeps {
   getTask: (taskId: string) => Task | undefined;
   /** The task's dotted reference ("2", "2.1"): a subtask's own order restarts at 1. */
   orderLabel?: (taskId: string) => string | undefined;
+  /** Open a workspace-relative file the handoff saved, such as its patch (ADR-0050). */
+  openFile: (path: string) => void;
   log: (msg: string) => void;
 }
 
@@ -129,6 +131,9 @@ export class TaskLogPanel {
       case 'resumeNow':
         this.follow = { ...this.follow, followLatest: true };
         this.controlAsync(() => this.userCommand(taskActionCommand('resume-now', this.taskId)));
+        return;
+      case 'openFile':
+        this.deps.openFile(msg.path);
         return;
       case 'continueTask':
         // The continue is a new attempt: show it, even from an earlier one.

@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0022", "0046", "0047"]
-note: "The capture, the kept patch, its artifact and task_diff are built; a change task applying a patch, the surfaces beyond one line, and the planner's guidance are not."
+note: "The capture, the kept patch, its artifact, task_diff and the three surfaces are built; a change task applying a patch and the planner's guidance are not."
 ---
 
 # 0050 — A read-only task can hand off its prototype as a patch
@@ -121,7 +121,10 @@ large file counts as small.
   - It is added whatever the verdict, and an attempt that ended without a
     *Completion call* still hands it on.
   - It is in the plan's digest, so `read_task`, `task_query` and every surface
-    show it as one line.
+    name it. A row says it and its lines added and removed; the attempt's log
+    block adds the base commit, the file to open and every flagged path. One
+    view in core words those facts for the TUI, the VS Code webview and the
+    CLI, and each surface offers its own way to open the file.
 - **The planner's `task_diff`** reads the patch for a task whose handoff names
   one: the file list with line counts, or one file's part. It still runs no
   git in a read-only worktree.
@@ -180,7 +183,6 @@ No field records the pick, and core reads nothing from the judge.
 ## Out of scope
 
 - A change task applying a patch, and reporting an apply that conflicts.
-- How the surfaces show a patch, beyond its one line.
 - The planner's guidance for explorers, judges and builders.
 - A repo group's several repositories.
 - Candidate change tasks: see below.
@@ -230,3 +232,4 @@ No field records the pick, and core reads nothing from the judge.
 ## History
 
 - 2026-10-24 — accepted; the capture, the kept patch, its artifact and `task_diff` implemented.
+- 2026-10-24 — the TUI, VS Code and CLI show a saved patch: its changes, the file to open and the paths it left out.

@@ -11,6 +11,8 @@ export interface TaskLogRegistryDeps {
   getTask: (taskId: string) => Task | undefined;
   /** The task's dotted reference ("2", "2.1"): a subtask's own order restarts at 1. */
   orderLabel?: (taskId: string) => string | undefined;
+  /** Open a workspace-relative file the log's handoff saved, from the panel's own link (ADR-0050). */
+  openFile: (path: string) => void;
   log: (msg: string) => void;
 }
 
@@ -81,7 +83,7 @@ export class TaskLogRegistry {
     const controller = new TaskLogPanel(
       panel,
       taskId,
-      { session: this.deps.session(), getTask: this.deps.getTask, orderLabel: this.deps.orderLabel, log: this.deps.log },
+      { session: this.deps.session(), getTask: this.deps.getTask, orderLabel: this.deps.orderLabel, openFile: this.deps.openFile, log: this.deps.log },
       this.deps.extensionUri,
       () => { this.panels.delete(taskId); },
     );

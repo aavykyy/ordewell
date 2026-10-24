@@ -153,6 +153,8 @@ export type WebviewToHost =
   | { type: 'addNote'; text: string }
   /** Open (or focus) the on-demand task-log tab for a structured task (ADR-0018, V1). */
   | { type: 'openTaskLog'; taskId: string }
+  /** Open a workspace-relative file Ordewell kept, such as a handoff's saved patch (ADR-0050). */
+  | { type: 'openFile'; path: string }
   /** The plan dock's dragged height in px, saved on release so every later session opens at it. */
   | { type: 'setPlanDockHeight'; height: number }
   /**

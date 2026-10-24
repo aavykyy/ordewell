@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { ConversationBlocks } from '../chat/components/ChatMessage';
+import { OpenPatchContext } from '../chat/openPatch';
 import { useFollowOutput } from '../chat/followOutput';
 import { contextMeterTitle, hasHiddenDetail } from '@ordewell/core/plan-utils';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type PatchedView } from '../../shared/conversationPatch';
@@ -168,6 +169,7 @@ export default function TaskLogApp() {
   const sendLabel = resumes ? 'Resume' : continues ? 'Continue' : 'Send';
 
   return (
+    <OpenPatchContext.Provider value={(path) => vscode.postMessage({ type: 'openFile', path })}>
     <div className="task-log-container">
       {status && (
         <div className="task-log-header">
@@ -252,5 +254,6 @@ export default function TaskLogApp() {
         {canSendNow && <SendKeyHint />}
       </div>
     </div>
+    </OpenPatchContext.Provider>
   );
 }

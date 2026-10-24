@@ -1,6 +1,7 @@
 import React from 'react';
 import type { HandoffDigest, StoredHandoff, TaskRowHandoff } from '@ordewell/core';
-import { handoffFindingsText, handoffPeekParts, handoffReferenceText, REPORT_PREVIEW_LINES, severityLabel, worstSeverity } from '@ordewell/core/plan-utils';
+import { handoffFindingsText, handoffPeekParts, handoffReferenceText, REPORT_PREVIEW_LINES, savedPatchViews, severityLabel, worstSeverity } from '@ordewell/core/plan-utils';
+import { useOpenPatch } from '../openPatch';
 
 export function HandoffPeek({ handoff }: { handoff: TaskRowHandoff | null }) {
   if (!handoff) return null;
@@ -24,6 +25,11 @@ export default function TaskHandoff({ handoff, expanded = false, taskName, onRea
   const shown = expanded ? lines : lines.slice(0, REPORT_PREVIEW_LINES);
   const hidden = lines.length - shown.length;
   const more = handoff.findingCount - handoff.findings.length;
+  // A patch gets its own block below (ADR-0050); the artifacts list keeps the
+  // author's references, which stay one line each.
+  const artifacts = handoff.artifacts?.filter((a) => a.kind !== 'patch') ?? [];
+  const patches = savedPatchViews(handoff);
+  const openPatch = useOpenPatch();
   return (
     <section className="task-handoff" aria-label="Handoff">
       <div className="task-handoff-heading">Handoff · {handoffFindingsText(handoff.findingCount)}{severity ? ` · ${severityLabel(severity)}` : ''}</div>
@@ -44,12 +50,21 @@ export default function TaskHandoff({ handoff, expanded = false, taskName, onRea
         </div>
       ))}
       {more > 0 && <div className="task-handoff-more">+{more} more finding{more === 1 ? '' : 's'}, in the attempt's log</div>}
-      {handoff.artifacts?.length ? (
+      {artifacts.length ? (
         <div className="task-handoff-artifacts">
           <div className="task-handoff-heading">Artifacts</div>
-          {handoff.artifacts.map((ref, i) => <div key={i}>{handoffReferenceText(ref, taskName)}</div>)}
+          {artifacts.map((ref, i) => <div key={i}>{handoffReferenceText(ref, taskName)}</div>)}
         </div>
       ) : null}
+      {patches.map((patch) => (
+        <div key={patch.path} className="task-handoff-patch">
+          <div className="task-handoff-heading">Patch · {patch.changes}</div>
+          <div className="task-handoff-patch-saved">{patch.saved}</div>
+          <div className="task-handoff-patch-base">{patch.base}</div>
+          {patch.flags.map((flag) => <div key={flag} className="task-handoff-patch-flag">{flag}</div>)}
+          {openPatch && <button type="button" className="task-log-open-btn" onClick={() => openPatch(patch.path)}>Open patch</button>}
+        </div>
+      ))}
       {report && (
         <div className="chat-report">
           <div className="chat-report-head">Report</div>
