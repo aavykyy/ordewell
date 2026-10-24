@@ -908,6 +908,66 @@ describe('the command seam: merge_all', () => {
 
 });
 
+describe('the command seam: tasks started one by one with run_task', () => {
+  /** An approved plan with one task the planner started alone: no scheduled run is under way. */
+  async function lone() {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]), 'goal', testWorkspace, { persist: false });
+    expect(await env.run({ command: 'run_task', task: 't1' })).toMatchObject({ ok: true });
+    expect(env.session.status).not.toBe('running');
+    return env;
+  }
+
+  // The scheduler is not driving a task started alone: nothing starts its dependents but the user's Execute or the planner's run_plan.
+  it('does not start the dependents of a lone task when it finishes', async () => {
+    const env = await lone();
+
+    env.latest('t1').reportComplete({ status: 'done', summary: 'did t1' });
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('completed'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(env.spawned('t2')).toHaveLength(0);
+    expect(taskOf(env.session, 't2')!.status).not.toBe('in_progress');
+  });
+
+  it('lets the planner\'s run_plan join a lone task\'s run, so its dependents start as it finishes', async () => {
+    const env = await lone();
+
+    const outcome = await env.run({ command: 'run_plan' });
+
+    expect(outcome).toEqual({ ok: true, message: 'The plan is running: task #1 "Task t1" is already running, and each approved task starts as its dependencies finish.' });
+    expect(env.session.status).toBe('running');
+    expect(env.spawned('t1')).toHaveLength(1);
+    env.latest('t1').reportComplete({ status: 'done', summary: 'did t1' });
+    await vi.waitFor(() => expect(env.spawned('t2')).toHaveLength(1));
+  });
+
+  it('joins approving nothing: a task added after the user approved the plan stays theirs to approve, and the answer says so', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { title: 'Add divide' })], { approvedTasks: ['t1', 't2'] }), 'goal', testWorkspace, { persist: false });
+    await env.run({ command: 'run_task', task: 't1' });
+
+    const outcome = await env.run({ command: 'run_plan' });
+
+    expect(outcome).toEqual({ ok: true, message: 'The plan is running: task #1 "Task t1" is already running, and each approved task starts as its dependencies finish. Task #3 "Add divide" was added after the user approved the plan, so it waits until they start it or execute the plan.' });
+    expect(env.session.planState!.approvedTasks).toEqual(['t1', 't2']);
+    env.latest('t1').reportComplete({ status: 'done', summary: 'did t1' });
+    await vi.waitFor(() => expect(env.spawned('t2')).toHaveLength(1));
+    expect(env.spawned('t3')).toHaveLength(0);
+  });
+
+  it('refuses the planner a join in a plan the user never executed, naming Execute plan as what makes the run', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { status: 'draft' }), 'goal', testWorkspace, { persist: false });
+    await env.session.execute({ command: 'force_start', task: 't1' }, { kind: 'user' });
+
+    const outcome = await env.run({ command: 'run_plan' });
+
+    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: 'The user has not approved this plan yet: they approve it by executing it themselves (Execute plan). Ask them to. Tasks started with run_task are not a scheduled run, so their dependents start only once the user executes the plan.' });
+    expect(env.session.status).not.toBe('running');
+  });
+});
+
 describe('the command seam\'s extension points', () => {
   const admission = () => ({ current: () => true, release: vi.fn() });
 
