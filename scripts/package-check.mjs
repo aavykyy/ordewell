@@ -80,7 +80,11 @@ try {
     join(consumer, 'package.json'),
     JSON.stringify({ name: 'ordewell-pack-smoke', private: true, dependencies: Object.fromEntries(tarballs.map((t) => [t.name, `file:${t.path}`])) }, null, 2),
   );
-  const installed = spawnSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: consumer, stdio: 'inherit' });
+  // An empty user config keeps a developer's ~/.npmrc (an allow-scripts list
+  // makes npm refuse a project-scoped install) out of the smoke install.
+  const userconfig = join(packDir, 'empty.npmrc');
+  writeFileSync(userconfig, '');
+  const installed = spawnSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', `--userconfig=${userconfig}`], { cwd: consumer, stdio: 'inherit' });
   if (installed.status !== 0) {
     fail('npm install of the packed tarballs failed');
   } else {
@@ -107,12 +111,12 @@ try {
   console.log('\nVS Code extension');
   const vscodeDir = join(root, 'packages/vscode');
   const before = failures;
-  const vsix = readdirSync(vscodeDir)
-    .filter((file) => file.endsWith('.vsix'))
-    .sort()
-    .pop();
+  // Name the current version: earlier releases' .vsix files linger in the
+  // directory, and sorting the names puts 0.10.8 after 0.10.12.
+  const extension = JSON.parse(readFileSync(join(vscodeDir, 'package.json'), 'utf8'));
+  const vsix = readdirSync(vscodeDir).find((file) => file === `${extension.name}-${extension.version}.vsix`);
   if (!vsix) {
-    fail('no .vsix in packages/vscode; run "npm run package -w packages/vscode" first');
+    fail(`no ${extension.name}-${extension.version}.vsix in packages/vscode; run "npm run package -w packages/vscode" first`);
   } else {
     const listed = execFileSync('unzip', ['-Z1', join(vscodeDir, vsix)], { encoding: 'utf8' }).split('\n');
     const has = (pattern) => listed.some((entry) => pattern.test(entry));
