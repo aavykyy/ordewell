@@ -546,11 +546,16 @@ export interface PatchApplyOptions {
   linked?: readonly string[];
 }
 
-/** How an apply ended: merged whole, merged with conflicts left in the worktree, or applied nothing. */
+/**
+ * How an apply ended: merged whole, merged with conflicts left in the
+ * worktree, applied nothing, or stopped part way, its index untouched and the
+ * files git had already changed left on disk as it wrote them.
+ */
 export type PatchApplyResult =
   | ({ kind: 'applied' } & AppliedAt)
   | ({ kind: 'conflicted'; conflicts: PatchConflict[] } & AppliedAt)
-  | { kind: 'refused'; reason: string };
+  | { kind: 'refused'; reason: string }
+  | { kind: 'stopped'; reason: string; changed: string[] };
 
 // A change task's worktree is the user's own repository, so git's fsmonitor hook is not run for it.
 const APPLY_GIT = ['--no-pager', '-c', 'core.fsmonitor=false'];
@@ -580,6 +585,12 @@ async function indexEntries(invoker: GitInvoker, worktree: string): Promise<Inde
   return entries;
 }
 
+/** What a trial apply found: the index as it left it, and git's words if it failed. */
+interface Trial {
+  left: IndexEntries;
+  failed?: string;
+}
+
 /**
  * The index as applying the patch would leave it, as git itself says: the
  * same apply, run against a copy of the index and writing no file. A patch's
@@ -588,14 +599,58 @@ async function indexEntries(invoker: GitInvoker, worktree: string): Promise<Inde
  * as its target, and the path git patches is the one its `---` and `+++`
  * lines name, not the one its first line does.
  */
-async function trialApply(invoker: GitInvoker, worktree: string, patchFile: string, scratch: string): Promise<IndexEntries> {
+async function trialApply(invoker: GitInvoker, worktree: string, patchFile: string, scratch: string): Promise<Trial> {
   const index = path.resolve(worktree, (await git(invoker, worktree, [...APPLY_GIT, 'rev-parse', '--git-path', 'index'])).trim());
   const copy = path.join(scratch, 'index');
   fs.copyFileSync(index, copy);
   const trial: GitInvoker = { ...invoker, exec: (file, args, opts) => invoker.exec(file, args, { ...opts, env: { ...opts.env, GIT_INDEX_FILE: copy } }) };
-  // Its own outcome is the real apply's to report: a refusal leaves the copy as it was, and a conflict leaves what the real one would.
-  await tryGit(trial, worktree, [...APPLY_GIT, 'apply', '--cached', '--3way', '--whitespace=nowarn', patchFile]);
-  return indexEntries(trial, worktree);
+  const tried = await tryGit(trial, worktree, [...APPLY_GIT, 'apply', '--cached', '--3way', '--whitespace=nowarn', patchFile]);
+  return { left: await indexEntries(trial, worktree), ...(tried.ok ? {} : { failed: tried.stderr }) };
+}
+
+/** Why git stopped, in its words: only its errors, since it narrates the files it merged before the one it could not. */
+function gitSaid(stderr: string): string {
+  const lines = stderr.trim().split('\n');
+  const errors = lines.filter((line) => line.startsWith('error:'));
+  const said = (errors.length > 0 ? errors : lines).join('\n');
+  return said.length > 1500 ? `…${said.slice(-1500)}` : said || 'it failed with no output';
+}
+
+function gitRefused(lead: string, stderr: string): PatchApplyResult {
+  const said = gitSaid(stderr);
+  const staged = /does not match index/.test(said) ? ' Stage (git add) or commit your changes to those files, then apply again.' : '';
+  return { kind: 'refused', reason: `${lead}: ${said}.${staged}` };
+}
+
+/** Each path as it stands on disk, so that a failed apply can be read for what git changed before it stopped. */
+function onDisk(worktree: string, names: readonly string[]): string[] {
+  return names.map((name) => {
+    try {
+      const stat = fs.lstatSync(path.join(worktree, name), { bigint: true, throwIfNoEntry: false });
+      return stat ? `${stat.mode} ${stat.ino} ${stat.size} ${stat.mtimeNs} ${stat.ctimeNs}` : 'none';
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code ?? 'unreadable';
+    }
+  });
+}
+
+/**
+ * Every path the patch names, as git itself parses it: `--numstat` names each
+ * section by the path it writes, and reversed by the one it reads, so a
+ * rename's and a copy's source is named as well. The index a trial leaves
+ * cannot stand for these, since git writes a path's file before it stages it,
+ * and a trial that git stops part way leaves the index as it was.
+ */
+async function pathsNamed(invoker: GitInvoker, worktree: string, patchFile: string): Promise<string[]> {
+  const names = new Set<string>();
+  for (const reversed of [[], ['-R']]) {
+    const listing = await git(invoker, worktree, [...APPLY_GIT, 'apply', '--numstat', '-z', '--whitespace=nowarn', ...reversed, patchFile]);
+    for (const record of listing.split('\0')) {
+      const name = /^(?:\d+|-)\t(?:\d+|-)\t([\s\S]+)$/.exec(record)?.[1];
+      if (name !== undefined) names.add(name);
+    }
+  }
+  return [...names];
 }
 
 /** The paths the apply would leave as a link or a submodule that the index does not already hold as such. */
@@ -635,6 +690,10 @@ function leavesWorktree(worktree: string, names: readonly string[], linked: read
     const parts = name.split('/');
     for (let i = 1; i <= parts.length; i += 1) {
       const at = parts.slice(0, i).join('/');
+      // On disk a submodule is a directory like any other: git would write the file and only then refuse to stage a path inside another repository.
+      if (i < parts.length && held.get(at)?.some((entry) => entry.mode === SUBMODULE)) {
+        return `the patch writes ${name}, under ${at}, a submodule, whose files are another repository's.`;
+      }
       const full = path.join(worktree, ...parts.slice(0, i));
       // Nothing there: git makes real directories from here down. Any other error is a refusal, since it leaves the question open.
       const stat = fs.lstatSync(full, { throwIfNoEntry: false });
@@ -666,8 +725,9 @@ function leavesWorktree(worktree: string, names: readonly string[], linked: read
  * An unresolved conflict of the task's own, or a file of the patch's that the
  * task changed and has not staged, would make the result unreadable, so
  * either applies nothing. So does a patch that is not the file that was saved,
- * that would leave a link or a submodule the worktree does not hold, or that
- * would write a path outside the worktree.
+ * that would leave a link or a submodule the worktree does not hold, that
+ * would write a path outside the worktree, or that git will not apply to a
+ * copy of the index short of a conflict.
  */
 export async function applyPatch(invoker: GitInvoker, worktree: string, patch: Buffer, saved: Pick<HandoffPatch, 'base' | 'files' | 'bytes' | 'sha256'>, opts: PatchApplyOptions = {}): Promise<PatchApplyResult> {
   const refused = (reason: string): PatchApplyResult => ({ kind: 'refused', reason });
@@ -696,13 +756,20 @@ export async function applyPatch(invoker: GitInvoker, worktree: string, patch: B
     const file = path.join(dir, 'saved.patch');
     fs.writeFileSync(file, patch, { flag: 'wx', mode: 0o600 });
     const held = await indexEntries(invoker, worktree);
-    const left = await trialApply(invoker, worktree, file, dir);
+    const named = await pathsNamed(invoker, worktree, file);
+    const { left, failed } = await trialApply(invoker, worktree, file, dir);
     const links = linksAdded(held, left);
     if (links.length > 0) {
       return refused(`the patch would leave ${listed(links.slice(0, 10))}${links.length > 10 ? `, +${links.length - 10} more` : ''} as a link or a submodule, which a saved patch never does, so it is not one that was saved.`);
     }
-    const outside = leavesWorktree(worktree, pathsChanged(held, left), opts.linked ?? [], held, left);
+    const walked = [...new Set([...pathsChanged(held, left), ...named])].sort();
+    const outside = leavesWorktree(worktree, walked, opts.linked ?? [], held, left);
     if (outside) return refused(outside);
+    // A trial that conflicts leaves the copy as the real apply will leave the index. One git stopped leaves the copy as it was, though the real apply may write the patch's earlier files before it stops at the same place, and a git older than 2.32 takes no --cached with --3way: either way what the apply would write is not known.
+    if (failed !== undefined && ![...left.values()].some((entries) => entries.some((entry) => entry.stage !== '0'))) {
+      return gitRefused('git would apply none of it, tried against a copy of your index', failed);
+    }
+    const was = onDisk(worktree, walked);
     // --3way implies --index. The whitespace policy is pinned so a repository's apply.whitespace=error cannot refuse a patch whole.
     const applied = await tryGit(invoker, worktree, [...APPLY_GIT, 'apply', '--3way', '--whitespace=nowarn', file]);
     const conflicted = await unmergedPaths(invoker, worktree);
@@ -712,12 +779,11 @@ export async function applyPatch(invoker: GitInvoker, worktree: string, patch: B
       return { kind: 'conflicted', ...at, conflicts: conflicted.map((name) => ({ path: name, binary: binary.has(name) })) };
     }
     if (!applied.ok) {
-      // Git narrates the files it merged before the one it could not; only its errors say why nothing was applied.
-      const lines = applied.stderr.trim().split('\n');
-      const errors = lines.filter((line) => line.startsWith('error:'));
-      const said = (errors.length > 0 ? errors : lines).join('\n');
-      const staged = /does not match index/.test(said) ? ' Stage (git add) or commit your changes to those files, then apply again.' : '';
-      return refused(`git applied none of it: ${said.length > 1500 ? `…${said.slice(-1500)}` : said || 'it failed with no output'}.${staged}`);
+      // Git writes the patch's files one by one and stages them only at the end, so one it cannot write leaves those before it on disk: read, not assumed.
+      const now = onDisk(worktree, walked);
+      const changed = walked.filter((_, i) => now[i] !== was[i]);
+      if (changed.length > 0) return { kind: 'stopped', reason: gitSaid(applied.stderr), changed };
+      return gitRefused('git applied none of it', applied.stderr);
     }
     return { kind: 'applied', ...at };
   } catch (err) {
@@ -737,6 +803,13 @@ function resolution(c: PatchConflict): string {
 /** What `apply_patch` answers: what merged and what did not, and what is left to do. */
 export function applyReply(result: PatchApplyResult, from: string, saved: HandoffPatch): McpToolReply {
   if (result.kind === 'refused') return { text: `Nothing applied: ${result.reason} The patch is the file ${saved.path}, if you would rather apply part of it by hand.`, isError: true };
+  if (result.kind === 'stopped') {
+    const { changed } = result;
+    return {
+      text: `Applied part of ${from}'s patch, then git stopped: ${result.reason}. Nothing is staged. The files git had changed are in your worktree as it left them: ${listed(changed.slice(0, 10))}${changed.length > 10 ? `, +${changed.length - 10} more` : ''}. Put them back (\`git checkout -- <path>\` for a tracked file, delete a new one) and apply again once the cause is gone, or apply the rest by hand from the file ${saved.path}.`,
+      isError: true,
+    };
+  }
   const counts = `${saved.files} file${saved.files === 1 ? '' : 's'}, +${saved.added} -${saved.removed}`;
   const where = result.sameBase
     ? 'Your worktree is at the commit the patch was taken against.'

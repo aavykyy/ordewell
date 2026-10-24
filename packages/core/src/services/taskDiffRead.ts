@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { devNull } from 'os';
@@ -115,8 +116,12 @@ export function patchFiles(patch: Buffer): Array<{ path: string; section: string
  * what it changed. The file list with stats, or one file's part, in the
  * shape a change task's diff has.
  */
-export function readSavedPatch(patch: Buffer | undefined, saved: Pick<HandoffPatch, 'attempt' | 'base'>, options: TaskDiffRead): TaskDiffResult {
+export function readSavedPatch(patch: Buffer | undefined, saved: Pick<HandoffPatch, 'attempt' | 'base' | 'bytes' | 'sha256'>, options: TaskDiffRead): TaskDiffResult {
   if (!patch) return { available: false, reason: `Task diff is not available: the patch attempt ${saved.attempt} saved is no longer in this session's task logs.` };
+  // A change task's commands can write the session's directory, so the file is the task's work only while it is the bytes its artifact records, as apply_patch checks.
+  if (patch.length !== saved.bytes || createHash('sha256').update(patch).digest('hex') !== saved.sha256) {
+    return { available: false, reason: `Task diff is not available: the patch file has changed since attempt ${saved.attempt} saved it: its size or hash is not the one its artifact records. It is not that task's work, and apply_patch refuses it too.` };
+  }
   if (options.repo !== undefined && options.repo !== '.') return { available: false, reason: `No repository matches "${options.repo}" in this task's saved patch: it has one, ".".` };
   const files = patchFiles(patch);
   if (options.path !== undefined) {

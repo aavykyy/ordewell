@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { applyPatch, capturePatch, patchArtifact, type PatchApplyResult } from '../PatchCapture';
-import { defaultExecFile } from '../gitExec';
+import { defaultExecFile, type GitInvoker } from '../gitExec';
 import type { OwnSealedRuns, TaskShell } from '../../interfaces/IFileSystem';
 import type { HandoffPatch } from '../../models/Handoff';
 
@@ -285,6 +285,26 @@ describe.skipIf(process.platform === 'win32')('applyPatch', () => {
       expect(git(dir, 'ls-files', '-s', 'latest').split(' ')[0]).toBe('120000');
     });
 
+    // Git before 2.32 refuses --cached with --3way, so there the trial never applies, and what the apply would leave is not known.
+    it('is not retargeted where git cannot try the patch on a copy of the index', async () => {
+      const dir = builder(base);
+      const { patch: hostile, saved: vouched } = rewritten(attacks[0][1].join('\n'));
+      const olderGit: GitInvoker = {
+        ...invoker,
+        exec: async (file, args, opts) => {
+          if (args.includes('--cached') && args.includes('--3way')) throw Object.assign(new Error('git apply failed'), { stdout: '', stderr: 'error: --cached and --3way cannot be used together.\n', code: 1 });
+          return invoker.exec(file, args, opts);
+        },
+      };
+      const status = git(dir, 'status', '--porcelain=v2');
+
+      const result = await applyPatch(olderGit, dir, hostile, vouched);
+
+      expect(result).toMatchObject({ kind: 'refused', reason: expect.stringContaining('--cached and --3way cannot be used together') });
+      expect(readlinkSync(join(dir, 'latest'))).toBe('README.md');
+      expect(git(dir, 'status', '--porcelain=v2')).toBe(status);
+    });
+
     it('still takes the capture\'s own deletion of it, and leaves the rest of the tree as it was', async () => {
       const explorer = join(repo, '.ordewell', 'worktrees', 'drops-link');
       git(repo, 'worktree', 'add', '-q', '-b', 'drops-link', explorer, base);
@@ -304,6 +324,7 @@ describe.skipIf(process.platform === 'win32')('applyPatch', () => {
 
   describe('a path that leads out of the worktree', () => {
     let outside: string;
+    let withSubmodule: string;
 
     beforeAll(() => {
       outside = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-apply-outside-')));
@@ -311,13 +332,18 @@ describe.skipIf(process.platform === 'win32')('applyPatch', () => {
       writeFileSync(join(outside, '.claude', 'settings.json'), '{}\n');
       mkdirSync(join(outside, 'pkg'));
       writeFileSync(join(outside, 'pkg', 'index.js'), 'module.exports = 1;\n');
+      // A submodule the repository tracks, which a worktree checks out as an empty directory.
+      const dir = builder(base);
+      git(dir, 'update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},sub`);
+      git(dir, 'commit', '-qm', 'a submodule');
+      withSubmodule = git(dir, 'rev-parse', 'HEAD').trim();
     });
 
     afterAll(() => rmSync(outside, { recursive: true, force: true }));
 
     /** A builder's worktree as the bootstrap leaves it: `.claude` linked whole and `node_modules` mirrored entry by entry, untracked, each link an absolute path out of it. */
-    function bootstrapped(): string {
-      const dir = builder(base);
+    function bootstrapped(commit = base): string {
+      const dir = builder(commit);
       symlinkSync(join(outside, '.claude'), join(dir, '.claude'));
       mkdirSync(join(dir, 'node_modules'));
       symlinkSync(join(outside, 'pkg'), join(dir, 'node_modules', 'pkg'));
@@ -346,6 +372,18 @@ describe.skipIf(process.platform === 'win32')('applyPatch', () => {
       expect([...everything(dir), ...outsideNow()]).toEqual(before);
     });
 
+    // Git refuses a path under a submodule only as it adds it to the index, after it has written the patch's earlier files.
+    it('refuses a file under a link where git would stop at a later path, and writes nothing anywhere', async () => {
+      const dir = bootstrapped(withSubmodule);
+      const { patch: hostile, saved: vouched } = rewritten(`${[...creating('.claude/settings.local.json'), ...creating('sub/x')].join('\n')}\n`);
+      const before = [...everything(dir), ...outsideNow(), readdirSync(join(dir, 'sub'))];
+
+      const result = await applyPatch(invoker, dir, hostile, vouched);
+
+      expect(result).toMatchObject({ kind: 'refused', reason: expect.stringContaining(`.claude/settings.local.json, under .claude, a link to ${join(outside, '.claude')}`) });
+      expect([...everything(dir), ...outsideNow(), readdirSync(join(dir, 'sub'))]).toEqual(before);
+    });
+
     it('refuses a rename whose target is under a link, and leaves the file where it was', async () => {
       const dir = bootstrapped();
       const was = lines('a', 'b', 'c', 'd', 'e', 'f', 'g');
@@ -372,15 +410,16 @@ describe.skipIf(process.platform === 'win32')('applyPatch', () => {
       expect([...everything(dir), ...outsideNow()]).toEqual(before);
     });
 
-    // Git's own check, which reads no index for it: a `.git` in any spelling, anywhere in a path, would load a repository of the patch's own.
-    it.each(['.git/hooks/pre-commit', 'src/.git', '.GIT/hooks/pre-commit'])('leaves git to refuse %s, a path into a repository, and writes nothing', async (name) => {
+    // A `.git` in any spelling, anywhere in a path, would load a repository of the patch's own. In a worktree `.git` is a file, which the walk will not write under; git refuses every other spelling and place itself, reading no index for it.
+    it.each(['.git/hooks/pre-commit', 'src/.git', '.GIT/hooks/pre-commit'])('refuses %s, a path into a repository, and writes nothing', async (name) => {
       const dir = bootstrapped();
       const { patch: hostile, saved: vouched } = rewritten(`${[...creating('src/added.ts'), ...creating(name)].join('\n')}\n`);
       const before = everything(dir);
 
       const result = await applyPatch(invoker, dir, hostile, vouched);
 
-      expect(result).toMatchObject({ kind: 'refused', reason: expect.stringContaining(`invalid path '${name}'`) });
+      expect(result).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/invalid path|which is not a directory/) });
+      expect(result).toMatchObject({ reason: expect.stringContaining(name) });
       expect(everything(dir)).toEqual(before);
       expect(existsSync(join(dir, 'src', 'added.ts'))).toBe(false);
     });
@@ -410,6 +449,34 @@ describe.skipIf(process.platform === 'win32')('applyPatch', () => {
       expect(result).toMatchObject({ kind: 'refused', reason: expect.stringContaining('notes/x, under notes, which is not a directory') });
       expect(everything(dir)).toEqual(before);
       expect(existsSync(join(dir, 'src', 'added.ts'))).toBe(false);
+    });
+
+    // On disk a submodule is a directory, so only the index says that git would write the file and then stop as it stages it.
+    it('refuses a path under a submodule the repository tracks, and writes none of the patch', async () => {
+      const dir = bootstrapped(withSubmodule);
+      const { patch: hostile, saved: vouched } = rewritten(`${[...creating('src/added.ts'), ...creating('sub/x')].join('\n')}\n`);
+      const before = [...everything(dir), readdirSync(join(dir, 'sub'))];
+
+      const result = await applyPatch(invoker, dir, hostile, vouched);
+
+      expect(result).toMatchObject({ kind: 'refused', reason: expect.stringContaining('sub/x, under sub, a submodule') });
+      expect([...everything(dir), readdirSync(join(dir, 'sub'))]).toEqual(before);
+      expect(existsSync(join(dir, 'src', 'added.ts'))).toBe(false);
+    });
+
+    // Git stops at the first file it cannot write, here one over a directory the builder made, after it has written those before it.
+    it('says which files git wrote before it stopped, rather than that it applied none of the patch', async () => {
+      const dir = bootstrapped();
+      mkdirSync(join(dir, 'notes'));
+      writeFileSync(join(dir, 'notes', 'mine.md'), 'the builder\'s own, untracked\n');
+      const { patch: hostile, saved: vouched } = rewritten(`${[...creating('src/added.ts'), ...creating('notes')].join('\n')}\n`);
+      const index = git(dir, 'ls-files', '-s');
+
+      const result = await applyPatch(invoker, dir, hostile, vouched);
+
+      expect(result).toEqual({ kind: 'stopped', changed: ['src/added.ts'], reason: expect.stringContaining('unable to write file \'notes\'') });
+      expect(git(dir, 'ls-files', '-s')).toBe(index);
+      expect(readFileSync(join(dir, 'src', 'added.ts'), 'utf8')).toBe(hooks);
     });
 
     it('still applies a patch that removes a file and puts a directory of the same name in its place', async () => {

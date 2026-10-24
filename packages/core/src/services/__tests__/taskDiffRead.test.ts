@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,10 +14,13 @@ import { patchFiles, readSavedPatch } from '../taskDiffRead';
 
 const git = (cwd: string, ...args: string[]) => spawnSync('git', args, { cwd, encoding: 'utf8' }).stdout;
 
+/** What the patch's artifact records of it, as the capture writes one. */
+const vouching = (patch: Buffer, attempt: number) => ({ attempt, base: 'c'.repeat(40), bytes: patch.length, sha256: createHash('sha256').update(patch).digest('hex') });
+
 describe.skipIf(process.platform === 'win32')('readSavedPatch', () => {
   let repo: string;
   let patch: Buffer;
-  const saved = { attempt: 2, base: 'c'.repeat(40) };
+  let saved: ReturnType<typeof vouching>;
 
   beforeAll(() => {
     repo = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-saved-patch-')));
@@ -35,6 +39,7 @@ describe.skipIf(process.platform === 'win32')('readSavedPatch', () => {
     writeFileSync(join(repo, 'café.md'), 'new\n');
     git(repo, 'add', '-A');
     patch = spawnSync('git', ['diff', '--cached', '--binary', '--full-index', '-M', 'HEAD'], { cwd: repo }).stdout;
+    saved = vouching(patch, 2);
   });
 
   afterAll(() => rmSync(repo, { recursive: true, force: true }));
@@ -69,6 +74,17 @@ describe.skipIf(process.platform === 'win32')('readSavedPatch', () => {
     expect(readSavedPatch(patch, saved, { repo: 'web' })).toEqual({ available: false, reason: expect.stringContaining('No repository matches "web"') });
     expect(readSavedPatch(undefined, saved, {})).toEqual({ available: false, reason: expect.stringContaining('the patch attempt 2 saved is no longer') });
   });
+
+  // The session's directory is one a change task's commands can write, so the file is the task's work only while it is the bytes its artifact records.
+  it('shows none of a file that is not the patch that was saved, by its size or its hash', () => {
+    const flipped = Buffer.from(patch);
+    flipped[flipped.length - 2] ^= 1;
+
+    for (const changed of [flipped, patch.subarray(0, -1)]) {
+      expect(readSavedPatch(changed, saved, {})).toEqual({ available: false, reason: expect.stringContaining('has changed since attempt 2 saved it') });
+      expect(readSavedPatch(changed, saved, { path: 'a.ts' })).toEqual({ available: false, reason: expect.stringContaining('has changed since attempt 2 saved it') });
+    }
+  });
 });
 
 describe.skipIf(process.platform === 'win32')('patchFiles', () => {
@@ -99,7 +115,7 @@ describe.skipIf(process.platform === 'win32')('patchFiles', () => {
     expect(files.map(({ path, added, removed }) => ({ path, added, removed }))).toEqual([{ path: 'l', added: '1', removed: '1' }]);
     expect(files[0].section).toContain('deleted file mode 120000');
     expect(files[0].section).toContain('new file mode 100644');
-    const read = readSavedPatch(patch, { attempt: 1, base: 'c'.repeat(40) }, {});
+    const read = readSavedPatch(patch, vouching(patch, 1), {});
     expect(read.available && read.text).toContain('[repo .] l: +1 -1\n');
     expect(read.available && read.text.match(/\[repo \.\] l:/g)).toHaveLength(1);
   });
