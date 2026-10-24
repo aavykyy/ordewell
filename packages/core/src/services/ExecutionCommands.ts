@@ -823,6 +823,8 @@ export class ExecutionCommands {
     const label = describe(located);
     const voice = voiceOf(actor);
     if (task.type === 'user') return { refusal: `${capitalize(label)} is a user task: ${voice.byHand}` };
+    const completing = this.completingRefusal(located);
+    if (completing) return { refusal: completing };
     if (this.host.running(task.id) || task.status === 'in_progress') {
       return { refusal: how === 'run' ? `${capitalize(label)} is already running.` : `${capitalize(label)} is running: ${voice.stopOrSteer}` };
     }
@@ -924,11 +926,21 @@ export class ExecutionCommands {
     };
   }
 
+  /**
+   * Mark complete's landing owns the task until it settles: a stop, retry or
+   * skip under it would end the attempt whose worktree it is merging, and the
+   * landing would complete the task anyway.
+   */
+  private completingRefusal(located: Located): string | null {
+    if (!waitOf(this.host.startWaits(located.task), 'completing')) return null;
+    return `${capitalize(describe(located))} is being marked complete: its work is landing.`;
+  }
+
   private prepareMarkComplete(located: Located): Prepared {
     const { task } = located;
     const label = describe(located);
     if (task.status === 'completed') return { refusal: `${capitalize(label)} has already completed.` };
-    if (waitOf(this.host.startWaits(task), 'completing')) return { refusal: `${capitalize(label)} is already being marked complete: its work is landing.` };
+    if (this.completingRefusal(located)) return { refusal: `${capitalize(label)} is already being marked complete: its work is landing.` };
     return {
       act: async () => {
         await this.host.markComplete(task.id);
@@ -1040,6 +1052,8 @@ export class ExecutionCommands {
   private prepareStop(located: Located): Prepared {
     const { task } = located;
     const label = describe(located);
+    const completing = this.completingRefusal(located);
+    if (completing) return { refusal: completing };
     if (!this.host.running(task.id) && task.status !== 'in_progress') {
       return { refusal: `${capitalize(label)} is not running (it ${statusWords(task)}): there is nothing to stop.` };
     }
@@ -1197,6 +1211,8 @@ export class ExecutionCommands {
     const { task } = located;
     const label = describe(located);
     const why = reason?.trim() || undefined;
+    const completing = this.completingRefusal(located);
+    if (completing) return { refusal: completing };
     if (task.status === 'in_progress') return { refusal: `${capitalize(label)} is running: ${voiceOf(actor).stopOrWait}` };
     if (task.status === 'completed') return { refusal: `${capitalize(label)} has completed: its work landed, so there is nothing to skip.` };
     if (task.status === 'skipped') return { refusal: `${capitalize(label)} is already skipped.` };

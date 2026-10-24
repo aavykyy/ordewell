@@ -505,7 +505,8 @@ describe('TaskOrchestrator', () => {
 
       const paused = orchestrator.storeInstance.get('t1');
       expect(paused!.status).toBe('awaiting_user');
-      expect(paused!.verdict!.outcome).toBe('fail');
+      // A pause is no verdict, as when the limit fails the turn instead.
+      expect(paused!.verdict).toBeUndefined();
       // A retry answers it, not a message; no reset time was given, so none is scheduled.
       expect(paused!.awaitingReason).toBe('usage-limit');
       expect(paused!.resumeAt).toBeUndefined();
@@ -1930,5 +1931,24 @@ describe('what a runner reports while it winds down', () => {
     expect(ledger.totals).toEqual({ reportedCost: { USD: 0.25 } });
     expect(ledger.runnerSessionCost).toEqual({ sessionId: 'native-1', usd: 0.25, modelUsd: { opus: 0.25 } });
     expect(orchestrator.storeInstance.get('t')!.status).toBe('pending');
+  });
+});
+
+describe('a plan load refused for a task on a runner outside the plan\'s set', () => {
+  it('leaves the run, its plan and its runners as they were', async () => {
+    const { sessions, spawn } = sessionRunner();
+    const orchestrator = makeOrchestrator({ runner: { spawn } });
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Running', prompt: 'do it' })], ['claude-code']);
+    await orchestrator.approveReview();
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    expect(() => orchestrator.loadPlan([createTask({ id: 'n1', order: 1, title: 'Foreign', prompt: 'p', assignedRunner: 'codex' })], ['claude-code']))
+      .toThrow('not in the plan\'s runner set');
+
+    expect(orchestrator.storeInstance.allTasks.map((t) => [t.id, t.status])).toEqual([['t1', 'in_progress']]);
+    expect(orchestrator.hasLiveWork).toBe(true);
+    expect(orchestrator.isReviewApproved).toBe(true);
+    sessions[0].reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
   });
 });
