@@ -2717,7 +2717,7 @@ refusal as the daemon worded it. No planner tool reaches into
 `TaskOrchestrator` directly, and the mandate (#23) plugs in here. Plan approval
 is the user's: executing the plan approves every task in it, and a task the
 user starts, retries or adds by hand is approved too (`approvedTasks` on the
-plan, read through `Session.isApproved`); a start from anyone else is refused
+plan, kept by `ApprovalRecord` and read through `Session.isApproved`); a start from anyone else is refused
 for a task outside that set, and the scheduler starts nothing outside it
 either (ADR-0035), so a task the planner added since *waits for approval to
 start*. A start the seam lets through is approved before it acts.
