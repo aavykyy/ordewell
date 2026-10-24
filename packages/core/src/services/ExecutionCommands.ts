@@ -44,7 +44,11 @@ export type ExecutionCommand =
   | { command: 'remove_queued'; task: string; id: string }
   /** Keep a task paused on a usage limit from resuming on its own at the reset: it waits for the user's Resume now or Retry. */
   | { command: 'cancel_resume'; task: string }
-  /** The user's answer to the checkpoint a task waits at: it goes on, or is told `reason` to act on. */
+  /**
+   * The answer to the checkpoint a task waits at: it goes on, or is told `reason`
+   * to act on, which anyone but the user must give. The user's, or the
+   * supervisor's at Act (ADR-0029).
+   */
   | { command: 'answer_checkpoint'; task: string; answer: 'approve' | 'reject'; reason?: string }
   /** The user signs off the plan's review: every task in it is approved, as executing it approves them, and it runs. */
   | { command: 'approve_review' }
@@ -281,13 +285,22 @@ const USERS_ONLY: Partial<Record<ExecutionCommandName, string>> = {
   force_send_queued: 'Force send',
   remove_queued: 'Taking back a queued message',
   cancel_resume: 'Cancelling a scheduled resume',
-  answer_checkpoint: 'Answering a checkpoint',
   approve_review: 'Approving the review',
 };
 
 const MERGE_IS_USERS = 'Merge all is the user\'s: they are in this conversation, and press Merge all themselves. Tell them the work is ready to merge.';
 
 const NOT_APPROVED_YET = 'The user has not approved this plan yet: they approve it by executing it themselves (Execute plan). Ask them to.';
+
+const CHECKPOINT_CARD = 'The user answers it from the task\'s checkpoint card (Approve or Reject): tell them what the runner asks and what you would answer, with why.';
+
+const CHECKPOINT_IS_USERS = `A checkpoint is the user's to answer in their own turn: they are in this conversation. ${CHECKPOINT_CARD} Only the supervisor at Act answers one, in a wake-up turn.`;
+
+/** The supervisor's own refusal for a checkpoint, by the level that denies it: the general one says the user's reply applies a suggestion, which a checkpoint's cannot. */
+const CHECKPOINT_BELOW_ACT: Record<Exclude<SupervisorLevel, 'act'>, string> = {
+  watch: `You are the supervisor at Watch: you read and suggest, and cannot answer a checkpoint. ${CHECKPOINT_CARD}`,
+  off: `The supervisor is off for this run, so it cannot answer a checkpoint. ${CHECKPOINT_CARD}`,
+};
 
 const SKIP_IS_USERS = 'Skipping a task is the user\'s in their own turn: they are in this conversation, and skip it themselves. Suggest it, with why; only the supervisor at Act skips, in a wake-up turn.';
 
@@ -733,6 +746,7 @@ export class ExecutionCommands {
   private consent(actor: ExecutionActor, command: ExecutionCommandName): Consent {
     const control = USERS_ONLY[command];
     if (control && actor.kind !== 'user') return { kind: 'refuse', reason: usersOnly(command, control) };
+    if (command === 'answer_checkpoint') return this.checkpointConsent(actor);
     switch (actor.kind) {
       case 'user':
       case 'autorun': return { kind: 'allow' };
@@ -742,6 +756,24 @@ export class ExecutionCommands {
         if (command === 'skip_task') return { kind: 'refuse', reason: SKIP_IS_USERS };
         return !STARTS.has(command) || this.host.autonomous() ? { kind: 'allow' } : { kind: 'ask' };
       case 'supervisor': return this.supervisor(actor.level, command);
+    }
+  }
+
+  /**
+   * A checkpoint asks a person for judgement on the work, so the user answers
+   * it from the task's card; the supervisor may only at Act, in a wake-up turn
+   * (ADR-0029). A planner turn is in the user's own conversation, and autorun
+   * only starts plans.
+   */
+  private checkpointConsent(actor: ExecutionActor): Consent {
+    switch (actor.kind) {
+      case 'user': return { kind: 'allow' };
+      case 'supervisor': {
+        const consent = this.supervisor(actor.level, 'answer_checkpoint');
+        return consent.kind === 'refuse' && actor.level !== 'act' ? { kind: 'refuse', reason: CHECKPOINT_BELOW_ACT[actor.level] } : consent;
+      }
+      case 'planner-turn':
+      case 'autorun': return { kind: 'refuse', reason: CHECKPOINT_IS_USERS };
     }
   }
 
@@ -770,7 +802,7 @@ export class ExecutionCommands {
       case 'force_send_queued': return this.prepareQueued(located!, command.id, 'force');
       case 'remove_queued': return this.prepareQueued(located!, command.id, 'remove');
       case 'cancel_resume': return this.prepareCancelResume(located!);
-      case 'answer_checkpoint': return this.prepareCheckpoint(located!, command);
+      case 'answer_checkpoint': return this.prepareCheckpoint(located!, command, actor);
       case 'approve_review': return this.prepareApproveReview();
       // Its task is not in the plan until the call adds it, so it has a path of its own: see runScript.
       case 'run_script': return { refusal: 'run_script adds its own task, so it is never judged against one.' };
@@ -997,16 +1029,19 @@ export class ExecutionCommands {
     };
   }
 
-  private prepareCheckpoint(located: Located, command: Extract<ExecutionCommand, { command: 'answer_checkpoint' }>): Prepared {
+  private prepareCheckpoint(located: Located, command: Extract<ExecutionCommand, { command: 'answer_checkpoint' }>, actor: ExecutionActor): Prepared {
     const label = describe(located);
     if (!this.host.awaitsCheckpoint(located.task.id)) {
       return { refusal: `${capitalize(label)} is not waiting at a checkpoint: it was answered already, withdrawn, or has no runner left to hear it.` };
     }
     const approve = command.answer === 'approve';
+    const reason = command.reason?.trim() || undefined;
+    if (!approve && !reason && actor.kind !== 'user') return { refusal: 'A rejection needs a reason: the runner is told it, and acts on it. Say what it should do instead.' };
     return {
       act: async () => {
-        this.host.answerCheckpoint(located.task.id, approve, command.reason?.trim() || undefined);
-        return { message: approve ? `Approved the checkpoint of ${label}: it goes on.` : `Rejected the checkpoint of ${label}: the runner is told${command.reason?.trim() ? ' your reason' : ''}.` };
+        this.host.answerCheckpoint(located.task.id, approve, reason);
+        const told = actor.kind === 'user' ? 'your reason' : 'the reason';
+        return { message: approve ? `Approved the checkpoint of ${label}: it goes on.` : `Rejected the checkpoint of ${label}: the runner is told${reason ? ` ${told}` : ''}.` };
       },
     };
   }
@@ -1104,6 +1139,9 @@ export class ExecutionCommands {
     const label = describe(located);
     if (located.task.type === 'script') return { refusal: scriptHasNoTurn(label, 'message') };
     if (command.force && actor.kind !== 'user') return { refusal: usersOnly('message_task', 'Force send') };
+    if (this.host.awaitsCheckpoint(located.task.id)) {
+      return { refusal: `${capitalize(label)} is at a checkpoint${actor.kind === 'user' ? ':' : ', which a message does not answer:'} ${voiceOf(actor).atCheckpoint}` };
+    }
     return {
       act: async () => {
         if (command.force) {
@@ -1400,6 +1438,8 @@ interface Voice {
   notMerged: string;
   /** A start a dirty checkout held back. */
   blockedRun: string;
+  /** What answers a task waiting at a checkpoint, which a message does not. */
+  atCheckpoint: string;
 }
 
 const MODEL_VOICE: Voice = {
@@ -1415,6 +1455,13 @@ const MODEL_VOICE: Voice = {
   startAgain: 'Start again with run_plan or run_task.',
   notMerged: 'Nothing was merged; tell the user, who resolves it.',
   blockedRun: 'Nothing started: the user\'s checkout has uncommitted changes, and the run waits for them to stash them or run without isolation. Tell them.',
+  atCheckpoint: 'the user answers it from the task\'s checkpoint card (Approve or Reject). Tell them what the runner asks and what you would answer, with why.',
+};
+
+/** The supervisor at Act answers checkpoints itself (ADR-0029); the planner's turn is the user's, and they answer. */
+const SUPERVISOR_VOICE: Voice = {
+  ...MODEL_VOICE,
+  atCheckpoint: 'answer it with answer_checkpoint (approve, or reject with a reason), or leave it to the user and tell them why.',
 };
 
 const USER_VOICE: Voice = {
@@ -1430,10 +1477,16 @@ const USER_VOICE: Voice = {
   startAgain: 'Run the plan or a task to start again.',
   notMerged: 'Nothing was merged.',
   blockedRun: 'Nothing started: your checkout has uncommitted changes. Stash them, or run without isolation.',
+  atCheckpoint: 'approve or reject it instead.',
 };
 
 function voiceOf(actor: ExecutionActor): Voice {
-  return actor.kind === 'user' ? USER_VOICE : MODEL_VOICE;
+  switch (actor.kind) {
+    case 'user': return USER_VOICE;
+    case 'supervisor': return SUPERVISOR_VOICE;
+    case 'planner-turn':
+    case 'autorun': return MODEL_VOICE;
+  }
 }
 
 /** A deferred start as a noun: "retry of task #4 "Title"". */
