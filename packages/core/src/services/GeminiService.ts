@@ -116,7 +116,9 @@ class GeminiResearchChat implements ResearchChat {
 
   async sendMessage(text: string, signal?: AbortSignal): Promise<ResearchTurn> {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    const result = await (await this.current()).sendMessageStream(text);
+    // The SDK's request options carry the signal onto the HTTP call, which is
+    // the only way a Stop (or a reset) ends a stream already under way.
+    const result = await (await this.current()).sendMessageStream(text, { signal });
     return this.consume(result.stream);
   }
 
@@ -128,7 +130,7 @@ class GeminiResearchChat implements ResearchChat {
         response: { output: r.output, truncated: r.truncated, totalChars: r.totalChars },
       },
     }));
-    const result = await (await this.current()).sendMessageStream(funcResponses);
+    const result = await (await this.current()).sendMessageStream(funcResponses, { signal });
     return this.consume(result.stream);
   }
 
@@ -312,7 +314,7 @@ export class GeminiService extends BaseAiService implements IAiService {
     repairHint: string | undefined,
     onToken: (token: string) => void,
     onReasoning?: (token: string) => void,
-    _signal?: AbortSignal,
+    signal?: AbortSignal,
   ): Promise<string> {
     const model = this.getPlanningModel();
     const finalParts: Part[] = repairHint
@@ -320,7 +322,7 @@ export class GeminiService extends BaseAiService implements IAiService {
       : [{ text: prompt }];
     const result = await model.generateContentStream({
       contents: [{ role: 'user', parts: finalParts }],
-    });
+    }, { signal });
     return this.consumePlanStream(result, onToken, onReasoning);
   }
 
@@ -348,12 +350,12 @@ export class GeminiService extends BaseAiService implements IAiService {
   }
 
   /** Gemini-specific stream over raw Parts for generatePlanDirect. */
-  private async streamPlanTextWithParts(parts: Part[], repairHint: string | undefined, onToken: (token: string) => void): Promise<string> {
+  private async streamPlanTextWithParts(parts: Part[], repairHint: string | undefined, onToken: (token: string) => void, signal?: AbortSignal): Promise<string> {
     const model = this.getPlanningModel();
     const finalParts: Part[] = repairHint ? [...parts, { text: `\n\n${repairHint}` }] : parts;
     const result = await model.generateContentStream({
       contents: [{ role: 'user', parts: finalParts }],
-    });
+    }, { signal });
     return this.consumePlanStream(result, onToken);
   }
 
@@ -405,7 +407,7 @@ export class GeminiService extends BaseAiService implements IAiService {
     _fetcher?: IWebFetcher,
     runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
     modes: PlannerModes = DEFAULT_PLANNER_MODES,
-    _signal?: AbortSignal,
+    signal?: AbortSignal,
   ): Promise<Task[]> {
     this.ensureInit();
     const { autonomousDefault } = modes;
@@ -416,7 +418,7 @@ export class GeminiService extends BaseAiService implements IAiService {
     }
     const prompt = buildPlanWithResults(userDescription, ctx, '', modelsByRunner, runners, runnerModes, modes);
     return generatePlanWithRepair((repairHint) =>
-      this.streamPlanTextWithParts([{ text: prompt }], repairHint, (token) => onToken?.(token)),
+      this.streamPlanTextWithParts([{ text: prompt }], repairHint, (token) => onToken?.(token), signal),
       runners,
       2,
       runnerModes,

@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { dropRetiredPlanFields, LegacyPlanState, migrateLoadedTasks } from '../models/Task';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
-import { getStateDir, ensureDir } from './fsHelpers';
+import { getStateDir, ensureDir, writeFileAtomic } from './fsHelpers';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
 
 const STATE_FILE = 'state.json';
@@ -30,7 +30,7 @@ export function saveState(plan: LegacyPlanState, baseDir?: string, sessionId?: s
   plan.lastUpdated = new Date().toISOString();
   const file = sessionId ? { ...plan, [SESSION_ID_KEY]: sessionId } : plan;
   dropRetiredPlanFields(file);
-  fs.writeFileSync(statePath, JSON.stringify(file, null, 2));
+  writeFileAtomic(statePath, JSON.stringify(file, null, 2));
 }
 
 export function loadState(baseDir?: string, logger: ILogger = defaultLogger): SavedState | null {

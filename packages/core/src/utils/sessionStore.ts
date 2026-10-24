@@ -5,7 +5,7 @@ import { dropRetiredPlanFields, migratePlanState, migrateLoadedTasks } from '../
 import { migratePlanStateIsolation } from '../services/isolationRecord';
 import type { SessionMeta, SessionData } from '../models/Session';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
-import { getStateDir, ensureDir, ensureStateDirIgnored } from './fsHelpers';
+import { getStateDir, ensureDir, ensureStateDirIgnored, writeFileAtomic } from './fsHelpers';
 import { mintSessionId } from './sessionId';
 
 const SESSIONS_SUBDIR = 'sessions';
@@ -32,6 +32,14 @@ export function sessionDataDir(sessionId: string, baseDir?: string): string {
 }
 
 const REJECTION_MESSAGE = 'This session was created with an older version of Ordewell. Please re-plan.';
+
+/** A file is listed only when it carries the header every surface reads; a parsed object is not enough. */
+function isSessionMeta(value: unknown): value is SessionMeta {
+  if (!value || typeof value !== 'object') return false;
+  const meta = value as Record<string, unknown>;
+  return typeof meta.id === 'string' && meta.id !== ''
+    && typeof meta.createdAt === 'string' && !Number.isNaN(Date.parse(meta.createdAt));
+}
 
 function hasScalarRunner(parsed: Record<string, unknown>): boolean {
   const meta = parsed.meta as Record<string, unknown> | undefined;
@@ -109,7 +117,7 @@ export function saveSession(plan: LegacyPlanState, goal: string, baseDir?: strin
   const filename = sessionFilename(meta);
   const filePath = path.join(sessionsDir, filename);
 
-  fs.writeFileSync(filePath, JSON.stringify(session, null, 2));
+  writeFileAtomic(filePath, JSON.stringify(session, null, 2));
   dropLegacyFile(sessionsDir, meta);
 
   return meta;
@@ -131,14 +139,31 @@ export function listSessions(baseDir?: string, logger: ILogger = defaultLogger):
           return null;
         }
         const session = parsed as SessionData;
+        if (!isSessionMeta(session.meta)) return moveAside(sessionsDir, f, 'is not a session: no usable id and creation time', logger);
         return session.meta;
       } catch (err: unknown) {
-        logger.warn('sessionStore', `failed to read session file ${f}; skipping`, err);
-        return null;
+        return moveAside(sessionsDir, f, 'could not be read', logger, err);
       }
     })
     .filter((m): m is SessionMeta => m !== null)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+/**
+ * A file that will not parse is not merely skipped: every surface would show
+ * the session gone with no explanation. It is renamed out of the `.json` set
+ * so the loss is visible and the bytes are kept for inspection — never deleted,
+ * since they may be all that is left of the user's work.
+ */
+function moveAside(sessionsDir: string, file: string, reason: string, logger: ILogger, err?: unknown): null {
+  const aside = `${file}.${Date.now()}.corrupt`;
+  try {
+    fs.renameSync(path.join(sessionsDir, file), path.join(sessionsDir, aside));
+    logger.warn('sessionStore', `session file ${file} ${reason}; moved aside to ${aside} rather than overwritten`, err);
+  } catch {
+    logger.warn('sessionStore', `failed to read session file ${file}; skipping`, err);
+  }
+  return null;
 }
 
 function findSessionFile(sessionsDir: string, sessionId: string, logger: ILogger): string | null {
