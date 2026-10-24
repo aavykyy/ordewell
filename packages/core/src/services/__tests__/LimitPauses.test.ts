@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTask, type Task } from '../../models/Task';
 import { PlanStore } from '../PlanStore';
-import { LimitPauses, RELAPSE_MS, type HeldFrom, type LimitedAttempt, type LimitPausesHost, type LimitWait, type ResumeNow } from '../LimitPauses';
+import { LimitPauses, RELAPSE_MS, type LimitedAttempt, type LimitPausesHost, type LimitWait, type ResumeNow } from '../LimitPauses';
+import { heldFrom, nextRunState, type RunState } from '../runState';
 import type { TurnFailure } from '../runnerExit';
 
 // Claude Code's wording (#84), in UTC so the expected times do not depend on the machine's.
@@ -11,17 +12,15 @@ const NOW = new Date('2026-10-11T17:00:00Z');
 const RESUME_AT = '2026-10-11T20:11:00.000Z';
 const LATER_RESUME_AT = '2026-10-11T21:31:00.000Z';
 
-type RunState = 'idle' | 'scheduling' | 'held';
-
-function setup(opts: { run?: Exclude<RunState, 'held'>; tasks?: Task[] } = {}) {
+function setup(opts: { run?: 'idle' | 'scheduling'; tasks?: Task[] } = {}) {
   const store = new PlanStore();
   store.load(opts.tasks ?? [
     createTask({ id: 't1', order: 1, title: 'One', prompt: 'p' }),
     createTask({ id: 't2', order: 2, title: 'Two', prompt: 'p' }),
   ], ['claude-code', 'codex']);
   for (const task of store.allTasks) store.markInProgress(task.id);
-  let state: RunState = opts.run ?? 'scheduling';
-  let from: HeldFrom = 'scheduling';
+  // The orchestrator's own reducer, so the pause holds and releases the run as it does there.
+  let state: RunState = { kind: opts.run ?? 'scheduling' };
   const steps: string[] = [];
   const waits: LimitWait[] = [];
   const told: { level: string; message: string }[] = [];
@@ -31,13 +30,9 @@ function setup(opts: { run?: Exclude<RunState, 'held'>; tasks?: Task[] } = {}) {
   const host: LimitPausesHost = {
     store,
     run: {
-      hold: () => {
-        if (state === 'held') return;
-        from = state;
-        state = 'held';
-      },
-      heldFrom: () => (state === 'held' ? from : null),
-      release: () => { if (state === 'held') state = from; },
+      hold: () => { state = nextRunState(state, { type: 'hold' }); },
+      heldFrom: () => heldFrom(state),
+      release: () => { state = nextRunState(state, { type: 'release' }); },
     },
     tell: (level, message) => told.push({ level, message }),
     waitChanged: (wait) => waits.push(wait),
@@ -53,7 +48,7 @@ function setup(opts: { run?: Exclude<RunState, 'held'>; tasks?: Task[] } = {}) {
     },
   };
   const pauses = new LimitPauses(host);
-  return { store, pauses, steps, waits, told, resumes, unstartable, run: () => state, task: (id: string): Readonly<Task> => store.get(id)! };
+  return { store, pauses, steps, waits, told, resumes, unstartable, run: () => state.kind, task: (id: string): Readonly<Task> => store.get(id)! };
 }
 
 function attempt(overrides: Partial<LimitedAttempt> = {}): LimitedAttempt {

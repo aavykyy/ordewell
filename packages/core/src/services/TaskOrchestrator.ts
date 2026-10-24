@@ -21,6 +21,7 @@ import { taskRefOf } from './TaskRefs';
 import { IsolationRunController } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
 import { LimitPauses, type LimitWait, type ResumeNow } from './LimitPauses';
+import { IDLE_RUN, heldFrom, nextRunState, type RunEvent, type RunState } from './runState';
 import { Attempts, type Admitted, type AttemptEnded, type EndedAttempt, type TaskAttemptSnapshot } from './Attempts';
 import { TaskControlError } from './TaskControlError';
 import { landed, selectReadyTasks, startWaits, waitOf, type ForcedStart, type Readiness, type StartRuleInput, type StartWait, type StartWaitKind } from './readiness';
@@ -157,22 +158,6 @@ const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued
 const FORCED_NOW: ForcedStart = { queued: false };
 
 /**
- * Where the full-plan run stands, as one value; every getter that reports on
- * the run derives from it (ADR-0034; ADR-0018 U1).
- * - `idle`: no full-plan run since the plan loaded or the user stopped one. A
- *   task started on its own may still be at work.
- * - `scheduling`: the scheduler drives the plan, starting ready tasks as slots
- *   free. A run that waits on the user, a hold or a merge gate stays here.
- * - `held`: a usage-limit pause holds the run. It stays open and starts
- *   nothing new until the reset, a Resume now, a retry, a skip or a move to
- *   another runner continues it.
- * - `endedOnFailure`: the run ended with failed tasks and the tasks they
- *   block; a retry or a skip continues it.
- * - `finished`: every task completed or was skipped.
- */
-type RunState = 'idle' | 'scheduling' | 'held' | 'endedOnFailure' | 'finished';
-
-/**
  * The wiring a {@link TaskOrchestrator} runs on, every collaborator resolved.
  * {@link TaskOrchestrator.compose} is the only production caller; tests build
  * one through it too. The constructor makes nothing itself, so there is exactly
@@ -285,10 +270,8 @@ export class TaskOrchestrator {
   private store: PlanStore;
   /** Every live attempt, from its claim to its end, and how each that ended on its own ended: see {@link settle}. */
   private readonly attempts: Attempts;
-  /** Changed only by start, stop, a plan load, a usage-limit pause, a move off the limit, and {@link settleRun}. */
-  private runState: RunState = 'idle';
-  /** What a usage-limit hold goes back to once released: a task started alone never becomes a scheduled run (ADR-0018, U1). */
-  private heldFrom: 'idle' | 'scheduling' = 'scheduling';
+  /** Written only through {@link transition}, by the run's events in {@link nextRunState}. */
+  private runState: RunState = IDLE_RUN;
   /** Planner turns in flight that new starts wait for (ADR-0029); running attempts carry on. */
   private startHolds = 0;
   /** Bumped by the user's Stop: a start admitted under an older generation never takes its claim. */
@@ -388,13 +371,9 @@ export class TaskOrchestrator {
     this.limitPauses = new LimitPauses({
       store: this.store,
       run: {
-        hold: () => {
-          if (this.runState !== 'scheduling' && this.runState !== 'idle') return;
-          this.heldFrom = this.runState;
-          this.runState = 'held';
-        },
-        heldFrom: () => (this.runState === 'held' ? this.heldFrom : null),
-        release: () => { if (this.runState === 'held') this.runState = this.heldFrom; },
+        hold: () => this.transition({ type: 'hold' }),
+        heldFrom: () => heldFrom(this.runState),
+        release: () => this.transition({ type: 'release' }),
       },
       tell: (level, message) => this.tell(level, message),
       waitChanged: (wait) => this.emit('onUsageLimitWait', wait),
@@ -579,15 +558,15 @@ export class TaskOrchestrator {
   }
   get isReviewApproved(): boolean { return this.reviewApproved; }
   /** The scheduler is driving the plan: ready tasks start on their own as slots free. Narrower than {@link isRunning}. */
-  get isScheduling(): boolean { return this.runState === 'scheduling'; }
+  get isScheduling(): boolean { return this.runState.kind === 'scheduling'; }
   /**
    * A full-plan run with nothing starting that something still resumes: a
    * usage limit's reset, or a retry of a failed task its blocked tasks wait on.
    */
-  get awaitsResume(): boolean { return this.runState === 'held' || this.runState === 'endedOnFailure'; }
+  get awaitsResume(): boolean { return this.runState.kind === 'held' || this.runState.kind === 'endedOnFailure'; }
   get status(): 'approved' | 'running' | 'completed' {
-    if (this.runState === 'scheduling') return 'running';
-    return this.runState === 'finished' ? 'completed' : 'approved';
+    if (this.runState.kind === 'scheduling') return 'running';
+    return this.runState.kind === 'finished' ? 'completed' : 'approved';
   }
   get activeTaskIds(): string[] { return [...this.activeSessionMap.keys()]; }
   /** Task id → session id of every attempt whose runner is up; a spawn in flight has no session yet. */
@@ -796,12 +775,10 @@ export class TaskOrchestrator {
     // A plan committed while the scheduler runs keeps that run, and its mode
     // with it; otherwise the next start decides afresh.
     this.runs.interrupt({ keepOpen: this.isScheduling });
-    // A held or ended run belongs to the plan it was in, whose failed tasks this
-    // load gives a fresh chance: kept, the next retry would restart a run
-    // nobody started, and a usage-limit move would arm the scheduler. A plan
-    // loaded from disk holds no run either, so at a reset only its paused
-    // tasks resume, as after any restart.
-    if (this.runState !== 'scheduling') this.runState = 'idle';
+    // A held or ended run goes with the plan it was in; a plan loaded from
+    // disk holds no run either, so at a reset only its paused tasks resume,
+    // as after any restart.
+    this.transition({ type: 'load' });
     this.reviewApproved = false;
     this.retryCounts.clear();
     this.previousRounds.clear();
@@ -810,6 +787,21 @@ export class TaskOrchestrator {
     this.owedRepairs.clear();
     this.recoverOrphans();
     this.limitPauses.rearm();
+  }
+
+  /**
+   * Adopt a planner's edit, or its whole-plan commit. With a run at work, or
+   * one that awaits a resume (ADR-0034), it is reconciled into that run: a
+   * reload would clear the holds and the review approval, so a task the user
+   * cancelled would be re-armed by the tick that follows, and a retry after
+   * the edit would run the failed task alone, its failure lost. Otherwise it
+   * is the plan the next run starts from, with what waits on a usage-limit
+   * reset still waiting: an edit between runs is not the user starting over.
+   */
+  adoptEdit(tasks: readonly Task[], planRunners: RunnerId[]): void {
+    if (this.isRunning || this.awaitsResume) return this.reconcilePlan(tasks, planRunners);
+    this.loadPlan(tasks, planRunners, true);
+    this.store.resetForRun({ keepScheduledResumes: true });
   }
 
   /**
@@ -875,6 +867,35 @@ export class TaskOrchestrator {
     }
   }
 
+  /**
+   * Begin the full-plan run afresh, as Execute does with nothing at work.
+   * Whatever an earlier run left goes: its state, even held or armed with
+   * nothing live, which {@link start} would take as a run already under way;
+   * its scheduled resumes and execution log; and, as the plan is loaded over
+   * itself, its retry counts, holds, loop rounds and review approval. Every
+   * task not done is ready to run again, and the scheduler starts it; a plan
+   * with nothing left to run ends at once, and the scheduler says so.
+   */
+  async beginRun(origin: RunOrigin): Promise<void> {
+    this.stop('restart');
+    this.store.clearLog();
+    this.store.resetForRun();
+    this.loadPlan(this.store.planTasks, [...this.store.planRunners]);
+    await this.approveReview(origin);
+  }
+
+  /**
+   * Take the plan into the run under way (#95), whose tasks were approved
+   * first: a scheduled run starts them as their dependencies finish, and one
+   * the scheduler was not driving — tasks started on their own — becomes the
+   * plan's run, as Execute would make it.
+   */
+  async joinRun(origin: RunOrigin): Promise<void> {
+    if (this.isScheduling) return this.tick();
+    if (this.reviewApproved) return this.start(origin);
+    return this.approveReview(origin);
+  }
+
   /** Start the full-plan run, or continue one that is held or ended on a failure. */
   async start(origin: RunOrigin = 'user'): Promise<void> {
     if (this.runs.blocked) return;
@@ -889,7 +910,7 @@ export class TaskOrchestrator {
     }
     this.openRun(origin);
     console.log(`[TaskOrchestrator] Starting with ${this.store.allTasks.length} tasks (${this.store.allTasks.filter(t => t.type === 'ai' && t.prompt).length} AI ready)`);
-    this.runState = 'scheduling';
+    this.transition({ type: 'schedule' });
     this.emit('onTaskChanged');
     await this.tick();
   }
@@ -902,7 +923,7 @@ export class TaskOrchestrator {
    */
   stop(reason: 'user' | 'restart' = 'user'): void {
     if (reason === 'user') this.stopGeneration++;
-    this.runState = 'idle';
+    this.transition({ type: 'stop' });
     // Interrupted work is kept like a failed attempt's: inspectable, and off
     // `active` so a crash-recovery prune does not sweep it away. A stopped
     // repair did not land, so its task waits on the user as its conflict did;
@@ -1197,6 +1218,22 @@ export class TaskOrchestrator {
     this.unawaited(this.tick(), 'Could not act on the changed run settings');
   }
 
+  private transition(event: RunEvent): void {
+    this.runState = nextRunState(this.runState, event);
+  }
+
+  /**
+   * A retry, skip or continue of a task continues a run that ended on a
+   * failure (ADR-0034): the scheduler drives it again. A run a reset holds
+   * stays held, and one held from an ended run is the plan's run once the
+   * reset lets it go. Null when no run starts.
+   */
+  private continueRun(origin: RunOrigin): Promise<void> | null {
+    if (this.runState.kind === 'endedOnFailure') return this.start(origin);
+    this.transition({ type: 'continue' });
+    return null;
+  }
+
   private openRun(origin: RunOrigin): void {
     const opening = !this.runs.isOpen;
     this.runs.open();
@@ -1380,10 +1417,8 @@ export class TaskOrchestrator {
       this.emit('onTaskChanged');
       await this.runs.release(taskId, { keep: true }, ended?.integration);
       // A Stop while the worktree was kept leaves the run stopped: the skip
-      // stands, and nothing it released starts. A run another task's reset
-      // still holds stays held; only one that ended on a failure starts
-      // afresh, as a retry continues it (ADR-0034).
-      if (this.runState === 'endedOnFailure' && admission.current()) await this.start(origin);
+      // stands, and nothing it released starts.
+      if (admission.current()) await (this.continueRun(origin) ?? this.tick());
       else await this.tick();
     });
   }
@@ -1426,10 +1461,7 @@ export class TaskOrchestrator {
       }
       // A Stop while the worktree went leaves the run stopped, the task back to not started.
       if (!admission.current()) return;
-      // A retry continues a run that ended on a failure (ADR-0034); a held
-      // run another task still owes a reset stays held.
-      if (this.runState === 'endedOnFailure') await this.start(origin);
-      else await this.tick();
+      await (this.continueRun(origin) ?? this.tick());
     });
   }
 
@@ -1464,9 +1496,7 @@ export class TaskOrchestrator {
       // Claimed before anything is awaited, so a running scheduler never sees the
       // pending task and starts it afresh. Its prepare replaces the old worktree.
       const started = this.claimed(taskId, admission, { message: text, resumeSessionId: resumable.sessionId });
-      // A continuation continues a run that ended on a failure; a run another
-      // task's reset still holds stays held.
-      const resumed = this.runState === 'endedOnFailure' ? this.start(origin) : Promise.resolve();
+      const resumed = this.continueRun(origin) ?? Promise.resolve();
       // Both are awaited even if one fails: the claimed attempt's start must not
       // be left unhandled because restarting the run threw.
       await Promise.all([resumed, started]);
@@ -1513,9 +1543,10 @@ export class TaskOrchestrator {
     // The limit belongs to the runner's account, so a model change on that
     // same runner must keep waiting for its reset.
     if ((next.assignedRunner ?? this.store.planRunners[0]) === this.store.resolveTaskRunner(task)) return changes;
-    const heldFrom = this.limitPauses.moved(taskId);
+    const from = this.limitPauses.moved(taskId);
     this.onHold.delete(taskId);
-    if (heldFrom === 'idle') this.queuedStarts.set(taskId, { pastGate: [] });
+    // Started alone, it starts again alone: no scheduler would claim it.
+    if (from === 'idle' || from === 'endedOnFailure') this.queuedStarts.set(taskId, { pastGate: [] });
     return { ...changes, status: 'pending', awaitingReason: undefined, resumeAt: undefined, carriedFrom: this.store.resolveTaskRunner(task) };
   }
 
@@ -1871,19 +1902,17 @@ export class TaskOrchestrator {
   private async settleRun(after: 'tick' | 'verdict'): Promise<void> {
     // A retry, Mark not done or an added task since leaves the plan unfinished:
     // still finished, it would tell every surface the run is over while a task waits.
-    if (this.runState === 'finished' && !this.store.isFinished()) this.runState = 'idle';
+    if (!this.store.isFinished()) this.transition({ type: 'reopen' });
     if (this.attempts.size > 0) return;
-    if (this.runState === 'held') {
-      // A task on a usage limit keeps the run open: closed, it would be handed
-      // over or merged before the work the reset resumes.
-      return;
-    }
-    if (this.runState !== 'scheduling') {
+    // A task on a usage limit keeps the run open: closed, it would be handed
+    // over or merged before the work the reset resumes.
+    if (this.runState.kind === 'held') return;
+    if (this.runState.kind !== 'scheduling') {
       if (after === 'tick') {
         if (this.runs.isOpen && this.settled) await this.closeRun();
         return;
       }
-      if (this.store.isFinished()) this.runState = 'finished';
+      if (this.store.isFinished()) this.transition({ type: 'end', outcome: 'finished' });
       this.emit('onTick');
       if (this.settled) await this.closeRun();
       this.emit('onExecutionComplete');
@@ -1899,12 +1928,12 @@ export class TaskOrchestrator {
     }
     const { blocked, repeating } = planBlocks(this.store.planTasks);
     if (remaining.length === 0) {
-      this.runState = 'finished';
+      this.transition({ type: 'end', outcome: 'finished' });
       this.sayFinished();
     } else if (remaining.every((t) => (t.status === 'failed' && !repeating.has(t.id)) || blocked.has(t.id))) {
       // Nothing left can start until a failed task is retried (ADR-0034):
       // the run ends, and a retry continues it.
-      this.runState = 'endedOnFailure';
+      this.transition({ type: 'end', outcome: 'failed' });
       this.sayEndedOnFailure(blocked);
     } else {
       // Waiting on the user: a user task, a checkpoint, a held task or a merge
