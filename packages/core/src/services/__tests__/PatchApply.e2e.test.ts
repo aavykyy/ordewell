@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -65,6 +65,14 @@ describe.skipIf(process.platform === 'win32')('applyPatch', () => {
   }
 
   const executable = (file: string) => (statSync(file).mode & 0o111) !== 0;
+
+  const blob = (content: string) => spawnSync('git', ['hash-object', '--stdin'], { cwd: repo, input: content, encoding: 'utf8' }).stdout.trim();
+
+  /** A patch written by hand, as a process that rewrote the saved file would, with the artifact that vouches for it: its size and hash are of these bytes. */
+  function rewritten(text: string): { patch: Buffer; saved: HandoffPatch } {
+    const hostile = Buffer.from(text, 'latin1');
+    return { patch: hostile, saved: { ...saved, bytes: hostile.length, sha256: createHash('sha256').update(hostile).digest('hex') } };
+  }
 
   beforeAll(async () => {
     repo = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-apply-repo-')));
@@ -248,15 +256,8 @@ describe.skipIf(process.platform === 'win32')('applyPatch', () => {
 
     expect(await applyPatch(invoker, join(dir, 'src'), patch, saved)).toMatchObject({ kind: 'refused', reason: expect.stringContaining('not the root') });
   });
+
   describe('a link the repository tracks', () => {
-    const blob = (content: string) => spawnSync('git', ['hash-object', '--stdin'], { cwd: repo, input: content, encoding: 'utf8' }).stdout.trim();
-
-    /** A patch written by hand, as a process that rewrote the saved file would, with the artifact that vouches for it: its size and hash are of these bytes. */
-    function rewritten(text: string): { patch: Buffer; saved: HandoffPatch } {
-      const hostile = Buffer.from(text, 'latin1');
-      return { patch: hostile, saved: { ...saved, bytes: hostile.length, sha256: createHash('sha256').update(hostile).digest('hex') } };
-    }
-
     /** A hunk that points `latest` at /etc/passwd, git's own way of writing a one-line file with no newline at its end. */
     const retarget = ['@@ -1 +1 @@', '-README.md', '\\ No newline at end of file', '+/etc/passwd', '\\ No newline at end of file', ''];
     const was = () => blob('README.md').slice(0, 12);
@@ -298,6 +299,142 @@ describe.skipIf(process.platform === 'win32')('applyPatch', () => {
       expect(result).toMatchObject({ kind: 'applied', sameBase: true });
       expect(git(dir, 'ls-files', '-s', 'latest')).toBe('');
       expect(git(dir, 'status', '--porcelain').split('\n').filter(Boolean).sort()).toEqual(['D  latest', 'M  README.md']);
+    });
+  });
+
+  describe('a path that leads out of the worktree', () => {
+    let outside: string;
+
+    beforeAll(() => {
+      outside = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-apply-outside-')));
+      mkdirSync(join(outside, '.claude'));
+      writeFileSync(join(outside, '.claude', 'settings.json'), '{}\n');
+      mkdirSync(join(outside, 'pkg'));
+      writeFileSync(join(outside, 'pkg', 'index.js'), 'module.exports = 1;\n');
+    });
+
+    afterAll(() => rmSync(outside, { recursive: true, force: true }));
+
+    /** A builder's worktree as the bootstrap leaves it: `.claude` linked whole and `node_modules` mirrored entry by entry, untracked, each link an absolute path out of it. */
+    function bootstrapped(): string {
+      const dir = builder(base);
+      symlinkSync(join(outside, '.claude'), join(dir, '.claude'));
+      mkdirSync(join(dir, 'node_modules'));
+      symlinkSync(join(outside, 'pkg'), join(dir, 'node_modules', 'pkg'));
+      return dir;
+    }
+
+    const hooks = '{"hooks":{"SessionStart":[]}}\n';
+    /** One section that creates `name`, as `git diff` writes a new file. */
+    const creating = (name: string) => [`diff --git a/${name} b/${name}`, 'new file mode 100644', `index ${'0'.repeat(40)}..${blob(hooks)}`, '--- /dev/null', `+++ b/${name}`, '@@ -0,0 +1 @@', `+${hooks.trimEnd()}`];
+    const outsideNow = () => [readdirSync(join(outside, '.claude')).sort(), readdirSync(join(outside, 'pkg')).sort()];
+    const everything = (dir: string) => [git(dir, 'ls-files', '-s'), git(dir, 'status', '--porcelain=v2', '--untracked-files=all')];
+
+    // No record of what was linked in: the links on disk alone refuse it.
+    it.each([
+      ['.claude, which the bootstrap linked to the main checkout\'s', '.claude/settings.local.json', '.claude', '.claude'],
+      ['node_modules/pkg, which the bootstrap mirrored from the main checkout\'s package', 'node_modules/pkg/index.js', 'node_modules/pkg', 'pkg'],
+    ])('refuses a file under %s, and writes nothing anywhere', async (_, name, link, target) => {
+      const dir = bootstrapped();
+      const { patch: hostile, saved: vouched } = rewritten(`${creating(name).join('\n')}\n`);
+      const before = [...everything(dir), ...outsideNow()];
+
+      const result = await applyPatch(invoker, dir, hostile, vouched);
+
+      expect(result).toMatchObject({ kind: 'refused', reason: expect.stringContaining(name) });
+      expect(result).toMatchObject({ reason: expect.stringContaining(`under ${link}, a link to ${join(outside, target)}`) });
+      expect([...everything(dir), ...outsideNow()]).toEqual(before);
+    });
+
+    it('refuses a rename whose target is under a link, and leaves the file where it was', async () => {
+      const dir = bootstrapped();
+      const was = lines('a', 'b', 'c', 'd', 'e', 'f', 'g');
+      const renaming = ['diff --git a/src/old-name.txt b/.claude/moved.md', 'similarity index 100%', 'rename from src/old-name.txt', 'rename to .claude/moved.md'];
+      const { patch: hostile, saved: vouched } = rewritten(`${renaming.join('\n')}\n`);
+      const before = [...everything(dir), ...outsideNow()];
+
+      const result = await applyPatch(invoker, dir, hostile, vouched);
+
+      expect(result).toMatchObject({ kind: 'refused', reason: expect.stringContaining('.claude/moved.md, under .claude, a link to') });
+      expect([...everything(dir), ...outsideNow()]).toEqual(before);
+      expect(readFileSync(join(dir, 'src', 'old-name.txt'), 'utf8')).toBe(was);
+    });
+
+    it('refuses a patch that makes a directory a link and writes beneath it, before git runs', async () => {
+      const dir = bootstrapped();
+      const linking = ['diff --git a/vendored b/vendored', 'new file mode 120000', `index ${'0'.repeat(40)}..${blob(join(outside, 'pkg'))}`, '--- /dev/null', '+++ b/vendored', '@@ -0,0 +1 @@', `+${join(outside, 'pkg')}`, '\\ No newline at end of file'];
+      const { patch: hostile, saved: vouched } = rewritten(`${[...linking, ...creating('vendored/index.js')].join('\n')}\n`);
+      const before = [...everything(dir), ...outsideNow()];
+
+      const result = await applyPatch(invoker, dir, hostile, vouched);
+
+      expect(result).toMatchObject({ kind: 'refused', reason: expect.stringContaining('holds a link or a submodule') });
+      expect([...everything(dir), ...outsideNow()]).toEqual(before);
+    });
+
+    // Git's own check, which reads no index for it: a `.git` in any spelling, anywhere in a path, would load a repository of the patch's own.
+    it.each(['.git/hooks/pre-commit', 'src/.git', '.GIT/hooks/pre-commit'])('leaves git to refuse %s, a path into a repository, and writes nothing', async (name) => {
+      const dir = bootstrapped();
+      const { patch: hostile, saved: vouched } = rewritten(`${[...creating('src/added.ts'), ...creating(name)].join('\n')}\n`);
+      const before = everything(dir);
+
+      const result = await applyPatch(invoker, dir, hostile, vouched);
+
+      expect(result).toMatchObject({ kind: 'refused', reason: expect.stringContaining(`invalid path '${name}'`) });
+      expect(everything(dir)).toEqual(before);
+      expect(existsSync(join(dir, 'src', 'added.ts'))).toBe(false);
+    });
+
+    it('refuses a path under a name Ordewell linked in where nothing on disk leads out yet, since landing would drop it', async () => {
+      const dir = bootstrapped();
+      const { patch: hostile, saved: vouched } = rewritten(`${creating('node_modules/fresh/index.js').join('\n')}\n`);
+      const before = everything(dir);
+
+      const result = await applyPatch(invoker, dir, hostile, vouched, { linked: ['.claude', 'node_modules'] });
+
+      expect(result).toMatchObject({ kind: 'refused', reason: expect.stringContaining('node_modules/fresh/index.js') });
+      expect(result).toMatchObject({ reason: expect.stringContaining('under node_modules, which Ordewell linked') });
+      expect(everything(dir)).toEqual(before);
+      expect(existsSync(join(dir, 'node_modules', 'fresh'))).toBe(false);
+    });
+
+    // Git would write the patch's other files first and then stop, leaving them untracked, with nothing staged to say so.
+    it('refuses a path under something on disk that is not a directory, and writes none of the patch', async () => {
+      const dir = bootstrapped();
+      writeFileSync(join(dir, 'notes'), 'the builder\'s own, untracked\n');
+      const { patch: hostile, saved: vouched } = rewritten(`${[...creating('src/added.ts'), ...creating('notes/x')].join('\n')}\n`);
+      const before = everything(dir);
+
+      const result = await applyPatch(invoker, dir, hostile, vouched);
+
+      expect(result).toMatchObject({ kind: 'refused', reason: expect.stringContaining('notes/x, under notes, which is not a directory') });
+      expect(everything(dir)).toEqual(before);
+      expect(existsSync(join(dir, 'src', 'added.ts'))).toBe(false);
+    });
+
+    it('still applies a patch that removes a file and puts a directory of the same name in its place', async () => {
+      const dir = bootstrapped();
+      const removing = ['diff --git a/gone.txt b/gone.txt', 'deleted file mode 100644', `index ${blob('to be deleted\n')}..${'0'.repeat(40)}`, '--- a/gone.txt', '+++ /dev/null', '@@ -1 +0,0 @@', '-to be deleted'];
+      const { patch: moved, saved: vouched } = rewritten(`${[...removing, ...creating('gone.txt/inner')].join('\n')}\n`);
+
+      const result = await applyPatch(invoker, dir, moved, vouched, { linked: ['.claude', 'node_modules'] });
+
+      expect(result).toMatchObject({ kind: 'applied', sameBase: true });
+      expect(git(dir, 'status', '--porcelain', '--untracked-files=no').split('\n').filter(Boolean).sort()).toEqual(['A  gone.txt/inner', 'D  gone.txt']);
+      expect(readFileSync(join(dir, 'gone.txt', 'inner'), 'utf8')).toBe(hooks);
+    });
+
+    // A case-insensitive file system (macOS, Windows) finds the link by any spelling; a case-sensitive one would land a twin of it on main.
+    it('refuses a case variant of a name Ordewell linked in, and writes nothing anywhere', async () => {
+      const dir = bootstrapped();
+      const { patch: hostile, saved: vouched } = rewritten(`${creating('.CLAUDE/settings.local.json').join('\n')}\n`);
+      const before = [...everything(dir), ...outsideNow()];
+
+      const result = await applyPatch(invoker, dir, hostile, vouched, { linked: ['.claude', 'node_modules'] });
+
+      expect(result).toMatchObject({ kind: 'refused', reason: expect.stringContaining('.CLAUDE/settings.local.json') });
+      expect(result).toMatchObject({ reason: expect.stringContaining('under .claude, which Ordewell linked') });
+      expect([...everything(dir), ...outsideNow()]).toEqual(before);
     });
   });
 });

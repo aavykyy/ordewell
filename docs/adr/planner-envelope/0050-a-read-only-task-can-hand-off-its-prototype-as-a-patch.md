@@ -126,15 +126,29 @@ whatever the listings say.
   for mode. At a later commit it merges with what has landed since. Ordewell
   runs this git as the user, like its other git in a change task's worktree,
   with fsmonitor off. It is not sealed: the worktree is the caller's own,
-  which can already run anything. Before the apply, Ordewell checks the patch
-  for a link or a submodule, as the capture did, since git creates whichever a
-  header names. That is only the first look: a section with no mode line takes
-  its path's mode from the index, so it can edit or rename a link the
-  repository tracks, and keep it a link, without naming one; and git patches
-  the path a section's `---` and `+++` lines name, which its first line need
-  not. Ordewell therefore also runs the same apply against a copy of the
-  index, which writes no file, and refuses if the copy holds a link or a
-  submodule the index does not, whichever path or header said so.
+  which can already run anything.
+- **Before the real apply, Ordewell checks what it would write:**
+  - *Its headers.* The patch names no link or submodule, as at the capture,
+    since git creates whichever a header names.
+  - *The index it would leave.* That is only the first look: a section with
+    no mode line takes its path's mode from the index, so it can edit or
+    rename a link the repository tracks, and keep it a link, without naming
+    one; and git patches the path a section's `---` and `+++` lines name,
+    which its first line need not. So Ordewell runs the same apply against a
+    copy of the index, which writes no file, and refuses if the copy holds a
+    link or a submodule the index does not, whichever path or header said so.
+  - *Each path, on disk.* Git checks a path's leading directories for a link
+    in the index alone, and the links the bootstrap puts in a task's worktree
+    are in no index: `.claude` and each mirrored `node_modules` entry lead into
+    the user's own checkout, where a `.claude/settings.local.json` carries
+    hooks. So every path whose entry the copy changed, new, renamed, copied,
+    deleted or merged, is walked under the worktree with no link followed. It
+    is refused under a link, or under something that is not a directory,
+    except a file the patch itself removes to put a directory in its place.
+  - *Each path, by name.* A path at or under a name Ordewell linked in
+    (`IsolationTaskRepo.linked`) is refused whatever is on disk there, compared
+    without case, since a case-insensitive file system finds a link by any
+    spelling of its name and landing would drop it.
 - **What came of it is read from the index, never predicted.**
   `git apply --check --3way` returns 0 for a patch that then conflicts. After
   the apply, the paths the index holds unmerged are the conflicts:
@@ -152,14 +166,17 @@ whatever the listings say.
 - **It refuses, applying nothing,** a task outside the readable set, a task or
   attempt that saved no patch, a patch whose file is gone or whose size or
   SHA-256 is not the artifact's (cut short, or changed since), a patch that
-  would create or change a link or a submodule, a call from a read-only task,
+  would create or change a link or a submodule, a patch that would write a
+  path under a link or something that is not a directory, or at or under a
+  name Ordewell linked in, a call from a read-only task,
   a caller with no worktree of its own or one across several repositories, a
   base commit this repository does not have, and a worktree that still holds
   an earlier conflict.
 - **A patch is another task's work.** The answer says to read what it changed
   and to run the checks, since the author ran its own at its base. Git itself
-  refuses a patch that writes through a link, or into `.git`. Nothing applies
-  on its own: a call is the caller's.
+  refuses a path into `.git`, in any spelling, and one under a link the index
+  holds; the links on disk are Ordewell's to check. Nothing applies on its
+  own: a call is the caller's.
 - **Nothing is committed.** The staged changes land with the task's own work,
   as everything in its worktree does.
 
@@ -179,7 +196,8 @@ whatever the listings say.
 A patch that holds a link or a submodule anyway is refused, at the save and at
 the apply. The apply refuses more: a patch that would change a link the
 repository tracks, though a capture never carries a change to one, only its
-deletion.
+deletion; and a path under a link in the worktree, or at or under a name
+Ordewell linked in, which a capture leaves out by name.
 
 A file's part is measured in the patch that is saved, not on disk. A small edit
 to a large file counts as small, and so does a large file that only moved,
@@ -263,13 +281,21 @@ No field records the pick, and core reads nothing from the judge.
   It also shows a hand-written patch refused, applying nothing, when it edits,
   renames or copies a link the repository tracks with no mode line to say so,
   or names another file in its first line than in its `---` and `+++` lines,
-  and the capture's own deletion of that link applied.
+  and the capture's own deletion of that link applied. And it shows one
+  refused, with nothing changed in the worktree, its index or the directory a
+  link leads to, when it creates or renames a file under an untracked link
+  out of the worktree (`.claude`, a mirrored `node_modules` entry), under a
+  case variant of a linked name, under a linked name with nothing on disk
+  yet, or under a file; when it makes a directory a link and writes beneath
+  it; and, git's own refusal, when a path holds `.git` in any spelling. A
+  patch that removes a file and puts a directory in its place still applies.
   `PatchApply.test.ts` shows what is refused before git runs, a patch with a
   link or a different hash among it, and how each outcome is worded.
 - **The seams around it.** `taskShell.test.ts` covers `TaskShell.hold` with the
   recording backend. The orchestrator's side, the artifact in the handoff
-  whatever the verdict, uses `FakeWorktreeIsolation`. Which token is offered
-  the tool is asserted at the MCP server test seam.
+  whatever the verdict, uses `FakeWorktreeIsolation`, and so does the apply's
+  refusal of a path under a name the attempt's record says was linked in.
+  Which token is offered the tool is asserted at the MCP server test seam.
 
 ## Out of scope
 
@@ -318,6 +344,14 @@ No field records the pick, and core reads nothing from the judge.
 - A file ignored only by the user's global gitignore is not ignored inside the
   seal, whose home is the task's scratch directory, and the capture reads no
   global git configuration.
+- The apply runs unsealed, so its checks are all that keep a patch inside the
+  worktree. Running it sealed, writing only the worktree and the repository's
+  git directory, would make a write outside impossible by construction, and
+  is the follow-up. It is not done here: every sealed profile withholds the
+  repository's git directory by design (ADR-0046), where the apply writes the
+  index and the merge's objects; a change task holds no sandbox to run it in;
+  and a host with none (Windows, Linux without bubblewrap) would still rely on
+  the checks.
 
 ## History
 
@@ -327,3 +361,4 @@ No field records the pick, and core reads nothing from the judge.
 - 2026-10-24 — the planner's guidance implemented: the explore skill, `WHO EXPLORES` and the read-only task's own prompt teach `save_patch`, the shared check and `apply_patch`.
 - 2026-10-24 — a review's fixes: Ordewell judges the saved patch on the bytes it reads (no link or submodule, counts and a SHA-256 taken from them, checked again at the apply), measures a rename as one section, and reads no global git configuration.
 - 2026-10-24 — the apply asks git, against a copy of the index, what the patch would leave, so a patch with no mode line cannot retarget a link the repository tracks.
+- 2026-10-24 — the apply refuses a path that would leave the worktree: under a link on disk, which git's check misses since it reads only the index, or at or under a name Ordewell linked in, in any case; sealing the apply is the follow-up.

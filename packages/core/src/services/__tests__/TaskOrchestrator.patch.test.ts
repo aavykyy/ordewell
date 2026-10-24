@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -43,8 +43,7 @@ describe.skipIf(process.platform === 'win32')("a read-only task's saved patch (A
     rmSync(scratch, { recursive: true, force: true });
   });
 
-  function setup() {
-    const isolation = new FakeWorktreeIsolation();
+  function setup(isolation = new FakeWorktreeIsolation()) {
     const sessions: FakeRunnerSession[] = [];
     const requests: RunnerSpawnOptions[] = [];
     const kept: Array<{ taskId: string; attempt: number; patch: string }> = [];
@@ -219,6 +218,33 @@ describe.skipIf(process.platform === 'win32')("a read-only task's saved patch (A
       expect(reply.text).toContain("Applied #1 Task r1's patch (1 file, +1 -0) cleanly");
       expect(readFileSync(join(builder, 'a.ts'), 'utf8')).toBe('one\ntwo\n');
       expect(git(builder, 'status', '--porcelain')).toBe('M  a.ts\n');
+    });
+
+    it('refuses a patch that writes under a name the bootstrap linked into its worktree, and applies none of it', async () => {
+      // The builder's worktree where a real prepare cuts it, with what the bootstrap linked in recorded.
+      const isolation = new (class extends FakeWorktreeIsolation {
+        async prepare(...args: Parameters<FakeWorktreeIsolation['prepare']>) {
+          const prepared = await super.prepare(...args);
+          const [prepping, run] = args;
+          if (prepping.id !== 'c2') return prepared;
+          run.tasks.c2.repos['.'] = { worktree: builder, linked: ['vendor'] };
+          return { ...prepared, cwd: builder };
+        }
+      })();
+      const env = setup(isolation);
+      env.orchestrator.loadPlan([readOnly('r1', 1), task('c2', 2, { dependencies: ['r1'] })]);
+      await env.orchestrator.approveReview();
+      await vi.waitFor(() => expect(env.request('r1')).toBeDefined());
+      mkdirSync(join(repo, 'vendor'));
+      writeFileSync(join(repo, 'vendor', 'lib.ts'), 'export const lib = 1;\n');
+      await env.request('r1').savePatch!(signal());
+      env.latest('r1').reportComplete({ status: 'done', summary: 'Prototype saved.' });
+      await vi.waitFor(() => expect(env.request('c2')).toBeDefined());
+
+      const reply = await env.request('c2').applyPatch!({ task: '#1' });
+
+      expect(reply).toMatchObject({ isError: true, text: expect.stringContaining('vendor/lib.ts, under vendor, which Ordewell linked') });
+      expect(git(builder, 'status', '--porcelain')).toBe('');
     });
 
     it('refuses a read-only task, which keeps its own prototype with save_patch', async () => {

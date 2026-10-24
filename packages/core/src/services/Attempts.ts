@@ -851,6 +851,8 @@ export class Attempts {
    * A change attempt's `apply_patch` (ADR-0050): a saved patch of a task it
    * may read, merged into its own worktree. A read-only attempt has no
    * worktree it keeps, so it is refused here as well as by its tool list.
+   * What Ordewell linked into the worktree leads into the user's checkout,
+   * so the patch may not write there.
    */
   private applyPatch(task: Task, attempt: TaskAttempt, args: ApplyPatchArgs): Promise<McpToolReply> {
     const repos = Object.values(this.deps.runs.openRecord(task.id)?.repos ?? {});
@@ -861,6 +863,7 @@ export class Attempts {
       worktrees: repos.map((repo) => repo.worktree),
       readOnly: landsNothing(attempt.kind),
       git: this.deps.git ?? DEFAULT_GIT,
+      linked: this.linkedPaths(task.id, attempt.cwd),
     });
   }
 

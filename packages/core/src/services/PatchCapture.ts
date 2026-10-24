@@ -536,6 +536,16 @@ interface AppliedAt {
   files: number;
 }
 
+/** What an apply refuses to write, beyond what is on disk. */
+export interface PatchApplyOptions {
+  /**
+   * The paths Ordewell linked into the worktree, relative to its root
+   * (`IsolationTaskRepo.linked`): they lead into the user's own checkout, or
+   * stand for it, and landing leaves them out.
+   */
+  linked?: readonly string[];
+}
+
 /** How an apply ended: merged whole, merged with conflicts left in the worktree, or applied nothing. */
 export type PatchApplyResult =
   | ({ kind: 'applied' } & AppliedAt)
@@ -552,35 +562,98 @@ async function unmergedPaths(invoker: GitInvoker, worktree: string): Promise<str
   return [...new Set(paths)].sort();
 }
 
-/** The index's links and submodules as `mode sha<TAB>path`, at whatever stage: a merge that conflicts holds a path three times. */
-async function linkEntries(invoker: GitInvoker, worktree: string): Promise<Set<string>> {
-  const entries = new Set<string>();
+interface IndexEntry {
+  mode: string;
+  sha: string;
+  stage: string;
+}
+
+/** The index's entries by path, in git's order: a merge that conflicts holds a path three times. */
+type IndexEntries = Map<string, IndexEntry[]>;
+
+async function indexEntries(invoker: GitInvoker, worktree: string): Promise<IndexEntries> {
+  const entries: IndexEntries = new Map();
   for (const record of (await git(invoker, worktree, [...APPLY_GIT, 'ls-files', '-s', '-z'])).split('\0')) {
-    const match = /^(120000|160000) ([0-9a-f]+) \d\t([\s\S]+)$/.exec(record);
-    if (match) entries.add(`${match[1]} ${match[2]}\t${match[3]}`);
+    const match = /^(\d{6}) ([0-9a-f]+) (\d)\t([\s\S]+)$/.exec(record);
+    if (match) entries.set(match[4], [...(entries.get(match[4]) ?? []), { mode: match[1], sha: match[2], stage: match[3] }]);
   }
   return entries;
 }
 
 /**
- * The paths that applying the patch would leave as a link or a submodule that
- * the worktree's index does not already hold as such, as git itself says:
- * the same apply, run against a copy of the index and writing no file. A
- * patch's headers cannot say. A section with no mode line takes the mode of
- * its path from the index, so it keeps a link a repository tracks and writes
- * the hunk as its target, and the path git patches is the one its `---` and
- * `+++` lines name, not the one its first line does.
+ * The index as applying the patch would leave it, as git itself says: the
+ * same apply, run against a copy of the index and writing no file. A patch's
+ * headers cannot say. A section with no mode line takes the mode of its path
+ * from the index, so it keeps a link a repository tracks and writes the hunk
+ * as its target, and the path git patches is the one its `---` and `+++`
+ * lines name, not the one its first line does.
  */
-async function linksAdded(invoker: GitInvoker, worktree: string, patchFile: string, scratch: string): Promise<string[]> {
+async function trialApply(invoker: GitInvoker, worktree: string, patchFile: string, scratch: string): Promise<IndexEntries> {
   const index = path.resolve(worktree, (await git(invoker, worktree, [...APPLY_GIT, 'rev-parse', '--git-path', 'index'])).trim());
   const copy = path.join(scratch, 'index');
   fs.copyFileSync(index, copy);
   const trial: GitInvoker = { ...invoker, exec: (file, args, opts) => invoker.exec(file, args, { ...opts, env: { ...opts.env, GIT_INDEX_FILE: copy } }) };
-  const held = await linkEntries(invoker, worktree);
   // Its own outcome is the real apply's to report: a refusal leaves the copy as it was, and a conflict leaves what the real one would.
   await tryGit(trial, worktree, [...APPLY_GIT, 'apply', '--cached', '--3way', '--whitespace=nowarn', patchFile]);
-  const added = [...await linkEntries(trial, worktree)].filter((entry) => !held.has(entry));
-  return [...new Set(added.map((entry) => entry.slice(entry.indexOf('\t') + 1)))].sort();
+  return indexEntries(trial, worktree);
+}
+
+/** The paths the apply would leave as a link or a submodule that the index does not already hold as such. */
+function linksAdded(held: IndexEntries, left: IndexEntries): string[] {
+  const linkish = (entry: IndexEntry) => entry.mode === LINK || entry.mode === SUBMODULE;
+  return [...left]
+    .filter(([name, entries]) => entries.some((entry) => linkish(entry) && !held.get(name)?.some((was) => was.mode === entry.mode && was.sha === entry.sha)))
+    .map(([name]) => name)
+    .sort();
+}
+
+/** Every path whose entries the apply would change: each one git writes, removes or merges in the worktree. */
+function pathsChanged(held: IndexEntries, left: IndexEntries): string[] {
+  const text = (entries: IndexEntry[] | undefined) => (entries ?? []).map((e) => `${e.mode} ${e.sha} ${e.stage}`).join('\n');
+  return [...new Set([...held.keys(), ...left.keys()])].filter((name) => text(held.get(name)) !== text(left.get(name))).sort();
+}
+
+/**
+ * Why applying would write outside the worktree, if it would. Git checks a
+ * path's leading directories for a link in the index alone, never on disk,
+ * and the links the bootstrap puts in a task's worktree are in no index:
+ * `.claude` and each mirrored `node_modules` entry lead into the user's own
+ * checkout, where a `.claude/settings.local.json` would carry hooks that run
+ * the next time the user's agent starts there. So each path is walked on disk,
+ * and one at or under a name Ordewell linked in is refused whatever is there
+ * now: landing would drop it, as it drops the name.
+ */
+function leavesWorktree(worktree: string, names: readonly string[], linked: readonly string[], held: IndexEntries, left: IndexEntries): string | undefined {
+  // Folded, since a case-insensitive file system finds a link by any spelling of its name.
+  const links = linked.map((name) => ({ name, key: folded(name) }));
+  for (const name of names) {
+    const key = folded(name);
+    const link = links.find((l) => key === l.key || key.startsWith(`${l.key}/`));
+    if (link !== undefined) {
+      return `the patch writes ${name}, ${key === link.key ? '' : 'under '}${link.name}, which Ordewell linked into your worktree from your own checkout and never lands, so git could write into your checkout.`;
+    }
+    const parts = name.split('/');
+    for (let i = 1; i <= parts.length; i += 1) {
+      const at = parts.slice(0, i).join('/');
+      const full = path.join(worktree, ...parts.slice(0, i));
+      // Nothing there: git makes real directories from here down. Any other error is a refusal, since it leaves the question open.
+      const stat = fs.lstatSync(full, { throwIfNoEntry: false });
+      if (!stat) break;
+      const last = i === parts.length;
+      if (stat.isSymbolicLink()) {
+        // A link the repository tracks is removed, as a capture's deletion of one asks, not followed; changing one is linksAdded's to refuse.
+        if (last && held.get(at)?.some((entry) => entry.mode === LINK)) break;
+        const target = fs.readlinkSync(full);
+        return `the patch writes ${name}, ${last ? `a link to ${target}` : `under ${at}, a link to ${target}`}, so git would write through it, outside your worktree.`;
+      }
+      if (last || stat.isDirectory()) continue;
+      // A tracked file the patch removes makes way for a directory of the same name: git deletes it before it writes beneath.
+      if (stat.isFile() && held.has(at) && !left.has(at)) break;
+      // Git would write the patch's other files first and then stop here, leaving them untracked.
+      return `the patch writes ${name}, under ${at}, which is not a directory in your worktree.`;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -593,9 +666,10 @@ async function linksAdded(invoker: GitInvoker, worktree: string, patchFile: stri
  * An unresolved conflict of the task's own, or a file of the patch's that the
  * task changed and has not staged, would make the result unreadable, so
  * either applies nothing. So does a patch that is not the file that was saved,
- * or that would leave a link or a submodule the worktree does not hold.
+ * that would leave a link or a submodule the worktree does not hold, or that
+ * would write a path outside the worktree.
  */
-export async function applyPatch(invoker: GitInvoker, worktree: string, patch: Buffer, saved: Pick<HandoffPatch, 'base' | 'files' | 'bytes' | 'sha256'>): Promise<PatchApplyResult> {
+export async function applyPatch(invoker: GitInvoker, worktree: string, patch: Buffer, saved: Pick<HandoffPatch, 'base' | 'files' | 'bytes' | 'sha256'>, opts: PatchApplyOptions = {}): Promise<PatchApplyResult> {
   const refused = (reason: string): PatchApplyResult => ({ kind: 'refused', reason });
   if (patch.length !== saved.bytes) {
     return refused(`the patch is ${byteSize(patch.length)} where its artifact says ${byteSize(saved.bytes)}, so it was cut short or changed after it was saved.`);
@@ -621,10 +695,14 @@ export async function applyPatch(invoker: GitInvoker, worktree: string, patch: B
 
     const file = path.join(dir, 'saved.patch');
     fs.writeFileSync(file, patch, { flag: 'wx', mode: 0o600 });
-    const links = await linksAdded(invoker, worktree, file, dir);
+    const held = await indexEntries(invoker, worktree);
+    const left = await trialApply(invoker, worktree, file, dir);
+    const links = linksAdded(held, left);
     if (links.length > 0) {
       return refused(`the patch would leave ${listed(links.slice(0, 10))}${links.length > 10 ? `, +${links.length - 10} more` : ''} as a link or a submodule, which a saved patch never does, so it is not one that was saved.`);
     }
+    const outside = leavesWorktree(worktree, pathsChanged(held, left), opts.linked ?? [], held, left);
+    if (outside) return refused(outside);
     // --3way implies --index. The whitespace policy is pinned so a repository's apply.whitespace=error cannot refuse a patch whole.
     const applied = await tryGit(invoker, worktree, [...APPLY_GIT, 'apply', '--3way', '--whitespace=nowarn', file]);
     const conflicted = await unmergedPaths(invoker, worktree);
@@ -692,6 +770,8 @@ export interface ApplyPatchSite {
   /** A read-only task lands nothing, so it has no worktree of its own to apply a patch into. */
   readOnly: boolean;
   git: GitInvoker;
+  /** What Ordewell linked into that worktree, relative to its root, which a patch may not write. */
+  linked?: readonly string[];
 }
 
 /**
@@ -731,5 +811,5 @@ export async function applySavedPatch(args: ApplyPatchArgs, site: ApplyPatchSite
   }
   const bytes = site.log.patch?.(target.id, saved.attempt);
   if (!bytes) return refuse(`the patch ${name} saved in attempt ${saved.attempt} is no longer in this session's task logs.`);
-  return applyReply(await applyPatch(site.git, site.worktrees[0], bytes, saved), name, saved);
+  return applyReply(await applyPatch(site.git, site.worktrees[0], bytes, saved, { linked: site.linked }), name, saved);
 }
