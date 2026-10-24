@@ -65,6 +65,20 @@ export function parseAutonomyLevel(arg: string | undefined): boolean | null {
 }
 
 /**
+ * The level a flag or `ORDEWELL_AUTONOMOUS_MODE` names: the level names above,
+ * plus the boolean spellings (`true`/`false`, `1`/`0`), case and surrounding
+ * space aside. Undefined for anything else — a typo must never raise autonomy,
+ * and the `.env` migration and the runtime override must read a value alike.
+ */
+export function parseAutonomyFlag(value: string | undefined): boolean | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === 'true' || normalized === '1') return true;
+  if (normalized === 'false' || normalized === '0') return false;
+  return parseAutonomyLevel(normalized) ?? undefined;
+}
+
+/**
  * The profile a manifest tags `readOnly` (ADR-0046) — never found by id, so a runner with no
  * tag has none. A mode this host cannot run is still the runner's read-only
  * mode: it is how a task already on it is recognized, and why a move of that

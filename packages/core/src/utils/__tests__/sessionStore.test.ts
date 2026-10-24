@@ -216,6 +216,24 @@ describe('sessionStore', () => {
       expect(warns).toHaveLength(0);
     });
 
+    it('leaves a file it could not read alone instead of calling the session corrupt', () => {
+      const plan = createEmptyPlan();
+      plan.runners = ['claude-code'];
+      const kept = saveSession(plan, 'valid', tmpDir);
+      const sessionsDir = path.join(tmpDir, '.ordewell', 'sessions');
+      // A directory named like a session fails readFileSync with EISDIR: an I/O
+      // error, not unparseable content, and no reason to hide the file.
+      fs.mkdirSync(path.join(sessionsDir, 'unreadable.json'));
+
+      const { logger, warns } = fakeLogger();
+      const sessions = listSessions(tmpDir, logger);
+
+      expect(sessions.map((s) => s.id)).toEqual([kept.id]);
+      expect(fs.existsSync(path.join(sessionsDir, 'unreadable.json'))).toBe(true);
+      expect(fs.readdirSync(sessionsDir).some((f) => f.endsWith('.corrupt'))).toBe(false);
+      expect(warns.some((w) => w.includes('unreadable.json') && w.includes('skipping'))).toBe(true);
+    });
+
     it('never returns an undefined entry for a JSON file that is not a session', () => {
       const plan = createEmptyPlan();
       plan.runners = ['claude-code'];

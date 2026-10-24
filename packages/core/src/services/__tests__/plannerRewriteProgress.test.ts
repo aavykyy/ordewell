@@ -40,6 +40,13 @@ function halfDonePlan(): LegacyPlanState {
  * new one. Recorded from a real session — the finished tasks came back
  * `pending` with a placeholder prompt.
  */
+/** The tasks not yet done, depending only on each other. */
+function withoutDone(tasks: readonly Task[]): Task[] {
+  const kept = tasks.filter((t) => t.status !== 'completed');
+  const ids = new Set(kept.map((t) => t.id));
+  return kept.map((t) => ({ ...t, dependencies: t.dependencies.filter((d) => ids.has(d)) }));
+}
+
 function rewrittenWithAddedTask(current: readonly Task[]): Task[] {
   return [
     ...current.map((t) => ({
@@ -115,10 +122,10 @@ describe('a planner rewrite never undoes finished work', () => {
       runner: recordingRunner(spawned),
       aiService: {
         startConversation: vi.fn(),
-        // Asked only for what is still to run, a planner drops the tasks already done.
+        // Asked only for what is still to run, a planner drops the tasks already done, and with them the dependencies on them: a plan naming a task it left out is refused.
         continueConversation: vi.fn(async () => ({
           kind: 'plan' as const,
-          tasks: rewrittenWithAddedTask(session.planTasks.filter((t) => t.status !== 'completed')),
+          tasks: rewrittenWithAddedTask(withoutDone(session.planTasks)),
           text: '',
           researchLog: [],
         })),

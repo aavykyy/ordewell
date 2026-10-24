@@ -23,8 +23,8 @@ import {
   NATIVE_SHELL_GUIDE,
 } from '../PlanPrompts';
 import { repairLoop, resubmitPlanPrompt } from '../PlanRepair';
-import { validatePlanTasks } from '../PlanValidator';
-import { checkPlanSkills, type SkillLookup } from '../taskSkills';
+import { PlanChangeCheck, planChangeErrorText, requestScope } from '../PlanChangeCheck';
+import type { SkillLookup } from '../taskSkills';
 import { PLANNER_TURN_ENDED } from '../plannerTools';
 import { settleReply, type ReplyAttempt } from '../settleReply';
 import { ReplySplitter } from '../replyStream';
@@ -878,18 +878,15 @@ export class CliAgentAiService implements IAiService {
         listRunners: async () => ({ text: JSON.stringify({ runners: catalog.runners.map((id) => ({ id, readOnly: readOnlyMode(catalog.runnerModes?.[id]) !== undefined })) }) }),
         listModels: async ({ runner }) => ({ text: JSON.stringify({ runner, models: catalog.modelsByRunner?.[runner] ?? [] }) }),
         submitPlan: async ({ tasks }) => {
-          const result = validatePlanTasks({ tasks }, catalog.runners, catalog.runnerModes, catalog.autonomousDefault);
-          if (!result.ok) return refuse(result.errors.map((error) => error.message));
-          const skills = catalog.taskSkills ? await checkPlanSkills(result.tasks, catalog.taskSkills) : undefined;
+          const checked = await new PlanChangeCheck(requestScope(catalog)).check({ kind: 'plan', tasks }, 'submit');
           if (ended || signal?.aborted) return { text: PLANNER_TURN_ENDED, isError: true };
-          if (skills && skills.errors.length > 0) return refuse(skills.errors.map((error) => error.message));
-          submitted = result.tasks;
+          if (!checked.ok) return refuse(checked.errors.map(planChangeErrorText));
+          submitted = checked.tasks;
           refused = [];
-          const warnings = [...(result.warnings ?? []), ...(skills?.warnings ?? [])];
           return {
             text: JSON.stringify({
               ok: true,
-              ...(warnings.length > 0 ? { warnings } : {}),
+              ...(checked.warnings.length > 0 ? { warnings: checked.warnings } : {}),
               next: 'Plan recorded. End your turn now.',
             }),
           };

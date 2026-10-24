@@ -5,7 +5,7 @@ import { withFileLock } from '../utils/fileLock';
 import type { SupervisorLevel } from '../models/Execution';
 import { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './LoopGuards';
 import { DEFAULT_WAKE_UP_READ_BUDGET } from './Supervisor';
-import { parseAutonomyLevel } from './ModeResolver';
+import { parseAutonomyFlag } from './ModeResolver';
 
 /** How a run is started, watched and merged: the user's, not a plan's (ADR-0030). */
 export interface GlobalRunSettings {
@@ -152,10 +152,15 @@ export function runSettingsOf(settings: UserSettings): GlobalRunSettings {
 /** How many times a save is made afresh when another process keeps saving under it. */
 const SAVE_TRIES = 5;
 
+/** A file that cannot be read is reported once per process, not on every look. */
+const warnedSettingsProblems = new Set<string>();
+
 export class SettingsService {
   private filePath: string;
   private cache: UserSettings | null = null;
   private cachedStamp: string | null = null;
+  /** A read failed for a reason other than a missing file; saving would overwrite bytes we never saw. */
+  private unreadable = false;
 
   constructor(filePath: string = getSettingsPath()) {
     this.filePath = filePath;
@@ -342,18 +347,14 @@ export class SettingsService {
 
   /**
    * The level `ORDEWELL_AUTONOMOUS_MODE` names, or undefined when it names
-   * none. It speaks the flag's own words (`true`/`false`, `1`/`0`) as well as
-   * the level names {@link parseAutonomyLevel} knows, case and surrounding
-   * space aside. Anything else is not an override at all rather than Full: a
-   * typo, `off` in a shell that spells Guarded that way, or a lower-case
-   * `false` must never raise the user's autonomy.
+   * none. It shares {@link parseAutonomyFlag} with the `.env` migration, so a
+   * value is read the same way whether it is still in `.env` or set in the
+   * shell. Anything else is not an override at all rather than Full: a typo,
+   * `off` in a shell that spells Guarded that way, or a lower-case `false`
+   * must never raise the user's autonomy.
    */
   private autonomyOverride(): boolean | undefined {
-    const env = process.env.ORDEWELL_AUTONOMOUS_MODE?.trim().toLowerCase();
-    if (!env) return undefined;
-    if (env === 'true' || env === '1') return true;
-    if (env === 'false' || env === '0') return false;
-    return parseAutonomyLevel(env) ?? undefined;
+    return parseAutonomyFlag(process.env.ORDEWELL_AUTONOMOUS_MODE);
   }
 
   setAutonomousMode(enabled: boolean): void {
@@ -385,35 +386,75 @@ export class SettingsService {
     // A pre-`.ordewell` install keeps its settings in the old config dir; lift
     // them once before reading so the first read already sees the moved file.
     migrateOldConfigDir();
+    this.unreadable = false;
+    let text: string;
     try {
-      if (fs.existsSync(this.filePath)) {
-        const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
-        // Only known keys are lifted, so the removed `tdd` (now a task skill)
-        // and `verification` toggles and the `runnerTransport` setting of older
-        // files are dropped on the next write.
-        const settings: UserSettings = {};
-        const modelAllowlist = readModelAllowlist(raw.modelAllowlist);
-        if (modelAllowlist) {
-          settings.modelAllowlist = modelAllowlist;
-        }
-        const plannerModels = readPlannerModels(raw.plannerModels);
-        if (plannerModels) {
-          settings.plannerModels = plannerModels;
-        }
-        if (Array.isArray(raw.enabledRunners)) {
-          settings.enabledRunners = raw.enabledRunners.map(String);
-        }
-        if (typeof raw.autonomousMode === 'boolean') settings.autonomousMode = raw.autonomousMode;
-        // A value it cannot use is left out, so its default stands.
-        for (const key of RUN_SETTING_KEYS) {
-          if (RUN_SETTING_CHECKS[key].valid(raw[key])) (settings as Record<keyof GlobalRunSettings, unknown>)[key] = raw[key];
-        }
-        return settings;
+      text = fs.readFileSync(this.filePath, 'utf-8');
+    } catch (err: unknown) {
+      // A missing file is simply defaults. Any other read failure (EACCES,
+      // EMFILE, EISDIR) says nothing about the content, so the next save must
+      // refuse rather than replace what was never read.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.unreadable = true;
+        this.warnProblem(`could not be read; changes will not be saved over it: ${String(err)}`);
       }
-    } catch {
-      // corrupted file — use defaults
+      return {};
     }
-    return {};
+    let raw: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      raw = parsed as Record<string, unknown>;
+    } catch {
+      this.moveAsideCorrupt();
+      return {};
+    }
+    // Only known keys are lifted, so the removed `tdd` (now a task skill)
+    // and `verification` toggles and the `runnerTransport` setting of older
+    // files are dropped on the next write.
+    const settings: UserSettings = {};
+    const modelAllowlist = readModelAllowlist(raw.modelAllowlist);
+    if (modelAllowlist) {
+      settings.modelAllowlist = modelAllowlist;
+    }
+    const plannerModels = readPlannerModels(raw.plannerModels);
+    if (plannerModels) {
+      settings.plannerModels = plannerModels;
+    }
+    if (Array.isArray(raw.enabledRunners)) {
+      settings.enabledRunners = raw.enabledRunners.map(String);
+    }
+    if (typeof raw.autonomousMode === 'boolean') {
+      settings.autonomousMode = raw.autonomousMode;
+    } else if (typeof raw.autonomousMode === 'string') {
+      // A hand-typed level name is read the way the flag and `.env` read it;
+      // "guarded" must not fall through to Full. An unknown word still does.
+      const level = parseAutonomyFlag(raw.autonomousMode);
+      if (level !== undefined) settings.autonomousMode = level;
+    }
+    // A value it cannot use is left out, so its default stands.
+    for (const key of RUN_SETTING_KEYS) {
+      if (RUN_SETTING_CHECKS[key].valid(raw[key])) (settings as Record<keyof GlobalRunSettings, unknown>)[key] = raw[key];
+    }
+    return settings;
+  }
+
+  /** Keep the bytes of a hand-edited file we cannot parse, and say so, instead of resetting it on the next save. */
+  private moveAsideCorrupt(): void {
+    const aside = `${this.filePath}.${Date.now()}.corrupt`;
+    try {
+      fs.renameSync(this.filePath, aside);
+      this.warnProblem(`is not valid JSON; kept it as ${aside} and started from defaults`);
+    } catch (err: unknown) {
+      this.unreadable = true;
+      this.warnProblem(`is not valid JSON and could not be moved aside; changes will not be saved over it: ${String(err)}`);
+    }
+  }
+
+  private warnProblem(problem: string): void {
+    if (warnedSettingsProblems.has(this.filePath)) return;
+    warnedSettingsProblems.add(this.filePath);
+    console.warn(`[SettingsService] ${this.filePath} ${problem}`);
   }
 
   /**
@@ -436,6 +477,11 @@ export class SettingsService {
 
   /** False, saving nothing, when the file is no longer the one stamped `expected`. */
   private persist(expected?: string | null): boolean {
+    // The bytes on disk were never read, so replacing them would be a silent
+    // reset to whatever defaults this process happens to hold.
+    if (this.unreadable) {
+      throw new Error(`Cannot save settings: ${this.filePath} could not be read, so it will not be overwritten. Fix or remove it and try again.`);
+    }
     const dir = path.dirname(this.filePath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });

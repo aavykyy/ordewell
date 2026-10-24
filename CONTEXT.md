@@ -1985,6 +1985,25 @@ lives only on the task's model (`assignedModel.thinkingEffort`); `edit_plan`'s
 *Avoid:* building a task from planner JSON anywhere else, and "fixing" a task
 the planner wrote by substitution — what it may not have is refused.
 
+**Plan change check** (`PlanChangeCheck`, `services/PlanChangeCheck.ts`) — the
+one check a planner's change to the plan meets: a whole plan or a batch of task
+ops, on either route (`submit_plan` and the plan envelope, `edit_plan` and
+`taskOps`), at both ends of its turn — *submit*, as the planner makes it, where
+an edit joins the ops its turn already holds, and *land*, as the turn commits
+it. Every rule reads one scope, the session's live catalog and plan (or a
+one-shot planner's request): the runners `assignableRunners` allows, their modes,
+the *Assignment resolver*, `applyTaskOps`, the attached skills, and an Act
+supervisor's oscillation guard. So a change accepted at submit is refused at
+landing only for something that moved in between, a runner switched off say,
+and the adjustments shown at submit are the ones landing makes. The skill
+lookup is its one wait and comes first; what passed is handed on in the tick its
+rules read the plan, so nothing moves the plan between the check and what
+lands. Refusals are structured (`PlanChangeError`: the task and field, or the
+op as an `OpRef`) and rendered by whoever shows them; an envelope plan is
+parsed against the check's `intake()`.
+*Avoid:* checking a planner's change at a call site, or reading an op number
+back out of a refusal's wording.
+
 **Task query** (`{"taskQuery":{"tasks":[...],"fields"?:[...],"catalog"?:true}}`)
 — the planner's read channel, alongside the plan and `taskOps` envelopes
 `classifyPlannerReply` already recognizes (see ADR-0012). An MCP-capable
