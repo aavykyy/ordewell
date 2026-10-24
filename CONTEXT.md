@@ -1142,7 +1142,7 @@ share lifecycle plumbing; `FakeRunnerSession` is the test seam. Structured
 methods are mandatory, with no optional capability or transport discriminator.
 *Avoid:* "terminal runner", "terminal session" for these interfaces.
 
-**Task attempt** (`TaskAttempt`, inside TaskOrchestrator) — one run of one
+**Task attempt** (`TaskAttempt`, inside `Attempts`) — one run of one
 task, from the moment the scheduler claims it to the moment it ends. It holds
 everything that has to die with the run: the attempt number, the phase
 (`starting` while the async spawn is in flight, `running` once the runner is
@@ -1150,11 +1150,19 @@ up, `integrating` while *Landing* settles its verdict), the live
 `IRunnerSession`, and the runner, working directory and start
 time — plus its *attempt kind* and,
 in an isolated run, whether that directory is its worktree and the landing in
-flight. The orchestrator keeps one
-`Map<taskId, TaskAttempt>`, and every way a run ends — verdict, cancel, release,
-mark complete, retry, a failed spawn, stop, plan load — goes through the one
-`endAttempt`, which also clears the verifier state an interrupted run leaves
-behind. Ending an attempt is also what invalidates a spawn still in flight: the
+flight. `Attempts` owns every live one — the one `Map<taskId, TaskAttempt>`,
+the runner sessions, the `VerdictEngine` wiring and the attempt's output — and
+the scheduler (`TaskOrchestrator`) owns which task starts and what follows.
+Every way a run ends — verdict, cancel, release, mark complete, retry, a failed
+spawn, stop, plan load — goes through the one `Attempts.end`, which also clears
+the verifier state an interrupted run leaves behind. An attempt that ends on
+its own is reported to the scheduler as one `AttemptEnded`: passed, files
+changed, failed, repaired, usage-limited, spawn failed or unsettled. The
+scheduler applies each in its one `settle`, as it applies a *Landing* outcome,
+so `Attempts` never marks a task done, failed or held. A spawn that throws,
+whatever threw, is one `SpawnFailure`: the task is left failed, held with a
+reason, or — a repair — waiting on its conflict. Ending an attempt is also
+what invalidates a spawn still in flight: the
 late session is compared by identity against the task's *current* attempt, so
 it is killed rather than resurrecting a stopped task or displacing a newer run,
 and it takes back only its own claim — a task marked complete meanwhile stays
@@ -1169,13 +1177,13 @@ and the *Start admission* it was asked under. It reads the task there, so a
 start that awaited first runs the task as the plan holds it then, and checks
 in the same synchronous step that the task is in the user's approval record,
 that no Stop came since the start was admitted, that Mark complete is not
-landing it and that a slot is free, and marks the attempt claimed before
-anything is awaited. The attempt keeps that admission, and the repair its
-conflict is owed claims under it. The scheduler also judges each task by the
-*Start rule* again right before claiming it, because a start it awaited, a
-user control or a concurrent tick may have changed it, so it never starts
-held, finished or newly blocked work, nor more than `maxParallelSessions` at
-once.
+landing it and that a slot is free; `Attempts.start` then marks the attempt
+claimed before anything is awaited. The attempt keeps that admission, and the
+repair its conflict is owed claims under it. The scheduler also judges each
+task by the *Start rule* again right before claiming it, because a start it
+awaited, a user control or a concurrent tick may have changed it, so it never
+starts held, finished or newly blocked work, nor more than
+`maxParallelSessions` at once.
 The working directory is decided in one place (`attemptKind.attemptCwd`): the
 workspace root for an attempt that acts from the checkout, else what the
 `IsolationRunController` gives it — the workspace root when the run does not
@@ -1184,13 +1192,16 @@ the attempt. A passed verdict keeps the attempt live through its merge,
 so the task completes — and frees its dependents — only once its work is on the
 integration branch. Holds, retry counts and spawn counts are
 deliberately *not* on the record — they describe the task across attempts and
-must survive one ending. Surfaces read an attempt through `getAttempt`;
-`activeSessionMap` is derived from it. Runner session ids
+must survive one ending; the spawn counts, which number the next attempt, are
+kept by `Attempts`, the rest by the scheduler. Surfaces read an attempt
+through `getAttempt`; `activeSessionMap` is derived from it. Runner session ids
 are unique per spawn for the same reason: a retry reuses its task id, and a
 registry keyed by task let the old attempt's exit unregister the new one.
 *Avoid:* "session" for this concept — the session is the runner's process, one
-field of the attempt. Do not add another per-task map to the orchestrator for
-state that ends with the run; put it on the attempt.
+field of the attempt. Do not add another per-task map to the orchestrator or
+`Attempts` for state that ends with the run; put it on the attempt. `Attempts`
+marks only what a live attempt is doing (in progress, at a checkpoint, waiting
+for input); how one ended goes to `settle`, never applied where it ended.
 
 **Blocked task** (`blockingFailures`, `TaskOrchestrator.getBlockedBy`,
 `TaskRowView.blockedBy`) — a task not started yet whose dependency failed or is
