@@ -126,13 +126,13 @@ describe('attemptPrompt', () => {
   }
 
   const table: Array<[string, { has: string[]; lacks: string[]; reads: Array<'repairPrompt' | 'previousAttempt'> }]> = [
-    ['change', { has: ['ORIGINAL BODY', '### Skill: tdd'], lacks: ['## Previous attempt'], reads: [] }],
+    ['change', { has: ['ORIGINAL BODY', '### Skill: tdd'], lacks: ['## Previous attempt', 'save_patch'], reads: [] }],
     ['ops', { has: ['ORIGINAL BODY', '### Skill: tdd', '## Previous attempt', 'created resource group rg-dev'], lacks: [], reads: ['previousAttempt'] }],
     ['repair', { has: ['MERGE THE INTEGRATION BRANCH'], lacks: ['ORIGINAL BODY', '### Skill: tdd', '## Previous attempt'], reads: ['repairPrompt'] }],
     ['continued change', { has: ['Check the working tree'], lacks: ['ORIGINAL BODY', '### Skill: tdd'], reads: [] }],
     ['continued ops', { has: ['in the same checkout', 'was not undone'], lacks: ['ORIGINAL BODY', '## Previous attempt'], reads: [] }],
     ['carried-over change', { has: ['ORIGINAL BODY', '### Skill: tdd', 'previous attempt on codex', 'may be unfinished'], lacks: ['## Previous attempt'], reads: [] }],
-    ['read-only', { has: ['ORIGINAL BODY', '### Skill: tdd'], lacks: ['## Previous attempt'], reads: [] }],
+    ['read-only', { has: ['ORIGINAL BODY', '### Skill: tdd', 'keep it with the `save_patch` tool before you finish'], lacks: ['## Previous attempt'], reads: [] }],
     ['continued read-only', { has: ['nothing your earlier attempt changed was kept'], lacks: ['ORIGINAL BODY', 'Your previous changes are in the working tree'], reads: [] }],
   ];
 

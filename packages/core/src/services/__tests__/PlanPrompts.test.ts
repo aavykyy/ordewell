@@ -355,6 +355,13 @@ describe('who explores: orientation, evidence, search (ADR-0037 R5)', () => {
     expect(rule).toMatch(/A vague goal the user can clarify is not one: ask first\./);
   });
 
+  // The procedure is the explore skill's; the rule only points at it, so a planner that explores knows the prototype survives.
+  it.each(backends)('points a search between approaches at save_patch and apply_patch, for $name', ({ harness, runner }) => {
+    const rule = section(prompt(harness, runner), 'WHO EXPLORES:');
+    expect(rule).toMatch(/explorers save their prototypes with save_patch, choose on a check fixed beforehand, and has the build task depend on the chosen explorer and apply its patch with apply_patch/);
+    expect(section(prompt(harness, runner), 'READ-ONLY TASKS:')).toMatch(/unless it keeps a prototype with save_patch, which a change task that depends on it applies with apply_patch/);
+  });
+
   it.each(backends)('asks for a digest only where there are agents to brief, for $name', ({ harness, runner }) => {
     const rule = section(prompt(harness, runner), 'WHO EXPLORES:');
     if (runner === 'opencode') expect(rule).not.toMatch(/digest/);

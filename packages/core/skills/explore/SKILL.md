@@ -34,15 +34,17 @@ For each promising claim, add a refuter:
 
 A claim is trusted only after its refuter fails to break it.
 
-## 5. Let one judge choose between competing approaches
+## 5. Let one check choose between competing approaches
 
-When the question is which of several approaches to take, explore them side by side and have one task choose:
+When the question is which of several approaches to take, explore them side by side and choose on a check, not on an opinion:
 
-- Explorers: read-only tasks, each trying one deliberately different approach, with no dependencies between them. Each brief asks for a check the explorer runs, such as a test, a build or a measurement, reported with its commands and their output.
-- A judge: one task that depends on every explorer. It reads their handoffs with `read_task` (with `include_report` where the summary is not enough), tries to break the most promising claim, and names its choice with the evidence: the explorers' checks and its own, not its opinion.
-- Make the judge a research task when its choice changes the shape of the rest of the plan, since only you re-plan. When the choice is local, such as which of three ways to build one module, make the judge the first build task instead, and the build goes on from its choice.
+- A shared check, fixed before the explorers start: a test, a build or a measurement the same for every approach. Write it into every explorer's brief, so the candidates are compared on one bar. Only a candidate that passes it is eligible.
+- Explorers: read-only tasks, each trying one deliberately different approach, with no dependencies between them. Each runs the shared check and reports its commands with their output. An explorer that builds a prototype keeps it with `save_patch` before it calls `task_complete`, because its worktree is thrown away with it. Tell it to.
+- The choice: if exactly one candidate passes, no judge is needed; that one is chosen. If several pass, one judge task that depends on every explorer recommends one. It reads their handoffs with `read_task` (with `include_report` where the summary is not enough), tries to break the most promising claim, and cites its evidence: the explorers' checks and its own, not its opinion. If none passes, that is a finding: say so, and plan the next round.
+- Make the judge a research task when its choice changes the shape of the rest of the plan, since only you re-plan. When the choice is local, such as which of three ways to build one module, the build task can be the judge: it depends on every explorer and applies the patch of the one it chooses.
+- The build task you add after the choice depends on the chosen explorer, and on the judge when there is one. It applies that explorer's patch with `apply_patch`, resolves any conflicts the tool reports, and runs the checks itself, since the explorer ran them at its own base. Say so in its brief. A patch that deletes or adds a file the worktree also changed applies nothing: the tool says why, and the builder applies the rest by hand.
 
-An explorer's code is thrown away with its worktree. Whoever builds re-creates the chosen approach from its report, so ask each explorer for a report that is enough to do that, and promise no prototype that survives.
+A prototype that was not saved with `save_patch` is gone with the worktree. If an explorer is not asked to save one, the builder re-creates the approach from its report, so ask for a report that is enough to do that.
 
 ## 6. Extend the plan
 

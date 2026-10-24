@@ -10,6 +10,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- **A read-only task can hand off its prototype as a patch.** It calls
+  `save_patch` and Ordewell keeps everything it changed in its worktree as one
+  file with its attempt, named in its handoff. A change task that depends on it
+  applies the patch with `apply_patch`, a three-way merge that names any
+  conflict for the task to resolve. The planner's `task_diff` and the TUI,
+  VS Code and CLI show a saved patch, and the `explore` skill has explorers
+  save theirs and the build task apply the chosen one
+  ([ADR-0050](docs/adr/planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)).
 - **Task handoffs.** Every task leaves a short summary, with optional numbered
   findings, evidence and artifacts. Dependents receive whole findings within
   the prompt limit and can pull the rest with `read_task`, including earlier
@@ -55,9 +63,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   after a reload. Every surface draws a loop's rounds, and the planner plans
   one for work that repeats until it passes, such as a review and its fix
   ([ADR-0045](docs/adr/supervision/0045-a-check-repeats-with-its-fix-until-it-passes.md)).
-- **Research tasks.** The planner can hand an investigation that would outlive
-  its turn to a research task: a read-only task whose report comes back to the
-  planner. Its end, passed, failed or blocked, opens a planner turn with the
+- **Research tasks.** When the planner must decide something on what a
+  read-only task finds, it marks that task as research, and its report comes
+  back to the planner. Its end, passed, failed or blocked, opens a planner turn with the
   report at every supervisor level, Off included, and you can talk to the
   planner while it runs. Research tasks start without asking, the planner
   decides how many a message starts, and they run within the run's Parallel
@@ -158,17 +166,18 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **The planner chooses between its own agents and a research task by what the
   result is, not by how long it will take.** A conclusion it needs this turn
   stays in the turn. Evidence that needs a worktree, another runner's
-  judgement, your eye or a later task's dependence is a research task, and the
-  findings reach that task in its handoff. A search that takes rounds is the
-  `explore` skill
+  judgement, your eye or that a later task acts on is a task of its own, which
+  the later task depends on, and its findings reach that task in its handoff.
+  It is marked as research only when the planner must decide something on its
+  report. A search that takes rounds is the `explore` skill
   ([ADR-0037](docs/adr/supervision/0037-research-tasks-wake-the-planner.md)).
-- **The planner tells evidence from orientation by the brief.** A result any
-  of which would go into a task's brief is a task of its own, which the later
-  task depends on and reads, instead of being re-typed. A first plan may be
-  research tasks alone when the plan cannot be outlined without them, and the
-  planner marks a task as research only when it must decide something on its
-  report. The `explore` skill can have several read-only explorers try
-  different approaches and one judge task choose on the checks they ran
+- **The planner tells evidence from orientation by the brief.** If the finding
+  a later task acts on would end up in its brief, it is evidence: a task of its
+  own that the later task depends on and reads, instead of being re-typed. A
+  first plan may be research tasks alone when the plan cannot be outlined
+  without them. The `explore` skill can have several read-only explorers try
+  different approaches against one check fixed beforehand, and one judge task
+  choose when several pass
   ([ADR-0037](docs/adr/supervision/0037-research-tasks-wake-the-planner.md)).
 - **The planner is sent its plan whole once, then only what changed.** A later
   turn carries the tasks added or changed, the tasks removed and what runs now.

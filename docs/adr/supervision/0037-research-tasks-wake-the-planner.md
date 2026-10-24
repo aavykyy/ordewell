@@ -108,11 +108,15 @@ awaited before the turn ends.**
   - *Search*, a problem that needs rounds of branching where each round's
     reports decide the next, is the `explore` skill: rounds of research tasks.
     Where the question is which of several approaches to take, the skill has
-    read-only explorers try them side by side and one judge task that depends
-    on all of them choose on the checks they ran: a research task when the
-    choice reshapes the plan, the first build task when it is local. An
-    explorer's code goes with its worktree, so the builder re-creates the
-    chosen approach from its report.
+    read-only explorers try them side by side against a check fixed before
+    they start, and only a candidate that passes is eligible. An explorer
+    keeps its prototype with `save_patch` ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)),
+    since its worktree goes with it. If exactly one passes it is chosen; if
+    several do, one judge task that depends on all of them recommends one and
+    cites the checks they ran: a research task when the choice reshapes the
+    plan, the first build task when it is local. The build task depends on
+    the chosen explorer and applies its patch with `apply_patch`, resolving
+    the conflicts the tool reports.
 
   #24 draws a line at the task boundary: inside a task the harness decides,
   and across tasks Ordewell does. This keeps it: what another task acts on, or
@@ -182,3 +186,4 @@ awaited before the turn ends.**
 - 2026-10-24 — research's unasked approval is withdrawn as the tree changes, by `ApprovalRecord`, not at the next save; surfaces are told with the plan (R4).
 - 2026-10-24 — who explores gets a test by the brief, a first plan may be research tasks alone, a report only later tasks read is a plain read-only task, and the explore skill gains explorers then a judge (R5).
 - 2026-10-24 — retitled from "Evidence the planner needs is a research task, and its report wakes the planner": only evidence the planner must decide on is a research task (R5).
+- 2026-10-24 — the explore skill's choice between approaches: explorers save their prototypes as patches, a check fixed beforehand decides eligibility, a judge only when several pass, and the build task applies the chosen patch (R5).
