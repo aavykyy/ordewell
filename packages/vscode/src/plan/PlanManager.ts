@@ -220,15 +220,6 @@ export async function executeUserCommand(session: Pick<Session, 'execute'>, comm
   if (!outcome.ok) throw new Error(outcome.message);
 }
 
-/** A new run leaves a skipped task skipped, as it leaves a completed one done: running it again is a retry. */
-function approvedTasks(tasks: Task[]): Task[] {
-  return tasks.map((t) => ({
-    ...t,
-    status: t.status === 'completed' || t.status === 'skipped' ? t.status : 'approved',
-    subtasks: approvedTasks(t.subtasks ?? []),
-  }));
-}
-
 export async function handleApprovePlan(deps: PlanManagerDeps): Promise<void> {
   deps.log('=== handleApprovePlan START ===');
   // A run under way keeps going: Execute then approves what waits for approval, and the session says how many (#95).
@@ -241,13 +232,10 @@ export async function handleApprovePlan(deps: PlanManagerDeps): Promise<void> {
     return;
   }
   const plan = deps.getCurrentPlan();
-  // The run_plan below is the approval, and the Session records it. New task objects, not edits in place: the plan's tasks are the Session's
-  // snapshot of its store, and the plan object itself must stay the same one
-  // so `loadPlan` keeps the live planner conversation. Saved once, after the
-  // approval is complete — an earlier write would persist approved status over
-  // tasks that have not been approved yet.
-  plan.tasks = approvedTasks(plan.tasks);
-  deps.session.loadPlan(plan, deps.getCurrentGoal(), deps.fsAdapter.getWorkspaceRoot());
+  // The run_plan below is the approval, and the Session records it and readies
+  // the tasks; rewriting their statuses here would approve a manual task the
+  // run has not reached. Only a plan the Session does not hold yet is loaded.
+  if (!deps.session.planState) deps.session.loadPlan(plan, deps.getCurrentGoal(), deps.fsAdapter.getWorkspaceRoot());
   deps.chatProvider.planApproved();
   saveState(plan, deps.fsAdapter.getWorkspaceRoot(), deps.session.sessionId);
   deps.saveCurrentSession();

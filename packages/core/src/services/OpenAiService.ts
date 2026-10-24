@@ -331,6 +331,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
       fs: req.fs,
       runners: req.runners,
       runnerModes: req.runnerModes,
+      liveScope: req.liveScope,
       autonomousDefault: req.autonomousDefault,
       fetcher: req.fetcher,
       plannerTools: req.plannerTools?.handler,

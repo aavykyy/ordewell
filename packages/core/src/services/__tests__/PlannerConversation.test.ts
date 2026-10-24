@@ -537,6 +537,38 @@ describe('PlannerConversation compact failure', () => {
     expect(state.persists).toBe(0);
   });
 
+  // The daemon answers a stop with 409 only for PlannerTurnStoppedError; anything else is a 500 or a 400.
+  it('settles a stop the backend reports as a thrown error as stopped', async () => {
+    let fail: (err: Error) => void = () => {};
+    const ai = fakeAi({
+      continueConversation: vi.fn(() => new Promise<ConversationTurn>((_resolve, reject) => { fail = reject; })),
+    });
+    const { conversation, state } = fakeHost(ai, threeTurnPlan());
+
+    const compacting = conversation.compact();
+    await vi.waitFor(() => expect(ai.continueConversation).toHaveBeenCalled());
+    conversation.stopTurn();
+    fail(new Error('Request was aborted.'));
+
+    await expect(compacting).rejects.toThrow(PlannerTurnStoppedError);
+    expect(state.plan!.conversationHistory).toHaveLength(6);
+  });
+
+  it('settles a stop the backend reports as an aborted turn as stopped', async () => {
+    let finish: (turn: ConversationTurn) => void = () => {};
+    const ai = fakeAi({
+      continueConversation: vi.fn(() => new Promise<ConversationTurn>((resolve) => { finish = resolve; })),
+    });
+    const { conversation } = fakeHost(ai, threeTurnPlan());
+
+    const compacting = conversation.compact();
+    await vi.waitFor(() => expect(ai.continueConversation).toHaveBeenCalled());
+    conversation.stopTurn();
+    finish({ kind: 'message', text: '', researchLog: [], aborted: true });
+
+    await expect(compacting).rejects.toThrow(PlannerTurnStoppedError);
+  });
+
   it('drops the live context after a failed turn, since it now holds the half-done summary exchange', async () => {
     const ai = fakeAi({ continueConversation: vi.fn().mockRejectedValue(new Error('boom')) });
     const { conversation } = fakeHost(ai, threeTurnPlan());
@@ -1010,6 +1042,27 @@ describe('PlannerConversation planner turn', () => {
         expect(ended(host).at(-1)?.outcome).toBe('stopped');
       });
     }
+  });
+});
+
+describe('a whole plan at landing', () => {
+  const planOn = (assignedRunner: string): ConversationTurn => ({
+    kind: 'plan', text: '', researchLog: [],
+    tasks: [createTask({ id: 'n1', order: 1, title: 'New', prompt: 'p', assignedRunner })],
+  });
+
+  // A plan the planner submitted may wait out a long reply; the runner it names can be switched off meanwhile (ADR-0003 V1).
+  it('is refused, with the runners enabled now named back, when it uses one switched off since it was accepted', async () => {
+    const ai = fakeAi({
+      continueConversation: vi.fn().mockResolvedValueOnce(planOn('codex')).mockResolvedValueOnce(planOn('claude-code')),
+    });
+    const { conversation, host } = fakeHost(ai, threeTurnPlan());
+
+    await conversation.reply('Add a codex task');
+
+    expect(vi.mocked(ai.continueConversation).mock.calls[1][0]).toContain('invalid assignedRunner "codex". Expected one of: claude-code');
+    expect(host.adoptTasks).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(host.adoptTasks).mock.calls[0][0].map((t) => t.assignedRunner)).toEqual(['claude-code']);
   });
 });
 

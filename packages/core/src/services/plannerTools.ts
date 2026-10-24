@@ -1,5 +1,6 @@
 import { flattenTasks, type RunnerId, type SkillLoad, type Task, type Verdict } from '../models/Task';
 import { scriptBodyOf } from '../models/ScriptTask';
+import { betweenRounds, checkOf, loopRoundOf } from '../models/Loop';
 import type { SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, snapshotSkill } from './skillInvocation';
 import { autonomyLevelLabel, readOnlyMode } from './ModeResolver';
@@ -324,6 +325,15 @@ function taskHead(plan: readonly Task[], task: Task) {
   return { id: task.id, ref: refOf(plan, task), title: task.title, status: task.status };
 }
 
+/** Where a task stands in a loop (ADR-0045), as the text read states it: a check's body and round, or the check a body task runs for. Absent for a task outside any loop. */
+function loopDetail(plan: readonly Task[], task: Task) {
+  if (task.loop) {
+    return { loop: { body: task.loop.body.map((id) => taskRefOf(plan, id) ?? id), maxRounds: task.loop.maxRounds, round: loopRoundOf(task), betweenRounds: betweenRounds(task) } };
+  }
+  const check = checkOf(plan, task.id);
+  return check ? { loop: { check: refOf(plan, check) } } : {};
+}
+
 /** A requested field with nothing in it reads `null`, so a missing answer is never mistaken for a field not asked for. */
 function taskDetail(plan: readonly Task[], ref: string, fields: readonly TaskQueryField[]) {
   const task = resolveTaskRef(plan, ref);
@@ -332,6 +342,7 @@ function taskDetail(plan: readonly Task[], ref: string, fields: readonly TaskQue
   return {
     ...taskHead(plan, task),
     type: task.type,
+    ...loopDetail(plan, task),
     ...(wants('description') ? { description: task.description || null } : {}),
     // A script task's body is what it runs, as a prompt is what a runner is told (ADR-0035).
     ...(wants('prompt') ? (task.type === 'script' ? { body: scriptBodyOf(task) } : { prompt: task.prompt || null }) : {}),

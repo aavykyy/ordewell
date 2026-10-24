@@ -36,6 +36,12 @@ export interface ConversationRequest {
   onProgress: (progress: ResearchProgress) => void;
   fetcher?: IWebFetcher;
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
+  /**
+   * The runners and modes enabled now, read on every turn: an envelope plan is
+   * checked against what the planner is told this turn, as `submit_plan` is
+   * (ADR-0022 L2). Absent: `runners` and `runnerModes` as the conversation opened.
+   */
+  liveScope?: () => { runners: RunnerId[]; runnerModes?: Record<RunnerId, RunnerModeInfo[]> };
   autonomousDefault?: boolean;
   /** Where tasks will run (ADR-0013, ADR-0014): in worktrees, the prompt drops file-overlap ordering and describes a repo group. */
   isolatedExecution?: IsolatedExecution;

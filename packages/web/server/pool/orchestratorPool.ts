@@ -569,7 +569,7 @@ export class OrchestratorPool {
   }
 
   async generatePlan(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<PlanState> {
-    const session = this.openPlanningSession(sessionId, workspace, modelOverride, options);
+    const session = this.openPlanningSession(sessionId, runners, workspace, modelOverride, options);
     return migratePlanState(await this.firstTurn(sessionId, session, () => session.generatePlan(goal, runners)));
   }
 
@@ -577,15 +577,19 @@ export class OrchestratorPool {
    * Build the session a new planning conversation runs in and register it in
    * place of any live one, for {@link firstTurn} to run its first turn on.
    */
-  private openPlanningSession(sessionId: string, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Session {
+  private openPlanningSession(sessionId: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Session {
     const session = this.createSessionFor(sessionId, workspace, modelOverride, options);
     // Judged on the new session's config (which carries the request's model)
     // and before the old session is destroyed, so a refusal leaves it alone.
     // Not while the installed-planner probe is out: its answer can be the
     // planner, and judging the openrouter fallback now would refuse the very
     // keyless first run the probe exists for, so that judgement is the first
-    // turn's own gate.
-    if (installedPlannerAnswered()) session.assertPlannerReady();
+    // turn's own gate. The runners are judged on the same terms: before the
+    // probe answers, the enabled set is a guess a refusal must not rest on.
+    if (installedPlannerAnswered()) {
+      session.assertPlannerReady();
+      session.assertRunnersEnabled(runners);
+    }
     // After the new session is built, so a refusal above leaves the live one
     // alone; before the set, so its runners and planner turn stop broadcasting.
     this.destroy(sessionId);
@@ -606,7 +610,7 @@ export class OrchestratorPool {
    * assistant message lives in conversationHistory).
    */
   async startPlanning(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<LegacyPlanState> {
-    const session = this.openPlanningSession(sessionId, workspace, modelOverride, options);
+    const session = this.openPlanningSession(sessionId, runners, workspace, modelOverride, options);
     return this.firstTurn(sessionId, session, () => session.startPlanning(goal, runners));
   }
 

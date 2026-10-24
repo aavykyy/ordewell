@@ -289,6 +289,26 @@ describe('VS Code: a window reload keeps the session\'s identity', () => {
   });
 });
 
+describe('VS Code: Execute plan leaves the status of a task to the Session', () => {
+  let workspace: string;
+  beforeEach(() => {
+    workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-approval-'));
+    (vscode.window.showErrorMessage as unknown as ReturnType<typeof vi.fn>).mockReset();
+  });
+  afterEach(() => { fs.rmSync(workspace, { recursive: true, force: true }); });
+
+  it('does not approve a manual task the run has not reached', async () => {
+    const h = host(workspace);
+    const opened = plan();
+    opened.tasks.push(createTask({ id: 't3', order: 3, title: 'Review by hand', type: 'user', dependencies: ['t2'] }));
+    h.open(opened);
+
+    await handleApprovePlan(h.deps);
+
+    expect(h.status('t3')).toBe('pending');
+  });
+});
+
 describe('VS Code: Execute while a run is under way', () => {
   let workspace: string;
   beforeEach(() => {
