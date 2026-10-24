@@ -1193,6 +1193,17 @@ describe('the command seam\'s extension points', () => {
     expect(host.startTask).not.toHaveBeenCalled();
   });
 
+  it('refuses a Run whose start a Stop ended while its spawn was under way, as stopped before it started', async () => {
+    let live = true;
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, admitStart: () => ({ current: () => live, release: vi.fn() }), startTask: vi.fn(async () => { live = false; }) };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    const outcome = await commands.run({ command: 'run_task', task: 't1' }, PLANNER);
+
+    expect(host.startTask).toHaveBeenCalledWith('t1', PLANNER);
+    expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: STOPPED_BEFORE_START });
+  });
+
   it('names no held edit when there is none', async () => {
     const commands = new ExecutionCommands({ host: stubHost(), consent: { request: vi.fn() } });
 
