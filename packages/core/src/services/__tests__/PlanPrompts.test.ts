@@ -348,7 +348,7 @@ describe('who explores: orientation, evidence, search (ADR-0037 R5)', () => {
   // A planner that re-typed its agents' results into twelve briefs had no test to tell evidence from orientation, and saw no plan it could submit before the evidence was in.
   it.each(backends)('gives a test it can apply on the spot, and a research-only first plan, for $name', ({ harness, runner }) => {
     const rule = section(prompt(harness, runner), 'WHO EXPLORES:');
-    expect(rule).toMatch(/The test: if any of the result would end up in a task's brief, it is evidence; if it only decides what you write or ask, it is orientation\./);
+    expect(rule).toMatch(/The test: if the finding a later task acts on would end up in its brief, it is evidence; if it only decides what you say or ask the user, it is orientation\./);
     expect(rule).toMatch(/Make it a research task only when you must decide something on its report; one whose report only later tasks read is a read-only task they depend on\./);
     expect(rule).toMatch(/- A research task's summary is what you take in: pull its full report with task_output only where the plan rests on the detail\./);
     expect(rule).toMatch(/- A first plan may be research tasks alone, when the plan cannot be outlined without their evidence: the outline is a line per task saying what it asks, and you plan the rest when their reports wake you\./);

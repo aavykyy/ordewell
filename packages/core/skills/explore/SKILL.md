@@ -13,7 +13,7 @@ Write down the question, what a finished answer looks like, and how a claim will
 
 Plan nothing beyond it. You do not yet know which questions matter, so a later task written now is a guess.
 
-A question one lookup answers is orientation, not a round: read it yourself, or ask one of your own agents if you have any, within the turn. A round is for what needs a worktree, another model or a report a later task will act on.
+Who finds out is decided as WHO EXPLORES says, by what the result is. A question one lookup answers, whose conclusion only decides what you say or ask, is orientation, not a round: read it yourself, or ask one of your own agents if you have any, within the turn. What a later task acts on, or what needs a worktree, another model or the user's eye, is a task of its own. It is a research task, and so a round, only when you must decide something on its report; a read-only task whose report only later tasks read is not.
 
 Make the research tasks deliberately different: another approach, another source, a different assumption, one that questions the premise itself. Several variations on one idea are one task done several times. Keep the round within the run's Parallel limit, so none waits.
 

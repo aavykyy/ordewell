@@ -4,7 +4,7 @@ implemented: full
 amends: ["0009", "0029"]
 ---
 
-# 0037 — Evidence the planner needs is a research task, and its report wakes the planner
+# 0037 — Evidence the planner decides on is a research task, and its report wakes the planner
 
 ## Problem
 
@@ -28,11 +28,12 @@ addressed to the planner.
 
 ## Decision
 
-**Research whose result is evidence is a research task: a read-only task in
-the plan whose report is addressed to the planner. When it ends, the planner
-wakes with the report, at every supervisor level. Orientation stays in the
-turn, with the planner's own reads and its own agents, awaited before the turn
-ends.**
+**Evidence the planner must decide something on is a research task: a
+read-only task in the plan whose report is addressed to the planner. When it
+ends, the planner wakes with the report, at every supervisor level. Evidence
+only a later task acts on is a plain read-only task that task depends on.
+Orientation stays in the turn, with the planner's own reads and its own agents,
+awaited before the turn ends.**
 
 - **What it is (R1).** A read-only AI task (ADR-0031) marked `research: true`,
   with a self-contained brief: what to find out, where to start, and what the
@@ -76,8 +77,9 @@ ends.**
 - **Who explores is decided by what the result is (R5).** A planner cannot
   know how long a lookup takes before it starts, so the line is drawn by what
   the result is, never by its duration. The test it applies on the spot: if
-  any of the result would end up in a task's brief, it is evidence; if it only
-  decides what the planner writes or asks, it is orientation.
+  the finding a later task acts on would end up in its brief, it is evidence;
+  if it only decides what the planner says or asks the user, it is
+  orientation.
   - *Orientation* is what the planner needs this turn to answer, ask or
     outline, when only the conclusion matters and no later task acts on it. It
     stays in the turn: the planner's own reads, or its own agents awaited
@@ -179,3 +181,4 @@ ends.**
 - 2026-10-23 — a Gemini planner has no in-turn agents: it neither declares nor is taught `spawn_research_agent`, as ADR-0005 now says (R5).
 - 2026-10-24 — research's unasked approval is withdrawn as the tree changes, by `ApprovalRecord`, not at the next save; surfaces are told with the plan (R4).
 - 2026-10-24 — who explores gets a test by the brief, a first plan may be research tasks alone, a report only later tasks read is a plain read-only task, and the explore skill gains explorers then a judge (R5).
+- 2026-10-24 — retitled from "Evidence the planner needs is a research task, and its report wakes the planner": only evidence the planner must decide on is a research task (R5).
