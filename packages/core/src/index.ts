@@ -100,7 +100,8 @@ export type { ResearchChat, ResearchTurn, ToolCall, ToolResult } from './service
 export { GeminiService } from './services/GeminiService';
 export { OpenAiService } from './services/OpenAiService';
 export { TaskOrchestrator, TaskControlError, STOPPED_BEFORE_START } from './services/TaskOrchestrator';
-export type { AutoMergeTrigger, OrchestratorObserver, StartAdmission, TaskAttemptSnapshot, TaskOrchestratorDeps, TaskOrchestratorOptions } from './services/TaskOrchestrator';
+export type { AutoMergeTrigger, OrchestratorObserver, StartAdmission, TaskOrchestratorDeps, TaskOrchestratorOptions } from './services/TaskOrchestrator';
+export type { TaskAttemptSnapshot } from './services/Attempts';
 export { PlanStore } from './services/PlanStore';
 export { Planner } from './services/Planner';
 export type { PlanRequest } from './services/Planner';
