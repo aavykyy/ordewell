@@ -651,6 +651,8 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     case 'deleteSession': {
       const { ok } = await api.deleteSession(effect.sessionId, workspace);
       await loadSessions(deps);
+      // The session is gone: a reconnect would open a socket on nothing.
+      if (ok) unfollow(deps, effect.sessionId);
       forgetInbound(deps.api, effect.sessionId);
       if (ok) dispatch({ type: 'sessionDeleted', sessionId: effect.sessionId });
       dispatch(ok
@@ -800,7 +802,7 @@ const follows = new WeakMap<object, { sessionId: string; follow: SessionFollow; 
 const runStreams = new WeakMap<object, Map<string, number>>();
 /** Consecutive reconnects that failed before opening, for the backoff. */
 const followFailures = new WeakMap<object, number>();
-const followRetryTimers = new WeakMap<object, ReturnType<typeof setTimeout>>();
+const followRetryTimers = new WeakMap<object, { sessionId: string; timer: ReturnType<typeof setTimeout> }>();
 const FOLLOW_RETRY_MS = 500;
 const FOLLOW_RETRY_MAX_MS = 8_000;
 
@@ -813,10 +815,13 @@ function runStreamsOf(api: object): Map<string, number> {
   return open;
 }
 
-function cancelFollowRetry(api: object): void {
-  const timer = followRetryTimers.get(api);
-  if (timer !== undefined) clearTimeout(timer);
+/** Drop a pending reconnect — the api's own, or only the one for `sessionId`. Says whether one went. */
+function cancelFollowRetry(api: object, sessionId?: string): boolean {
+  const pending = followRetryTimers.get(api);
+  if (pending === undefined || (sessionId !== undefined && pending.sessionId !== sessionId)) return false;
+  clearTimeout(pending.timer);
   followRetryTimers.delete(api);
+  return true;
 }
 
 /**
@@ -836,7 +841,7 @@ function scheduleFollowRetry(deps: EffectDeps, sessionId: string, failures: numb
     void follow(deps, sessionId, true).catch(() => {});
   }, delay);
   timer.unref?.();
-  followRetryTimers.set(deps.api, timer);
+  followRetryTimers.set(deps.api, { sessionId, timer });
 }
 
 /**
@@ -880,10 +885,16 @@ async function follow(deps: EffectDeps, sessionId: string, restored = false): Pr
 }
 
 function unfollow(deps: EffectDeps, sessionId: string): void {
+  // A follow that was already lost leaves no entry behind, only its retry. That
+  // timer must not reopen a session the user is closing, so it is cancelled
+  // whether or not there is still a socket to close.
+  const retried = cancelFollowRetry(deps.api, sessionId);
   const current = follows.get(deps.api);
-  if (current?.sessionId !== sessionId) return;
+  if (current?.sessionId !== sessionId) {
+    if (retried) followFailures.delete(deps.api);
+    return;
+  }
   follows.delete(deps.api);
-  cancelFollowRetry(deps.api);
   followFailures.delete(deps.api);
   current.follow.close();
 }
@@ -939,8 +950,8 @@ async function settleLostReply(deps: EffectDeps, sessionId: string, how: { openi
  */
 async function readBackSession(deps: EffectDeps, sessionId: string, how: { opening: boolean; turnEnded: boolean }): Promise<void> {
   try {
-    const { plan } = await deps.api.adoptSession(sessionId, deps.workspace);
-    deps.dispatch({ type: 'turnReconciled', plan, chat: restoredChat(plan, sessionId), sessionId });
+    const { plan, plannerTurnId } = await deps.api.adoptSession(sessionId, deps.workspace);
+    deps.dispatch({ type: 'turnReconciled', plan, plannerTurnId, chat: restoredChat(plan, sessionId), sessionId });
   } catch (err) {
     if (err instanceof DaemonError && err.code === 'session_not_found' && how.opening) {
       unfollow(deps, sessionId);

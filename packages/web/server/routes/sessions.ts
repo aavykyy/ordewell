@@ -52,7 +52,14 @@ export function sessionsRoute(pool: OrchestratorPool) {
       const id = c.req.param('id');
       const plan = pool.adoptSavedSession(id, ws);
       const run = pool.runSnapshot(id);
-      return c.json({ ok: true, plan: surfacePlan(plan), goal: pool.getGoal(id), ...(run ? { run } : {}) } satisfies AdoptSessionResponse);
+      const plannerTurnId = pool.plannerTurnId(id);
+      return c.json({
+        ok: true,
+        plan: surfacePlan(plan),
+        goal: pool.getGoal(id),
+        ...(run ? { run } : {}),
+        ...(plannerTurnId ? { plannerTurnId } : {}),
+      } satisfies AdoptSessionResponse);
     } catch (err: unknown) {
       return failure(c, err, 'load session', { message: 'Failed to load session' });
     }

@@ -226,6 +226,11 @@ export interface AdoptSessionResponse extends OkResponse {
   goal: string;
   /** The adopted session's run, as {@link SessionResponse.run}. */
   run?: RunView;
+  /**
+   * The planner turn holding the session when it was adopted. Absent when none
+   * is, which is what lets a surface that lost a turn end settle it.
+   */
+  plannerTurnId?: string;
 }
 
 export interface TaskLogAttemptsResponse {

@@ -223,6 +223,8 @@ export class OrchestratorPool {
   getGoal(sessionId: string): string { return this.sessions.get(sessionId)?.currentGoal ?? ''; }
   /** Null for a session this process is not holding: there is no run to describe. */
   runSnapshot(sessionId: string): RunView | null { return this.sessions.get(sessionId)?.runSnapshot() ?? null; }
+  /** The planner turn answering in a session this process holds, if one is. */
+  plannerTurnId(sessionId: string): string | undefined { return this.sessions.get(sessionId)?.plannerTurnId; }
   /** The planner's approval requests still waiting, as they were announced. */
   announcedApprovals(sessionId: string): ApprovalRequestMessage[] { return this.sessions.get(sessionId)?.announcedApprovals() ?? []; }
   /** The last broadcast of the session so far: a snapshot taken now accounts for it and everything before. */

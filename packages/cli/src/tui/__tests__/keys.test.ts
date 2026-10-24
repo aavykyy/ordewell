@@ -86,6 +86,16 @@ describe('decodeKey', () => {
     expect(decodeKey('\x1b[97;2u')).toEqual({ name: 'char', char: 'A' });
   });
 
+  // A garbled sequence from the terminal or another process on the tty must
+  // not throw out of the stdin handler: that exits the TUI mid-session. The
+  // protocol's own functional keys (the BMP private-use block) are not text.
+  it.each([['\x1b[1114112u'], ['\x1b[999999999u'], ['\x1b[4294967296u'], ['\x1b[57352u']])(
+    'reads the out-of-range kitty code %j as unknown instead of text',
+    (seq) => {
+      expect(decodeKey(seq)).toEqual({ name: 'unknown' });
+    },
+  );
+
   // A C0 byte with no binding is still a key, not text: typed into the editor
   // it is invisible (sanitize drops it at draw time) and ships inside the goal.
   it.each([['\x00'], ['\x02'], ['\x06'], ['\x16'], ['\x1a'], ['\x1c'], ['\x1f']])(
