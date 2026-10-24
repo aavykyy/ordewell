@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import {
   createSession, createSkillsService, detectInstalledPlanner, createEmptyPlan, flattenTasks, parseMaxParallel, sessionRuntimeSettings, taskRefOf,
   type PlannerBackendId, type GlobalRunSettings, type LegacyPlanState, type RunnerId, type Session, type SessionDeps,
@@ -79,6 +80,28 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     console.log(`[Ordewell] ${msg}`);
   };
 
+  /**
+   * A workspace-relative file Ordewell kept, such as a handoff's saved patch
+   * (ADR-0050), opened in an editor tab. The path comes from a webview, so it
+   * is refused unless it stays inside the workspace; a saved patch is under
+   * `.ordewell/`, never outside it.
+   */
+  const openWorkspaceFile = async (file: string): Promise<void> => {
+    const root = services.fsAdapter.getWorkspaceRoot();
+    const absolute = path.resolve(root, file);
+    const relative = path.relative(root, absolute);
+    if (!file || path.isAbsolute(file) || file.split(/[\\/]/).includes('..') || relative.startsWith('..') || path.isAbsolute(relative)) {
+      void vscodeApi.window.showErrorMessage(`Ordewell: cannot open ${JSON.stringify(file)}: it is not a workspace path.`);
+      return;
+    }
+    try {
+      const doc = await vscodeApi.workspace.openTextDocument(vscodeApi.Uri.file(absolute));
+      await vscodeApi.window.showTextDocument(doc, { preview: false });
+    } catch (err) {
+      void vscodeApi.window.showErrorMessage(`Ordewell: ${file} could not be opened: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   const state: HostState = {
     plan: createEmptyPlan(),
     goal: '',
@@ -136,6 +159,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     session: () => requireSession(),
     getTask: (taskId) => flattenTasks(requireSession().planTasks).find((t) => t.id === taskId),
     orderLabel: (taskId) => taskRefOf(requireSession().planTasks, taskId)?.replace(/^#/, ''),
+    openFile: (path) => { void openWorkspaceFile(path); },
     log,
   });
 
@@ -204,6 +228,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       setPlanner: (provider) => planner.apply(provider),
       setPlannerModel: (modelId, effort) => planner.setModel(modelId, effort),
       openTaskLog: (taskId) => taskLogs.open(taskId),
+      openFile: (path) => { void openWorkspaceFile(path); },
       setPlanDockHeight: (height) => { void services.context.globalState.update(PLAN_DOCK_HEIGHT_KEY, height); },
       changeSettings,
       enableRunner: async (runnerId) => {

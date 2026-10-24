@@ -75,6 +75,8 @@ export interface HandoffPeekSubject {
   summary: string;
   findingCount: number;
   severity: FindingSeverity | null;
+  /** The patch its attempt saved (ADR-0050), when it saved one. */
+  patch?: { peek: string } | null;
 }
 
 /**
@@ -96,5 +98,5 @@ export function handoffPeekParts(handoff: HandoffPeekSubject): string[] {
   const severity = handoff.severity ? [severityLabel(handoff.severity)] : [];
   const commit = handoff.commit ? [`Commit: ${handoff.commit.subject.trim()}`] : [];
   const summary = firstNonBlankLine(handoff.summary);
-  return [handoffFindingsText(handoff.findingCount), ...severity, ...commit, ...(summary ? [summary] : [])];
+  return [handoffFindingsText(handoff.findingCount), ...severity, ...(handoff.patch ? [handoff.patch.peek] : []), ...commit, ...(summary ? [summary] : [])];
 }

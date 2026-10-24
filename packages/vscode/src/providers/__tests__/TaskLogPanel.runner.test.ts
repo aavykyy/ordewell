@@ -15,7 +15,7 @@ function openedStatus(t: Task) {
   const session = {
     taskLogAttempts: () => [], taskLog: () => [], outstandingApprovals: () => [], execute: vi.fn(), invokeTaskCommand: vi.fn(),
   } as unknown as TaskLogSession;
-  new TaskLogPanel(panel as unknown as vscode.WebviewPanel, t.id, { session, getTask: () => t, log: () => undefined }, { toString: () => 'file:///ext' } as unknown as vscode.Uri, () => undefined);
+  new TaskLogPanel(panel as unknown as vscode.WebviewPanel, t.id, { session, getTask: () => t, openFile: () => undefined, log: () => undefined }, { toString: () => 'file:///ext' } as unknown as vscode.Uri, () => undefined);
   panel.__receive({ type: 'ready' });
   const init = panel.webview.postMessage.mock.calls.map(([m]) => m as HostToTaskLog).find((m) => m.type === 'init');
   if (init?.type !== 'init') throw new Error('the panel posted no init');

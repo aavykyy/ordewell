@@ -34,6 +34,7 @@ function harness(attempts: Record<number, TaskLogEvent[]> = { 1: attemptOne }) {
     extensionUri: vscode.Uri.file('/ext'),
     session: () => session,
     getTask: () => task as Task,
+    openFile: vi.fn(),
     log: vi.fn(),
   });
   return { registry, session, task };
@@ -157,6 +158,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
       session: () => harness().session,
       getTask: () => subtask,
       orderLabel: (taskId) => (taskId === 's1' ? '2.1' : undefined),
+      openFile: vi.fn(),
       log: vi.fn(),
     });
 
@@ -183,6 +185,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
         invokeTaskCommand: () => 'c', taskLogAttempts: () => [], taskLog: () => [], execute: async () => ({ ok: true, message: '' }), outstandingApprovals: () => [],
       }),
       getTask: () => undefined,
+      openFile: vi.fn(),
       log: vi.fn(),
     });
 
@@ -428,7 +431,7 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
       t2: createTask({ id: 't2', order: 2, title: 'Write tests', assignedRunner: 'claude-code', status: 'in_progress' }) as Task,
     };
     const session = harness().session;
-    const registry = new TaskLogRegistry({ extensionUri: vscode.Uri.file('/ext'), session: () => session, getTask: (id) => tasks[id], log: vi.fn() });
+    const registry = new TaskLogRegistry({ extensionUri: vscode.Uri.file('/ext'), session: () => session, getTask: (id) => tasks[id], openFile: vi.fn(), log: vi.fn() });
     registry.open('t1');
     registry.open('t2');
     for (const panel of __panels) panel.__receive({ type: 'ready' });
@@ -549,6 +552,7 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
       extensionUri: vscode.Uri.file('/ext'),
       session: () => harness().session,
       getTask: () => undefined,
+      openFile: vi.fn(),
       log: vi.fn(),
     });
     const panel = createFakeWebviewPanel('ordewellTaskLog', 'Task log');

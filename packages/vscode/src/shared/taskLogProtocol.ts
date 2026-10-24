@@ -69,4 +69,6 @@ export type TaskLogToHost =
   /** Answer one of the runner's tool requests (ADR-0018, A1). */
   | { type: 'answerApproval'; id: string; decision: ApprovalDecision }
   /** Show an earlier attempt; the host answers with `init`. */
-  | { type: 'selectAttempt'; attempt: number };
+  | { type: 'selectAttempt'; attempt: number }
+  /** Open a workspace-relative file the handoff saved, such as its patch (ADR-0050). */
+  | { type: 'openFile'; path: string };

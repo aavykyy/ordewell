@@ -2250,6 +2250,29 @@ body.vscode-high-contrast-light .task-card.expanded {
   font-size: 11px;
 }
 
+.task-handoff-patch {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--purple);
+  background: var(--bg-secondary);
+}
+
+.task-handoff-patch-saved,
+.task-handoff-patch-base,
+.task-handoff-patch-flag {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.task-handoff-patch-saved {
+  font-family: var(--font-mono, monospace);
+  word-break: break-all;
+}
+
+.task-handoff-patch .task-log-open-btn {
+  margin-top: 6px;
+}
+
 .task-handoff > .task-log-open-btn {
   margin-top: 8px;
 }

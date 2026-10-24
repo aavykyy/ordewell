@@ -178,6 +178,17 @@ describe('the compact handoff a row shows (ADR-0047)', () => {
     expect(taskRowView(subject()).handoff).toBeNull();
   });
 
+  it('carries the saved patch its attempt kept, when it saved one (ADR-0050)', () => {
+    const patch = { kind: 'patch' as const, path: '.ordewell/sessions/s1/tasks/t1/1.patch', attempt: 1, base: 'a'.repeat(40), files: 2, added: 9, removed: 1, binary: 0, bytes: 900 };
+    const row = taskRowView(subject({
+      status: 'completed',
+      handoff: { summary: 'Tried it.', findings: [], findingCount: 0, artifacts: [patch] },
+    }));
+
+    expect(row.handoff?.patch?.peek).toBe('patch: 2 files, +9 -1');
+    expect(taskRowView(subject({ status: 'completed', handoff: { summary: 's', findings: [], findingCount: 0 } })).handoff).not.toHaveProperty('patch');
+  });
+
   it('carries the summary, the whole finding count and the worst severity the digest keeps', () => {
     const row = taskRowView(subject({
       status: 'completed',

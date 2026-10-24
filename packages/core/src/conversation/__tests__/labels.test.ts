@@ -72,6 +72,11 @@ describe('what a conversation block says', () => {
       .toEqual(['1 finding', 'Info', 'Commit: Only a commit']);
   });
 
+  it('names a saved patch before the commit, so a row shows the prototype it kept (ADR-0050)', () => {
+    expect(handoffPeekParts({ summary: 'Tried it.', findingCount: 0, severity: null, patch: { peek: 'patch: 2 files, +9 -1' } }))
+      .toEqual(['no findings', 'patch: 2 files, +9 -1', 'Tried it.']);
+  });
+
   it('takes the summary\'s first non-blank line, never a leading blank one', () => {
     expect(handoffPeekParts({ summary: '\n\n  Keep it scoped.  \nMore context.', findingCount: 0, severity: null }))
       .toEqual(['no findings', 'Keep it scoped.']);

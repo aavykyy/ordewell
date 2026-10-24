@@ -83,6 +83,25 @@ describe('a handoff a headless surface prints (ADR-0047)', () => {
     ]);
   });
 
+  it('prints a saved patch as its own block, after the author\'s artifacts (ADR-0050)', () => {
+    const patch: HandoffPatch = {
+      kind: 'patch', path: '.ordewell/sessions/s1/tasks/t1/1.patch', attempt: 2,
+      base: 'b'.repeat(40), files: 1, added: 3, removed: 0, binary: 0, bytes: 300,
+      flags: [{ kind: 'normalized', count: 1, paths: ['notes.txt'] }],
+    };
+
+    expect(handoffPreviewLines({ ...handoff, artifacts: [...handoff.artifacts!, patch] })).toEqual([
+      'The cache key omits the tenant.',
+      'F1 [blocker] The cache key omits the tenant',
+      'F2 [major] No regression test',
+      '+2 more findings, in the attempt\'s log',
+      'Artifacts: src/cache.ts:42 (unresolved); https://example.com/pr/7',
+      'Patch: 1 file, +3 -0, 300 B, from commit bbbbbbbbbbbb',
+      'saved as .ordewell/sessions/s1/tasks/t1/1.patch (attempt 2)',
+      'normalized by git attributes: 1 file (notes.txt)',
+    ]);
+  });
+
   it('gives a wake-up the top findings whole, detail and evidence included', () => {
     expect(handoffWakeLines(handoff).slice(0, 6)).toEqual([
       'The cache key omits the tenant.',
