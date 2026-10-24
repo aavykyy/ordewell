@@ -5,7 +5,7 @@ import { DaemonError } from '../../apiClient';
 import { openTerminal, type Terminal } from '../terminal';
 import { runEffect, type OrdewellApi } from '../effects';
 import { stripAnsi, width } from '../ansi';
-import type { AttemptUsage } from '@ordewell/core';
+import type { AttemptUsage, ExecutionCommand } from '@ordewell/core';
 import type { RewindTargetView } from '../state';
 import { messagesOf } from './chat';
 
@@ -83,9 +83,7 @@ function fakeDaemon() {
     }),
     stopExecution: vi.fn(async () => ({ status: 'stopped' })),
     cancelPlanning: vi.fn(async () => ({ cancelled: true })),
-    taskControl: vi.fn(async () => ({ ok: true })),
-    markTaskComplete: vi.fn(async () => ({ ok: true })),
-    markTaskIncomplete: vi.fn(async () => ({ ok: true })),
+    execute: vi.fn(async (_sessionId: string, _command: ExecutionCommand) => ({ ok: true as const, message: 'Done.' })),
     addTask: vi.fn(async () => ({ ok: true })),
     updateTask: vi.fn(async () => ({ ok: true })),
     removeTask: vi.fn(async () => ({ ok: true })),
@@ -587,10 +585,10 @@ describe('TUI end to end', () => {
     h.type('\r');
     await vi.waitFor(() => expect(h.screen()).toContain('Add the login route'));
 
-    h.daemon.mocks.taskControl.mockImplementationOnce(async () => {
-      h.daemon.log.push('taskControl');
+    h.daemon.mocks.execute.mockImplementationOnce(async () => {
+      h.daemon.log.push('execute');
       h.daemon.emitExecution({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress' }] });
-      return { ok: true };
+      return { ok: true as const, message: 'Started.' };
     });
 
     h.type('\t');
@@ -601,9 +599,9 @@ describe('TUI end to end', () => {
       expect(h.app.getState().tasks.find((t) => t.id === 't1')?.status).toBe('in_progress');
       expect(h.screen()).toContain('RUN');
     });
-    expect(h.daemon.mocks.taskControl).toHaveBeenCalledWith('session-1', 't1', 'force-start');
+    expect(h.daemon.mocks.execute).toHaveBeenCalledWith('session-1', { command: 'force_start', task: 't1' });
     // The stream was subscribed before the request, so the first update landed.
-    expect(h.daemon.log.indexOf('streamExecution')).toBeLessThan(h.daemon.log.indexOf('taskControl'));
+    expect(h.daemon.log.indexOf('streamExecution')).toBeLessThan(h.daemon.log.indexOf('execute'));
 
     const frame = h.app.getState().spinnerFrame;
     h.app.dispatch({ type: 'spinnerTick' });
@@ -678,16 +676,16 @@ describe('TUI end to end', () => {
     await vi.waitFor(() => {
       expect(h.app.getState().tasks.find((t) => t.id === 't1')?.status).toBe('completed');
     });
-    expect(h.daemon.mocks.markTaskComplete).toHaveBeenCalledWith('session-1', 't1');
+    expect(h.daemon.mocks.execute).toHaveBeenCalledWith('session-1', { command: 'mark_complete', task: 't1' });
     expect(h.daemon.mocks.getSession).toHaveBeenCalled();
 
     // Same key, other direction: `m` on the now-completed task un-marks it.
     h.type('\t');
     h.type('m');
     await vi.waitFor(() => {
-      expect(h.daemon.mocks.markTaskIncomplete).toHaveBeenCalledWith('session-1', 't1');
+      expect(h.daemon.mocks.execute).toHaveBeenCalledWith('session-1', { command: 'mark_not_done', task: 't1' });
     });
-    expect(h.daemon.mocks.markTaskComplete).toHaveBeenCalledTimes(1);
+    expect(h.daemon.mocks.execute.mock.calls.filter(([, command]) => command.command === 'mark_complete')).toHaveLength(1);
   });
 
   it('/planner <provider> persists the switch to the env, the daemon, and the header', async () => {

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { latestTaskCommands } from '../shared/taskCommands';
-import { canContinue, isMeasured, pausedOnLimit, resumeLabel, taskUsageSummary, usageLine, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent, type TaskUsageSummary } from '@ordewell/core';
+import { taskActionCommand, canContinue, isMeasured, pausedOnLimit, resumeLabel, taskUsageSummary, usageLine, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent, type TaskUsageSummary } from '@ordewell/core';
 import { EMPTY_TASK_LOG_FOLLOW, followTaskLog } from '@ordewell/core/plan-utils';
 import { diffConversation } from '../shared/conversationPatch';
 import { renderWebviewHtml } from './webviewHtml';
@@ -122,11 +122,11 @@ export class TaskLogPanel {
         this.controlAsync(() => this.userCommand({ command: 'interrupt_task', task: this.taskId }));
         return;
       case 'cancelResume':
-        this.controlAsync(() => this.userCommand({ command: 'cancel_resume', task: this.taskId }));
+        this.controlAsync(() => this.userCommand(taskActionCommand('cancel-resume', this.taskId)));
         return;
       case 'resumeNow':
         this.follow = { ...this.follow, followLatest: true };
-        this.controlAsync(() => this.userCommand({ command: 'retry_task', task: this.taskId, from: 'session' }));
+        this.controlAsync(() => this.userCommand(taskActionCommand('resume-now', this.taskId)));
         return;
       case 'continueTask':
         // The continue is a new attempt: show it, even from an earlier one.

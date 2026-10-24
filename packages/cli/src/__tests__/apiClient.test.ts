@@ -54,12 +54,12 @@ describe('ApiClient', () => {
     });
     servers.push(srv);
 
-    await new ApiClient(srv.port, '/work/app').taskControl('session-1', 't1', 'retry');
+    await new ApiClient(srv.port, '/work/app').execute('session-1', { command: 'retry_task', task: 't1', from: 'fresh' });
 
     expect(hits).toEqual([
-      'POST /api/plans/session-1/tasks/t1/retry',
+      'POST /api/plans/session-1/execute-command',
       'POST /api/sessions/session-1/load?workspace=%2Fwork%2Fapp',
-      'POST /api/plans/session-1/tasks/t1/retry',
+      'POST /api/plans/session-1/execute-command',
     ]);
   });
 
@@ -73,7 +73,7 @@ describe('ApiClient', () => {
     });
     servers.push(srv);
 
-    await expect(new ApiClient(srv.port, '/work/app').taskControl('session-9', 't1', 'retry')).rejects.toThrow('Session not found');
+    await expect(new ApiClient(srv.port, '/work/app').execute('session-9', { command: 'retry_task', task: 't1', from: 'fresh' })).rejects.toThrow('Session not found');
     expect(hits).toHaveLength(2);
   });
 
@@ -94,7 +94,7 @@ describe('ApiClient', () => {
     });
     servers.push(srv);
 
-    const err = await new ApiClient(srv.port, '/work/app').taskControl('session-1', 't1', 'retry').catch((e: unknown) => e);
+    const err = await new ApiClient(srv.port, '/work/app').execute('session-1', { command: 'retry_task', task: 't1', from: 'fresh' }).catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(DaemonError);
     expect((err as DaemonError).code).toBe('session_held');
@@ -483,7 +483,7 @@ describe('ApiClient — adopting a saved session', () => {
     await expect(new ApiClient(server.port).adoptSession('s1')).rejects.toThrow('Session not found');
   });
 
-  it('sends, takes back and interrupts on a task\'s own routes, and surfaces a refusal', async () => {
+  it('sends one command to the one route, answering the seam\'s line and payload, and surfaces a refusal', async () => {
     const hits: string[] = [];
     const srv = await startCustomServer((req, res) => {
       let body = '';
@@ -491,24 +491,22 @@ describe('ApiClient — adopting a saved session', () => {
       req.on('end', () => {
         hits.push(`${req.method} ${req.url} ${body}`.trim());
         res.setHeader('Content-Type', 'application/json');
-        if (req.url?.endsWith('/interrupt')) {
+        if (body.includes('interrupt_task')) {
           res.statusCode = 400;
-          return res.end(JSON.stringify({ error: 'Task "Only" is not running' }));
+          return res.end(JSON.stringify({ error: 'Task "Only" is not running', code: 'refused' }));
         }
-        res.end(JSON.stringify(req.method === 'DELETE' ? { removed: true } : { id: 'msg-1' }));
+        res.end(JSON.stringify({ ok: true, message: 'Sent.', payload: { kind: 'message', id: 'msg-1' } }));
       });
     });
     servers.push(srv);
     const client = new ApiClient(srv.port);
 
-    expect(await client.sendTaskMessage('s1', 't1', 'use Postgres')).toEqual({ id: 'msg-1' });
-    expect(await client.removeQueuedTaskMessage('s1', 't1', 'msg-1')).toEqual({ removed: true });
-    await expect(client.interruptTask('s1', 't1')).rejects.toThrow('is not running');
+    expect(await client.execute('s1', { command: 'message_task', task: 't1', text: 'use Postgres' })).toEqual({ ok: true, message: 'Sent.', payload: { kind: 'message', id: 'msg-1' } });
+    await expect(client.execute('s1', { command: 'interrupt_task', task: 't1' })).rejects.toThrow('is not running');
 
     expect(hits).toEqual([
-      'POST /api/plans/s1/tasks/t1/messages {"text":"use Postgres"}',
-      'DELETE /api/plans/s1/tasks/t1/messages/msg-1',
-      'POST /api/plans/s1/tasks/t1/interrupt',
+      'POST /api/plans/s1/execute-command {"command":"message_task","task":"t1","text":"use Postgres"}',
+      'POST /api/plans/s1/execute-command {"command":"interrupt_task","task":"t1"}',
     ]);
   });
 
@@ -530,34 +528,6 @@ describe('ApiClient — adopting a saved session', () => {
     expect(hits).toEqual(['POST /api/plans/s1/tasks/t1/commands {"name":"compact","args":"keep the API notes"}']);
   });
 
-  it('force sends a new or a queued message on its own routes, and surfaces a refusal (ADR-0023, F1)', async () => {
-    const hits: string[] = [];
-    const srv = await startCustomServer((req, res) => {
-      let body = '';
-      req.on('data', (chunk) => { body += String(chunk); });
-      req.on('end', () => {
-        hits.push(`${req.method} ${req.url} ${body}`.trim());
-        res.setHeader('Content-Type', 'application/json');
-        if (req.url?.includes('/t2/')) {
-          res.statusCode = 400;
-          return res.end(JSON.stringify({ error: 'Task "Two" is not running, so there is no turn to send a message to' }));
-        }
-        res.end(JSON.stringify(req.url?.endsWith('/messages/now') ? { id: 'msg-3' } : { sent: true }));
-      });
-    });
-    servers.push(srv);
-    const client = new ApiClient(srv.port);
-
-    expect(await client.forceSendTaskMessage('s1', 't1', 'stop now')).toEqual({ id: 'msg-3' });
-    expect(await client.forceSendQueuedTaskMessage('s1', 't1', 'msg-2')).toEqual({ sent: true });
-    await expect(client.forceSendTaskMessage('s1', 't2', 'stop now')).rejects.toThrow('no turn to send a message to');
-
-    expect(hits.slice(0, 2)).toEqual([
-      'POST /api/plans/s1/tasks/t1/messages/now {"text":"stop now"}',
-      'POST /api/plans/s1/tasks/t1/messages/msg-2/now',
-    ]);
-  });
-
   it('send now in the planner chat posts to the converse/now route (ADR-0023, F5)', async () => {
     const hits: string[] = [];
     const srv = await startCustomServer((req, res) => {
@@ -575,30 +545,6 @@ describe('ApiClient — adopting a saved session', () => {
     expect(await client.forceSendPlannerMessage('s1', 'use Postgres instead')).toEqual({ tasks: [] });
 
     expect(hits).toEqual(['POST /api/plans/s1/converse/message/now {"message":"use Postgres instead"}']);
-  });
-
-  it('continues a finished task on its own route, and surfaces a refusal (ADR-0018, K1)', async () => {
-    const hits: string[] = [];
-    const srv = await startCustomServer((req, res) => {
-      let body = '';
-      req.on('data', (chunk) => { body += String(chunk); });
-      req.on('end', () => {
-        hits.push(`${req.method} ${req.url} ${body}`.trim());
-        res.setHeader('Content-Type', 'application/json');
-        if (req.url?.includes('/t2/')) {
-          res.statusCode = 400;
-          return res.end(JSON.stringify({ error: 'Task "Two" cannot be continued: its runner left no saved session to resume' }));
-        }
-        res.end(JSON.stringify({ ok: true }));
-      });
-    });
-    servers.push(srv);
-    const client = new ApiClient(srv.port);
-
-    expect(await client.continueTask('s1', 't1', 'also handle arrays')).toEqual({ ok: true });
-    await expect(client.continueTask('s1', 't2', 'go on')).rejects.toThrow('cannot be continued');
-
-    expect(hits[0]).toBe('POST /api/plans/s1/tasks/t1/continue {"text":"also handle arrays"}');
   });
 
   it('answers a planner prompt with a yes/no and a runner\'s request with its whole decision', async () => {

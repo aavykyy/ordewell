@@ -1,4 +1,4 @@
-import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, PlanUsage, PlannerUsage, ResearchLogEntry, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskLogEvent } from '@ordewell/core';
+import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, PlanUsage, PlannerUsage, ResearchLogEntry, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskLogEvent } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -90,7 +90,7 @@ export type Effect =
 
 export type ChatRestored = { type: 'chatRestored'; history: SerializedConversationMessage[]; researchLog?: ResearchLogEntry[]; plannerUsage?: PlannerUsage; pendingTurns?: SerializedPendingTurn[]; sessionId?: string };
 
-export type TaskAction = 'complete' | 'uncomplete' | 'skip' | 'retry' | 'cancel' | 'force-start' | 'cancel-resume' | 'resume-now';
+export type { TaskAction };
 
 export type Action =
   | { type: 'key'; key: Key }

@@ -1144,7 +1144,7 @@ share lifecycle plumbing; `FakeRunnerSession` is the test seam. Structured
 methods are mandatory, with no optional capability or transport discriminator.
 *Avoid:* "terminal runner", "terminal session" for these interfaces.
 
-**Task attempt** (`TaskAttempt`, inside TaskOrchestrator) — one run of one
+**Task attempt** (`TaskAttempt`, inside `Attempts`) — one run of one
 task, from the moment the scheduler claims it to the moment it ends. It holds
 everything that has to die with the run: the attempt number, the phase
 (`starting` while the async spawn is in flight, `running` once the runner is
@@ -1152,11 +1152,19 @@ up, `integrating` while *Landing* settles its verdict), the live
 `IRunnerSession`, and the runner, working directory and start
 time — plus its *attempt kind* and,
 in an isolated run, whether that directory is its worktree and the landing in
-flight. The orchestrator keeps one
-`Map<taskId, TaskAttempt>`, and every way a run ends — verdict, cancel, release,
-mark complete, retry, a failed spawn, stop, plan load — goes through the one
-`endAttempt`, which also clears the verifier state an interrupted run leaves
-behind. Ending an attempt is also what invalidates a spawn still in flight: the
+flight. `Attempts` owns every live one — the one `Map<taskId, TaskAttempt>`,
+the runner sessions, the `VerdictEngine` wiring and the attempt's output — and
+the scheduler (`TaskOrchestrator`) owns which task starts and what follows.
+Every way a run ends — verdict, cancel, release, mark complete, retry, a failed
+spawn, stop, plan load — goes through the one `Attempts.end`, which also clears
+the verifier state an interrupted run leaves behind. An attempt that ends on
+its own is reported to the scheduler as one `AttemptEnded`: passed, files
+changed, failed, repaired, usage-limited, spawn failed or unsettled. The
+scheduler applies each in its one `settle`, as it applies a *Landing* outcome,
+so `Attempts` never marks a task done, failed or held. A spawn that throws,
+whatever threw, is one `SpawnFailure`: the task is left failed, held with a
+reason, or — a repair — waiting on its conflict. Ending an attempt is also
+what invalidates a spawn still in flight: the
 late session is compared by identity against the task's *current* attempt, so
 it is killed rather than resurrecting a stopped task or displacing a newer run,
 and it takes back only its own claim — a task marked complete meanwhile stays
@@ -1171,13 +1179,13 @@ and the *Start admission* it was asked under. It reads the task there, so a
 start that awaited first runs the task as the plan holds it then, and checks
 in the same synchronous step that the task is in the user's approval record,
 that no Stop came since the start was admitted, that Mark complete is not
-landing it and that a slot is free, and marks the attempt claimed before
-anything is awaited. The attempt keeps that admission, and the repair its
-conflict is owed claims under it. The scheduler also judges each task by the
-*Start rule* again right before claiming it, because a start it awaited, a
-user control or a concurrent tick may have changed it, so it never starts
-held, finished or newly blocked work, nor more than `maxParallelSessions` at
-once.
+landing it and that a slot is free; `Attempts.start` then marks the attempt
+claimed before anything is awaited. The attempt keeps that admission, and the
+repair its conflict is owed claims under it. The scheduler also judges each
+task by the *Start rule* again right before claiming it, because a start it
+awaited, a user control or a concurrent tick may have changed it, so it never
+starts held, finished or newly blocked work, nor more than
+`maxParallelSessions` at once.
 The working directory is decided in one place (`attemptKind.attemptCwd`): the
 workspace root for an attempt that acts from the checkout, else what the
 `IsolationRunController` gives it — the workspace root when the run does not
@@ -1186,13 +1194,16 @@ the attempt. A passed verdict keeps the attempt live through its merge,
 so the task completes — and frees its dependents — only once its work is on the
 integration branch. Holds, retry counts and spawn counts are
 deliberately *not* on the record — they describe the task across attempts and
-must survive one ending. Surfaces read an attempt through `getAttempt`;
-`activeSessionMap` is derived from it. Runner session ids
+must survive one ending; the spawn counts, which number the next attempt, are
+kept by `Attempts`, the rest by the scheduler. Surfaces read an attempt
+through `getAttempt`; `activeSessionMap` is derived from it. Runner session ids
 are unique per spawn for the same reason: a retry reuses its task id, and a
 registry keyed by task let the old attempt's exit unregister the new one.
 *Avoid:* "session" for this concept — the session is the runner's process, one
-field of the attempt. Do not add another per-task map to the orchestrator for
-state that ends with the run; put it on the attempt.
+field of the attempt. Do not add another per-task map to the orchestrator or
+`Attempts` for state that ends with the run; put it on the attempt. `Attempts`
+marks only what a live attempt is doing (in progress, at a checkpoint, waiting
+for input); how one ended goes to `settle`, never applied where it ended.
 
 **Blocked task** (`blockingFailures`, `TaskOrchestrator.getBlockedBy`,
 `TaskRowView.blockedBy`) — a task not started yet whose dependency failed or is
@@ -2621,17 +2632,25 @@ only the level; the scheduler reads the run's settings through one
 *Avoid:* "supervisor" for the module — the Supervisor is the planner
 conversation taking turns; Run supervision holds the run to its settings.
 
-**Run state** (`RunState`, in `TaskOrchestrator`; ADR-0034, ADR-0018 U1) —
+**Run state** (`RunState`, `packages/core/src/services/runState.ts`, held by
+`TaskOrchestrator`; ADR-0034, ADR-0018 U1) —
 where the full-plan run stands, as one value: *idle* (no full-plan run since
 the plan loaded or the user stopped one; a task started on its own may still be
 at work), *scheduling* (ready tasks start as slots free; a run waiting on the
 user, a hold or a merge gate stays here), *held* (a usage-limit pause with a
 reset to wait for holds it: it stays open and starts nothing new until the
 reset, a *Resume now*, a retry, a skip or a move to another runner continues
-it), *ended on a failure* (every task left is failed or blocked; a retry or a
-skip continues it) and *finished* (every task completed or was skipped).
-`isScheduling`, `awaitsResume` and the plan status (`running`, `completed`,
-else `approved`) derive from it. One
+it; it carries what it goes back to once released — *idle* for a task started
+alone, *scheduling*, or *ended on a failure*), *ended on a failure* (every task
+left is failed or blocked; a retry or a skip continues it) and *finished*
+(every task completed or was skipped). It changes only by an event — schedule,
+stop, load, continue, hold, release, end, reopen — through one pure reducer
+(`nextRunState`). The Session changes the run through three verbs on the
+orchestrator: `beginRun` (Execute with nothing at work: the run afresh),
+`joinRun` (Execute during a run: the plan joins it) and `adoptEdit` (a
+planner's edit, reconciled into a run at work or awaiting a resume, else loaded
+for the next run). `isScheduling`, `awaitsResume` and the plan status
+(`running`, `completed`, else `approved`) derive from it. One
 settle step (`settleRun`) decides, once nothing is at work and nothing can
 start, whether the run goes on, is held, waits on the user or is over; only an
 end closes the run and sends `execution_complete`. The review approval
@@ -2734,12 +2753,14 @@ the run. The user's Stop with nothing to stop is an ok no-op, recorded nowhere.
 VS Code's task cards, plan bar, command palette and task-log panel send every
 control through it as the user and show a refusal's line as the seam worded it;
 the chat adds no note of its own beside the timeline's line for the control.
-The daemon's task-control routes (complete, uncomplete, resume, force start,
-interrupt, checkpoint answers, queued-message controls, review approval, Merge
-all and a runner request's answers) are thin wrappers that run the matching
-command as the user and answer in its words: a refusal is the 400 carrying the
-seam's line, and a task named in a route is resolved by the seam (an id,
-`#order` or title). The CLI sends the task as typed and prints the daemon's
+The daemon takes the user's controls on one route, `POST /api/plans/:id/execute-command`
+(`ApiClient.execute`), whose body is the `ExecutionCommand`: it runs the command
+as the user and answers in its words, a refusal being the 400 carrying the
+seam's line, and a task named in the command is resolved by the seam (an id,
+`#order` or title). Core's `taskActionCommand` is the one table from a task
+action to its command, for the TUI, the CLI and VS Code. Execute, Stop, review
+approval, checkpoint answers, Merge all and a runner request's answers keep
+routes of their own, as they answer more than the seam's line. The CLI sends the task as typed and prints the daemon's
 line; the TUI adds no notice of its own beside the timeline's line, and shows a
 refusal as the daemon worded it. No planner tool reaches into
 `TaskOrchestrator` directly, and the mandate (#23) plugs in here. Plan approval

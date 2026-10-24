@@ -342,11 +342,14 @@ VS Code sends each of its controls — task cards, the plan bar, the command
 palette and the task-log panel, a Deny with a note included — through these
 commands as the user, and shows a refusal as the seam worded it; the chat writes
 no note of its own for them, so the timeline's line is the only one.
-The daemon's routes for these controls are thin wrappers over `Session.execute`
-as the user: each answers a refusal as the 400 that carries the seam's line, so
-the CLI prints the same words the other surfaces show. A control's route answers
-the command's line as `message`; a task message's answers the message's `id`,
-and Merge all's the merge result, whose card says the outcome. A task named in
+The daemon takes these controls on one route, `POST /api/plans/:sessionId/execute-command`,
+whose body is the `ExecutionCommand` and which runs it through `Session.execute`
+as the user: it answers a refusal as the 400 that carries the seam's line, so
+the CLI prints the same words the other surfaces show. It answers the command's
+line as `message`, and a `payload` where a surface needs more: a task message's
+`id`, a force start's queued line, a Merge all's result. Execute, Stop, the
+review approval, a checkpoint's answers and Merge all keep routes of their own,
+since each answers more than the seam does ([ADR-0006](../surfaces/0006-tui-pure-core-thin-driver.md) S3). A task named in
 a route is resolved by the seam, so the CLI sends a reference as typed (an id,
 `#order`, title, or the user's unique id prefix) and reads no plan first. The TUI writes no
 notice beside the timeline's line for a control and shows a refusal as the
@@ -633,4 +636,5 @@ until #30 exists.
 - 2026-10-22 — decided, not built: run updates carry a task's handoff ([ADR-0047](0047-structured-task-handoffs.md), #120).
 - 2026-10-22 — implemented handoffs in run updates, with whole findings and a pull pointer (ADR-0047, #120).
 - 2026-10-24 — the supervisor at Act may answer a checkpoint with `answer_checkpoint`, a planner tool of its own; a planner turn in the user's turn, the supervisor below Act and autorun are refused, a rejection needs a reason, and one that asks for the user's judgement on an irreversible or outward effect is escalated to them.
+- 2026-10-24 — the daemon's per-control routes are replaced by one `execute-command` route (ADR-0006 S3); the seam's lines and payloads travel as before.
 - 2026-10-24 — the approval record's rules live in one module, `ApprovalRecord`, and run on each change to the task tree rather than inside a save: a task that leaves the plan takes its approval, and a save only writes. Approval taken from a task is announced to surfaces as a plan update with a status, wherever the change was made. `Session.isApproved` stays the one read.

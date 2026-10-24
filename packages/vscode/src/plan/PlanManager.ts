@@ -4,7 +4,7 @@ import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
   createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, pastGateConfirmation, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
-  type ExecutionCommand,
+  taskActionCommand, type ExecutionCommand, type TaskAction,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit } from '../shared/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -478,7 +478,7 @@ export async function confirmPastGate(taskId: string, session: Pick<Session, 'me
  */
 export async function forceStartPastGate(taskId: string, deps: Pick<PlanManagerDeps, 'session' | 'chatProvider'>): Promise<void> {
   if (!(await confirmPastGate(taskId, deps.session))) return;
-  await startTask(deps, { command: 'force_start', task: taskId });
+  await startTask(deps, taskActionCommand('force-start', taskId));
 }
 
 /**
@@ -491,6 +491,17 @@ async function startTask(deps: Pick<PlanManagerDeps, 'session' | 'chatProvider'>
   deps.chatProvider.clearIsolationHandoff();
 }
 
+/** The webview's names for the task controls that are one command each; Force start and Run go through the merge gate's confirmation instead. */
+const SYSTEM_TASK_ACTIONS = {
+  cancel: 'cancel',
+  cancelResume: 'cancel-resume',
+  resumeNow: 'resume-now',
+  retry: 'retry',
+  skip: 'skip',
+  markComplete: 'complete',
+  markIncomplete: 'uncomplete',
+} as const satisfies Record<string, TaskAction>;
+
 export async function handleSystemCommand(
   command: string,
   taskId: string,
@@ -498,30 +509,18 @@ export async function handleSystemCommand(
 ): Promise<void> {
   try {
     switch (command) {
-      case 'cancel':
-        await executeUserCommand(deps.session, { command: 'stop_task', task: taskId });
-        break;
-      case 'cancelResume':
-        await executeUserCommand(deps.session, { command: 'cancel_resume', task: taskId });
-        break;
       case 'cancelPlannerResend':
         deps.session.cancelPlannerResend();
         break;
-      case 'resumeNow':
-        await executeUserCommand(deps.session, { command: 'retry_task', task: taskId, from: 'session' });
-        break;
-      case 'retry':
-        await executeUserCommand(deps.session, { command: 'retry_task', task: taskId, from: 'fresh' });
-        break;
       // Skip lands nothing, so it is never a mark: only Mark complete vouches for work.
+      case 'cancel':
+      case 'cancelResume':
+      case 'resumeNow':
+      case 'retry':
       case 'skip':
-        await executeUserCommand(deps.session, { command: 'skip_task', task: taskId });
-        break;
       case 'markComplete':
-        await executeUserCommand(deps.session, { command: 'mark_complete', task: taskId });
-        break;
       case 'markIncomplete':
-        await executeUserCommand(deps.session, { command: 'mark_not_done', task: taskId });
+        await executeUserCommand(deps.session, taskActionCommand(SYSTEM_TASK_ACTIONS[command], taskId));
         break;
       case 'forceStart':
         await forceStartPastGate(taskId, deps);
@@ -533,7 +532,7 @@ export async function handleSystemCommand(
           await forceStartPastGate(taskId, deps);
           break;
         }
-        await startTask(deps, { command: 'run_task', task: taskId });
+        await startTask(deps, taskActionCommand('run', taskId));
         break;
       }
       case 'executePlan':

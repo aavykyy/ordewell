@@ -90,8 +90,9 @@ task would start with its opening paragraph only and no instruction to call
 multi-line argument, and — unlike overflow, a capacity judgement about a line
 cmd.exe would at least read — that disqualification **falls through to the next
 route**: a `.ps1` beside a `.cmd` is taken when the arguments span lines, and a
-`.cmd` standing alone raises `EmbeddedNewlineError`, which
-`TaskOrchestrator.startTask` turns into a held task naming the fix.
+`.cmd` standing alone raises `EmbeddedNewlineError`, which the start's one
+spawn-failure path (`Attempts` reports it, the scheduler applies it) turns into
+a held task naming the fix.
 
 The batch route wraps its whole command line in one more pair of quotes, which
 is load-bearing rather than cosmetic. Under `/s`, cmd's rule is to strip the
@@ -111,9 +112,8 @@ off-platform it is what makes the behavior testable at all.
 context) does not fit, and Windows truncates
 rather than rejecting. A truncated system prompt makes the planner answer half a
 question confidently, which is exactly the silent success this repo refuses — so
-`CommandLineTooLongError` names the fix instead. `TaskOrchestrator.startTask`
-already catches a spawn throw and holds the task, so it degrades to a visible
-held task with an actionable message.
+`CommandLineTooLongError` names the fix instead. A spawn throw already holds
+the task, so it degrades to a visible held task with an actionable message.
 
 The native and PowerShell routes are bounded by CreateProcess's own 32767-character
 ceiling rather than cmd.exe's, which is four times further away but truncates
@@ -261,3 +261,4 @@ measured on a Windows host; the rest has not been run on one.
 - 2026-10-13 — a returned exit code no longer skips a group leader: the group is signalled and tracked until it is empty.
 - 2026-10-13 — a group whose leader has exited is asked for members before each signal, and dropped once empty.
 - 2026-10-17 — Codex's approvals on Windows read `on-request`, as ADR-0026 made them on 2026-10-10; the text still said `never`.
+- 2026-10-24 — a spawn throw is held through the one spawn-failure path in `Attempts`; the text named a `TaskOrchestrator.startTask` that no longer exists.

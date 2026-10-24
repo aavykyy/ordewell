@@ -100,7 +100,8 @@ export type { ResearchChat, ResearchTurn, ToolCall, ToolResult } from './service
 export { GeminiService } from './services/GeminiService';
 export { OpenAiService } from './services/OpenAiService';
 export { TaskOrchestrator, TaskControlError, STOPPED_BEFORE_START } from './services/TaskOrchestrator';
-export type { AutoMergeTrigger, OrchestratorObserver, StartAdmission, TaskAttemptSnapshot, TaskOrchestratorDeps, TaskOrchestratorOptions } from './services/TaskOrchestrator';
+export type { AutoMergeTrigger, OrchestratorObserver, StartAdmission, TaskOrchestratorDeps, TaskOrchestratorOptions } from './services/TaskOrchestrator';
+export type { TaskAttemptSnapshot } from './services/Attempts';
 export { PlanStore } from './services/PlanStore';
 export { Planner } from './services/Planner';
 export type { PlanRequest } from './services/Planner';
@@ -162,6 +163,7 @@ export { plannerNotReady, plannerNotReadyFor, describePlannerNotReady, PlannerNo
 export type { SessionDeps, SessionRuntimeSettings, SessionPlanner, SaveSession, ConversationFork, ConversationRewind } from './services/createSession';
 export { ExecutionCommands, SUPERVISOR_LEVELS } from './services/ExecutionCommands';
 export type { ExecutionCommand, CommandOutcome, CommandPayload, Consent, SupervisorPolicy, LoopGuard, ExecutionHost } from './services/ExecutionCommands';
+export { parseExecutionCommand, type ParsedCommand } from './services/executionCommandShape';
 export { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './services/LoopGuards';
 export type { GuardTrip, GuardTarget } from './services/LoopGuards';
 export { ConversationEditError, ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError } from './services/PlannerConversation';

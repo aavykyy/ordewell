@@ -5,6 +5,9 @@ import { readUsageLimitReset, type TurnFailure } from './runnerExit';
 import { resumeTime } from '../taskRow/status';
 import { quotedList } from '../utils/quotedList';
 import type { RunOrigin } from './TaskOrchestrator';
+import type { HeldFrom } from './runState';
+
+export type { HeldFrom } from './runState';
 
 /** How long after a limit resets the work waiting on it goes again: the runner's clock and ours need not agree to the second. */
 export const RESUME_MARGIN_MS = 60_000;
@@ -32,9 +35,6 @@ export interface ResumeNow {
   message?: string;
 }
 
-/** What a run a pause held goes back to once released: a task started alone never becomes a scheduled run. */
-export type HeldFrom = 'idle' | 'scheduling';
-
 /** The attempt the limit stopped, as far as its pause reads it. */
 export interface LimitedAttempt {
   readonly runner: string;
@@ -45,9 +45,9 @@ export interface LimitedAttempt {
   readonly startedAt: string;
 }
 
-/** The run's state is the orchestrator's: a pause only holds it and lets it go. */
+/** The run's state is the orchestrator's (see `nextRunState`): a pause only holds it and lets it go. */
 export interface HeldRun {
-  /** Hold the run, whether the scheduler drives it or a task started alone; one already held or ended stays as it is. */
+  /** Hold the run, however it stands — driven by the scheduler, a task started alone, or one ended on a failure; one already held stays as it is. */
   hold(): void;
   /** What the held run goes back to; null when nothing holds it. */
   heldFrom(): HeldFrom | null;

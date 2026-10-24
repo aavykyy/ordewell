@@ -31,6 +31,7 @@ export default defineConfig({
         'src/services/harness/connectors.ts': floor(100, 87, 100),
         'src/services/harness/openCodeTransport.ts': floor(100, 97, 94),
         'src/services/harness/ordewellBinding.ts': floor(80, 78, 100),
+        'src/services/runState.ts': floor(100, 100, 100),
         'src/taskRow/actions.ts': floor(100, 100, 100),
         'src/taskRow/index.ts': floor(100, 100, 100),
         'src/taskRow/status.ts': floor(100, 100, 100),
