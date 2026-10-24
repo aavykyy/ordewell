@@ -1385,6 +1385,80 @@ describe.skipIf(!hasGit)('WorktreeIsolation never deletes work that has not land
     expect(readFileSync(join(first.cwd, 'first-try.txt'), 'utf8')).toBe('first try\n');
   });
 
+  describe('a registration no record holds', () => {
+    it('prepare succeeds after the directory of the last attempt was deleted and its registration left', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(root);
+      const first = await iso.prepare(task(1, 'Retried'), run);
+      rmSync(first.cwd, { recursive: true, force: true });
+      run.tasks = {};
+
+      const retry = await iso.prepare(task(1, 'Retried'), run);
+
+      expect(retry.cwd).toBe(first.cwd);
+      expect(git(retry.cwd, 'branch', '--show-current')).toBe(first.branch);
+      expect(worktreePaths(root).sort()).toEqual([root, retry.cwd].sort());
+    });
+
+    it('prepare keeps the uncommitted work of a leftover at the task\'s own path, then starts over it', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(root);
+      const first = await iso.prepare(task(1, 'Retried'), run);
+      writeFileSync(join(first.cwd, 'half-done.txt'), 'half\n');
+      run.tasks = {};
+
+      const retry = await iso.prepare(task(1, 'Retried'), run);
+
+      const kept = `ordewell-preserved/${run.id}/1-retried`;
+      expect(retry.preserved).toEqual([expect.objectContaining({ repo: '.', branch: kept })]);
+      expect(git(root, 'show', `${kept}:half-done.txt`)).toBe('half');
+      expect(existsSync(join(retry.cwd, 'half-done.txt'))).toBe(false);
+      expect(run.tasks['task-1'].workspace).toBe(retry.cwd);
+    });
+
+    it('prepare refuses, and removes nothing, when the leftover\'s work cannot be kept', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }), execFileImpl: rescueFails });
+      const run = await iso.startRun(root);
+      const first = await iso.prepare(task(1, 'Retried'), run);
+      writeFileSync(join(first.cwd, 'first-try.txt'), 'first try\n');
+      run.tasks = {};
+
+      await expect(iso.prepare(task(1, 'Retried'), run)).rejects.toThrow(/could not keep/);
+      expect(readFileSync(join(first.cwd, 'first-try.txt'), 'utf8')).toBe('first try\n');
+    });
+
+    it('prepare never removes a worktree another live record of the run holds', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(root);
+      const held = await iso.prepare(task(1, 'Held'), run);
+      writeFileSync(join(held.cwd, 'in-flight.txt'), 'running\n');
+      // A record that names the path a retry of task 1 would use, under another branch.
+      run.tasks = { other: { ...run.tasks['task-1'], taskId: 'other', branch: `ordewell/${run.id}/elsewhere` } };
+
+      await expect(iso.prepare(task(1, 'Held'), run)).rejects.toThrow();
+      expect(readFileSync(join(held.cwd, 'in-flight.txt'), 'utf8')).toBe('running\n');
+      expect(branches(root)).toContain(held.branch);
+    });
+
+    it('pruneOrphans drops a registration whose directory is gone, with its branch', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(root);
+      const first = await iso.prepare(task(1, 'Crashed'), run);
+      rmSync(first.cwd, { recursive: true, force: true });
+      run.tasks = {};
+
+      await iso.pruneOrphans(run);
+
+      expect(worktreePaths(root)).toEqual([root]);
+      expect(branches(root)).toEqual([`ordewell/${run.id}/integration`]);
+    });
+  });
+
   it('never overwrites a branch kept earlier: a second keep for the same task gets its own', async () => {
     const root = repo();
     const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });

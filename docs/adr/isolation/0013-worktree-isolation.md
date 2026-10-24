@@ -194,6 +194,11 @@ everything below applies per repo of the group.
   and excluded from the task's commit; removal unlinks every link inside it
   before anything deletes the worktree, and finds the workspace packages'
   directories again from `package.json` when a crash left no record.
+- **A start over what no record holds.** `prepare` prunes git's stale
+  registrations, then keeps and removes whatever the task's own path and branch
+  still hold when no live record does — a crashed attempt's, or one whose record
+  was lost — by the rules a retry follows, and refuses when that work cannot be
+  kept. A path or branch another record of the run holds is never touched.
 - **Windows needs no privilege (ADR-0010).** Directories become junctions and
   files hard links, copied only when a hard link is impossible (a different
   volume), with a notice. Copies are what make the recorded link list matter
@@ -517,3 +522,4 @@ literal git command lines or private fields.
 - 2026-10-23 — the messages Ordewell writes land as written, whatever the user's `commit.cleanup`.
 - 2026-10-24 — preparing a task workspace takes its turn, and a replaced run's integration branch is deleted only where HEAD contains it, never on the word of its records.
 - 2026-10-24 — only the host holding the session's lease adopts, continues or changes its run (ADR-0049).
+- 2026-10-24 — preparing a task prunes stale worktree registrations and clears an unrecorded leftover at the task's path or branch, keeping its work first.

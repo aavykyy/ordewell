@@ -435,11 +435,18 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if (refused) {
         throw new Error(`The worktree of its last attempt (${refused.worktree}) holds work Ordewell could not keep (${refused.reason}). Save or remove it by hand, then start the task again`);
       }
-      const preserved = intent === 'restore'
-        ? [...replaced.preserved, ...(previous?.continuationWork ?? [])]
-        : replaced.preserved;
-
       const { branch, dir } = this.namesFor(run, task);
+      // What the record did not name: a crash between `worktree add` and the save, or a record lost to another save, leaves a registration, a
+      // directory or a branch that would fail the add below, or be reset by it.
+      const leftover = await this.clearLeftovers(run, task, { branch, dir });
+      const [stuck] = leftover.refused;
+      if (stuck) {
+        throw new Error(`The worktree of its last attempt (${stuck.worktree}) holds work Ordewell could not keep (${stuck.reason}). Save or remove it by hand, then start the task again`);
+      }
+      const preserved = intent === 'restore'
+        ? [...replaced.preserved, ...leftover.preserved, ...(previous?.continuationWork ?? [])]
+        : [...replaced.preserved, ...leftover.preserved];
+
       const record: IsolationTaskRecord = {
         taskId: task.id, order: task.order, title: task.title, branch, workspace: dir, status: 'active', repos: {},
         ...(opts.readOnly ? { readOnly: true } : {}),
@@ -456,7 +463,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
           const worktree = path.join(dir, repo.path);
           const tip = (await this.git(repo.root, ['rev-parse', repo.integrationBranch])).trim();
           fs.mkdirSync(path.dirname(worktree), { recursive: true });
-          // -B: the name is inside this run's namespace, so a leftover from a crashed attempt is ours to reset.
+          // -B stays for a branch with no work to lose: clearLeftovers kept and removed what a crashed attempt left, so nothing is reset here that was not kept.
           await this.git(repo.root, ['worktree', 'add', '-q', '-B', branch, worktree, tip]);
           record.repos[repo.path] = { worktree, linked: [], baseRef: tip };
         }
@@ -527,6 +534,59 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         ...(restoration ? { restoration } : {}),
       };
     }));
+  }
+
+  /**
+   * What a task's own names still hold when no record does: a worktree git
+   * has registered (prunable or live) or a directory at its path, and the
+   * branch itself. Under the session lease only this host prepares in the run
+   * (ADR-0049), so a registration no live record holds is a crashed attempt's.
+   * Its work is kept as {@link removeTask} keeps it; one that cannot be kept
+   * leaves everything in place and is refused. A name another record of the
+   * run holds is never touched, and fails the prepare instead.
+   */
+  private async clearLeftovers(run: IsolationRun, task: Task, names: { branch: string; dir: string }): Promise<IsolationRemoval> {
+    const removal = noRemoval();
+    const holder = Object.values(run.tasks).find((r) => r.taskId !== task.id && (
+      r.branch === names.branch || path.resolve(r.workspace) === path.resolve(names.dir) || isInside(r.workspace, names.dir)));
+    if (holder) throw new Error(`Its worktree path or branch is held by the record of task ${holder.order} (${holder.title}); Ordewell will not remove it`);
+    const found: { repo: IsolationRepo; worktree: string; target: RemovalTarget }[] = [];
+    for (const repo of run.repos) {
+      await this.tryGit(repo.root, ['worktree', 'prune']);
+      const listed = await this.tryGit(repo.root, ['worktree', 'list', '--porcelain']);
+      const registered = listed.stdout.split(/\r?\n\r?\n/).map((block) => ({
+        worktree: /^worktree (.+)$/m.exec(block)?.[1],
+        branch: /^branch refs\/heads\/(.+)$/m.exec(block)?.[1],
+      }));
+      const at = new Set([path.join(names.dir, repo.path)]);
+      for (const entry of registered) {
+        // Outside the run's own directories it is not ours to remove, whatever branch it has; git's refusal then stands.
+        if (entry.worktree && entry.branch === names.branch && isInside(this.runRoot(run), path.resolve(entry.worktree))) at.add(entry.worktree);
+      }
+      const base = { branch: names.branch, name: path.basename(names.dir), title: task.title };
+      for (const worktree of at) {
+        // `worktree prune` ran above, so a registration is a directory that exists; a path with neither has nothing to keep or remove.
+        if (!fs.existsSync(worktree)) continue;
+        const linked = leftoverLinks(path.join(worktree, await this.prefixOf(repo)));
+        found.push({ repo, worktree, target: { ...base, worktree, linked } });
+      }
+      found.push({ repo, worktree: names.dir, target: { ...base, linked: [] } });
+    }
+    for (const { repo, worktree, target } of found) {
+      try {
+        const kept = await this.preserve(run, repo, target);
+        if (kept && !removal.preserved.some((p) => p.repo === kept.repo && p.branch === kept.branch)) removal.preserved.push(kept);
+      } catch (err) {
+        removal.refused.push({ worktree, reason: firstLine(err instanceof Error ? err.message : String(err)) });
+        return removal;
+      }
+    }
+    for (const { repo, worktree, target } of found) {
+      if (target.worktree) await this.removeWorktreeDir(run, repo, worktree, target.linked);
+    }
+    for (const repo of run.repos) await this.tryGit(repo.root, ['branch', '-D', names.branch]);
+    this.removeTaskWorkspace(run, names.dir);
+    return removal;
   }
 
   private async restorePrevious(record: IsolationTaskRecord, preserved: PreservedWork[]): Promise<'restored' | 'fallback'> {
