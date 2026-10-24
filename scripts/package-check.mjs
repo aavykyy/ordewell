@@ -81,10 +81,13 @@ try {
     JSON.stringify({ name: 'ordewell-pack-smoke', private: true, dependencies: Object.fromEntries(tarballs.map((t) => [t.name, `file:${t.path}`])) }, null, 2),
   );
   // An empty user config keeps a developer's ~/.npmrc (an allow-scripts list
-  // makes npm refuse a project-scoped install) out of the smoke install.
+  // makes npm refuse a project-scoped install) out of the smoke install. `npm
+  // run` re-exports that list as npm_config_allow_scripts, so drop it from the
+  // environment too.
   const userconfig = join(packDir, 'empty.npmrc');
   writeFileSync(userconfig, '');
-  const installed = spawnSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', `--userconfig=${userconfig}`], { cwd: consumer, stdio: 'inherit' });
+  const installEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toLowerCase().replace(/-/g, '_') !== 'npm_config_allow_scripts'));
+  const installed = spawnSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', `--userconfig=${userconfig}`], { cwd: consumer, stdio: 'inherit', env: installEnv });
   if (installed.status !== 0) {
     fail('npm install of the packed tarballs failed');
   } else {
