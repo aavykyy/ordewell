@@ -416,6 +416,31 @@ describe('a usage-limit pause keeps the run open', () => {
     expect(orchestrator.storeInstance.getExecutionLog()).toEqual([]);
   });
 
+  // A refused start once only ticked, so a task started alone kept its run
+  // without an end; every way in now settles as the attempt's verdict would.
+  const untimed = "You've hit your session limit.";
+  const untimedStops: [string, { refuse?: true; hit?: (session: FakeRunnerSession) => void }][] = [
+    ['its turn fails on the limit', { hit: (session) => hitLimitInTurn(session, untimed) }],
+    ['its runner exits on the limit', { hit: (session) => { session.emitOutput(untimed); session.emitExit(1); } }],
+    ['the limit refuses its start', { refuse: true }],
+  ];
+
+  it.each(untimedStops)('ends the run of a task started alone that waits for the user because %s', async (_how, stop) => {
+    const { orchestrator, sessions, spawn, task } = setup();
+    const events = runEvents(orchestrator);
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+    if (stop.refuse) spawn.mockRejectedValueOnce(new RunnerStartupExit(`The claude-code task runner exited with code 1.\n\n${untimed}`));
+    await orchestrator.forceStartTask('t1');
+    stop.hit?.(sessions[0]);
+    await until(() => task('t1').status === 'awaiting_user');
+    await flushMicrotasks(20);
+
+    expect(task('t1')).toMatchObject({ awaitingReason: 'usage-limit' });
+    expect(task('t1').resumeAt).toBeUndefined();
+    expect(orchestrator.awaitsResume).toBe(false);
+    expect(events).toEqual(['started:user', 'complete']);
+  });
+
   it('and an edit while it is held does not read as a running plan', async () => {
     const { orchestrator, sessions, task } = setup({ maxParallelSessions: 2 });
     const tasks = [

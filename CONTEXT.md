@@ -679,9 +679,11 @@ session is never started in its place.
 for it — a retry starts a fresh attempt with no message; "continue" across
 runners.
 
-**Usage-limit resume** (`readUsageLimitReset`, `UsageLimitWaits`,
+**Usage-limit resume** (`readUsageLimitReset`, `LimitPauses`,
 `cancelScheduledResume`; ADR-0018, U1) — a task whose runner stopped on its
-account's usage limit is `awaiting_user` with reason `usage-limit`; a pause with
+account's usage limit is `awaiting_user` with reason `usage-limit`, however the
+limit arrived: its runner exited mid-turn on it, a turn failed with it, or it
+refused the start. That pause is no verdict and nothing of it is archived; a pause with
 a reset to wait for holds the run, and one without a time keeps only that
 runner's tasks from starting. The limit counts only under the *in-flight rule*. When the runner's message names the reset (Claude Code and Codex do,
 read by their connectors' `usageLimitReset`; OpenCode does not), the task carries a `resumeAt` saved with the plan, and at
