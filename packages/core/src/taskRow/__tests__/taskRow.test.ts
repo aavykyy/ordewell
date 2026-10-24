@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, taskActionCommand, opsEditable,
-  titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, blockedByLabel, holdLabel, skippedLabel, type TaskRowSubject, type TaskRowAction,
+  titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, noExecutorRefusal, blockedByLabel, holdLabel, skippedLabel, type TaskRowSubject, type TaskRowAction,
 } from '..';
 import { taskRef, titledTaskRef } from '../../services/TaskRefs';
 
@@ -433,6 +433,13 @@ describe('texts', () => {
     ['   ', 'anything', null],
   ])('a hand-added %j with prompt %j starts as %j', (title, prompt, fields) => {
     expect(newTaskFields(title, prompt)).toEqual(fields);
+  });
+
+  it.each([
+    ['script', 'A script task runs no model, so it has no runner.'],
+    ['manual', 'Manual tasks do not run an executor, so they have no runner.'],
+  ])('words the refusal to give a %s task an executor choice for that type', (type, refusal) => {
+    expect(noExecutorRefusal(type, 'they have no runner.', 'it has no runner.')).toBe(refusal);
   });
 });
 
