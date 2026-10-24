@@ -174,15 +174,39 @@ function chopWord(piece: string, max: number): string[] {
   const chunks: string[] = [];
   let cur = '';
   let curWidth = 0;
-  for (const ch of graphemes(piece)) {
-    const w = stringWidth(ch);
-    if (cur && curWidth + w > max) {
-      chunks.push(cur);
-      cur = ch;
-      curWidth = w;
-    } else {
-      cur += ch;
-      curWidth += w;
+  // The SGR sequences in force when the current chunk began. A chunk cut out
+  // of a painted word has to carry them again: rows are diffed and written
+  // independently, so a continuation row cannot rely on the colour the row
+  // above it opened. Escape sequences are measured as zero width — measured
+  // like text, a chunk boundary could fall inside `\x1b[0m`, leaving a
+  // truncated sequence on one row and its tail printed as text on the next.
+  let active: string[] = [];
+  const startChunk = (ch: string, w: number): void => {
+    chunks.push(cur);
+    cur = active.join('') + ch;
+    curWidth = w;
+  };
+  for (const part of piece.split(ESCAPE_SPLIT)) {
+    if (part.startsWith('\x1b')) {
+      // eslint-disable-next-line no-control-regex
+      const sgr = /^\x1b\[([0-9;]*)m$/.exec(part);
+      if (sgr) {
+        const codes = sgr[1].split(';').filter(Boolean);
+        if (codes.length === 0 || codes.includes('0')) active = [];
+        const opens = codes.filter((code) => code !== '0');
+        if (opens.length > 0) active.push(`\x1b[${opens.join(';')}m`);
+      }
+      cur += part;
+      continue;
+    }
+    for (const ch of graphemes(part)) {
+      const w = stringWidth(ch);
+      if (curWidth > 0 && curWidth + w > max) {
+        startChunk(ch, w);
+      } else {
+        cur += ch;
+        curWidth += w;
+      }
     }
   }
   chunks.push(cur);
@@ -276,6 +300,16 @@ function colour(open: string | (() => string)): (text: string) => string {
   return (text: string) => (style.enabled ? `\x1b[${typeof open === 'string' ? open : open()}m${text}\x1b[0m` : text);
 }
 
+/**
+ * An SGR attribute that carries state rather than colour — inverse video for
+ * a caret or a selected row. `NO_COLOR` asks for no colour, not for these:
+ * with the hardware cursor hidden, dropping them leaves nothing marking the
+ * insertion point. They are off only when the output is not a terminal at all.
+ */
+function attribute(open: string): (text: string) => string {
+  return (text: string) => (style.attributes ? `\x1b[${open}m${text}\x1b[0m` : text);
+}
+
 export interface Rgb { r: number; g: number; b: number }
 
 /** The logo's teal (assets/readme/logo-*.png), and its nearest xterm-256 slot. */
@@ -324,12 +358,14 @@ const reBand = (text: string): string => {
 export const style = {
   /** Set false when the output is piped or the terminal has no colour. */
   enabled: true,
+  /** Set false only when the output is not a terminal; see `attribute`. */
+  attributes: true,
   bold: colour('1'),
   dim: colour('2'),
   italic: colour('3'),
   underline: colour('4'),
   strike: colour('9'),
-  inverse: colour('7'),
+  inverse: attribute('7'),
   red: colour('31'),
   green: colour('32'),
   yellow: colour('33'),
@@ -350,7 +386,7 @@ export const style = {
    * reset inside, or the first painted word in the row would end the bar.
    */
   highlight: (text: string): string =>
-    (style.enabled ? `\x1b[7m${text.split('\x1b[0m').join('\x1b[0m\x1b[7m')}\x1b[0m` : text),
+    (style.attributes ? `\x1b[7m${text.split('\x1b[0m').join('\x1b[0m\x1b[7m')}\x1b[0m` : text),
   /**
    * The band the user's own messages and the composer sit on (see `bandBg`).
    * The background is re-asserted after every reset inside, or the `❯` and a

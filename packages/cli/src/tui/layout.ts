@@ -1,4 +1,4 @@
-import { firstGrapheme, pad, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
+import { firstGrapheme, nextBoundary, pad, previousBoundary, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
 import { cursorInLines, type CursorPosition } from './editor';
 import { assignmentFlagText, checkpointCardLines, conversationLines, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
@@ -10,7 +10,7 @@ import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { approvalLabel, scriptTaskText, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeLabel, resumeTime, runnerForProvider, severityLabel, taskRowView, tasksTotalText, taskUsageSummary, plannerContextFill, usageText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
+import { approvalLabel, scriptTaskText, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeLabel, resumeTime, runnerForProvider, severityLabel, taskRowView, taskStatusKind, tasksTotalText, taskUsageSummary, plannerContextFill, usageText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -33,18 +33,66 @@ const CHROME_ROWS = 1;
 // ── Chrome extents ───────────────────────────────────────────────────────────
 
 /**
- * The chat input's wrapped lines, or `null` when the editor is blurred and
- * therefore always exactly one row (a literal newline would otherwise push
- * every row below it down one line).
+ * The most draft text the composer wraps and paints around the caret. The
+ * transcript caps a block at 32KB for the same reason, but the composer is
+ * repainted on every keystroke and `wrapLines` cannot cache a draft that
+ * changes, so its cap is smaller. The window follows the caret rather than
+ * showing the head: a pasted log leaves the caret at its end, and typing there
+ * must not happen off screen.
  */
-export function chatInputWrap(state: TuiState): WrapLine[] | null {
-  const active = state.focus === 'chat' && !state.overlay;
-  if (!active) return null;
-  return wrapLines(state.editor.text, chatEditorRoomFor(state, true));
-}
+const COMPOSER_WINDOW_CHARS = 8 * 1024;
 
 /** The empty rows the composer carries above and below its text, on the grey band. */
 export const COMPOSER_BAND_ROWS = 2;
+
+/** The part of the draft the composer actually wraps, paints and reports hiding. */
+export interface ComposerView {
+  /** The shown slice of the draft. */
+  text: string;
+  /** Where `text` starts in the draft. */
+  base: number;
+  /** Wrapped lines of `text`; their `start` offsets are relative to `text`. */
+  lines: WrapLine[];
+  hiddenBefore: number;
+  hiddenAfter: number;
+}
+
+/**
+ * The chat input's visible window — the wrapped lines around the caret that
+ * the composer paints — or `null` when the editor is blurred and therefore
+ * always exactly one row (a literal newline would otherwise push every row
+ * below it down one line).
+ */
+export function composerView(state: TuiState): ComposerView | null {
+  const active = state.focus === 'chat' && !state.overlay;
+  if (!active) return null;
+
+  const { text, cursor } = state.editor;
+  const room = chatEditorRoomFor(state, true);
+  const start = text.length <= COMPOSER_WINDOW_CHARS
+    ? 0
+    : Math.max(0, Math.min(text.length - COMPOSER_WINDOW_CHARS, cursor - Math.floor(COMPOSER_WINDOW_CHARS / 2)));
+  // Back up to the start of a grapheme rather than cutting a joined cluster.
+  const before = previousBoundary(text, start);
+  const windowBase = nextBoundary(text, before) > start ? before : start;
+  const shown = text.slice(windowBase, windowBase + COMPOSER_WINDOW_CHARS);
+  const all = wrapLines(shown, room);
+  const cursorLine = cursorInLines(all, Math.max(0, cursor - windowBase), shown.length).line;
+  // A short terminal keeps half its rows for the transcript and chrome: the
+  // caret's own line is always inside this window, so typing stays visible.
+  const cap = Math.max(1, Math.min(all.length, Math.floor(state.rows / 2) - COMPOSER_BAND_ROWS));
+  const from = Math.max(0, Math.min(all.length - cap, cursorLine - Math.floor(cap / 2)));
+  const first = all[from].start;
+  const end = from + cap < all.length ? all[from + cap].start : shown.length;
+  const visible = shown.slice(first, end);
+  return {
+    text: visible,
+    base: windowBase + first,
+    lines: all.slice(from, from + cap).map((line) => ({ ...line, start: line.start - first })),
+    hiddenBefore: windowBase + first,
+    hiddenAfter: text.length - (windowBase + end),
+  };
+}
 
 /**
  * Every row the composer takes: its text rows plus the band rows around them.
@@ -52,7 +100,7 @@ export const COMPOSER_BAND_ROWS = 2;
  * what keeps the frame at exactly `state.rows` lines.
  */
 export function composerRows(state: TuiState): number {
-  return (chatInputWrap(state)?.length ?? 1) + COMPOSER_BAND_ROWS;
+  return (composerView(state)?.lines.length ?? 1) + COMPOSER_BAND_ROWS;
 }
 
 /**
@@ -212,10 +260,22 @@ function queuedTaskBubble(message: QueuedTaskMessage, target: boolean, sends: bo
  * Completion can kill a runner before its log's turn ends, so a settled
  * task's status wins. Otherwise a runner request waiting for an answer wins,
  * then a live turn, then what an `awaiting_user` task waits on (a checkpoint
- * over plain input), then the task's own status.
+ * over plain input), then the task's own status — which is worded through
+ * core's `TaskStatusKind`, not printed raw as the store spells it.
  */
+const STATUS_WORD: Record<TaskStatusKind, string> = {
+  done: 'Done',
+  failed: 'Failed',
+  running: 'Running',
+  quiet: 'Stalled',
+  awaiting: 'Awaiting',
+  blocked: 'Blocked',
+  skipped: 'Skipped',
+  todo: 'To do',
+};
+
 function taskActivity(task: TaskView | undefined, working: boolean): string {
-  if (task?.status === 'completed' || task?.status === 'failed') return task.status;
+  if (task?.status === 'completed' || task?.status === 'failed') return inRow(STATUS_WORD[taskStatusKind(task)]);
   const approvals = approvalLabel(task?.awaitingApproval);
   if (approvals) return inRow(approvals);
   if (working) return 'working';
@@ -223,7 +283,7 @@ function taskActivity(task: TaskView | undefined, working: boolean): string {
     const resumes = resumeLabel(task);
     return [inRow(awaitingLabel(task) ?? 'Waiting for your input'), resumes ? inRow(resumes) : ''].filter(Boolean).join(' · ');
   }
-  return task?.status ?? '';
+  return task ? inRow(STATUS_WORD[taskStatusKind(task)]) : '';
 }
 
 /** The task view's two pinned rows: the accent bar, and the keys it owns. */

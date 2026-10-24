@@ -266,7 +266,6 @@ export class VsCodeConfig extends BaseConfig {
   }
 
   get maxParallelSessions() { return parseMaxParallel(this.config.get<number>('maxParallelSessions', DEFAULT_MAX_PARALLEL)) ?? DEFAULT_MAX_PARALLEL; }
-  get researchEnabled() { return this.config.get<boolean>('researchEnabled', true); }
   get researchMaxSteps() { return this.config.get<number>('researchMaxSteps', 48); }
   get researchMaxFileSize() { return this.config.get<number>('researchMaxFileSize', 10); }
   get approvalMode() {

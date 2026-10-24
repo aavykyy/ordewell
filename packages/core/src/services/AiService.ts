@@ -231,7 +231,7 @@ export interface IAiService {
  * The single branch point between planner transports. Two of them talk HTTP to
  * an LLM vendor; the third (ADR-0009) drives a coding agent already installed
  * on the machine. Everything downstream — the plan contract, the research-step
- * stream, the four surfaces — is shared.
+ * stream, the three surfaces — is shared.
  */
 export function createAiService(config: IConfig, deps?: CliAgentAiServiceDeps): IAiService {
   if (isCliProvider(config.aiProvider)) {

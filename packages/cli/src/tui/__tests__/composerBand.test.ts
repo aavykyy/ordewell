@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { replayTaskLog } from '@ordewell/core';
 import { stripAnsi, style, width } from '../ansi';
-import { bodyRows, chatScrollMax } from '../layout';
+import { bodyRows, chatScrollMax, composerRows } from '../layout';
 import { render } from '../render';
 import { initialState, type TaskLogState, type TaskView, type TuiState } from '../state';
 import { registerSkillCommands } from '../slash';
@@ -185,16 +185,24 @@ describe('the band rows are part of the layout', () => {
 });
 
 describe('with colour off', () => {
-  it('has no escape code, and keeps the empty rows above and below the text', () => {
+  it('has no colour escape, but keeps the inverse caret and the empty rows', () => {
     style.enabled = false;
-    const frame = render(typed('add a login route'));
-    expect(frame).toHaveLength(24);
-    for (const row of frame) expect(row).not.toContain('\x1b');
-    const at = frame.findIndex((row) => row.startsWith('❯ add a login route'));
-    expect(at).toBeGreaterThan(0);
-    expect(frame[at - 1].trim()).toBe('');
-    expect(frame[at + 1].trim()).toBe('');
-    expect(bodyRows(typed('hi'))).toBe(24 - 1 - 1 - 3);
+    try {
+      const frame = render(typed('add a login route'));
+      expect(frame).toHaveLength(24);
+      // SGR 7 and its reset are the only escapes left: they mark the caret,
+      // which NO_COLOR must not take away while the hardware cursor is hidden.
+      // eslint-disable-next-line no-control-regex
+      for (const row of frame) expect(row.replace(/\x1b\[(?:7|0)m/g, '')).not.toContain('\x1b');
+      const at = frame.findIndex((row) => row.startsWith('❯ add a login route'));
+      expect(at).toBeGreaterThan(0);
+      expect(frame[at]).toContain('\x1b[7m \x1b[0m');
+      expect(frame[at - 1].trim()).toBe('');
+      expect(frame[at + 1].trim()).toBe('');
+      expect(bodyRows(typed('hi'))).toBe(24 - 1 - 1 - 3);
+    } finally {
+      style.enabled = true;
+    }
   });
 });
 
@@ -246,6 +254,31 @@ describe('a sent message on the band, in the whole frame', () => {
         expect(frame[at + 1].startsWith(GREY_BG)).toBe(true);
         expect(width(frame[at])).toBe(cols);
       }
+    }
+  });
+
+  it('caps a huge draft to a window that keeps the caret, and says what it hides', () => {
+    // A pasted log: wrapping and painting all of it on every keystroke is what
+    // froze typing. The composer shows a window around the caret instead.
+    const state = typed('x'.repeat(128 * 1024));
+    expect(composerRows(state)).toBeLessThanOrEqual(12);
+    const rows = bandRows(state);
+    expect(rows.map(stripAnsi).join('\n')).toContain('characters not shown');
+    expect(rows.map(stripAnsi).join('\n')).toContain('xxx');
+    // The caret sits at the end of the draft, inside the shown window.
+    expect(rows.join('\n')).toContain(style.inverse(' '));
+  });
+
+  it('still marks the caret when colour is off, because only colour is off', () => {
+    // NO_COLOR disables colour, not SGR 7; the driver hides the hardware
+    // cursor, so an inverse caret is the only insertion point there is.
+    style.enabled = false;
+    try {
+      const row = render(typed('ab')).find((r) => stripAnsi(r).includes('❯ ab'));
+      expect(row).toBeDefined();
+      expect(row).toContain('ab\x1b[7m \x1b[0m');
+    } finally {
+      style.enabled = true;
     }
   });
 });
