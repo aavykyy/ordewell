@@ -75,13 +75,21 @@ export interface ScriptStatus {
  * `VerdictEngine`, as a runner's `task_complete` call is handed to it.
  * `command` names the command of `commands` it ended on, as a reader would
  * type it; a `script` body is one step and names none. `errorTail` is the end
- * of what that step wrote to stderr.
+ * of what that step wrote to stderr. `fullOutput` is the file that holds all
+ * of the attempt's output, since the task log keeps only its ends.
  */
-export type ScriptExit =
+export type ScriptExit = (
   | { outcome: 'passed' }
   | { outcome: 'failed'; command?: string; status: ScriptStatus; errorTail: string }
   | { outcome: 'timed-out'; command?: string; timeoutMs: number; errorTail: string }
-  | { outcome: 'stopped'; command?: string };
+  | { outcome: 'stopped'; command?: string }
+) & { fullOutput?: ScriptFullOutput };
+
+/** Where a script task attempt's whole output was saved, and how much of it a hard cap did not keep. */
+export interface ScriptFullOutput {
+  file: string;
+  droppedChars: number;
+}
 
 /** A runner command a user invoked, with its arguments as typed. */
 export interface InvokedCommand {

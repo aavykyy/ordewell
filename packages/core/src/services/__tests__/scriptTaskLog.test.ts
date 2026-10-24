@@ -7,7 +7,7 @@ import { ScriptRunner } from '../ScriptRunner';
 import { renderTaskLog, TASK_LOG_KINDS } from '../taskLogRead';
 import { EMPTY_TASK_LOG, reduceTaskLog } from '../../conversation/taskLog';
 import { coalesceTaskLog, digestTaskLog, type TaskLogEvent } from '../../models/TaskLog';
-import type { TaskLogFile } from '../../utils/taskLogStore';
+import { listTaskLogAttempts, prepareTaskOutputFile, type TaskLogFile } from '../../utils/taskLogStore';
 import type { SessionMessage } from '../SessionMessage';
 
 /**
@@ -33,6 +33,27 @@ async function recorded(commands: string[][]): Promise<{ saved: TaskLogEvent[]; 
   await vi.waitFor(() => expect(saved.at(-1)).toEqual({ type: 'runner_ended' }));
   return { saved, sent };
 }
+
+describe('a script task\'s whole output', () => {
+  it('is saved beside the attempt\u2019s log, where the log drops the middle of a long one', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-script-whole-'));
+    dirs.push(cwd);
+    const where = { baseDir: cwd, sessionId: 'sess' };
+    const saved: TaskLogEvent[] = [];
+    const recorder = new TaskLogRecorder({ broadcast: () => {}, location: () => where, open: () => ({ attempt: 1, append: (events) => { saved.push(...events); } }) });
+    const runner = new ScriptRunner({ fullOutputFile: (taskId, attempt) => prepareTaskOutputFile(where, taskId, attempt) });
+    const body = "process.stdout.write('a'.repeat(60000) + ['FAILED', 'PACKAGE'].join('_') + 'b'.repeat(60000)); process.exitCode = 1";
+    const session = await recorder.wrap(runner).spawn({ taskId: 't1', runner: 'script', prompt: '', cwd, attempt: 1, script: { commands: [[node, '-e', body]], timeoutMs: 60_000 } });
+    const exit = await new Promise<Parameters<Parameters<typeof session.onScriptExit>[0]>[0]>((resolve) => session.onScriptExit(resolve));
+    await vi.waitFor(() => expect(saved.at(-1)).toEqual({ type: 'runner_ended' }));
+
+    const file = path.join(cwd, '.ordewell', 'sessions', 'sess', 'tasks', 't1', '1.output.txt');
+    expect(exit).toMatchObject({ outcome: 'failed', fullOutput: { file, droppedChars: 0 } });
+    expect(fs.readFileSync(file, 'utf8')).toContain('FAILED_PACKAGE');
+    expect(renderTaskLog(saved)).not.toContain('FAILED_PACKAGE');
+    expect(listTaskLogAttempts(where, 't1')).toEqual([]);
+  });
+});
 
 describe('a script task\'s log', () => {
   it('records each command as it ran, its output and its exit status, saved as it streamed', async () => {

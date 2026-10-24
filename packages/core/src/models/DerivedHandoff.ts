@@ -15,7 +15,10 @@ function endOf(text: string, max: number): string {
   return text.length <= max ? text : `…${text.slice(-(max - 1))}`;
 }
 
-/** The exit and output tail in the summary, the bounded output in the report (ADR-0047). */
+/**
+ * The exit and output tail in the summary, the bounded output in the report,
+ * and the file of the whole output as an artifact (ADR-0047).
+ */
 export function scriptHandoff(exit: ScriptExit, durationMs: number, output: string): StoredHandoff | undefined {
   const took = secondsText(durationMs);
   let summary: string;
@@ -44,7 +47,11 @@ export function scriptHandoff(exit: ScriptExit, durationMs: number, output: stri
   const statusBudget = HANDOFF_LIMITS.summary - (tail ? 2 : 0);
   if (summary.length > statusBudget) summary = `${summary.slice(0, statusBudget - 1)}…`;
   if (tail) summary += `\n${endOf(tail, HANDOFF_LIMITS.summary - summary.length - 1)}`;
-  return storedHandoff({ summary, report: endOf(output, HANDOFF_LIMITS.report) });
+  return storedHandoff({
+    summary,
+    report: endOf(output, HANDOFF_LIMITS.report),
+    ...(exit.fullOutput ? { artifacts: [{ kind: 'file', path: exit.fullOutput.file }] } : {}),
+  });
 }
 
 /**

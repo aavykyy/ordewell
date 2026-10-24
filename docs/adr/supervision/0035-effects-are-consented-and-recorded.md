@@ -87,7 +87,12 @@ writes repository files.**
   runner to make one; the evidence is the status of the literal script the
   plan holds.
 - **Its log is its task log**: each command as run, its output and its exit
-  status. The planner reads it with `task_output`, as any task's.
+  status. The planner reads it with `task_output`, as any task's. The log
+  keeps only the ends of a long output, so the whole of it is also streamed to
+  a file beside the attempt's log (`<attempt>.output.txt`). The verdict names
+  that file, and the handoff lists it as an artifact, because the reason a
+  command failed is often in the middle of what it printed. The file has a
+  guard of tens of megabytes, and what it does not keep is counted and said.
 - **Only the planner writes the body.** The surfaces draw a script task as an
   ops task with its body, read-only, in place of a prompt, and the task editor
   leaves it alone; the user consents to it or does not.
@@ -373,3 +378,4 @@ minute is recorded beside its start.
 - 2026-10-17 — a force start past a failure waits for the work a blocked dependency waits on, and a Stop with no run under way withdraws a queued start.
 - 2026-10-21 — script tasks, `run_script` and the effect allowlist implemented (#107). The plan model, the validator, `submit_plan`, `edit_plan` and the plan JSON accept `type: 'script'`; `ScriptSession` runs a body at the workspace root with no model, behind an ops task's merge gate and Merge-all exclusion, and hands its exit status to `VerdictEngine`. `run_script` is on the MCP server and the API planner, and the end of one still running after a minute reaches the planner as a report. Consent follows the table, and an edit to a body, a time limit or the type withdraws an approval. The effect allowlist is `ordewell.effectAllowlist` / `ORDEWELL_EFFECT_ALLOW`, with the wildcard and exclusion rules above. Surfaces draw a script task read-only; the timeline records who asked and how it was consented to. Where the built code differs from this ADR's first text: autorun in Guarded does not approve a script task the planner writes in the user's turn unless the effect allowlist covers it, and no card is asked; with autorun off, a script task added by `edit_plan` waits even when the allowlist covers it; the autorun row of the table needs an approved plan; Execute leaves out a script whose card is open; a script waiting at a closed merge gate keeps its queued start across an edit that leaves its body alone.
 - 2026-10-24 — the planner's `run_plan` while only tasks started with `run_task` are running joins them into the plan's run, approving nothing, as the user's Execute does; before, it was refused as "already running" and the dependents of those tasks started only by hand.
+- 2026-10-24 — a script attempt's whole output is kept in a file beside its log, named in the verdict and as a handoff artifact; before, the log kept the first 32,000 and last 16,000 characters and the verdict the last 4,000 of stderr, which lost the failure of a long command.
