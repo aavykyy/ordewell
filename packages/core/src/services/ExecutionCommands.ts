@@ -176,11 +176,12 @@ export interface ExecutionHost {
   /** A start is told who asked: whether a run it opens continues the last one depends on it (ADR-0029). */
   runPlan(actor: ExecutionActor): Promise<void>;
   /**
-   * The user's Execute while a run is under way, once it approved every task:
-   * the run takes them in, each starting once its dependencies finish. Answers
-   * the line that says so, naming how many had waited for approval.
+   * Execute while a run is under way: the run takes in the tasks approved, each
+   * starting once its dependencies finish. The user's Execute approves every
+   * task first, `approved` of which had waited; the planner's approves none, and
+   * `left` still wait. Answers the line that says so.
    */
-  joinRun(approved: number): Promise<string>;
+  joinRun(approved: number, left: number): Promise<string>;
   startTask(taskId: string, actor: ExecutionActor): Promise<void>;
   /** Force start the task; answers the line saying it waits for its dependencies, when it was queued behind them rather than started. */
   forceStart(taskId: string): Promise<string | undefined>;
@@ -285,6 +286,8 @@ const USERS_ONLY: Partial<Record<ExecutionCommandName, string>> = {
 };
 
 const MERGE_IS_USERS = 'Merge all is the user\'s: they are in this conversation, and press Merge all themselves. Tell them the work is ready to merge.';
+
+const NOT_APPROVED_YET = 'The user has not approved this plan yet: they approve it by executing it themselves (Execute plan). Ask them to.';
 
 const SKIP_IS_USERS = 'Skipping a task is the user\'s in their own turn: they are in this conversation, and skip it themselves. Suggest it, with why; only the supervisor at Act skips, in a wake-up turn.';
 
@@ -778,12 +781,21 @@ export class ExecutionCommands {
     const all = this.all(tasks);
     const live = all.filter(({ task }) => this.host.running(task.id));
     if (this.host.hasLiveWork()) {
+      const waiting = all.filter(({ task }) => this.host.waitsForApproval(task.id) && !this.carded.has(task.id));
       // The user's Execute approves what waits rather than restarting the run under way; counted before the approval it records.
-      if (actor.kind === 'user') {
-        const waiting = all.filter(({ task }) => this.host.waitsForApproval(task.id) && !this.carded.has(task.id)).length;
-        return { act: async () => ({ message: await this.host.joinRun(waiting) }) };
+      if (actor.kind === 'user') return { act: async () => ({ message: await this.host.joinRun(waiting.length, 0) }) };
+      // Tasks started one by one are no scheduled run, so nothing starts their dependents: this call makes them one.
+      // It approves nothing, and the scheduler starts only approved tasks, so it grants what run_task already does (ADR-0035).
+      if (!this.host.planApproved()) {
+        return { refusal: `${NOT_APPROVED_YET} Tasks started with run_task are not a scheduled run, so their dependents start only once the user executes the plan.` };
       }
-      return { refusal: `The plan is already running (${named(live)} ${live.length === 1 ? 'is' : 'are'} running). Start one more ready task with run_task, or wait.` };
+      return {
+        act: async () => {
+          await this.host.joinRun(0, waiting.length);
+          const held = waiting.length === 0 ? '' : ` ${capitalize(named(waiting))} ${waiting.length === 1 ? 'was' : 'were'} added after the user approved the plan, so ${waiting.length === 1 ? 'it waits' : 'they wait'} until they start ${waiting.length === 1 ? 'it' : 'them'} or execute the plan.`;
+          return { message: `The plan is running: ${named(live)} ${live.length === 1 ? 'is' : 'are'} already running, and each approved task starts as its dependencies finish.${held}` };
+        },
+      };
     }
     // A new run leaves a skipped task skipped, as it leaves a completed one done.
     const toRun = all.filter(({ task }) => task.type !== 'user' && task.status !== 'completed' && task.status !== 'skipped');
@@ -793,7 +805,7 @@ export class ExecutionCommands {
     if (actor.kind !== 'user' && actor.kind !== 'autorun') {
       // Executing the plan is how the user first takes it as theirs, so no card stands in for it.
       if (!this.host.planApproved()) {
-        return { refusal: 'The user has not approved this plan yet: they approve it by executing it themselves (Execute plan). Ask them to.' };
+        return { refusal: NOT_APPROVED_YET };
       }
       approves = this.addedMayStart(actor) ? [] : toRun.filter(({ task }) => !this.host.taskApproved(task.id));
       if (approves.length > 0 && !this.asksToApprove(actor)) {

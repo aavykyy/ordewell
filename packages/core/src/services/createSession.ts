@@ -815,7 +815,7 @@ export class Session {
         .filter(({ request }) => isRunnerApproval(request) && request.taskId === taskId)
         .map(({ id, request }) => ({ id, subject: request.subject })),
       runPlan: (actor) => this.runWholePlan(runOrigin(actor)),
-      joinRun: (approved) => this.joinRun(approved),
+      joinRun: (approved, left) => this.joinRun(approved, left),
       startTask: (taskId, actor) => this.startOneTask(taskId, runOrigin(actor)),
       forceStart: (taskId) => this.withSave(() => this.orchestrator.forceStartTask(taskId, 'user')),
       markComplete: (taskId) => this.withSave(() => this.orchestrator.markTaskComplete(taskId)),
@@ -1934,9 +1934,10 @@ export class Session {
    * Execute while a run is under way (#95): the seam has approved every task,
    * as executing does, and the run takes them in. A run the scheduler was not
    * driving, one task started on its own, becomes the plan's run, as Execute
-   * would make it.
+   * would make it. The planner's run_plan joins with `approved` 0: the
+   * scheduler starts only approved tasks, so `left` tasks still wait.
    */
-  private async joinRun(approved: number): Promise<string> {
+  private async joinRun(approved: number, left: number): Promise<string> {
     const plan = this.plan!;
     const scheduling = this.orchestrator.isScheduling;
     await this.withSave(async () => {
@@ -1946,7 +1947,8 @@ export class Session {
       else await this.orchestrator.approveReview('user');
     });
     const line = approved === 0
-      ? scheduling ? 'The plan is already running, and no task waits for your approval.' : 'The plan is running: each task starts once its dependencies finish.'
+      ? left > 0 ? `The plan is ${scheduling ? 'already ' : ''}running; ${left} ${left === 1 ? 'task waits' : 'tasks wait'} for your approval.`
+        : scheduling ? 'The plan is already running, and no task waits for your approval.' : 'The plan is running: each task starts once its dependencies finish.'
       : approved === 1 ? 'Approved 1 task; it starts once its dependencies finish.' : `Approved ${approved} tasks; each starts once its dependencies finish.`;
     this.notice('info', line);
     return line;
