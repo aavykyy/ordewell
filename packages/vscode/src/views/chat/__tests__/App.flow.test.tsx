@@ -431,6 +431,20 @@ describe('input watchdog', () => {
 
     expect(processing()).toBe(true);
   });
+
+  it('never calls a planner hung while its approval card waits for an answer', () => {
+    host.session(turnStarted());
+    host.session({ type: 'approval_request', id: 'ap-1', kind: 'shell_command', subject: 'npm test', scope: 'npm test', turnId: TURN });
+    api.postMessage.mockClear();
+
+    wait(125_000);
+
+    // The turn is still open and Stop is still offered: quiet is what waiting
+    // for the user looks like, not a hang.
+    expect(processing()).toBe(true);
+    expect(document.querySelector('.approval-card')).toBeTruthy();
+    expect(api.postMessage).not.toHaveBeenCalledWith({ type: 'addNote', text: expect.stringContaining('stopped responding') });
+  });
 });
 
 /**

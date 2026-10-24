@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import {
-  createSession, createSkillsService, detectInstalledPlanner, createEmptyPlan, flattenTasks, parseMaxParallel, sessionRuntimeSettings,
+  createSession, createSkillsService, detectInstalledPlanner, createEmptyPlan, flattenTasks, parseMaxParallel, sessionRuntimeSettings, taskRefOf,
   type PlannerBackendId, type GlobalRunSettings, type LegacyPlanState, type RunnerId, type Session, type SessionDeps,
 } from '@ordewell/core';
 import { registerCommands, type CommandDeps } from './commands/CommandRegistry';
@@ -135,6 +135,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     extensionUri: services.context.extensionUri,
     session: () => requireSession(),
     getTask: (taskId) => flattenTasks(requireSession().planTasks).find((t) => t.id === taskId),
+    orderLabel: (taskId) => taskRefOf(requireSession().planTasks, taskId)?.replace(/^#/, ''),
     log,
   });
 
@@ -357,6 +358,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     services.context.subscriptions.push(
       vscodeApi.window.registerWebviewViewProvider('ordewellChatView', services.chatProvider, { webviewOptions: { retainContextWhenHidden: true } }),
     );
+    // Open task-log tabs survive a window reload or an extension update.
+    services.context.subscriptions.push(taskLogs.register());
 
     registerCommands(services.context, commandDeps);
     services.context.subscriptions.push(

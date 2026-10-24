@@ -25,11 +25,21 @@ describe('what a task log header says (ADR-0018, V1)', () => {
 
   it.each([
     ['input', 'waiting', 'Waiting for your input'],
-    ['checkpoint', 'checkpoint', 'Waiting at a checkpoint'],
-    ['conflict', 'waiting', 'Waiting on a merge conflict'],
+    ['checkpoint', 'checkpoint', 'Checkpoint'],
+    ['conflict', 'waiting', 'Merge conflict'],
+    ['files-changed', 'waiting', 'Changed tracked files'],
     ['usage-limit', 'waiting', 'Paused on a usage limit'],
   ] as const)('a task waiting on %s is shown as %s', (awaitingReason, kind, label) => {
-    expect(taskLogState(status({ awaitingReason }))).toMatchObject({ kind, label });
+    expect(taskLogState(status({ planStatus: 'awaiting_user', awaitingReason }))).toMatchObject({ kind, label });
+  });
+
+  it('says a skipped task was skipped, and why', () => {
+    expect(taskLogState(status({ planStatus: 'skipped', skipReason: 'no GPU on this host' }))).toEqual({ kind: 'idle', label: 'Skipped: no GPU on this host' });
+    expect(taskLogState(status({ planStatus: 'skipped' }))).toEqual({ kind: 'idle', label: 'Skipped' });
+  });
+
+  it('does not call a blocked task idle', () => {
+    expect(taskLogState(status({ planStatus: 'blocked' }))).toMatchObject({ label: 'Blocked' });
   });
 
   it('reads the task status before the last turn end', () => {

@@ -3,7 +3,7 @@ import SkillChips from './SkillChips';
 import ModelSelector from './ModelSelector';
 import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import TaskHandoff, { HandoffPeek } from './TaskHandoff';
-import { pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
+import { capConflictFiles, pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope, RunTask } from '@ordewell/core';
 import { AssignmentFlag, StatusBadge, TaskActions, TaskCheck, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
@@ -23,8 +23,8 @@ interface SubTaskCardProps {
   configuredProviders?: ('openrouter' | 'google' | 'openai_compatible')[];
   modelApiMapping?: Record<string, ('openrouter' | 'google' | 'openai_compatible')[]>;
   isExecuting?: boolean;
-  /** This subtask's own run entry: its hold reason, when it has one. */
-  run?: Pick<RunTask, 'holdReason' | 'handoff'>;
+  /** This subtask's own run entry: what its status badges read, as a task's do. */
+  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound'>;
   onRunnerChange?: (taskId: string, runner: string) => void;
   onModelChange?: (taskId: string, assignment: TaskModelAssignment) => void;
   onModelsRefreshNeeded?: () => void;
@@ -62,8 +62,23 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
   const runnerOptions = runnerOptionsFor(runners, task.assignedRunner);
   const handoff = run ? run.handoff : task.handoff;
-  const row = taskRowView({ ...task, handoff, holdReason: run?.holdReason }, { parent: parentTask, placement: 'subtask', tasks, runnerScope });
+  // The run's word on this subtask, as on a top-level card: approvals, its
+  // isolation and merge gate, and the scheduler's hold are all its own.
+  const isolation = run?.isolation ?? null;
+  const row = taskRowView({
+    ...task,
+    handoff,
+    idleSince: run?.idleSince ?? null,
+    awaitingApproval: run?.awaitingApproval ?? 0,
+    isolation,
+    mergeGate: run?.mergeGate,
+    holdReason: run?.holdReason,
+    continuable: run?.continuable === true,
+    waitsForApproval: run?.waitsForApproval === true,
+    ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
+  }, { parent: parentTask, placement: 'subtask', tasks, runnerScope });
   const status = statusBadge(row);
+  const conflictFiles = isolation?.state === 'conflict' ? isolation.conflictFiles ?? [] : [];
 
   const handlePromptSave = () => {
     if (editingPrompt !== null && editingPrompt !== task.prompt) {
@@ -215,6 +230,48 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
             onClick={(e) => { e.stopPropagation(); onOpenLog(task.id); }}
             title="Open this task's log in an editor tab">
             Open log
+          </button>
+        )}
+
+        {/* The run's word on this subtask, as on a top-level card. */}
+        {row.waitsForApproval && (
+          <span className="task-isolation-badge approval"
+            title="Added after you approved the plan, so it does not start on its own. Approve it, or Approve all, and it starts once its dependencies finish.">
+            {row.waitsForApproval}
+          </span>
+        )}
+        {row.waitsForApproval && onForceStart && (
+          <button type="button" className="task-log-open-btn"
+            onClick={(e) => { e.stopPropagation(); onForceStart(task.id); }}
+            title="Approve it to run: it starts once its dependencies finish">
+            Approve
+          </button>
+        )}
+
+        {row.mergeGate && (
+          <span className="task-isolation-badge gate"
+            title={`The work of ${row.mergeGate.join(', ')} is not merged into your branch yet. Merge all lets this task go on.`}>
+            Waits for Merge all
+          </span>
+        )}
+
+        {row.conflict && (
+          <span className="task-isolation-badge conflict" title={`Integrating this task conflicted${row.conflict.repo ? ` in ${row.conflict.repo}` : ''}${conflictFiles.length > 0 ? `: ${capConflictFiles(conflictFiles)}` : ''}. Its worktree and branch are kept.`}>
+            Conflict{row.conflict.repo ? ` in ${row.conflict.repo}` : ''}
+          </span>
+        )}
+
+        {row.repairing && (
+          <span className="task-isolation-badge repairing" title={`Repairing the conflict in its own worktree${row.conflict?.files ? `: ${row.conflict.files}` : ''}.`}>
+            Repairing{row.repairing.attempt ? ` (${row.repairing.attempt.attempt} of ${row.repairing.attempt.limit})` : ''}
+          </span>
+        )}
+
+        {row.approvals && (
+          <button type="button" className="task-approval-badge"
+            onClick={(e) => { e.stopPropagation(); onOpenLog?.(task.id); }}
+            title="The runner is waiting for you to allow or deny a tool call: open the log to answer">
+            {row.approvals}
           </button>
         )}
 
