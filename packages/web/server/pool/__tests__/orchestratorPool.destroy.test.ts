@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -7,6 +7,13 @@ import { OrchestratorPool } from '../orchestratorPool';
 import { withReadyPlanner } from '../../__tests__/readyPlanner';
 
 withReadyPlanner();
+
+afterEach(() => {
+  // Each test stubs its own settings path and spies; leaking either would let
+  // one test's environment or mock decide the next one's result.
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
 /** Keeps the turn in flight until teardown aborts it, as a real planner would. */
 function hangingPlanner() {
@@ -24,7 +31,7 @@ describe('closing a session', () => {
     // The session's runners are the user's settings: not the developer's own.
     vi.stubEnv('ORDEWELL_SETTINGS_PATH', join(workspace, 'settings.json'));
     const pool = new OrchestratorPool();
-    const planner = hangingPlanner();
+    hangingPlanner();
     const destroySpy = vi.spyOn(Session.prototype, 'destroy');
 
     try {
@@ -39,8 +46,6 @@ describe('closing a session', () => {
       expect(pool.cancelPlanning('s1')).toBe(false);
       await expect(turn).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
     } finally {
-      planner.mockRestore();
-      destroySpy.mockRestore();
       pool.destroyAll();
       rmSync(workspace, { recursive: true, force: true });
     }
@@ -55,7 +60,7 @@ describe('re-planning under a live session id', () => {
     vi.stubEnv('ORDEWELL_SETTINGS_PATH', join(workspace, 'settings.json'));
     const pool = new OrchestratorPool();
     const destroySpy = vi.spyOn(Session.prototype, 'destroy');
-    const planner = hangingPlanner();
+    hangingPlanner();
 
     try {
       const firstTurn = pool.startPlanning('s1', 'first', ['claude-code'], workspace);
@@ -74,8 +79,6 @@ describe('re-planning under a live session id', () => {
       pool.destroyAll();
       await secondDiscarded;
     } finally {
-      planner.mockRestore();
-      destroySpy.mockRestore();
       pool.destroyAll();
       rmSync(workspace, { recursive: true, force: true });
     }

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -13,6 +13,10 @@ vi.mock('os', async (importOriginal) => {
 describe('global data directory', () => {
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-global-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(home, { recursive: true, force: true });
   });
 
   it('points at ~/.ordewell', async () => {

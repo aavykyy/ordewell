@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -8,6 +8,19 @@ let home = '';
 let workspaceRoot = '';
 
 const h = vi.hoisted(() => ({ builtinDir: '', caseInsensitive: false }));
+
+// A suite that leaves one directory per test behind fills a machine's temp root
+// within a few runs, and slows every later test that scans it.
+const tempDirs: string[] = [];
+function tempDir(prefix: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 // What macOS and Windows do by default, switched on per test: a path opens a
 // folder whatever the case it is written in.
@@ -51,7 +64,7 @@ function writeSkill(sourceDir: string, name: string, frontmatter: Record<string,
 }
 
 function builtinFixture(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-builtin-'));
+  const dir = tempDir('ordewell-builtin-');
   writeSkill(dir, 'grilling', { name: 'grilling', description: 'Builtin G' }, 'Builtin grilling body.');
   writeSkill(dir, 'to-spec', { name: 'to-spec', description: 'Builtin S' }, 'Builtin spec body.');
   writeSkill(dir, 'improve-codebase-architecture', { name: 'improve-codebase-architecture', description: 'Builtin A' }, 'Builtin architecture body.');
@@ -96,8 +109,8 @@ The session is done when the frontier is empty: every branch of the design tree 
 `;
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-skills-global-'));
-  workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-skills-workspace-'));
+  home = tempDir('ordewell-skills-global-');
+  workspaceRoot = tempDir('ordewell-skills-workspace-');
   h.builtinDir = builtinFixture();
 });
 
@@ -346,7 +359,7 @@ describe('SkillsService', () => {
 
   describe('forRoot', () => {
     it('reads workspace skills from the given root, keeping the global ones', () => {
-      const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-skills-worktree-'));
+      const worktree = tempDir('ordewell-skills-worktree-');
       writeSkill(path.join(home, '.ordewell', 'skills'), 'shared', { name: 'shared' }, 'Global.');
       writeSkill(path.join(workspaceRoot, '.ordewell', 'skills'), 'main-only', { name: 'main-only' }, 'Main.');
       const worktreeFile = writeSkill(path.join(worktree, '.ordewell', 'skills'), 'task-only', { name: 'task-only', 'applies-to': 'task' }, 'Task.');

@@ -22,21 +22,65 @@ function savedPlan(): LegacyPlanState {
   };
 }
 
-/** The first `count` frames a new socket on the session receives. */
-function firstFrames(port: number, sessionId: string, count: number): Promise<unknown[]> {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/ws/${sessionId}`, [DAEMON_SUBPROTOCOL]);
-    const frames: unknown[] = [];
-    const timer = setTimeout(() => { socket.terminate(); reject(new Error(`got ${frames.length} of ${count} frames`)); }, 5000);
-    socket.on('message', (data) => {
-      frames.push(JSON.parse(data.toString()));
-      if (frames.length < count) return;
-      clearTimeout(timer);
-      socket.close();
-      resolve(frames);
-    });
-    socket.on('error', reject);
+interface JoinedSocket {
+  /** The first `count` frames it has received, resolving as soon as it has that many. */
+  until(count: number): Promise<unknown[]>;
+  close(): void;
+}
+
+interface FrameWaiter {
+  count: number;
+  timer?: NodeJS.Timeout;
+  resolve: (frames: unknown[]) => void;
+  reject: (error: Error) => void;
+}
+
+/**
+ * A socket newly joined to the session. `until` lets a test wait for the
+ * frames the server has actually sent instead of sleeping and hoping: the
+ * handler subscribes only after its snapshot, both in one turn, so once the
+ * snapshot arrives a later broadcast is certain to reach this socket.
+ */
+function joinSocket(port: number, sessionId: string): JoinedSocket {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/ws/${sessionId}`, [DAEMON_SUBPROTOCOL]);
+  const frames: unknown[] = [];
+  const waiters = new Set<FrameWaiter>();
+  const settle = (error?: Error) => {
+    for (const waiter of [...waiters]) {
+      if (!error && frames.length < waiter.count) continue;
+      waiters.delete(waiter);
+      clearTimeout(waiter.timer);
+      if (error) waiter.reject(error);
+      else waiter.resolve(frames);
+    }
+  };
+  socket.on('message', (data) => {
+    frames.push(JSON.parse(data.toString()));
+    settle();
   });
+  socket.on('error', (error) => settle(error));
+  return {
+    until: (count) => new Promise<unknown[]>((resolve, reject) => {
+      const waiter: FrameWaiter = { count, resolve, reject };
+      waiter.timer = setTimeout(() => {
+        waiters.delete(waiter);
+        reject(new Error(`got ${frames.length} of ${count} frames`));
+      }, 5000);
+      waiters.add(waiter);
+      settle();
+    }),
+    close: () => socket.close(),
+  };
+}
+
+/** The first `count` frames a new socket on the session receives. */
+async function firstFrames(port: number, sessionId: string, count: number): Promise<unknown[]> {
+  const socket = joinSocket(port, sessionId);
+  try {
+    return await socket.until(count);
+  } finally {
+    socket.close();
+  }
 }
 
 describe('the session socket', () => {
@@ -82,10 +126,14 @@ describe('the session socket', () => {
     await pool.session(meta.id).execute({ command: 'mark_complete', task: 't2' }, { kind: 'user' });
 
     const [, snapshot] = await firstFrames(port, meta.id, 2) as [unknown, RunSnapshotFrame];
-    const later = firstFrames(port, meta.id, 3);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    const later = joinSocket(port, meta.id);
+    // Await its connected and snapshot frames, which is when it is subscribed:
+    // no broadcast of the command below can fall between the two.
+    await later.until(2);
+    const broadcast = later.until(3);
     await pool.session(meta.id).execute({ command: 'mark_not_done', task: 't2' }, { kind: 'user' });
-    const [, again, next] = await later as [unknown, RunSnapshotFrame, SessionFrame];
+    const [, again, next] = await broadcast as [unknown, RunSnapshotFrame, SessionFrame];
+    later.close();
 
     expect(snapshot.seq).toBeGreaterThan(0);
     expect(again.seq).toBe(snapshot.seq);
