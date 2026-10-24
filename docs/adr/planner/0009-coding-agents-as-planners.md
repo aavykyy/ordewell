@@ -113,8 +113,8 @@ model's behalf, which is precisely what a coding agent replaces.
     MCP tool, a fetch, a read outside the workspace — are held open and decided
     against `IApproval` rather than auto-denied. An absent answer is a denial.
   - The planner's execution tools (`run_plan`, `run_task`, `stop_task`,
-    `stop_run`, `retry_task`, `message_task`, `answer_approval`, `merge_all`,
-    `skip_task`, `run_script`) are a further explicit exception
+    `stop_run`, `retry_task`, `message_task`, `answer_approval`,
+    `answer_checkpoint`, `merge_all`, `skip_task`, `run_script`) are a further explicit exception
     ([ADR-0029](../supervision/0029-the-supervisor.md)). They change what runs,
     through one core command seam that checks the supervisor level and the
     plan's approval; they edit no file. All but `run_script` run nothing outside
@@ -357,3 +357,4 @@ this backend should understand they are trading speed for not holding a key.
 
 - 2026-10-21 — research that outlives a turn uses research tasks; harness subagents stay awaited inside the turn (ADR-0037 R5).
 - 2026-10-23 — harness subagents serve orientation and research tasks evidence, decided by what the result is rather than how long it takes (ADR-0037 R5).
+- 2026-10-24 — `answer_checkpoint` joins the execution tools, for the supervisor at Act ([ADR-0029](../supervision/0029-the-supervisor.md)).

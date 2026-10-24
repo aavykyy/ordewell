@@ -716,6 +716,7 @@ export class TaskOrchestrator {
     if (!message) throw new TaskControlError('A message to a task cannot be empty.');
     const task = this.store.get(taskId);
     const session = this.runnerSession(taskId, action);
+    // The command seam words this refusal for who asked (ADR-0029), so a model is told the tool or the card; this is for a caller past the seam.
     if (task?.status === 'awaiting_user' && task.awaitingReason !== 'input') {
       throw new TaskControlError(`Task "${task.title}" is at a checkpoint: approve or reject it instead.`);
     }

@@ -591,3 +591,49 @@ describe('skip_task at Act', () => {
     expect(JSON.parse(retry.text).reason).toBe('Task #1 "Task t1" was skipped: whether it runs again is the user\'s to decide. Tell them if it should.');
   });
 });
+
+describe('answer_checkpoint at Act', () => {
+  /** Task 1's runner stopped at a checkpoint; the supervisor is woken to it at Act. */
+  async function atCheckpoint(over: Options['settings'] = {}) {
+    const env = await supervised([task('t1', 1), task('t2', 2)], { settings: { supervisorLevel: 'act', ...over } });
+    const answer = env.run.of('t1').callCheckpoint('Another process is editing this worktree. Carry on?');
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 1);
+    return { env, answer };
+  }
+
+  it('is woken by the checkpoint, approves it, and the runner goes on', async () => {
+    const { env, answer } = await atCheckpoint();
+    expect(env.planner.calls[0].message).toContain('at a checkpoint: Another process is editing this worktree. Carry on?');
+
+    const approved = await env.planner.tools().answerCheckpoint!({ task: '1', answer: 'approve' }, ctx);
+    env.planner.calls[0].finish(prose('It was my own tool; I approved it.'));
+
+    expect(approved.isError, approved.text).toBeFalsy();
+    await expect(answer).resolves.toEqual({ kind: 'continue' });
+    expect(taskOf(env.session, 't1')!.status).toBe('in_progress');
+    expect(records(env).at(-1)).toMatchObject({ command: 'answer_checkpoint', actor: 'supervisor', level: 'act', outcome: 'done', task: { ref: '#1' } });
+  });
+
+  it('rejects it with a reason the runner is told', async () => {
+    const { env, answer } = await atCheckpoint();
+
+    const rejected = await env.planner.tools().answerCheckpoint!({ task: '1', answer: 'reject', reason: 'Stop, and tell the user: someone else is editing this worktree.' }, ctx);
+
+    expect(rejected.isError, rejected.text).toBeFalsy();
+    await expect(answer).resolves.toEqual({ kind: 'rejected', reason: 'Stop, and tell the user: someone else is editing this worktree.' });
+    expect(records(env).at(-1)).toMatchObject({ command: 'answer_checkpoint', actor: 'supervisor', outcome: 'done', detail: 'Stop, and tell the user: someone else is editing this worktree.' });
+  });
+
+  it('leaves it waiting when the supervisor is lowered to Watch before it answers, and says the user answers', async () => {
+    const { env } = await atCheckpoint();
+    changeSettings(env, { supervisorLevel: 'watch' });
+
+    const approved = await env.planner.tools().answerCheckpoint!({ task: '1', answer: 'approve' }, ctx);
+
+    expect(approved.isError).toBe(true);
+    expect(JSON.parse(approved.text).reason).toMatch(/^You are the supervisor at Watch: you read and suggest, and cannot answer a checkpoint\. The user answers it from the task's checkpoint card/);
+    expect(env.session.awaitsCheckpoint('t1')).toBe(true);
+  });
+});

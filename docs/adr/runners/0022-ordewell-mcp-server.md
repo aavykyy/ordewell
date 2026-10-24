@@ -174,7 +174,8 @@ planner tools are recorded here as an explicit entry against both:
   finished task, exactly as an envelope edit is (ADR-0029).
 - **Execution tools are a further explicit entry (P5).** `run_plan`, `run_task`,
   `stop_task`, `stop_run`, `retry_task`, `message_task`, `answer_approval` (deny
-  or escalate, never allow), `merge_all`, `skip_task` (lands nothing, never
+  or escalate, never allow), `answer_checkpoint` (the supervisor at Act's, or the
+  user's), `merge_all`, `skip_task` (lands nothing, never
   marks work complete) and `run_script` change what runs, not files
   ([ADR-0029](../supervision/0029-the-supervisor.md)). `run_script` adds a
   script task to the plan and starts it in one step, and answers with its
@@ -295,3 +296,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-21 — a read-only task's token serves `run_command`, and says so in the runner's configuration (ADR-0046).
 - 2026-10-22 — decided, not built: `task_complete` carries a handoff and the task token gains `read_task` ([ADR-0047](../supervision/0047-structured-task-handoffs.md), #120).
 - 2026-10-22 — implemented the handoff envelope and task-scoped `read_task` (V4; ADR-0047, #120).
+- 2026-10-24 — `answer_checkpoint` joins the execution tools, for the supervisor at Act ([ADR-0029](../supervision/0029-the-supervisor.md)).

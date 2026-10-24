@@ -194,6 +194,7 @@ the same seam through its own tool definitions.
 | `retry_task` | retry, continuing the saved session (ADR-0018, K1) or fresh; an amended prompt goes through `edit_plan` first, so the plan holds what runs |
 | `message_task` | send a task message (ADR-0023) |
 | `answer_approval` | deny a runner approval with a note, or escalate it to the user — never allow |
+| `answer_checkpoint` | approve the checkpoint a task waits at, or reject it with a required reason the runner acts on. In Act wake-up turns only |
 | `merge_all` | Merge all, in Act wake-up turns only |
 | `skip_task` | end a task that failed, is blocked or is waiting for input as *skipped*, with a required reason; nothing of it lands, and its dependents go ahead, told the reason. In Act wake-up turns only |
 | `run_script` | add a script task ([ADR-0035](0035-effects-are-consented-and-recorded.md)) and start it in one step; answers with its verdict and the tail of its output, or "still running" after a minute |
@@ -254,6 +255,26 @@ cover the request. Allowing it would widen the mode the plan gave that task,
 which ADR-0001 forbids at spawn and #92 forbids down the tree. A supervisor can
 narrow (deny), or hand the decision to a person.
 
+**`answer_checkpoint` is the supervisor's at Act, and the user's.** A runner at
+a checkpoint asks a person to approve its work before it goes on, and the
+answer is the user's judgement unless they let the supervisor act. In a
+wake-up turn at Act the supervisor approves it, so the task goes on, or rejects
+it with a reason, which the runner is told and acts on; a rejection without a
+reason is refused, since the runner would be left with nothing to act on. A
+planner turn in the user's own turn is refused: the user is in the conversation
+and answers from the task's checkpoint card, and the refusal tells the planner
+to tell them what the runner asks and what it would answer. The supervisor
+below Act and autorun are refused the same way. A checkpoint is not answered
+with `message_task`: that is refused too, and each refusal is worded for who
+asked — the checkpoint tool to the supervisor at Act, the card to a planner
+turn, Approve or Reject to the user. **A checkpoint that asks for the user's
+judgement on an irreversible or outward effect — a deletion, a push, a payment,
+a message to someone — is escalated to the user, not approved.** The supervisor
+leaves it waiting and tells the user what it asks and why it did not answer.
+This is the escalation rule the mandate (#23) will enforce; until then it is
+the Act brief's guidance, and Act is the user's statement that they accept the
+supervisor's judgement on the rest.
+
 **Consent depends on who started the turn:**
 
 - **A user-started turn** follows #91. Stops and messages are always allowed —
@@ -263,8 +284,9 @@ narrow (deny), or hand the decision to a person.
   a plan the planner submits is approved and started as the user's standing
   instruction, and with autorun on and Full the planner may also start a task it
   added after the plan was approved.
-  `merge_all` and `skip_task` are refused: the user is in the conversation,
-  and presses Merge all or skips the task themselves. A skip decides that
+  `merge_all`, `skip_task` and `answer_checkpoint` are refused: the user is in
+  the conversation, and presses Merge all, skips the task or answers its
+  checkpoint from the card themselves. A skip decides that
   work will not be waited for, which only the user, or a supervisor they let
   act, decides. A `run_script` call asks the user on the approval card, shown
   the script as written, unless the effect allowlist covers it, or autorun in
@@ -295,10 +317,11 @@ matching button press, so the plan pane looks the same whichever route acted.
 above, which the user's buttons reach as the user, the seam has a command for
 each control only the user presses: `force_start`, `mark_complete`,
 `mark_not_done`, `interrupt_task`, a force send (`message_task` with `force`),
-`force_send_queued`, `remove_queued`, `cancel_resume`, `answer_checkpoint` and
-`approve_review`. Resume now is `retry_task` from `session` on a paused task.
-A planner turn, the supervisor or autorun asking for one is refused: the user
-is in the conversation and presses it. The supervisor never Mark completes,
+`force_send_queued`, `remove_queued`, `cancel_resume` and `approve_review`.
+Resume now is `retry_task` from `session` on a paused task. A planner turn,
+the supervisor or autorun asking for one is refused: the user is in the
+conversation and presses it. The checkpoint answer, `answer_checkpoint`, is
+the user's control too, and the one the supervisor at Act may also press (above). The supervisor never Mark completes,
 at any level. The user's `answer_approval` may allow, allow for the task, or
 deny with a note; everyone else's still only denies or escalates. Each command
 is checked, claimed and recorded as the shared ones are, and saved before any
@@ -312,7 +335,8 @@ user's Stop with nothing to stop is answered ok and recorded nowhere, since
 the surface already shows the run stopped. A refusal is worded for who asked,
 in one place: a model is
 told the tools it calls and what to tell the user, the user the controls they
-press. Every surface's control reaches these commands through the Session's one
+press, and the supervisor and a planner turn are told apart where they differ,
+as for a task waiting at a checkpoint. Every surface's control reaches these commands through the Session's one
 `execute` as the user; the Session keeps no per-verb control method for them.
 VS Code sends each of its controls — task cards, the plan bar, the command
 palette and the task-log panel, a Deny with a note included — through these
@@ -495,6 +519,18 @@ until #30 exists.
 - **Rejected: added tasks under Act wait for the user.** Safer against
   injection, but Act then stalls at every replan. Recorded as a choice for #23
   to revisit, not as safe.
+- **Rejected: checkpoint answers are the user's alone.** Until 2026-10-24 a
+  planner turn, the supervisor and autorun were refused `answer_checkpoint`,
+  like the user's other controls. A runner that stopped at a checkpoint after
+  noticing another process editing its worktree then had no one to answer it
+  at Act: the supervisor's only tool was `answer_approval`, which covers
+  runner requests, and it could only tell the user it could not answer. Act is
+  the user's consent to the supervisor's judgement, and a checkpoint is a
+  judgement; what stays the user's is the one on an irreversible or outward
+  effect.
+- **Rejected: let a planner turn in the user's turn answer checkpoints.** The
+  user is present and presses Approve or Reject from the card, as with Merge
+  all.
 - **Rejected: `merge_all` in user-started turns.** The user is present and can
   press it; a merge by proxy adds a route to the user's branch for nothing.
 - **Rejected: a separate supervisor model or process.** It would not know why
@@ -596,3 +632,4 @@ until #30 exists.
 - 2026-10-22 — automatic report turns are not bounded per user message: a report turn may start further research, whose report opens the next turn, and the chain is held only by the planner's judgement, the run's Parallel limit, `mayReport` and the user's Stop (ADR-0037 R4).
 - 2026-10-22 — decided, not built: run updates carry a task's handoff ([ADR-0047](0047-structured-task-handoffs.md), #120).
 - 2026-10-22 — implemented handoffs in run updates, with whole findings and a pull pointer (ADR-0047, #120).
+- 2026-10-24 — the supervisor at Act may answer a checkpoint with `answer_checkpoint`, a planner tool of its own; a planner turn in the user's turn, the supervisor below Act and autorun are refused, a rejection needs a reason, and one that asks for the user's judgement on an irreversible or outward effect is escalated to them.
