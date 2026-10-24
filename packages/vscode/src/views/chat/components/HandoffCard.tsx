@@ -1,5 +1,5 @@
 import React from 'react';
-import { capConflictFiles, describeMergeResult } from '@ordewell/core/plan-utils';
+import { capConflictFiles, mergeOutcome } from '@ordewell/core/plan-utils';
 import type { IsolationMergeResult } from '@ordewell/core';
 
 export interface HandoffLandedTask {
@@ -55,12 +55,12 @@ function sortLanded(tasks: HandoffLandedTask[]): HandoffLandedTask[] {
 }
 
 /**
- * What Merge all did, in core's words so the card and the TUI cannot disagree
- * about a blocked, part-landed or failed merge — for a lone repo as well as a
- * group. `group` only changes core's wording of a clean merge.
+ * What Merge all did and what to do next, in core's words so the card and the
+ * TUI cannot disagree about a blocked, part-landed or failed merge — for a
+ * lone repo as well as a group.
  */
 function MergeOutcome({ result, branch, group, repaired }: { result: IsolationMergeResult; branch: string; group: boolean; repaired: HandoffLandedTask[] }) {
-  const { message } = describeMergeResult(result, branch, group, repaired);
+  const { message } = mergeOutcome(result, branch, group, repaired);
   return <div className={`isolation-merge-result ${result.outcome}`}>{message}</div>;
 }
 
