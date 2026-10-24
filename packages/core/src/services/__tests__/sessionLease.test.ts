@@ -160,6 +160,33 @@ describe('the session lease (ADR-0049)', () => {
     expect(fs.existsSync(path.join(sessionStore.sessionDataDir(SESSION, workspace), 'lease.json'))).toBe(true);
   });
 
+  it('does not take the lease again when a save settles after the Session was destroyed', async () => {
+    const first = sessionOn(host({ id: 'host-a', pid: 37797, alive: () => true }));
+    adopt(first);
+    first.destroy();
+
+    // A Run, a close or a replacement still in flight when the Session went
+    // saves once it settles: that is not a reason to hold the session again.
+    await first.addTask({ title: 'Settled late', prompt: 'p', assignedRunner: 'claude-code' });
+
+    expect(fs.existsSync(path.join(sessionStore.sessionDataDir(SESSION, workspace), 'lease.json'))).toBe(false);
+    expect(() => adopt(sessionOn(host({ id: 'host-b', alive: () => true })))).not.toThrow();
+  });
+
+  it('lets the lease go with the last Session of a host that a destroyed one saved late for', async () => {
+    const first = host({ id: 'host-a', pid: 37797, alive: () => true });
+    const old = sessionOn(first);
+    adopt(old);
+    const replacement = sessionOn(first);
+    adopt(replacement);
+    old.destroy();
+    await old.addTask({ title: 'Settled late', prompt: 'p', assignedRunner: 'claude-code' });
+
+    replacement.destroy();
+
+    expect(fs.existsSync(path.join(sessionStore.sessionDataDir(SESSION, workspace), 'lease.json'))).toBe(false);
+  });
+
   it('lets every lease go when the host shuts down', () => {
     const first = host({ id: 'host-a', pid: 37797, alive: () => true });
     adopt(sessionOn(first));

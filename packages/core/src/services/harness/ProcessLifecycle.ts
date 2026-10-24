@@ -70,7 +70,7 @@ export abstract class ProcessLifecycle {
    * Hand `release` to the process: it runs once, when the process ends or the
    * adapter is disposed, whichever comes first. A second claim on a name frees
    * the first, so a process launched again does not leak its predecessor's.
-   * A claim made after the process is already gone is freed at once.
+   * A claim made after the adapter was disposed is freed at once.
    */
   protected own(name: string, release: () => void): void {
     this.owned.get(name)?.();

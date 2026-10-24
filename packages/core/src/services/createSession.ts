@@ -531,6 +531,8 @@ export class Session {
   private readonly turns: PlanTurns;
   /** Destroyed: a turn that waited for the planner to be found must not open on it. */
   private closed = false;
+  /** Destroyed and let go of its lease for good: whatever settles later neither saves nor holds the session. */
+  private leaseReleased = false;
   /**
    * Turns PlanTurns does not open, waiting at the planner gate, each ended
    * with why it must not open: a Stop, a newer goal, or its plan scope ending.
@@ -1197,7 +1199,9 @@ export class Session {
    * write: a turn holds what it writes until the mutation that lands it.
    */
   private persist(): void {
-    if (!this.plan) return;
+    // A save that settles after destroy would claim the lease again, and hold
+    // the session from every other host until this process exits (ADR-0049 L7).
+    if (!this.plan || this.leaseReleased) return;
     // A host that does not hold the session must not write over the one that
     // does (ADR-0049): the last writer would otherwise win.
     const held = this.heldElsewhere();
@@ -1230,6 +1234,7 @@ export class Session {
    * no live host holds it, as a new session's first save does.
    */
   heldElsewhere(): SessionHeld | null {
+    if (this.leaseReleased) return null;
     return this.lease.hold(this.currentSessionId, this.workspace);
   }
 
@@ -2369,6 +2374,7 @@ export class Session {
     this.fsAdapter.endSession?.();
     // Last: stopping the run above saves what it changed, which needs the lease.
     this.lease.release();
+    this.leaseReleased = true;
   }
 
   /**

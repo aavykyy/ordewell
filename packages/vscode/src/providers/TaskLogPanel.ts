@@ -48,6 +48,8 @@ export class TaskLogPanel {
   private sequence = 0;
   private ready = false;
   private lastStatus = '';
+  /** When the runner last went quiet, as the status stream says it: the Session keeps no per-task answer to ask for. */
+  private idleSince: string | null = null;
 
   constructor(
     private readonly panel: vscode.WebviewPanel,
@@ -88,6 +90,7 @@ export class TaskLogPanel {
       else this.push();
       return;
     }
+    if (msg.type === 'status_update') this.idleSince = msg.tasks.find((t) => t.id === this.taskId)?.idleSince ?? null;
     if (TASK_STATE_EVENTS.has(msg.type)) this.pushStatus();
   }
 
@@ -213,6 +216,7 @@ export class TaskLogPanel {
         ...(task?.awaitingReason ? { awaitingReason: task.awaitingReason } : {}),
         ...(task?.skipReason !== undefined ? { skipReason: task.skipReason } : {}),
         resumeAt: task?.resumeAt ?? null,
+        idleSince: this.idleSince,
         continuable: task ? canContinue(task) : false,
         attemptUsage: task?.attemptUsage ?? [],
       }, this.follow, approvals, this.follow.attempt),
