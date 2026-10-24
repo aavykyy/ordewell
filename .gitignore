@@ -9,6 +9,10 @@ out/
 # Copied from @ordewell/core by scripts/copy-skills.mjs at build time — not source.
 packages/vscode/skills/
 
+# Generated from the installed dependency tree by scripts/generate-third-party-notices.mjs.
+packages/cli/THIRD-PARTY-NOTICES.md
+packages/vscode/THIRD-PARTY-NOTICES.md
+
 # Downloaded VS Code build used by the extension integration tests (~320 MB)
 .vscode-test/
 

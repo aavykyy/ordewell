@@ -25,7 +25,7 @@
     "cli"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=20.3"
   },
   "publishConfig": {
     "access": "public"
@@ -36,7 +36,9 @@
   "files": [
     "bin",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE",
+    "AUTHORS.md"
   ],
   "dependencies": {
     "@ordewell/cli": "0.10.12"
