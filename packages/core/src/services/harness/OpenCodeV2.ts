@@ -39,6 +39,9 @@ function codeModeOnly(version: string | undefined, role: 'planner' | 'task'): st
   return `OpenCode${version ? ` ${version}` : ''} cannot run the ${role} safely: it can only offer Ordewell's tools inside code mode, which runs code the model writes without asking. `
     + `This ${role} needs an OpenCode version that can list MCP tools outside code mode. Update OpenCode, or choose another runner.`;
 }
+function toolsNotTakenBack(role: 'planner' | 'task'): string {
+  return `OpenCode would not list Ordewell's tools as tools of their own again, and the ${role} may not reach them inside code mode: the message was not sent.`;
+}
 /** Why an approved project server's tools are missing, when this OpenCode cannot list them as tools of their own. */
 const UNUSABLE = 'not usable on this OpenCode version: its tools are only reachable through code mode\'s `execute`, which the planner may not use';
 /** A task asks its user in plain text for now, through its runner session. */
@@ -343,15 +346,40 @@ export class OpenCodeV2 {
    * not started. A project server's tools are then not reachable at all.
    */
   private async exposeServers(): Promise<void> {
-    const mcp = this.opts.mcp;
-    if (mcp && !await this.expose(mcp.name, { type: 'remote', url: mcp.url, headers: mcp.headers }) && (this.role === 'planner' || readOnlyTask(this.opts))) {
-      throw new Error(codeModeOnly(this.host.version, this.role));
-    }
+    if (!await this.exposeOrdewell()) throw new Error(codeModeOnly(this.host.version, this.role));
     const project = this.opts.kind === 'planner' ? this.opts.projectServers ?? [] : [];
     for (const server of project) {
       if (await this.expose(server.name, transportFields(server.definition))) this.exposed.push(server.name);
       else this.unusable.push(server);
     }
+  }
+
+  /**
+   * The same replacements, made again before every turn. 2.x rebuilds a
+   * location from the configuration it was launched with when it evicts or
+   * reloads one, and every server is back in code mode then: still connected,
+   * its tools offered to the model only inside `execute`, which a planner is
+   * denied (checked against 2.1.4). The launch configuration turns eviction
+   * off; this puts the servers back after any rebuild that still happens,
+   * though the model is offered a server put back only a moment later, so the
+   * turn's first step may go without it. A replacement that changes nothing
+   * restarts nothing. False when Ordewell's tools are left where this session
+   * may not reach them (ADR-0022 S4).
+   */
+  private async reexposeServers(): Promise<boolean> {
+    if (!await this.exposeOrdewell()) return false;
+    const project = this.opts.kind === 'planner' ? this.opts.projectServers ?? [] : [];
+    for (const server of project) {
+      if (this.exposed.includes(server.name)) await this.expose(server.name, transportFields(server.definition));
+    }
+    return true;
+  }
+
+  /** Whether Ordewell's tools are listed as tools of their own, or this session can do without that: a task reaches them through `execute`. */
+  private async exposeOrdewell(): Promise<boolean> {
+    const mcp = this.opts.mcp;
+    if (!mcp || await this.expose(mcp.name, { type: 'remote', url: mcp.url, headers: mcp.headers })) return true;
+    return this.role === 'task' && !readOnlyTask(this.opts);
   }
 
   private async expose(name: string, config: Record<string, unknown>): Promise<boolean> {
@@ -401,6 +429,11 @@ export class OpenCodeV2 {
     if (!this.sessionId) throw new Error(`OpenCode ${this.role} session is not started`);
     if (this.host.isExited()) {
       onEvent({ type: 'error', message: this.host.exitMessage() });
+      return;
+    }
+    // Before the stream, so the location a rebuild leaves is the one it listens to.
+    if (!await this.reexposeServers()) {
+      onEvent({ type: 'error', message: toolsNotTakenBack(this.role) });
       return;
     }
     const state = newTurnState();

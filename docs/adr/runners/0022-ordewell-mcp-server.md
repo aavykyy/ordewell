@@ -110,7 +110,11 @@ on the same mechanism.
   ([ADR-0028](../planner-envelope/0028-planners-never-run-repository-config.md)).
 - **Prompts teach the connected tools (S4).** The connector checks the runner's
   own MCP attach state before sending the prompt. A failed attach receives no
-  task or planning prompt.
+  task or planning prompt. Attached means the model is offered the tools, for
+  as long as the runner lives: OpenCode 2.x, which rebuilds its services from
+  the launch configuration and so drops the runtime setting that lists them
+  outside code mode, is launched never to evict those services and has the
+  setting made again before every turn.
 
 ### Tasks: evidence, not opinion
 
@@ -306,3 +310,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-22 — implemented the handoff envelope and task-scoped `read_task` (V4; ADR-0047, #120).
 - 2026-10-24 — P2: one check (`PlanChangeCheck`) for every planner change, at submit and at landing, with structured refusals; a whole plan is re-held to the plan's rules as it lands.
 - 2026-10-24 — `answer_checkpoint` joins the execution tools, for the supervisor at Act ([ADR-0029](../supervision/0029-the-supervisor.md)).
+- 2026-10-24 — S4 holds for the runner's whole life: OpenCode 2.1.4 evicted an idle planner's services after an hour and rebuilt them with Ordewell's tools inside code mode, out of the planner's reach.

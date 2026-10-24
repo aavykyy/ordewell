@@ -228,6 +228,12 @@ function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig 
     // beats `SHELL`; the launch environment names the same launcher as a
     // fallback for OpenCode built without this layer.
     ...(nativeShell ? { shell: nativeShell } : {}),
+    // 2.x evicts a location left idle past this (an hour unless set) and
+    // rebuilds it from this configuration, without the replacement that lists
+    // Ordewell's tools outside code mode: a planner idle that long lost them
+    // for good (ADR-0022 S4; checked against 2.1.4). 1.x has no such
+    // eviction, and ignores the key (checked against 1.18.35's config parser).
+    ...(mcp ? { experimental: { location_idle_timeout: false } } : {}),
     permission: {
       ...(role === 'planner' ? plannerPermission(nativeShell !== undefined) : role === 'readOnlyTask' ? OPENCODE_READ_ONLY_PERMISSION : {}),
       ...(role === 'readOnlyTask' && site ? { external_directory: Object.fromEntries(readOnlySessionRules(site).filter((r) => r.action === 'external_directory').map((r) => [r.resource, r.effect])) } : {}),
