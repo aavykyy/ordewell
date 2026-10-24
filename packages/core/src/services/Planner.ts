@@ -5,9 +5,8 @@ import { IWebFetcher } from '../interfaces/IWebFetcher';
 import { IAiService } from './AiService';
 import type { RunnerModeInfo } from './ModeResolver';
 import { filterModelsForPrompt } from './ModelAllowlistResolver';
-import { resolveAssignments } from './TaskAssignment';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
-import { checkPlanSkills } from './taskSkills';
+import { PlanChangeCheck, planChangeErrorText, requestScope } from './PlanChangeCheck';
 
 /**
  * `autonomousDefault` still arrives on its own — it is not a user toggle but a
@@ -112,21 +111,20 @@ export class Planner {
       );
     }
 
-    // Checked before coercion copies the tasks, which leaves behind what each one asked to attach.
-    const skills = req.modes?.taskSkills ? await checkPlanSkills(tasks, req.modes.taskSkills) : undefined;
-    if (skills && req.signal?.aborted) throw new Error('Plan generation was stopped.');
-    if (skills && skills.errors.length > 0) {
-      throw new PlanSkillsError(`The generated plan was refused: ${skills.errors.map((e) => e.message).join(' ')}`);
-    }
+    // It lands as a conversation's plan lands, held to the request it was asked under.
+    const taskSkills = req.modes?.taskSkills;
+    const checked = await new PlanChangeCheck(requestScope({ ...req, perRunnerAllowlist: req.perRunnerAllowlist ?? {}, taskSkills })).check({ kind: 'plan', tasks }, 'land');
+    if (taskSkills && req.signal?.aborted) throw new Error('Plan generation was stopped.');
+    if (!checked.ok) throw new PlanSkillsError(`The generated plan was refused: ${checked.errors.map(planChangeErrorText).join(' ')}`);
 
     return {
-      tasks: resolveAssignments(tasks, [], { modelsByRunner: req.modelsByRunner ?? {}, perRunnerAllowlist: req.perRunnerAllowlist ?? {} }).tasks,
+      tasks: checked.tasks,
       generatedAt: now,
       status: 'draft',
       runners: req.runners,
       lastUpdated: now,
       researchLog,
-      ...(skills && skills.warnings.length > 0 ? { skillWarnings: skills.warnings } : {}),
+      ...(checked.warnings.length > 0 ? { skillWarnings: checked.warnings } : {}),
     };
   }
 }

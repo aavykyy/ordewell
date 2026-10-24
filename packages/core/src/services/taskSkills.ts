@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { flattenTasks, isSkillName, skillNames, type Task, type TaskSkillSnapshot } from '../models/Task';
 import { skillsDirOf, workspaceSkillRoots, type SkillInfo, type SkillsService } from './SkillsService';
-import type { TaskOp } from './TaskOps';
+import { opLabel, type OpRef, type TaskOp } from './TaskOps';
 import { requestedSkills } from './PlanValidator';
 import { cleanEnv, execFileWithTimeout } from './gitExec';
 import { quotedList } from '../utils/quotedList';
@@ -38,14 +38,14 @@ export interface SkillLayout {
 
 /** What a plan's attached skills come to against the catalog its tasks will see. */
 export interface SkillCheck {
-  /** Names that can never be a task skill: they resolve to a planner skill. */
-  errors: { taskId?: string; message: string }[];
+  /** Names that can never be a task skill: they resolve to a planner skill. An edit's name its op beside the message, not in it. */
+  errors: { taskId?: string; op?: OpRef; message: string }[];
   /** Names not found yet — an earlier task may create them in its worktree — or found only in a file no worktree will get. */
   warnings: string[];
 }
 
-function plannerSkillMessage(owner: string, skill: SkillInfo): string {
-  return `${owner}: "${skill.name}" is a planner skill (applies-to: planner, ${skill.path}). Only skills with applies-to: task can be attached to a task.`;
+function plannerSkillMessage(owner: string | undefined, skill: SkillInfo): string {
+  return `${owner ? `${owner}: ` : ''}"${skill.name}" is a planner skill (applies-to: planner, ${skill.path}). Only skills with applies-to: task can be attached to a task.`;
 }
 
 function notFoundWarning(owner: string, name: string): string {
@@ -62,7 +62,9 @@ function invalidNameWarning(owner: string, name: string): string {
 
 interface SkillEntry {
   taskId?: string;
-  owner: string;
+  /** The edit op that attaches the names; `owner` then says where under it, if anywhere but the op's own task. */
+  op?: OpRef;
+  owner?: string;
   names: string[];
   /** What was asked for but {@link skillNames} drops: never attached, so never silently. */
   dropped?: string[];
@@ -80,13 +82,14 @@ async function check(entries: SkillEntry[], lookup: SkillLookup): Promise<SkillC
   const errors: SkillCheck['errors'] = [];
   // Task skills hold their warning's place until one git call per repo says which are uncommitted.
   const warnings: (string | { owner: string; skill: SkillInfo })[] = [];
-  for (const { taskId, owner, names, dropped } of entries) {
-    for (const name of dropped ?? []) warnings.push(invalidNameWarning(owner, name));
+  for (const { taskId, op, owner, names, dropped } of entries) {
+    const named = [op ? opLabel(op) : undefined, owner].filter(Boolean).join(': ');
+    for (const name of dropped ?? []) warnings.push(invalidNameWarning(named, name));
     for (const name of names) {
       const skill = lookup.findSkill(name);
-      if (!skill) warnings.push(notFoundWarning(owner, name));
-      else if (skill.appliesTo !== 'task') errors.push({ ...(taskId ? { taskId } : {}), message: plannerSkillMessage(owner, skill) });
-      else warnings.push({ owner, skill });
+      if (!skill) warnings.push(notFoundWarning(named, name));
+      else if (skill.appliesTo !== 'task') errors.push({ ...(taskId ? { taskId } : {}), ...(op ? { op } : {}), message: plannerSkillMessage(owner, skill) });
+      else warnings.push({ owner: named, skill });
     }
   }
   const attached = warnings.flatMap((w) => (typeof w === 'string' ? [] : [w.skill]));
@@ -182,14 +185,14 @@ export function checkTaskSkillsEdit(task: Pick<Task, 'id' | 'title'>, skills: un
  * The subtasks an added task brings, at every depth, each named by its path
  * under the op so an error points at the descendant, not the task it hangs on.
  */
-function subtaskEntries(owner: string, spec: Partial<Task> | undefined, path: string[] = []): SkillEntry[] {
+function subtaskEntries(op: OpRef, spec: Partial<Task> | undefined, path: string[] = []): SkillEntry[] {
   const subtasks: unknown = spec?.subtasks;
   if (!Array.isArray(subtasks)) return [];
   return subtasks.flatMap((sub: unknown, i) => {
     if (typeof sub !== 'object' || sub === null) return [];
     const child = sub as Partial<Task>;
     const at = [...path, typeof child.title === 'string' && child.title.trim() ? `"${child.title}"` : `#${i + 1}`];
-    return [{ owner: `${owner}: subtask ${at.join(' > ')}`, ...attached(child.skills) }, ...subtaskEntries(owner, child, at)];
+    return [{ op, owner: `subtask ${at.join(' > ')}`, ...attached(child.skills) }, ...subtaskEntries(op, child, at)];
   });
 }
 
@@ -197,8 +200,8 @@ function subtaskEntries(owner: string, spec: Partial<Task> | undefined, path: st
 export function checkOpSkills(ops: readonly TaskOp[], lookup: SkillLookup): Promise<SkillCheck> {
   const entries: SkillEntry[] = [];
   ops.forEach((op, i) => {
-    const owner = `op ${i + 1} (${op.op})`;
-    const add = (spec: Partial<Task> | undefined) => entries.push({ owner, ...attached(spec?.skills) });
+    const ref: OpRef = { number: i + 1, kind: op.op };
+    const add = (spec: Partial<Task> | undefined) => entries.push({ op: ref, ...attached(spec?.skills) });
     switch (op.op) {
       case 'update':
       case 'rearm':
@@ -207,7 +210,7 @@ export function checkOpSkills(ops: readonly TaskOp[], lookup: SkillLookup): Prom
       case 'add':
         add(op.task);
         // Only an add keeps its spec's subtasks; merge and split build theirs from named fields, and update drops the field.
-        entries.push(...subtaskEntries(owner, op.task));
+        entries.push(...subtaskEntries(ref, op.task));
         break;
       case 'merge':
         add(op.merged);

@@ -4,14 +4,13 @@ import { betweenRounds, checkOf, loopRoundOf } from '../models/Loop';
 import type { SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, snapshotSkill } from './skillInvocation';
 import { autonomyLevelLabel, readOnlyMode } from './ModeResolver';
-import { validatePlanTasks } from './PlanValidator';
 import type { AssignmentAdjustment } from './TaskAssignment';
 import {
   fitTail, handoffRest, taskQuerySignature, OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, OUTPUT_TAIL_MAX_CHARS, TASK_QUERY_TASK_FIELDS, TASK_READ_ANSWER_OR_EDIT,
   type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog, type TaskQueryField,
 } from './TaskQuery';
-import type { TaskOp } from './TaskOps';
-import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
+import { opLabel, type TaskOp } from './TaskOps';
+import type { CheckedChange, PlanChangeError } from './PlanChangeCheck';
 import type { PlanChange, ToolRead } from './PlannerConversation';
 import { commandReply, type McpToolReply, type PlannerToolHandler } from './mcp/tools';
 import type { TaskLogEvent } from '../models/TaskLog';
@@ -35,9 +34,9 @@ export interface PlannerToolsHost {
   recordSkillLoad(skill: SkillLoad): boolean;
   /** Enabled runners, their modes and their allowlisted models, as of now. */
   liveCatalog(): Promise<TaskQueryCatalog>;
-  /** What landing these tasks would change in their assignments, under the catalog and allowlist in force (ADR-0003). */
-  adjustments(tasks: readonly Task[]): AssignmentAdjustment[];
-  /** Hand a validated plan to the open planner turn. False when no turn is open. */
+  /** A submitted plan held to the one check of a plan change (`PlanChangeCheck`), against the live catalog. */
+  checkPlan(tasks: unknown): Promise<CheckedChange>;
+  /** Hand a checked plan to the open planner turn. False when no turn is open. */
   submitPlan(tasks: Task[]): boolean;
   /** Check a batch against the live catalog and hand it to the open planner turn, which commits it as it settles. */
   editPlan(ops: TaskOp[]): Promise<PlanEditOutcome>;
@@ -52,8 +51,6 @@ export interface PlannerToolsHost {
   taskLogAttempts(taskId: string): number[];
   taskLog(taskId: string, attempt: number): TaskLogEvent[];
   taskDiff(taskId: string, options: TaskDiffRead): Promise<TaskDiffResult>;
-  /** The catalog a plan's tasks will see where they run, which attached skill names are checked against. */
-  taskSkills(): SkillLookup;
   /** The planner's research shell: classified, confined and approved as the API planner's `bash` is (ADR-0026), or sealed (ADR-0036). */
   runCommand(command: string, signal: AbortSignal, opts?: BashOptions): Promise<ToolOutcome>;
   /** A fetch through the session's web fetcher, whose web-read policy decides it (ADR-0027). */
@@ -80,8 +77,8 @@ export const PLANNER_TURN_ENDED = 'The planning turn this call was made in has e
 /** What an edit made through the tool came to. */
 export type PlanEditOutcome =
   // An edit's tasks get their ids as it lands, so what its assignments were adjusted to is named by title.
-  | { ok: true; summary: string[]; coerced?: Omit<AssignmentAdjustment, 'taskId'>[] }
-  | { ok: false; errors: string[] };
+  | { ok: true; summary: string[]; coerced?: Omit<AssignmentAdjustment, 'taskId'>[]; warnings?: string[] }
+  | { ok: false; errors: PlanChangeError[] };
 
 /** The runners a set of tasks runs on. A user task runs on none, and a script task on no runner (ADR-0035). */
 export function runnersOf(tasks: readonly Task[]): RunnerId[] {
@@ -176,25 +173,21 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       const refused = host.editsRefused('plan');
       if (refused) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: refused }] }) };
       const turn = host.turnId();
-      const catalog = await host.liveCatalog();
-      const result = validatePlanTasks({ tasks }, catalog.runners, catalog.modes, catalog.autonomousDefault);
-      if (!result.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: result.errors, enabledRunners: catalog.runners }) };
-      const skills = await checkPlanSkills(result.tasks, host.taskSkills());
+      const checked = await host.checkPlan(tasks);
       if (host.turnId() !== turn) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: PLANNER_TURN_ENDED }] }) };
-      if (skills.errors.length > 0) {
-        return { isError: true, text: JSON.stringify({ ok: false, errors: skills.errors.map((e) => ({ ...e, field: 'skills' })) }) };
+      if (!checked.ok) {
+        // A rule a task breaks names what would be accepted; a skill is the skill catalog's, which is not the runners'.
+        const skills = checked.errors.every((e) => e.field === 'skills');
+        return { isError: true, text: JSON.stringify({ ok: false, errors: checked.errors.map(planErrorReply), ...(skills ? {} : { enabledRunners: checked.runners }) }) };
       }
-
-      const warnings = [...(result.warnings ?? []), ...skills.warnings];
-      const coerced = host.adjustments(result.tasks);
-      if (!host.submitPlan(result.tasks)) {
+      if (!host.submitPlan(checked.tasks)) {
         return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: 'No planning turn is open to take the plan.' }] }) };
       }
       return answer({
         ok: true,
-        tasks: result.tasks.length,
-        coerced,
-        ...(warnings.length > 0 ? { warnings } : {}),
+        tasks: checked.tasks.length,
+        coerced: checked.adjustments,
+        ...(checked.warnings.length > 0 ? { warnings: checked.warnings } : {}),
         next: 'The plan is committed when this reply ends. Tell the user briefly what you submitted; do not repeat the plan as JSON.',
       });
     },
@@ -253,28 +246,33 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       // The applier checks each op's fields one by one, so a loose shape is its to refuse.
       const taskOps = ops as unknown as TaskOp[];
       const refused = host.editsRefused('edit');
-      if (refused) return { isError: true, text: JSON.stringify({ ok: false, errors: [opError(refused)] }) };
-      const turn = host.turnId();
-      const skills = await checkOpSkills(taskOps, host.taskSkills());
-      if (host.turnId() !== turn) return { isError: true, text: JSON.stringify({ ok: false, errors: [opError(PLANNER_TURN_ENDED)] }) };
-      if (skills.errors.length > 0) return { isError: true, text: JSON.stringify({ ok: false, errors: skills.errors.map((e) => opError(e.message)) }) };
+      if (refused) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ message: refused }] }) };
       const outcome = await host.editPlan(taskOps);
-      if (!outcome.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: outcome.errors.map(opError) }) };
+      if (!outcome.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: outcome.errors.map(opErrorReply) }) };
       return answer({
         ok: true,
         summary: outcome.summary,
         ...(outcome.coerced?.length ? { coerced: outcome.coerced } : {}),
-        ...(skills.warnings.length > 0 ? { warnings: skills.warnings } : {}),
+        ...(outcome.warnings?.length ? { warnings: outcome.warnings } : {}),
         next: 'The edit is applied when this reply ends, and the user is shown what changed. Tell them briefly; do not repeat it as JSON.',
       });
     },
   };
 }
 
-/** The applier words an error "op 2 (update): …"; name the op so the planner can fix that one. */
-function opError(message: string): { op?: number; kind?: string; message: string } {
-  const match = /^op (\d+) \((\w+)\): ([\s\S]*)$/.exec(message);
-  return match ? { op: Number(match[1]), kind: match[2], message: match[3] } : { message };
+/** A plan's refusal pinned to the task and field it is about. */
+function planErrorReply({ taskId, field, message }: PlanChangeError): { taskId?: string; field: string; message: string } {
+  return { ...(taskId !== undefined ? { taskId } : {}), field: field ?? 'tasks', message };
+}
+
+/**
+ * An edit's refusal pinned to the op of this call it is about, so the planner
+ * can fix that one. An op an earlier call made is named in the message, since
+ * this call's numbers do not reach it.
+ */
+function opErrorReply({ op, message }: PlanChangeError): { op?: number; kind?: string; message: string } {
+  if (!op) return { message };
+  return op.earlier ? { message: `${opLabel(op)}: ${message}` } : { op: op.number, kind: op.kind, message };
 }
 
 /** A read through the budget the envelope's reads share, and what the planner is told when it is spent. */

@@ -258,16 +258,48 @@ function pinnedRefusal(other: Task, pin: Task, side: 'before' | 'after'): string
   return `"${other.title}" would have to run ${side} "${pin.title}", which is ${word} and cannot be moved`;
 }
 
+/**
+ * Which op of a batch a refusal is about: its number among the ops the call
+ * wrote, from 1, or among those the turn already held when `earlier`.
+ */
+export interface OpRef {
+  number: number;
+  kind: string;
+  earlier?: boolean;
+}
+
+/** How a refusal names its op, as the planner reads it: "op 2 (update)". */
+export function opLabel(ref: OpRef): string {
+  return `${ref.earlier ? 'earlier op' : 'op'} ${ref.number} (${ref.kind})`;
+}
+
+/** One reason a batch was refused, and the op it is about; absent for the batch as a whole, its order say. */
+export interface OpRefusal {
+  op?: OpRef;
+  message: string;
+}
+
+/** A refusal as the planner reads it, its op named first. */
+export function opRefusalText({ op, message }: OpRefusal): string {
+  return op ? `${opLabel(op)}: ${message}` : message;
+}
+
 export interface ApplyTaskOpsResult {
   ok: boolean;
   tasks: readonly Task[];
+  /** {@link refusals} as the planner reads them. */
   errors: string[];
+  refusals: OpRefusal[];
   /** Human-readable summary of what changed, for the chat transcript. */
   summary: string[];
   /** On ok, what the batch's tasks were adjusted to beyond what the planner wrote, as they stand at its end. */
   adjustments?: AssignmentAdjustment[];
   /** On ok, the id of the task each batch handle names. */
   handles?: ReadonlyMap<string, string>;
+}
+
+function refused(tasks: readonly Task[], refusals: OpRefusal[]): ApplyTaskOpsResult {
+  return { ok: false, tasks, errors: refusals.map(opRefusalText), refusals, summary: [] };
 }
 
 /**
@@ -392,9 +424,9 @@ export function applyTaskOps(
   // Ops already accepted earlier in the batch apply first; errors number only
   // the new ones, as the planner wrote them in the call it is answered for.
   const ops = [...held, ...newOps];
-  const opLabel = (i: number) => (i < held.length ? `earlier op ${i + 1} (${ops[i].op})` : `op ${i - held.length + 1} (${ops[i].op})`);
+  const opLabel = (i: number): OpRef => (i < held.length ? { number: i + 1, kind: ops[i].op, earlier: true } : { number: i - held.length + 1, kind: ops[i].op });
   let tasks: Task[] = JSON.parse(JSON.stringify(currentTasks));
-  const errors: string[] = [];
+  const errors: OpRefusal[] = [];
   const summary: string[] = [];
   const adjustments: AssignmentAdjustment[] = [];
 
@@ -408,20 +440,20 @@ export function applyTaskOps(
     const handle = (op as { handle?: unknown }).handle;
     if (handle === undefined) continue;
     if (typeof handle !== 'string' || !handle.trim()) {
-      errors.push(`${opLabel(i)}: handle must be a non-empty string`);
+      errors.push({ op: opLabel(i), message: `handle must be a non-empty string` });
       continue;
     }
     if (handleOwner.has(handle)) {
-      errors.push(`${opLabel(i)}: handle "${handle}" is already used earlier in this batch`);
+      errors.push({ op: opLabel(i), message: `handle "${handle}" is already used earlier in this batch` });
       continue;
     }
     if (resolveTaskRef(currentTasks, handle)) {
-      errors.push(`${opLabel(i)}: handle "${handle}" collides with an existing task reference`);
+      errors.push({ op: opLabel(i), message: `handle "${handle}" collides with an existing task reference` });
       continue;
     }
     handleOwner.set(handle, i);
   }
-  if (errors.length) return { ok: false, tasks: currentTasks, errors, summary: [] };
+  if (errors.length) return refused(currentTasks, errors);
 
   const resolveDeps = (deps: unknown, opIndex: number): { ids: string[]; bad: string[] } => {
     const ids: string[] = [];
@@ -484,23 +516,22 @@ export function applyTaskOps(
   const prepareEdit = (
     op: { taskId: string; changes?: PlannerTaskSpec },
     opIndex: number,
-    label: string,
     audience: TaskEditActor,
     refuseRunning = false,
   ): { target: Task; changes: Partial<Task>; fields: string[]; check: TaskEditCheck } | { error: string } => {
     const ref = resolveRef(op.taskId, currentTasks, tasks, handleOwner, handleId, opIndex);
-    if ('error' in ref) return { error: `${label}: ${ref.error}` };
+    if ('error' in ref) return { error: ref.error };
     const target = findInTasks(tasks, ref.id);
-    if (!target) return { error: `${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)` };
-    if (refuseRunning && target.status === 'in_progress') return { error: `${label}: ${lockedTaskRefusal(target, 're-armed')}` };
+    if (!target) return { error: `task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)` };
+    if (refuseRunning && target.status === 'in_progress') return { error: lockedTaskRefusal(target, 're-armed')! };
     // What only a runner would read, and that never lands on a task, is refused here for a script (ADR-0035).
     const planners = op.changes ? (['readOnly', 'thinkingEffort'] as const).filter((f) => op.changes?.[f] !== undefined && op.changes?.[f] !== null && op.changes?.[f] !== false) : [];
-    if ((op.changes?.type ?? target.type) === 'script' && planners.length > 0) return { error: `${label}: "${target.title}" ${notOnAScriptMessage(planners)}` };
-    if (op.changes && 'taskMode' in op.changes) return { error: `${label}: ${MODE_NOT_THE_PLANNERS}` };
+    if ((op.changes?.type ?? target.type) === 'script' && planners.length > 0) return { error: `"${target.title}" ${notOnAScriptMessage(planners)}` };
+    if (op.changes && 'taskMode' in op.changes) return { error: MODE_NOT_THE_PLANNERS };
     const changes = updatableChanges(op.changes);
     if (op.changes && 'thinkingEffort' in op.changes) {
       const model = changes.assignedModel ?? target.assignedModel;
-      if (!model) return { error: `${label}: "thinkingEffort" is the assigned model's — set "assignedModel" with it` };
+      if (!model) return { error: `"thinkingEffort" is the assigned model's — set "assignedModel" with it` };
       changes.assignedModel = { ...model, thinkingEffort: op.changes.thinkingEffort ?? undefined };
     }
     // Dependency refs are still unresolved (e.g. "#3") at this point, so the
@@ -509,35 +540,35 @@ export function applyTaskOps(
     const changesForCheck: Partial<Task> = { ...changes };
     delete changesForCheck.dependencies;
     const check = validateTaskEdit(audience, tasks, target.id, changesForCheck);
-    if (!check.ok) return { error: `${label}: ${check.error}` };
+    if (!check.ok) return { error: check.error! };
     for (const field of check.clear ?? []) (changes as Record<string, unknown>)[field] = undefined;
     Object.assign(changes, check.set);
     const readOnly = askedReadOnly(op.changes);
-    if (readOnly === true && (changes.type ?? target.type) === 'user') return { error: `${label}: ${MANUAL_NOT_READ_ONLY}` };
-    if ((changes.ops ?? target.ops) && (readOnly ?? isReadOnly(target, catalog))) return { error: `${label}: ${OPS_NOT_READ_ONLY}` };
+    if (readOnly === true && (changes.type ?? target.type) === 'user') return { error: MANUAL_NOT_READ_ONLY };
+    if ((changes.ops ?? target.ops) && (readOnly ?? isReadOnly(target, catalog))) return { error: OPS_NOT_READ_ONLY };
     const landed: Partial<Task> = { ...changes };
     if (readOnly === false && target.research && op.changes?.research !== true) landed.research = false;
     const written = { ...target, ...changes };
     // A runner not allowed has nothing to resolve against; the plan's rules refuse it once the op is applied.
     if (written.type !== 'ai' || runners.includes(written.assignedRunner)) {
       const resolved = resolveAssignment({ writer: 'edit', task: written, before: target, readOnly, catalog: catalog ?? NO_CATALOG });
-      if (!resolved.ok) return { error: `${label}: ${resolved.error}` };
+      if (!resolved.ok) return { error: resolved.error };
       if (resolved.task.assignedModel !== written.assignedModel) landed.assignedModel = resolved.task.assignedModel;
       if (resolved.task.taskMode !== written.taskMode) landed.taskMode = resolved.task.taskMode;
       adjustments.push(...resolved.adjustments);
     }
     if ('dependencies' in changes) {
       const { ids, bad } = resolveDeps(changes.dependencies, opIndex);
-      if (bad.length) return { error: `${label}: unknown dependencies: ${bad.join(', ')}` };
+      if (bad.length) return { error: `unknown dependencies: ${bad.join(', ')}` };
       landed.dependencies = ids;
     }
     if ('loop' in changes) {
       // `null` drops the loop, and the round it was in with it (ADR-0045).
       const spec = loopSpec(changes.loop);
-      if ('error' in spec) return { error: `${label}: "${target.title}" ${spec.error}` };
+      if ('error' in spec) return { error: `"${target.title}" ${spec.error}` };
       if (spec.loop) {
         const { ids, bad } = resolveDeps(spec.loop.body, opIndex);
-        if (bad.length) return { error: `${label}: unknown tasks in the loop's "body": ${bad.join(', ')}` };
+        if (bad.length) return { error: `unknown tasks in the loop's "body": ${bad.join(', ')}` };
         landed.loop = { ...spec.loop, body: ids };
       } else {
         landed.loop = undefined;
@@ -554,7 +585,7 @@ export function applyTaskOps(
   // which an edit may change.
   const breachKey = (e: PlanTaskError) => `${e.taskId ?? ''}\u0000${e.field}`;
   const standing = new Set(checkPlanInvariants(currentTasks, runners, catalog?.runnerModes).map(breachKey));
-  const brokenBy = new Map<string, string>();
+  const brokenBy = new Map<string, OpRef>();
   let lastLabel = opLabel(0);
 
   for (const [i, op] of ops.entries()) {
@@ -562,13 +593,13 @@ export function applyTaskOps(
     const newId = idsOf(op);
     switch (op.op) {
       case 'update': {
-        const prep = prepareEdit(op, i, label, 'planner');
-        if ('error' in prep) { errors.push(prep.error); break; }
+        const prep = prepareEdit(op, i, 'planner');
+        if ('error' in prep) { errors.push({ op: label, message: prep.error }); break; }
         const { target, changes, fields, check } = prep;
         if (fields.length === 0) {
           const readOnly = askedReadOnly(op.changes);
           if (readOnly !== undefined && isReadOnly(target, catalog) === readOnly) { summary.push(`"${target.title}" is already ${readOnly ? '' : 'not '}read-only`); break; }
-          errors.push(`${label}: no valid changes provided`);
+          errors.push({ op: label, message: `no valid changes provided` });
           break;
         }
         tasks = updateTaskInPlan(tasks, target.id, changes);
@@ -578,13 +609,13 @@ export function applyTaskOps(
       }
       case 'add': {
         const spec = op.task ?? {};
-        if (!spec.title) { errors.push(`${label}: new task needs a title`); break; }
+        if (!spec.title) { errors.push({ op: label, message: `new task needs a title` }); break; }
         const planned = plannedTask(spec, intake, { freshIds: true, newId });
         const refused = refusalOf(planned);
-        if (refused) { errors.push(`${label}: ${refused}`); break; }
+        if (refused) { errors.push({ op: label, message: `${refused}` }); break; }
         adjustments.push(...planned.adjustments);
         const resolved = resolveTree(planned, i);
-        if ('error' in resolved) { errors.push(`${label}: ${resolved.error}`); break; }
+        if ('error' in resolved) { errors.push({ op: label, message: `${resolved.error}` }); break; }
         tasks = addTaskToPlan(tasks, resolved.task);
         if (op.handle) handleId.set(op.handle, resolved.task.id);
         summary.push(`Added "${spec.title}"`);
@@ -592,13 +623,13 @@ export function applyTaskOps(
       }
       case 'remove': {
         const ref = resolveRef(op.taskId, currentTasks, tasks, handleOwner, handleId, i);
-        if ('error' in ref) { errors.push(`${label}: ${ref.error}`); break; }
+        if ('error' in ref) { errors.push({ op: label, message: `${ref.error}` }); break; }
         const target = findInTasks(tasks, ref.id);
-        if (!target) { errors.push(`${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)`); break; }
+        if (!target) { errors.push({ op: label, message: `task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)` }); break; }
         // Removing the task takes its whole subtree, so every task in it meets
         // the same lock rule as the named one (ADR-0029).
         const locked = reshapeRefusal(target, 'removed') ?? lockedInSubtree(target) ?? loopRemovalRefusal(target);
-        if (locked) { errors.push(`${label}: ${locked}`); break; }
+        if (locked) { errors.push({ op: label, message: `${locked}` }); break; }
         tasks = removeTaskFromPlan(tasks, target.id);
         summary.push(`Removed "${target.title}"`);
         break;
@@ -606,13 +637,13 @@ export function applyTaskOps(
       case 'reorder': {
         const refs = (op.taskIds ?? []).map((r) => resolveRef(r, currentTasks, tasks, handleOwner, handleId, i));
         const badRef = refs.find((r): r is { error: string } => 'error' in r);
-        if (badRef) { errors.push(`${label}: ${badRef.error}`); break; }
+        if (badRef) { errors.push({ op: label, message: `${badRef.error}` }); break; }
         const resolved = (refs as { id: string }[]).map((r) => findTopLevel(tasks, r.id));
-        if (resolved.some((t) => !t)) { errors.push(`${label}: unknown task in reorder list`); break; }
+        if (resolved.some((t) => !t)) { errors.push({ op: label, message: `unknown task in reorder list` }); break; }
         const listed = resolved.map((t) => t!.id);
         const orderIds = [...listed, ...tasks.filter((t) => addedPast.has(t.id) && !listed.includes(t.id)).map((t) => t.id)];
         if (orderIds.length !== tasks.length || new Set(orderIds).size !== tasks.length) {
-          errors.push(`${label}: reorder must list every top-level task exactly once (${tasks.length} tasks)`);
+          errors.push({ op: label, message: `reorder must list every top-level task exactly once (${tasks.length} tasks)` });
           break;
         }
         const byId = new Map(tasks.map((t) => [t.id, t]));
@@ -623,19 +654,19 @@ export function applyTaskOps(
       case 'merge': {
         const refs = (op.taskIds ?? []).map((r) => resolveRef(r, currentTasks, tasks, handleOwner, handleId, i));
         const badRef = refs.find((r): r is { error: string } => 'error' in r);
-        if (badRef) { errors.push(`${label}: ${badRef.error}`); break; }
+        if (badRef) { errors.push({ op: label, message: `${badRef.error}` }); break; }
         const resolved = (refs as { id: string }[]).map((r) => findTopLevel(tasks, r.id));
-        if (resolved.some((t) => !t)) { errors.push(`${label}: unknown task in merge list (already removed, merged, or split by an earlier op)`); break; }
+        if (resolved.some((t) => !t)) { errors.push({ op: label, message: `unknown task in merge list (already removed, merged, or split by an earlier op)` }); break; }
         const toMerge = [...new Map(resolved.map((t) => [t!.id, t!])).values()].sort((a, b) => a.order - b.order);
-        if (toMerge.length < 2) { errors.push(`${label}: merge needs at least two tasks`); break; }
+        if (toMerge.length < 2) { errors.push({ op: label, message: `merge needs at least two tasks` }); break; }
         const locked = toMerge.map((t) => reshapeRefusal(t, 'merged') ?? loopReshapeRefusal(tasks, t, 'merged')).find((refusal) => refusal !== null);
-        if (locked) { errors.push(`${label}: ${locked}`); break; }
+        if (locked) { errors.push({ op: label, message: `${locked}` }); break; }
         const idSet = new Set(toMerge.map((t) => t.id));
         const unionDepsRaw = [...new Set(toMerge.flatMap((t) => t.dependencies))].filter((d) => !idSet.has(d));
         const { ids, bad } = resolveDeps(unionDepsRaw, i);
-        if (bad.length) { errors.push(`${label}: unknown dependencies: ${bad.join(', ')}`); break; }
+        if (bad.length) { errors.push({ op: label, message: `unknown dependencies: ${bad.join(', ')}` }); break; }
         const spec = op.merged ?? {};
-        if (!spec.title) { errors.push(`${label}: merged task needs a title`); break; }
+        if (!spec.title) { errors.push({ op: label, message: `merged task needs a title` }); break; }
         // Read-only only when every merged task was: one that writes makes the merged task write.
         const writes = toMerge.find((t) => !isReadOnly(t, catalog));
         const stories = [...new Set(toMerge.flatMap((t) => t.userStoriesCovered ?? []))];
@@ -661,10 +692,10 @@ export function applyTaskOps(
           },
         });
         const refused = refusalOf(planned);
-        if (refused) { errors.push(`${label}: ${refused}`); break; }
+        if (refused) { errors.push({ op: label, message: `${refused}` }); break; }
         adjustments.push(...planned.adjustments);
         const built = resolveTree({ ...planned, task: { ...planned.task, dependencies: [] } }, i);
-        if ('error' in built) { errors.push(`${label}: ${built.error}`); break; }
+        if ('error' in built) { errors.push({ op: label, message: `${built.error}` }); break; }
         const mergedTask: Task = { ...built.task, dependencies: ids };
         const mergedId = mergedTask.id;
         const firstId = toMerge[0].id;
@@ -685,26 +716,26 @@ export function applyTaskOps(
       }
       case 'split': {
         const ref = resolveRef(op.taskId, currentTasks, tasks, handleOwner, handleId, i);
-        if ('error' in ref) { errors.push(`${label}: ${ref.error}`); break; }
+        if ('error' in ref) { errors.push({ op: label, message: `${ref.error}` }); break; }
         const target = findTopLevel(tasks, ref.id);
-        if (!target) { errors.push(`${label}: task "${op.taskId}" not found`); break; }
+        if (!target) { errors.push({ op: label, message: `task "${op.taskId}" not found` }); break; }
         const locked = reshapeRefusal(target, 'split') ?? loopReshapeRefusal(tasks, target, 'split');
-        if (locked) { errors.push(`${label}: ${locked}`); break; }
+        if (locked) { errors.push({ op: label, message: `${locked}` }); break; }
         const parts = op.parts ?? [];
-        if (parts.length < 2) { errors.push(`${label}: split needs at least two parts`); break; }
+        if (parts.length < 2) { errors.push({ op: label, message: `split needs at least two parts` }); break; }
         const newTasks: Task[] = [];
         let prevId: string | undefined;
         let buildError = false;
         for (let p = 0; p < parts.length; p++) {
           const spec = parts[p];
-          if (!spec || !spec.title) { errors.push(`${label}: split part ${p + 1} needs a title`); buildError = true; break; }
+          if (!spec || !spec.title) { errors.push({ op: label, message: `split part ${p + 1} needs a title` }); buildError = true; break; }
           // Part 0 inherits the original's (external) dependencies, resolved
           // against the current plan. Later parts chain onto the previous part
           // — a sibling id created in this same op, so it needs no resolution.
           let deps: string[];
           if (p === 0) {
             const { ids, bad } = resolveDeps(target.dependencies, i);
-            if (bad.length) { errors.push(`${label}: split part 1 unknown dependencies: ${bad.join(', ')}`); buildError = true; break; }
+            if (bad.length) { errors.push({ op: label, message: `split part 1 unknown dependencies: ${bad.join(', ')}` }); buildError = true; break; }
             deps = ids;
           } else {
             deps = prevId ? [prevId] : [];
@@ -728,10 +759,10 @@ export function applyTaskOps(
             },
           });
           const refused = refusalOf(planned);
-          if (refused) { errors.push(`${label}: split part ${p + 1}: ${refused}`); buildError = true; break; }
+          if (refused) { errors.push({ op: label, message: `split part ${p + 1}: ${refused}` }); buildError = true; break; }
           adjustments.push(...planned.adjustments);
           const resolved = resolveTree({ ...planned, task: { ...planned.task, dependencies: [] } }, i);
-          if ('error' in resolved) { errors.push(`${label}: split part ${p + 1}: ${resolved.error}`); buildError = true; break; }
+          if ('error' in resolved) { errors.push({ op: label, message: `split part ${p + 1}: ${resolved.error}` }); buildError = true; break; }
           const nt: Task = { ...resolved.task, dependencies: deps };
           newTasks.push(nt);
           prevId = nt.id;
@@ -752,8 +783,8 @@ export function applyTaskOps(
         // Re-arming is the sanctioned exception to the planner lock — its whole
         // point is to touch a task the lock would otherwise refuse — so it
         // validates as a direct edit; well-formedness still applies.
-        const prep = prepareEdit(op, i, label, 'direct', true);
-        if ('error' in prep) { errors.push(prep.error); break; }
+        const prep = prepareEdit(op, i, 'direct', true);
+        if ('error' in prep) { errors.push({ op: label, message: prep.error }); break; }
         const { target, changes, fields, check } = prep;
         // A re-armed check starts its rounds over, as a retry does (ADR-0045 L7).
         tasks = updateTaskInPlan(tasks, target.id, { ...changes, status: 'pending', verdict: undefined, outputSummary: undefined, handoff: undefined, awaitingReason: undefined, resumeAt: undefined, skipReason: undefined, loopRound: undefined });
@@ -763,7 +794,7 @@ export function applyTaskOps(
         break;
       }
       default:
-        errors.push(`${label}: unknown op "${(op as { op: string }).op}"`);
+        errors.push({ op: label, message: `unknown op "${(op as { op: string }).op}"` });
     }
     if (errors.length) break;
     lastLabel = label;
@@ -777,7 +808,7 @@ export function applyTaskOps(
   if (!errors.length) {
     for (const e of checkPlanInvariants(tasks, runners, catalog?.runnerModes)) {
       const key = breachKey(e);
-      if (!standing.has(key)) errors.push(`${brokenBy.get(key) ?? lastLabel}: ${e.message}`);
+      if (!standing.has(key)) errors.push({ op: brokenBy.get(key) ?? lastLabel, message: e.message });
     }
   }
 
@@ -787,7 +818,7 @@ export function applyTaskOps(
   if (!errors.length) {
     const repaired = repairOrder(tasks);
     if ('error' in repaired) {
-      errors.push(repaired.error);
+      errors.push({ message: repaired.error });
     } else {
       const moves = describeMoves(tasks, repaired.tasks);
       if (moves) summary.push(`Reordered to keep dependencies first: ${moves}`);
@@ -795,7 +826,7 @@ export function applyTaskOps(
     }
   }
 
-  if (errors.length) return { ok: false, tasks: currentTasks, errors, summary: [] };
+  if (errors.length) return refused(currentTasks, errors);
   // A later op may move or remove what an earlier one adjusted: only what still stands is reported.
   const landed = new Map(flattenTasks(tasks).map((t) => [t.id, t]));
   const told = new Set<string>();
@@ -807,5 +838,5 @@ export function applyTaskOps(
     told.add(key);
     return true;
   });
-  return { ok: true, tasks, errors: [], summary, handles: handleId, adjustments: standingAdjustments };
+  return { ok: true, tasks, errors: [], refusals: [], summary, handles: handleId, adjustments: standingAdjustments };
 }

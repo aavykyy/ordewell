@@ -7,7 +7,7 @@ import { createTask, keepExecutionState, skillNames } from '../../models/Task';
 import { createSkillsService } from '../SkillsService';
 import { checkOpSkills, checkPlanSkills, checkTaskSkillsEdit, plannedSkillLookup, resolveTaskSkills, TaskSkillsError } from '../taskSkills';
 import { parsePlanJson } from '../PlanValidator';
-import { applyTaskOps } from '../TaskOps';
+import { applyTaskOps, opRefusalText } from '../TaskOps';
 import { PlanStore } from '../PlanStore';
 import { buildConversationSystemPrompt } from '../PlanPrompts';
 import { serializeTask } from '../SessionMessage';
@@ -205,7 +205,7 @@ describe('checking a plan\'s skills against the catalog', () => {
       { op: 'split', taskId: '#2', parts: [{ title: 'P1' }, { title: 'P2', skills: ['grilling', 'later'] }] },
     ], createSkillsService(workspace));
 
-    expect(result.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^op 2 \(split\): "grilling" is a planner skill/)]);
+    expect(result.errors.map(opRefusalText)).toEqual([expect.stringMatching(/^op 2 \(split\): "grilling" is a planner skill/)]);
     expect(result.warnings).toEqual([expect.stringMatching(/^op 2 \(split\): skill "later" not found/)]);
   });
 });
@@ -217,7 +217,7 @@ describe('checking the subtasks an edit adds', () => {
       { op: 'add', task: { title: 'Parent', subtasks: [{ title: 'Child', skills: ['grilling'], subtasks: [] }] as never } },
     ], createSkillsService(workspace));
 
-    expect(result.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^op 1 \(add\): subtask "Child": "grilling" is a planner skill/)]);
+    expect(result.errors.map(opRefusalText)).toEqual([expect.stringMatching(/^op 1 \(add\): subtask "Child": "grilling" is a planner skill/)]);
   });
 
   it('reaches every depth, and warns about a descendant\'s missing and malformed names as written', async () => {
@@ -234,7 +234,7 @@ describe('checking the subtasks an edit adds', () => {
       },
     ], createSkillsService(workspace));
 
-    expect(result.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^op 1 \(add\): subtask "Child" > #1: "grilling" is a planner skill/)]);
+    expect(result.errors.map(opRefusalText)).toEqual([expect.stringMatching(/^op 1 \(add\): subtask "Child" > #1: "grilling" is a planner skill/)]);
     expect(result.warnings).toEqual([
       'op 1 (add): subtask "Child": "Bad Name!" is not a valid skill name (lowercase letters, digits, "-" and "_", starting with a letter or digit), so it was not attached.',
       expect.stringMatching(/^op 1 \(add\): subtask "Child": skill "later" not found/),
@@ -248,7 +248,7 @@ describe('checking the subtasks an edit adds', () => {
       { op: 'add', task: { title: 'Parent', skills: ['grilling'], subtasks: [{ title: 'Child', skills: ['tdd'] }, { title: 'Bare' }] as never } },
     ], createSkillsService(workspace));
 
-    expect(result.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^op 1 \(add\): "grilling" is a planner skill/)]);
+    expect(result.errors.map(opRefusalText)).toEqual([expect.stringMatching(/^op 1 \(add\): "grilling" is a planner skill/)]);
     expect(result.warnings).toEqual([]);
   });
 });
