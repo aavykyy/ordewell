@@ -91,6 +91,7 @@ const STEPS = {
     return 0;
   },
   'Planner conversation loop — offline e2e (mock model, no API key)': plannerE2e,
+  'Bench harness tests (offline, against the built core)': () => npm('run', 'test:bench'),
   'Build (vscode, cli & web)': () => npm('run', 'build', '-w', 'packages/vscode', '-w', 'packages/cli', '-w', 'packages/web', '--if-present'),
   'VS Code integration test (synthetic runner — no API key)': integrationTest,
   'Typecheck': () => npm('run', 'typecheck'),

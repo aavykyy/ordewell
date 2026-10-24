@@ -78,6 +78,12 @@ jobs:
           done
           node bench/live/drive-conversation.mjs
 
+      # node:test suites, not vitest: the runner-detection lab makes the real
+      # install probe run against shimmed CLIs in a throwaway HOME, and the
+      # pipeline test drives plan -> execute -> verify through the fake claude.
+      - name: Bench harness tests (offline, against the built core)
+        run: npm run test:bench
+
       - name: Build (vscode, cli & web)
         run: npm run build -w packages/vscode -w packages/cli -w packages/web --if-present
 

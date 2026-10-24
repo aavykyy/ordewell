@@ -1,10 +1,20 @@
-import { spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import { createServer } from 'http';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { createServer as createNetServer } from 'net';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+
+const webRoot = resolve(__dirname, '../..');
+
+// These spawn the built daemon, but `test:quick` on a fresh checkout has no
+// dist yet, and the missing build then fails as a fifteen-second "timed out
+// waiting for the daemon". Building it here also keeps a stale bundle from
+// deciding what the tests see.
+beforeAll(() => {
+  execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:server'], { cwd: webRoot, stdio: 'ignore' });
+}, 60_000);
 
 function freePort(): Promise<number> {
   return new Promise((resolvePort) => {
@@ -50,7 +60,7 @@ describe('daemon startup', () => {
       expect(() => readFileSync(pidFile, 'utf8')).toThrow();
     } finally {
       child.kill('SIGKILL');
-      rmSync(home, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -82,7 +92,7 @@ describe('daemon startup', () => {
     } finally {
       child.kill();
       await new Promise<void>((resolve) => incumbent.close(() => resolve()));
-      rmSync(home, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

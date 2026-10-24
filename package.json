@@ -32,6 +32,7 @@
     "test:quick": "npm run test:quick -ws --if-present",
     "test:changed": "node scripts/test-changed.mjs",
     "test:coverage": "npm run test:coverage -ws --if-present",
+    "test:bench": "node --test \"bench/**/*.test.mjs\"",
     "ci": "node scripts/ci.mjs",
     "build:web": "npm run build -w packages/web",
     "start": "node packages/cli/dist/main.js tui"
