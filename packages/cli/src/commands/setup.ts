@@ -39,7 +39,7 @@ export function handleSetup(subArgs: string[]): void {
   }
 
   content += `
-# Default models (uncomment to change)
+# Planner model and API endpoint (uncomment to set)
 # ORCHESTRATOR_MODEL=deepseek/deepseek-v4-flash
 # OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 

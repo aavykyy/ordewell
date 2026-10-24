@@ -1721,9 +1721,9 @@ its **label** with or without `#` (`#2`, `2`, or `#2.1` for the first subtask of
 task 2), or its exact title. A label is the task's order under its parent,
 written as the full path from the top level at any depth (`#3.2.1`): subtask
 orders restart at 1 under each parent, so `#N` always means top-level task N and
-a subtask is reachable only by its dotted label. Every read tool (`task_query`,
-`task_read`, `task_output`, `task_diff`) names a task by that label, never by a
-bare order. One module
+a subtask is reachable only by its dotted label. Every planner read tool
+(`task_query`, `task_output`, `task_diff`) names a task by that label, never by
+a bare order. One module
 both renders labels (`taskOrderLabel`, `taskRef`, `titledTaskRef`) and resolves
 references against the plan tree (`resolveTaskRef`) — every planner op and read
 tool, the per-turn plan block (which lists subtasks under their dotted labels),
@@ -2030,7 +2030,7 @@ API-key resolution (skipped), provider routing (skipped), and the planner-model
 picker (fed by per-runner discovery instead of the vendor catalog). The
 transport lives behind the existing `IAiService` seam (`CliAgentAiService` plus
 one adapter per agent); everything above it — reply classification, the repair
-loop, `ResearchProgress`, the four surfaces — is untouched. Read-only is
+loop, `ResearchProgress`, the three surfaces — is untouched. Read-only is
 enforced at spawn *and* at the request surface: whatever an agent can ask a
 human for is either withheld (OpenCode's `question` tool) or answered with a
 refusal (its `permission.asked` events; every Codex server→client request,
@@ -2102,9 +2102,10 @@ what gives the surfaces' icon/label switches their exhaustiveness checking.
 **Provider model lists** — the canonical `{ openrouter[], google[] }` id lists
 `resolveProvider` matches a chosen model id against to pick its serving API. The
 ModelResolver is the **sole producer**: native Gemini ids are always minted with
-the `gemini:` qualifier (`geminiOptionId`) so a stored `gemini:<id>` routes to
-the Gemini API, never to OpenRouter's `google/<id>` namespace. Built in one place to
-keep the two surfaces from diverging. The lists only route when nobody named a
+the `gemini:` qualifier (`prefixModelId`, from the provider's `modelPrefix`), so
+a stored `gemini:<id>` routes to the Gemini API, never to OpenRouter's
+`google/<id>` namespace. Built in one place to keep the two surfaces from
+diverging. The lists only route when nobody named a
 planner: an explicit `AI_PROVIDER` or VS Code `aiProvider` always wins over them.
 The daemon drops a vendor's list when its credential is removed, and every config
 it builds reads the current lists, so a session never routes to a vendor the
