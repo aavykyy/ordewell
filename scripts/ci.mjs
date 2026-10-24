@@ -80,6 +80,18 @@ function integrationTest() {
     : sh('npm', ['run', 'test:integration', '-w', 'ordewell'], env);
 }
 
+/**
+ * `npm run test:coverage` runs every workspace and exits 1 without saying which
+ * one failed, and the middle of its output is what a saved log loses. So run
+ * the workspaces one by one, in the order it would, and name each that fails.
+ */
+function testWithCoverage() {
+  const { workspaces } = JSON.parse(readFileSync('package.json', 'utf8'));
+  const failed = workspaces.filter((ws) => npm('run', 'test:coverage', '-w', ws, '--if-present') !== 0);
+  if (failed.length) console.error(`\nCoverage run failed in: ${failed.join(', ')}`);
+  return failed.length ? 1 : 0;
+}
+
 /** Run here, keyed by the step's name in ci.yml. */
 const STEPS = {
   'Build (core first — cli, web and vscode compile against its dist/)': () => npm('run', 'build:core'),
@@ -95,7 +107,7 @@ const STEPS = {
   'Build (vscode, cli & web)': () => npm('run', 'build', '-w', 'packages/vscode', '-w', 'packages/cli', '-w', 'packages/web', '--if-present'),
   'VS Code integration test (synthetic runner — no API key)': integrationTest,
   'Typecheck': () => npm('run', 'typecheck'),
-  'Test with coverage': () => npm('run', 'test:coverage'),
+  'Test with coverage': testWithCoverage,
   'Lint': () => npm('run', 'lint'),
   'Package VS Code Extension': () => npm('run', 'package', '-w', 'packages/vscode'),
   'Verify packaged npm and VS Code artifacts': () => sh('node', ['scripts/package-check.mjs']),
