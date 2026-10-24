@@ -49,7 +49,7 @@ import { plannerContextFill } from '../models/Usage';
 import { TurnBudgets, contextLine, taskReadsLine, webReadsLine } from './PlannerBudgets';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
-import { approvalRecordOf, dropRetiredPlanFields, flattenTasks, keepExecutionState, stampOrigin, waitsForApproval, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
+import { approvalRecordOf, flattenTasks, keepExecutionState, migrateLoadedPlan, stampOrigin, waitsForApproval, type LegacyPlanState, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import { describeHeld, describeLost, processLeaseHost, UNLEASED, type LeaseHost, type SessionHeld, type SessionLease } from './sessionLease';
 import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
@@ -61,7 +61,6 @@ import type { INotification } from '../interfaces/INotification';
 import type { IRunner } from '../interfaces/IRunner';
 import type { TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { IsolationHandoff, IsolationMergeResult, IsolationView, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
-import { migratePlanStateIsolation } from './isolationRecord';
 import type { IsolationRunController } from './IsolationRunController';
 import { PlanEditor } from './PlanEditor';
 import { PlanEditError } from './PlanEditError';
@@ -104,18 +103,6 @@ export interface SessionRuntimeSettings {
   enabledRunners?: RunnerId[];
   /** The user's run settings (ADR-0030); absent means every default. */
   run?: GlobalRunSettings;
-}
-
-/**
- * A mid-run edit an older build queued for its next batch boundary was never
- * answered, so it waits as a pending turn input like any other.
- */
-function carryOverQueuedEdits(plan: LegacyPlanState): void {
-  const queued = plan.queuedMessages ?? [];
-  delete plan.queuedMessages;
-  if (queued.length === 0) return;
-  const carried = queued.map(({ id, text, timestamp, skills }): PendingPlanTurn => ({ id, source: 'user', text, timestamp, ...(skills ? { skills } : {}) }));
-  plan.pendingTurns = [...(plan.pendingTurns ?? []), ...carried];
 }
 
 /** Calls an ops retry is told about; earlier ones are counted, not listed (ADR-0020). */
@@ -2331,13 +2318,10 @@ export class Session {
     if (adopting) this.turns.restoreResend();
     this.goal = goal;
     this.workspace = workspace;
-    // Saved before approval had its own record: the status said it, and
-    // executing a plan approved every task it held. Read once, here, and never
-    // again — a surface rewrites the status for display.
-    plan.approved ??= plan.status !== 'draft' && plan.status !== 'rejected';
-    if (!plan.approvedTasks && plan.approved) {
-      plan.approvedTasks = flattenTasks(plan.tasks).map((t) => t.id);
-    }
+    // Every plan-shape migration lives in one place (models/Task.ts); this load
+    // only calls it. A saved pause is reset before the orchestrator clones the
+    // tasks, so its copy is idle too.
+    migrateLoadedPlan(plan, { adopting });
     // The saved ledger is the session's own history: adopt it before the
     // persist below writes the plan back, so a load does not zero the totals.
     // The same-object load keeps the live ledger, which holds what the turn in
@@ -2349,26 +2333,10 @@ export class Session {
     // Adopting the saved session's id keeps subsequent persists writing to the
     // same file instead of forking the session under a fresh identity.
     if (opts?.sessionId) this.currentSessionId = opts.sessionId;
-    if (adopting) {
-      for (const task of flattenTasks(plan.tasks)) delete task.resumeAt;
-    }
     this.orchestrator.loadPlan(plan.tasks, plan.runners);
     // Loading normalizes statuses (a failed task gets a fresh chance) on the
     // store's copy; the adopted plan shows that result, not the caller's input.
     this.syncPlanTasks();
-    migratePlanStateIsolation(plan);
-    // Older builds copied the since-removed transport setting onto the plan.
-    // Every plan now runs structured (ADR-0018), so the copy is not carried on.
-    delete (plan as { runnerTransport?: unknown }).runnerTransport;
-    // Run settings are the user's now (ADR-0030); an older plan's own copies
-    // are not read, and go with this save.
-    for (const key of ['supervisorLevel', 'mergeAtGatesAutomatically', 'supervisorRetryLimit', 'wakeUpReadBudget']) {
-      delete (plan as unknown as Record<string, unknown>)[key];
-    }
-    // The per-message research budget is gone (ADR-0037); a plan saved before
-    // its removal is read once and written back without its keys.
-    dropRetiredPlanFields(plan);
-    carryOverQueuedEdits(plan);
     // The run record is taken synchronously; the orphan prune and the look at
     // what the user has merged since are awaited in the background, and git
     // serializes them ahead of any worktree a run adds.

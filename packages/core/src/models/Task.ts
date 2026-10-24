@@ -9,6 +9,7 @@ import type { TaskLoop } from './Loop';
 import type { HandoffDigest } from './Handoff';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
 import { subtreeIds, walkPlan } from '../services/PlanTree';
+import { migratePlanStateIsolation } from '../services/isolationRecord';
 
 export interface UserStep {
   order: number;
@@ -137,6 +138,54 @@ export function dropRetiredPlanFields(plan: LegacyPlanState): void {
   }
   for (const turn of plan.pendingTurns ?? []) delete (turn as unknown as Record<string, unknown>).budgetStarted;
   for (const task of flattenTasks(plan.tasks)) delete (task as unknown as Record<string, unknown>).researchWait;
+}
+
+/**
+ * Move a mid-run edit an older build queued for its next batch boundary into
+ * the pending turns: it was never answered, so it waits like any other.
+ */
+function carryOverQueuedEdits(plan: LegacyPlanState): void {
+  const queued = plan.queuedMessages ?? [];
+  delete plan.queuedMessages;
+  if (queued.length === 0) return;
+  const carried = queued.map(({ id, text, timestamp, skills }): PendingPlanTurn => ({ id, source: 'user', text, timestamp, ...(skills ? { skills } : {}) }));
+  plan.pendingTurns = [...(plan.pendingTurns ?? []), ...carried];
+}
+
+/**
+ * Bring a loaded plan to the shape this build reads, in place: every plan-shape
+ * migration lives here, so each can be tested from an old shape without a whole
+ * Session, as {@link migrateLoadedTasks} does for tasks.
+ *
+ * `adopting` is false when a Session reloads the plan it already holds: the
+ * live run's task pauses are fresher than the save, so they stay.
+ */
+export function migrateLoadedPlan(plan: LegacyPlanState, { adopting = true }: { adopting?: boolean } = {}): void {
+  // Saved before approval had its own record: the status said it, and
+  // executing a plan approved every task it held. Read once, here, and never
+  // again — a surface rewrites the status for display.
+  plan.approved ??= plan.status !== 'draft' && plan.status !== 'rejected';
+  if (!plan.approvedTasks && plan.approved) {
+    plan.approvedTasks = flattenTasks(plan.tasks).map((t) => t.id);
+  }
+  // A saved reset time belonged to a run that is gone; loading is not consent
+  // to spend tokens (ADR-0044).
+  if (adopting) {
+    for (const task of flattenTasks(plan.tasks)) delete task.resumeAt;
+  }
+  migratePlanStateIsolation(plan);
+  // Older builds copied the since-removed transport setting onto the plan.
+  // Every plan now runs structured (ADR-0018), so the copy is not carried on.
+  delete (plan as { runnerTransport?: unknown }).runnerTransport;
+  // Run settings are the user's now (ADR-0030); an older plan's own copies
+  // are not read, and go with this save.
+  for (const key of ['supervisorLevel', 'mergeAtGatesAutomatically', 'supervisorRetryLimit', 'wakeUpReadBudget']) {
+    delete (plan as unknown as Record<string, unknown>)[key];
+  }
+  // The per-message research budget is gone (ADR-0037); a plan saved before
+  // its removal is read once and written back without its keys.
+  dropRetiredPlanFields(plan);
+  carryOverQueuedEdits(plan);
 }
 
 /**
