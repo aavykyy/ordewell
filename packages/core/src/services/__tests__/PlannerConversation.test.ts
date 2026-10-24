@@ -6,6 +6,7 @@ import type { TaskOp } from '../TaskOps';
 import { ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlannerConversationHost } from '../PlannerConversation';
 import type { SkillInfo } from '../SkillsService';
 import type { TurnFailure } from '../runnerExit';
+import { fakePlanChanges, passed, refused } from './planChangesTestKit';
 
 function dialoguePlan(): LegacyPlanState {
   return {
@@ -38,6 +39,7 @@ function fakeAi(overrides: Partial<IAiService> = {}): IAiService {
  */
 function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan()) {
   const state = { plan, persists: 0 };
+  const checks = fakePlanChanges({ tasks: () => state.plan?.tasks ?? [], runners: () => ['claude-code'], catalog: () => ({ modelsByRunner: {} }) });
   const host: PlannerConversationHost = {
     plan: () => state.plan,
     goal: () => 'build me a parser',
@@ -59,8 +61,7 @@ function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan())
     },
     broadcast: vi.fn(),
     broadcastPlan: vi.fn(),
-    validateOps: vi.fn(),
-    taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [] }),
+    planChanges: checks.planChanges,
     notice: vi.fn(),
     usageLimit: vi.fn((said: TurnFailure) => ({ text: said.message, resendAt: null })),
     adoptTasks: vi.fn((tasks) => tasks.length),
@@ -68,7 +69,7 @@ function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan())
     turnAborted: vi.fn(),
   };
   const conversation = new PlannerConversation(host);
-  return { conversation, host, state };
+  return { conversation, host, state, checks };
 }
 
 describe('PlannerConversation transcript', () => {
@@ -425,11 +426,11 @@ describe('PlannerConversation compact', () => {
       researchLog: [{ id: 'x', type: 'user_prompt', content: 'ignored', timestamp: '2026-01-02T00:00:00Z' }],
     };
     const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(ops) });
-    const { conversation, state, host } = fakeHost(ai, threeTurnPlan());
+    const { conversation, state, host, checks } = fakeHost(ai, threeTurnPlan());
 
     await conversation.compact();
 
-    expect(host.validateOps).not.toHaveBeenCalled();
+    expect(checks.rules).not.toHaveBeenCalled();
     expect(host.adoptTasks).not.toHaveBeenCalled();
     expect(state.plan!.researchLog!.map((e) => e.id)).toEqual(['up-1', 'up-2', 'up-3']);
     expect(state.plan!.conversationHistory![0].content).toContain('kept');
@@ -752,14 +753,14 @@ describe('PlannerConversation planner turn', () => {
 
   it('applies no task edit a stale turn settles on', async () => {
     const { ai, calls } = heldBackend();
-    const { conversation, host, state } = fakeHost(ai, threeTurnPlan());
+    const { conversation, host, state, checks } = fakeHost(ai, threeTurnPlan());
 
     const turn = conversation.reply('Rename #1');
     state.plan = dialoguePlan();
     calls[0].finish({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#1' }], text: '', researchLog: [] });
 
     await expect(turn).rejects.toThrow(PlannerTurnDiscardedError);
-    expect(host.validateOps).not.toHaveBeenCalled();
+    expect(checks.rules).not.toHaveBeenCalled();
     expect(host.adoptTasks).not.toHaveBeenCalled();
   });
 
@@ -878,8 +879,8 @@ describe('PlannerConversation planner turn', () => {
 
   it('takes back the edit an abandoned turn showed at once, and tells nothing of it once another turn shows one', async () => {
     const { ai, calls } = heldBackend();
-    const { conversation, host } = fakeHost(ai, threeTurnPlan());
-    vi.mocked(host.validateOps).mockReturnValue({ ok: true, tasks: [], errors: [], summary: ['removed #1'] });
+    const { conversation, host, checks } = fakeHost(ai, threeTurnPlan());
+    checks.rules.mockReturnValue(passed({ summary: ['removed #1'] }));
     const sent = () => vi.mocked(host.broadcast).mock.calls.map(([m]) => m);
     const held = () => sent().flatMap((m) => (m.type === 'plan_edit_held' ? [m.held?.turnId ?? null] : []));
 
@@ -980,21 +981,21 @@ describe('PlannerConversation planner turn', () => {
 
   describe('across the skill check before an edit lands', () => {
     /** A lookup whose git check the test releases, so a stop or plan swap can land while it waits. */
-    function heldSkillCheck(host: PlannerConversationHost) {
+    function heldSkillCheck(checks: ReturnType<typeof fakeHost>['checks']) {
       let release: () => void = () => {};
       const asked = vi.fn();
       const skill: SkillInfo = {
         name: 'tdd', description: 'tdd', metadata: { name: 'tdd', description: 'tdd' }, content: '', path: '/g/tdd/SKILL.md', source: 'global', appliesTo: 'task', modelInvocable: false, userInvocable: true,
       };
-      host.taskSkills = () => ({
-        findSkill: (name) => (name === 'tdd' ? skill : undefined),
+      checks.useSkills({
+        findSkill: (name: string) => (name === 'tdd' ? skill : undefined),
         searchedDirs: () => [],
         uncommitted: () => new Promise((resolve) => {
           asked();
           release = () => resolve(new Map());
         }),
       });
-      vi.mocked(host.validateOps).mockReturnValue({ ok: true, tasks: [], errors: [], summary: ['#1 skills'] });
+      checks.rules.mockReturnValue(passed({ summary: ['#1 skills'] }));
       return { asked, release: () => release() };
     }
 
@@ -1004,8 +1005,8 @@ describe('PlannerConversation planner turn', () => {
     for (const [label, reply] of [['task edit', opsTurn], ['whole plan', planTurn]] as const) {
       it(`drops a ${label} whose plan was swapped out while the check ran`, async () => {
         const { ai, calls } = heldBackend();
-        const { conversation, host, state } = fakeHost(ai, threeTurnPlan());
-        const check = heldSkillCheck(host);
+        const { conversation, host, state, checks } = fakeHost(ai, threeTurnPlan());
+        const check = heldSkillCheck(checks);
 
         const turn = conversation.reply('Use tdd');
         await vi.waitFor(() => expect(calls).toHaveLength(1));
@@ -1015,7 +1016,6 @@ describe('PlannerConversation planner turn', () => {
         check.release();
 
         await expect(turn).rejects.toThrow(PlannerTurnDiscardedError);
-        expect(host.validateOps).not.toHaveBeenCalled();
         expect(host.adoptTasks).not.toHaveBeenCalled();
         expect(state.persists).toBe(0);
         expect(vi.mocked(host.broadcast).mock.calls.map(([m]) => m.type)).not.toContain('planner_message');
@@ -1024,9 +1024,9 @@ describe('PlannerConversation planner turn', () => {
 
       it(`drops a ${label} when the turn is stopped while the check ran`, async () => {
         const { ai, calls } = heldBackend();
-        const { conversation, host, state } = fakeHost(ai, threeTurnPlan());
+        const { conversation, host, state, checks } = fakeHost(ai, threeTurnPlan());
         const before = state.plan!.conversationHistory;
-        const check = heldSkillCheck(host);
+        const check = heldSkillCheck(checks);
 
         const turn = conversation.reply('Use tdd');
         await vi.waitFor(() => expect(calls).toHaveLength(1));
@@ -1105,10 +1105,10 @@ describe('PlannerConversation reply runs', () => {
           return { kind: 'task_ops', ops, text: '{"taskOps":[{"op":"remove","taskId":"#1"}]}', researchLog: [], runs: [] };
         }),
     });
-    const { conversation, state, host } = fakeHost(ai, threeTurnPlan());
-    vi.mocked(host.validateOps)
-      .mockReturnValueOnce({ ok: false, tasks: [], errors: ['#9 does not exist'], summary: [] })
-      .mockReturnValue({ ok: true, tasks: [], errors: [], summary: ['removed #1'] });
+    const { conversation, state, host, checks } = fakeHost(ai, threeTurnPlan());
+    checks.rules
+      .mockReturnValueOnce(refused('#9 does not exist'))
+      .mockReturnValue(passed({ summary: ['removed #1'] }));
 
     await conversation.reply('Drop the parser task');
 
@@ -1141,8 +1141,8 @@ describe('PlannerConversation reply runs', () => {
   ])('saves the narration before %s it submitted with the reply, ahead of what landed', async (_what, submission, marker) => {
     const submitted = run('s2', 'Submitted.', '2026-01-01T00:00:06Z');
     const ai = fakeAi({ continueConversation: vi.fn() });
-    const { conversation, state, host } = fakeHost(ai, threeTurnPlan());
-    vi.mocked(host.validateOps).mockReturnValue({ ok: true, tasks: [], errors: [], summary: ['removed #1'] });
+    const { conversation, state, host, checks } = fakeHost(ai, threeTurnPlan());
+    checks.rules.mockReturnValue(passed({ summary: ['removed #1'] }));
     vi.mocked(ai.continueConversation).mockImplementation(async () => {
       conversation.submit(submission);
       return { kind: 'message', text: 'Let me look at the parser.\n\nSubmitted.', researchLog: [], runs: [looking, submitted] };
@@ -1433,13 +1433,13 @@ describe('the plan block: whole once per live context, then what changed', () =>
   });
 
   it('sends the whole plan after a turn that landed only once a corrective retry repaired it', async () => {
-    const third = await afterSecond(async ({ conversation, host }) => {
+    const third = await afterSecond(async ({ conversation, host, checks }) => {
       vi.mocked(host.aiService().continueConversation)
         .mockResolvedValueOnce({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#9' }], text: '', researchLog: [] })
         .mockResolvedValueOnce({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#2' }], text: '', researchLog: [] });
-      vi.mocked(host.validateOps)
-        .mockReturnValueOnce({ ok: false, tasks: [], errors: ['#9 does not exist'], summary: [] })
-        .mockReturnValueOnce({ ok: true, tasks: [], errors: [], summary: ['removed #2'] });
+      checks.rules
+        .mockReturnValueOnce(refused('#9 does not exist'))
+        .mockReturnValueOnce(passed({ summary: ['removed #2'] }));
       await conversation.reply('drop the last one');
     });
 

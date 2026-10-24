@@ -1,7 +1,8 @@
 import { resolveHandoffReferences } from './handoffReferences';
 import { createAiService, type IAiService } from './AiService';
 import { PlannerBackend } from './PlannerBackend';
-import { applyTaskOps, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
+import type { TaskOp } from './TaskOps';
+import { PlanChangeCheck, type PlanChangeScope } from './PlanChangeCheck';
 import { carryPlannedModes } from './ModeResolver';
 import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
@@ -28,7 +29,6 @@ import { sharedWebResponseCache } from './WebResponseCache';
 import { sharedSearchProvider } from './DuckDuckGoSearchProvider';
 import { PROVIDER_PRIORITY, runnerForProvider } from './ProviderRegistry';
 import { ModelResolver } from './ModelResolver';
-import { resolveAssignments } from './TaskAssignment';
 import { plannerModesFrom } from './plannerModes';
 import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
@@ -546,12 +546,18 @@ export class Session {
   /** Every turn's effects with starts still owed: a turn's may still be running its starts when the next opens. */
   private readonly owingEffects = new Set<TurnEffects>();
   private unlistenApprovals: (() => void) | null;
+  /** The one check of a planner's change to the plan; an Act supervisor's edits meet its guard. */
+  private readonly planChanges = new PlanChangeCheck(this.changeScope(() => this.supervisorEditing()));
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
     skills: () => this.workspaceSkills().listSkills(),
     turnId: () => this.conversation.currentTurnId,
     recordSkillLoad: (skill) => this.conversation.recordPlannerSkill(skill),
     liveCatalog: () => this.liveCatalog(),
-    adjustments: (tasks) => resolveAssignments(tasks, this.store.planTasks, this.catalog.edit()).adjustments,
+    checkPlan: async (tasks) => {
+      // Discovered first: a model is resolved against what the runner was found to offer.
+      await this.liveCatalog();
+      return this.planChanges.check({ kind: 'plan', tasks }, 'submit');
+    },
     submitPlan: (tasks) => this.submitPlanFromTool(tasks),
     editPlan: (ops) => this.editPlanFromTool(ops),
     tasks: () => this.store.planTasks,
@@ -561,7 +567,6 @@ export class Session {
     taskLogAttempts: (taskId) => this.taskLogAttempts(taskId),
     taskLog: (taskId, attempt) => this.taskLog(taskId, attempt),
     taskDiff: (taskId, options) => this.runs.taskDiff(taskId, options),
-    taskSkills: () => this.workspaceSkills(),
     runCommand: (command, signal, opts) => this.fsAdapter.bash(command, signal, opts),
     fetchUrl: (url) => this.fetcher.fetch(url),
     webSearch: async (query) => this.fetcher.search?.(query),
@@ -629,8 +634,7 @@ export class Session {
       mutate: (op, notify) => this.mutatePlan(op, notify),
       broadcast: (msg) => this.broadcast(msg),
       broadcastPlan: (turnId) => this.announcePlan(turnId),
-      validateOps: (ops) => this.checkPlannerOps(ops),
-      taskSkills: () => this.workspaceSkills(),
+      planChanges: this.planChanges,
       notice: (level, message) => this.notice(level, message),
       adoptTasks: (tasks, how) => this.adoptPlannerTasks(tasks, how),
       capturePrd: (text) => this.capturePrd(text),
@@ -879,7 +883,6 @@ export class Session {
    * oscillation guard its edits are held to, and marked as its own.
    */
   private draftScript(call: Extract<ExecutionCommand, { command: 'run_script' }>, actor: ExecutionActor): { ok: true; task: Task } | { ok: false; errors: string[] } {
-    const runners = this.editRunners();
     const spec: Partial<Task> = {
       title: call.title, type: 'script', sliceType: 'AFK',
       ...(call.commands !== undefined ? { commands: call.commands } : {}),
@@ -887,14 +890,13 @@ export class Session {
       ...(call.timeoutMs !== undefined ? { timeoutMs: call.timeoutMs } : {}),
       ...(call.dependencies !== undefined ? { dependencies: call.dependencies } : {}),
     };
-    const result = applyTaskOps(this.store.planTasks, [{ op: 'add', task: spec }], runners, this.catalog.edit(runners));
-    if (!result.ok) return { ok: false, errors: result.errors.map((e) => e.replace(/^op \d+ \(\w+\): /, '')) };
+    // A script attaches no skill, so nothing waits between the check and the start that follows it.
+    const checked = new PlanChangeCheck(this.changeScope(() => actor.kind === 'supervisor')).checkNow({ kind: 'ops', ops: [{ op: 'add', task: spec }] }, 'land');
+    if (!checked.ok) return { ok: false, errors: checked.errors.map((e) => e.message) };
     const known = new Set(this.store.allTasks.map((t) => t.id));
-    const task = flattenTasks(result.tasks).find((t) => !known.has(t.id));
+    const task = flattenTasks(checked.tasks).find((t) => !known.has(t.id));
     if (!task) return { ok: false, errors: ['the plan did not take it'] };
-    if (actor.kind !== 'supervisor') return { ok: true, task };
-    const trip = this.supervision.checkEdit(this.store.planTasks, result.tasks);
-    return trip ? { ok: false, errors: [trip.refusal] } : { ok: true, task: { ...task, addedBy: 'supervisor' } };
+    return { ok: true, task: actor.kind === 'supervisor' ? { ...task, addedBy: 'supervisor' } : task };
   }
 
   /** A drafted script task into the plan now, unapproved: the seam approves it once its start is consented to. */
@@ -964,9 +966,9 @@ export class Session {
     const unedited = { tasks: this.store.planTasks, handles: new Map<string, string>() };
     const held = this.conversation.pendingOps();
     if (!held || held.length === 0 || !this.plan) return unedited;
-    const runners = this.editRunners();
-    const result = applyTaskOps(this.store.planTasks, held, runners, this.catalog.edit(runners), [], this.turnEffects.addedPastEdit);
-    return result.ok ? { tasks: result.tasks, handles: result.handles ?? new Map() } : unedited;
+    // Unguarded: the batch met the guard as it was made, and a trip tells the user, which a read of the plan must not.
+    const result = new PlanChangeCheck(this.changeScope(() => false)).checkNow({ kind: 'ops', ops: held }, 'land');
+    return result.ok ? { tasks: result.tasks, handles: result.handles } : unedited;
   }
 
   /** The task as the open turn's held edit leaves it; undefined when that edit removes it. */
@@ -981,26 +983,23 @@ export class Session {
   }
 
   /**
-   * The runners a planner edit may put a task on (`assignableRunners`). An
-   * edit is checked as it is made and again as it lands against this one set,
-   * so what was accepted cannot be refused at commit.
+   * What every planner change is checked against (`PlanChangeCheck`), as it
+   * is made and as it lands: the live catalog and plan, and the open turn's
+   * held edit. A plan may use the runners enabled now, an edit the plan's own
+   * as well (`assignableRunners`), one set at both ends, so what was accepted
+   * cannot be refused at commit unless the catalog moved. `guarded`: the
+   * change meets the supervisor's oscillation guard.
    */
-  private editRunners(): RunnerId[] {
-    return this.catalog.runnersFor('edit') ?? [];
-  }
-
-  /**
-   * A planner edit checked as it is made and again as it lands: the applier's
-   * rules, then, for the supervisor, the oscillation guard. `held` are the
-   * ops the turn already holds, which `ops` join; errors are numbered by `ops`.
-   */
-  private checkPlannerOps(ops: TaskOp[], held: readonly TaskOp[] = []): ApplyTaskOpsResult {
-    const runners = this.editRunners();
-    const result = applyTaskOps(this.store.planTasks, ops, runners, this.catalog.edit(runners), held, this.turnEffects.addedPastEdit);
-    if (!result.ok || !this.supervisorEditing()) return result;
-    const trip = this.supervision.checkEdit(this.store.planTasks, result.tasks);
-    if (!trip) return result;
-    return { ok: false, tasks: [...this.store.planTasks], errors: [trip.refusal], summary: [] };
+  private changeScope(guarded: () => boolean): PlanChangeScope {
+    return {
+      tasks: () => this.store.planTasks,
+      runners: (kind) => this.catalog.runnersFor(kind === 'plan' ? 'plan' : 'edit') ?? [],
+      catalog: (runners) => this.catalog.edit(runners),
+      skills: () => this.workspaceSkills(),
+      held: () => this.conversation.pendingOps() ?? [],
+      addedPast: () => this.turnEffects.addedPastEdit,
+      guard: (before, after) => (guarded() ? this.supervision.checkEdit(before, after)?.refusal : undefined),
+    };
   }
 
   /** A line from Ordewell itself, kept in the transcript where it happened. */
@@ -1705,22 +1704,27 @@ export class Session {
    * batch, which applies whole or not at all.
    */
   private async editPlanFromTool(ops: TaskOp[]): Promise<PlanEditOutcome> {
-    const refuse = (message: string): PlanEditOutcome => ({ ok: false, errors: [message] });
+    const refuse = (message: string): PlanEditOutcome => ({ ok: false, errors: [{ message }] });
+    const wholePlanHeld = 'A whole plan was submitted in this reply and replaces the plan when it ends: make the edit in your next reply.';
     const turn = this.conversation.currentTurnId;
-    // The held batch is read after this await, so two calls made in parallel
-    // join one batch instead of one replacing the other.
     await this.liveCatalog();
     if (this.conversation.currentTurnId !== turn) return refuse(PLANNER_TURN_ENDED);
     if (!this.plan || this.store.planTasks.length === 0) return refuse('There is no plan to edit yet: submit one with submit_plan.');
-    const held = this.conversation.pendingOps();
-    if (!held) return refuse('A whole plan was submitted in this reply and replaces the plan when it ends: make the edit in your next reply.');
+    if (!this.conversation.pendingOps()) return refuse(wholePlanHeld);
 
-    const result = this.checkPlannerOps(ops, held);
-    if (!result.ok) return { ok: false, errors: result.errors };
-    if (!this.conversation.submit({ kind: 'task_ops', ops: [...held, ...ops] })) return refuse('No planning turn is open to take the edit.');
-    // What the edit's own ops were adjusted to, then what landing them would change besides, an untouched task's effort say.
-    const adjusted = [...(result.adjustments ?? []), ...resolveAssignments(result.tasks, this.store.planTasks, this.catalog.edit()).adjustments];
-    return { ok: true, summary: result.summary, coerced: adjusted.map(({ taskId: _id, ...rest }) => rest) };
+    // The held batch is read where the check's rules run, after its last
+    // wait, and joined in that tick: two calls made in parallel join one
+    // batch instead of one replacing the other.
+    let refused: string | undefined;
+    const checked = await this.planChanges.check({ kind: 'ops', ops }, 'submit', () => {
+      const held = this.conversation.pendingOps();
+      if (this.conversation.currentTurnId !== turn) refused = PLANNER_TURN_ENDED;
+      else if (!held) refused = wholePlanHeld;
+      else if (!this.conversation.submit({ kind: 'task_ops', ops: [...held, ...ops] })) refused = 'No planning turn is open to take the edit.';
+    });
+    if (refused) return refuse(refused);
+    if (!checked.ok) return this.conversation.currentTurnId === turn ? { ok: false, errors: checked.errors } : refuse(PLANNER_TURN_ENDED);
+    return { ok: true, summary: checked.summary, coerced: checked.adjustments.map(({ taskId: _id, ...rest }) => rest), warnings: checked.warnings };
   }
 
   /** Whether the planner conversation is live (started and not yet committed to a plan). */
@@ -1758,10 +1762,8 @@ export class Session {
       runners,
       modelsByRunner: filteredModels,
       runnerModes,
-      liveScope: () => {
-        const { runners, modes } = this.catalog.current();
-        return { runners, runnerModes: modes };
-      },
+      // An envelope's plan is parsed against what submit_plan checks a plan against.
+      liveScope: () => this.planChanges.intake(),
       autonomousDefault: this.config.autonomousMode,
       autorun: this.userRunSettings().autorun,
       isolatedExecution: await this.runs.plannerLayout(),
@@ -1775,8 +1777,9 @@ export class Session {
   }
 
   /**
-   * Load planner-produced tasks, coerced to the allowlist read live — it may
-   * have changed since planning started. Tasks adopted on an armed scheduler,
+   * Load planner-produced tasks, as the check they landed through resolved
+   * them against the catalog read live: it may have changed since planning
+   * started. Tasks adopted on an armed scheduler,
    * or on a run that awaits a resume (ADR-0034), are reconciled rather than
    * reloaded: `loadPlan` clears the on-hold set and the review approval, so a
    * task the user cancelled would be re-armed and re-spawned by the re-tick
@@ -1794,7 +1797,7 @@ export class Session {
     for (const runner of runnersOf(tasks)) this.editor.admitRunner(runner, this.catalog.known(runner));
     const runners = this.plan!.runners;
     const before = this.store.planTasks;
-    let coerced = resolveAssignments(tasks, before, this.catalog.edit(runners)).tasks;
+    let coerced = [...tasks];
     if (how === 'commit') coerced = keepExecutionState(before, carryPlannedModes(before, coerced, this.catalog.edit(runners)));
     // Tasks an Act supervisor adds are approved to run, ops tasks included (ADR-0029): choosing Act was the consent.
     const bySupervisor = this.supervisorEditing();

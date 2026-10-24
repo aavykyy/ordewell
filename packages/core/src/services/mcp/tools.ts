@@ -126,9 +126,10 @@ const modelAssignment = z.looseObject({
   thinkingEffort: z.string().optional().describe("A variant id from that model's variants list."),
 });
 
-// Loose on purpose: the plan goes through the same validation and repair as the
-// plan envelope (ADR-0022, P2), and a schema stricter than that path would
-// make the two routes disagree about the same tasks.
+// Loose on purpose: a plan from either route meets one check (`PlanChangeCheck`,
+// ADR-0022 P2), this tool's through it and the plan envelope's parse against
+// its intake, and a schema stricter than that check would make the two routes
+// disagree about the same tasks.
 const planTask = z.looseObject({
   id: z.string().optional(),
   order: z.number().optional(),

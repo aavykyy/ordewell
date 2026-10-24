@@ -46,7 +46,7 @@ describe('Planner', () => {
     });
 
     it('filters modelsByRunner to allowlist before passing to generatePlanDirect', async () => {
-      const task = createTask({ id: 'a1', order: 1, title: 'Task', prompt: 'go', assignedModel: { modelId: 'kimi-2.6', modelLabel: 'Kimi 2.6' } });
+      const task = createTask({ id: 'a1', order: 1, title: 'Task', prompt: 'go', assignedRunner: 'opencode', assignedModel: { modelId: 'kimi-2.6', modelLabel: 'Kimi 2.6' } });
       const aiService = fakeAiService();
       (aiService.generatePlanDirect as import("vitest").Mock).mockResolvedValue([task]);
 

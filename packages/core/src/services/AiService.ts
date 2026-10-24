@@ -4,6 +4,7 @@ import { IFileSystem } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { IApproval } from '../interfaces/IApproval';
 import type { RunnerModeInfo } from './ModeResolver';
+import type { PlanIntake } from './PlanChangeCheck';
 import { GeminiService } from './GeminiService';
 import { OpenAiService } from './OpenAiService';
 import { isCliProvider } from './ProviderRegistry';
@@ -37,11 +38,12 @@ export interface ConversationRequest {
   fetcher?: IWebFetcher;
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
   /**
-   * The runners and modes enabled now, read on every turn: an envelope plan is
-   * checked against what the planner is told this turn, as `submit_plan` is
-   * (ADR-0022 L2). Absent: `runners` and `runnerModes` as the conversation opened.
+   * What a whole plan is held to now (`PlanChangeCheck.intake`), read on every
+   * turn: an envelope plan is checked against what `submit_plan` checks one
+   * against (ADR-0022 L2, P2). Absent: `runners`, `runnerModes` and
+   * `autonomousDefault` as the conversation opened.
    */
-  liveScope?: () => { runners: RunnerId[]; runnerModes?: Record<RunnerId, RunnerModeInfo[]> };
+  liveScope?: () => PlanIntake;
   autonomousDefault?: boolean;
   /** Where tasks will run (ADR-0013, ADR-0014): in worktrees, the prompt drops file-overlap ordering and describes a repo group. */
   isolatedExecution?: IsolatedExecution;

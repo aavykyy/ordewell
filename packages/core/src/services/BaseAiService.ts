@@ -9,6 +9,7 @@ import { generatePlanWithRepair, classifyPlannerReply } from './PlanRepair';
 import { settleReply, type ReplyAttempt } from './settleReply';
 import { compactResearchResults, withProactiveCompaction } from './contextCompaction';
 import type { RunnerModeInfo } from './ModeResolver';
+import type { PlanIntake } from './PlanChangeCheck';
 import { collectResearchContext } from './ContextCollector';
 import { PLANNER_EXECUTION_TOOLS, PLANNER_TASK_READ_TOOLS, type PlannerToolHandler } from './mcp/tools';
 import { redactSecrets } from '../utils/redactSecrets';
@@ -102,7 +103,7 @@ export interface ConversationTurnContext {
   runners: RunnerId[];
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
   /** See {@link ConversationRequest.liveScope}. */
-  liveScope?: () => { runners: RunnerId[]; runnerModes?: Record<RunnerId, RunnerModeInfo[]> };
+  liveScope?: () => PlanIntake;
   autonomousDefault?: boolean;
   fetcher?: IWebFetcher;
   /** The session's planner tools; the conversation offers their task reads and execution tools (ADR-0029) when set. */
@@ -385,7 +386,7 @@ export abstract class BaseAiService {
       // The turn's own input carries the budgets, not the system prompt, which stays cacheable.
       message: withTurnBudgets(this.turnBudgets, message),
       send: (text) => this.runToolRounds(chat, ctx, text, onProgress, signal),
-      classify: { ...(ctx.liveScope?.() ?? { runners: ctx.runners, runnerModes: ctx.runnerModes }), autonomousDefault: ctx.autonomousDefault },
+      classify: { autonomousDefault: ctx.autonomousDefault, ...(ctx.liveScope?.() ?? { runners: ctx.runners, runnerModes: ctx.runnerModes }) },
       onProgress,
       signal,
       compactHistory: chat.compactHistory,

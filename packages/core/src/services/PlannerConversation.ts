@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ConversationRequest, ConversationTurn, IAiService, TurnRun } from './AiService';
 import { reEmitPlanPrompt, repairLoop, resubmitEditPrompt, resubmitPlanPrompt, taskOpsRejectedPrompt } from './PlanRepair';
 import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, TASK_READ_TOOLS_REMINDER, type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog } from './TaskQuery';
-import { taskOpsProtocol, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
+import { taskOpsProtocol, type TaskOp } from './TaskOps';
 import { readOnlyMode, readOnlyRunners } from './ModeResolver';
 import type { PlannerTurnOutcome, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { TurnStream } from './replyStream';
@@ -13,8 +13,7 @@ import { flattenTasksWithParents, isUserMessage } from '../models/Task';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
-import { checkPlanRunners } from './PlannedTask';
-import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
+import { planChangeErrorText, type PassedChange, type PlanChangeCheck } from './PlanChangeCheck';
 import { heldEditTasks } from './heldEdit';
 import { classifyRunnerStop, type TurnFailure } from './runnerExit';
 import type { PlannerLimit } from './PlannerResend';
@@ -145,7 +144,8 @@ type TurnAdmission = { refuseAs: string } | 'supersede';
 type ClaimedTurn = ConversationTurn & { said?: string };
 /** A turn with every read already drained — what the settle path actually commits. */
 type SettleableTurn = Exclude<ClaimedTurn, { kind: 'task_query' }>;
-type CommitTurn = Exclude<SettleableTurn, { kind: 'task_ops' }>;
+/** A turn that changes nothing in the plan: what it said is all that lands. */
+type CommitTurn = Exclude<SettleableTurn, { kind: 'task_ops' | 'plan' }>;
 
 /** {@link writtenOverRuns} for a turn that reported runs; one that reported none carries none. */
 function writtenOver(runs: readonly TurnRun[] | undefined, text: string): Pick<ConversationTurn, 'runs'> {
@@ -307,15 +307,14 @@ export interface PlannerConversationHost {
   /** `turnId`: the planner turn whose commit this is, when one is. */
   broadcastPlan(turnId?: string): void;
   /**
-   * Validate a batch against live state; nothing of it is applied. A
+   * The one check a plan change meets, over live state: a whole plan or a
+   * batch as its turn lands it, and the held edit as it is shown. A
    * supervisor's batch that trips the oscillation guard is refused, and the
    * user is told of the trip once, in the supervisor's voice (ADR-0029): a note
    * saved as it is written, like any of Ordewell's own, which a turn in flight
    * holds nothing in.
    */
-  validateOps(ops: TaskOp[]): ApplyTaskOpsResult;
-  /** The workspace's skill catalog under its repo group's layout, which the skills a plan or edit attaches are checked against. */
-  taskSkills(): SkillLookup;
+  planChanges: Pick<PlanChangeCheck, 'check' | 'checkNow'>;
   /** Tell the user something the transcript does not carry. */
   notice(level: SessionNotice['level'], message: string): void;
   /** Load planner-produced tasks: an edit keeps run state, a commit starts over. Returns how many landed. */
@@ -662,7 +661,7 @@ export class PlannerConversation {
    * ends: the backend's reply claims it, but it has not landed by then.
    */
   private showHeld(turn: UserTurn, held: PlannerSubmission | null): void {
-    const result = held?.kind === 'task_ops' ? this.host.validateOps(held.ops) : undefined;
+    const result = held?.kind === 'task_ops' ? this.host.planChanges.checkNow({ kind: 'ops', ops: held.ops }, 'land') : undefined;
     if (!result?.ok) {
       this.clearHeld(turn);
       return;
@@ -1344,7 +1343,7 @@ export class PlannerConversation {
    * one path, not two.
    */
   private async settle(turn: SettleableTurn, userTurn: UserTurn): Promise<SettledTurn> {
-    type Settled = { plan: LegacyPlanState } | { turn: CommitTurn; skillWarnings?: string[] };
+    type Settled = SettledTurn | { turn: CommitTurn };
     const { signal, stream } = userTurn;
     const ai = this.host.aiService();
     // A planner with tools submits through them alone, so its correctives ask for a tool call, not JSON.
@@ -1383,19 +1382,17 @@ export class PlannerConversation {
           return { retry: { errors, corrective: (tools ? resubmitEditPrompt : taskOpsRejectedPrompt)(errors) } };
         }
         if (t.kind === 'plan') {
-          // A submitted plan waits out the rest of its reply, so the runners it was accepted against may be gone (ADR-0003 V1).
-          const live = this.host.catalog();
-          const skills = await checkPlanSkills(t.tasks, this.host.taskSkills());
-          this.assertStillCurrent(userTurn);
-          const errors = [...checkPlanRunners(t.tasks, live.runners), ...skills.errors].map((e) => e.message);
-          if (errors.length === 0) return { done: { turn: t, skillWarnings: skills.warnings } };
+          this.assertCurrent(userTurn);
+          const landed = await this.commitPlan(t, userTurn);
+          if ('plan' in landed) return { done: { plan: landed.plan, outcome: 'plan' } };
+          const { errors } = landed;
           if (!ai.hasActiveConversation() || signal.aborted) return { done: invalidPlan(errors, t) };
           return { retry: { errors, corrective: tools ? resubmitPlanPrompt(errors) : reEmitPlanPrompt(errors.join('; ')) } };
         }
         if (t.kind !== 'task_ops') return { done: { turn: t } };
         this.assertCurrent(userTurn);
         const applied = await this.applyTaskOps(t, userTurn);
-        if ('plan' in applied) return { done: { plan: applied.plan } };
+        if ('plan' in applied) return { done: { plan: applied.plan, outcome: 'task_ops' } };
         // No live conversation (or an abort) means no corrective re-send is
         // possible — surface the failure instead of retrying into the void.
         if (!ai.hasActiveConversation() || signal.aborted) {
@@ -1407,9 +1404,9 @@ export class PlannerConversation {
       onExhausted: ({ reply, errors }) => (reply.kind === 'plan' ? invalidPlan : invalidOps)(errors, reply),
     });
 
-    if ('plan' in settled) return { plan: settled.plan, outcome: 'task_ops' };
+    if ('plan' in settled) return settled;
     this.assertCurrent(userTurn);
-    return { plan: this.commit(settled.turn, userTurn, settled.skillWarnings ?? []), outcome: settled.turn.kind };
+    return { plan: this.commit(settled.turn, userTurn), outcome: settled.turn.kind };
   }
 
   /** A name not found at submit only warns: a task the attaching one depends on may create it. */
@@ -1417,28 +1414,61 @@ export class PlannerConversation {
     for (const warning of warnings) this.host.notice('warn', warning);
   }
 
-  /** Validate + commit a task_ops turn atomically. Returns the errors on rejection (plan untouched). */
+  /**
+   * Check a task_ops turn as it lands and commit it atomically: what passed
+   * lands in the tick the check's rules ran in. Returns the errors on
+   * rejection (plan untouched).
+   */
   private async applyTaskOps(turn: Extract<SettleableTurn, { kind: 'task_ops' }>, userTurn: UserTurn): Promise<{ plan: LegacyPlanState } | { errors: string[] }> {
     this.requirePlan();
-    const skills = await checkOpSkills(turn.ops, this.host.taskSkills());
-    this.assertStillCurrent(userTurn);
-    if (skills.errors.length > 0) return this.refusedHeld(userTurn, skills.errors.map((e) => e.message));
-    const result = this.host.validateOps(turn.ops);
-    if (!result.ok) return this.refusedHeld(userTurn, result.errors);
-
-    const said = this.said(turn, userTurn);
-    const plan = this.land(userTurn, turn.researchLog, () => {
-      this.host.adoptTasks(result.tasks, 'edit');
-      return [...(said ? [said] : []), { content: `Tasks updated:\n- ${result.summary.join('\n- ')}` }];
-    }, {
-      skillWarnings: skills.warnings,
-      announce: () => {
-        this.host.broadcastPlan();
-        // After the plan that carries it, so the edit is never missing from both.
-        this.clearHeld(userTurn);
-      },
+    const landed: { plan?: LegacyPlanState } = {};
+    const checked = await this.host.planChanges.check({ kind: 'ops', ops: turn.ops }, 'land', (passed) => {
+      // The skill check waits on git, which a stop, rewind or session switch may outlast.
+      this.assertStillCurrent(userTurn);
+      const said = this.said(turn, userTurn);
+      landed.plan = this.land(userTurn, turn.researchLog, () => {
+        this.host.adoptTasks(passed.tasks, 'edit');
+        return [...(said ? [said] : []), { content: `Tasks updated:\n- ${passed.summary.join('\n- ')}` }];
+      }, {
+        skillWarnings: passed.warnings,
+        announce: () => {
+          this.host.broadcastPlan();
+          // After the plan that carries it, so the edit is never missing from both.
+          this.clearHeld(userTurn);
+        },
+      });
     });
-    return { plan };
+    this.assertStillCurrent(userTurn);
+    if (landed.plan) return { plan: landed.plan };
+    return this.refusedHeld(userTurn, checked.ok ? [] : checked.errors.map(planChangeErrorText));
+  }
+
+  /**
+   * Check a whole plan as it lands and commit it in the same tick, as an edit
+   * is: it waited out the rest of its reply, so the runners it was accepted
+   * against may be gone (ADR-0003 V1). Returns the errors on rejection.
+   */
+  private async commitPlan(turn: Extract<SettleableTurn, { kind: 'plan' }>, userTurn: UserTurn): Promise<{ plan: LegacyPlanState } | { errors: string[] }> {
+    const landed: { plan?: LegacyPlanState } = {};
+    const checked = await this.host.planChanges.check({ kind: 'plan', tasks: turn.tasks }, 'land', (passed) => {
+      this.assertStillCurrent(userTurn);
+      landed.plan = this.landPlan(turn, userTurn, passed);
+    });
+    this.assertStillCurrent(userTurn);
+    if (landed.plan) return { plan: landed.plan };
+    return { errors: checked.ok ? [] : checked.errors.map(planChangeErrorText) };
+  }
+
+  private landPlan(turn: Extract<SettleableTurn, { kind: 'plan' }>, userTurn: UserTurn, passed: PassedChange): LegacyPlanState {
+    this.requirePlan();
+    const said = this.said(turn, userTurn);
+    return this.land(userTurn, turn.researchLog, () => {
+      // A cheap model may emit the PRD block and the plan JSON in one turn —
+      // capture the PRD here too so it isn't dropped with the plan preamble.
+      this.host.capturePrd(turn.text);
+      const count = this.host.adoptTasks(passed.tasks, 'commit');
+      return [...(said ? [said] : []), { content: `Plan generated with ${count} task${count === 1 ? '' : 's'}.`, kind: 'plan_generated' }];
+    }, { skillWarnings: passed.warnings, announce: () => this.host.broadcastPlan(userTurn.stream.turnId) });
   }
 
   /** The edit was refused as it landed: what it showed is not coming. */
@@ -1447,20 +1477,9 @@ export class PlannerConversation {
     return { errors };
   }
 
-  /** Commit a settled (non-task_ops) turn: a whole plan, or what it said. */
-  private commit(turn: CommitTurn, userTurn: UserTurn, skillWarnings: readonly string[]): LegacyPlanState {
+  /** Commit a settled turn that changes nothing in the plan: what it said. */
+  private commit(turn: CommitTurn, userTurn: UserTurn): LegacyPlanState {
     this.requirePlan();
-
-    if (turn.kind === 'plan') {
-      const said = this.said(turn, userTurn);
-      return this.land(userTurn, turn.researchLog, () => {
-        // A cheap model may emit the PRD block and the plan JSON in one turn —
-        // capture the PRD here too so it isn't dropped with the plan preamble.
-        this.host.capturePrd(turn.text);
-        const count = this.host.adoptTasks(turn.tasks, 'commit');
-        return [...(said ? [said] : []), { content: `Plan generated with ${count} task${count === 1 ? '' : 's'}.`, kind: 'plan_generated' }];
-      }, { skillWarnings, announce: () => this.host.broadcastPlan(userTurn.stream.turnId) });
-    }
 
     // Budget models occasionally return an empty content turn after tool use —
     // surface that visibly instead of rendering a blank bubble. A stopped turn

@@ -163,13 +163,21 @@ planner tools are recorded here as an explicit entry against both:
   recorded starting commit. These are bounded answers, not a path into
   `.ordewell/` or an arbitrary git ref (ADR-0012).
 - **The only writes are `submit_plan` and `edit_plan` (P2).** They go through
-  the same validation and commit path as the envelopes they replace: the live
-  catalog, the assignment resolver (ADR-0003: a stray model id in a
-  submitted plan is replaced by the allowlist's, its effort carried to the
-  nearest level, and the result reports the adjustment), and `applyTaskOps`
-  with `TaskEditValidator` (ADR-0012). The same
-  tasks produce the same plan by either route, and the plan stays the source
-  of truth (ADR-0001). A structural edit during a live run applies at once to
+  the same check and commit path as the envelopes they replace. One module,
+  `PlanChangeCheck`, holds every planner change to its rules, a whole plan or a
+  batch of task ops, as it is made and again as its turn lands it, against
+  one live scope: the enabled runners for a plan (the plan's own as well for
+  an edit), their modes, the assignment resolver (ADR-0003: a stray model id
+  in a submitted plan is replaced by the allowlist's, its effort carried to
+  the nearest level, and the result reports the adjustment), `applyTaskOps`
+  with `TaskEditValidator` (ADR-0012), the attached skills (ADR-0024) and, for
+  the supervisor, its oscillation guard (ADR-0029). An envelope plan is parsed
+  against the same intake. A change accepted as it is made is refused as it
+  lands only for something that moved in between, and the adjustments the
+  planner is told are the ones landing makes. Refusals are structured, naming
+  the task and field or the op, and no caller reads them back out of their
+  wording. The same tasks produce the same plan by either route, and the plan
+  stays the source of truth (ADR-0001). A structural edit during a live run applies at once to
   tasks not yet started and is refused, with a note, for a running or
   finished task, exactly as an envelope edit is (ADR-0029).
 - **Execution tools are a further explicit entry (P5).** `run_plan`, `run_task`,
@@ -295,3 +303,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-21 — a read-only task's token serves `run_command`, and says so in the runner's configuration (ADR-0046).
 - 2026-10-22 — decided, not built: `task_complete` carries a handoff and the task token gains `read_task` ([ADR-0047](../supervision/0047-structured-task-handoffs.md), #120).
 - 2026-10-22 — implemented the handoff envelope and task-scoped `read_task` (V4; ADR-0047, #120).
+- 2026-10-24 — P2: one check (`PlanChangeCheck`) for every planner change, at submit and at landing, with structured refusals; a whole plan is re-held to the plan's rules as it lands.

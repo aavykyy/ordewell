@@ -11,6 +11,8 @@ import type { ConversationRequest } from '../AiService';
 import type { SessionRuntimeSettings } from '../createSession';
 import { surfacePlan, type SessionMessage, type SessionNotice } from '../SessionMessage';
 import type { SkillInfo, SkillsService } from '../SkillsService';
+import type { SkillLookup } from '../taskSkills';
+import { PlanChangeCheck, requestScope } from '../PlanChangeCheck';
 import { createTask, flattenTasks, type DiscoveredModel, type Task } from '../../models/Task';
 import { execFileSync } from 'child_process';
 import { writeFileSync } from 'fs';
@@ -1834,12 +1836,20 @@ describe('a submission whose planner turn ends while its skill check runs', () =
     const tdd: SkillInfo = {
       name: 'tdd', description: 'tdd', metadata: { name: 'tdd', description: 'tdd' }, content: '', path: '/g/tdd/SKILL.md', source: 'global', appliesTo: 'task', modelInvocable: false, userInvocable: true,
     };
+    const lookup: SkillLookup = {
+      findSkill: (name) => (name === 'tdd' ? tdd : undefined),
+      searchedDirs: () => [],
+      uncommitted: () => new Promise((resolve) => {
+        asked();
+        state.release = () => resolve(new Map());
+      }),
+    };
     const host: PlannerToolsHost = {
       skills: () => [],
       turnId: () => state.turn,
       recordSkillLoad: () => false,
       liveCatalog: async () => ({ runners: ['claude-code'], models: { 'claude-code': [{ modelId: 'claude-sonnet-4', modelLabel: 'Sonnet', variants: [] }] }, modes: {}, autonomousDefault: true }),
-      adjustments: () => [],
+      checkPlan: (tasks) => new PlanChangeCheck({ ...requestScope({ runners: ['claude-code'] }), skills: () => lookup }).check({ kind: 'plan', tasks }, 'submit'),
       submitPlan: vi.fn(() => true),
       editPlan: vi.fn(async () => ({ ok: true as const, summary: [], queued: false })),
       tasks: () => [],
@@ -1854,14 +1864,6 @@ describe('a submission whose planner turn ends while its skill check runs', () =
       webSearch: async () => undefined,
       execute: vi.fn(),
       editsRefused: () => undefined,
-      taskSkills: () => ({
-        findSkill: (name) => (name === 'tdd' ? tdd : undefined),
-        searchedDirs: () => [],
-        uncommitted: () => new Promise((resolve) => {
-          asked();
-          state.release = () => resolve(new Map());
-        }),
-      }),
     };
     return { host, state, asked, handler: plannerToolHandler(host) };
   }
@@ -1878,17 +1880,6 @@ describe('a submission whose planner turn ends while its skill check runs', () =
     expect(host.submitPlan).not.toHaveBeenCalled();
   });
 
-  it('hands edit_plan\'s ops to no turn, rather than to the one opened since', async () => {
-    const { host, state, asked, handler } = heldHost();
-
-    const call = handler.editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { skills: ['tdd'] } }] }, context);
-    await vi.waitFor(() => expect(asked).toHaveBeenCalled());
-    state.turn = undefined;
-    state.release();
-
-    expect(await call).toEqual({ isError: true, text: expect.stringContaining(PLANNER_TURN_ENDED) });
-    expect(host.editPlan).not.toHaveBeenCalled();
-  });
 });
 
 describe('task references in the read tools', () => {
@@ -1905,7 +1896,7 @@ describe('task references in the read tools', () => {
     turnId: () => 'turn-1',
     recordSkillLoad: () => false,
     liveCatalog: async () => ({ runners: ['claude-code'], models: {}, modes: {}, autonomousDefault: true }),
-    adjustments: () => [],
+    checkPlan: async () => { throw new Error('not used here'); },
     submitPlan: () => true,
     editPlan: async () => ({ ok: true as const, summary: [], queued: false }),
     tasks: () => plan,
@@ -1920,7 +1911,6 @@ describe('task references in the read tools', () => {
     webSearch: async () => undefined,
     execute: async () => ({ ok: true, message: '' }),
     editsRefused: () => undefined,
-    taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [], uncommitted: async () => new Map() }),
   });
 
   it('reads #2 as top-level task 2 once task 1 has subtasks, and a subtask by its dotted label', async () => {
@@ -2103,7 +2093,7 @@ describe('run_command, sealed (ADR-0036)', () => {
     turnId: () => 'turn-1',
     recordSkillLoad: () => false,
     liveCatalog: async () => ({ runners: ['claude-code'], models: {}, modes: {}, autonomousDefault: true }),
-    adjustments: () => [],
+    checkPlan: async () => { throw new Error('not used here'); },
     submitPlan: () => true,
     editPlan: async () => ({ ok: true as const, summary: [], queued: false }),
     tasks: () => [],
@@ -2118,7 +2108,6 @@ describe('run_command, sealed (ADR-0036)', () => {
     webSearch: async () => undefined,
     execute: async () => ({ ok: true, message: '' }),
     editsRefused: () => undefined,
-    taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [], uncommitted: async () => new Map() }),
   });
 
   it('hands a sealed run to the session only when the planner asks for one, and returns what it said', async () => {

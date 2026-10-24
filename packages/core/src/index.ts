@@ -144,8 +144,8 @@ export { nativeShellOffer } from './services/harness/nativeShell';
 export type { NativeShellOffer } from './services/harness/nativeShell';
 export { mapAgentTool, normalizeAgentArgs } from './services/harness/agentTools';
 export type { MappedTool } from './services/harness/agentTools';
-export { applyTaskOps, parseTaskOpsJson, textHasTaskOps, canMergeTasks, canSplitTask, canSetDependencies, dependencyCandidates, dependentsOf } from './services/TaskOps';
-export type { TaskOp, ApplyTaskOpsResult, TaskRef } from './services/TaskOps';
+export { applyTaskOps, opRefusalText, parseTaskOpsJson, textHasTaskOps, canMergeTasks, canSplitTask, canSetDependencies, dependencyCandidates, dependentsOf } from './services/TaskOps';
+export type { TaskOp, ApplyTaskOpsResult, OpRef, OpRefusal, TaskRef } from './services/TaskOps';
 export {
   parseTaskQueryJson, textHasTaskQuery, taskQuerySignature, renderTaskQueryAnswer,
   TASK_QUERY_FIELDS, TASK_QUERY_PROTOCOL, TASK_QUERY_REMINDER, TASK_QUERY_ANSWER_OR_OPS,

@@ -4,6 +4,7 @@ import type { ConversationTurn, IAiService, TurnRun } from '../AiService';
 import { AUTORUN_OFF } from '../PlanPrompts';
 import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '../SettingsService';
 import { PlannerConversation, type PlannerConversationHost } from '../PlannerConversation';
+import { fakePlanChanges, passed } from './planChangesTestKit';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { SessionMessage } from '../SessionMessage';
 import { HUNG_TURN_GRACE_MS, WAKE_UP_TURN_TIMEOUT_MS } from '../Supervisor';
@@ -86,6 +87,9 @@ function fakeAi(turn: ConversationTurn): IAiService {
 
 function conversationHost(ai: IAiService, planState: LegacyPlanState | null = dialoguePlan()) {
   const state = { plan: planState, persists: 0 };
+  const checks = fakePlanChanges({ tasks: () => state.plan?.tasks ?? [], runners: () => ['claude-code'], catalog: () => ({ modelsByRunner: {} }) });
+  // An edit passes as it stands; a plan meets the real rules.
+  checks.rules.mockImplementation((change, phase) => (change.kind === 'ops' ? passed({ tasks: [...state.plan?.tasks ?? []], summary: ['updated'] }) : checks.real(change, phase)));
   const host: PlannerConversationHost = {
     plan: () => state.plan,
     goal: () => 'build me a parser',
@@ -107,8 +111,7 @@ function conversationHost(ai: IAiService, planState: LegacyPlanState | null = di
     },
     broadcast: vi.fn(),
     broadcastPlan: vi.fn(),
-    validateOps: vi.fn(() => ({ ok: true, tasks: state.plan?.tasks ?? [], errors: [], summary: ['updated'] })),
-    taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [] }),
+    planChanges: checks.planChanges,
     notice: vi.fn(),
     usageLimit: vi.fn((said) => ({ text: said.message, resendAt: null })),
     adoptTasks: vi.fn((tasks) => tasks.length),
