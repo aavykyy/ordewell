@@ -211,7 +211,7 @@ export { VerdictEngine } from './services/VerdictEngine';
 export type { VerdictListener, CheckpointListener } from './services/VerdictEngine';
 export * from './interfaces/TaskOutputSource';
 export { BufferedTaskOutputSource } from './services/BufferedTaskOutputSource';
-export { autonomyLevelLabel, parseAutonomyLevel, runnerModesFrom } from './services/ModeResolver';
+export { autonomyLevelLabel, parseAutonomyFlag, parseAutonomyLevel, runnerModesFrom } from './services/ModeResolver';
 export type { RunnerModeInfo } from './services/ModeResolver';
 export { AbstractRunnerSession, AbstractRunner } from './services/AbstractRunner';
 export type { RunnerSpawnOptions } from './services/AbstractRunner';

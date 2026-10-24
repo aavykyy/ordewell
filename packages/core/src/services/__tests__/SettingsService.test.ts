@@ -422,6 +422,43 @@ describe('SettingsService', () => {
     });
   });
 
+  describe('a file it cannot read', () => {
+    it('warns once and keeps a hand-edited file it cannot parse as a backup, rather than resetting it', () => {
+      const corrupt = '{\n  "autonomousMode": false,\n  "modelAllowlist": { "codex": ["gpt-5"] },\n}\n';
+      fs.writeFileSync(tempFile, corrupt);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        expect(service.getAll()).toEqual({});
+
+        service.setEnabledRunners(['claude-code']);
+
+        const saved = JSON.parse(fs.readFileSync(tempFile, 'utf-8'));
+        expect(saved).toEqual({ enabledRunners: ['claude-code'] });
+        const aside = fs.readdirSync(tempDir).filter((f) => f.endsWith('.corrupt'));
+        expect(aside).toHaveLength(1);
+        expect(fs.readFileSync(path.join(tempDir, aside[0]), 'utf-8')).toBe(corrupt);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0][0])).toContain(tempFile);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('refuses to save over a file a read error left unread, keeping what is there', () => {
+      // A directory in the file's place makes readFileSync fail with EISDIR —
+      // an I/O error, not a parse error, and no licence to overwrite it.
+      fs.mkdirSync(tempFile);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        expect(() => service.setEnabledRunners(['codex'])).toThrow(/could not be read/);
+        expect(fs.statSync(tempFile).isDirectory()).toBe(true);
+        expect(warn).toHaveBeenCalledTimes(1);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
   describe('enabledRunners', () => {
     it('is undefined until the user chooses, so hosts can fall back to their defaults', () => {
       expect(service.getEnabledRunners()).toBeUndefined();
@@ -520,10 +557,12 @@ describe('SettingsService', () => {
       expect(service.autonomousModeOverridden()).toBe(true);
     });
 
-    it('reads a hand-edited value it cannot use as Full', () => {
+    it('reads a hand-edited level name it can use, and Full for one it cannot', () => {
       delete process.env.ORDEWELL_AUTONOMOUS_MODE;
       fs.writeFileSync(tempFile, JSON.stringify({ autonomousMode: 'guarded' }));
+      expect(new SettingsService(tempFile).autonomousMode()).toBe(false);
 
+      fs.writeFileSync(tempFile, JSON.stringify({ autonomousMode: 'maybe' }));
       expect(new SettingsService(tempFile).autonomousMode()).toBe(true);
     });
 

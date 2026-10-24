@@ -334,6 +334,22 @@ describe('SkillsService', () => {
       }
     });
 
+    it('catalogs the packaged built-ins a read-only home could not seed, as the planner lists them', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      h.seedFails = true;
+      try {
+        const svc = createSkillsService(workspaceRoot);
+
+        expect(svc.readCatalog().skills.map((s) => s.name).sort())
+          .toEqual(['diagnose', 'explore', 'grilling', 'improve-codebase-architecture', 'tdd', 'to-spec']);
+        expect(svc.readCatalog().skills.every((s) => s.source === 'global')).toBe(true);
+        expect(fs.existsSync(path.join(home, '.ordewell', 'skills'))).toBe(false);
+      } finally {
+        h.seedFails = false;
+        warn.mockRestore();
+      }
+    });
+
     it('prunes a stale grill-me seed left by an older build', () => {
       writeSkill(path.join(home, '.ordewell', 'skills'), 'grill-me', {
         name: 'grill-me',

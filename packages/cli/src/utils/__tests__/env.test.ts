@@ -145,6 +145,33 @@ describe('moving the autonomy level out of .env (ADR-0030)', () => {
     expect(process.env.ORDEWELL_AUTONOMOUS_MODE).toBeUndefined();
   });
 
+  it.each([['off'], ['guarded'], ['auto'], ['FALSE'], [' false '], ['0']])(
+    'migrates ORDEWELL_AUTONOMOUS_MODE=%s as Guarded rather than Full',
+    async (value) => {
+      const { moveAutonomyToSettings } = await import('../env');
+      const { SettingsService } = await import('@ordewell/core');
+      writeEnvVar(file(), 'ORDEWELL_AUTONOMOUS_MODE', value);
+
+      moveAutonomyToSettings();
+
+      expect(new SettingsService().getAll().autonomousMode).toBe(false);
+      expect(fs.readFileSync(file(), 'utf8')).not.toContain('ORDEWELL_AUTONOMOUS_MODE');
+    },
+  );
+
+  it.each([['true'], ['on'], ['FULL'], ['1']])(
+    'migrates ORDEWELL_AUTONOMOUS_MODE=%s as Full',
+    async (value) => {
+      const { moveAutonomyToSettings } = await import('../env');
+      const { SettingsService } = await import('@ordewell/core');
+      writeEnvVar(file(), 'ORDEWELL_AUTONOMOUS_MODE', value);
+
+      moveAutonomyToSettings();
+
+      expect(new SettingsService().getAll().autonomousMode).toBe(true);
+    },
+  );
+
   it('keeps a level already in the settings, and still clears the stale .env line', async () => {
     const { moveAutonomyToSettings } = await import('../env');
     const { SettingsService } = await import('@ordewell/core');
