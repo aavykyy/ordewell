@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, act, fireEvent, cleanup } from '@testing-library/react';
-import type { DisplayBlock } from '@ordewell/core';
+import { EMPTY_TASK_LOG, EMPTY_TASK_LOG_FOLLOW, taskLogHeaderView, type AttemptUsage, type DisplayBlock, type RunnerCommand, type StructuredTurnEnd, type TaskLogFollow, type TaskLogHeaderTask, type TaskUsageSummary, type UsageTotals } from '@ordewell/core';
 import { replayTaskLog } from '@ordewell/core/plan-utils';
 import TaskLogApp from '../TaskLogApp';
 import type { HostToTaskLog, TaskLogStatus } from '../../../shared/taskLogProtocol';
@@ -12,17 +12,83 @@ function send(msg: HostToTaskLog): void {
   act(() => { window.dispatchEvent(new MessageEvent('message', { data: msg })); });
 }
 
-function status(overrides: Partial<TaskLogStatus> = {}): TaskLogStatus {
+/**
+ * The header fields the app used to take raw (`working`, `planStatus`, …) are
+ * turned into a real log and read through core's one header view, so these
+ * tests draw what the TUI draws rather than a hand-copied header.
+ */
+type StatusOverrides = Partial<TaskLogStatus> & {
+  planStatus?: string;
+  working?: boolean;
+  awaitingReason?: TaskLogHeaderTask['awaitingReason'];
+  skipReason?: string;
+  resumeAt?: string;
+  awaitingApproval?: number;
+  continuable?: boolean;
+  lastTurnEnd?: StructuredTurnEnd;
+  usage?: Pick<TaskUsageSummary, 'totals' | 'contextFill'>;
+  usageTotal?: Pick<TaskUsageSummary, 'totals' | 'contextFill'>;
+  commands?: readonly RunnerCommand[];
+};
+
+function attemptOf(n: number, usage: Pick<TaskUsageSummary, 'totals' | 'contextFill'>): AttemptUsage {
+  return {
+    attempt: n, runner: 'claude-code', startedAt: '', wallTimeMs: 0, totals: usage.totals, byModel: [],
+    ...(usage.contextFill
+      ? { lastPromptTokens: usage.contextFill.usedTokens, ...(usage.contextFill.windowTokens ? { contextWindow: usage.contextFill.windowTokens } : {}) }
+      : {}),
+  };
+}
+
+/** What a second attempt adds to reach a stated task total, for the past-attempt case below. */
+function remainder(total: UsageTotals, own: UsageTotals): UsageTotals {
+  const left: UsageTotals = { ...total };
+  for (const key of ['inputTokens', 'outputTokens', 'cachedInputTokens'] as const) {
+    const value = (total[key] ?? 0) - (own[key] ?? 0);
+    if (value > 0) left[key] = value; else delete left[key];
+  }
+  const cost = Object.entries(total.reportedCost ?? {}).flatMap(([currency, amount]) => {
+    const value = amount - (own.reportedCost?.[currency] ?? 0);
+    return value > 0 ? [[currency, value] as const] : [];
+  });
+  if (cost.length > 0) left.reportedCost = Object.fromEntries(cost); else delete left.reportedCost;
+  return left;
+}
+
+function status(over: StatusOverrides = {}): TaskLogStatus {
+  const {
+    planStatus = 'in_progress', working = false, awaitingReason, skipReason, resumeAt,
+    awaitingApproval = 0, continuable = false, lastTurnEnd, usage, usageTotal, commands,
+    attempt = 1, attempts = [1], ...rest
+  } = over;
+  const ledger = usageTotal && usage
+    ? [attemptOf(1, usage), attemptOf(2, { totals: remainder(usageTotal.totals, usage.totals), ...(usageTotal.contextFill ? { contextFill: usageTotal.contextFill } : {}) })]
+    : usage ? [attemptOf(1, usage)] : [];
+  const view = {
+    ...EMPTY_TASK_LOG,
+    working,
+    ...(lastTurnEnd ? { lastTurnEnd } : {}),
+    ...(commands?.length ? { blocks: [{ type: 'runner_loaded' as const, id: 'r', commands: [...commands], mcpServers: [] }] } : {}),
+  };
+  const follow: TaskLogFollow = { ...EMPTY_TASK_LOG_FOLLOW, view, attempts, attempt };
   return {
     taskId: 't1', order: 2, title: 'Parse JSON', runner: 'claude-code',
-    planStatus: 'in_progress', awaitingApproval: 0, working: false, queued: [], attempts: [1], attempt: 1, continuable: false,
-    ...overrides,
+    header: taskLogHeaderView({
+      status: planStatus,
+      ...(awaitingReason ? { awaitingReason } : {}),
+      ...(skipReason !== undefined ? { skipReason } : {}),
+      resumeAt: resumeAt ?? null,
+      continuable,
+      attemptUsage: ledger,
+    }, follow, awaitingApproval, attempt),
+    queued: [], attempts, attempt,
+    ...rest,
   };
 }
 
 const message = (id: string, text: string): DisplayBlock => ({ type: 'message', id, role: 'agent', text, streaming: false });
 
-function init(overrides: Partial<TaskLogStatus> = {}, blocks: DisplayBlock[] = [message('b1', 'hello from the agent')]): void {
+function init(overrides: StatusOverrides = {}, blocks: DisplayBlock[] = [message('b1', 'hello from the agent')]): void {
   send({ type: 'init', status: status(overrides), blocks });
 }
 
@@ -240,6 +306,15 @@ describe('the task log tab (ADR-0018, V1)', () => {
     act(() => { fireEvent.click(screen.getByLabelText('Send')); });
 
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendTaskMessage', text: 'use Postgres' });
+  });
+
+  it('says what a waiting task waits on, and why a skipped one was skipped', () => {
+    render(<TaskLogApp />);
+    init({ planStatus: 'awaiting_user', awaitingReason: 'files-changed' });
+    expect(screen.getByText('Changed tracked files', { selector: '.task-log-state' })).toBeTruthy();
+
+    send({ type: 'status', status: status({ planStatus: 'skipped', skipReason: 'no GPU on this host' }) });
+    expect(screen.getByText('Skipped: no GPU on this host', { selector: '.task-log-state' })).toBeTruthy();
   });
 
   it('shows an undelivered message from the task log with an empty queue', () => {

@@ -1,5 +1,5 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type PromptHold, type RunnerCommand, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { SaveSettingsEffect } from './reducers/settings';
 import type { StepperState } from './reducers/stepper';
@@ -580,15 +580,6 @@ export function selectedPlanRow(state: TuiState): PlanRow | null {
   return planRows(state)[state.selectedTask] ?? null;
 }
 
-/** The commands the task's runner reported in the attempt on screen (#66): empty when it reported none. */
-export function runnerCommands(tv: TaskLogState): readonly RunnerCommand[] {
-  for (let i = tv.view.blocks.length - 1; i >= 0; i--) {
-    const block = tv.view.blocks[i];
-    if (block.type === 'runner_loaded') return block.commands;
-  }
-  return [];
-}
-
 /** The request the task view's approval keys answer: the oldest one still waiting in the attempt on screen. */
 export function waitingApproval(tv: TaskLogState): ApprovalBlock | undefined {
   return tv.view.blocks.find((b): b is ApprovalBlock => b.type === 'approval' && b.status === 'pending' && b.approvalId !== undefined);
@@ -606,17 +597,16 @@ export function waitingCheckpoint(task: TaskView | undefined): string | undefine
 /**
  * A finished structured task the daemon can continue in its saved session
  * (ADR-0018, K1), or one paused on a usage limit it can resume there: the
- * composer continues it rather than messaging a turn. The status is checked
- * too, so a start the daemon has not reported the flag's end for yet is not
- * continued twice.
+ * composer continues it rather than messaging a turn. The rule is core's, so
+ * the header that names the button and the key that runs it cannot disagree.
  */
 export function continuesTask(task: TaskView | undefined): boolean {
-  return task?.continuable === true && (task.status === 'completed' || task.status === 'failed' || task.status === 'skipped' || resumesTask(task));
+  return task ? logContinues(task) : false;
 }
 
 /** A task paused on a usage limit, whose composer resumes it now with what is typed. */
 export function resumesTask(task: TaskView | undefined): boolean {
-  return task?.status === 'awaiting_user' && task.awaitingReason === 'usage-limit';
+  return task ? logResumes(task) : false;
 }
 
 /**

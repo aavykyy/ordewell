@@ -85,7 +85,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     const h = harness({ 1: [{ type: 'runner_loaded', commands: [{ name: 'compact', description: 'Compact context', kind: 'builtin' }], mcpServers: [] }] });
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
-    expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { commands: [{ name: 'compact', description: 'Compact context', kind: 'builtin' }] } });
+    expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { header: { commands: [{ name: 'compact', description: 'Compact context', kind: 'builtin' }] } } });
     __panels[0].__receive({ type: 'invokeTaskCommand', name: 'compact', args: 'retain tests' });
     expect(h.session.invokeTaskCommand).toHaveBeenCalledWith('t1', 'compact', 'retain tests');
   });
@@ -95,7 +95,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
     expect(posted(__panels[0])[0]).toMatchObject({ type: 'init' });
-    expect((posted(__panels[0])[0] as { status: { usage?: unknown } }).status.usage).toBeUndefined();
+    expect((posted(__panels[0])[0] as { status: { header: { usage?: unknown } } }).status.header.usage).toEqual([]);
 
     const spend = (attempt: number, inputTokens: number, usd: number, lastPromptTokens: number): AttemptUsage => ({
       attempt, runner: 'claude-code', startedAt: '', wallTimeMs: 1000,
@@ -107,26 +107,20 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     h.registry.receive({ type: 'status_update', tasks: [] });
 
     // The latest attempt: the task's whole spend, with the meter it left.
-    const latest = (posted(__panels[0])[0] as { status: { usage?: unknown; usageTotal?: unknown } }).status;
-    expect(latest.usage).toEqual({
-      totals: { inputTokens: 1500, outputTokens: 20, reportedCost: { USD: 1.5 } },
-      contextFill: { usedTokens: 50_000, windowTokens: 200_000 },
-    });
-    expect(latest.usageTotal).toBeUndefined();
+    const latest = (posted(__panels[0])[0] as { status: { header: { usage: unknown } } }).status;
+    expect(latest.header.usage).toEqual([
+      { text: 'ctx 50k (25%) · $1.50', contextFill: { usedTokens: 50_000, windowTokens: 200_000 } },
+    ]);
 
     // An earlier attempt: its own numbers, and the task total labelled below.
     __panels[0].webview.postMessage.mockClear();
     __panels[0].__receive({ type: 'selectAttempt', attempt: 1 });
     const earlier = posted(__panels[0]).at(-1);
     if (earlier?.type !== 'init') throw new Error('Expected an attempt init');
-    expect(earlier.status.usage).toEqual({
-      totals: { inputTokens: 1000, outputTokens: 10, reportedCost: { USD: 0.5 } },
-      contextFill: { usedTokens: 10_000, windowTokens: 200_000 },
-    });
-    expect(earlier.status.usageTotal).toEqual({
-      totals: { inputTokens: 1500, outputTokens: 20, reportedCost: { USD: 1.5 } },
-      contextFill: { usedTokens: 50_000, windowTokens: 200_000 },
-    });
+    expect(earlier.status.header.usage).toEqual([
+      { text: 'attempt 1: ctx 10k (5%) · $0.50', contextFill: { usedTokens: 10_000, windowTokens: 200_000 } },
+      { text: 'task total: ctx 50k (25%) · $1.50', contextFill: { usedTokens: 50_000, windowTokens: 200_000 } },
+    ]);
   });
 
   it('draws an old log\'s own usage when the task kept no attempt ledger', () => {
@@ -141,10 +135,9 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     __panels[0].__receive({ type: 'ready' });
 
     const init = posted(__panels[0])[0];
-    expect((init as { status: { usage?: unknown } }).status.usage).toEqual({
-      totals: { inputTokens: 500, outputTokens: 40 },
-      contextFill: { usedTokens: 540, windowTokens: 200_000 },
-    });
+    expect((init as { status: { header: { usage?: unknown } } }).status.header.usage).toEqual([
+      { text: 'ctx 540 (<1%)', contextFill: { usedTokens: 540, windowTokens: 200_000 } },
+    ]);
   });
 
   it('never opens a tab by itself, and opens one titled for the task on demand', () => {
@@ -317,21 +310,21 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     h.registry.receive({ type: 'status_update', tasks: [] });
 
     const status = posted(__panels[0]).find((m) => m.type === 'status');
-    expect(status).toMatchObject({ type: 'status', status: { planStatus: 'awaiting_user', awaitingReason: 'input' } });
+    expect(status).toMatchObject({ type: 'status', status: { header: { state: { kind: 'awaiting', label: 'Waiting for your input' } } } });
   });
 
   it('offers Continue only for a finished structured task with a saved session (ADR-0018, K1)', () => {
     const h = harness();
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
-    expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { continuable: false } });
+    expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { header: { continuable: false } } });
     __panels[0].webview.postMessage.mockClear();
 
     h.task.status = 'completed';
     h.task.runnerSessionId = 'sess-1';
     h.registry.receive({ type: 'status_update', tasks: [] });
 
-    expect(posted(__panels[0]).find((m) => m.type === 'status')).toMatchObject({ status: { continuable: true } });
+    expect(posted(__panels[0]).find((m) => m.type === 'status')).toMatchObject({ status: { header: { continuable: true } } });
   });
 
   it('continues the task through the command seam as the user and follows the new attempt, even from an earlier one', async () => {
@@ -365,7 +358,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     const h = harness();
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
-    expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { awaitingApproval: 0 } });
+    expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { header: { state: { kind: 'running' } } } });
     __panels[0].webview.postMessage.mockClear();
 
     const request = (id: string, taskId: string, kind: 'runner_tool' | 'shell_command' = 'runner_tool'): PendingApproval => ({
@@ -374,7 +367,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     h.session.pending = [request('a', 't1'), request('b', 't2'), request('c', 't1', 'shell_command')];
     h.registry.receive({ type: 'status_update', tasks: [] });
 
-    expect(posted(__panels[0]).find((m) => m.type === 'status')).toMatchObject({ status: { awaitingApproval: 1 } });
+    expect(posted(__panels[0]).find((m) => m.type === 'status')).toMatchObject({ status: { header: { state: { kind: 'approval', label: 'Waiting for approval' } } } });
   });
 
   it('sends a request\'s answer through the seam as the user, so the timeline and the supervisor hear of it', async () => {
@@ -499,7 +492,7 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
 
-    expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { awaitingReason: 'usage-limit', resumes: expect.stringMatching(/^Resumes at /) } });
+    expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { header: { resumes: expect.stringMatching(/^Resumes at /), state: { label: 'Paused on a usage limit' } } } });
   });
 
   it('offers Resume now for a task paused on a usage limit', () => {
@@ -508,7 +501,7 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
 
-    expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { continuable: true, resumable: true } });
+    expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { header: { continuable: true, resumable: true } } });
   });
 
   it('closes every tab on dispose, and a later event reaches none of them', () => {

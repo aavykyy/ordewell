@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
-import { latestTaskCommands } from '../shared/taskCommands';
-import { taskActionCommand, canContinue, isMeasured, pausedOnLimit, resumeLabel, taskUsageSummary, usageLine, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent, type TaskUsageSummary } from '@ordewell/core';
+import { taskActionCommand, canContinue, taskLogHeaderView, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG_FOLLOW, followTaskLog } from '@ordewell/core/plan-utils';
 import { diffConversation } from '../shared/conversationPatch';
 import { renderWebviewHtml } from './webviewHtml';
@@ -201,57 +200,26 @@ export class TaskLogPanel {
 
   private status(): TaskLogStatus {
     const task = this.deps.getTask(this.taskId);
-    const resumes = task ? resumeLabel(task) : null;
-    const attempts = task?.attemptUsage ?? [];
-    const latest = attempts.at(-1);
-    const shown = this.follow.attempt > 0 ? attempts.find((a) => a.attempt === this.follow.attempt) : undefined;
-    // A log saved before attempt ledgers still measured its own usage; it is
-    // the only report there is, and the TUI task view draws it too.
-    const logged = this.follow.view.usage;
-    const loggedLine = logged && isMeasured(logged.totals) ? usageLine(logged) : undefined;
-    const total = task ? taskUsageSummary(task) : undefined;
-    const totalUsage = total && total.attempts > 0
-      ? { totals: total.totals, ...(total.contextFill ? { contextFill: total.contextFill } : {}) }
-      : undefined;
-    // The TUI's task view draws the attempt on screen's own numbers first and
-    // the task total under them; only the latest attempt gets the total alone.
-    let usage: TaskLogStatus['usage'];
-    let usageTotal: TaskLogStatus['usageTotal'];
-    if (totalUsage && this.follow.attempt !== 0 && this.follow.attempt !== latest?.attempt) {
-      usage = this.usageOf(shown ? usageLine(shown) : undefined) ?? this.usageOf(loggedLine);
-      usageTotal = totalUsage;
-    } else if (totalUsage) {
-      usage = totalUsage;
-    } else {
-      usage = this.usageOf(loggedLine);
-    }
+    const approvals = this.deps.session.outstandingApprovals()
+      .filter((p) => p.request.kind === 'runner_tool' && p.request.taskId === this.taskId).length;
     return {
-      commands: latestTaskCommands(this.deps.session, this.taskId),
       taskId: this.taskId,
       order: task?.order ?? 0,
       orderLabel: this.deps.orderLabel?.(this.taskId),
       title: task?.title ?? '',
       runner: task?.assignedRunner ?? '',
-      planStatus: task?.status ?? 'pending',
-      awaitingReason: task?.awaitingReason,
-      skipReason: task?.skipReason,
-      ...(resumes ? { resumes } : {}),
-      awaitingApproval: this.deps.session.outstandingApprovals()
-        .filter((p) => p.request.kind === 'runner_tool' && p.request.taskId === this.taskId).length,
-      working: this.follow.view.working,
-      lastTurnEnd: this.follow.view.lastTurnEnd,
+      header: taskLogHeaderView({
+        status: task?.status ?? '',
+        ...(task?.awaitingReason ? { awaitingReason: task.awaitingReason } : {}),
+        ...(task?.skipReason !== undefined ? { skipReason: task.skipReason } : {}),
+        resumeAt: task?.resumeAt ?? null,
+        continuable: task ? canContinue(task) : false,
+        attemptUsage: task?.attemptUsage ?? [],
+      }, this.follow, approvals, this.follow.attempt),
       queued: this.follow.view.queued,
       attempts: this.follow.attempts,
       attempt: this.follow.attempt,
-      continuable: task ? canContinue(task) : false,
-      resumable: task ? pausedOnLimit(task) && canContinue(task) : false,
-      ...(usage ? { usage } : {}),
-      ...(usageTotal ? { usageTotal } : {}),
     };
-  }
-
-  private usageOf(line: Pick<TaskUsageSummary, 'totals' | 'contextFill'> | undefined): TaskLogStatus['usage'] {
-    return line ? { totals: line.totals, ...(line.contextFill ? { contextFill: line.contextFill } : {}) } : undefined;
   }
 
   private control(run: () => void): void {
