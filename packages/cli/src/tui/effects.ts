@@ -1,6 +1,6 @@
 import { execSync } from 'child_process';
 import {
-  clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, markRequestFor, newTaskFields, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
+  clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, newTaskFields, taskActionCommand, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
   type PlannerModelRecall,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
@@ -20,10 +20,9 @@ import { inboundFor, forgetInbound } from './inbound';
  */
 export type OrdewellApi = Pick<ApiClient,
   | 'startConversation' | 'sendConversationMessage' | 'forceSendPlannerMessage' | 'executePlan' | 'stopExecution' | 'cancelPlanning'
-  | 'taskControl' | 'markTaskComplete' | 'markTaskIncomplete' | 'skipTask' | 'cancelResume' | 'resumeNow' | 'cancelPlannerResend'
+  | 'execute' | 'cancelPlannerResend'
   | 'getTaskLogAttempts' | 'getTaskLog'
-  | 'sendTaskMessage' | 'invokeTaskCommand' | 'removeQueuedTaskMessage' | 'forceSendTaskMessage' | 'forceSendQueuedTaskMessage'
-  | 'interruptTask' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint' | 'continueTask'
+  | 'invokeTaskCommand' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint'
   | 'addTask' | 'updateTask' | 'removeTask'
   | 'getSessions' | 'getSession' | 'adoptSession' | 'deleteSession' | 'closeSession'
   | 'forkConversation' | 'rewindTargets' | 'rewindConversation' | 'compactConversation'
@@ -245,22 +244,8 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
 
     case 'taskAction': {
       const { sessionId, taskId, action } = effect;
-      if (action === 'cancel-resume') {
-        // A task with no resume scheduled is refused in the daemon's words.
-        await api.cancelResume(sessionId, taskId);
-        await refreshPlan(deps, sessionId);
-        return;
-      }
-      const request =
-        action === 'cancel' || action === 'retry' || action === 'force-start'
-          ? () => api.taskControl(sessionId, taskId, action)
-          : action === 'resume-now'
-            ? () => api.resumeNow(sessionId, taskId)
-            : action === 'skip'
-              ? () => api.skipTask(sessionId, taskId)
-              : markRequestFor(action) === 'uncomplete'
-                ? () => api.markTaskIncomplete(sessionId, taskId)
-                : () => api.markTaskComplete(sessionId, taskId);
+      // A refusal comes back in the seam's words, a task with no resume scheduled included.
+      const request = () => api.execute(sessionId, taskActionCommand(action, taskId));
       // A spawning action (see `taskActionEffect`) reports its progress the same
       // way a whole run does, so it needs the same stream open around it.
       await (effect.watch ? withExecutionStream(deps, sessionId, request) : request());
@@ -341,7 +326,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     // The daemon queues the message (or delivers it to a waiting task) and
     // broadcasts the `task_log` event that shows it; nothing to dispatch here.
     case 'sendTaskMessage':
-      await api.sendTaskMessage(effect.sessionId, effect.taskId, effect.text);
+      await api.execute(effect.sessionId, { command: 'message_task', task: effect.taskId, text: effect.text });
       return;
     case 'invokeTaskCommand':
       await api.invokeTaskCommand(effect.sessionId, effect.taskId, effect.name, effect.args);
@@ -351,7 +336,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     // the execution stream, which a TUI not already watching a run holds open.
     case 'continueTask': {
       const { sessionId, taskId, text } = effect;
-      const request = () => api.continueTask(sessionId, taskId, text);
+      const request = () => api.execute(sessionId, { command: 'retry_task', task: taskId, from: 'session', message: text });
       await (effect.watch ? withExecutionStream(deps, sessionId, request) : request());
       await refreshPlan(deps, sessionId);
       return;
@@ -359,21 +344,21 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
 
     // One already delivered is refused in the daemon's words.
     case 'removeTaskMessage':
-      await api.removeQueuedTaskMessage(effect.sessionId, effect.taskId, effect.messageId);
+      await api.execute(effect.sessionId, { command: 'remove_queued', task: effect.taskId, id: effect.messageId });
       return;
 
     // The task log shows the forced message at the head of the queue, then
     // the interrupt, then the turn it opens; nothing to dispatch here.
     case 'forceSendTaskMessage':
-      await api.forceSendTaskMessage(effect.sessionId, effect.taskId, effect.text);
+      await api.execute(effect.sessionId, { command: 'message_task', task: effect.taskId, text: effect.text, force: true });
       return;
 
     case 'forceSendQueuedTaskMessage':
-      await api.forceSendQueuedTaskMessage(effect.sessionId, effect.taskId, effect.messageId);
+      await api.execute(effect.sessionId, { command: 'force_send_queued', task: effect.taskId, id: effect.messageId });
       return;
 
     case 'interruptTask':
-      await api.interruptTask(effect.sessionId, effect.taskId);
+      await api.execute(effect.sessionId, { command: 'interrupt_task', task: effect.taskId });
       return;
 
     case 'setPlanner': {

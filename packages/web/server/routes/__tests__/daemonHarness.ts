@@ -2,7 +2,7 @@ import { vi } from 'vitest';
 import { Hono } from 'hono';
 import {
   createSession, createTask, ModelResolver, RunnerRegistry,
-  type IRunner, type LegacyPlanState, type Session, type SessionMessage, type Task,
+  type ExecutionCommand, type IRunner, type LegacyPlanState, type Session, type SessionMessage, type Task,
 } from '@ordewell/core';
 import { fakeConfig, fakeFileSystem, FakeRunnerSession } from '@ordewell/core/testing';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
@@ -68,5 +68,8 @@ export function daemonHarness() {
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
 
-  return { app, session, messages, runners, runner, load, timeline, forgetTimeline, latest, post };
+  // The one route every forwarded control takes: the body is the command itself.
+  const command = (body: ExecutionCommand) => post('execute-command', body);
+
+  return { app, session, messages, runners, runner, load, timeline, forgetTimeline, latest, post, command };
 }

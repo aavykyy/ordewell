@@ -6,7 +6,7 @@ import {
   DEFAULT_RUNNERS, ModelResolver, RunnerRegistry, saveState, clearState,
   listSessions, loadSession,
   SettingsService, installedPlannerDetected,
-  type ExecutionCommand,
+  taskActionCommand, type ExecutionCommand,
 } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { forkConversation, rewindConversation, compactConversation } from '../plan/conversation';
@@ -253,7 +253,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         if (!picked) return;
         taskId = picked.description;
       }
-      await userCommand({ command: 'mark_complete', task: taskId });
+      await userCommand(taskActionCommand('complete', taskId));
     }),
   );
   context.subscriptions.push(
@@ -275,7 +275,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         if (!picked) return;
         taskId = picked.description;
       }
-      await userCommand({ command: 'mark_not_done', task: taskId });
+      await userCommand(taskActionCommand('uncomplete', taskId));
     }),
   );
   context.subscriptions.push(
@@ -289,21 +289,21 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     vscode.commands.registerCommand('ordewell.skipTask', async (taskItem?: Task) => {
       const taskId = taskItem?.id;
       if (!taskId) return;
-      await userCommand({ command: 'skip_task', task: taskId });
+      await userCommand(taskActionCommand('skip', taskId));
     }),
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.retryTask', async (taskItem?: Task) => {
       const taskId = taskItem?.id;
       if (!taskId) return;
-      await userCommand({ command: 'retry_task', task: taskId, from: 'fresh' });
+      await userCommand(taskActionCommand('retry', taskId));
     }),
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.cancelTask', async (taskItem?: Task) => {
       const taskId = taskItem?.id;
       if (!taskId) return;
-      await userCommand({ command: 'stop_task', task: taskId });
+      await userCommand(taskActionCommand('cancel', taskId));
     }),
   );
   context.subscriptions.push(

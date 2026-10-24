@@ -116,46 +116,23 @@ describe('task editing routes', () => {
     });
   });
 
-  describe('POST /tasks/:taskId/uncomplete', () => {
-    it('un-marks the task through the command seam as the user, answering its line', async () => {
-      const res = await app.request('/api/plans/s1/tasks/t1/uncomplete', { method: 'POST' });
+  describe('POST /execute-command', () => {
+    const send = (body: unknown) => app.request('/api/plans/s1/execute-command', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+
+    it('runs the command through the seam as the user, answering its line', async () => {
+      const res = await send({ command: 'mark_not_done', task: 't1' });
 
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ ok: true, message: 'Done.' });
       expect(session.execute).toHaveBeenCalledWith({ command: 'mark_not_done', task: 't1' }, { kind: 'user' });
     });
 
-    it('404s when the session is gone', async () => {
-      session.execute.mockRejectedValue(new SessionNotFoundError());
-
-      const res = await app.request('/api/plans/s1/tasks/t1/uncomplete', { method: 'POST' });
-
-      expect(res.status).toBe(404);
-    });
-
-    it('survives a non-Error throw rather than crashing the route', async () => {
-      session.execute.mockRejectedValue('boom');
-
-      const res = await app.request('/api/plans/s1/tasks/t1/uncomplete', { method: 'POST' });
-
-      expect(res.status).toBe(500);
-      expect((await res.json() as { error: string }).error).toBe('Internal error');
-    });
-  });
-
-  describe('POST /tasks/:taskId/resume/cancel', () => {
-    it('cancels the resume of a task paused on a usage limit through the seam, answering its line', async () => {
-      const res = await app.request('/api/plans/s1/tasks/t1/resume/cancel', { method: 'POST' });
-
-      expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ cancelled: true, message: 'Done.' });
-      expect(session.execute).toHaveBeenCalledWith({ command: 'cancel_resume', task: 't1' }, { kind: 'user' });
-    });
-
-    it('refuses, with the reason, a task that has no resume scheduled', async () => {
+    it('refuses, with the reason, what the seam refuses', async () => {
       session.execute.mockResolvedValue({ ok: false, outcome: 'refused', message: 'Task #1 "Fix" has no resume scheduled.' });
 
-      const res = await app.request('/api/plans/s1/tasks/t1/resume/cancel', { method: 'POST' });
+      const res = await send({ command: 'cancel_resume', task: 't1' });
 
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({ error: 'Task #1 "Fix" has no resume scheduled.', code: 'refused' });
@@ -164,26 +141,38 @@ describe('task editing routes', () => {
     it('404s when the session is gone', async () => {
       session.execute.mockRejectedValue(new SessionNotFoundError());
 
-      expect((await app.request('/api/plans/s1/tasks/t1/resume/cancel', { method: 'POST' })).status).toBe(404);
-    });
-  });
-
-  describe('POST /tasks/:taskId/resume/now', () => {
-    it('resumes a task paused on a usage limit now, as the user\'s retry from its saved session', async () => {
-      const res = await app.request('/api/plans/s1/tasks/t1/resume/now', { method: 'POST' });
-
-      expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ ok: true, message: 'Done.' });
-      expect(session.execute).toHaveBeenCalledWith({ command: 'retry_task', task: 't1', from: 'session' }, { kind: 'user' });
+      expect((await send({ command: 'cancel_resume', task: 't1' })).status).toBe(404);
     });
 
-    it('refuses with the reason when the task cannot be resumed', async () => {
-      session.execute.mockResolvedValue({ ok: false, outcome: 'refused', message: 'Task "Fix" is not paused on a usage limit.' });
+    it('survives a non-Error throw rather than crashing the route', async () => {
+      session.execute.mockRejectedValue('boom');
 
-      const res = await app.request('/api/plans/s1/tasks/t1/resume/now', { method: 'POST' });
+      const res = await send({ command: 'mark_not_done', task: 't1' });
+
+      expect(res.status).toBe(500);
+      expect((await res.json() as { error: string }).error).toBe('Internal error');
+    });
+
+    it.each([
+      ['an unknown command', { command: 'format_disk' }],
+      ['a command with no name', {}],
+      ['a task reference that is not text', { command: 'stop_task', task: 7 }],
+      ['a command missing its task', { command: 'stop_task' }],
+      ['a retry from neither kind of start', { command: 'retry_task', task: 't1', from: 'later' }],
+      ['an empty message', { command: 'message_task', task: 't1', text: '  ' }],
+    ])('refuses %s before it reaches the seam', async (_label, body) => {
+      const res = await send(body);
 
       expect(res.status).toBe(400);
-      expect((await res.json() as { error: string }).error).toBe('Task "Fix" is not paused on a usage limit.');
+      expect(await res.json()).toMatchObject({ code: 'refused' });
+      expect(session.execute).not.toHaveBeenCalled();
+    });
+
+    it('refuses a body that is not an object', async () => {
+      const res = await send([]);
+
+      expect(res.status).toBe(400);
+      expect(session.execute).not.toHaveBeenCalled();
     });
   });
 

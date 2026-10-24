@@ -2730,12 +2730,14 @@ the run. The user's Stop with nothing to stop is an ok no-op, recorded nowhere.
 VS Code's task cards, plan bar, command palette and task-log panel send every
 control through it as the user and show a refusal's line as the seam worded it;
 the chat adds no note of its own beside the timeline's line for the control.
-The daemon's task-control routes (complete, uncomplete, resume, force start,
-interrupt, checkpoint answers, queued-message controls, review approval, Merge
-all and a runner request's answers) are thin wrappers that run the matching
-command as the user and answer in its words: a refusal is the 400 carrying the
-seam's line, and a task named in a route is resolved by the seam (an id,
-`#order` or title). The CLI sends the task as typed and prints the daemon's
+The daemon takes the user's controls on one route, `POST /api/plans/:id/execute-command`
+(`ApiClient.execute`), whose body is the `ExecutionCommand`: it runs the command
+as the user and answers in its words, a refusal being the 400 carrying the
+seam's line, and a task named in the command is resolved by the seam (an id,
+`#order` or title). Core's `taskActionCommand` is the one table from a task
+action to its command, for the TUI, the CLI and VS Code. Execute, Stop, review
+approval, checkpoint answers, Merge all and a runner request's answers keep
+routes of their own, as they answer more than the seam's line. The CLI sends the task as typed and prints the daemon's
 line; the TUI adds no notice of its own beside the timeline's line, and shows a
 refusal as the daemon worded it. No planner tool reaches into
 `TaskOrchestrator` directly, and the mandate (#23) plugs in here. Plan approval

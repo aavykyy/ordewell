@@ -1,7 +1,8 @@
-import { Hono, type Context, type Env } from 'hono';
+import { Hono } from 'hono';
 import {
   flattenTasks,
   NoPlanError,
+  parseExecutionCommand,
   resolveUserTaskRef,
   surfacePlan,
   surfacePlanState,
@@ -11,10 +12,10 @@ import {
   type ConversationForkResponse,
   type ConversationRewindResponse,
   type ApproveReviewResponse,
+  type ErrorBody,
+  type ExecuteCommandResponse,
   type ExecuteResponse,
-  type TaskStartResponse,
   type ExecutionCommand,
-  type ForceSendResponse,
   type GeneratePlanResponse,
   type IsolationDiffResponse,
   type IsolationMergeResponse,
@@ -22,7 +23,6 @@ import {
   type OkResponse,
   type PlanResponse,
   type PrdResponse,
-  type RemoveMessageResponse,
   type ResolveConflictResponse,
   type RewindTargetsResponse,
   type StopResponse,
@@ -113,86 +113,25 @@ export function plansRoute(pool: OrchestratorPool) {
     return c.json({ cancelled } satisfies CancelPlanningResponse);
   });
 
-  // A task paused on a usage limit then waits for a manual retry.
-  router.post('/:sessionId/tasks/:taskId/resume/cancel', async (c) => {
+  // Every execution button that is no more than "this command, as the user"
+  // (ADR-0029, ADR-0006): the body is an ExecutionCommand, the answer is the
+  // seam's own line and payload, and a refusal is the one 400 every route gives.
+  // The routes beside it stay because they answer more than the seam does: a
+  // `no_plan` code, the 409 for a checkpoint nobody waits at, the Merge all card.
+  router.post('/:sessionId/execute-command', async (c) => {
     try {
-      const { message } = await runUserCommand(pool.session(c.req.param('sessionId')), { command: 'cancel_resume', task: c.req.param('taskId') });
-      return c.json({ cancelled: true, message } satisfies CancelResumeResponse);
-    } catch (err) {
-      return failure(c, err, 'cancel resume');
-    }
-  });
-
-  // Task controls — these spawn or kill runner processes, or settle a task's
-  // state, so they are deliberately separate from the generic `PUT tasks/:taskId`
-  // status patch. Each is an execution button, so it goes through the command
-  // seam as the user (ADR-0029) and answers in the seam's words. Force start
-  // has its own route below, since it also answers the line saying it is queued.
-  for (const [segment, command] of [
-    ['run', (id: string): ExecutionCommand => ({ command: 'run_task', task: id })],
-    ['retry', (id: string): ExecutionCommand => ({ command: 'retry_task', task: id, from: 'fresh' })],
-    ['cancel', (id: string): ExecutionCommand => ({ command: 'stop_task', task: id })],
-    ['complete', (id: string): ExecutionCommand => ({ command: 'mark_complete', task: id })],
-    ['uncomplete', (id: string): ExecutionCommand => ({ command: 'mark_not_done', task: id })],
-    // The user says the limit has reset early: the task, and every other one waiting on its runner's reset, resumes in its saved session now.
-    ['resume/now', (id: string): ExecutionCommand => ({ command: 'retry_task', task: id, from: 'session' })],
-    ['interrupt', (id: string): ExecutionCommand => ({ command: 'interrupt_task', task: id })],
-  ] as const) {
-    router.post(`/:sessionId/tasks/:taskId/${segment}`, async (c) => {
-      try {
-        const { message } = await runUserCommand(pool.session(c.req.param('sessionId')), command(c.req.param('taskId')));
-        return c.json({ ok: true, message } satisfies OkResponse);
-      } catch (err) {
-        return failure(c, err, segment);
+      const parsed = parseExecutionCommand(await jsonObject(c));
+      if (!parsed.ok) return refuse(c, 400, parsed.message, 'refused');
+      const outcome = await pool.session(c.req.param('sessionId')).execute(parsed.command, { kind: 'user' });
+      if (!outcome.ok) {
+        // Not through TaskControlError: a Merge all that git stopped keeps the result it stopped with.
+        return c.json({ error: outcome.message, code: 'refused', ...(outcome.payload ? { payload: outcome.payload } : {}) } satisfies ErrorBody, 400);
       }
-    });
-  }
-
-  // Skip ends the task without landing its work (never a mark complete); the user's reason is optional.
-  router.post('/:sessionId/tasks/:taskId/skip', async (c) => {
-    try {
-      const body: unknown = await c.req.json().catch(() => ({}));
-      const reason = typeof body === 'object' && body !== null && 'reason' in body && typeof body.reason === 'string' ? body.reason : undefined;
-      const { message } = await runUserCommand(pool.session(c.req.param('sessionId')), { command: 'skip_task', task: c.req.param('taskId'), ...(reason ? { reason } : {}) });
-      return c.json({ ok: true, message } satisfies OkResponse);
+      return c.json({ ok: true, message: outcome.message, ...(outcome.payload ? { payload: outcome.payload } : {}) } satisfies ExecuteCommandResponse);
     } catch (err) {
-      return failure(c, err, 'skip');
+      return failure(c, err, 'execute-command');
     }
   });
-
-  router.post('/:sessionId/tasks/:taskId/force-start', async (c) => {
-    try {
-      const { message, payload } = await runUserCommand(pool.session(c.req.param('sessionId')), { command: 'force_start', task: c.req.param('taskId') });
-      return c.json({ ok: true, ...(payload?.kind === 'queued' ? { queued: payload.line } : {}), message } satisfies TaskStartResponse);
-    } catch (err) {
-      return failure(c, err, 'force-start');
-    }
-  });
-
-  // Talking to a task (ADR-0018, M1). A task not running is refused with
-  // the reason. Force send
-  // (ADR-0023, F1) is the same request: it interrupts the running turn and
-  // delivers this message next, ahead of anything queued.
-  const messageHandler = (send: (session: ReturnType<typeof pool.session>, taskId: string, text: string) => Promise<string>) => async (c: Context<Env, '/:sessionId/tasks/:taskId/messages'>) => {
-    try {
-      const body: unknown = await c.req.json().catch(() => ({}));
-      const text = typeof body === 'object' && body !== null && 'text' in body ? body.text : undefined;
-      if (typeof text !== 'string' || !text.trim()) return c.json({ error: 'text is required' }, 400);
-      const id = await send(pool.session(c.req.param('sessionId')), c.req.param('taskId'), text);
-      return c.json({ id } satisfies TaskMessageResponse);
-    } catch (err) {
-      return failure(c, err, 'task edit');
-    }
-  };
-
-  // A message reaches the task through the command seam as the user (ADR-0029),
-  // so it lands in the timeline.
-  const sendMessage = (force: boolean) => messageHandler(async (session, taskId, text) => {
-    const { payload } = await runUserCommand(session, { command: 'message_task', task: taskId, text, ...(force ? { force } : {}) });
-    return payload?.kind === 'message' ? payload.id : '';
-  });
-  router.post('/:sessionId/tasks/:taskId/messages', sendMessage(false));
-  router.post('/:sessionId/tasks/:taskId/messages/now', sendMessage(true));
 
   // The task runner's own slash command (#66): carried to the runner, never
   // one of Ordewell's. A task that cannot take one is refused with the reason.
@@ -204,41 +143,6 @@ export function plansRoute(pool: OrchestratorPool) {
       const args = typeof fields.args === 'string' ? fields.args : '';
       const id = pool.session(c.req.param('sessionId')).invokeTaskCommand(c.req.param('taskId'), fields.name.trim(), args);
       return c.json({ id } satisfies TaskMessageResponse);
-    } catch (err) {
-      return failure(c, err, 'task edit');
-    }
-  });
-
-  // Force send a message queued behind the running turn; one already
-  // delivered is refused with the reason.
-  router.post('/:sessionId/tasks/:taskId/messages/:messageId/now', async (c) => {
-    try {
-      const { message } = await runUserCommand(pool.session(c.req.param('sessionId')), { command: 'force_send_queued', task: c.req.param('taskId'), id: c.req.param('messageId') });
-      return c.json({ sent: true, message } satisfies ForceSendResponse);
-    } catch (err) {
-      return failure(c, err, 'task edit');
-    }
-  });
-
-  // Continue a finished structured task in its saved session (ADR-0018, K1),
-  // through the command seam as the user (ADR-0029). A task that cannot be
-  // continued is refused with the reason.
-  router.post('/:sessionId/tasks/:taskId/continue', async (c) => {
-    try {
-      const body: unknown = await c.req.json().catch(() => ({}));
-      const text = typeof body === 'object' && body !== null && 'text' in body ? body.text : undefined;
-      if (typeof text !== 'string' || !text.trim()) return c.json({ error: 'text is required' }, 400);
-      const { message } = await runUserCommand(pool.session(c.req.param('sessionId')), { command: 'retry_task', task: c.req.param('taskId'), from: 'session', message: text });
-      return c.json({ ok: true, message } satisfies OkResponse);
-    } catch (err) {
-      return failure(c, err, 'task edit');
-    }
-  });
-
-  router.delete('/:sessionId/tasks/:taskId/messages/:messageId', async (c) => {
-    try {
-      const { message } = await runUserCommand(pool.session(c.req.param('sessionId')), { command: 'remove_queued', task: c.req.param('taskId'), id: c.req.param('messageId') });
-      return c.json({ removed: true, message } satisfies RemoveMessageResponse);
     } catch (err) {
       return failure(c, err, 'task edit');
     }

@@ -149,7 +149,7 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
       expect(pool.hasSession('session-saved')).toBe(false);
 
-      await expect(client.markTaskComplete('session-saved', 't1')).resolves.toEqual({ ok: true, message: 'Marked task #1 "Add the limiter" complete.' });
+      await expect(client.execute('session-saved', { command: 'mark_complete', task: 't1' })).resolves.toEqual({ ok: true, message: 'Marked task #1 "Add the limiter" complete.' });
 
       expect(pool.hasSession('session-saved')).toBe(true);
     });
@@ -162,8 +162,8 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       ];
       saveSession(plan, 'Rate limiting', workspace, 'session-saved');
 
-      await expect(client.skipTask('session-saved', 't1', 'the limiter is not needed')).resolves.toMatchObject({ ok: true, message: expect.stringContaining('Skipped task #1') });
-      const err = await refusal(client.skipTask('session-saved', 't2'));
+      await expect(client.execute('session-saved', { command: 'skip_task', task: 't1', reason: 'the limiter is not needed' })).resolves.toMatchObject({ ok: true, message: expect.stringContaining('Skipped task #1') });
+      const err = await refusal(client.execute('session-saved', { command: 'skip_task', task: 't2' }));
 
       const skipped = pool.session('session-saved').planState!.tasks.find((t) => t.id === 't1')!;
       expect(skipped).toMatchObject({ status: 'skipped', skipReason: 'the limiter is not needed' });
@@ -311,7 +311,7 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
       await client.adoptSession('session-saved', workspace);
 
-      const err = await refusal(client.interruptTask('session-saved', 't1'));
+      const err = await refusal(client.execute('session-saved', { command: 'interrupt_task', task: 't1' }));
 
       expect(err.status).toBe(400);
       expect(err.code).toBe('refused');
@@ -366,7 +366,7 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       { name: 'Mark complete', cli: (id) => handleMarkComplete(['--session-id', id, '1'], client), effect: (id) => task(id, 'complete'), line: 'You marked task #1 "Add the limiter" complete.' },
       {
         name: 'Mark not done',
-        before: async (id) => { await client.markTaskComplete(id, 't1'); },
+        before: async (id) => { await client.execute(id, { command: 'mark_complete', task: 't1' }); },
         cli: (id) => handleUncomplete(['--session-id', id, '1'], client),
         effect: (id) => task(id, 'uncomplete'),
         line: 'You marked task #1 "Add the limiter" not done.',

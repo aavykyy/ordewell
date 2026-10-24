@@ -19,18 +19,9 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
       executePlan: vi.fn().mockResolvedValue({ status: 'started' }),
       stopExecution: vi.fn().mockResolvedValue({ status: 'stopped' }),
       cancelPlanning: vi.fn().mockResolvedValue({ cancelled: true }),
-      taskControl: vi.fn().mockResolvedValue({ ok: true }),
-      skipTask: vi.fn().mockResolvedValue({ ok: true }),
-      markTaskComplete: vi.fn().mockResolvedValue({ ok: true }),
-      markTaskIncomplete: vi.fn().mockResolvedValue({ ok: true }),
+      execute: vi.fn().mockResolvedValue({ ok: true, message: 'Done.' }),
       getTaskLogAttempts: vi.fn().mockResolvedValue({ attempts: [] }),
       getTaskLog: vi.fn().mockResolvedValue({ attempt: 1, events: [] }),
-      sendTaskMessage: vi.fn().mockResolvedValue({ id: 'm1' }),
-      removeQueuedTaskMessage: vi.fn().mockResolvedValue({ removed: true }),
-      forceSendTaskMessage: vi.fn().mockResolvedValue({ id: 'm2' }),
-      forceSendQueuedTaskMessage: vi.fn().mockResolvedValue({ sent: true }),
-      interruptTask: vi.fn().mockResolvedValue({ ok: true }),
-      continueTask: vi.fn().mockResolvedValue({ ok: true }),
       addTask: vi.fn().mockResolvedValue({ ok: true }),
       updateTask: vi.fn().mockResolvedValue({ ok: true }),
       setMergeAtGatesAutomatically: vi.fn().mockResolvedValue({ ok: true }),
@@ -843,34 +834,21 @@ describe('duplicate run subscriptions', () => {
 });
 
 describe('task control', () => {
+  // Every task action is one command at the seam (core's taskActionCommand), whichever button sent it.
   it.each([
-    ['retry', 'retry'],
-    ['cancel', 'cancel'],
-    ['force-start', 'force-start'],
-  ] as const)('%s goes to the orchestrator', async (action, segment) => {
+    ['retry', { command: 'retry_task', task: 't1', from: 'fresh' }],
+    ['cancel', { command: 'stop_task', task: 't1' }],
+    ['force-start', { command: 'force_start', task: 't1' }],
+    ['resume-now', { command: 'retry_task', task: 't1', from: 'session' }],
+    ['cancel-resume', { command: 'cancel_resume', task: 't1' }],
+    ['complete', { command: 'mark_complete', task: 't1' }],
+    ['uncomplete', { command: 'mark_not_done', task: 't1' }],
+    ['skip', { command: 'skip_task', task: 't1' }],
+  ] as const)('%s sends its command to the seam, and no other', async (action, command) => {
     const h = harness();
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action }, h.deps);
-    expect(h.api.taskControl).toHaveBeenCalledWith('s1', 't1', segment);
-  });
-
-  it('completing a task marks it complete', async () => {
-    const h = harness();
-    await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'complete' }, h.deps);
-    expect(h.api.markTaskComplete).toHaveBeenCalledWith('s1', 't1');
-  });
-
-  it('un-completing a task marks it not done', async () => {
-    const h = harness();
-    await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'uncomplete' }, h.deps);
-    expect(h.api.markTaskIncomplete).toHaveBeenCalledWith('s1', 't1');
-    expect(h.api.markTaskComplete).not.toHaveBeenCalled();
-  });
-
-  it('skipping a task skips it, and never marks it complete: only Mark complete vouches for work', async () => {
-    const h = harness();
-    await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'skip' }, h.deps);
-    expect(h.api.skipTask).toHaveBeenCalledWith('s1', 't1');
-    expect(h.api.markTaskComplete).not.toHaveBeenCalled();
+    expect(h.api.execute).toHaveBeenCalledOnce();
+    expect(h.api.execute).toHaveBeenCalledWith('s1', command);
   });
 
   it('refreshes the plan after a task action so the pane matches the server', async () => {
@@ -888,15 +866,15 @@ describe('task control', () => {
         onEvent({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress' }] });
         return Promise.resolve();
       }),
-      taskControl: vi.fn().mockImplementation(async () => {
-        order.push('taskControl');
-        return { ok: true };
+      execute: vi.fn().mockImplementation(async () => {
+        order.push('execute');
+        return { ok: true, message: 'Done.' };
       }),
     });
 
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'force-start', watch: true }, h.deps);
 
-    expect(order).toEqual(['streamExecution', 'taskControl']);
+    expect(order).toEqual(['streamExecution', 'execute']);
     expect(h.actions).toContainEqual({
       type: 'statusUpdate',
       tasks: [{ id: 't1', status: 'in_progress' }],
@@ -1315,7 +1293,7 @@ describe('failures', () => {
   // Now that loading adopts the session, this only happens when the daemon has
   // restarted underneath us — so the advice is to reload, not to re-plan.
   it('tells the user to reload a session the daemon no longer holds', async () => {
-    const h = harness({ markTaskComplete: vi.fn().mockRejectedValue(new DaemonError('Session not found', 404, 'session_not_found')) });
+    const h = harness({ execute: vi.fn().mockRejectedValue(new DaemonError('Session not found', 404, 'session_not_found')) });
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'complete' }, h.deps);
 
     const failure = h.actions.find((a) => a.type === 'failed') as Extract<Action, { type: 'failed' }>;
@@ -1327,7 +1305,7 @@ describe('failures', () => {
 
   it('names the host that runs the session when a call\'s re-adoption was refused, not a reload', async () => {
     const held = 'This session is open in another Ordewell host: the Ordewell daemon on port 3742 (pid 37797) has held it since 10/24/2026, 1:40:00 AM. Close it there, or stop that process, then open it here.';
-    const h = harness({ markTaskComplete: vi.fn().mockRejectedValue(new DaemonError(held, 409, 'session_held')) });
+    const h = harness({ execute: vi.fn().mockRejectedValue(new DaemonError(held, 409, 'session_held')) });
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'complete' }, h.deps);
 
     const failure = h.actions.find((a) => a.type === 'failed') as Extract<Action, { type: 'failed' }>;
@@ -1345,7 +1323,7 @@ describe('failures', () => {
   });
 
   it('leaves an unrelated error message alone', async () => {
-    const h = harness({ markTaskComplete: vi.fn().mockRejectedValue(new Error('disk on fire')) });
+    const h = harness({ execute: vi.fn().mockRejectedValue(new Error('disk on fire')) });
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'complete' }, h.deps);
     expect(h.actions).toContainEqual({ type: 'failed', message: 'disk on fire' });
   });
@@ -1423,7 +1401,7 @@ describe('a daemon that went away mid-session', () => {
   // 404s. That is a different problem with a different fix.
   it('explains a post-revive 404 as a lost session, not as a dead server', async () => {
     const h = harness({
-      markTaskComplete: vi.fn()
+      execute: vi.fn()
         .mockRejectedValueOnce(refused())
         .mockRejectedValue(new DaemonError('Session not found', 404, 'session_not_found')),
     });
@@ -2119,12 +2097,11 @@ describe('a structured task\'s log, messages and interrupt', () => {
   });
 
   it('sends a message and leaves the queue to the stream', async () => {
-    const sendTaskMessage = vi.fn().mockResolvedValue({ id: 'm1' });
-    const h = harness({ sendTaskMessage } as Partial<OrdewellApi>);
+    const h = harness();
 
     await runEffect({ type: 'sendTaskMessage', sessionId: 's1', taskId: 't1', text: 'use Postgres' }, h.deps);
 
-    expect(sendTaskMessage).toHaveBeenCalledWith('s1', 't1', 'use Postgres');
+    expect(h.api.execute).toHaveBeenCalledWith('s1', { command: 'message_task', task: 't1', text: 'use Postgres' });
     expect(h.actions).toEqual([]);
   });
 
@@ -2133,13 +2110,13 @@ describe('a structured task\'s log, messages and interrupt', () => {
 
     await runEffect({ type: 'removeTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }, h.deps);
 
-    expect(h.api.removeQueuedTaskMessage).toHaveBeenCalledWith('s1', 't1', 'm1');
+    expect(h.api.execute).toHaveBeenCalledWith('s1', { command: 'remove_queued', task: 't1', id: 'm1' });
     expect(h.actions).toEqual([]);
   });
 
   it('shows the daemon\'s words when a message to take back had already gone out', async () => {
     const refusal = new DaemonError('That message to task #1 "Build" was already delivered or taken back.', 400, 'refused');
-    const h = harness({ removeQueuedTaskMessage: vi.fn().mockRejectedValue(refusal) } as Partial<OrdewellApi>);
+    const h = harness({ execute: vi.fn().mockRejectedValue(refusal) });
 
     await runEffect({ type: 'removeTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }, h.deps);
 
@@ -2148,18 +2125,18 @@ describe('a structured task\'s log, messages and interrupt', () => {
 
   it('continues a finished task, holding the execution stream open when asked to watch (ADR-0018, K1)', async () => {
     const order: string[] = [];
-    const continueTask = vi.fn().mockImplementation(async () => { order.push('continueTask'); return { ok: true }; });
+    const execute = vi.fn().mockImplementation(async () => { order.push('execute'); return { ok: true, message: 'Done.' }; });
     const streamExecution = vi.fn().mockImplementation((_id: string, _cb: (e: unknown) => void, onReady?: (error?: Error) => void) => {
       order.push('streamExecution');
       onReady?.();
       return Promise.resolve();
     });
-    const h = harness({ continueTask, streamExecution } as Partial<OrdewellApi>);
+    const h = harness({ execute, streamExecution } as Partial<OrdewellApi>);
 
     await runEffect({ type: 'continueTask', sessionId: 's1', taskId: 't1', text: 'also handle arrays', watch: true }, h.deps);
 
-    expect(continueTask).toHaveBeenCalledWith('s1', 't1', 'also handle arrays');
-    expect(order).toEqual(['streamExecution', 'continueTask']);
+    expect(execute).toHaveBeenCalledWith('s1', { command: 'retry_task', task: 't1', from: 'session', message: 'also handle arrays' });
+    expect(order).toEqual(['streamExecution', 'execute']);
   });
 
   it('continues without a second stream while a run is already watched', async () => {
@@ -2167,17 +2144,16 @@ describe('a structured task\'s log, messages and interrupt', () => {
 
     await runEffect({ type: 'continueTask', sessionId: 's1', taskId: 't1', text: 'go on' }, h.deps);
 
-    expect(h.deps.api.continueTask).toHaveBeenCalledWith('s1', 't1', 'go on');
+    expect(h.deps.api.execute).toHaveBeenCalledWith('s1', { command: 'retry_task', task: 't1', from: 'session', message: 'go on' });
     expect(h.deps.api.streamExecution).not.toHaveBeenCalled();
   });
 
   it('interrupts the task, leaving what it says to the timeline', async () => {
-    const interruptTask = vi.fn().mockResolvedValue({ ok: true });
-    const h = harness({ interruptTask } as Partial<OrdewellApi>);
+    const h = harness();
 
     await runEffect({ type: 'interruptTask', sessionId: 's1', taskId: 't1' }, h.deps);
 
-    expect(interruptTask).toHaveBeenCalledWith('s1', 't1');
+    expect(h.api.execute).toHaveBeenCalledWith('s1', { command: 'interrupt_task', task: 't1' });
     expect(h.actions).toEqual([]);
   });
 

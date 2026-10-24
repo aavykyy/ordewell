@@ -13,6 +13,7 @@ import type { OrchestratorOption } from './services/ProviderRouting';
 import type { RunnerModeInfo } from './services/ModeResolver';
 import type { GlobalRunSettings, UserSettings } from './services/SettingsService';
 import type { TaskLogEvent } from './models/TaskLog';
+import type { CommandPayload } from './services/ExecutionCommands';
 
 /**
  * The daemon contract: every HTTP body the local daemon sends, in one place.
@@ -64,6 +65,8 @@ export interface ErrorBody {
   plannerNotReady?: PlannerNotReady;
   /** Set with `session_held`: the host that holds the session, and the runners a gone one left. */
   sessionHeld?: SessionHeld;
+  /** Set on a command the seam refused after the act ran and stopped: the Merge all git would not take. */
+  payload?: CommandPayload;
 }
 
 /**
@@ -85,9 +88,17 @@ export interface ServerInfoResponse {
   port: number;
 }
 
-/** A task start's answer: `queued` says why it did not start now, when the task waits for its dependencies instead. */
-export interface TaskStartResponse extends OkResponse {
-  queued?: string;
+/**
+ * `POST /api/plans/:id/execute-command`: the body is an `ExecutionCommand`, run
+ * as the user (ADR-0029), and this is its answer. `message` is the seam's own
+ * line, `payload` what a button needs beyond it (a queued message's id, a force
+ * start's queued line). A refusal is the one `ErrorBody` every route gives, code
+ * `refused`.
+ */
+export interface ExecuteCommandResponse {
+  ok: true;
+  message: string;
+  payload?: CommandPayload;
 }
 
 /**
@@ -142,21 +153,13 @@ export interface CancelPlanningResponse {
   cancelled: boolean;
 }
 
-/** `POST …/resume/cancel` (cancelled is true: a task with no resume scheduled is refused) and `POST …/converse/resend/cancel` (false when nothing waited). */
+/** `POST …/converse/resend/cancel`: `cancelled` is false when nothing waited. */
 export interface CancelResumeResponse extends Worded {
   cancelled: boolean;
 }
 
 export interface TaskMessageResponse {
   id: string;
-}
-
-export interface ForceSendResponse extends Worded {
-  sent: boolean;
-}
-
-export interface RemoveMessageResponse extends Worded {
-  removed: boolean;
 }
 
 export interface MergeGateEntry {

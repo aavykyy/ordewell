@@ -117,8 +117,8 @@ turn-scoped and never touches the run's tasks.**
   queue, so there is nothing to send now; force sending one already forced
   changes nothing. The surfaces: `ctrl-s` in the TUI task view (the composer
   text, or the selected queued message when the composer is empty), *Send now* and
-  `Ctrl+Enter` in the VS Code task log, and `POST …/tasks/:task/messages/now`
-  and `…/messages/:id/now` on the daemon. The planner chat's force send is
+  `Ctrl+Enter` in the VS Code task log, and the daemon's `execute-command` route
+  carrying `message_task` with `force` or `force_send_queued`. The planner chat's force send is
   F5.
 - **The forced message goes first; the rest keep their order (F2).** Messages
   still in Ordewell's queue follow the forced one in the order they were sent.
@@ -355,3 +355,4 @@ interrupt (D4 covers it either way).
 - 2026-10-13 — F5: a force send keeps the run update of a wake-up turn it stops.
 - 2026-10-14 — F1: a handed-over message can be force sent, and is never sent twice; probed on Claude Code 2.1.299. F2 corrected for OpenCode 1.x, whose adapter lets go of an unread message at the abort. Removal of a handed-over message stays refused.
 - 2026-10-18 — F2: turn-end delivery waits for every message the runner still holds, including one behind a newly forced message.
+- 2026-10-24 — the daemon's force send routes are replaced by the one `execute-command` route (ADR-0006 S3).
