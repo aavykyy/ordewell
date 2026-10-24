@@ -1,8 +1,8 @@
-import { capConflictFiles, checkoutRule, describeMergeResult, isRepoGroup, mergeTarget, namedRepos, reposWithWork, type IsolationMergeResult } from '@ordewell/core';
+import { capConflictFiles, checkoutRule, isRepoGroup, mergeOutcome, mergeTarget, namedRepos, reposWithWork } from '@ordewell/core';
 import type { HandoffRepoView, HandoffView, LandedTaskView, TaskIsolationView } from './tui/state';
 
 // Core words what a Merge confirmation says, so the CLI, the TUI and VS Code cannot drift.
-export { checkoutRule, isRepoGroup, mergeTarget, reposWithWork };
+export { checkoutRule, isRepoGroup, mergeOutcome, mergeTarget, reposWithWork };
 
 /**
  * What a saved plan says about its isolated run, in the shape the surfaces show.
@@ -170,23 +170,4 @@ export function repoResultLines(handoff: HandoffView): string[] {
 
 export function taskRepoNames(isolation: TaskIsolationView | undefined): string[] {
   return namedRepos(isolation?.repos);
-}
-
-/**
- * What "Merge all" did, in words. A group of one reads as it did before repo
- * groups; a group takes the shared wording and, when nothing or not everything
- * merged, is told the integration branches are plain branches to merge by hand.
- */
-export function mergeOutcome(
-  result: IsolationMergeResult,
-  branch: string,
-  group: boolean,
-  repaired: LandedTaskView[] = [],
-): { ok: boolean; message: string } {
-  const ok = result.outcome === 'merged';
-  if (!group && result.outcome === 'conflict') {
-    return { ok, message: `Merging ${branch} conflicted, so it was aborted: your tree is as it was. Merge it with git and resolve the conflict there.` };
-  }
-  const { message } = describeMergeResult(result, branch, group, repaired);
-  return { ok, message: ok || !group ? message : `${message} Each repository's ${branch} is a plain branch you can merge by hand.` };
 }

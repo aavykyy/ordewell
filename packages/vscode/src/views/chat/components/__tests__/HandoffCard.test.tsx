@@ -112,7 +112,7 @@ describe('HandoffCard — repo group (ADR-0014)', () => {
     render(<HandoffCard {...groupHandoff} mergeResult={blocked} onAction={vi.fn()} />);
 
     expect(document.querySelector('.isolation-merge-result')!.textContent).toBe(
-      'Merged nothing, so every tree is as it was: api would conflict in src/a.ts; web has uncommitted changes to src/b.ts.',
+      'Merged nothing, so every tree is as it was: api would conflict in src/a.ts; web has uncommitted changes to src/b.ts. Each repository\'s ordewell/run-1/integration is a plain branch you can merge by hand.',
     );
   });
 
@@ -121,7 +121,7 @@ describe('HandoffCard — repo group (ADR-0014)', () => {
     render(<HandoffCard {...groupHandoff} mergeResult={blocked} onAction={vi.fn()} />);
 
     expect(document.querySelector('.isolation-merge-result')!.textContent).toBe(
-      'Merged nothing, so every tree is as it was: git could not check api.',
+      'Merged nothing, so every tree is as it was: git could not check api. Each repository\'s ordewell/run-1/integration is a plain branch you can merge by hand.',
     );
   });
 
@@ -130,7 +130,7 @@ describe('HandoffCard — repo group (ADR-0014)', () => {
     render(<HandoffCard {...groupHandoff} mergeResult={partial} onAction={vi.fn()} />);
 
     expect(document.querySelector('.isolation-merge-result')!.textContent).toBe(
-      'Merging ordewell/run-1/integration conflicted in web (src/b.ts), so it was aborted there. api was merged already and stays merged.',
+      'Merging ordewell/run-1/integration conflicted in web (src/b.ts), so it was aborted there. api was merged already and stays merged. Each repository\'s ordewell/run-1/integration is a plain branch you can merge by hand.',
     );
   });
 
@@ -151,6 +151,15 @@ describe('HandoffCard — repo group (ADR-0014)', () => {
 
     expect(document.querySelector('.isolation-merge-result')!.textContent).toBe(
       'Merged ordewell/run-1/integration into your checked-out branch.',
+    );
+  });
+
+  it('tells a lone repo whose merge conflicted to resolve it with git', () => {
+    const conflict: IsolationMergeResult = { outcome: 'conflict', repo: '.', files: ['src/a.ts'] };
+    render(<HandoffCard {...handoff} mergeResult={conflict} onAction={vi.fn()} />);
+
+    expect(document.querySelector('.isolation-merge-result')!.textContent).toBe(
+      'Merging ordewell/run-1/integration conflicted, so it was aborted: your tree is as it was. Merge it with git and resolve the conflict there.',
     );
   });
 });
@@ -195,7 +204,7 @@ describe('HandoffCard — the branch the run started on', () => {
     render(<HandoffCard {...groupHandoff} mergeResult={blocked} onAction={vi.fn()} />);
 
     expect(document.querySelector('.isolation-merge-result')!.textContent).toBe(
-      'Merged nothing, so every tree is as it was: api is in the middle of a rebase; this run started on main. Finish or abort the rebase in api, then press Merge all again.',
+      'Merged nothing, so every tree is as it was: api is in the middle of a rebase; this run started on main. Finish or abort the rebase in api, then press Merge all again. Each repository\'s ordewell/run-1/integration is a plain branch you can merge by hand.',
     );
   });
 
@@ -207,7 +216,7 @@ describe('HandoffCard — the branch the run started on', () => {
     render(<HandoffCard {...groupHandoff} mergeResult={blocked} onAction={vi.fn()} />);
 
     expect(document.querySelector('.isolation-merge-result')!.textContent).toBe(
-      'Merged nothing, so every tree is as it was: api is on feature-x; this run started on main. Check out main and press Merge all again.',
+      'Merged nothing, so every tree is as it was: api is on feature-x; this run started on main. Check out main and press Merge all again. Each repository\'s ordewell/run-1/integration is a plain branch you can merge by hand.',
     );
   });
 });
