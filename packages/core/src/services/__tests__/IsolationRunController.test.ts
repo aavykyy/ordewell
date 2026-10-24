@@ -4,6 +4,7 @@ import { createTask, type Task } from '../../models/Task';
 import type { IsolationOutcome } from '../../interfaces/IWorktreeIsolation';
 import { fakeConfig, FakeWorktreeIsolation } from '../../testing';
 import { PlanEditError } from '../PlanEditError';
+import { PrepareFailedError } from '../isolationRecord';
 import { fakeNotification } from './sessionTestKit';
 
 function setup(isolation = new FakeWorktreeIsolation()) {
@@ -98,6 +99,17 @@ describe('IsolationRunController', () => {
       expect(runs.current!.tasks.t1.readOnly).toBe(true);
       await runs.attemptCwd(task('t2', 2), 'fresh');
       expect(runs.current!.tasks.t2.readOnly).toBeUndefined();
+    });
+
+    it('says where the last attempt\'s work was kept when preparing the next one fails', async () => {
+      const { runs, isolation, notifications } = setup();
+      await runs.decide(async () => undefined);
+      const kept = { repo: '.', branch: 'ordewell-preserved/run1/1-t1', commit: 'abcdef0123456789', task: { taskId: 't1', order: 1, title: 'Task t1' } };
+      vi.spyOn(isolation, 'prepare').mockRejectedValueOnce(new PrepareFailedError(new Error('git worktree failed: x'), [kept]));
+
+      await expect(runs.attemptCwd(task('t1', 1), 'fresh')).rejects.toThrow('git worktree failed: x');
+
+      expect(notifications.warn).toHaveBeenCalledWith(expect.stringContaining('ordewell-preserved/run1/1-t1'));
     });
 
     it('gives an attempt in a shared run the workspace root', async () => {

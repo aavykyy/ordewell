@@ -70,12 +70,19 @@ export function describeMergeResult(
           ? `Merging ${branch} conflicted, so it was aborted: your tree is as it was.`
           : `Merging ${branch} conflicted in ${result.repo}${result.files?.length ? ` (${result.files.join(', ')})` : ''}, so it was aborted there. ${landedNotice(result.landed ?? [])}`,
       };
-    case 'failed':
+    case 'failed': {
+      const lone = result.repo === SELF_REPO;
+      const where = lone ? '' : ` in ${result.repo}`;
+      // Without git's words the only cause left is the user's own unfinished merge, the one case that never asks git.
+      if (result.error) {
+        return { level: 'error', message: `Could not merge ${branch}${where}: git said "${result.error}". ${lone ? 'Your tree is as it was.' : landedNotice(result.landed ?? [])}` };
+      }
       return {
         level: 'error',
-        message: result.repo === SELF_REPO
+        message: lone
           ? `Could not merge ${branch}: finish or abort the merge already in progress, then try again.`
-          : `Could not merge ${branch} in ${result.repo}: finish or abort any merge in progress there, then try again. ${landedNotice(result.landed ?? [])}`,
+          : `Could not merge ${branch}${where}: finish or abort any merge in progress there, then try again. ${landedNotice(result.landed ?? [])}`,
       };
+    }
   }
 }

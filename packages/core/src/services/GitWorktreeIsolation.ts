@@ -32,7 +32,7 @@ import type { HandoffCommit } from '../models/Handoff';
 import { augmentedPath } from '../utils/shellPath';
 import { ensureStateDirIgnored, STATE_DIR } from '../utils/fsHelpers';
 import { sanitizeSlug } from '../utils/prdStore';
-import { absorbRemoval, handoffOf, integrationBranchFor, noRemoval, repoRootOf, SELF_REPO } from './isolationRecord';
+import { absorbRemoval, handoffOf, integrationBranchFor, noRemoval, PrepareFailedError, repoRootOf, SELF_REPO } from './isolationRecord';
 import { defaultExecFile, git, tryGit, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
 import { IsolationLocks } from './isolationLocks';
 import { bootstrap, installDirs, isEnvFile, lexists, LINKED_ARTIFACTS, listDir, SetupCommandError } from './worktreeBootstrap';
@@ -125,6 +125,11 @@ function firstLine(text: string): string {
   return text.split(/\r?\n/, 1)[0].trim();
 }
 
+/** What git said when it stopped, in a line; a hook that printed nothing leaves only how it ended. */
+function stoppedOn(result: GitResult): string {
+  return firstLine(result.stderr) || firstLine(result.stdout) || `exit status ${result.code ?? 'unknown'}`;
+}
+
 /** The paths of `git status --porcelain -z`; a rename or copy names both of its paths. */
 function statusPaths(porcelain: string): string[] {
   const fields = porcelain.split('\0');
@@ -136,6 +141,22 @@ function statusPaths(porcelain: string): string[] {
     if (/[RC]/.test(entry.slice(0, 2)) && fields[i + 1]) paths.push(fields[++i]);
   }
   return paths;
+}
+
+/** The directories above `file`, outermost first. */
+function directoriesOf(file: string): string[] {
+  const parts = file.split('/').slice(0, -1);
+  return parts.map((_, i) => parts.slice(0, i + 1).join('/'));
+}
+
+/**
+ * The untracked files that stand where `incoming` has git write a file: the
+ * same path, a file where one of its directories must go, or a directory's
+ * worth of files where it writes a file.
+ */
+function collidingPaths(untracked: string[], incoming: Set<string>): string[] {
+  const incomingDirs = new Set([...incoming].flatMap(directoriesOf));
+  return untracked.filter((file) => incoming.has(file) || incomingDirs.has(file) || directoriesOf(file).some((dir) => incoming.has(dir)));
 }
 
 /** The files `git diff --check` reports leftover conflict markers in; its whitespace warnings are not asked about. */
@@ -405,7 +426,9 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   prepare(task: Task, run: IsolationRun, intent: PrepareIntent = 'fresh', opts: { readOnly?: boolean } = {}): Promise<PreparedTask> {
-    const prepare = () => this.admin(run.workspaceRoot, async () => {
+    // The turn first, for any intent: a group's integration tips are only a consistent set between landings. A fresh task branched mid-landing
+    // would hold a merge that is rolled back a moment later, and land it through its own.
+    return this.inTurn(() => this.admin(run.workspaceRoot, async () => {
       const previous = run.tasks[task.id];
       const replaced = previous ? await this.removeTask(run, previous, { dropRecord: true, intent }) : noRemoval();
       const [refused] = replaced.refused;
@@ -417,7 +440,6 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         : replaced.preserved;
 
       const { branch, dir } = this.namesFor(run, task);
-      ensureStateDirIgnored(run.workspaceRoot);
       const record: IsolationTaskRecord = {
         taskId: task.id, order: task.order, title: task.title, branch, workspace: dir, status: 'active', repos: {},
         ...(opts.readOnly ? { readOnly: true } : {}),
@@ -429,6 +451,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const setupFailed: SetupFailure[] = [];
       let restoration: PreparedTask['restoration'];
       try {
+        ensureStateDirIgnored(run.workspaceRoot);
         for (const repo of run.repos) {
           const worktree = path.join(dir, repo.path);
           const tip = (await this.git(repo.root, ['rev-parse', repo.integrationBranch])).trim();
@@ -493,7 +516,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       } catch (err) {
         record.status = 'failed';
         await this.removeTask(run, record, { dropRecord: false, preserve: false });
-        throw err;
+        // The attempt this one replaced is gone with its record; where its work went is the one thing left to say.
+        throw preserved.length > 0 ? new PrepareFailedError(err, preserved) : err;
       }
       run.tasks[task.id] = record;
       return {
@@ -502,9 +526,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         ...(preserved.length > 0 ? { preserved } : {}),
         ...(restoration ? { restoration } : {}),
       };
-    });
-    // A restore must not take its group of integration tips halfway through a landing.
-    return intent === 'restore' ? this.inTurn(prepare) : prepare();
+    }));
   }
 
   private async restorePrevious(record: IsolationTaskRecord, preserved: PreservedWork[]): Promise<'restored' | 'fallback'> {
@@ -694,7 +716,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    */
   private async worktreeHasChanges(entry: IsolationTaskRepo, prefix: string): Promise<boolean> {
     if (!fs.existsSync(entry.worktree)) return false;
-    const status = await this.tryGit(entry.worktree, ['status', '--porcelain', '-z']);
+    // Asked for explicitly: the user's `status.showUntrackedFiles=no` would otherwise hide new files, and a worktree of nothing else would be deleted unkept.
+    const status = await this.tryGit(entry.worktree, ['status', '--porcelain', '-z', '--untracked-files=normal']);
     if (!status.ok) return true;
     const linked = new Set(entry.linked);
     return statusPaths(status.stdout).some((p) => {
@@ -866,19 +889,33 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     // Git would refuse to merge over these, or worse, leave a half-merge in a tree holding the user's edits.
     const incoming = await this.tryGit(repo.root, ['diff', '--name-only', '--no-renames', '-z', `HEAD...${repo.integrationBranch}`]);
     const status = await this.tryGit(repo.root, ['status', '--porcelain', '-z', '--untracked-files=no']);
-    if (!incoming.ok || !status.ok) return block('git-error');
+    // Ignored files are left out: a merge writes over those without a word.
+    const untracked = await this.tryGit(repo.root, ['ls-files', '--others', '--exclude-standard', '-z']);
+    const staged = await this.tryGit(repo.root, ['diff', '--cached', '--name-only', '-z']);
+    if (!incoming.ok || !status.ok || !untracked.ok || !staged.ok) return block('git-error');
     const touched = new Set(incoming.stdout.split('\0').filter(Boolean));
-    const overlap = statusPaths(status.stdout).filter((file) => touched.has(file));
-    return overlap.length > 0 ? block('uncommitted-changes', overlap) : null;
+    const inTheWay = [
+      ...statusPaths(status.stdout).filter((file) => touched.has(file)),
+      ...collidingPaths(untracked.stdout.split('\0').filter(Boolean), touched),
+      // A merge commit is refused over anything staged, overlapping or not; a fast-forward is not.
+      ...(staged.stdout && !(await this.fastForwards(repo)) ? staged.stdout.split('\0').filter(Boolean) : []),
+    ];
+    return inTheWay.length > 0 ? block('uncommitted-changes', [...new Set(inTheWay)]) : null;
+  }
+
+  /** Whether the checked-out HEAD is an ancestor of the integration branch, so merging it moves HEAD without a merge commit. */
+  private async fastForwards(repo: IsolationRepo): Promise<boolean> {
+    return (await this.tryGit(repo.root, ['merge-base', '--is-ancestor', 'HEAD', repo.integrationBranch])).ok;
   }
 
   /** Merge each repo in turn, stopping at the first that does not take its merge. Only a merge started here is ever aborted. */
   private async mergeInTurn(run: IsolationRun, repos: IsolationRepo[]): Promise<IsolationMergeResult> {
     const landed: string[] = [];
-    const stopped = (outcome: 'conflict' | 'failed', repo: IsolationRepo, files?: string[]): IsolationMergeResult => ({
+    const stopped = (outcome: 'conflict' | 'failed', repo: IsolationRepo, extra: { files?: string[]; error?: string } = {}): IsolationMergeResult => ({
       outcome,
       repo: repo.path,
-      ...(files ? { files } : {}),
+      ...(extra.files ? { files: extra.files } : {}),
+      ...(extra.error ? { error: extra.error } : {}),
       ...(landed.length > 0 ? { landed } : {}),
     });
     for (const repo of repos) {
@@ -896,7 +933,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       // Not `abortMerge`: its `reset --hard` fallback is for Ordewell's own
       // integration worktree, and here it would discard uncommitted work.
       if (await this.mergeInProgress(repo.root)) await this.tryGit(repo.root, ['merge', '--abort']);
-      return files.length > 0 ? stopped('conflict', repo, files) : stopped('failed', repo);
+      return files.length > 0 ? stopped('conflict', repo, { files }) : stopped('failed', repo, { error: stoppedOn(merge) });
     }
     return { outcome: 'merged' };
   }
@@ -1092,7 +1129,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     // A hook that refuses the merge commit leaves a merge in progress with nothing unmerged: a failure, not a conflict.
     const files = await this.unmergedPaths(dir);
     if (await this.mergeInProgress(dir)) await this.abortMerge(dir);
-    return { outcome: files.length > 0 ? 'conflict' : 'failed', files };
+    return files.length > 0 ? { outcome: 'conflict', files } : { outcome: 'failed', files, error: `git could not merge its work (${stoppedOn(merge)})` };
   }
 
   /**

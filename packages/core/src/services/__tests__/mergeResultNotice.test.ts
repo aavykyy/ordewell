@@ -80,3 +80,25 @@ describe('describeMergeResult — a repo off the branch the run started on', () 
     );
   });
 });
+
+describe('describeMergeResult — a merge git refused', () => {
+  const branch = 'ordewell/r1/integration';
+
+  it('quotes what git said for a lone repository instead of sending the user to a merge in progress', () => {
+    const { level, message } = describeMergeResult({ outcome: 'failed', repo: '.', error: 'error: Your local changes to the following files would be overwritten by merge:' }, branch, false);
+    expect(level).toBe('error');
+    expect(message).toBe(`Could not merge ${branch}: git said "error: Your local changes to the following files would be overwritten by merge:". Your tree is as it was.`);
+  });
+
+  it('quotes what git said for the repository of a group, and names those already merged', () => {
+    const { message } = describeMergeResult({ outcome: 'failed', repo: 'web', error: 'lint: subject is too long', landed: ['api'] }, branch, true);
+    expect(message).toBe(`Could not merge ${branch} in web: git said "lint: subject is too long". api was merged already and stays merged.`);
+  });
+
+  it('still sends the user to their own merge in progress when git was never asked', () => {
+    expect(describeMergeResult({ outcome: 'failed', repo: '.' }, branch, false).message)
+      .toBe(`Could not merge ${branch}: finish or abort the merge already in progress, then try again.`);
+    expect(describeMergeResult({ outcome: 'failed', repo: 'web', landed: ['api'] }, branch, true).message)
+      .toBe(`Could not merge ${branch} in web: finish or abort any merge in progress there, then try again. api was merged already and stays merged.`);
+  });
+});
