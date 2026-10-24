@@ -358,8 +358,6 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     services.context.subscriptions.push(
       vscodeApi.window.registerWebviewViewProvider('ordewellChatView', services.chatProvider, { webviewOptions: { retainContextWhenHidden: true } }),
     );
-    // Open task-log tabs survive a window reload or an extension update.
-    services.context.subscriptions.push(taskLogs.register());
 
     registerCommands(services.context, commandDeps);
     services.context.subscriptions.push(
@@ -371,6 +369,10 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     );
 
     restoreState(persistenceDeps());
+    // Open task-log tabs survive a window reload or an extension update. VS Code
+    // asks the serializer during activation, so the plan must be restored first
+    // or a restored tab would find no task and close itself.
+    services.context.subscriptions.push(taskLogs.register());
     checkPlannerSetting();
 
     services.context.subscriptions.push(services.config.onDidChange(() => {

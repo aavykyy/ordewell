@@ -2,12 +2,13 @@ import { firstGrapheme, graphemes, pad, stripAnsi, style, truncate, width, wrap 
 import { cursorInLines } from './editor';
 import { activeToken, composerCompletions, runnerCommandFor, skillMatchKind, slashTokens } from './slash';
 import {
-  approvalLayout, bodyRows, chatInputWrap, chatLayout, footerHints, helpLayout, type HelpSheet, packHints, planLayout, planOffset,
+  approvalLayout, bodyRows, composerView, chatLayout, footerHints, helpLayout, type HelpSheet, packHints, planLayout, planOffset,
   stopHint,
   chatActivity,
   runnerStoppable,
   DOT_TICKS,
   runHint,
+  type ComposerView,
 } from './layout';
 import { chatEditorRoomFor, chatPaneWidth, chatPromptLabel, paneColumns, planPaneWidth } from './geometry';
 import { currentHandoff, diffRoom, handoffActions } from './handoff';
@@ -316,33 +317,45 @@ function paintSpans(text: string, base: number, spans: Array<{ start: number; en
  * reserves does not depend on the terminal's palette.
  */
 function renderInput(state: TuiState): string[] {
-  const rows = ['', ...composerLines(state), ''];
+  const view = composerView(state);
+  const rows = ['', ...composerLines(state, view), ''];
+  // The last band row carries the count of what the window leaves out, so a
+  // pasted draft never looks complete when it is not.
+  if (view && (view.hiddenBefore > 0 || view.hiddenAfter > 0)) rows[rows.length - 1] = style.bandGrey(hiddenDraftNote(view));
   return style.enabled ? rows.map((row) => style.band(pad(row, state.cols))) : rows;
 }
 
-function composerLines(state: TuiState): string[] {
+function hiddenDraftNote({ hiddenBefore, hiddenAfter }: ComposerView): string {
+  const parts = [
+    ...(hiddenBefore > 0 ? [`${hiddenBefore} earlier`] : []),
+    ...(hiddenAfter > 0 ? [`${hiddenAfter} later`] : []),
+  ];
+  return `… ${parts.join(' and ')} characters not shown`;
+}
+
+function composerLines(state: TuiState, view: ComposerView | null): string[] {
   const prompt = state.taskView
     ? style.accent(`${chatPromptLabel(state)} `)
     : state.focus === 'plan' ? style.bandGrey('❯ ') : style.brand('❯ ');
   // The driver hides the hardware cursor, so the frame marks the caret itself —
   // but only while keystrokes actually go to the editor.
-  const lines = chatInputWrap(state);
+  const lines = view?.lines ?? null;
   const room = chatEditorRoomFor(state, lines !== null);
   const { text, cursor } = state.editor;
   const continuation = ' '.repeat(width(prompt));
-  const spans = highlightSpans(text, state.taskView ? runnerCommands(state.taskView) : null);
 
   // A blurred editor never wraps — a literal \n here would push every
   // following row down one line, so newlines/tabs are squashed to one row.
-  if (!lines) {
+  if (!lines || !view) {
     const visible = text.replace(/\n/g, '¶').replace(/\t/g, ' ');
-    const painted = paintSpans(visible, 0, spans);
+    const painted = paintSpans(visible, 0, highlightSpans(text, state.taskView ? runnerCommands(state.taskView) : null));
     return [prompt + painted + suggest(state, room - width(visible))];
   }
 
+  const spans = highlightSpans(view.text, state.taskView ? runnerCommands(state.taskView) : null);
   // The caret is derived from the same wrapped lines rather than re-wrapping,
   // which doubled the cost of every keystroke on a long input.
-  const { line: lineIndex, col } = cursorInLines(lines, cursor, text.length);
+  const { line: lineIndex, col } = cursorInLines(lines, cursor - view.base, view.text.length);
 
   return lines.map(({ line: raw, start: base }, i) => {
     const prefix = i === 0 ? prompt : continuation;

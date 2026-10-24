@@ -39,7 +39,8 @@
     "planner"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:ordewellTaskLog"
   ],
   "main": "./dist/extension.js",
   "scripts": {
@@ -242,11 +243,6 @@
           "default": 5,
           "minimum": 1,
           "description": "How many AI tasks run at once (1 or more). A change applies to a run already going."
-        },
-        "ordewell.researchEnabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Run codebase research before planning"
         },
         "ordewell.plannerApprovals": {
           "scope": "application",

@@ -32,7 +32,7 @@ function tui(api: Partial<OrdewellApi>, start: Partial<TuiState> = {}) {
       compactConversation: vi.fn().mockResolvedValue({ plan: { tasks: [] }, summary: '' }),
       adoptSession: vi.fn().mockResolvedValue({ plan: planWith(), goal: 'g' }),
       streamPlanning: vi.fn().mockReturnValue({ ready: Promise.resolve(), close: vi.fn() }),
-      followSession: vi.fn().mockReturnValue({ ready: Promise.resolve(), ended: new Promise(() => {}), close: unfollowed }),
+      followSession: vi.fn().mockReturnValue({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: unfollowed }),
       ...api,
     } as unknown as OrdewellApi,
     workspace: '/ws',
@@ -226,5 +226,18 @@ describe('a later turn whose reply was lost', () => {
 
     expect(types(t.actions)).toContain('failed');
     expect(t.api.adoptSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('a turn end that went with the follow socket', () => {
+  it('reads the session back when the follow reconnects', () => {
+    const awaiting = initialState({ sessionId: 's1', planner: 'awaiting' });
+    expect(reduce(awaiting, { type: 'followRestored', sessionId: 's1' }).effects)
+      .toEqual([{ type: 'reconcileTurn', sessionId: 's1' }]);
+  });
+
+  it('does nothing when no reply is waiting on it', () => {
+    const idle = initialState({ sessionId: 's1' });
+    expect(reduce(idle, { type: 'followRestored', sessionId: 's1' }).effects).toEqual([]);
   });
 });

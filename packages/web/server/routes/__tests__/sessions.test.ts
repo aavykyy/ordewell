@@ -21,6 +21,7 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     getPlanState: vi.fn().mockReturnValue(null),
     runSnapshot: vi.fn().mockReturnValue(null),
     streamPosition: vi.fn().mockReturnValue({ stream: 'daemon', seq: 12 }),
+    hasSession: vi.fn().mockReturnValue(false),
     destroy: vi.fn(),
     ...overrides,
   } as unknown as OrchestratorPool;
@@ -205,7 +206,7 @@ describe('DELETE /api/sessions/:id', () => {
     const res = await app.request(`/api/sessions/${meta.id}?workspace=${encodeURIComponent(ws)}`, { method: 'DELETE' });
 
     expect(await res.json()).toEqual({ ok: true });
-    expect(pool.destroy).toHaveBeenCalledWith(meta.id);
+    expect(pool.destroy).toHaveBeenCalledWith(meta.id, { notifyClients: true });
     expect(filesWhenDestroyed).toEqual([true]);
     expect(listSessions(ws)).toEqual([]);
   });
@@ -217,7 +218,9 @@ describe('DELETE /api/sessions/:id', () => {
 
     const res = await app.request(`/api/sessions/missing?workspace=${encodeURIComponent(ws)}`, { method: 'DELETE' });
 
-    expect(await res.json()).toEqual({ ok: false });
+    const body = (await res.json()) as { ok: boolean; message?: string };
+    expect(body.ok).toBe(false);
+    expect(body.message).toContain('missing');
   });
 });
 
@@ -231,7 +234,7 @@ describe('POST /api/sessions/:id/close', () => {
 
     expect(res.status).toBe(200);
     expect(((await res.json()) as { ok?: boolean }).ok).toBe(true);
-    expect(pool.destroy).toHaveBeenCalledWith('s1');
+    expect(pool.destroy).toHaveBeenCalledWith('s1', { notifyClients: true });
   });
 });
 

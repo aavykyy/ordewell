@@ -80,15 +80,20 @@ export function sessionsRoute(pool: OrchestratorPool) {
   router.delete('/:id', (c) => {
     const ws = c.req.query('workspace') || process.cwd();
     const id = c.req.param('id');
-    pool.destroy(id);
-    const ok = removeSession(id, ws);
-    return c.json({ ok } satisfies OkResponse);
+    const held = pool.hasSession(id);
+    pool.destroy(id, { notifyClients: true });
+    const removed = removeSession(id, ws);
+    const ok = held || removed;
+    return c.json({
+      ok,
+      ...(ok ? {} : { message: `No session "${id}" was found in ${ws}.` }),
+    } satisfies OkResponse);
   });
 
   // Stops the orchestrator (killing every runner it spawned) and drops the
   // in-memory planner conversation. No-op if already closed/unregistered.
   router.post('/:id/close', (c) => {
-    pool.destroy(c.req.param('id'));
+    pool.destroy(c.req.param('id'), { notifyClients: true });
     return c.json({ ok: true } satisfies OkResponse);
   });
 

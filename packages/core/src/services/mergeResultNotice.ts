@@ -86,3 +86,23 @@ export function describeMergeResult(
     }
   }
 }
+
+/**
+ * What "Merge all" did and what the user can do next, in words every surface
+ * shares: a group takes the shared wording and, when nothing or not everything
+ * merged, is told the integration branches are plain branches to merge by hand;
+ * a lone repo whose merge conflicted is told to resolve it with git.
+ */
+export function mergeOutcome(
+  result: IsolationMergeResult,
+  branch: string,
+  group: boolean,
+  repaired: IsolationLandedTask[] = [],
+): { ok: boolean; message: string } {
+  const ok = result.outcome === 'merged';
+  if (!group && result.outcome === 'conflict') {
+    return { ok, message: `Merging ${branch} conflicted, so it was aborted: your tree is as it was. Merge it with git and resolve the conflict there.` };
+  }
+  const { message } = describeMergeResult(result, branch, group, repaired);
+  return { ok, message: ok || !group ? message : `${message} Each repository's ${branch} is a plain branch you can merge by hand.` };
+}

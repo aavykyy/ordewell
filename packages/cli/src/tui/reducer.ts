@@ -291,10 +291,20 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (plannerInFlight(state)) return step(showPlan(state, action.plan));
       return reduceAction(state, { type: 'planUpdated', plan: action.plan, sessionId: action.sessionId });
 
-    // The follow is open while nothing runs, so its loss is news only with a run on screen.
-    case 'followLost':
-      if (stale(state, action.sessionId) || state.status !== 'executing') return step(state);
-      return reduceAction(state, { type: 'executionLost', sessionId: action.sessionId });
+    // The follow is the only subscription open while nothing runs, so losing
+    // it stops live updates entirely: say so, and let the effects side retry
+    // without sending this notice again until a reconnect opens.
+    case 'followLost': {
+      if (stale(state, action.sessionId)) return step(state);
+      if (state.status === 'executing') return reduceAction(state, { type: 'executionLost', sessionId: action.sessionId });
+      return step(say(state, 'system', 'Lost the connection to the daemon; reconnecting to follow this session.'));
+    }
+
+    // A follow that opens again may be the only way a lost reply's turn end
+    // arrives: its socket was gone when the daemon broadcast it.
+    case 'followRestored':
+      if (stale(state, action.sessionId) || state.planner !== 'awaiting') return step(state);
+      return step(state, [{ type: 'reconcileTurn', sessionId: action.sessionId }]);
 
     case 'executionLost': {
       if (stale(state, action.sessionId)) return step(state);

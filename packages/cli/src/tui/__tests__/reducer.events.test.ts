@@ -206,9 +206,11 @@ describe('execution', () => {
     expect(lastMessage(s)?.text).toContain('Lost the connection');
   });
 
-  it('says nothing when the follow is lost with no run on screen', () => {
+  it('says it is reconnecting when the follow is lost with no run on screen', () => {
     const idle = initialState({ ...withTasks, sessionId: 's1' });
-    expect(send(idle, { type: 'followLost', sessionId: 's1' })).toBe(idle);
+    const s = send(idle, { type: 'followLost', sessionId: 's1' });
+    expect(s.status).toBe('idle');
+    expect(lastMessage(s)?.text).toContain('reconnecting');
   });
 
   // A run whose last live task is cancelled or marked done can never restart if

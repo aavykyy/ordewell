@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { createTask, type AttemptUsage, type CommandOutcome, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
-import { TaskLogRegistry } from '../providers/TaskLogRegistry';
+import { TASK_LOG_VIEW_TYPE, TaskLogRegistry } from '../providers/TaskLogRegistry';
 import type { HostToTaskLog } from '../shared/taskLogProtocol';
 import { __panels, __resetPanels, createFakeWebviewPanel, window } from '../test/vscode.mock';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks } from '../shared/conversationPatch';
@@ -555,5 +557,13 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
     h.registry.register();
 
     expect(window.registerWebviewPanelSerializer).toHaveBeenCalledWith('ordewellTaskLog', expect.anything());
+  });
+
+  it('declares the activation event VS Code fires to revive a restored tab', () => {
+    // The restore path activates `onWebviewPanel:<viewType>` before asking for
+    // the serializer, so onStartupFinished alone registers it too late.
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf8')) as { activationEvents?: string[] };
+
+    expect(manifest.activationEvents).toContain(`onWebviewPanel:${TASK_LOG_VIEW_TYPE}`);
   });
 });

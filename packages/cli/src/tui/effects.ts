@@ -11,7 +11,7 @@ import type { Action, Effect } from './reducer';
 import type { ChatRestored } from './reducers/shared';
 import type { SessionView } from './state';
 import { mergeOutcome } from '../isolation';
-import { inboundFor } from './inbound';
+import { inboundFor, forgetInbound } from './inbound';
 
 /**
  * The slice of the daemon client the TUI needs. Derived from `ApiClient` rather
@@ -651,6 +651,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     case 'deleteSession': {
       const { ok } = await api.deleteSession(effect.sessionId, workspace);
       await loadSessions(deps);
+      forgetInbound(deps.api, effect.sessionId);
       if (ok) dispatch({ type: 'sessionDeleted', sessionId: effect.sessionId });
       dispatch(ok
         ? { type: 'notice', message: `Deleted ${effect.sessionId}.` }
@@ -665,6 +666,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
 
     case 'closeSession':
       unfollow(deps, effect.sessionId);
+      forgetInbound(deps.api, effect.sessionId);
       // Local state already moved on; a failure here must not surface as an
       // error in the new session's transcript.
       try {
@@ -794,8 +796,13 @@ async function streamRun(
 
 // ── Following the session ────────────────────────────────────────────────────
 
-const follows = new WeakMap<object, { sessionId: string; follow: SessionFollow }>();
+const follows = new WeakMap<object, { sessionId: string; follow: SessionFollow; opened: boolean }>();
 const runStreams = new WeakMap<object, Map<string, number>>();
+/** Consecutive reconnects that failed before opening, for the backoff. */
+const followFailures = new WeakMap<object, number>();
+const followRetryTimers = new WeakMap<object, ReturnType<typeof setTimeout>>();
+const FOLLOW_RETRY_MS = 500;
+const FOLLOW_RETRY_MAX_MS = 8_000;
 
 function runStreamsOf(api: object): Map<string, number> {
   let open = runStreams.get(api);
@@ -804,6 +811,32 @@ function runStreamsOf(api: object): Map<string, number> {
     runStreams.set(api, open);
   }
   return open;
+}
+
+function cancelFollowRetry(api: object): void {
+  const timer = followRetryTimers.get(api);
+  if (timer !== undefined) clearTimeout(timer);
+  followRetryTimers.delete(api);
+}
+
+/**
+ * Reopen a follow the daemon dropped, backing off while it stays down. The
+ * session the TUI shows must keep following it: a run started by the daemon's
+ * own timer or by another client broadcasts to sockets only, so an idle TUI
+ * that gave up would never see it. Timers are unref'd, so a pending reconnect
+ * does not hold the process open.
+ */
+function scheduleFollowRetry(deps: EffectDeps, sessionId: string, failures: number): void {
+  cancelFollowRetry(deps.api);
+  const delay = Math.min(FOLLOW_RETRY_MS * 2 ** Math.min(failures, 4), FOLLOW_RETRY_MAX_MS);
+  const timer = setTimeout(() => {
+    followRetryTimers.delete(deps.api);
+    // A send, a load or a new session reopened it meanwhile: that follow owns the session now.
+    if (follows.get(deps.api) !== undefined) return;
+    void follow(deps, sessionId, true).catch(() => {});
+  }, delay);
+  timer.unref?.();
+  followRetryTimers.set(deps.api, timer);
 }
 
 /**
@@ -815,26 +848,43 @@ function runStreamsOf(api: object): Map<string, number> {
  * `withExecutionStream` subscribes first; anchored to the client, like
  * `inboundFor`, so a new daemon connection starts clean.
  */
-async function follow(deps: EffectDeps, sessionId: string): Promise<void> {
+async function follow(deps: EffectDeps, sessionId: string, restored = false): Promise<void> {
   const current = follows.get(deps.api);
-  if (current?.sessionId === sessionId) return current.follow.ready;
+  if (current?.sessionId === sessionId) {
+    await current.follow.ready;
+    return;
+  }
   current?.follow.close();
+  cancelFollowRetry(deps.api);
   const inbound = inboundFor(deps.api, deps.dispatch, sessionId);
-  const entry = { sessionId, follow: deps.api.followSession(sessionId, inbound.execution()) };
+  const entry = { sessionId, follow: deps.api.followSession(sessionId, inbound.execution()), opened: false };
   follows.set(deps.api, entry);
   void entry.follow.ended.then((outcome) => {
     if (follows.get(deps.api) !== entry) return;
     follows.delete(deps.api);
-    // A run's own stream says so itself when it goes with the daemon; two notices for one loss is noise.
-    if (outcome === 'lost' && !runStreamsOf(deps.api).has(sessionId)) deps.dispatch({ type: 'followLost', sessionId });
+    if (outcome !== 'lost') return;
+    const failures = followFailures.get(deps.api) ?? 0;
+    // One notice per outage: a daemon that stays down would otherwise add a
+    // line every backoff interval. A run's own stream says so itself when it
+    // goes with the daemon; two notices for one loss is noise.
+    if (failures === 0 && !runStreamsOf(deps.api).has(sessionId)) deps.dispatch({ type: 'followLost', sessionId });
+    followFailures.set(deps.api, failures + 1);
+    scheduleFollowRetry(deps, sessionId, failures);
   });
-  await entry.follow.ready;
+  entry.opened = await entry.follow.ready;
+  if (!entry.opened) return;
+  followFailures.delete(deps.api);
+  // A turn whose reply was lost has no `planner_turn_ended` to settle it; a
+  // reconnect is the moment the session can be read back for its end.
+  if (restored) deps.dispatch({ type: 'followRestored', sessionId });
 }
 
 function unfollow(deps: EffectDeps, sessionId: string): void {
   const current = follows.get(deps.api);
   if (current?.sessionId !== sessionId) return;
   follows.delete(deps.api);
+  cancelFollowRetry(deps.api);
+  followFailures.delete(deps.api);
   current.follow.close();
 }
 

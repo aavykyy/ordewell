@@ -596,3 +596,4 @@ until #30 exists.
 - 2026-10-22 — automatic report turns are not bounded per user message: a report turn may start further research, whose report opens the next turn, and the chain is held only by the planner's judgement, the run's Parallel limit, `mayReport` and the user's Stop (ADR-0037 R4).
 - 2026-10-22 — decided, not built: run updates carry a task's handoff ([ADR-0047](0047-structured-task-handoffs.md), #120).
 - 2026-10-22 — implemented handoffs in run updates, with whole findings and a pull pointer (ADR-0047, #120).
+- 2026-10-24 — the approval record's rules live in one module, `ApprovalRecord`, and run on each change to the task tree rather than inside a save: a task that leaves the plan takes its approval, and a save only writes. Approval taken from a task is announced to surfaces as a plan update with a status, wherever the change was made. `Session.isApproved` stays the one read.

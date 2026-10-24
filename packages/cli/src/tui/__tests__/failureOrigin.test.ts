@@ -26,7 +26,7 @@ const refused = (): Promise<never> => Promise.reject(Object.assign(new Error('co
 /** The sockets a turn opens around its call, open at once and never dropping. */
 const turnSockets: Partial<OrdewellApi> = {
   streamPlanning: () => ({ close: () => {}, ready: Promise.resolve() }),
-  followSession: () => ({ ready: Promise.resolve(), ended: new Promise(() => {}), close: () => {} }),
+  followSession: () => ({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: () => {} }),
 };
 
 /** Runs one effect against `api` and folds every action it dispatched into `state`. */

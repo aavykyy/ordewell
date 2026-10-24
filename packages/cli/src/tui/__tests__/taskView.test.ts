@@ -295,7 +295,7 @@ describe('the task view draws as a runner, not the planner', () => {
     expect(out).toContain('Refactor PlanStore');
     // The log ends with a completed turn, so the header reads the saved status;
     // "working" is the header's word only while a turn is live.
-    expect(out).toContain('claude-code · in_progress');
+    expect(out).toContain('claude-code · running');
     expect(out).toContain('ctrl-r remove queued');
     expect(out).toContain('ctrl-x stop runner');
   });
@@ -575,8 +575,24 @@ describe('the task view header says what the task is doing', () => {
       taskView: loaded({ view: replayTaskLog([{ type: 'turn_start', message: 'Do the task' }]) }),
     });
 
-    expect(header(completed)).toContain('· completed');
+    expect(header(completed)).toContain('· done');
     expect(header(completed)).not.toContain('· working');
+  });
+
+  // The header words the store's status the way the plan pane and VS Code do,
+  // rather than printing `pending`/`completed`/`skipped` raw.
+  it.each([
+    ['pending', 'to do'],
+    ['approved', 'to do'],
+    ['in_progress', 'running'],
+    ['completed', 'done'],
+    ['failed', 'failed'],
+    ['skipped', 'skipped'],
+    ['blocked', 'blocked'],
+    ['cancelled', 'to do'],
+  ])('words the store status %s as %s', (status, word) => {
+    const state = opened({ tasks: [task({ status })], taskView: loaded({ view: replayTaskLog([]) }) });
+    expect(header(state)).toContain(`· ${word}`);
   });
 
   it('names a subtask by its dotted reference in the log header', () => {
