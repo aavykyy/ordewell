@@ -100,14 +100,15 @@ describe('an opening turn whose reply was lost', () => {
     expect(t.sent).toEqual([{ type: 'sendMessage', sessionId: 'session-new', message: 'ok looks good, output the plan and run it' }]);
   });
 
-  it('says in one line that the reply was lost and the turn may still be going', async () => {
+  it('says in one line that the reply was lost, not that the turn failed', async () => {
     const t = tui({ sendConversationMessage: vi.fn().mockRejectedValue(timedOut()) }, { sessionId: 's1', planner: 'planning' });
     t.send({ type: 'sessionMessage', sessionId: 's1', message: { type: 'planner_turn_started', turnId: 't1' } });
     await t.run({ type: 'sendMessage', sessionId: 's1', message: 'x' });
 
     const said = messagesOf(t.state).map((m) => m.text).filter((text) => /lost/i.test(text));
     expect(said).toHaveLength(1);
-    expect(said[0]).toMatch(/still running|may have finished/i);
+    expect(said[0]).toMatch(/lost on the way/i);
+    expect(types(t.actions)).not.toContain('failed');
   });
 
   it('keeps saying the reply was lost once the daemon\'s state is redrawn', async () => {
@@ -173,8 +174,11 @@ describe('a later turn whose reply was lost', () => {
     return t;
   }
 
-  it('does not drain the queue into a turn the daemon may still be running', async () => {
-    const t = runningTurn({ sendConversationMessage: vi.fn().mockRejectedValue(timedOut()) });
+  it('does not drain the queue into a turn the daemon is still running', async () => {
+    const t = runningTurn({
+      sendConversationMessage: vi.fn().mockRejectedValue(timedOut()),
+      adoptSession: vi.fn().mockResolvedValue({ plan: planWith(), goal: 'g', plannerTurnId: 't1' }),
+    });
     await t.run({ type: 'sendMessage', sessionId: 's1', message: 'first' });
 
     expect(t.state.queuedPrompts).toEqual(['and the tests']);
@@ -230,6 +234,14 @@ describe('a later turn whose reply was lost', () => {
 });
 
 describe('a turn end that went with the follow socket', () => {
+  /** A lost reply with a prompt held behind it, as the turn's gate stays open after `turnLost`. */
+  function lostTurn(api: Partial<OrdewellApi>) {
+    const t = tui(api, { sessionId: 's1', planner: 'planning', queuedPrompts: ['and the tests'] });
+    t.send({ type: 'sessionMessage', sessionId: 's1', message: { type: 'planner_turn_started', turnId: 't1' } });
+    t.send({ type: 'turnLost', sessionId: 's1' });
+    return t;
+  }
+
   it('reads the session back when the follow reconnects', () => {
     const awaiting = initialState({ sessionId: 's1', planner: 'awaiting' });
     expect(reduce(awaiting, { type: 'followRestored', sessionId: 's1' }).effects)
@@ -239,5 +251,37 @@ describe('a turn end that went with the follow socket', () => {
   it('does nothing when no reply is waiting on it', () => {
     const idle = initialState({ sessionId: 's1' });
     expect(reduce(idle, { type: 'followRestored', sessionId: 's1' }).effects).toEqual([]);
+  });
+
+  it('settles the lost turn and sends the queue once the daemon holds no turn', async () => {
+    const t = lostTurn({});
+    t.send({ type: 'followRestored', sessionId: 's1' });
+    await t.settle();
+
+    expect(t.sent.filter((e) => e.type === 'sendMessage'))
+      .toEqual([{ type: 'sendMessage', sessionId: 's1', message: 'and the tests' }]);
+    expect(t.state.queuedPrompts).toEqual([]);
+    expect(t.state.turnGate.open).toBeNull();
+  });
+
+  it('keeps the turn and its queue while the daemon still runs that turn', async () => {
+    const t = lostTurn({ adoptSession: vi.fn().mockResolvedValue({ plan: planWith(), goal: 'g', plannerTurnId: 't1' }) });
+    t.send({ type: 'followRestored', sessionId: 's1' });
+    await t.settle();
+
+    expect(t.state.planner).toBe('awaiting');
+    expect(t.state.queuedPrompts).toEqual(['and the tests']);
+    expect(t.state.turnGate.open).toBe('t1');
+  });
+
+  // The gate was the lost turn's; a turn the daemon runs now is the one whose
+  // end has to release the queue.
+  it('follows the turn the daemon runs when the gate held a different one', async () => {
+    const t = lostTurn({ adoptSession: vi.fn().mockResolvedValue({ plan: planWith(), goal: 'g', plannerTurnId: 't2' }) });
+    t.send({ type: 'followRestored', sessionId: 's1' });
+    await t.settle();
+
+    expect(t.state.turnGate.open).toBe('t2');
+    expect(t.state.queuedPrompts).toEqual(['and the tests']);
   });
 });

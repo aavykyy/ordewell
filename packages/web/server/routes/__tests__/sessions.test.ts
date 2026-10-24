@@ -20,6 +20,7 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     getGoal: vi.fn().mockReturnValue('Rate limiting'),
     getPlanState: vi.fn().mockReturnValue(null),
     runSnapshot: vi.fn().mockReturnValue(null),
+    plannerTurnId: vi.fn().mockReturnValue(undefined),
     streamPosition: vi.fn().mockReturnValue({ stream: 'daemon', seq: 12 }),
     destroy: vi.fn(),
     ...overrides,
@@ -121,6 +122,24 @@ describe('POST /api/sessions/:id/load', () => {
 
     expect(res.status).toBe(200);
     expect(pool.adoptSavedSession).toHaveBeenCalledWith('s1', '/ws');
+  });
+
+  // A surface that lost the turn's end reads this back to tell a gate the
+  // daemon has closed from one a live turn still holds.
+  it('names the planner turn the adopted session is running', async () => {
+    const running = fakePool({ plannerTurnId: vi.fn().mockReturnValue('t1') });
+    const app2 = new Hono();
+    app2.route('/api/sessions', sessionsRoute(running));
+
+    const res = await app2.request('/api/sessions/s1/load', { method: 'POST' });
+
+    expect(((await res.json()) as { plannerTurnId?: string }).plannerTurnId).toBe('t1');
+  });
+
+  it('leaves the turn out when no planner turn is running', async () => {
+    const res = await app.request('/api/sessions/s1/load', { method: 'POST' });
+
+    expect(await res.json()).not.toHaveProperty('plannerTurnId');
   });
 
   it('returns the restored plan', async () => {

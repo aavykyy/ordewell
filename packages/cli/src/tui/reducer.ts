@@ -132,13 +132,20 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step(say(awaiting, 'system', 'The reply was lost on the way: the planner may still be running this turn or may have finished it. Showing what the server holds.'));
     }
 
-    // The daemon's own word on the session. A turn its stream still holds open
-    // is running, and ends through `sessionMessage` below; otherwise it is
-    // over, and settles as any turn that returned its plan.
+    // The daemon's own word on the session. A turn it still runs is live, and
+    // ends through `sessionMessage` below; otherwise the gate's turn is over,
+    // and settles as any turn that returned its plan.
     case 'turnReconciled': {
       if (stale(state, action.sessionId)) return step(state);
-      if (state.turnGate.open !== null) return step(showPlan(state, action.plan));
-      const redrawn = reduceAction(state, action.chat).state;
+      if (action.plannerTurnId !== undefined) {
+        // The gate follows the turn actually running: its own end is what
+        // releases the queue, a stranger's output is not dropped as a stale one's.
+        const gate = action.plannerTurnId === state.turnGate.open
+          ? state.turnGate
+          : { open: action.plannerTurnId, stopped: null };
+        return step(showPlan({ ...state, turnGate: gate }, action.plan));
+      }
+      const redrawn = reduceAction({ ...state, turnGate: NO_TURN }, action.chat).state;
       const settled = reduceAction(redrawn, { type: 'planUpdated', plan: action.plan, sessionId: action.sessionId });
       // The redraw replaced the line `turnLost` spoke, and with it the reason a message may be missing.
       return { ...settled, state: say(settled.state, 'system', 'The reply to your last message was lost on the way; this is what the server holds.') };

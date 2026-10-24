@@ -154,7 +154,7 @@ describe('a plan row, pinned before its rules move to core', () => {
       [task({ status: 'completed' }), deploy({ status: 'awaiting_user', taskMode: 'yolo', forcedPastGate: ['Fix the parser'], dependencies: ['t1', 'ghost'] })],
       { expandedTaskId: 'o2', modesByRunner: modes },
     );
-    expect(out).toContain('    awaiting user');
+    expect(out).toContain('    Awaiting');
     expect(out).toContain('Runs in your checkout, not a worktree, once the work it depends on is merged. O makes it a change task.');
     expect(out).toContain('Started before the work of Fix the parser was merged into your branch.');
     expect(out).toContain('Runs without permission prompts (Full). Change the level with /settings.');

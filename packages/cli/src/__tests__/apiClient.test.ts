@@ -423,6 +423,16 @@ describe('ApiClient — adopting a saved session', () => {
     expect((await new ApiClient(server.port).adoptSession('s1')).run).toEqual(run);
   });
 
+  it('hands on the planner turn the session is running', async () => {
+    const server = await startCustomServer((_req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ ok: true, plan: {}, goal: '', plannerTurnId: 't1' }));
+    });
+    servers.push(server);
+
+    expect((await new ApiClient(server.port).adoptSession('s1')).plannerTurnId).toBe('t1');
+  });
+
   it('omits the workspace when none is given', async () => {
     let url = '';
     const server = await startCustomServer((req, res) => {
