@@ -182,8 +182,14 @@ describe('ordewell handoff', () => {
       isolation: {
         resolvers: {},
         run: {
-          id: 'r1', workspaceRoot: '/tmp/ws', baseRef: 'abcdef1234567890', integrationBranch: 'ordewell/r1/integration',
-          tasks: { t1: { taskId: 't1', order: 1, title: 'One', branch: 'ordewell/r1/1-t1', worktree: '/w', status: 'merged', linked: [], repairs: 1, repairedFiles: ['a.ts'] } },
+          id: 'r1', workspaceRoot: '/tmp/ws', shared: [], sharedRepos: [],
+          repos: [{ path: '.', root: '/tmp/ws', baseRef: 'abcdef1234567890', integrationBranch: 'ordewell/r1/integration' }],
+          tasks: {
+            t1: {
+              taskId: 't1', order: 1, title: 'One', branch: 'ordewell/r1/1-t1', workspace: '/w', status: 'merged',
+              repos: { '.': { worktree: '/w', linked: [], changed: true } }, repairs: 1, repairedFiles: ['a.ts'],
+            },
+          },
         },
       },
     };

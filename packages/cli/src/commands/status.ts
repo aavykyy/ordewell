@@ -2,11 +2,10 @@ import { assignmentFlagText } from '../tui/blocks';
 import { writeFileSync } from 'fs';
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
-import { blockedByLabel, holdLabel, loopRowParts, planBlocks, scriptTaskText, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, tasksTotalText, usageText, waitsForApproval, walkPlan, type ApprovalRecord, type AssignmentScope, type RunView } from '@ordewell/core';
+import { blockedByLabel, handoffBaseLine, holdLabel, isolationViewOfPlan, loopRowParts, planBlocks, scriptTaskText, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, tasksTotalText, usageText, waitsForApproval, walkPlan, type ApprovalRecord, type AssignmentScope, type RunView } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type SessionMeta } from '../apiClient';
-import { handoffBase, isolationOfPlan } from '../isolation';
 import { taskHandoffLines } from './taskHandoff';
 
 export async function handleStatus(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
@@ -105,8 +104,8 @@ function printOneSession(
   console.log(`Goal:     ${meta.goal}`);
   console.log(`Runner:   ${(meta.runners || []).join(', ')}  |  Status: ${meta.status}`);
   console.log(`Phase:    ${plan?.phase || 'unknown'}  |  Created: ${meta.createdAt}`);
-  const isolation = isolationOfPlan(plan);
-  if (isolation) console.log(`Base:     ${handoffBase(isolation.handoff, 8)}`);
+  const isolation = isolationViewOfPlan(plan);
+  if (isolation) console.log(`Base:     ${handoffBaseLine(isolation.handoff, 8)}`);
   console.log(`Tasks:    ${everyTask.length} total  |  ${count('completed')} done  |  ${count('failed')} failed  |  ${count('in_progress')} running  |  ${count('blocked')} blocked  |  ${count('skipped')} skipped\n`);
 
   const total = tasksTotalText(allTasks);

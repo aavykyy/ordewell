@@ -12,8 +12,7 @@ import {
 } from './layout';
 import { chatEditorRoomFor, chatPaneWidth, chatPromptLabel, paneColumns, planPaneWidth } from './geometry';
 import { currentHandoff, diffRoom, handoffActions } from './handoff';
-import { handoffBase, handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
-import { capConflictFiles, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
+import { capConflictFiles, handoffBaseLine, handoffBranchName, isRepoGroup, repoResultLines, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
 import { matchingItems, runnerCommands, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
 import type { StepperState } from './reducers/stepper';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
@@ -500,7 +499,7 @@ function renderHandoff(
     // line would push the end of the diff and the footer out of the frame.
     const shown = lines.slice(scroll, scroll + room).map((line) => paintDiffLine(truncate(line, Math.max(1, cols - 2))));
     const more = scroll + room < lines.length ? '↑↓ pgup/pgdn scroll · ' : '';
-    return frame(`Diff: ${handoffBranch(handoff)}`, [...shown, '', style.grey(`${more}enter or esc goes back`)], rows, cols);
+    return frame(`Diff: ${handoffBranchName(handoff)}`, [...shown, '', style.grey(`${more}enter or esc goes back`)], rows, cols);
   }
 
   const landed = handoff.landed.length === 0
@@ -524,8 +523,8 @@ function renderHandoff(
   return frame(
     'Run handoff',
     [
-      `Branch  ${style.brand(handoffBranch(handoff))}`,
-      style.grey(`Forked from ${handoffBase(handoff, 12)}`),
+      `Branch  ${style.brand(handoffBranchName(handoff))}`,
+      style.grey(`Forked from ${handoffBaseLine(handoff, 12)}`),
       '',
       ...perRepo,
       'Landed on it, in plan order:',

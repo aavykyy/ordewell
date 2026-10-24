@@ -4,12 +4,14 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import HandoffCard from '../HandoffCard';
 import type { IsolationMergeResult } from '@ordewell/core';
 
+const landed = [
+  { taskId: 't2', order: 2, title: 'Second task' },
+  { taskId: 't1', order: 1, title: 'First task' },
+];
+
 const handoff = {
-  repos: [{ path: '.', integrationBranch: 'ordewell/run-1/integration', baseRef: 'abcdef0123456789' }],
-  landed: [
-    { taskId: 't2', order: 2, title: 'Second task' },
-    { taskId: 't1', order: 1, title: 'First task' },
-  ],
+  repos: [{ path: '.', integrationBranch: 'ordewell/run-1/integration', baseRef: 'abcdef0123456789', landed }],
+  landed,
 };
 
 const groupHandoff = {
@@ -99,6 +101,17 @@ describe('HandoffCard — repo group (ADR-0014)', () => {
     expect(screen.getByText('Merge')).toBeTruthy();
     expect(screen.queryByText('Merge all')).toBeNull();
     expect(document.querySelector('.isolation-handoff-repo')).toBeNull();
+  });
+
+  it('treats a one-repo workspace that is not the root as a group, as core does', () => {
+    const oneNested = {
+      repos: [{ path: 'api', integrationBranch: 'ordewell/run-1/integration', baseRef: 'aaaa11112222', landed: [{ taskId: 't1', order: 1, title: 'Add rate limiting' }] }],
+      landed: [{ taskId: 't1', order: 1, title: 'Add rate limiting' }],
+    };
+    render(<HandoffCard {...oneNested} onAction={vi.fn()} />);
+
+    expect(screen.getByText('Merge all')).toBeTruthy();
+    expect(document.querySelector('.isolation-handoff-repo-path')!.textContent).toBe('api');
   });
 
   it('shows every blocking repository, its reason and files, in core\'s words', () => {

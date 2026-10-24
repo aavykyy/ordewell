@@ -9,7 +9,9 @@ export type { TaskRef } from './services/TaskOps';
 export { summarizeToolCall } from './services/researchStepSummary';
 export { truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH } from './services/SessionMessage';
 export { capConflictFiles } from './services/conflictFiles';
-export { describeMergeResult, mergeOutcome } from './services/mergeResultNotice';
+export { describeMergeResult, mergeOutcome, blockNotice, blockNotices, repairedLanded, repairedNotice } from './services/mergeResultNotice';
+export { handoffBaseLine, handoffBranchName, isRepoGroup, repoBaseLine, repoResultLines } from './services/mergeWording';
+export type { HandoffForkRepo } from './services/mergeWording';
 export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, type PlanBlocks } from './services/blocking';
 // What a loop's rows say (ADR-0045) is read the way the scheduler reads it.
 export { betweenRounds, outOfRounds, loopRoundOf, checkOf, loopRemovalRefusal, type TaskLoop } from './models/Loop';

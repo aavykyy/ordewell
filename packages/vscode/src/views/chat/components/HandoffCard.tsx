@@ -1,35 +1,16 @@
 import React from 'react';
-import { capConflictFiles, mergeOutcome } from '@ordewell/core/plan-utils';
-import type { IsolationMergeResult } from '@ordewell/core';
-
-export interface HandoffLandedTask {
-  taskId: string;
-  order: number;
-  title: string;
-  /** Set when the task landed only after a conflict repair (ADR-0015): the files it was started for. */
-  repairedFiles?: string[];
-}
+import { capConflictFiles, handoffBaseLine, handoffBranchName, isRepoGroup, mergeOutcome, repoBaseLine, repairedLanded } from '@ordewell/core/plan-utils';
+import type { IsolationHandoffRepo, IsolationLandedTask, IsolationMergeResult } from '@ordewell/core';
 
 /** So the reviewer knows where to look (ADR-0015). */
 function RepairedNote({ files }: { files: string[] }) {
   return <span className="isolation-handoff-repaired">: repaired ({capConflictFiles(files)})</span>;
 }
 
-export interface HandoffRepo {
-  path: string;
-  integrationBranch: string;
-  baseRef: string;
-  /** The branch the run started on; absent when it started on a detached HEAD or the record never noted one. */
-  baseBranch?: string;
-  /** Set when the run started on a detached HEAD. */
-  startedDetached?: true;
-  /** Tasks whose work landed in this repo, in plan order. */
-  landed?: HandoffLandedTask[];
-}
-
 interface HandoffCardProps {
-  repos: HandoffRepo[];
-  landed: HandoffLandedTask[];
+  /** The run's repos, in core's handoff shape: the card only draws what core worded. */
+  repos: readonly IsolationHandoffRepo[];
+  landed: readonly IsolationLandedTask[];
   /** An Act supervisor looks at this run when it wakes and may merge it; the actions stay the user's too. */
   deferredTo?: 'supervisor';
   /** The result of the last Merge all, so a blocked or part-landed group is visible. */
@@ -44,13 +25,7 @@ interface HandoffCardProps {
   onAction: (action: 'reviewDiff' | 'merge' | 'discard' | 'cleanup') => void;
 }
 
-/** Where a repo's run forked: the branch and the commit, or that it started detached, or just the commit when the record never noted a branch. */
-function baseOf({ baseBranch, startedDetached, baseRef }: HandoffRepo): string {
-  const commit = baseRef.slice(0, 12);
-  return baseBranch ? `${baseBranch} @ ${commit}` : `${startedDetached ? 'detached at' : 'base'} ${commit}`;
-}
-
-function sortLanded(tasks: HandoffLandedTask[]): HandoffLandedTask[] {
+function sortLanded(tasks: readonly IsolationLandedTask[]): IsolationLandedTask[] {
   return [...tasks].sort((a, b) => a.order - b.order);
 }
 
@@ -59,7 +34,7 @@ function sortLanded(tasks: HandoffLandedTask[]): HandoffLandedTask[] {
  * TUI cannot disagree about a blocked, part-landed or failed merge — for a
  * lone repo as well as a group.
  */
-function MergeOutcome({ result, branch, group, repaired }: { result: IsolationMergeResult; branch: string; group: boolean; repaired: HandoffLandedTask[] }) {
+function MergeOutcome({ result, branch, group, repaired }: { result: IsolationMergeResult; branch: string; group: boolean; repaired: readonly IsolationLandedTask[] }) {
   const { message } = mergeOutcome(result, branch, group, repaired);
   return <div className={`isolation-merge-result ${result.outcome}`}>{message}</div>;
 }
@@ -73,10 +48,9 @@ function MergeOutcome({ result, branch, group, repaired }: { result: IsolationMe
  */
 export default function HandoffCard({ repos, landed, deferredTo, mergeResult, midRun, onAction }: HandoffCardProps) {
   const sorted = sortLanded(landed);
-  const isGroup = repos.length > 1;
-  // Every repo's integration branch has the same name.
-  const branch = [...new Set(repos.map((r) => r.integrationBranch))].join(', ');
-  const base = repos.map(baseOf).join(', ');
+  const isGroup = isRepoGroup({ repos });
+  const branch = handoffBranchName({ repos });
+  const base = handoffBaseLine({ repos }, 12);
   return (
     <div className="isolation-handoff">
       <div className="isolation-handoff-header">
@@ -99,8 +73,8 @@ export default function HandoffCard({ repos, landed, deferredTo, mergeResult, mi
             {repos.map((repo) => (
               <div key={repo.path} className="isolation-handoff-repo">
                 <code className="isolation-handoff-repo-path">{repo.path}</code>
-                <span className="isolation-handoff-repo-base">on <code>{baseOf(repo)}</code></span>
-                {repo.landed && repo.landed.length > 0 && (
+                <span className="isolation-handoff-repo-base">on <code>{repoBaseLine(repo, 12)}</code></span>
+                {repo.landed.length > 0 && (
                   <ul className="isolation-handoff-landed">
                     {sortLanded(repo.landed).map((t) => (
                       <li key={t.taskId}>
@@ -136,9 +110,9 @@ export default function HandoffCard({ repos, landed, deferredTo, mergeResult, mi
       {mergeResult && (
         <MergeOutcome
           result={mergeResult}
-          branch={repos[0]?.integrationBranch ?? ''}
+          branch={branch}
           group={isGroup}
-          repaired={sorted.filter((t) => t.repairedFiles && t.repairedFiles.length > 0)}
+          repaired={repairedLanded({ landed: sorted })}
         />
       )}
       <div className="isolation-handoff-actions">

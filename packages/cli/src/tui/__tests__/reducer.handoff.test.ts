@@ -321,7 +321,7 @@ describe('isolation_blocked', () => {
 describe('the run closing', () => {
   it('clears the handoff, the marks, and only its own overlay', () => {
     const before = withHandoff({
-      tasks: [task({ isolation: { state: 'conflict', branch: 'b', worktree: 'w' } })],
+      tasks: [task({ isolation: { state: 'conflict', branch: 'b', worktree: 'w', repos: [] } })],
       overlay: { kind: 'handoff', index: 2, diff: null },
     });
 
@@ -462,7 +462,7 @@ describe('per-task isolation on the plan', () => {
 describe('resolving a conflict', () => {
   const conflicted = (): TuiState => session({
     focus: 'plan',
-    tasks: [task({ id: 't2', order: 2, status: 'awaiting_user', isolation: { state: 'conflict', branch: 'b', worktree: 'w' } })],
+    tasks: [task({ id: 't2', order: 2, status: 'awaiting_user', isolation: { state: 'conflict', branch: 'b', worktree: 'w', repos: [] } })],
   });
 
   it('x on a conflicted task asks the daemon to add a resolver task', () => {
@@ -470,7 +470,7 @@ describe('resolving a conflict', () => {
   });
 
   it('x does nothing on a task without a conflict', () => {
-    const quiet = session({ focus: 'plan', tasks: [task({ isolation: { state: 'active', branch: 'b', worktree: 'w' } })] });
+    const quiet = session({ focus: 'plan', tasks: [task({ isolation: { state: 'active', branch: 'b', worktree: 'w', repos: [] } })] });
 
     expect(press(quiet, 'char', 'x').effects).toEqual([]);
   });

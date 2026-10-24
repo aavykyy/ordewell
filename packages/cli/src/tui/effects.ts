@@ -1,6 +1,6 @@
 import { execSync } from 'child_process';
 import {
-  clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, newTaskFields, taskActionCommand, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
+  clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, mergeOutcome, newTaskFields, taskActionCommand, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
   type PlannerModelRecall,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
@@ -10,7 +10,6 @@ import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelS
 import type { Action, Effect } from './reducer';
 import type { ChatRestored } from './reducers/shared';
 import type { SessionView } from './state';
-import { mergeOutcome } from '../isolation';
 import { inboundFor, forgetInbound } from './inbound';
 
 /**

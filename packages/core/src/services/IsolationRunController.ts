@@ -25,9 +25,10 @@ import type {
   TaskIsolation,
   TreeSnapshot,
 } from '../interfaces/IWorktreeIsolation';
-import { describeMergeResult } from './mergeResultNotice';
+import { describeMergeResult, repairedLanded } from './mergeResultNotice';
 import { quotedList } from '../utils/quotedList';
-import { handoffOf, integrationBranchNameOf, layoutOf, PrepareFailedError, SELF_REPO, taskIsolationOf } from './isolationRecord';
+import { handoffOf, layoutOf, PrepareFailedError, SELF_REPO, taskIsolationOf } from './isolationRecord';
+import { handoffBranchName } from './mergeWording';
 import type { IsolatedExecution } from './plannerModes';
 import { PlanEditError } from './PlanEditError';
 import { workspaceRepoGroup } from './repoGroup';
@@ -614,9 +615,9 @@ export class IsolationRunController {
    */
   async merge(): Promise<IsolationMergeResult> {
     const run = this.requireRun();
-    const repaired = handoffOf(run).landed.filter((t) => t.repairedFiles?.length);
+    const repaired = repairedLanded(handoffOf(run));
     const result = await this.isolation.mergeIntoCheckedOut(run);
-    const branch = integrationBranchNameOf(run);
+    const branch = handoffBranchName(run);
     const group = run.repos.some((r) => r.path !== SELF_REPO);
     const { level, message } = describeMergeResult(result, branch, group, repaired);
     this.tell(level, message);
