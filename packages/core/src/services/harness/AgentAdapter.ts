@@ -310,6 +310,13 @@ export interface AgentAdapter {
   mcpAttached?(): Promise<boolean | AttachState>;
 
   /**
+   * Registers a listener for the process ending, for any reason; a planner
+   * reads it to tell a runner that exited while it started. Fires at most
+   * once. `lastWords` is how it ended, with its stderr tail.
+   */
+  onProcessExit?(listener: (code: number, lastWords?: string) => void): void;
+
+  /**
    * The approved project servers (ADR-0028) this runner started but cannot
    * give the planner as tools of their own, known once `start` resolved.
    * Absent on an adapter that gives the planner every one it starts.

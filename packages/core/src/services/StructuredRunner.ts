@@ -632,7 +632,9 @@ export class StructuredSession extends AbstractRunnerSession {
   private async interruptTurn(turn: OpenTurn, adapter: TaskModeAgentAdapter): Promise<void> {
     const grace = this.launch.interruptGraceMs;
     const ended = new Promise<void>((resolve) => this.structuredEmitter.once('turnEnd', () => resolve()));
-    if (await adapter.interrupt(grace)) {
+    // An adapter whose request never answers is one that ignored the interrupt, so the grace bounds the ask too.
+    const acknowledged = await settleWithin(adapter.interrupt(grace).catch(() => false), { timeoutMs: grace, onTimeout: () => false });
+    if (acknowledged) {
       // Acknowledged, but the turn only ends with its result line.
       const settled = await settleWithin(ended.then(() => true), { timeoutMs: grace, onTimeout: () => false });
       if (settled) return;

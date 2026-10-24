@@ -504,6 +504,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private readonly steers = new Map<string, string>();
   /** The last turn's `result` ended it, so a steer's echo now opens a turn the CLI started for that message. */
   private turnClosed = false;
+  /** The model is working in a turn the CLI opened itself, after the last one closed: a background wake. */
+  private runnerTurn = false;
   /** The task's commands as the CLI last listed them, and what its `init` said of them (#66). */
   private listedCommands: ClaudeCommand[] = [];
   private skillNames = new Set<string>();
@@ -728,7 +730,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       if (!answer) return 'pending';
       const server = answer.response?.mcpServers?.find((s) => s.name === ORDEWELL_MCP_SERVER_NAME);
       return server ? CLAUDE_ORDEWELL.attachState(server.status) : 'pending';
-    }, MCP_ATTACH_TIMEOUT_MS, MCP_STATUS_POLL_MS);
+    }, MCP_ATTACH_TIMEOUT_MS, MCP_STATUS_POLL_MS, this.processEnded);
   }
 
   /**
@@ -738,7 +740,17 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * as an interrupted `turn_end`.
    */
   async interrupt(timeoutMs: number): Promise<boolean> {
-    if (!this.process) return false;
+    // Between turns there is nothing to stop, and remembering the request
+    // would call the next turn the runner opens by itself interrupted.
+    if (!this.process || (this.turnClosed && !this.runnerTurn)) return false;
+    // A held turn's model is idle and only background work runs: the CLI has
+    // no turn to end, so the turn ends here and that work is left alone.
+    if (this.resultHeld) {
+      this.resultHeld = false;
+      this.clearFollowOnTimer();
+      this.closeTurn({ type: 'turn_end', interrupted: true }, (event) => this.announce(event));
+      return true;
+    }
     this.interruptRequested = true;
     return (await this.control({ subtype: 'interrupt' }, timeoutMs))?.subtype === 'success';
   }
@@ -849,6 +861,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     this.interruptRequested = false;
     this.resultHeld = false;
     this.turnClosed = false;
+    this.runnerTurn = false;
     this.clearFollowOnTimer();
     // A turn names its own model on its first call; a command turn makes none,
     // and reading the last turn's id here would report its window against the
@@ -930,7 +943,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       }
 
       case 'assistant':
-        if (!subagentId) this.clearFollowOnTimer();
+        if (!subagentId) {
+          this.clearFollowOnTimer();
+          this.runnerTurn = this.turnClosed;
+        }
         if (subagentId) {
           this.handleSubagentMessage(msg, subagentId, emit);
           return;
@@ -1033,14 +1049,18 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         // blocks, so this only settles the turn.
         this.reportSessionCost(msg, emit);
         for (const command of this.modelCommands) command.turnsLeft = Math.max(0, command.turnsLeft - 1);
+        // The request belongs to the turn this result closes, so a result that
+        // finished anyway clears it too: left set, it would call the next turn interrupted.
         if (this.interruptRequested && (msg.is_error || msg.subtype !== 'success')) {
           this.interruptRequested = false;
           this.closeTurn({ type: 'turn_end', interrupted: true }, emit);
         } else if (msg.is_error || (msg.subtype && msg.subtype !== 'success')) {
           this.closeTurn({ type: 'error', message: msg.result?.trim() || msg.errors?.join('\n').trim() || `Claude Code ended the turn: ${msg.subtype ?? 'error'}` }, emit);
         } else if (this.role === 'task' && this.backgroundTaskCount > 0) {
+          this.interruptRequested = false;
           this.resultHeld = true;
         } else {
+          this.interruptRequested = false;
           this.resultHeld = false;
           this.closeTurn({ type: 'turn_end' }, emit);
         }
@@ -1048,7 +1068,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
 
       case 'stream_event':
         // Only the planner's own messages stream; a subagent's arrive whole.
-        if (msg.event && !subagentId) this.handleStreamEvent(msg.event, emit);
+        if (msg.event && !subagentId) {
+          this.runnerTurn = this.turnClosed;
+          this.handleStreamEvent(msg.event, emit);
+        }
         return;
 
       default:
@@ -1154,6 +1177,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   /** A subagent left running in the background outlives the turn, and a request it raised still waits on its answer. */
   private closeTurn(end: AgentEvent, emit: (event: AgentEvent) => void): void {
     this.turnClosed = true;
+    this.runnerTurn = false;
     if (this.backgroundTaskCount === 0) this.permissions.endTurn(emit);
     emit(end);
   }

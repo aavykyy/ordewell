@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { OpenCodeAdapter } from '../OpenCodeAdapter';
+import { REQUEST_TIMEOUT_MS } from '../openCodeTransport';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions, TaskModeAgentAdapter } from '../AgentAdapter';
 import { mcpClientConfig, TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../../mcp';
 import { OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
@@ -52,7 +53,16 @@ function fakeServer(routes: Record<string, (body: unknown) => Reply | Promise<Re
 
     const key = `${method} ${path}`;
     let reply: Reply;
-    if (routes[key]) reply = await routes[key](body);
+    if (routes[key]) {
+      const answering = Promise.resolve(routes[key](body));
+      // A request that is aborted stops waiting on its route, as a real socket does.
+      reply = await (init?.signal
+        ? Promise.race([answering, new Promise<never>((_resolve, reject) => {
+          const abort = () => reject(init.signal?.reason instanceof Error ? init.signal.reason : new Error('The operation was aborted.'));
+          if (init.signal?.aborted) abort(); else init.signal?.addEventListener('abort', abort, { once: true });
+        })])
+        : answering);
+    }
     else if (key === 'GET /session/status') reply = status;
     else if (key === 'POST /session') reply = { id: 'ses_task' };
     else if (key.endsWith('/prompt_async')) reply = { status: 204 };
@@ -97,7 +107,8 @@ function taskStart(overrides: Partial<TaskStartOptions> = {}): TaskStartOptions 
   };
 }
 
-async function startTask(server: ReturnType<typeof fakeServer>, opts: AgentStartOptions = taskStart(), workspaceEnv: Record<string, string> = {}) {
+/** The adapter's start, announced up and not yet awaited — for a test that holds the start itself. */
+async function beginTask(server: ReturnType<typeof fakeServer>, opts: AgentStartOptions = taskStart(), workspaceEnv: Record<string, string> = {}) {
   const spawned = fakeSpawn([]);
   const envs: NodeJS.ProcessEnv[] = [];
   const spawn: SpawnFn = (cmd, argv, options) => {
@@ -117,8 +128,13 @@ async function startTask(server: ReturnType<typeof fakeServer>, opts: AgentStart
   const started = adapter.start(opts);
   for (let i = 0; i < 50 && spawned.processes.length === 0; i++) await Promise.resolve();
   spawned.processes[0].emitStdout(`opencode server listening on ${BASE}\n`);
+  return { adapter, spawned, env: envs[0], started };
+}
+
+async function startTask(server: ReturnType<typeof fakeServer>, opts: AgentStartOptions = taskStart(), workspaceEnv: Record<string, string> = {}) {
+  const { started, ...running } = await beginTask(server, opts, workspaceEnv);
   await started;
-  return { adapter, spawned, env: envs[0] };
+  return running;
 }
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -570,6 +586,28 @@ describe('OpenCodeAdapter task mode — interrupt', () => {
     await turn;
     expect(events.at(-1)).toEqual({ type: 'turn_end', interrupted: true });
     expect(events.some((e) => e.type === 'error')).toBe(false);
+    adapter.dispose();
+  });
+
+  it('reports a turn that failed for its own reason after an interrupt as failed, and only the abort itself as interrupted', async () => {
+    const server = fakeServer();
+    const { adapter } = await startTask(server);
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('do the task', (e) => events.push(e));
+    const stream = await server.stream();
+    stream.push(status('busy'));
+    await until(() => server.requests.some((r) => r.path === `/session/${SES}/prompt_async`));
+
+    server.status[SES] = { type: 'busy' };
+    const acknowledged = adapter.interrupt(2000);
+    await until(() => server.requests.some((r) => r.method === 'POST' && r.path === `/session/${SES}/abort`));
+    delete server.status[SES];
+    stream.push(assistant('msg_a', { error: { name: 'APIError', data: { message: 'Usage limit reached' } } }));
+    stream.push(status('idle'));
+
+    expect(await acknowledged).toBe(true);
+    await turn;
+    expect(events.at(-1)).toEqual({ type: 'error', message: 'Usage limit reached' });
     adapter.dispose();
   });
 
@@ -1288,4 +1326,114 @@ it('reports a refused OpenCode 1.x summarize instead of a successful compaction 
   await adapter.invokeCommand!('compact', '', (e) => events.push(e));
   expect(events.filter((e) => e.type === 'error' || e.type === 'turn_end' || e.type === 'compaction')).toEqual([{ type: 'error', message: 'OpenCode did not compact the session.' }]);
   adapter.dispose();
+});
+
+
+describe('OpenCodeAdapter task mode — request deadlines', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('gives an ordinary request a deadline, so a server that never answers cannot stall the start', async () => {
+    const server = fakeServer({ 'GET /api/info': () => new Promise<Reply>(() => {}) });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { adapter, started } = await beginTask(server);
+
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+    await started;
+
+    expect(adapter.version()).toBeNull();
+    expect(adapter.nativeSessionId()).toBe('ses_task');
+    adapter.dispose();
+  });
+
+  it('bounds an interrupt request by the time it was given, and says it was not acknowledged', async () => {
+    const server = fakeServer({ 'POST /session/ses_task/abort': () => new Promise<Reply>(() => {}) });
+    const { adapter, events, turn, stream } = await turnWith(server, taskStart());
+    stream.push(status('busy'));
+    await tick();
+
+    const acknowledged = await Promise.race([adapter.interrupt(50), new Promise<string>((resolve) => setTimeout(() => resolve('hung'), 1500))]);
+
+    expect(acknowledged).toBe(false);
+    adapter.dispose();
+    await turn;
+    void events;
+  });
+});
+
+describe('OpenCodeAdapter task mode — a command turn whose POST is held open', () => {
+  const commandRoutes = (post: () => Promise<Reply>) => ({
+    'GET /command': () => [{ name: 'hello', description: 'Say hello' }],
+    'POST /session/ses_task/command': post,
+  });
+  const headersTimeout = () => Object.assign(new TypeError('fetch failed'), { cause: { code: 'UND_ERR_HEADERS_TIMEOUT' } });
+
+  it('keeps the turn when the POST dies under it, and ends it on the idle, withdrawing what is still open', async () => {
+    let failPost: (err: Error) => void = () => {};
+    const server = fakeServer(commandRoutes(() => new Promise<Reply>((_resolve, reject) => { failPost = reject; })));
+    const { adapter } = await startTask(server, planMode);
+    const events: AgentEvent[] = [];
+    const turn = adapter.invokeCommand!('hello', 'Bob', (e) => events.push(e));
+    const stream = await server.stream();
+    stream.push(status('busy'));
+    stream.push(ask('per_1'));
+    await until(() => events.some((e) => e.type === 'permission_request'));
+
+    failPost(headersTimeout());
+    await tick();
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    stream.push(status('idle'));
+    await turn;
+
+    expect(events.filter((e) => e.type === 'error')).toEqual([]);
+    expect(events).toContainEqual({ type: 'permission_cancelled', id: 'per_1' });
+    expect(events.at(-1)).toEqual({ type: 'turn_end' });
+    adapter.dispose();
+  });
+
+  it('ends an interrupted command as interrupted, not as the abort error it comes back with, and withdraws what is open', async () => {
+    let answer: (value: Reply) => void = () => {};
+    const server = fakeServer(commandRoutes(() => new Promise<Reply>((resolve) => { answer = resolve; })));
+    const { adapter } = await startTask(server, planMode);
+    const events: AgentEvent[] = [];
+    const turn = adapter.invokeCommand!('hello', 'Bob', (e) => events.push(e));
+    const stream = await server.stream();
+    server.status[SES] = { type: 'busy' };
+    stream.push(status('busy'));
+    stream.push(ask('per_1'));
+    await until(() => events.some((e) => e.type === 'permission_request'));
+
+    const acknowledged = adapter.interrupt(1000);
+    await until(() => server.requests.some((r) => r.path === '/session/ses_task/abort'));
+    answer({ info: { id: 'msg_cmd', role: 'assistant', error: { name: 'MessageAbortedError', data: { message: 'The operation was aborted.' } } }, parts: [] });
+    await tick();
+    delete server.status[SES];
+    stream.push(status('idle'));
+
+    expect(await acknowledged).toBe(true);
+    await turn;
+    expect(events.filter((e) => e.type === 'error')).toEqual([]);
+    expect(events).toContainEqual({ type: 'permission_cancelled', id: 'per_1' });
+    expect(events.at(-1)).toEqual({ type: 'turn_end', interrupted: true });
+    adapter.dispose();
+  });
+
+  it('withdraws what is open when the command ends with its reply', async () => {
+    const reply = { info: { id: 'msg_cmd', role: 'assistant' }, parts: [{ id: 'txt', type: 'text', messageID: 'msg_cmd', text: 'done' }] };
+    let answer: (value: Reply) => void = () => {};
+    const server = fakeServer(commandRoutes(() => new Promise<Reply>((resolve) => { answer = resolve; })));
+    const { adapter } = await startTask(server, planMode);
+    const events: AgentEvent[] = [];
+    const turn = adapter.invokeCommand!('hello', 'Bob', (e) => events.push(e));
+    const stream = await server.stream();
+    stream.push(status('busy'));
+    stream.push(ask('per_1'));
+    await until(() => events.some((e) => e.type === 'permission_request'));
+
+    answer(reply);
+    await turn;
+
+    expect(events).toContainEqual({ type: 'permission_cancelled', id: 'per_1' });
+    expect(events.at(-1)).toEqual({ type: 'turn_end' });
+    adapter.dispose();
+  });
 });

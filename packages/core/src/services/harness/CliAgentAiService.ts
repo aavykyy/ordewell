@@ -683,12 +683,23 @@ export class CliAgentAiService implements IAiService {
       nativeShell,
       systemPrompt: nativeShell ? `${opts.systemPrompt}\n\n${NATIVE_SHELL_GUIDE}` : opts.systemPrompt,
     };
+    // A planner that exits before it answers the attach check refused what it was started with, so its words are the failure and no respawn repeats it.
+    let startupExit: string | null = null;
+    let starting: AgentAdapter | null = null;
     const spawned = await spawnAttached({
       runner: this.runner,
       create: () => this.newAdapter(),
       issueToken: () => server.issuePlannerToken({ sessionId: tools.sessionId, hidden: connectorFor(this.runner)?.ordewellTools.plannerHidden(start) }, tools.handler),
       revoke: (token) => server.revoke(token),
-      start: (adapter, credential) => adapter.start({ ...start, mcp: mcpClientConfig(credential) }),
+      start: async (adapter, credential) => {
+        starting = adapter;
+        startupExit = null;
+        await adapter.start({ ...start, mcp: mcpClientConfig(credential) });
+        adapter.onProcessExit?.((code, lastWords) => {
+          if (adapter === starting) startupExit ??= lastWords ?? `${this.runner} exited with code ${code}`;
+        });
+      },
+      startupExit: () => startupExit,
       cancelled: session.discarded,
       failed: (first, second) => `Could not start the ${this.runner} planner with Ordewell's tools. First spawn: ${first}. Respawn: ${second}.`,
     });

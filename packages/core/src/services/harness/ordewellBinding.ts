@@ -1,5 +1,6 @@
 import { ORDEWELL_MCP_SERVER_NAME, PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, type McpCredential } from '../mcp';
 import type { PlannerStartOptions } from './AgentAdapter';
+import { settleWithin } from './settleWithin';
 
 export class McpAttachError extends Error {
   constructor(message: string) {
@@ -246,7 +247,11 @@ async function spawnOnce<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): 
     return { kind: 'failed', message: `${steps.runner} cannot be handed Ordewell's MCP server` };
   }
   try {
-    await steps.start(adapter, credential);
+    // A start that hangs must not outlive the Stop that cancelled it.
+    if (await unlessCancelled(steps.start(adapter, credential), signal) === CANCELLED) {
+      takeBack();
+      return null;
+    }
   } catch (err) {
     takeBack();
     throw err;
@@ -291,14 +296,25 @@ function errorText(err: unknown): string {
  * Ask the runner until it reports the server connected or failed, or the
  * deadline passes. `probe` gets the time left and answers with the runner's
  * latest report, waiting for one however it must. Running out of time is
- * `pending`: the runner was still starting when the wait ended.
+ * `pending`: the runner was still starting when the wait ended. Each probe is
+ * raced against that time and against `ended`, so a request that never
+ * answers cannot outlast the cap, and a process that exits (`failed`: no
+ * answer will ever come) ends the wait at once.
  */
-export async function awaitAttach(probe: (msLeft: number) => Promise<AttachState>, timeoutMs: number, pollMs: number): Promise<AttachState> {
+export async function awaitAttach(
+  probe: (msLeft: number) => Promise<AttachState>,
+  timeoutMs: number,
+  pollMs: number,
+  ended?: Promise<unknown>,
+): Promise<AttachState> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const left = deadline - Date.now();
     if (left <= 0) return 'pending';
-    const state = await probe(left);
+    const onTimeout = (): AttachState => 'pending';
+    const state = await settleWithin(probe(left), ended
+      ? { timeoutMs: left, onTimeout, ended, onEnded: (): AttachState => 'failed' }
+      : { timeoutMs: left, onTimeout });
     if (state !== 'pending') return state;
     if (pollMs > 0) {
       await new Promise((resolve) => {
