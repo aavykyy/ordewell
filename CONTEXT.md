@@ -322,14 +322,15 @@ share the same slots. Removing research or lifting read-only withdraws the
 approval granted as research landed. Surfaces mark its row as research and draw
 its report in the run update that delivered it, folded when long.
 The planner starts one for evidence it must decide something on. Evidence is
-a result any of which would end up in a task's brief, or one whose finding out
-needs a worktree (a failing test, a build, a reproduction), another runner or
-model to judge it, or the user to see it and be able to stop it. Evidence
-only a later task acts on is a plain read-only task that task depends on,
-reading the findings in its handoff. A first plan may be research tasks alone
-when it cannot be outlined without them. Orientation, a conclusion the
-planner needs this turn that no task acts on, stays in the turn, in its own reads or its own agents; a search, rounds
-of research each deciding the next, is the `explore` skill (ADR-0037 R5).
+a finding a later task acts on, which would otherwise be re-typed into its
+brief, or one whose finding out needs a worktree (a failing test, a build, a
+reproduction), another runner or model to judge it, or the user to see it and
+be able to stop it. Evidence only a later task acts on is a plain read-only
+task that task depends on, reading the findings in its handoff. A first plan
+may be research tasks alone when it cannot be outlined without them.
+Orientation, a conclusion the planner needs this turn that no task acts on,
+stays in the turn, in its own reads or its own agents; a search, rounds of
+research each deciding the next, is the `explore` skill (ADR-0037 R5).
 *Avoid:* "background agent" — a harness's subagents are awaited inside their
 turn; work across turns is a task in the plan. *Avoid:* choosing between a
 research task and the planner's own agents by how long a lookup will take —

@@ -185,8 +185,9 @@ model's behalf, which is precisely what a coding agent replaces.
   own subagents are awaited before the turn ends (`MAX_AGENT_WAITS`), and
   serve orientation: what the planner needs this turn and no later task acts
   on. Evidence, what needs a worktree, another runner or model, the user's
-  sight, or a later task to act on, is a read-only research task in the plan
-  whose report returns to the planner ([ADR-0037](../supervision/0037-research-tasks-wake-the-planner.md), R1, R5).
+  sight, or a later task to act on, is a task of its own: a research task
+  whose report returns to the planner where the planner must decide on it, a
+  plain read-only task its dependent reads otherwise ([ADR-0037](../supervision/0037-research-tasks-wake-the-planner.md), R1, R5).
 - **An unusable agent fails before the goal is typed (T9).** `RunnerInstallation`
   probes the binary and credentials; a planner picker offers only the agents
   that are usable, and states what to install when none is. A turn
@@ -359,3 +360,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-23 — harness subagents serve orientation and research tasks evidence, decided by what the result is rather than how long it takes (ADR-0037 R5).
 - 2026-10-24 — `answer_checkpoint` joins the execution tools, for the supervisor at Act ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-24 — the surface list corrected: there is no web surface, so three (VS Code, the CLI and the TUI) consume the planner's events (ADR-0006).
+- 2026-10-24 — evidence a later task acts on is a plain read-only task it depends on; only evidence the planner decides on is a research task (ADR-0037 R5).
