@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { exec, spawn } from 'child_process';
+import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fsSync from 'fs';
 import * as osMod from 'os';
@@ -8,9 +8,9 @@ import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { RunnerManifest, DiscoveryCommand, ApiDiscoveryConfig, ApiAuthMethod, ModelDiscoveryParser } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { globalDataDir } from '../utils/globalDataDir';
-import { planDirectLaunch } from '../utils/launch';
-import { killTree, spawnInOwnGroup } from '../utils/processTree';
-import { StringDecoder } from 'string_decoder';
+import { discoverAppServerModels, type AppServerModel } from './harness/appServerModels';
+
+export type { AppServerModel } from './harness/appServerModels';
 
 const execAsync = promisify(exec);
 
@@ -38,23 +38,11 @@ const defaultExec: ExecImpl = async (command, options) => {
 };
 
 /**
- * One raw model entry from an app-server `model/list` response (Codex's stdio
- * JSON-RPC protocol). Field names are the protocol's, not Ordewell's.
- */
-export interface AppServerModel {
-  id: string;
-  displayName?: string;
-  hidden?: boolean;
-  defaultReasoningEffort?: string;
-  supportedReasoningEfforts?: { reasoningEffort: string; description?: string }[];
-}
-
-/**
- * Injectable app-server JSON-RPC client: spawn the command, drive
- * `initialize` → `model/list` over stdio, return the raw model list. Returns
- * null on any failure (spawn error, timeout, malformed response) so discovery
- * falls through to the on-disk cache file. Tests inject a fake so discovery
- * never spawns a real app-server.
+ * Injectable app-server JSON-RPC client: ask the runner's `app-server` for its
+ * `model/list` and return the raw entries. Returns null on any failure (spawn
+ * error, timeout, malformed response) so discovery falls through to the
+ * on-disk cache file. Tests inject a fake so discovery never spawns a real
+ * app-server.
  */
 export type AppServerClientImpl = (
   command: string,
@@ -63,73 +51,8 @@ export type AppServerClientImpl = (
 ) => Promise<AppServerModel[] | null>;
 
 /** Exported for its test: the real client is the one place that spawns an app-server. */
-export const defaultAppServerClient: AppServerClientImpl = async (command, args, options) => {
-  const PATH = await augmentedPath();
-  // No shell here, so on Windows the command has to be resolved against
-  // PATHEXT first — `codex` alone is a `.cmd` shim that CreateProcess cannot
-  // start. A resolution failure returns the command unchanged, and the spawn's
-  // own error still routes discovery to the on-disk cache.
-  const launch = await planDirectLaunch(command, args).catch(() => null);
-  if (!launch) return null;
-  return new Promise((resolve) => {
-    let child: import('child_process').ChildProcess;
-    try {
-      // Its own group, so the tree-wide kill below reaches what a shim started.
-      child = spawnInOwnGroup((detached) => spawn(launch.file, launch.args, {
-        env: withPath(process.env, PATH),
-        stdio: ['pipe', 'pipe', 'ignore'],
-        windowsVerbatimArguments: launch.verbatim,
-        detached,
-      }));
-    } catch {
-      resolve(null);
-      return;
-    }
-    let settled = false;
-    const finish = (value: AppServerModel[] | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      // Tree-wide, for the same reason every other dispose path is: when
-      // `codex` resolved to a shim the direct child is the interpreter, and
-      // killing it leaves the app-server alive — holding its port, and
-      // outliving the discovery call that started it.
-      killTree(child);
-      resolve(value);
-    };
-    const timer = setTimeout(() => finish(null), options?.timeout ?? 20000);
-    child.on('error', () => finish(null));
-    child.on('exit', () => finish(null));
-    // A write racing the server's death fails with EPIPE asynchronously; unheard, it crashes the host.
-    child.stdin!.on('error', () => finish(null));
-
-    const decoder = new StringDecoder('utf8');
-    let buffer = '';
-    const send = (id: number, method: string, params: unknown) => {
-      try {
-        child.stdin!.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-      } catch {
-        finish(null);
-      }
-    };
-    child.stdout!.on('data', (chunk: Buffer) => {
-      buffer += decoder.write(chunk);
-      let newline: number;
-      while ((newline = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
-        let msg: { id?: number; result?: { data?: AppServerModel[] } };
-        try { msg = JSON.parse(line); } catch { continue; }
-        if (msg.id === 1) {
-          send(2, 'model/list', {});
-        } else if (msg.id === 2) {
-          finish(Array.isArray(msg.result?.data) ? msg.result!.data! : null);
-        }
-      }
-    });
-    send(1, 'initialize', { clientInfo: { name: 'ordewell', title: 'Ordewell', version: '0.1.0' } });
-  });
-};
+export const defaultAppServerClient: AppServerClientImpl = (command, args, options) =>
+  discoverAppServerModels(command, args, { timeout: options?.timeout });
 
 function effortVariant(effort: string): { id: string; label: string } {
   return { id: effort, label: effort.charAt(0).toUpperCase() + effort.slice(1) };
