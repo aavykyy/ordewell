@@ -1,12 +1,11 @@
-import { flattenTasks, type RunnerId, type SkillLoad, type Task, type Verdict } from '../models/Task';
-import { scriptBodyOf } from '../models/ScriptTask';
-import { betweenRounds, checkOf, loopRoundOf } from '../models/Loop';
+import { flattenTasks, type RunnerId, type SkillLoad, type Task } from '../models/Task';
 import type { SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, snapshotSkill } from './skillInvocation';
 import { autonomyLevelLabel, readOnlyMode } from './ModeResolver';
 import type { AssignmentAdjustment } from './TaskAssignment';
 import {
-  fitTail, handoffRest, taskQuerySignature, OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, OUTPUT_TAIL_MAX_CHARS, TASK_QUERY_TASK_FIELDS, TASK_READ_ANSWER_OR_EDIT,
+  fitTail, readTask, taskReadDetail, verdictRead, outputSummaryRead, taskQuerySignature,
+  OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, OUTPUT_TAIL_MAX_CHARS, TASK_QUERY_TASK_FIELDS, TASK_READ_ANSWER_OR_EDIT,
   type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog, type TaskQueryField,
 } from './TaskQuery';
 import { opLabel, type TaskOp } from './TaskOps';
@@ -224,8 +223,8 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
           ...head,
           running: false,
           reason: 'This task is not running, so there is no live output: its outcome is below.',
-          verdict: verdictDetail(task.verdict),
-          outputSummary: outputSummaryDetail(task),
+          verdict: verdictRead(task.verdict),
+          outputSummary: outputSummaryRead(task),
           handoff: endedHandoffDetail(host, task),
           lastAttempt: host.lastAttempt(task.id),
         };
@@ -284,38 +283,13 @@ async function read(host: PlannerToolsHost, signature: string, answerRead: () =>
   return { ...answer({ ...result.value, ...(result.landNow ? { note: TASK_READ_ANSWER_OR_EDIT } : {}) }), ...('ok' in result.value && result.value.ok === false ? { isError: true } : {}) };
 }
 
-function verdictDetail(verdict: Verdict | undefined) {
-  if (!verdict) return null;
-  return {
-    outcome: verdict.outcome,
-    reason: verdict.reason,
-    checks: verdict.checks.map((c) => ({ name: c.name, result: c.skipped ? 'skipped' : c.passed ? 'pass' : 'fail' })),
-  };
-}
-
-function outputSummaryDetail({ outputSummary, handoff }: Task) {
-  if (!outputSummary) return null;
-  const { reviewReason, logTail } = outputSummary;
-  // A task with a handoff carries its report there (ADR-0047).
-  const report = handoff ? undefined : outputSummary.report;
-  return { reviewReason, ...(report ? { report } : {}), ...(logTail ? { logTail } : {}) };
-}
-
-/** A task's handoff digest, and where the rest is. */
-function handoffDetail(plan: readonly Task[], { handoff }: Task) {
-  return handoff ? { ...namedHandoff(plan, handoff), rest: handoffRest(handoff) } : null;
-}
-
-/**
- * The whole handoff of the task's latest attempt, every finding and the
- * report, from that attempt's log; its digest where the log has none.
- */
+/** A task's whole handoff from its latest attempt's log, findings and report, else the plan's digest. */
 function endedHandoffDetail(host: PlannerToolsHost, task: Task) {
   if (!task.handoff) return null;
   const attempt = host.taskLogAttempts(task.id).at(-1);
   const events = attempt === undefined ? [] : host.taskLog(task.id, attempt);
   const logged = events.filter((e): e is Extract<TaskLogEvent, { type: 'handoff' }> => e.type === 'handoff').at(-1);
-  return logged ? namedHandoff(host.tasks(), logged.handoff) : handoffDetail(host.tasks(), task);
+  return namedHandoff(host.tasks(), logged?.handoff ?? task.handoff);
 }
 
 /** A subtask's order restarts under its parent, so a read names it by its dotted reference, never a bare order. */
@@ -327,36 +301,10 @@ function taskHead(plan: readonly Task[], task: Task) {
   return { id: task.id, ref: refOf(plan, task), title: task.title, status: task.status };
 }
 
-/** Where a task stands in a loop (ADR-0045), as the text read states it: a check's body and round, or the check a body task runs for. Absent for a task outside any loop. */
-function loopDetail(plan: readonly Task[], task: Task) {
-  if (task.loop) {
-    return { loop: { body: task.loop.body.map((id) => taskRefOf(plan, id) ?? id), maxRounds: task.loop.maxRounds, round: loopRoundOf(task), betweenRounds: betweenRounds(task) } };
-  }
-  const check = checkOf(plan, task.id);
-  return check ? { loop: { check: refOf(plan, check) } } : {};
-}
-
-/** A requested field with nothing in it reads `null`, so a missing answer is never mistaken for a field not asked for. */
+/** A task read as the tool answers it: the rules are {@link readTask}'s, so both channels state them once. */
 function taskDetail(plan: readonly Task[], ref: string, fields: readonly TaskQueryField[]) {
   const task = resolveTaskRef(plan, ref);
-  if (!task) return { ref, error: 'no task matches this reference in the current plan.' };
-  const wants = (field: TaskQueryField) => fields.includes(field);
-  return {
-    ...taskHead(plan, task),
-    type: task.type,
-    ...loopDetail(plan, task),
-    ...(wants('description') ? { description: task.description || null } : {}),
-    // A script task's body is what it runs, as a prompt is what a runner is told (ADR-0035).
-    ...(wants('prompt') ? (task.type === 'script' ? { body: scriptBodyOf(task) } : { prompt: task.prompt || null }) : {}),
-    ...(wants('userSteps')
-      ? { userSteps: task.userSteps?.length ? task.userSteps.map((s) => ({ order: s.order, instruction: s.instruction, completed: s.completed === true })) : null }
-      : {}),
-    ...(wants('verdict') ? { verdict: verdictDetail(task.verdict) } : {}),
-    ...(wants('outputSummary') ? { outputSummary: outputSummaryDetail(task) } : {}),
-    ...(wants('handoff') ? { handoff: handoffDetail(plan, task) } : {}),
-    ...(wants('userStoriesCovered') ? { userStoriesCovered: task.userStoriesCovered?.length ? task.userStoriesCovered : null } : {}),
-    ...(wants('skills') ? { skills: task.skills?.length ? task.skills : null } : {}),
-  };
+  return task ? taskReadDetail(readTask(plan, task, fields)) : { ref, error: 'no task matches this reference in the current plan.' };
 }
 
 function catalogDetail(catalog: TaskQueryCatalog) {
