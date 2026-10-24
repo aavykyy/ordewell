@@ -206,7 +206,7 @@ describe('StructuredRunner spawn', () => {
       '--resume', 'sess-prev',
       '--append-system-prompt', TASK_COMPLETION_CONTRACT,
       '--mcp-config', expect.stringMatching(/mcp\.json$/),
-      '--allowedTools', 'mcp__ordewell__task_complete,mcp__ordewell__checkpoint,mcp__ordewell__read_task',
+      '--allowedTools', 'mcp__ordewell__task_complete,mcp__ordewell__checkpoint,mcp__ordewell__read_task,mcp__ordewell__apply_patch',
     ]);
     session.kill();
   });

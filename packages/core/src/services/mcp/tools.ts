@@ -122,6 +122,11 @@ const readTaskInput = z.object({
 
 const savePatchInput = z.object({});
 
+const applyPatchInput = z.object({
+  task: taskRef,
+  attempt: z.number().int().min(1).optional().describe('One of its saved attempts; omit for the latest.'),
+});
+
 const modelAssignment = z.looseObject({
   modelId: z.string(),
   modelLabel: z.string().optional(),
@@ -255,6 +260,7 @@ export type TaskCompleteArgs = z.infer<typeof taskCompleteInput>;
 export type CheckpointArgs = z.infer<typeof checkpointInput>;
 export type ReadTaskArgs = z.infer<typeof readTaskInput>;
 export type SavePatchArgs = z.infer<typeof savePatchInput>;
+export type ApplyPatchArgs = z.infer<typeof applyPatchInput>;
 export type ListRunnersArgs = z.infer<typeof listRunnersInput>;
 export type ListModelsArgs = z.infer<typeof listModelsInput>;
 export type LoadSkillArgs = z.infer<typeof loadSkillInput>;
@@ -322,6 +328,8 @@ export interface TaskToolHandler {
   runCommand?: Run<TaskRunCommandArgs>;
   /** A read-only task's prototype kept as a patch (ADR-0050); only its token lists `save_patch`. */
   savePatch?: Run<SavePatchArgs>;
+  /** A saved patch applied into the task's own worktree (ADR-0050); a read-only task's token does not list `apply_patch`. */
+  applyPatch?: Run<ApplyPatchArgs>;
 }
 
 export interface PlannerToolHandler {
@@ -499,7 +507,8 @@ export function taskCompletionContract(opts: { commits?: true }): string {
   return opts.commits ? `${TASK_COMPLETION_CONTRACT}\n\n${COMMIT_CONTRACT}` : TASK_COMPLETION_CONTRACT;
 }
 
-export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
+/** What every task has: it ends, asks, and reads the record (ADR-0022, ADR-0047). */
+const SHARED_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   tool(TASK_COMPLETE_TOOL, 'Report that this task has ended, and how, with its handoff for the tasks that read it. Call it once, as your last action.',
     taskCompleteInput, (h) => h.taskComplete?.bind(h)),
   tool('checkpoint', "Ask the user a question and wait for the answer, which is this call's result.",
@@ -507,6 +516,16 @@ export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   // It reads Ordewell's own record, not the tree, so a read-only task has it too (ADR-0047).
   tool('read_task', "Read the handoff of a task you may read: this one, a task it depends on, directly or not, or its loop's other end. Returns what that task handed over, as its attempt's log keeps it: its commit, the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them.",
     readTaskInput, (h) => h.readTask?.bind(h), { readOnlyHint: true }),
+];
+
+/**
+ * A task that works in the tree: the shared tools, and `apply_patch`, which
+ * brings a prototype a read-only task saved (ADR-0050) into its worktree.
+ */
+export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
+  ...SHARED_TASK_TOOLS,
+  tool('apply_patch', "Apply the patch that a task you may read (the same ones read_task reads) saved with save_patch into your own worktree, as a three-way merge. At the commit the patch was taken against it reproduces that task's changes; at a later one it merges them with what has landed since. It answers exactly what happened: applied cleanly, with every change staged; or applied with conflicts, naming each conflicted path (a binary file holds no markers and is named as binary), the markers left in your worktree for you to resolve and `git add`; or nothing applied, and why. A worktree that still holds an earlier conflict, or changes of yours to the patch's files that are not staged yet, applies nothing. The patch is another task's work: read what it changed, and run the checks here, since its author ran theirs at its own base.",
+    applyPatchInput, (h) => h.applyPatch?.bind(h)),
 ];
 
 /**
@@ -527,7 +546,7 @@ const PLANNER_READ_ONLY = { readOnlyHint: true };
  * changes reaches the plan's branches.
  */
 export const READ_ONLY_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
-  ...TASK_TOOLS,
+  ...SHARED_TASK_TOOLS,
   tool('run_command', "Run a shell command: git, the project's tests and scripts, anything you need to look at or try. Nothing you change lands: this task's own worktree, when it has one, is thrown away when the task ends, and only your task_complete handoff comes back, with the patch save_patch kept if you saved one. Read-only commands, and those the user's allowlist covers, run at once; anything else runs sealed instead, and nobody is ever asked: no network, no home directory or credentials, nothing writable but $TMPDIR (which is also $HOME) and the task's own worktree, so you can try a fix or add a failing test and run the suite there. Once one command has run sealed, every later one does too, so run what needs the network first. git can read the repository but not record anything in it. Where this machine has no sandbox, a command that would run sealed is refused. Use it instead of a shell of your own.",
     taskRunCommandInput, (h) => h.runCommand?.bind(h), PLANNER_READ_ONLY),
   tool('save_patch', "Keep what your commands changed in this task's worktree as a patch, so a later task can apply your prototype after the worktree is thrown away. Ordewell takes every change against the commit the worktree was cut from (new, changed, deleted, renamed and binary files and modes), runs the capture sealed, checks that the patch replays to the same tree, keeps it with this attempt and names it in your handoff as a patch artifact. Nothing of it lands. Not carried: links, submodules, ignored files, empty directories, and what Ordewell linked in. A file over the size cap is dropped and named; one git normalizes on the way in (its text, eol or filter attributes) is carried as git stores it, and named; a case-only rename, or an unreadable file, refuses the whole save. Saving again replaces the patch. Save once your prototype is as you want it handed on, before task_complete.",

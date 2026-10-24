@@ -1,5 +1,5 @@
 import type { AgentEvent } from '../services/harness/AgentAdapter';
-import type { CheckpointAnswer, McpToolReply, ReadTaskArgs, TaskCompleteArgs } from '../services/mcp/tools';
+import type { ApplyPatchArgs, CheckpointAnswer, McpToolReply, ReadTaskArgs, TaskCompleteArgs } from '../services/mcp/tools';
 import type { ApprovalDecision } from './IApproval';
 import type { TaskSkillSnapshot } from '../models/Task';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
@@ -278,6 +278,12 @@ export interface IRunner {
      * the call says it is not available.
      */
     savePatch?: (signal: AbortSignal) => Promise<McpToolReply>;
+    /**
+     * Answers a change attempt's `apply_patch` calls (ADR-0050): a saved patch
+     * of a task it may read, applied into its worktree. Without one the call
+     * says it is not available.
+     */
+    applyPatch?: (args: ApplyPatchArgs) => Promise<McpToolReply>;
   }): Promise<IRunnerSession>;
 
   /** Wind one session down ({@link IRunnerSession.stop}); resolves once its process is gone. */

@@ -84,6 +84,12 @@ function sectionStats(section: string): { added: string; removed: string } {
   return { added: String(added), removed: String(removed) };
 }
 
+/** The files a patch changes, each with its own part and line counts (`-` for a binary change). */
+export function patchFiles(patch: Buffer): Array<{ path: string; section: string; added: string; removed: string }> {
+  const sections = patch.toString('utf8').split(/^(?=diff --git )/m).filter((section) => section.startsWith('diff --git '));
+  return sections.map((section) => ({ path: sectionPath(section), section, ...sectionStats(section) }));
+}
+
 /**
  * A read-only task's saved patch as `task_diff` reads it (ADR-0050): its
  * worktree is gone and Ordewell ran no git in it, so the patch it saved is
@@ -93,9 +99,7 @@ function sectionStats(section: string): { added: string; removed: string } {
 export function readSavedPatch(patch: Buffer | undefined, saved: Pick<HandoffPatch, 'attempt' | 'base'>, options: TaskDiffRead): TaskDiffResult {
   if (!patch) return { available: false, reason: `Task diff is not available: the patch attempt ${saved.attempt} saved is no longer in this session's task logs.` };
   if (options.repo !== undefined && options.repo !== '.') return { available: false, reason: `No repository matches "${options.repo}" in this task's saved patch: it has one, ".".` };
-  const text = patch.toString('utf8');
-  const sections = text.split(/^(?=diff --git )/m).filter((section) => section.startsWith('diff --git '));
-  const files = sections.map((section) => ({ path: sectionPath(section), section, ...sectionStats(section) }));
+  const files = patchFiles(patch);
   if (options.path !== undefined) {
     const selected = files.filter((f) => f.path === options.path);
     if (selected.length === 0) return { available: false, reason: `No changed file matches "${options.path}" in this task's saved patch. Read the file list first.` };

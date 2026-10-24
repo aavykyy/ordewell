@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0022", "0046", "0047"]
-note: "The capture, the kept patch, its artifact, task_diff and the three surfaces are built; a change task applying a patch and the planner's guidance are not."
+note: "The capture, the kept patch, its artifact, task_diff, a change task's apply_patch and the three surfaces are built; the planner's guidance is not."
 ---
 
 # 0050 — A read-only task can hand off its prototype as a patch
@@ -31,7 +31,9 @@ an unreadable file.
 captures every change in the task's worktree as a patch, inside the task's own
 seal, and checks that the patch replays to the same tree. It keeps the patch
 beside the attempt's log and names it in the attempt's handoff as a `patch`
-artifact. The patch lands nothing. Choosing among several explorers' patches
+artifact. The patch lands nothing. A change task brings it into its own
+worktree with `apply_patch`, and is told exactly what merged and what did
+not. Choosing among several explorers' patches
 needs no new mechanism: a shared check eliminates, a judge recommends among
 those that pass, and the pick is approving the build task the planner adds.**
 
@@ -92,6 +94,46 @@ the repository:
 
 **What the scripts wrote** is read from unguessable names in the attempt's
 scratch, with no link followed and every size bounded.
+
+### Applying it
+
+- **`apply_patch({task, attempt?})`** is on a change task's token, and a
+  read-only task's does not list it. The patch is the artifact of a task the
+  caller may read, the set `read_task` reads (`readableTaskIds`), found as
+  `read_task` finds a handoff: the named attempt's, else the latest's.
+- **It merges into the caller's own worktree**, from the worktree's root, with
+  `git apply --3way --whitespace=nowarn`, which stages what it applies. At the
+  commit the patch was taken against it reproduces the explorer's tree, mode
+  for mode. At a later commit it merges with what has landed since. Ordewell
+  runs this git as the user, like its other git in a change task's worktree,
+  with fsmonitor off. It is not sealed: the worktree is the caller's own,
+  which can already run anything.
+- **What came of it is read from the index, never predicted.**
+  `git apply --check --3way` returns 0 for a patch that then conflicts. After
+  the apply, the paths the index holds unmerged are the conflicts:
+  - *Applied*: nothing is unmerged. The answer says the changes are staged,
+    whether the worktree is at the patch's base, and, past it, that the
+    author's checks ran at the other commit.
+  - *Conflicted*: the answer names each path, and a binary one as binary,
+    which holds no conflict markers. The other files are applied and staged;
+    the conflicted ones hold their markers for the task to settle and
+    `git add`. The apply is not an error.
+  - *Refused*: git applied none of it. That is what git does for a patch that
+    deletes or adds a file the worktree has changed, and for a patch to a file
+    the task has changed and not yet staged. The answer gives git's errors,
+    and the file the patch is in, to apply by hand.
+- **It refuses, applying nothing,** a task outside the readable set, a task or
+  attempt that saved no patch, a patch whose file is gone or whose size is not
+  the artifact's (cut short, or changed since), a call from a read-only task,
+  a caller with no worktree of its own or one across several repositories, a
+  base commit this repository does not have, and a worktree that still holds
+  an earlier conflict.
+- **A patch is another task's work.** The answer says to read what it changed
+  and to run the checks, since the author ran its own at its base. Git itself
+  refuses a patch that writes through a link it creates, or into `.git`.
+  Nothing applies on its own: a call is the caller's.
+- **Nothing is committed.** The staged changes land with the task's own work,
+  as everything in its worktree does.
 
 ### What is carried, refused and flagged
 
@@ -175,6 +217,13 @@ No field records the pick, and core reads nothing from the judge.
   task shell in the host's sandbox. It applies the patch outside the sandbox,
   in a fresh worktree at the same base, and compares every file and mode. CI's
   Linux sandbox job runs it under bubblewrap with `ORDEWELL_REQUIRE_SANDBOX`.
+- **Applying.** `PatchApply.e2e.test.ts` captures a patch with the real
+  capture and applies it with real git: at the same base, to an identical
+  tree; at a base that moved, merging cleanly, with a rename carrying the
+  other work's edit; and at a base with conflicting work, where the conflicts
+  are named, a binary one as binary, and the worktree holds the markers.
+  `PatchApply.test.ts` shows what is refused before git runs and how each
+  outcome is worded.
 - **The seams around it.** `taskShell.test.ts` covers `TaskShell.hold` with the
   recording backend. The orchestrator's side, the artifact in the handoff
   whatever the verdict, uses `FakeWorktreeIsolation`. Which token is offered
@@ -182,7 +231,6 @@ No field records the pick, and core reads nothing from the judge.
 
 ## Out of scope
 
-- A change task applying a patch, and reporting an apply that conflicts.
 - The planner's guidance for explorers, judges and builders.
 - A repo group's several repositories.
 - Candidate change tasks: see below.
@@ -232,4 +280,5 @@ No field records the pick, and core reads nothing from the judge.
 ## History
 
 - 2026-10-24 — accepted; the capture, the kept patch, its artifact and `task_diff` implemented.
+- 2026-10-24 — a change task's `apply_patch` implemented.
 - 2026-10-24 — the TUI, VS Code and CLI show a saved patch: its changes, the file to open and the paths it left out.

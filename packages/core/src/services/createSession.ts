@@ -333,7 +333,7 @@ export function createSession(deps: SessionDeps): Session {
       },
     }),
     recordHandoff: (sessionId, taskId, handoff) => taskLogs.note(sessionId, taskId, { type: 'handoff', handoff }),
-    taskLog: { attempts: (taskId) => session.taskLogAttempts(taskId), events: (taskId, attempt) => session.taskLog(taskId, attempt) },
+    taskLog: { attempts: (taskId) => session.taskLogAttempts(taskId), events: (taskId, attempt) => session.taskLog(taskId, attempt), patch: (taskId, attempt) => readTaskPatch(session.taskLogLocation, taskId, attempt) },
     sessionHeld: () => session.heldElsewhere(),
   });
   const usage = new PlannerUsageLedger(windows);
