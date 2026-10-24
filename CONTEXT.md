@@ -1778,7 +1778,10 @@ resolve against the plan as it stood before the batch began.
 
 **Runner set** — the ordered `runners: RunnerId[]` a plan may execute across,
 carried on *the plan* and the session. Every task carries an `assignedRunner`
-drawn from the set (always present, even for single-runner plans). Size is the
+drawn from the set (always present, even for single-runner plans), but only an
+AI task has a runner: a script or a manual task keeps a stored default that
+nothing runs on, and every surface reads the runner through `assignedRunnerOf`,
+which is nothing for them. Size is the
 semantics, not a sentinel: size 1 means a single-runner plan, size >1 means a
 multi-runner plan. Empty is invalid and rejected before planning.
 

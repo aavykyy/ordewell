@@ -488,6 +488,19 @@ describe('renderPlanMap', () => {
   });
 });
 
+describe('renderPlanMap runners', () => {
+  it('names the runner of an AI task only, not of a script or a manual one', () => {
+    const ai = createTask({ id: 'a', order: 1, title: 'Build', assignedRunner: 'codex' });
+    const man = createTask({ id: 'm', order: 2, title: 'Review by hand', type: 'user', assignedRunner: 'codex' });
+    const script = createTask({ id: 's', order: 3, title: 'Push', type: 'script', assignedRunner: 'codex', commands: [['git', 'push']] });
+    const out = renderPlanMap([ai, man, script], 'a');
+    expect(out).toContain('Build (codex)');
+    expect(out).toMatch(/Review by hand(?! \()/);
+    expect(out).not.toContain('Review by hand (codex)');
+    expect(out).toContain('Push (script)');
+  });
+});
+
 describe('composeAugmentedPrompt', () => {
   it('emits plan map + prior outputs + base prompt in order', () => {
     const a = createTask({

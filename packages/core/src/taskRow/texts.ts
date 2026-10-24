@@ -66,3 +66,12 @@ export function newTaskFields(title: string, prompt?: string): NewTaskFields | n
   if (!name) return null;
   return { title: name, description: name, prompt: prompt?.trim() ? prompt : name, type: 'ai' };
 }
+
+/**
+ * Why a manual or script task offers no executor choice (a runner, model,
+ * effort or mode), worded for whichever of the two it is; a script task runs
+ * no model (ADR-0035). `manual` and `script` finish the sentence for each.
+ */
+export function noExecutorRefusal(type: string, manual: string, script: string): string {
+  return type === 'script' ? `A script task runs no model, so ${script}` : `Manual tasks do not run an executor, so ${manual}`;
+}

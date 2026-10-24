@@ -8,7 +8,7 @@ import { taskOrderLabel, taskRefOf } from '../services/TaskRefs';
 import { capConflictFiles } from '../services/conflictFiles';
 import { planBlocks, type BlockingSubject, type PlanBlocks } from '../services/blocking';
 import { checkOf, type LoopSubject } from '../models/Loop';
-import { assignmentConsequence, assignmentIssue, assignmentIssueText, type AssignmentScope } from '../services/AssignmentScope';
+import { assignedRunnerOf, assignmentConsequence, assignmentIssue, assignmentIssueText, type AssignmentScope } from '../services/AssignmentScope';
 import { approvalLabel, awaitingLabel, isTaskRunning, NOT_STARTED, resumeLabel, taskStatusKind, WAITS_FOR_APPROVAL_LABEL, type TaskStatusKind } from './status';
 import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskRowPlacement } from './actions';
 import { loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, type LoopCheckState } from './loop';
@@ -164,6 +164,8 @@ export interface TaskRowView {
   waitsForApproval: string | null;
   /** Why it is held out of the scheduler, in sentence case; null when it is not held. */
   holdReason: string | null;
+  /** The runner an AI task is assigned; null for any other task, which has none. */
+  runner: string | null;
   /** Why the task's runner or model is one the user has since moved away from, in sentence case; null when it is not. The task still runs. */
   assignmentFlag: string | null;
   /** What the flag means for this task as it stands (a failed one runs again only if retried); set exactly when `assignmentFlag` is. */
@@ -303,6 +305,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     waitsForApproval: task.waitsForApproval && NOT_STARTED.has(task.status) ? WAITS_FOR_APPROVAL_LABEL : null,
     holdReason: task.holdReason?.trim() || null,
     research: task.type === 'ai' && task.research === true,
+    runner: assignedRunnerOf(task) ?? null,
     ...flagOf(task, context.runnerScope),
     autonomous: task.type === 'ai' && context.modes?.find((m) => m.id === task.taskMode)?.autonomous === true,
     repos: namedRepos(isolation?.repos),

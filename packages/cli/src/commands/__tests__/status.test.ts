@@ -341,6 +341,28 @@ describe('handleStatus --output', () => {
     srv.close();
   });
 
+  it('names no runner and flags none on a script or a manual task stored with a runner that is switched off', async () => {
+    const session = {
+      meta: SESSION.meta,
+      plan: {
+        pendingTasks: [
+          { id: 't1', order: 1, title: 'Push the tag', type: 'script', status: 'pending', assignedRunner: 'codex', dependencies: [], commands: [['git', 'push']] },
+          { id: 't2', order: 2, title: 'Sign off', type: 'user', status: 'pending', assignedRunner: 'codex', dependencies: [] },
+        ],
+      },
+    };
+    const srv = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(req.url?.startsWith('/api/runners') ? { runners: [{ id: 'codex', name: 'Codex', enabled: false }, { id: 'claude-code', name: 'Claude Code', enabled: true }] } : session));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
+    const rows = stripAnsi(stdout).split('\n').filter((line) => /^\s+\d+\. |⚠/.test(line));
+    expect(rows).toHaveLength(2);
+    expect(rows.join('\n')).not.toMatch(/codex|switched off|⚠/);
+    srv.close();
+  });
+
   // The flag every surface shows for a task outside the user's scope (ADR-0043).
   it('flags a task on a runner switched off or a model off its allowlist, subtasks too, and never a finished one', async () => {
     const session = {

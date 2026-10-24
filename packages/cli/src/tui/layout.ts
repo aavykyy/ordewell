@@ -10,7 +10,7 @@ import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
+import { assignedRunnerOf, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -298,7 +298,7 @@ function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>,
   const parts = [
     `→ Task ${task ? refFor(state, task).slice(1) : '?'}`,
     task?.title ?? '(task removed)',
-    task?.assignedRunner ?? '',
+    (task && assignedRunnerOf(task)) ?? '',
     task ? inRow(header.state.label) : '',
     header.resumes ? inRow(header.resumes) : '',
   ].filter(Boolean);
@@ -991,7 +991,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   const mode = task.type === 'ai'
     ? `mode: ${task.taskMode ?? 'default'}${row.autonomous ? style.yellow(' ⚡') : ''}`
     : '';
-  const runner = task.assignedRunner ?? '';
+  const runner = row.runner ?? '';
   const bodyPad = parent ? '      ' : '    ';
   // Only a state that wants the user gets a word: a runner approval ("enter
   // opens it") and a task stopped at a question. Running and quiet are the

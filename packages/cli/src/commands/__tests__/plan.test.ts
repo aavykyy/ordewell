@@ -253,6 +253,26 @@ describe('handlePlan', () => {
     srv.close();
   });
 
+  it('names no runner on a script or a manual task, whatever runner the plan stores for it', async () => {
+    const stored = {
+      tasks: [
+        { id: 't1', order: 1, title: 'Build', type: 'ai', assignedRunner: 'opencode' },
+        { id: 't2', order: 2, title: 'Tag the release', type: 'script', commands: [['git', 'tag', 'v1']], assignedRunner: 'opencode' },
+        { id: 't3', order: 3, title: 'Sign off', type: 'user', assignedRunner: 'opencode' },
+      ],
+      runners: ['claude-code'],
+    };
+    const srv = await planServer({ '/converse/start': { plan: stored } }, []);
+    const { handlePlan } = await import('../plan');
+    const { stdout } = await capture(() =>
+      handlePlan(['--goal', 'ship it', '--workspace', '/tmp'], { api: new ApiClient(srv.port) }),
+    );
+    const rows = stdout.split('\n').filter((l) => l.includes('[SCR] Tag the release') || l.includes('[MAN] Sign off'));
+    expect(rows).toHaveLength(2);
+    expect(rows.join('\n')).not.toContain('opencode');
+    srv.close();
+  });
+
   it('prints a research task as [RES], with a legend line for it (ADR-0037)', async () => {
     const withResearch = {
       tasks: [

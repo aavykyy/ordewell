@@ -1,4 +1,4 @@
-import { clampThinkingEffort } from '@ordewell/core/plan-utils';
+import { assignedRunnerOf, clampThinkingEffort } from '@ordewell/core/plan-utils';
 import type { ModeView, ModelView, TaskView } from './state';
 
 /**
@@ -21,11 +21,11 @@ export function modelsForRunner(models: ModelView[], runner: string | undefined)
 
 /** A model is assignable to a task only if the task's runner serves it. */
 export function runnerAccepts(task: TaskView, model: Pick<ModelView, 'runners'>): boolean {
-  return runnerServes(task.assignedRunner, model);
+  return runnerServes(assignedRunnerOf(task), model);
 }
 
 export function modelsForTask(models: ModelView[], task: TaskView): ModelView[] {
-  return modelsForRunner(models, task.assignedRunner);
+  return modelsForRunner(models, assignedRunnerOf(task));
 }
 
 export function effortsForTask(models: ModelView[], task: TaskView): { id: string; label: string }[] {
@@ -55,6 +55,6 @@ export function assignedModelFor(model: ModelView, currentEffort: string | undef
 
 /** The modes a task may run in — its runner's, since a mode id means nothing outside the runner that declares it. */
 export function modesForTask(modesByRunner: Record<string, ModeView[]>, task: TaskView): ModeView[] {
-  if (!task.assignedRunner) return [];
-  return modesByRunner[task.assignedRunner] ?? [];
+  const runner = assignedRunnerOf(task);
+  return runner ? modesByRunner[runner] ?? [] : [];
 }
