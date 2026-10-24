@@ -72,6 +72,38 @@
 - **The planner is sent its plan whole once, then only what changed.** The
   whole plan goes again after a reorder, a reset or compaction, or a turn that
   did not land.
+- **Opening a session another Ordewell host is running is refused.** The
+  message names the window or process that holds it. Before, a second window
+  loaded the session as well, and the two removed each other's task worktrees
+  and overwrote its file
+  ([ADR-0049](docs/adr/isolation/0049-a-session-has-one-live-host.md)).
+- **A plan marker and a handoff preview use the terminal's words.** The marker
+  reads `Plan generated · 3 tasks`, and the preview names the findings count,
+  severity, commit and the first line of the summary.
+- **The inert `ordewell.researchEnabled` setting is gone.** It never changed
+  what the planner did.
+
+### Fixed
+
+- **A task log's header follows the attempt on screen.** Its usage is that
+  attempt's, with the task total beneath it, its `/` commands come from that
+  attempt, and a runner that has gone quiet reads Stalled after the next status
+  update.
+- **A task log tab reopens after a window reload.** The tab finds its task
+  again, and a tab whose task left the plan closes instead of staying empty.
+- **A subtask's log tab is named by its dotted reference** (`Task 2.1 · …`),
+  and its card carries the same Waits for Merge all, Conflict and Repairing
+  badges as its parent's.
+- **An early Stop releases the chat.** Stopping before the planner turn opened
+  no longer leaves the webview drawing the turn as working.
+- **A turn waiting on your approval card is no longer called a hang** by the
+  chat's watchdog.
+- **Approving a plan no longer marks a manual task approved before the run
+  reaches it**, and a task whose approval the planner withdraws is announced
+  instead of changing silently.
+- **Merge all's guidance in the handoff card is the terminal's next step**,
+  including for a lone repository whose merge conflicted: your tree is as it
+  was, and you merge the branch yourself with git.
 
 ## [0.10.12] - 2026-10-22
 
