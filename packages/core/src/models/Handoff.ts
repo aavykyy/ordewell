@@ -83,6 +83,8 @@ export interface HandoffPatch {
   /** Of {@link files}, those whose change is binary. */
   binary: number;
   bytes: number;
+  /** The SHA-256 of the patch file's bytes, hex: what `apply_patch` checks the file against before it applies it. */
+  sha256: string;
   flags?: PatchFlag[];
 }
 

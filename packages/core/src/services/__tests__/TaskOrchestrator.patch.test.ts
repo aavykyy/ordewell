@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -134,7 +135,7 @@ describe.skipIf(process.platform === 'win32')("a read-only task's saved patch (A
     env.latest('r1').reportComplete({ status: 'done', summary: 'Prototype saved.', artifacts: [{ kind: 'file', path: 'a.ts' }] });
 
     await vi.waitFor(() => expect(env.stored('r1').status).toBe('completed'));
-    const patch = { kind: 'patch', path: '.ordewell/sessions/s/tasks/r1/1.patch', attempt: 1, base: git(repo, 'rev-parse', 'HEAD').trim(), files: 1, added: 1, removed: 0, binary: 0, bytes: Buffer.byteLength(env.kept[0].patch) };
+    const patch = { kind: 'patch', path: '.ordewell/sessions/s/tasks/r1/1.patch', attempt: 1, base: git(repo, 'rev-parse', 'HEAD').trim(), files: 1, added: 1, removed: 0, binary: 0, bytes: Buffer.byteLength(env.kept[0].patch), sha256: createHash('sha256').update(env.kept[0].patch).digest('hex') };
     expect(env.stored('r1').handoff).toMatchObject({ summary: 'Prototype saved.', artifacts: [{ kind: 'file', path: 'a.ts' }, patch] });
     expect(env.recorded.at(-1)?.artifacts).toEqual([{ kind: 'file', path: 'a.ts' }, patch]);
   });

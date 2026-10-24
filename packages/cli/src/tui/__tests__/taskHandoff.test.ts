@@ -185,7 +185,7 @@ describe('a task\'s handoff in its view (ADR-0047)', () => {
   it('draws a saved patch in full: its changes, base, file and what it left out (ADR-0050)', () => {
     const saved: HandoffPatch = {
       kind: 'patch', path: '.ordewell/sessions/s1/tasks/t1/1.patch', attempt: 1,
-      base: 'a'.repeat(40), files: 2, added: 9, removed: 1, binary: 0, bytes: 900,
+      base: 'a'.repeat(40), files: 2, added: 9, removed: 1, binary: 0, bytes: 900, sha256: 'f'.repeat(64),
       flags: [
         { kind: 'excluded', count: 1, paths: ['docs/link'] },
         { kind: 'dropped', count: 1, paths: ['big.bin'] },
@@ -204,7 +204,7 @@ describe('a task\'s handoff in its view (ADR-0047)', () => {
   it('names the patch in the plan row\'s handoff peek, before the summary', () => {
     const saved: HandoffPatch = {
       kind: 'patch', path: '.ordewell/sessions/s1/tasks/t1/1.patch', attempt: 1,
-      base: 'a'.repeat(40), files: 2, added: 9, removed: 1, binary: 0, bytes: 900,
+      base: 'a'.repeat(40), files: 2, added: 9, removed: 1, binary: 0, bytes: 900, sha256: 'f'.repeat(64),
     };
     const state = initialState({
       rows: 24, cols: 240, focus: 'plan',

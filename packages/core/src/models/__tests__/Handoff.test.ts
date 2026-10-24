@@ -86,7 +86,7 @@ describe('a handoff a headless surface prints (ADR-0047)', () => {
   it('prints a saved patch as its own block, after the author\'s artifacts (ADR-0050)', () => {
     const patch: HandoffPatch = {
       kind: 'patch', path: '.ordewell/sessions/s1/tasks/t1/1.patch', attempt: 2,
-      base: 'b'.repeat(40), files: 1, added: 3, removed: 0, binary: 0, bytes: 300,
+      base: 'b'.repeat(40), files: 1, added: 3, removed: 0, binary: 0, bytes: 300, sha256: 'c'.repeat(64),
       flags: [{ kind: 'normalized', count: 1, paths: ['notes.txt'] }],
     };
 
@@ -140,7 +140,7 @@ describe('the commit a done call states', () => {
 describe('a patch a read-only task saved (ADR-0050)', () => {
   const patch: HandoffPatch = {
     kind: 'patch', path: '.ordewell/sessions/s/tasks/t/2.patch', attempt: 2, base: '0123456789abcdef0123456789abcdef01234567',
-    files: 3, added: 40, removed: 2, binary: 1, bytes: 5 * 1024 + 512,
+    files: 3, added: 40, removed: 2, binary: 1, bytes: 5 * 1024 + 512, sha256: 'd'.repeat(64),
     flags: [{ kind: 'excluded', count: 1, paths: ['.claude'] }, { kind: 'dropped', count: 12, paths: ['big.bin (1.5 MB)'] }],
   };
 

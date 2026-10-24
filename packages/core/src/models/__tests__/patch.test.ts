@@ -13,6 +13,7 @@ const patch = (over: Partial<HandoffPatch> = {}): HandoffPatch => ({
   removed: 7,
   binary: 1,
   bytes: 1536,
+  sha256: 'e'.repeat(64),
   ...over,
 });
 

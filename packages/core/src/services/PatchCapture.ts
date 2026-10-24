@@ -1,4 +1,4 @@
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -6,7 +6,7 @@ import type { OwnSealedRuns, TaskShell, ToolOutcome } from '../interfaces/IFileS
 import { HANDOFF_LIMITS, byteSize, patchFlagText, readableTaskIds, savedPatchOf, type HandoffPatch, type PatchFlag } from '../models/Handoff';
 import { flattenTasks, type Task } from '../models/Task';
 import { git, tryGit, type GitInvoker } from './gitExec';
-import { patchFiles } from './taskDiffRead';
+import { patchFiles, unquoted } from './taskDiffRead';
 import { loggedHandoff, type TaskLogReader } from './readTask';
 import { listed } from './harness/ordewellBinding';
 import { resolveTaskRef, titledTaskRefOf } from './TaskRefs';
@@ -27,6 +27,12 @@ import type { ApplyPatchArgs, McpToolReply } from './mcp/tools';
  * what is not carried. The second takes that back out of the private index,
  * writes the patch, and replays it on a fresh index at the same base: the
  * patch is kept only if that gives the very tree that was staged.
+ *
+ * Whatever the scripts write is a file in the task's own scratch, which a
+ * process its commands left behind can rewrite. So the patch that is kept is
+ * judged on the bytes Ordewell reads, with no git: it holds no link or
+ * submodule, its counts are of those bytes, and its hash is what `apply_patch`
+ * checks it against.
  *
  * Applying one is the same concept seen from the other side: a change task
  * brings a saved patch into its own worktree as a three-way merge and is told
@@ -57,6 +63,7 @@ export interface PatchStats {
   removed: number;
   binary: number;
   bytes: number;
+  sha256: string;
   flags: PatchFlag[];
 }
 
@@ -105,7 +112,7 @@ function shellQuoted(text: string): string {
 function prelude(stem: string): string {
   return [
     'set -e',
-    'export LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_OPTIONAL_LOCKS=0 GIT_NO_REPLACE_OBJECTS=1 GIT_TERMINAL_PROMPT=0 GIT_NO_LAZY_FETCH=1',
+    'export LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_OPTIONAL_LOCKS=0 GIT_NO_REPLACE_OBJECTS=1 GIT_TERMINAL_PROMPT=0 GIT_NO_LAZY_FETCH=1',
     `O=${shellQuoted(stem)}`,
     'G="$(git rev-parse --git-dir)"',
     'C="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"',
@@ -117,11 +124,13 @@ function prelude(stem: string): string {
 
 /**
  * Stage every change but what Ordewell linked in, and list it: the base, each
- * change with its modes and blobs, every path the index then holds, and the
- * size of each change's part of a patch, one line per `diff --git` section.
- * A linked path is excluded as the landing commit excludes it: by name,
- * whatever it is on disk, unless git already ignores it, since naming an
- * ignored path in an exclude makes `add` refuse.
+ * change with its modes and blobs, every path the index then holds, the size
+ * of each change's part of a patch, one line per `diff --git` section, and
+ * the size of each rename's, since the saved patch holds a rename as one
+ * section and not as a removal and an addition. A linked path is excluded as
+ * the landing commit excludes it: by name, whatever it is on disk, unless git
+ * already ignores it, since naming an ignored path in an exclude makes `add`
+ * refuse.
  */
 function stageScript(stem: string, linked: readonly string[]): string {
   return [
@@ -136,14 +145,16 @@ function stageScript(stem: string, linked: readonly string[]): string {
     'git ls-files -z > "$O.files"',
     'git diff --cached --binary --full-index --no-renames $D HEAD > "$O.d/full"',
     `awk '/^diff --git /{ if (n) print s; s = 0; n = 1 } { s += length($0) + 1 } END { if (n) print s }' "$O.d/full" > "$O.sizes"`,
-    'rm -f "$O.d/full"',
+    'git diff --cached --binary --full-index -M --diff-filter=R $D HEAD > "$O.d/renamed"',
+    `awk '/^diff --git /{ if (n) printf "%s\\t%s\\t%s\\n", s, f, t; s = 0; n = 1; f = ""; t = "" } { s += length($0) + 1 } /^rename from /{ f = substr($0, 13) } /^rename to /{ t = substr($0, 11) } END { if (n) printf "%s\\t%s\\t%s\\n", s, f, t }' "$O.d/renamed" > "$O.renames"`,
+    'rm -f "$O.d/full" "$O.d/renamed"',
   ].join('\n');
 }
 
 /**
  * Take back what is not carried, write the patch, and replay it on a fresh
  * index at the same base. Beside it: what is carried, with the hash of each
- * file's bytes as the task left them, and its line counts.
+ * file's bytes as the task left them.
  */
 function exportScript(stem: string): string {
   return [
@@ -153,7 +164,6 @@ function exportScript(stem: string): string {
     'git diff --cached --name-only --no-renames --diff-filter=AMT $D HEAD > "$O.d/names"',
     'git hash-object --no-filters --stdin-paths < "$O.d/names" > "$O.hashes"',
     'git diff --cached --binary --full-index -M $D HEAD > "$O.patch"',
-    'git diff --cached --numstat -z -M $D HEAD > "$O.numstat"',
     'git write-tree > "$O.tree"',
     '(export GIT_INDEX_FILE="$O.d/replay"; git read-tree HEAD && git apply --cached --whitespace=nowarn "$O.patch" && git write-tree > "$O.replayed")',
   ].join('\n');
@@ -232,17 +242,64 @@ function sizesOf(changes: readonly Change[], sizes: string): number[] {
   return changes.map((c) => (c.status === 'T' ? sections[next++] + sections[next++] : sections[next++]));
 }
 
-/** What fits: a file over its own cap is dropped, then the largest of the rest until the whole fits. */
-function withinCaps(candidates: readonly Change[], sizes: ReadonlyMap<Change, number>): { kept: Change[]; dropped: Change[] } {
-  const dropped = candidates.filter((c) => sizes.get(c)! > PATCH_LIMITS.fileBytes);
-  const rest = candidates.filter((c) => !dropped.includes(c));
-  let total = rest.reduce((sum, c) => sum + sizes.get(c)!, 0);
-  for (const largest of [...rest].sort((a, b) => sizes.get(b)! - sizes.get(a)!)) {
+/** What the caps judge as one: a change, or a rename's removal and addition, which the saved patch holds as the one section. */
+interface Part {
+  changes: Change[];
+  /** The path the part is named by: where a rename goes. */
+  name: string;
+  size: number;
+}
+
+/** One rename the saved patch holds, with the size of its section, as the first script measures it. */
+interface Rename {
+  size: number;
+  from: string;
+  to: string;
+}
+
+function renamesOf(listing: string): Rename[] {
+  return listing.split('\n').filter((line) => line !== '').map((line) => {
+    const [size, from, to, ...rest] = line.split('\t');
+    const name = (quoted: string | undefined) => (quoted?.startsWith('"') ? unquoted(quoted) : quoted);
+    if (rest.length > 0 || !Number.isSafeInteger(Number(size)) || !from || !to) throw new Refusal('Ordewell could not measure the renames git listed');
+    return { size: Number(size), from: name(from)!, to: name(to)! };
+  });
+}
+
+/**
+ * The changes as the caps see them. A removal and an addition that the saved
+ * patch pairs as a rename are measured by the rename's section, so a large file
+ * that only moved is as small as the patch makes it, and they are kept or
+ * dropped together.
+ */
+function partsOf(candidates: readonly Change[], sizes: ReadonlyMap<Change, number>, renames: readonly Rename[]): Part[] {
+  const removals = new Map(candidates.filter((c) => c.status === 'D').map((c) => [c.name, c]));
+  const additions = new Map(candidates.filter((c) => c.status === 'A').map((c) => [c.name, c]));
+  const paired = new Set<Change>();
+  const parts: Part[] = [];
+  for (const { size, from, to } of renames) {
+    const removal = removals.get(from);
+    const addition = additions.get(to);
+    if (!removal || !addition || paired.has(removal) || paired.has(addition)) continue;
+    paired.add(removal).add(addition);
+    parts.push({ changes: [removal, addition], name: to, size });
+  }
+  for (const c of candidates) if (!paired.has(c)) parts.push({ changes: [c], name: c.name, size: sizes.get(c)! });
+  return parts;
+}
+
+/** What fits: a part over its own cap is dropped, then the largest of the rest until the whole fits. */
+function withinCaps(candidates: readonly Change[], parts: readonly Part[]): { kept: Change[]; dropped: Part[] } {
+  const dropped = parts.filter((p) => p.size > PATCH_LIMITS.fileBytes);
+  const rest = parts.filter((p) => !dropped.includes(p));
+  let total = rest.reduce((sum, p) => sum + p.size, 0);
+  for (const largest of [...rest].sort((a, b) => b.size - a.size)) {
     if (total <= PATCH_LIMITS.patchBytes) break;
     dropped.push(largest);
-    total -= sizes.get(largest)!;
+    total -= largest.size;
   }
-  return { kept: candidates.filter((c) => !dropped.includes(c)), dropped };
+  const out = new Set(dropped.flatMap((p) => p.changes));
+  return { kept: candidates.filter((c) => !out.has(c)), dropped };
 }
 
 /** The index records that take changes back to the base: a new path removed, any other put back as it was. */
@@ -254,23 +311,51 @@ function revertRecords(changes: readonly Change[]): Buffer {
   ]));
 }
 
-/** Lines added and removed, and how many files, as `--numstat -z` counts them; a binary file counts no lines. */
-function countLines(numstat: Buffer): { files: number; added: number; removed: number; binary: number } {
-  const fields = splitNul(numstat);
+/** Files, lines added and removed, and binary files, counted in the bytes of a patch; a binary file counts no lines. */
+function countedIn(patch: Buffer): { files: number; added: number; removed: number; binary: number } {
   const counts = { files: 0, added: 0, removed: 0, binary: 0 };
-  for (let i = 0; i < fields.length; i++) {
-    const row = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(fields[i].toString('latin1'));
-    if (!row) throw new Refusal('git counted the patch in a form Ordewell does not read');
+  for (const file of patchFiles(patch)) {
     counts.files += 1;
-    if (row[1] === '-') counts.binary += 1;
+    if (file.added === '-') counts.binary += 1;
     else {
-      counts.added += Number(row[1]);
-      counts.removed += Number(row[2]);
+      counts.added += Number(file.added);
+      counts.removed += Number(file.removed);
     }
-    // A rename names its two paths in the fields after its counts.
-    if (row[3] === '') i += 2;
   }
   return counts;
+}
+
+const FILE_MODES: ReadonlySet<string> = new Set(['100644', '100755']);
+const MODES_GONE: ReadonlySet<string> = new Set([...FILE_MODES, LINK, SUBMODULE]);
+
+/**
+ * The first header line of a patch that names a mode other than a regular
+ * file's, so that `git apply` might create a symbolic link or a submodule, or
+ * turn a file into one. It reads the bytes with no git, since a patch is
+ * applied where nothing seals it. Git takes any octal mode whose type bits say
+ * link (`0120000` and `120755` as well as `120000`), so a mode is allowed only
+ * as one of the two a regular file has. Deleting a link or a submodule may name
+ * another, as the capture carries those deletions.
+ *
+ * Only a header starts a line this way: a hunk's lines start with a space,
+ * `+`, `-` or a backslash, and a binary patch's with a letter and then base85,
+ * which has no space.
+ */
+export function linkInPatch(patch: Buffer): string | undefined {
+  for (const line of patch.toString('latin1').split('\n')) {
+    let mode: string | undefined;
+    let allowed = FILE_MODES;
+    const named = /^(old mode|new mode|new file mode|deleted file mode) (.*)$/.exec(line);
+    if (named) {
+      mode = named[2];
+      if (named[1] === 'deleted file mode') allowed = MODES_GONE;
+    } else if (line.startsWith('index ')) {
+      const space = line.indexOf(' ', 'index '.length);
+      if (space !== -1) mode = line.slice(space + 1);
+    }
+    if (mode !== undefined && !allowed.has(mode)) return line;
+  }
+  return undefined;
 }
 
 /**
@@ -352,14 +437,15 @@ async function captureHeld(runs: OwnSealedRuns, opts: PatchCaptureOptions, signa
     // A link would hand the builder a path into wherever it points, and a sealed
     // run cannot record a submodule's commit, so neither is ever carried.
     const excluded = changes.filter((c) => c.status !== 'D' && (c.newMode === LINK || c.newMode === SUBMODULE));
-    const { kept, dropped } = withinCaps(changes.filter((c) => !excluded.includes(c)), sizes);
+    const candidates = changes.filter((c) => !excluded.includes(c));
+    const { kept, dropped } = withinCaps(candidates, partsOf(candidates, sizes, renamesOf(own('renames').toString('latin1'))));
     const indexed = splitNul(own('files')).map((name) => name.toString('utf8'));
     const clash = caseClash(kept, indexed, changes);
     if (clash) return { kind: 'refused', reason: clash };
-    const flags = [...flag('excluded', excluded.map((c) => c.name)), ...flag('dropped', dropped.map((c) => `${c.name} (${byteSize(sizes.get(c)!)})`))];
+    const flags = [...flag('excluded', excluded.map((c) => c.name)), ...flag('dropped', dropped.map((p) => `${p.name} (${byteSize(p.size)})`))];
     if (kept.length === 0) return { kind: 'empty', reason: 'none of the worktree\'s changes is one a patch carries.', flags };
 
-    fs.writeFileSync(`${stem}.revert`, revertRecords([...excluded, ...dropped]), { flag: 'wx', mode: 0o600 });
+    fs.writeFileSync(`${stem}.revert`, revertRecords([...excluded, ...dropped.flatMap((p) => p.changes)]), { flag: 'wx', mode: 0o600 });
     const exported = await runs.run(exportScript(stem), worktree);
     if (signal?.aborted) return { kind: 'refused', reason: 'the attempt ended while its changes were being captured.' };
     if (!exported.success) return { kind: 'refused', reason: failure('git could not write or replay the patch', exported) };
@@ -373,18 +459,22 @@ async function captureHeld(runs: OwnSealedRuns, opts: PatchCaptureOptions, signa
     if (hashes.length !== carried.length) throw new Refusal('Ordewell could not compare the patch with the worktree\'s files');
     const normalized = carried.filter((c, i) => c.newSha !== hashes[i]).map((c) => c.name);
     const patch = own('patch', PATCH_LIMITS.patchBytes);
-    const counts = countLines(own('numstat'));
+    // Nothing git wrote beside the patch vouches for it: a process the task's commands left behind can rewrite any of those files while the scripts run.
+    const link = linkInPatch(patch);
+    if (link !== undefined) {
+      return { kind: 'refused', reason: `the patch holds a link or a submodule (${JSON.stringify(link.slice(0, 80))}), which a capture leaves out, so something other than git wrote it.` };
+    }
     return {
       kind: 'saved',
       patch,
-      stats: { base, ...counts, bytes: patch.length, flags: [...flags, ...flag('normalized', normalized)] },
+      stats: { base, ...countedIn(patch), bytes: patch.length, sha256: createHash('sha256').update(patch).digest('hex'), flags: [...flags, ...flag('normalized', normalized)] },
     };
   } catch (err) {
     if (err instanceof Refusal) return { kind: 'refused', reason: `${err.message}.` };
     throw err;
   } finally {
     fs.rmSync(`${stem}.d`, { recursive: true, force: true });
-    for (const suffix of ['base', 'raw', 'files', 'sizes', 'revert', 'kept', 'hashes', 'patch', 'numstat', 'tree', 'replayed']) fs.rmSync(`${stem}.${suffix}`, { force: true });
+    for (const suffix of ['base', 'raw', 'files', 'sizes', 'renames', 'revert', 'kept', 'hashes', 'patch', 'tree', 'replayed']) fs.rmSync(`${stem}.${suffix}`, { force: true });
   }
 }
 
@@ -399,8 +489,8 @@ export async function capturePatch(shell: TaskShell, opts: PatchCaptureOptions =
 
 /** A saved patch as the artifact the attempt's handoff names (ADR-0050). */
 export function patchArtifact(stats: PatchStats, at: { path: string; attempt: number }): HandoffPatch {
-  const { base, files, added, removed, binary, bytes, flags } = stats;
-  return { kind: 'patch', path: at.path, attempt: at.attempt, base, files, added, removed, binary, bytes, ...(flags.length ? { flags } : {}) };
+  const { base, files, added, removed, binary, bytes, sha256, flags } = stats;
+  return { kind: 'patch', path: at.path, attempt: at.attempt, base, files, added, removed, binary, bytes, sha256, ...(flags.length ? { flags } : {}) };
 }
 
 /** A capture's flags as the lines a reply ends with. */
@@ -471,13 +561,22 @@ async function unmergedPaths(invoker: GitInvoker, worktree: string): Promise<str
  *
  * An unresolved conflict of the task's own, or a file of the patch's that the
  * task changed and has not staged, would make the result unreadable, so
- * either applies nothing.
+ * either applies nothing. So does a patch that is not the file that was saved,
+ * or that would create a link or a submodule.
  */
-export async function applyPatch(invoker: GitInvoker, worktree: string, patch: Buffer, saved: Pick<HandoffPatch, 'base' | 'files' | 'bytes'>): Promise<PatchApplyResult> {
-  if (patch.length !== saved.bytes) {
-    return { kind: 'refused', reason: `the patch is ${byteSize(patch.length)} where its artifact says ${byteSize(saved.bytes)}, so it was cut short or changed after it was saved.` };
-  }
+export async function applyPatch(invoker: GitInvoker, worktree: string, patch: Buffer, saved: Pick<HandoffPatch, 'base' | 'files' | 'bytes' | 'sha256'>): Promise<PatchApplyResult> {
   const refused = (reason: string): PatchApplyResult => ({ kind: 'refused', reason });
+  if (patch.length !== saved.bytes) {
+    return refused(`the patch is ${byteSize(patch.length)} where its artifact says ${byteSize(saved.bytes)}, so it was cut short or changed after it was saved.`);
+  }
+  if (createHash('sha256').update(patch).digest('hex') !== saved.sha256) {
+    return refused('the patch is not the file that was saved: its hash is not the one its artifact records, so it was changed after it was saved.');
+  }
+  // Applying is not sealed, and git creates whatever link a header names; a saved patch holds none, so one here was not written by the capture.
+  const link = linkInPatch(patch);
+  if (link !== undefined) {
+    return refused(`the patch holds a link or a submodule (${JSON.stringify(link.slice(0, 80))}), which a saved patch never does, so it is not one that was saved.`);
+  }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-apply-'));
   try {
     const toplevel = (await git(invoker, worktree, [...APPLY_GIT, 'rev-parse', '--show-toplevel'])).trim();
