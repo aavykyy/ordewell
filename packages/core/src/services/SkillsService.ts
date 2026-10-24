@@ -440,27 +440,27 @@ export class SkillsService {
   private catalog(): SkillCatalog {
     this.pruneRetired();
     for (const name of BUILTIN_SKILL_NAMES) this.seed(name);
-    return this.readCatalogWith(true);
+    return this.readCatalog();
   }
 
-  /** Inspect installed skills without seeding, refreshing or pruning global files. */
+  /**
+   * Inspect installed skills without seeding, refreshing or pruning global
+   * files. A built-in that is not seeded here still ships with Ordewell, so it
+   * is listed at global precedence: this is the catalog the planner uses even
+   * on a home that cannot hold the seeds.
+   */
   readCatalog(): SkillCatalog {
-    return this.readCatalogWith(false);
-  }
-
-  /** `includePackagedBuiltins` adds the built-ins a read-only home could not seed, at global precedence. */
-  private readCatalogWith(includePackagedBuiltins: boolean): SkillCatalog {
     const byName = new Map<string, SkillInfo>();
     const global = readDir(this.globalDir(), 'global');
     for (const skill of global.skills) {
       byName.set(skill.name, skill);
     }
-    if (includePackagedBuiltins) {
-      for (const name of BUILTIN_SKILL_NAMES) {
-        if (byName.has(name)) continue;
-        const packaged = this.packagedBuiltin(name);
-        if (packaged) byName.set(name, packaged);
-      }
+    // A read-only home cannot hold the seed, but the built-in is still there
+    // in the package, and still outranks a workspace copy of its name.
+    for (const name of BUILTIN_SKILL_NAMES) {
+      if (byName.has(name)) continue;
+      const packaged = this.packagedBuiltin(name);
+      if (packaged) byName.set(name, packaged);
     }
     const shadowed: ShadowedSkill[] = [];
     const invalid = [...global.invalid];

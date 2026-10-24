@@ -78,14 +78,15 @@ describe('ordewell skills', () => {
     handleSkills(['--workspace', selected, '--json']);
 
     expect(logs).toHaveLength(1);
-    expect(JSON.parse(logs[0])).toEqual({
-      skills: [
-        { name: 'shared', scope: 'global', appliesTo: 'planner', invocation: 'both', path: '~/.ordewell/skills/shared/SKILL.md' },
-        { name: 'selected-only', scope: 'workspace', appliesTo: 'task', invocation: 'both', path: skillPath },
-      ],
-      shadowed: [{ name: 'shared', path: duplicatePath, shadowedBy: { scope: 'global', path: '~/.ordewell/skills/shared/SKILL.md' } }],
-      invalid: [],
-    });
+    const listed = JSON.parse(logs[0]);
+    // The packaged built-ins ship with Ordewell, so they are listed even in a
+    // home nothing has seeded yet; this test is about the workspace selection.
+    expect(listed.skills.filter((s: { name: string }) => ['shared', 'selected-only'].includes(s.name))).toEqual([
+      { name: 'shared', scope: 'global', appliesTo: 'planner', invocation: 'both', path: '~/.ordewell/skills/shared/SKILL.md' },
+      { name: 'selected-only', scope: 'workspace', appliesTo: 'task', invocation: 'both', path: skillPath },
+    ]);
+    expect(listed.shadowed).toEqual([{ name: 'shared', path: duplicatePath, shadowedBy: { scope: 'global', path: '~/.ordewell/skills/shared/SKILL.md' } }]);
+    expect(listed.invalid).toEqual([]);
   });
 
   it('in a repo group, lists a skill committed inside a repo after the group root\'s own, the root winning a clash', () => {
@@ -97,7 +98,7 @@ describe('ordewell skills', () => {
     handleSkills(['--json']);
 
     const listed = JSON.parse(logs[0]);
-    expect(listed.skills.map((s: { name: string; path: string }) => [s.name, s.path])).toEqual([['deploy', rootPath], ['api-check', apiPath]]);
+    expect(listed.skills.filter((s: { name: string }) => ['deploy', 'api-check'].includes(s.name)).map((s: { name: string; path: string }) => [s.name, s.path])).toEqual([['deploy', rootPath], ['api-check', apiPath]]);
     expect(listed.shadowed).toEqual([{ name: 'deploy', path: shadowedPath, shadowedBy: { scope: 'workspace', path: rootPath } }]);
 
     handleSkills([]);
@@ -118,7 +119,9 @@ describe('ordewell skills', () => {
 
     handleSkills(['--json']);
     const listed = JSON.parse(logs[logs.length - 1]);
-    expect(listed.skills.map((s: { name: string }) => s.name)).toEqual(['kept']);
+    expect(listed.skills.map((s: { name: string }) => s.name)).toContain('kept');
+    expect(listed.skills.map((s: { name: string }) => s.name)).not.toContain('pr.review');
+    expect(listed.skills.map((s: { name: string }) => s.name)).not.toContain('PR-Review');
     expect(listed.invalid).toEqual([
       { name: 'PR-Review', path: '~/.ordewell/skills/PR-Review/SKILL.md', reason: expect.stringMatching(/^not a valid skill name/) },
       { name: 'pr.review', path: dotted, reason: expect.stringMatching(/^not a valid skill name/) },
@@ -129,7 +132,8 @@ describe('ordewell skills', () => {
     const otherWorkspace = home + '-other';
     const file = writeSkill(otherWorkspace, 'mine');
     handleSkills(['--workspace', otherWorkspace, '--json']);
-    expect(JSON.parse(logs[0]).skills[0].path).toBe(file);
+    const listed = JSON.parse(logs[0]).skills.find((s: { name: string }) => s.name === 'mine');
+    expect(listed.path).toBe(file);
   });
 
   it('does not seed, refresh, prune or write a manifest while listing', () => {
@@ -146,11 +150,16 @@ describe('ordewell skills', () => {
     expect(existsSync(join(home, '.ordewell', 'skills', 'to-spec'))).toBe(false);
   });
 
-  it('handles an empty installation without creating directories', () => {
+  it('lists the packaged built-ins in a home it has not seeded, without creating directories', () => {
     handleSkills([]);
-    expect(logs).toEqual(['No skills installed.']);
+    expect(logs[0]).toMatch(/Name\s+Scope\s+Applies-to\s+Invocation\s+SKILL.md/);
+    expect(logs.some((line) => line.startsWith('tdd'))).toBe(true);
     handleSkills(['--json']);
-    expect(JSON.parse(logs[1])).toEqual({ skills: [], shadowed: [], invalid: [] });
+    const listed = JSON.parse(logs[logs.length - 1]);
+    expect(listed.skills.map((s: { name: string }) => s.name).sort())
+      .toEqual(['diagnose', 'explore', 'grilling', 'improve-codebase-architecture', 'tdd', 'to-spec']);
+    expect(listed.shadowed).toEqual([]);
+    expect(listed.invalid).toEqual([]);
     expect(readdirSync(home)).toEqual([]);
     expect(readdirSync(workspace)).toEqual([]);
   });

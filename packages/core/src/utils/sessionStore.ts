@@ -131,19 +131,27 @@ export function listSessions(baseDir?: string, logger: ILogger = defaultLogger):
 
   return files
     .map((f) => {
+      let parsed: unknown;
       try {
-        const raw = fs.readFileSync(path.join(sessionsDir, f), 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (hasScalarRunner(parsed)) {
-          logger.warn('sessionStore', `session file ${f}: ${REJECTION_MESSAGE}`);
-          return null;
-        }
-        const session = parsed as SessionData;
-        if (!isSessionMeta(session.meta)) return moveAside(sessionsDir, f, 'is not a session: no usable id and creation time', logger);
-        return session.meta;
+        parsed = JSON.parse(fs.readFileSync(path.join(sessionsDir, f), 'utf-8'));
       } catch (err: unknown) {
-        return moveAside(sessionsDir, f, 'could not be read', logger, err);
+        // Only unparseable content is moved aside: an I/O error (EACCES, EMFILE)
+        // says nothing about the file, and renaming a good session would hide it
+        // from every surface long after the error cleared.
+        if (err instanceof SyntaxError) return moveAside(sessionsDir, f, 'is not valid JSON', logger);
+        logger.warn('sessionStore', `failed to read session file ${f}; skipping`, err);
+        return null;
       }
+      if (!parsed || typeof parsed !== 'object') {
+        return moveAside(sessionsDir, f, 'is not a session: no usable id and creation time', logger);
+      }
+      if (hasScalarRunner(parsed as Record<string, unknown>)) {
+        logger.warn('sessionStore', `session file ${f}: ${REJECTION_MESSAGE}`);
+        return null;
+      }
+      const session = parsed as SessionData;
+      if (!isSessionMeta(session.meta)) return moveAside(sessionsDir, f, 'is not a session: no usable id and creation time', logger);
+      return session.meta;
     })
     .filter((m): m is SessionMeta => m !== null)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -155,13 +163,13 @@ export function listSessions(baseDir?: string, logger: ILogger = defaultLogger):
  * so the loss is visible and the bytes are kept for inspection — never deleted,
  * since they may be all that is left of the user's work.
  */
-function moveAside(sessionsDir: string, file: string, reason: string, logger: ILogger, err?: unknown): null {
+function moveAside(sessionsDir: string, file: string, reason: string, logger: ILogger): null {
   const aside = `${file}.${Date.now()}.corrupt`;
   try {
     fs.renameSync(path.join(sessionsDir, file), path.join(sessionsDir, aside));
-    logger.warn('sessionStore', `session file ${file} ${reason}; moved aside to ${aside} rather than overwritten`, err);
+    logger.warn('sessionStore', `session file ${file} ${reason}; moved aside to ${aside} rather than overwritten`);
   } catch {
-    logger.warn('sessionStore', `failed to read session file ${file}; skipping`, err);
+    logger.warn('sessionStore', `failed to read session file ${file}; skipping`);
   }
   return null;
 }

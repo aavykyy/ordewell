@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { SettingsService, globalDataDir, writePrivateFile } from '@ordewell/core';
+import { SettingsService, globalDataDir, parseAutonomyFlag, writePrivateFile } from '@ordewell/core';
 
 export function findEnvFile(): string {
   return join(globalDataDir(), '.env');
@@ -92,8 +92,8 @@ export function moveAutonomyToSettings(): void {
   if (index === -1) return;
   const settings = new SettingsService();
   if (settings.getAll().autonomousMode === undefined) {
-    const value = unquote(lines[index].slice(lines[index].indexOf('=') + 1).trim());
-    settings.setAutonomousMode(value !== 'false' && value !== '0');
+    const level = parseAutonomyFlag(unquote(lines[index].slice(lines[index].indexOf('=') + 1).trim()));
+    if (level !== undefined) settings.setAutonomousMode(level);
   }
   lines.splice(index, 1);
   try {
