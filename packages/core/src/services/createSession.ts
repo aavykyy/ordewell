@@ -1785,11 +1785,8 @@ export class Session {
   /**
    * Load planner-produced tasks, as the check they landed through resolved
    * them against the catalog read live: it may have changed since planning
-   * started. Tasks adopted on an armed scheduler,
-   * or on a run that awaits a resume (ADR-0034), are reconciled rather than
-   * reloaded: `loadPlan` clears the on-hold set and the review approval, so a
-   * task the user cancelled would be re-armed and re-spawned by the re-tick
-   * that follows, and a retry after the edit would run the task alone.
+   * started. The scheduler adopts them into the run under way, or as the plan
+   * the next run starts from (`adoptEdit`).
    *
    * A whole-plan commit is the planner restating every task, so it is laid
    * over the plan's execution state rather than replacing it: a planner that
@@ -1814,14 +1811,7 @@ export class Session {
     // than what was approved waits for approval again, read before any rule
     // below approves what this edit wrote.
     const rewritten = rewrittenScripts(before, coerced);
-    // A run that ended on a failure is still the one a retry continues: reloaded,
-    // the failed task would lose its failure and its retry would run it alone.
-    if (this.orchestrator.isRunning || this.orchestrator.awaitsResume) {
-      this.orchestrator.reconcilePlan(coerced, runners);
-    } else {
-      this.orchestrator.loadPlan(coerced, runners, true);
-      this.store.resetForRun({ keepScheduledResumes: true });
-    }
+    this.orchestrator.adoptEdit(coerced, runners);
     this.record.withdraw(rewritten);
     // Once they are in the plan: approval is only ever of a task the plan holds.
     if (bySupervisor) this.record.approve(added);
@@ -1888,20 +1878,10 @@ export class Session {
   private async runWholePlan(origin: RunOrigin): Promise<void> {
     const plan = this.idlePlan();
     await this.withSave(async () => {
-      // A scheduler armed from an earlier run but with nothing live — paused on a
-      // hold, a user task, or a cancellation — would ignore the restart: `start`
-      // no-ops while armed and `loadPlan` keeps the run mode. Disarm it so this
-      // run starts cleanly; with nothing live, stopping has nothing to interrupt.
-      this.orchestrator.stop('restart');
-
+      // Approved first: the scheduler reads the record at each start.
       this.record.approvePlan();
       plan.status = 'approved';
-      this.store.clearLog();
-      this.store.resetForRun();
-
-      this.orchestrator.loadPlan(this.store.planTasks, plan.runners);
-      // A plan with nothing left to run ends here: the scheduler announces it.
-      await this.orchestrator.approveReview(origin);
+      await this.orchestrator.beginRun(origin);
     });
   }
 
@@ -1916,9 +1896,7 @@ export class Session {
     const scheduling = this.orchestrator.isScheduling;
     await this.withSave(async () => {
       this.record.approvePlan();
-      if (scheduling) await this.orchestrator.tick();
-      else if (this.orchestrator.isReviewApproved) await this.orchestrator.start('user');
-      else await this.orchestrator.approveReview('user');
+      await this.orchestrator.joinRun('user');
     });
     const line = approved === 0
       ? left > 0 ? `The plan is ${scheduling ? 'already ' : ''}running; ${left} ${left === 1 ? 'task waits' : 'tasks wait'} for your approval.`

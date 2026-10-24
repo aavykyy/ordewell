@@ -2628,17 +2628,25 @@ only the level; the scheduler reads the run's settings through one
 *Avoid:* "supervisor" for the module — the Supervisor is the planner
 conversation taking turns; Run supervision holds the run to its settings.
 
-**Run state** (`RunState`, in `TaskOrchestrator`; ADR-0034, ADR-0018 U1) —
+**Run state** (`RunState`, `packages/core/src/services/runState.ts`, held by
+`TaskOrchestrator`; ADR-0034, ADR-0018 U1) —
 where the full-plan run stands, as one value: *idle* (no full-plan run since
 the plan loaded or the user stopped one; a task started on its own may still be
 at work), *scheduling* (ready tasks start as slots free; a run waiting on the
 user, a hold or a merge gate stays here), *held* (a usage-limit pause with a
 reset to wait for holds it: it stays open and starts nothing new until the
 reset, a *Resume now*, a retry, a skip or a move to another runner continues
-it), *ended on a failure* (every task left is failed or blocked; a retry or a
-skip continues it) and *finished* (every task completed or was skipped).
-`isScheduling`, `awaitsResume` and the plan status (`running`, `completed`,
-else `approved`) derive from it. One
+it; it carries what it goes back to once released — *idle* for a task started
+alone, *scheduling*, or *ended on a failure*), *ended on a failure* (every task
+left is failed or blocked; a retry or a skip continues it) and *finished*
+(every task completed or was skipped). It changes only by an event — schedule,
+stop, load, continue, hold, release, end, reopen — through one pure reducer
+(`nextRunState`). The Session changes the run through three verbs on the
+orchestrator: `beginRun` (Execute with nothing at work: the run afresh),
+`joinRun` (Execute during a run: the plan joins it) and `adoptEdit` (a
+planner's edit, reconciled into a run at work or awaiting a resume, else loaded
+for the next run). `isScheduling`, `awaitsResume` and the plan status
+(`running`, `completed`, else `approved`) derive from it. One
 settle step (`settleRun`) decides, once nothing is at work and nothing can
 start, whether the run goes on, is held, waits on the user or is over; only an
 end closes the run and sends `execution_complete`. The review approval
