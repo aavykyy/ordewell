@@ -133,7 +133,7 @@ function fakeDaemon() {
     followSession: vi.fn((_id: string, onEvent: (event: unknown) => void) => {
       log.push('followSession');
       followListener = onEvent;
-      return { ready: Promise.resolve(), ended: new Promise<void>(() => {}), close: () => { if (followListener === onEvent) followListener = null; } };
+      return { ready: Promise.resolve(true), ended: new Promise<void>(() => {}), close: () => { if (followListener === onEvent) followListener = null; } };
     }),
   };
   let settleExecution: () => void = () => {};

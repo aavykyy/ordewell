@@ -243,7 +243,10 @@ and completion evidence.
   ([ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)). The attempt ends
   as a verdict would end it (L1), the task is `awaiting_user` with reason
   `usage-limit`, and the run holds: every other start would spend the same
-  exhausted limit. A held run stays open
+  exhausted limit. However the limit arrived, the pause is one rule
+  (`LimitPauses`): no verdict is recorded and nothing goes to the execution
+  log, the task's summary names the limit, its worktree is kept for the
+  resume, and what follows is what follows a verdict. A held run stays open
   ([ADR-0034](../supervision/0034-a-failed-task-blocks-only-its-dependents.md)):
   with nothing left at work it is neither handed over nor merged at its end,
   and sends no `execution_complete`. When the runner's message says when the limit resets
@@ -485,3 +488,4 @@ transport is retained for take-over.
 - 2026-10-18 — U1: loading a session clears saved resume times and keeps paused tasks idle until explicitly resumed.
 - 2026-10-19 — L1: an attempt's runner stops at its verdict, before the landing, by interrupting the turn and taking the runner's last report (Claude Code's cost and window) before the process goes; a continue waits for that wind-down, and what the runner would still write after `task_complete` is cut short. A plan adopted during one is a new scope, and the old runner's late reports are dropped.
 - 2026-10-22: the turn that reported `task_complete` closes itself within the interrupt grace before its report is published, so the tool reply reaches the runner; a turn still open at the grace has its report published then and is stopped.
+- 2026-10-24 — U1: the three ways a limit arrives — an exit mid-turn, a failed turn, a refused start — are one pause, owned by `LimitPauses`; a refused start now settles as a verdict does.

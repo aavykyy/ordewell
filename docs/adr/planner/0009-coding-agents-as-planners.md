@@ -28,7 +28,7 @@ attach failure (ADR-0025). Plan submission, edits and reads use the injected
 tools (ADR-0022); API planners retain their JSON envelopes.
 
 The plan contract does not move. `classifyPlannerReply`, `PlanRepair`,
-`PlanValidator`, `ResearchProgress`, `ConversationTurn` and the four surfaces
+`PlanValidator`, `ResearchProgress`, `ConversationTurn` and the three surfaces
 are already provider-agnostic; only the thing that turns *a user message* into
 *assistant text plus tool activity* is new. `CliAgentAiService implements
 IAiService` sits beside `OpenAiService`/`GeminiService`, delegating to a small
@@ -212,7 +212,7 @@ model's behalf, which is precisely what a coding agent replaces.
   ([ADR-0033](../planner-envelope/0033-codex-planner-without-its-sandbox.md)). A Codex that
   explores nothing is still the silent success this repo forbids, so a
   planner without Ordewell's tools is refused at handshake.
-- **All four surfaces get it for free (T11).** VS Code, web, CLI and TUI consume
+- **All three surfaces get it for free (T11).** VS Code, the CLI and the TUI consume
   `SessionMessage` and `ResearchProgress`; the harness planner emits the same
   events from the same `Session`. No surface learns that a coding agent is on
   the other end.
@@ -298,7 +298,7 @@ this backend should understand they are trading speed for not holding a key.
   these prompts and deleted precisely to keep one source.
 - **Widening `ResearchToolType` to arbitrary strings.** Most future-proof.
   Rejected for now: the closed union gives exhaustiveness checking in
-  `researchStepSummary` and four surfaces' icon/label switches, and one new
+  `researchStepSummary` and three surfaces' icon/label switches, and one new
   member with a label field buys the same honesty without turning every one of
   those into a runtime default branch.
 - **The paragraph break inside the reply text.** Previously adopted: each
@@ -358,3 +358,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-21 — research that outlives a turn uses research tasks; harness subagents stay awaited inside the turn (ADR-0037 R5).
 - 2026-10-23 — harness subagents serve orientation and research tasks evidence, decided by what the result is rather than how long it takes (ADR-0037 R5).
 - 2026-10-24 — `answer_checkpoint` joins the execution tools, for the supervisor at Act ([ADR-0029](../supervision/0029-the-supervisor.md)).
+- 2026-10-24 — the surface list corrected: there is no web surface, so three (VS Code, the CLI and the TUI) consume the planner's events (ADR-0006).

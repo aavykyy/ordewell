@@ -47,4 +47,17 @@ describe('loadState', () => {
     expect(saved.sessionId).toBeUndefined();
     expect(saved.plan.status).toBe('approved');
   });
+
+  it('replaces the state file whole on every save, so a crash mid-write cannot empty it', () => {
+    const statePath = path.join(tmpDir, '.ordewell', 'state.json');
+    saveState(plan(), tmpDir);
+    const before = fs.statSync(statePath).ino;
+
+    saveState({ ...plan(), status: 'running' }, tmpDir);
+
+    // A write in place truncates first; a rename swaps the file in one step.
+    expect(fs.statSync(statePath).ino).not.toBe(before);
+    expect(fs.readdirSync(path.dirname(statePath))).toEqual(['state.json']);
+    expect(loadState(tmpDir)!.plan.status).toBe('running');
+  });
 });

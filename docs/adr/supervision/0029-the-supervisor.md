@@ -633,3 +633,4 @@ until #30 exists.
 - 2026-10-22 — decided, not built: run updates carry a task's handoff ([ADR-0047](0047-structured-task-handoffs.md), #120).
 - 2026-10-22 — implemented handoffs in run updates, with whole findings and a pull pointer (ADR-0047, #120).
 - 2026-10-24 — the supervisor at Act may answer a checkpoint with `answer_checkpoint`, a planner tool of its own; a planner turn in the user's turn, the supervisor below Act and autorun are refused, a rejection needs a reason, and one that asks for the user's judgement on an irreversible or outward effect is escalated to them.
+- 2026-10-24 — the approval record's rules live in one module, `ApprovalRecord`, and run on each change to the task tree rather than inside a save: a task that leaves the plan takes its approval, and a save only writes. Approval taken from a task is announced to surfaces as a plan update with a status, wherever the change was made. `Session.isApproved` stays the one read.

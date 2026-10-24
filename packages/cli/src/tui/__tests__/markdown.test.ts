@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { renderMarkdown } from '../markdown';
-import { stripAnsi, style, width } from '../ansi';
+import { stripAnsi, palette, style, width } from '../ansi';
 
 beforeAll(() => {
   // Deterministic frames: colour codes would only make the assertions noisy.
@@ -215,6 +215,34 @@ describe('renderMarkdown — links', () => {
 
   it('shows an image as its alt text', () => {
     expect(md('![diagram](https://example.com/x.png)')).toEqual(['diagram']);
+  });
+});
+
+describe('renderMarkdown — wrapping painted text', () => {
+  it('never cuts a colour sequence when a long code span is hard-split', () => {
+    style.enabled = true;
+    // The 256-colour brand code the audit reproduced with; truecolor is a
+    // different length, which moves the chunk boundaries.
+    const truecolor = palette.truecolor;
+    palette.truecolor = false;
+    try {
+      for (const length of [145, 223, 301]) {
+        const path = `/${'a'.repeat(length)}`;
+        const out = md(`See \`${path}\` here.`, 78);
+        for (const line of out) {
+          // Anything left after the well-formed SGR codes is a sequence cut in
+          // half: the terminal aborts it and prints the rest as text, and the
+          // colour it opened is never closed.
+          // eslint-disable-next-line no-control-regex
+          expect(line.replace(/\x1b\[[0-9;]*m/g, '')).not.toContain('\x1b');
+          expect(width(line)).toBeLessThanOrEqual(78);
+        }
+        expect(out.map(stripAnsi).join('')).toContain(path);
+      }
+    } finally {
+      palette.truecolor = truecolor;
+      style.enabled = false;
+    }
   });
 });
 

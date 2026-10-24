@@ -8,6 +8,8 @@ import { TurnBudgets } from '../PlannerBudgets';
 
 /** The chat instance every getGenerativeModel().startChat() hands back. */
 const startChat = vi.hoisted(() => vi.fn());
+/** The content stream call the plan-emission path makes. */
+const generateContentStream = vi.hoisted(() => vi.fn());
 /** The model each getGenerativeModel() call was asked for, in order. */
 const modelsAsked = vi.hoisted((): string[] => []);
 
@@ -16,7 +18,7 @@ vi.mock('@google/generative-ai', () => ({
     getGenerativeModel = ({ model }: { model: string }) => {
       modelsAsked.push(model);
       // As the SDK does: the instance names the model by its resource path.
-      return { model: `models/${model}`, startChat: startChat, generateContentStream: vi.fn() };
+      return { model: `models/${model}`, startChat: startChat, generateContentStream: generateContentStream };
     };
   },
   SchemaType: { STRING: 'STRING', NUMBER: 'NUMBER', ARRAY: 'ARRAY', BOOLEAN: 'BOOLEAN', OBJECT: 'OBJECT' },
@@ -255,6 +257,74 @@ describe('Gemini research chat streaming', () => {
     // Thought tokens bill as output alongside the answer tokens.
     expect(usage[0].record).toEqual({ source: 'google', model: 'test-model', inputTokens: 70, outputTokens: 72, contextTokens: 130 });
     expect(tasks).toHaveLength(1);
+  });
+});
+
+describe('Gemini turn cancellation', () => {
+  beforeEach(() => {
+    startChat.mockReset();
+    generateContentStream.mockReset();
+  });
+
+  // The SDK takes the signal as request options; without it a turn the user
+  // stopped keeps streaming (and billing) until the model finishes.
+  it('passes the caller signal to a streaming chat turn, so Stop settles it', async () => {
+    let sentOptions: { signal?: AbortSignal } | undefined;
+    startChat.mockReturnValue({
+      sendMessageStream: (_request: unknown, options?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          sentOptions = options;
+          options?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+        }),
+    });
+    const service = new GeminiService(geminiConfig());
+    const caller = new AbortController();
+    const turn = service.startConversation({
+      goal: 'go',
+      runners: ['claude-code'],
+      modelsByRunner: {},
+      fs: fakeFileSystem() as IFileSystem,
+      onProgress: () => {},
+      signal: caller.signal,
+    });
+
+    await vi.waitFor(() => expect(sentOptions?.signal).toBeDefined());
+    caller.abort();
+
+    await expect(turn).rejects.toThrow(/abort/i);
+  });
+
+  it('passes the signal to the plan-emission content stream too', async () => {
+    generateContentStream.mockReturnValue({
+      stream: (async function* () {
+        yield { candidates: [{ content: { parts: [{ text: '{}' }] } }] };
+      })(),
+    });
+    class ExposedGeminiService extends GeminiService {
+      plan(prompt: string, signal: AbortSignal): Promise<string> {
+        return this.streamPlanText(prompt, undefined, () => {}, undefined, signal);
+      }
+    }
+    const caller = new AbortController();
+
+    await new ExposedGeminiService(geminiConfig()).plan('make a plan', caller.signal);
+
+    expect(generateContentStream.mock.calls[0][1]).toEqual({ signal: caller.signal });
+  });
+
+  it('passes the signal on the direct-plan path, where research is off', async () => {
+    generateContentStream.mockReturnValue({
+      stream: (async function* () {
+        yield { candidates: [{ content: { parts: [{ text: 'no plan here' }] } }] };
+      })(),
+    });
+    const caller = new AbortController();
+
+    await expect(
+      new GeminiService(geminiConfig()).generatePlanDirect('make a plan', ['claude-code'], {}, () => {}, undefined, undefined, undefined, undefined, caller.signal),
+    ).rejects.toThrow();
+
+    expect(generateContentStream.mock.calls[0][1]).toEqual({ signal: caller.signal });
   });
 });
 
