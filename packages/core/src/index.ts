@@ -86,7 +86,7 @@ export { EnvConfig } from './interfaces/EnvConfig';
 export * from './interfaces/INotification';
 export * from './interfaces/IRunner';
 export * from './interfaces/IWorktreeIsolation';
-export { describeMergeResult } from './services/mergeResultNotice';
+export { describeMergeResult, mergeOutcome } from './services/mergeResultNotice';
 export { createWorktreeIsolation } from './services/GitWorktreeIsolation';
 export { migratePlanIsolation } from './services/isolationRecord';
 export { capConflictFiles } from './services/conflictFiles';

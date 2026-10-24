@@ -31,12 +31,12 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
  * A daemon on a real socket, so the Host header the admission check reads is
  * the one the transport actually produced rather than one a test invented.
  */
-async function startDaemon(pool: OrchestratorPool) {
+async function startDaemon(pool: OrchestratorPool, maxBodyBytes?: number) {
   const server = http.createServer();
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = (server.address() as AddressInfo).port;
   const admission = { port, token: TOKEN, tokenFile: TOKEN_FILE };
-  server.on('request', createRequestListener(createApp(pool, admission)));
+  server.on('request', createRequestListener(createApp(pool, admission), admission, maxBodyBytes));
   attachWsHandler(server, pool, admission);
   return {
     port,
@@ -62,6 +62,33 @@ function request(
     req.on('error', reject);
     if (init.body) req.write(init.body);
     req.end();
+  });
+}
+
+/**
+ * Sends headers and never the declared body. An adapter that reads before it
+ * admits waits here; one that admits from the headers answers at once.
+ */
+function requestWithoutBody(
+  port: number,
+  path: string,
+  headers: Record<string, string>,
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { hostname: '127.0.0.1', port, path, method: 'POST', headers },
+      (res) => {
+        let data = '';
+        res.on('data', (c: Buffer) => { data += c.toString(); });
+        res.on('end', () => { req.destroy(); resolve({ status: res.statusCode ?? 0, body: data }); });
+      },
+    );
+    const timer = setTimeout(() => {
+      req.destroy();
+      reject(new Error('the daemon waited for a body before answering'));
+    }, 3000);
+    req.on('error', (err) => { clearTimeout(timer); reject(err); });
+    req.flushHeaders();
   });
 }
 
@@ -151,6 +178,7 @@ describe('daemon admission control', () => {
   describe('another process running as the same user, which can see the port', () => {
     const ROUTES: Array<[string, string, string | undefined]> = [
       ['GET', '/api/approvals/s1', undefined],
+      ['GET', '/api/server', undefined],
       ['GET', '/api/runners', undefined],
       ['GET', '/api/settings', undefined],
       ['GET', '/api/sessions', undefined],
@@ -298,6 +326,45 @@ describe('daemon admission control', () => {
     it('is refused when it names loopback at a port that is not ours', async () => {
       const res = await request(daemon.port, '/api/runners', { headers: { host: '127.0.0.1:1' } });
       expect(res.status).toBe(403);
+    });
+  });
+
+  describe('a request body', () => {
+    it('is never read before a browser request is refused', async () => {
+      const res = await requestWithoutBody(daemon.port, '/api/approvals/s1/ap-1', {
+        origin: 'http://evil.example',
+        'content-type': 'text/plain',
+        'content-length': '50000000',
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it('is refused with 413 when its declared length is over the cap', async () => {
+      const capped = await startDaemon(fakePool(), 1024);
+      try {
+        const res = await requestWithoutBody(capped.port, '/api/approvals/s1/ap-1', {
+          ...AUTH,
+          'content-type': 'application/json',
+          'content-length': '2048',
+        });
+        expect(res.status).toBe(413);
+      } finally {
+        await capped.close();
+      }
+    });
+
+    it('is refused with 413 as soon as a chunked body passes the cap', async () => {
+      const capped = await startDaemon(fakePool(), 1024);
+      try {
+        const res = await request(capped.port, '/api/approvals/s1/ap-1', {
+          method: 'POST',
+          headers: { ...AUTH, 'content-type': 'application/json' },
+          body: 'x'.repeat(2048),
+        });
+        expect(res.status).toBe(413);
+      } finally {
+        await capped.close();
+      }
     });
   });
 

@@ -908,9 +908,11 @@ Answered with approve — which carries no note — or reject with a reason: the
 TUI task view's *checkpoint card* (`enter` replies with the composer text as
 the reason and the task goes on in the same session following it; `ctrl-y`
 approves; `ctrl-g` rejects, with nothing typed a plain no), `/checkpoint <id> approve|reject [reason]`, `ordewell checkpoint`,
-or the VS Code card. A runner approval waiting in the same task is answered
-first. The turn that asked it ending — an interrupt, a force send — withdraws
-it, and the task goes back to in progress.
+or the VS Code card; the supervisor at Act answers with `answer_checkpoint`,
+and a planner turn in the user's own turn does not, since they answer. A runner
+approval waiting in the same task is answered first. The turn that asked it
+ending — an interrupt, a force send — withdraws it, and the task goes back to
+in progress.
 *Avoid:* "runner approval" (a tool request mid-turn, not a question about the
 work), "pause", and "merge gate" (a scheduling wait).
 
@@ -2716,8 +2718,8 @@ point every execution action reaches the scheduler through: `run_plan`,
 (ADR-0035: it adds a *Script task* and starts it in one step; only a planner
 turn or the supervisor calls it), and the user's own controls, refused to anyone else: `force_start`, `mark_complete`,
 `mark_not_done`, `interrupt_task`, a force send (`message_task` with `force`),
-`force_send_queued`, `remove_queued`, `cancel_resume`, `answer_checkpoint` and
-`approve_review`. Resume now is `retry_task` from `session` on a paused task.
+`force_send_queued`, `remove_queued`, `cancel_resume` and `approve_review`.
+Resume now is `retry_task` from `session` on a paused task.
 It checks who asked (user, planner turn, supervisor), the Supervisor level,
 plan approval and the loop guards, refuses with an actionable note worded for
 who asked (a model's tools, or the user's controls), and records each action
@@ -2749,8 +2751,11 @@ edit to land, then goes through the seam again; an edit that never lands — the
 turn stopped, or the edit refused as it landed — drops the start, with a
 notice, rather than running it on the unedited plan. `merge_all` is refused in a
 user-started turn — the user presses Merge all — and allowed to the supervisor
-only at Act; so is `skip_task`, which needs a reason from anyone but the
-user. The user's Skip and Merge all reach the seam as the user.
+only at Act; so are `skip_task`, which needs a reason from anyone but the
+user, and `answer_checkpoint`, which needs one to reject; a checkpoint that asks
+for the user's judgement on an irreversible or outward effect is escalated to
+them, not approved. The user's Skip, Merge all and checkpoint answers reach the
+seam as the user.
 `answer_approval` denies or escalates, never allows, for anyone but the user:
 allowing would widen the mode the plan gave the task. The user's may allow,
 allow for the task, or deny with a note.

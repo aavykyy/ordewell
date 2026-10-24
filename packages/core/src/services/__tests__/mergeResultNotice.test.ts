@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { describeMergeResult } from '../mergeResultNotice';
+import { describeMergeResult, mergeOutcome } from '../mergeResultNotice';
 import type { IsolationLandedTask } from '../../interfaces/IWorktreeIsolation';
 
 describe('describeMergeResult — repaired tasks (ADR-0015)', () => {
@@ -100,5 +100,37 @@ describe('describeMergeResult — a merge git refused', () => {
       .toBe(`Could not merge ${branch}: finish or abort the merge already in progress, then try again.`);
     expect(describeMergeResult({ outcome: 'failed', repo: 'web', landed: ['api'] }, branch, true).message)
       .toBe(`Could not merge ${branch} in web: finish or abort any merge in progress there, then try again. api was merged already and stays merged.`);
+  });
+});
+
+describe('mergeOutcome — the next step every surface gives', () => {
+  const branch = 'ordewell/r1/integration';
+
+  it('tells a lone repo with a conflict to merge it with git', () => {
+    expect(mergeOutcome({ outcome: 'conflict', repo: '.', files: ['a.txt'] }, branch, false)).toEqual({
+      ok: false,
+      message: `Merging ${branch} conflicted, so it was aborted: your tree is as it was. Merge it with git and resolve the conflict there.`,
+    });
+  });
+
+  it('tells a group that did not merge that each branch can be merged by hand', () => {
+    const { ok, message } = mergeOutcome({
+      outcome: 'blocked',
+      blocked: [{ repo: 'api', reason: 'conflict', files: ['src/a.ts'] }],
+    }, branch, true);
+
+    expect(ok).toBe(false);
+    expect(message).toBe(
+      `Merged nothing, so every tree is as it was: api would conflict in src/a.ts. Each repository's ${branch} is a plain branch you can merge by hand.`,
+    );
+  });
+
+  it('adds no hand-merge advice to a clean merge or a lone repo', () => {
+    expect(mergeOutcome({ outcome: 'merged' }, branch, true)).toEqual({
+      ok: true,
+      message: `Merged ${branch} into the checked-out branch of every repository.`,
+    });
+    expect(mergeOutcome({ outcome: 'failed', repo: '.' }, branch, false).message)
+      .toBe(`Could not merge ${branch}: finish or abort the merge already in progress, then try again.`);
   });
 });

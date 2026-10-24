@@ -79,6 +79,12 @@ export interface OkResponse extends Worded {
   ok: boolean;
 }
 
+/** `GET /api/server`: which process owns the port, so a stop can be verified before it signals one. */
+export interface ServerInfoResponse {
+  pid: number;
+  port: number;
+}
+
 /** A task start's answer: `queued` says why it did not start now, when the task waits for its dependencies instead. */
 export interface TaskStartResponse extends OkResponse {
   queued?: string;
@@ -220,6 +226,11 @@ export interface AdoptSessionResponse extends OkResponse {
   goal: string;
   /** The adopted session's run, as {@link SessionResponse.run}. */
   run?: RunView;
+  /**
+   * The planner turn holding the session when it was adopted. Absent when none
+   * is, which is what lets a surface that lost a turn end settle it.
+   */
+  plannerTurnId?: string;
 }
 
 export interface TaskLogAttemptsResponse {

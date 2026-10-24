@@ -1,6 +1,8 @@
+import { resolveUserTaskRef } from '@ordewell/core/plan-utils';
 import { flag, flags, readLastSession } from '../utils';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient } from '../apiClient';
+import { taskViews } from './shared';
 
 export async function handleAddTask(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   const title = flag(subArgs, '--title');
@@ -22,9 +24,36 @@ export async function handleAddTask(subArgs: string[], injectedApi?: ApiClient):
 
   const type = flag(subArgs, '--type') === 'user' ? 'user' : 'ai';
   const description = flag(subArgs, '--description') || title;
-  const dependencies = flags(subArgs, '--depends-on').filter(Boolean) as string[];
+  const dependencyRefs = flags(subArgs, '--depends-on').filter(Boolean) as string[];
 
   const api = injectedApi || new ApiClient(await ensureDaemon(resolvePort(subArgs)));
+
+  // Core silently drops a dependency id it does not know. Resolve order
+  // numbers and id prefixes as every other task command does, and refuse what
+  // names nothing rather than adding a task that can start alongside the one
+  // it was meant to wait for.
+  let dependencies: string[] | undefined;
+  if (dependencyRefs.length > 0) {
+    let tasks;
+    try {
+      tasks = taskViews((await api.getSession(sessionId)).plan);
+    } catch (err) {
+      console.error(`Failed to read the plan: ${(err as Error).message}`);
+      process.exit(1);
+      return;
+    }
+    const unresolved: string[] = [];
+    dependencies = dependencyRefs.map((ref) => {
+      const found = resolveUserTaskRef(tasks, ref);
+      if (!found) unresolved.push(ref);
+      return found?.id ?? ref;
+    });
+    if (unresolved.length > 0) {
+      console.error(`No task matches --depends-on ${unresolved.map((ref) => `"${ref}"`).join(', ')}.`);
+      process.exit(1);
+      return;
+    }
+  }
 
   try {
     await api.addTask(sessionId, {
@@ -33,7 +62,7 @@ export async function handleAddTask(subArgs: string[], injectedApi?: ApiClient):
       type,
       prompt: type === 'ai' ? (flag(subArgs, '--prompt') || description) : undefined,
       taskMode: 'build',
-      dependencies: dependencies.length ? dependencies : undefined,
+      dependencies: dependencies && dependencies.length ? dependencies : undefined,
       userSteps: type === 'user' ? [{ order: 1, instruction: description, completed: false }] : undefined,
     });
     console.log(`Added task: ${title}`);

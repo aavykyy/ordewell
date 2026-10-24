@@ -2387,6 +2387,44 @@ describe('following the session', () => {
     }
   });
 
+  // A lost follow leaves no entry, only a pending retry. Closing or deleting
+  // the session must cancel that timer, or it reopens a session the user is done with.
+  it('does not reopen a session the user closed while its follow was down', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = following();
+      await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
+      h.follows[0].end('lost');
+      await Promise.resolve();
+      await Promise.resolve();
+      await runEffect({ type: 'closeSession', sessionId: 's1' }, h.deps);
+
+      await vi.advanceTimersByTimeAsync(9_000);
+
+      expect(h.api.followSession).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not reopen a session the user deleted while its follow was down', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = following();
+      await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
+      h.follows[0].end('lost');
+      await Promise.resolve();
+      await Promise.resolve();
+      await runEffect({ type: 'deleteSession', sessionId: 's1' }, h.deps);
+
+      await vi.advanceTimersByTimeAsync(9_000);
+
+      expect(h.api.followSession).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('leaves a loss to the run\'s own stream while one is open, so it is reported once', async () => {
     let lose: () => void = () => {};
     const h = following({

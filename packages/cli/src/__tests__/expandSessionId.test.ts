@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { describe, it, expect } from 'vitest';
+import { afterAll, describe, it, expect } from 'vitest';
 import { expandSessionId } from '../utils/session';
 
 function workspaceWith(ids: string[]): string {
@@ -14,6 +14,7 @@ function workspaceWith(ids: string[]): string {
 
 describe('expandSessionId', () => {
   const ws = workspaceWith(['session-9a407a988bb0706e009055b784ac2257', 'session-bf85a92352de3fd498691291cdb952a7']);
+  afterAll(() => rmSync(ws, { recursive: true, force: true }));
 
   it('expands the short id `ordewell status` prints', () => {
     expect(expandSessionId('84ac2257', ws)).toBe('session-9a407a988bb0706e009055b784ac2257');

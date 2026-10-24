@@ -1446,6 +1446,12 @@ export class Session {
   get isPlannerBusy(): boolean { return this.conversation.isTurnInFlight || this.openingsWaiting.size > 0; }
 
   /**
+   * The planner turn answering right now, if one is: a surface whose stream
+   * lost that turn's end reads this back to tell a stale gate from a live one.
+   */
+  get plannerTurnId(): string | undefined { return this.conversation.currentTurnId; }
+
+  /**
    * Stop the planner turn in flight. It still settles — a backend hands back
    * what it had — and ends as stopped. A turn still waiting at the planner
    * gate is stopped too, before it opens, and so is every message sent behind

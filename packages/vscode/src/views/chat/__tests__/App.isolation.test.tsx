@@ -103,7 +103,7 @@ describe('App — worktree isolation (ADR-0013)', () => {
     }));
 
     const block = document.querySelector('.isolation-merge-result');
-    expect(block?.textContent).toBe('Merged nothing, so every tree is as it was: api would conflict in src/a.ts.');
+    expect(block?.textContent).toBe('Merged nothing, so every tree is as it was: api would conflict in src/a.ts. Each repository\'s ordewell/run-1/integration is a plain branch you can merge by hand.');
 
     sendRun(EMPTY_RUN);
     expect(document.querySelector('.isolation-merge-result')).toBeNull();

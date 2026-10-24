@@ -118,6 +118,25 @@ describe('ApiClient', () => {
     expect(fromB[0].id).toBe('server-b');
   });
 
+  // Before this, each returned the error body as its success type: `stop`
+  // printed "Execution stopped." and exited 0 while nothing had stopped.
+  it.each([
+    ['stopExecution', (client: ApiClient) => client.stopExecution('s1')],
+    ['closeSession', (client: ApiClient) => client.closeSession('s1')],
+    ['cancelPlanning', (client: ApiClient) => client.cancelPlanning('s1')],
+    ['getSessions', (client: ApiClient) => client.getSessions()],
+  ])('turns a 500 from %s into a DaemonError', async (_name, call) => {
+    const srv = await startCustomServer((_req, res) => {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'boom' }));
+    });
+    servers.push(srv);
+
+    const result = call(new ApiClient(srv.port));
+    await expect(result).rejects.toBeInstanceOf(DaemonError);
+    await expect(result).rejects.toThrow('boom');
+  });
+
   it('reads a multi-byte character split across response chunks intact', async () => {
     const body = Buffer.from(JSON.stringify([{ id: 'prompt-😀-é', goal: '', runners: [], taskCount: 0, status: '', createdAt: '', updatedAt: '' }]));
     // Cut inside the 4-byte emoji so the first chunk ends on a partial sequence.
@@ -186,9 +205,14 @@ describe('ApiClient', () => {
     const wss = new WebSocketServer({ port: 0 });
     await new Promise<void>((resolve) => wss.once('listening', () => resolve()));
     const port = (wss.address() as { port: number }).port;
+    let markGone!: () => void;
+    const gone = new Promise<void>((resolve) => { markGone = resolve; });
     wss.on('connection', (ws) => {
+      // Both frames are queued in this turn, before the client's handler sees
+      // the first and closes, so the second is on the wire and must be dropped.
       ws.send(JSON.stringify({ type: 'planner_turn_ended', turnId: 't1', outcome: 'message' }));
       ws.send(JSON.stringify({ type: 'planner_text_delta', turnId: 't2', segmentId: 's', text: 'uno' }));
+      ws.on('close', markGone);
     });
     servers.push({ close: () => wss.close() });
 
@@ -198,7 +222,9 @@ describe('ApiClient', () => {
       if ((e as { type: string }).type === 'planner_turn_ended') stream.close();
     });
     await stream.ready;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // The close handshake completing means the client has handled what the
+    // server queued; a fixed sleep would race a loaded machine's handshake.
+    await gone;
 
     expect(events.map((e) => e.type)).toEqual(['planner_turn_ended']);
   });
@@ -421,6 +447,16 @@ describe('ApiClient — adopting a saved session', () => {
     servers.push(server);
 
     expect((await new ApiClient(server.port).adoptSession('s1')).run).toEqual(run);
+  });
+
+  it('hands on the planner turn the session is running', async () => {
+    const server = await startCustomServer((_req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ ok: true, plan: {}, goal: '', plannerTurnId: 't1' }));
+    });
+    servers.push(server);
+
+    expect((await new ApiClient(server.port).adoptSession('s1')).plannerTurnId).toBe('t1');
   });
 
   it('omits the workspace when none is given', async () => {

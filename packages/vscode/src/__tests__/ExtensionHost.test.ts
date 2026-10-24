@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { RUN_SETTINGS_DEFAULTS,
-  createTask, defaultEnabledRunners, RunnerRegistry, recordedInstalledPlanner, resetInstalledPlanner,
+  createTask, defaultEnabledRunners, saveState, RunnerRegistry, recordedInstalledPlanner, resetInstalledPlanner,
   type AiProvider, type DiscoveredModel, type IRunner, type LegacyPlanState, type PlannerUsability,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
   type RunView, type Session, type SessionDeps, type SettingsService,
@@ -18,7 +18,7 @@ import type { VsCodeConfig } from '../adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from '../adapters/VsCodeNotification';
 import type { WebviewToHost } from '../shared/protocol';
-import { __panels, __resetPanels, window } from '../test/vscode.mock';
+import { __panels, __resetPanels, createFakeWebviewPanel, window } from '../test/vscode.mock';
 
 const models: DiscoveredModel[] = [
   { modelId: 'claude-sonnet-4-5', modelLabel: 'Claude Sonnet 4.5', variants: [], runnerProvider: 'anthropic' },
@@ -521,6 +521,29 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     await vi.waitFor(() => expect(__panels).toHaveLength(1));
     expect(__panels[0].viewType).toBe('ordewellTaskLog');
     expect(__panels[0].title).toBe('Task 1 · Parse JSON');
+  });
+
+  it('has the plan loaded before VS Code asks it to restore a task-log tab', async () => {
+    saveState(planWithOneTask('build a parser'), h.workspace);
+    h.session.spies.loadPlan.mockImplementation((plan: LegacyPlanState) => {
+      (h.session.spies as unknown as { planTasks: LegacyPlanState['tasks'] }).planTasks = plan.tasks;
+    });
+    const register = window.registerWebviewPanelSerializer as unknown as ReturnType<typeof vi.fn>;
+    const panel = createFakeWebviewPanel('ordewellTaskLog', 'Task log');
+    // VS Code revives the tab while activation is still running, so the
+    // serializer must already see the task the reloaded plan holds.
+    register.mockImplementation((_viewType: string, serializer: { deserializeWebviewPanel: (p: unknown, state: unknown) => Promise<void> }) => {
+      void serializer.deserializeWebviewPanel(panel, { taskId: 't1' });
+      return { dispose: vi.fn() };
+    });
+
+    try {
+      await h.host.start();
+    } finally {
+      register.mockImplementation(() => ({ dispose: vi.fn() }));
+    }
+
+    expect(panel.dispose).not.toHaveBeenCalled();
   });
 });
 

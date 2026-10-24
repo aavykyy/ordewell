@@ -1077,7 +1077,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   if (expanded) {
     if (skills) lines.push(style.grey(truncate(`${bodyPad}skills: ${skills}`, cols)));
     if (effort || mode) lines.push(style.grey(truncate(`${bodyPad}${[effort, mode].filter(Boolean).join(' · ')}`, cols)));
-    lines.push(style.grey(`${bodyPad}${task.status.replace(/_/g, ' ')}`));
+    lines.push(style.grey(`${bodyPad}${STATUS_WORD[taskStatusKind(task)]}`));
     if (task.isolation && task.isolation.state !== 'none' && task.isolation.branch) {
       lines.push(...taskText('Branch', task.isolation.branch, cols, bodyPad));
       if (row.repos.length > 0) lines.push(...taskText('Repos', row.repos.join(', '), cols, bodyPad));

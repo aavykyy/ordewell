@@ -153,7 +153,7 @@ describe('the Claude Code planner with the Ordewell server injected', () => {
       'mcp__ordewell__edit_plan', 'mcp__ordewell__task_query', 'mcp__ordewell__task_output', 'mcp__ordewell__task_diff',
       'mcp__ordewell__run_command', 'mcp__ordewell__load_skill',
       'mcp__ordewell__run_plan', 'mcp__ordewell__run_task', 'mcp__ordewell__stop_task', 'mcp__ordewell__stop_run',
-      'mcp__ordewell__retry_task', 'mcp__ordewell__skip_task', 'mcp__ordewell__message_task', 'mcp__ordewell__answer_approval', 'mcp__ordewell__merge_all',
+      'mcp__ordewell__retry_task', 'mcp__ordewell__skip_task', 'mcp__ordewell__message_task', 'mcp__ordewell__answer_approval', 'mcp__ordewell__answer_checkpoint', 'mcp__ordewell__merge_all',
       'mcp__ordewell__run_script',
     ]);
     expect(args[args.indexOf('--permission-mode') + 1]).toBe('default');

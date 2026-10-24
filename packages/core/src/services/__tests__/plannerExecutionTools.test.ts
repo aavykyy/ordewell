@@ -50,6 +50,8 @@ describe('the execution tools on the Ordewell MCP server', () => {
     await client.callTool({ name: 'message_task', arguments: { task: 't4', text: 'use the cache' } });
     const answered = await client.callTool({ name: 'answer_approval', arguments: { task: 't4', answer: 'deny', note: 'not that' } });
     await client.callTool({ name: 'merge_all', arguments: {} });
+    await client.callTool({ name: 'answer_checkpoint', arguments: { task: 't4', answer: 'reject', reason: 'not on production' } });
+    await client.callTool({ name: 'answer_checkpoint', arguments: { task: '#2', answer: 'approve' } });
 
     expect(execute.mock.calls.map(([command]) => command)).toEqual([
       { command: 'run_plan' },
@@ -60,9 +62,26 @@ describe('the execution tools on the Ordewell MCP server', () => {
       { command: 'message_task', task: 't4', text: 'use the cache' },
       { command: 'answer_approval', task: 't4', answer: 'deny', note: 'not that' },
       { command: 'merge_all' },
+      { command: 'answer_checkpoint', task: 't4', answer: 'reject', reason: 'not on production' },
+      { command: 'answer_checkpoint', task: '#2', answer: 'approve' },
     ]);
     expect(answered.isError).toBe(false);
     expect(JSON.parse(text(answered))).toEqual({ ok: true, result: 'done' });
+  });
+
+  it('takes only "approve" or "reject" as a checkpoint answer, and says who may answer and that answer_approval does not cover it', async () => {
+    const execute = vi.fn(async (): Promise<CommandOutcome> => ({ ok: true, message: 'done' }));
+    const client = await connected(host(execute));
+
+    const bad = await client.callTool({ name: 'answer_checkpoint', arguments: { task: 't1', answer: 'allow' } });
+    const tools = (await client.listTools()).tools;
+    const description = (name: string) => tools.find((t) => t.name === name)!.description;
+
+    expect(bad.isError).toBe(true);
+    expect(execute).not.toHaveBeenCalled();
+    expect(description('answer_checkpoint')).toMatch(/Only the supervisor at Act may, in a wake-up turn/);
+    expect(description('answer_checkpoint')).toMatch(/escalate|judgement/i);
+    expect(description('answer_approval')).toMatch(/does not cover a checkpoint/);
   });
 
   it('hands run_script to the seam as one command, with the call\'s own cancellation (ADR-0035)', async () => {

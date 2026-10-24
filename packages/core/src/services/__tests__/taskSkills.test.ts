@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -36,6 +36,19 @@ vi.mock('../gitExec', async (importOriginal) => {
   return { ...actual, execFileWithTimeout };
 });
 
+// A suite that leaves directories behind fills a machine's temp root within a
+// few runs, and slows every later test that scans it.
+const tempDirs: string[] = [];
+function tempDir(prefix: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 function writeSkill(root: string, name: string, appliesTo: string | null, body: string): string {
   const dir = path.join(root, name);
   fs.mkdirSync(dir, { recursive: true });
@@ -48,10 +61,10 @@ const globalSkills = () => path.join(home, '.ordewell', 'skills');
 const skillsOf = (root: string) => path.join(root, '.ordewell', 'skills');
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-taskskills-home-'));
-  workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-taskskills-ws-'));
-  worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-taskskills-wt-'));
-  h.builtinDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-taskskills-builtin-'));
+  home = tempDir('ordewell-taskskills-home-');
+  workspace = tempDir('ordewell-taskskills-ws-');
+  worktree = tempDir('ordewell-taskskills-wt-');
+  h.builtinDir = tempDir('ordewell-taskskills-builtin-');
   h.gitCalls = [];
 });
 

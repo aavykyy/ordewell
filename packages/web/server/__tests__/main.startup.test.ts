@@ -1,11 +1,59 @@
 import { spawn } from 'child_process';
 import { createServer } from 'http';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { createServer as createNetServer } from 'net';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { describe, expect, it } from 'vitest';
 
+function freePort(): Promise<number> {
+  return new Promise((resolvePort) => {
+    const srv = createNetServer();
+    srv.listen(0, '127.0.0.1', () => {
+      const address = srv.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      srv.close(() => resolvePort(port));
+    });
+  });
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 15000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error('timed out waiting for the daemon');
+    await new Promise((resolveTick) => setTimeout(resolveTick, 100));
+  }
+}
+
 describe('daemon startup', () => {
+  it('writes its PID file only once listening, and removes it on shutdown', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ordewell-daemon-pid-'));
+    mkdirSync(join(home, '.ordewell'));
+    const port = await freePort();
+    const pidFile = join(home, '.ordewell', `server-${port}.pid`);
+    const child = spawn(process.execPath, [
+      resolve(__dirname, '../../dist/server/main.js'),
+      '--port', String(port),
+      '--pid-file', pidFile,
+    ], {
+      env: { HOME: home, USERPROFILE: home, PATH: '', AI_PROVIDER: 'codex', ORDEWELL_ENABLED_RUNNERS: 'codex' },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    try {
+      await waitFor(() => {
+        try { return readFileSync(pidFile, 'utf8').trim() === String(child.pid); } catch { return false; }
+      });
+      expect(readFileSync(pidFile, 'utf8').trim()).toBe(String(child.pid));
+
+      child.kill('SIGTERM');
+      await new Promise<void>((resolveExit) => child.once('close', () => resolveExit()));
+      expect(() => readFileSync(pidFile, 'utf8')).toThrow();
+    } finally {
+      child.kill('SIGKILL');
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('preserves the listening daemon token when another daemon cannot bind its port', async () => {
     const home = mkdtempSync(join(tmpdir(), 'ordewell-daemon-start-'));
     const incumbent = createServer((_req, res) => res.end('incumbent'));

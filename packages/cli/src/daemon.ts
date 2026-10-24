@@ -1,28 +1,81 @@
 import { spawn } from 'child_process';
-import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync, openSync } from 'fs';
+import { existsSync, readFileSync, unlinkSync, mkdirSync, openSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 import http from 'http';
 import { createServer } from 'net';
 import { bearerHeaderValue, clearDaemonToken, globalDataDir, readDaemonToken } from '@ordewell/core';
+import { flag } from './utils/args';
 
 export const DEFAULT_PORT = 3742;
-const CONFIG_DIR = globalDataDir();
-const LEGACY_PID_FILE = join(CONFIG_DIR, 'server.pid');
+// Paths are read at call time, not import time: a test (and a shell that
+// re-exports HOME) changes the home directory after this module loads.
+function configDir(): string {
+  return globalDataDir();
+}
+
 // Pre-`.ordewell` install: daemon tokens already moved to globalDataDir() via
 // daemonToken.ts, but a daemon spawned by old code before this upgrade wrote
 // its PID file here — `stopDaemon` falls back to it so that daemon is still
 // reachable to stop, rather than orphaned by a path it doesn't know moved.
-const OLD_CONFIG_DIR = join(homedir(), '.config', 'ordewell');
+function oldConfigDir(): string {
+  return join(homedir(), '.config', 'ordewell');
+}
 
 // One PID file per port so a second daemon doesn't clobber the first one's
 // entry (and `stop --server --port N` kills the daemon the user meant).
 function pidFileFor(port: number): string {
-  return port === DEFAULT_PORT ? LEGACY_PID_FILE : join(CONFIG_DIR, `server-${port}.pid`);
+  const dir = configDir();
+  return port === DEFAULT_PORT ? join(dir, 'server.pid') : join(dir, `server-${port}.pid`);
 }
 
 function oldPidFileFor(port: number): string {
-  return port === DEFAULT_PORT ? join(OLD_CONFIG_DIR, 'server.pid') : join(OLD_CONFIG_DIR, `server-${port}.pid`);
+  const dir = oldConfigDir();
+  return port === DEFAULT_PORT ? join(dir, 'server.pid') : join(dir, `server-${port}.pid`);
+}
+
+/** The PID a file names, or undefined when it is missing or not a positive integer. */
+function readPidFile(file: string): number | undefined {
+  try {
+    const pid = parseInt(readFileSync(file, 'utf8').trim(), 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+type DaemonInfo =
+  | { kind: 'daemon'; pid: number }
+  /** Nothing owns the port: a stale PID file and token are safe to remove. */
+  | { kind: 'unreachable' }
+  /** Something owns the port, but it cannot prove which process it is. Never signal it. */
+  | { kind: 'unverifiable' };
+
+/**
+ * Ask the daemon on `port` which process it is. A daemon older than this
+ * route answers 404, and a mismatched token answers 401: both mean "someone
+ * owns the port, but the PID file cannot be checked against it".
+ */
+async function daemonInfo(port: number): Promise<DaemonInfo> {
+  const token = readDaemonToken(port);
+  try {
+    const res = await httpGet(
+      `http://127.0.0.1:${port}/api/server`,
+      2000,
+      token ? { Authorization: bearerHeaderValue(token) } : {},
+    );
+    if (res.status !== 200) return { kind: 'unverifiable' };
+    const parsed: unknown = JSON.parse(res.data);
+    const pid = (parsed as Partial<{ pid: unknown }>).pid;
+    return typeof pid === 'number' && Number.isInteger(pid) && pid > 0
+      ? { kind: 'daemon', pid }
+      : { kind: 'unverifiable' };
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code;
+    return code === 'ECONNREFUSED' || String(err).includes('ECONNREFUSED')
+      ? { kind: 'unreachable' }
+      : { kind: 'unverifiable' };
+  }
 }
 
 function httpGet(
@@ -98,11 +151,13 @@ export async function startDaemon(
 
   const serverPath = getWebServerPath();
 
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+  const dir = configDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
   }
 
-  const logFd = openSync(join(CONFIG_DIR, 'server.log'), 'a');
+  const pidFile = pidFileFor(port);
+  const logFd = openSync(join(dir, 'server.log'), 'a');
   // detached=false puts the daemon in the caller's own process group, so a
   // terminal hangup (closing the tab) reaches it via the same kernel-delivered
   // SIGHUP as the caller — no JS-level signal relay required, and none of the
@@ -119,6 +174,10 @@ export async function startDaemon(
   const child = spawn(process.execPath, [
     serverPath,
     '--port', String(port),
+    // The daemon writes the file itself once it is listening, and removes it
+    // on shutdown. A CLI-side write before the bind would leave the loser of a
+    // two-CLI race owning the winner's entry, or a dead PID after a crash.
+    '--pid-file', pidFile,
     ...(detached ? [] : ['--watch-parent', String(process.pid)]),
   ], {
     detached,
@@ -127,17 +186,18 @@ export async function startDaemon(
   });
 
   if (detached) child.unref();
-  writeFileSync(pidFileFor(port), String(child.pid));
 
   for (let i = 0; i < 30; i++) {
     await new Promise((r) => setTimeout(r, 500));
     if (await isDaemonRunning(port)) {
-      say(`Server started on http://127.0.0.1:${port} (PID ${child.pid})`);
+      // The daemon's own PID, not the child's: a child that lost the bind race
+      // has exited, and the winner is what the message must name.
+      say(`Server started on http://127.0.0.1:${port} (PID ${readPidFile(pidFile) ?? child.pid})`);
       return;
     }
   }
 
-  const failure = `Server did not respond within 15s. Check logs: ${join(CONFIG_DIR, 'server.log')}`;
+  const failure = `Server did not respond within 15s. Check logs: ${join(dir, 'server.log')}`;
   // A quiet caller is a live TUI: killing its process would drop the user out
   // of a full-screen app with a half-restored terminal, so it gets a throw to
   // handle instead. Every other caller keeps the exit it has always had.
@@ -153,29 +213,49 @@ export async function stopDaemon(port: number = DEFAULT_PORT): Promise<boolean> 
     console.error(`No server PID file found for port ${port}. Is the server running?`);
     return false;
   }
-  try {
-    const pidStr = readFileSync(pidFile, 'utf8').trim();
-    const pid = parseInt(pidStr, 10);
-    if (!pid || isNaN(pid)) {
-      unlinkSync(pidFile);
-      clearDaemonToken(port);
-      return false;
-    }
-    process.kill(pid, 'SIGTERM');
-    unlinkSync(pidFile);
-    console.log(`Server stopped (PID ${pid}).`);
-    return true;
-  } catch (err) {
-    if ((err as Error & { code?: string }).code === 'ESRCH') {
-      try { unlinkSync(pidFile); } catch { /* empty */ }
-      // A daemon killed outright never ran its own shutdown, so its token file
-      // may still be sitting there looking usable.
-      clearDaemonToken(port);
-      console.log('Server was not running (stale PID removed).');
-      return true;
-    }
-    throw err;
+
+  const filePid = readPidFile(pidFile);
+  if (!filePid) {
+    try { unlinkSync(pidFile); } catch { /* empty */ }
+    clearDaemonToken(port);
+    console.error(`Removed an unreadable PID file for port ${port}. Is the server running?`);
+    return false;
   }
+
+  const info = await daemonInfo(port);
+  if (info.kind === 'unverifiable') {
+    // A PID from an unverified file may now belong to any process the OS has
+    // recycled it for. Refuse rather than risk killing something unrelated.
+    console.error(
+      `A server owns port ${port} but could not name its own process (it may predate this check, or the token file is stale). `
+      + `Not signalling PID ${filePid}. Stop it yourself with: kill ${filePid}`,
+    );
+    return false;
+  }
+  if (info.kind === 'unreachable') {
+    try { unlinkSync(pidFile); } catch { /* empty */ }
+    // A daemon killed outright never ran its own shutdown, so its token file
+    // may still be sitting there looking usable.
+    clearDaemonToken(port);
+    console.log('Server was not running (stale PID removed).');
+    return true;
+  }
+
+  const pid = info.pid;
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch (err) {
+    const code = (err as Error & { code?: string }).code;
+    if (code !== 'ESRCH') throw err;
+    try { unlinkSync(pidFile); } catch { /* empty */ }
+    console.log('Server was not running (stale PID removed).');
+    return true;
+  }
+  try { unlinkSync(pidFile); } catch { /* empty */ }
+  console.log(pid === filePid
+    ? `Server stopped (PID ${pid}).`
+    : `Server stopped (PID ${pid}); its PID file named the stale ${filePid}.`);
+  return true;
 }
 
 export async function ensureDaemon(port?: number): Promise<number> {
@@ -226,7 +306,7 @@ export function isConnectionRefused(err: unknown): boolean {
  */
 export function describeConnectionRefused(port: number): string {
   return `No Ordewell server is listening on port ${port}. `
-    + `It may have been stopped, or it may have crashed: check ${join(CONFIG_DIR, 'server.log')}. `
+    + `It may have been stopped, or it may have crashed: check ${join(configDir(), 'server.log')}. `
     + `Start one with \`ordewell web --daemon\`.`;
 }
 
@@ -253,11 +333,8 @@ export function findFreePort(): Promise<number> {
  * instead of whatever is already on 3742.
  */
 export function resolvePort(args: string[] = []): number {
-  const idx = args.indexOf('--port');
-  if (idx !== -1) {
-    const parsed = parseInt(args[idx + 1] ?? '', 10);
-    if (!isNaN(parsed) && parsed > 0) return parsed;
-  }
+  const parsedArg = parseInt(flag(args, '--port') ?? '', 10);
+  if (!isNaN(parsedArg) && parsedArg > 0) return parsedArg;
   const fromEnv = parseInt(process.env.ORDEWELL_PORT ?? '', 10);
   if (!isNaN(fromEnv) && fromEnv > 0) return fromEnv;
   return DEFAULT_PORT;

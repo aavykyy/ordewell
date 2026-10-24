@@ -355,3 +355,17 @@ describe('the help sheet footer', () => {
     }
   });
 });
+
+describe('an expanded task row', () => {
+  // The row used to print the store's own spelling, so the pane said "in
+  // progress" directly under a header that said "Running".
+  it('words the status as the task view and the header do', () => {
+    const out = plain(initialState({
+      sessionId: 's1', rows: 24, cols: 120, focus: 'plan', expandedTaskId: 't1',
+      tasks: [{ id: 't1', order: 1, title: 'Add the route', type: 'ai', status: 'in_progress', dependencies: [] }],
+    }));
+
+    expect(out).not.toContain('in progress');
+    expect(out).toContain('Running');
+  });
+});

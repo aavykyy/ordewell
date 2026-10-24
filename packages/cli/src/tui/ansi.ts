@@ -200,7 +200,10 @@ function chopWord(piece: string, max: number): string[] {
       continue;
     }
     for (const ch of graphemes(part)) {
-      const w = stringWidth(ch);
+      // Printable ASCII is one column per code unit. A pasted single-line blob
+      // is the worst case for this loop, and asking string-width once per
+      // character of it costs an order of magnitude more than measuring it.
+      const w = PRINTABLE_ASCII.test(ch) ? 1 : stringWidth(ch);
       if (curWidth > 0 && curWidth + w > max) {
         startChunk(ch, w);
       } else {
