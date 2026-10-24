@@ -5,15 +5,19 @@ import { createServer as createNetServer } from 'net';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { beforeAll, describe, expect, it } from 'vitest';
-
-const webRoot = resolve(__dirname, '../..');
+import { daemonBuild, daemonBuildFailure } from './daemonBuild';
 
 // These spawn the built daemon, but `test:quick` on a fresh checkout has no
 // dist yet, and the missing build then fails as a fifteen-second "timed out
 // waiting for the daemon". Building it here also keeps a stale bundle from
 // deciding what the tests see.
 beforeAll(() => {
-  execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:server'], { cwd: webRoot, stdio: 'ignore' });
+  const build = daemonBuild();
+  try {
+    execFileSync(build.file, build.args, { cwd: build.cwd, stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8' });
+  } catch (error) {
+    throw daemonBuildFailure(error);
+  }
 }, 60_000);
 
 function freePort(): Promise<number> {
