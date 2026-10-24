@@ -440,3 +440,43 @@ describe('the user\'s controls are the user\'s', () => {
     },
   );
 });
+
+describe('a control on a task while Mark complete lands its work', () => {
+  async function landing(failFirst: boolean) {
+    const isolation = new FakeWorktreeIsolation();
+    const env = setup({ isolation });
+    env.load([task('t1', 1), task('t2', 2)]);
+    await env.run({ command: 'run_task', task: 't1' });
+    if (failFirst) {
+      env.latest('t1').emitExit(1);
+      await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
+    }
+    const openMerge = isolation.holdIntegration('t1');
+    const marked = env.run({ command: 'mark_complete', task: 't1' });
+    await vi.waitFor(() => expect(isolation.taskIdsFor('integrate')).toEqual(['t1']));
+    return { env, openMerge, marked };
+  }
+
+  const refused = { ok: false, message: 'Task #1 "Task t1" is being marked complete: its work is landing.' };
+
+  it('refuses a retry and a skip of a failed task', async () => {
+    const { env, openMerge, marked } = await landing(true);
+
+    expect(await env.run({ command: 'retry_task', task: 't1', from: 'fresh' })).toMatchObject(refused);
+    expect(await env.run({ command: 'skip_task', task: 't1' })).toMatchObject(refused);
+    openMerge();
+    await marked;
+
+    expect(taskOf(env.session, 't1')!.status).toBe('completed');
+  });
+
+  it('refuses a stop of a task marked complete while it ran', async () => {
+    const { env, openMerge, marked } = await landing(false);
+
+    expect(await env.run({ command: 'stop_task', task: 't1' })).toMatchObject(refused);
+    openMerge();
+    await marked;
+
+    expect(taskOf(env.session, 't1')!.status).toBe('completed');
+  });
+});

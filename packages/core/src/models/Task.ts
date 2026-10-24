@@ -1001,6 +1001,11 @@ export function renumberTasks(tasks: readonly Task[]): Task[] {
   }));
 }
 
+/** A task waiting on the user with its attempt still live: the runner sits at a checkpoint or for input. */
+export function waitsMidAttempt(task: Pick<Task, 'status' | 'awaitingReason'>): boolean {
+  return task.status === 'awaiting_user' && (task.awaitingReason === 'checkpoint' || task.awaitingReason === 'input');
+}
+
 /** A task paused on its runner's usage limit, whether it resumes on its own or waits for the user (#84). */
 export function pausedOnLimit(task: Readonly<Task>): boolean {
   return task.status === 'awaiting_user' && task.awaitingReason === 'usage-limit';
