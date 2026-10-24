@@ -71,6 +71,11 @@ starting as usual.
   the task row's merge gate and the planner's view of the plan all read it. A
   force start reads it as forced: past a hold, a failure, a usage limit and
   the merge gate the user confirmed, never past dependencies still under way.
+  A hold someone chose (a stop, a completion taken back) lasts until a retry
+  or a force start: starting the plan again, the user's Stop of the run and an
+  edit of the same plan leave it, and only loading another plan lets it go. The
+  hold a failed start sets ("start it again") is not chosen, and a new run
+  releases it.
   A force start is judged again once its run has opened, against the task as
   it stands then: one an edit gave dependencies still under way meanwhile
   waits for them, queued or made now. The claim then checks only what can
@@ -158,3 +163,4 @@ attempt. This decides what a failure stops, not how a verdict is reached.
 - 2026-10-18 — a force start judged again as its run opens waits for dependencies an edit added meanwhile, queued or made now; the claim's last-moment checks are listed in full.
 - 2026-10-21 — a loop's check that fails a round with rounds left blocks nothing, ends no run and wakes no one until its loop stops or runs out of rounds; the start rule gains the check between rounds and the body waiting on its check ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md)).
 - 2026-10-24 — the run's state changes only through `nextRunState`; Execute begins a run with `beginRun` and a planner edit is adopted with `adoptEdit`; a retry while a usage-limit pause holds a run that ended on a failure keeps it held until the reset.
+- 2026-10-24 — a hold set by a stop or a taken-back completion survives starting the plan again, the user's Stop of the run and an edit of the same plan; it was cleared by all three.

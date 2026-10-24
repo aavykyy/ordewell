@@ -300,6 +300,14 @@ export class TaskOrchestrator {
    */
   private onHold = new Map<string, string>();
   /**
+   * The holds someone chose (a stop, a completion taken back). Starting the
+   * plan again or editing it does not release these, or a task the user or
+   * supervisor stopped would run at the next Execute plan; only a retry, a
+   * force start or another plan does. A start's failure hold is not in it: a
+   * new run is the "start it again" that hold asks for.
+   */
+  private chosenHolds = new Set<string>();
+  /**
    * Force starts queued behind dependencies the scheduler will not start them
    * after: outside a run it drives, or past a failed dependency, which it
    * never forces. Each starts once those still under way have finished.
@@ -768,6 +776,7 @@ export class TaskOrchestrator {
     // would leave its run scheduling over a plan half loaded.
     assertAssignedRunners(tasks, planRunners);
     const queued = edited ? [...this.queuedStarts] : [];
+    const chosen = this.chosenHoldsNow();
     // Ended before the plan is swapped, so nothing of the plan being replaced reaches the next one.
     const repairs = this.attempts.unload().filter((a) => a.kind.kind === 'repair' && a.worktree);
     this.store.load(tasks, planRunners);
@@ -783,6 +792,8 @@ export class TaskOrchestrator {
     this.retryCounts.clear();
     this.previousRounds.clear();
     this.onHold.clear();
+    if (edited) this.restoreHolds(chosen);
+    else this.chosenHolds.clear();
     this.queuedStarts = new Map(queued.filter(([id]) => this.store.get(id)));
     this.owedRepairs.clear();
     this.recoverOrphans();
@@ -880,7 +891,9 @@ export class TaskOrchestrator {
     this.stop('restart');
     this.store.clearLog();
     this.store.resetForRun();
+    const chosen = this.chosenHoldsNow();
     this.loadPlan(this.store.planTasks, [...this.store.planRunners]);
+    this.restoreHolds(chosen);
     await this.approveReview(origin);
   }
 
@@ -940,13 +953,35 @@ export class TaskOrchestrator {
       if (a.worktree) this.unawaited(this.runs.release(a.taskId, { keep: true }, a.integration), `Could not keep the worktree of task "${this.store.get(a.taskId)?.title ?? a.taskId}"`);
     }
     this.runs.interrupt();
-    this.onHold.clear();
+    this.releaseUnchosenHolds();
     this.owedRepairs.clear();
     if (reason === 'user') this.queuedStarts.clear();
     this.limitPauses.cancelAll();
     this.sayStopped(stopped);
     this.recoverOrphans();
     this.emit('onTaskChanged');
+  }
+
+  private chosenHoldsNow(): [string, string][] {
+    return [...this.onHold].filter(([id]) => this.chosenHolds.has(id));
+  }
+
+  private restoreHolds(holds: readonly [string, string][]): void {
+    for (const [id, reason] of holds) {
+      if (this.store.get(id)) this.hold(id, reason, true);
+    }
+  }
+
+  private releaseUnchosenHolds(): void {
+    for (const id of [...this.onHold.keys()]) {
+      if (!this.chosenHolds.has(id)) this.onHold.delete(id);
+    }
+  }
+
+  private hold(taskId: string, reason: string, chosen: boolean): void {
+    this.onHold.set(taskId, reason);
+    if (chosen) this.chosenHolds.add(taskId);
+    else this.chosenHolds.delete(taskId);
   }
 
   /** Name the tasks a stop took down, so none is mistaken for one still at work. */
@@ -1067,7 +1102,7 @@ export class TaskOrchestrator {
         this.store.setTaskOutputSummary(task.id, failure.summary);
       } else {
         this.store.markPending(task.id);
-        this.onHold.set(task.id, failure.hold);
+        this.hold(task.id, failure.hold, false);
       }
       await this.runs.release(task.id, { keep: failure.leaves === 'failed' && failure.keepWorktree });
       const { level, text, toastOnly } = failure.notice;
@@ -1298,7 +1333,7 @@ export class TaskOrchestrator {
     if (!this.attempts.has(taskId) && task.status !== 'in_progress') return;
     const ended = this.attempts.end(taskId, 'cancel');
     this.store.markPending(taskId);
-    this.onHold.set(taskId, 'cancelled; retry or force start to run it again');
+    this.hold(taskId, 'cancelled; retry or force start to run it again', true);
     this.emit('onTaskChanged');
     await this.runs.release(taskId, worktree, ended?.integration);
     await this.tick();
@@ -1376,7 +1411,7 @@ export class TaskOrchestrator {
    * Undo a completion: return the task to "not executed" — pending, verdict and
    * summary dropped, archive entry removed. It is put on hold like a cancel, so
    * a running plan does not immediately re-spawn the work the user just
-   * un-marked; Retry / Force Start / Run release the hold. Dependents fall back
+   * un-marked; only Retry / Force Start release the hold, starting the plan again does not. Dependents fall back
    * to waiting on their own, because the scheduler gates on `isCompleted`.
    */
   async markTaskIncomplete(taskId: string): Promise<void> {
@@ -1386,7 +1421,7 @@ export class TaskOrchestrator {
     this.attempts.clear(task);
     this.store.retry(taskId);
     this.store.removeFromLog(taskId);
-    this.onHold.set(taskId, 'marked not done; retry or force start to run it again');
+    this.hold(taskId, 'marked not done; retry or force start to run it again', true);
 
     this.notifications.info(`Task "${task.title}" marked not done.`);
     this.emit('onTaskChanged');

@@ -258,6 +258,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **Starting the plan no longer runs a task you stopped.** A task held by a
+  stop, or by taking its completion back, stays held when the plan is started
+  again, after Stop of the whole run, and when the plan is edited; only a retry
+  or a force start runs it
+  ([ADR-0034](docs/adr/supervision/0034-a-failed-task-blocks-only-its-dependents.md)).
 - **A usage limit that pauses a task no longer closes the run.** Whether the
   limit ends the runner's turn, fails it or refuses the start, the task records
   no verdict and waits for its reset, and the run stays open until then. A
