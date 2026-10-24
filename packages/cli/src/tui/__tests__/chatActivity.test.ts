@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { EMPTY_TASK_LOG } from '@ordewell/core';
 import { chatActivity } from '../layout';
 import { initialState, type TaskLogState, type TaskView, type TuiState } from '../state';
@@ -12,6 +12,15 @@ function viewing(taskId: string): TaskLogState {
 }
 
 const state = (over: Partial<TuiState>): TuiState => initialState({ sessionId: 's1', ...over });
+
+// The resume label shortens a same-day time and names the date on another day,
+// so the clock is fixed rather than read: a real clock makes this a date bomb.
+beforeEach(() => {
+  vi.useFakeTimers({ now: new Date(2026, 9, 14, 11, 0), toFake: ['Date'] });
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('chatActivity: the planner chat', () => {
   it('is empty while the planner is idle, even with tasks running', () => {
@@ -52,7 +61,7 @@ describe('chatActivity: a task chat', () => {
     const resumeAt = new Date(2026, 9, 14, 12, 12).toISOString();
     const tasks = [task({ status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt })];
     const activity = chatActivity(state({ tasks, taskView: viewing('t1') }));
-    expect(activity?.label).toMatch(/^paused · resumes .*12:12/);
+    expect(activity?.label).toBe('paused · resumes 12:12pm');
     expect(activity?.busy).toBe(false);
   });
 });

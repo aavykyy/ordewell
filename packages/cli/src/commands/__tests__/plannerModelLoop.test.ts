@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { rmSync } from 'fs';
 import http from 'http';
 import { PlannerModelMemory, type PlannerModelCandidate } from '@ordewell/core';
 import { ApiClient } from '../../apiClient';
@@ -113,7 +114,10 @@ beforeEach(async () => {
   envDir = mkdtempSync(join(tmpdir(), 'ordewell-cli-loop-test-'));
   vi.stubEnv('HOME', envDir);
 });
-afterEach(() => { vi.unstubAllEnvs(); });
+afterEach(() => {
+  vi.unstubAllEnvs();
+  rmSync(envDir, { recursive: true, force: true });
+});
 
 describe('planner model memory — CLI round trip', () => {
   it('keeps each planner\'s own model+effort across switch-A, pick, switch-B, pick, switch-back-A', async () => {

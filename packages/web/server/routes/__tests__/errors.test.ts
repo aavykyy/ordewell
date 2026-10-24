@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { Hono } from 'hono';
 import {
   AlreadyExecutingError,
@@ -24,6 +24,12 @@ async function answer(err: unknown, options?: Parameters<typeof failure>[3]) {
 }
 
 describe('failure', () => {
+  // These tests silence console.error; left in place, a later test's genuine
+  // fault would be swallowed and its log assertion could not fail.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it.each([
     [new SessionNotFoundError(), 404, 'session_not_found'],
     [new NoPlanError('execute'), 400, 'no_plan'],

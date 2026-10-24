@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { render } from '../render';
 import { bodyRows, chatBodyLines, helpLayout } from '../layout';
 import { stripAnsi, style, width } from '../ansi';
@@ -492,6 +492,15 @@ describe('plan pane', () => {
 });
 
 describe('status line', () => {
+  // A fake clock keeps the resume label's two forms — a same-day time and a
+  // dated one — from depending on when the suite runs.
+  beforeEach(() => {
+    vi.useFakeTimers({ now: new Date(2026, 9, 14, 11, 0), toFake: ['Date'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const viewing = (taskId: string, over: Partial<TuiState> = {}): Partial<TuiState> => ({
     taskView: { taskId, view: EMPTY_TASK_LOG, attempts: [1], attempt: 1, pending: [], loaded: true, followLatest: true, queuedIndex: 0 },
     ...over,
@@ -522,7 +531,11 @@ describe('status line', () => {
   it('states a usage-limit pause\'s resume time in that task\'s chat', () => {
     const resumeAt = new Date(2026, 9, 14, 12, 12).toISOString();
     const paused = [{ ...tasks[1], status: 'awaiting_user', awaitingReason: 'usage-limit' as const, resumeAt }];
-    expect(text({ tasks: paused, ...viewing('b') })).toMatch(/paused · resumes .*12:12/);
+    expect(text({ tasks: paused, ...viewing('b') })).toContain('paused · resumes 12:12pm');
+
+    // Another day names the date, so a resume tomorrow is never read as today's.
+    const tomorrow = [{ ...tasks[1], status: 'awaiting_user', awaitingReason: 'usage-limit' as const, resumeAt: new Date(2026, 9, 15, 8, 10).toISOString() }];
+    expect(text({ tasks: tomorrow, ...viewing('b') })).toContain('paused · resumes Oct 15, 8:10am');
   });
 });
 

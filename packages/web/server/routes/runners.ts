@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { installedPlannerDetected, type OkResponse, type RunnersResponse } from '@ordewell/core';
 import { OrchestratorPool } from '../pool/orchestratorPool';
+import { failure, jsonObject, refuse } from './errors';
 
 export function runnersRoute(pool: OrchestratorPool) {
   const router = new Hono();
@@ -17,13 +18,20 @@ export function runnersRoute(pool: OrchestratorPool) {
   });
 
   router.put('/:id', async (c) => {
-    // A toggle saves the enabled set it changes; built on the stale default,
-    // it would save claude-code over the installed agents the probe finds.
-    await installedPlannerDetected();
-    const id = c.req.param('id');
-    const body = await c.req.json();
-    pool.setRunnerEnabled(id, body.enabled);
-    return c.json({ ok: true } satisfies OkResponse);
+    try {
+      // A toggle saves the enabled set it changes; built on the stale default,
+      // it would save claude-code over the installed agents the probe finds.
+      await installedPlannerDetected();
+      const id = c.req.param('id');
+      const { enabled } = await jsonObject<{ enabled?: unknown }>(c);
+      // A missing value is not `false`: before this, `{}` disabled the runner
+      // while answering 200.
+      if (typeof enabled !== 'boolean') return refuse(c, 400, 'enabled must be true or false');
+      pool.setRunnerEnabled(id, enabled);
+      return c.json({ ok: true } satisfies OkResponse);
+    } catch (err) {
+      return failure(c, err, 'runner toggle', { fallback: 400 });
+    }
   });
 
   return router;

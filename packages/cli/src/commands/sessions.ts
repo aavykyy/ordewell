@@ -1,4 +1,4 @@
-import { flag, hasFlag, positionals, saveLastSession, readLastSession } from '../utils';
+import { expandSessionId, flag, hasFlag, positionals, saveLastSession, readLastSession } from '../utils';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient } from '../apiClient';
 
@@ -12,6 +12,8 @@ const USAGE = 'Usage: ordewell sessions list|load <id>|delete <id> [--workspace 
 export async function handleSessions(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   const [action, identifier] = positionals(subArgs);
   const workspace = flag(subArgs, '--workspace') || process.cwd();
+  // `status` prints the tail of an id; load/delete must accept what it printed.
+  const target = identifier ? expandSessionId(identifier, workspace) : undefined;
   const asJson = hasFlag(subArgs, '--json');
 
   const api = injectedApi || new ApiClient(await ensureDaemon(resolvePort(subArgs)));
@@ -37,16 +39,16 @@ export async function handleSessions(subArgs: string[], injectedApi?: ApiClient)
   }
 
   if (action === 'load') {
-    if (!identifier) {
+    if (!target) {
       console.error(USAGE);
       process.exit(1);
     }
     let session;
     try {
-      session = await api.getSession(identifier, workspace);
+      session = await api.getSession(target, workspace);
       // Adopt it on the server too — the marker alone only tells the CLI which
       // id to send; the daemon can execute a session only once it holds one.
-      await api.adoptSession(identifier, workspace);
+      await api.adoptSession(target, workspace);
     } catch (err) {
       console.error(`Failed to load session: ${(err as Error).message}`);
       process.exit(1);
@@ -60,13 +62,18 @@ export async function handleSessions(subArgs: string[], injectedApi?: ApiClient)
   }
 
   if (action === 'delete') {
-    if (!identifier) {
+    if (!target) {
       console.error(USAGE);
       process.exit(1);
     }
     try {
-      await api.deleteSession(identifier, workspace);
-      console.log(`Deleted session ${identifier}.`);
+      const result = await api.deleteSession(target, workspace);
+      if (!result.ok) {
+        console.error(result.message ?? `No session "${target}" was found in ${workspace}.`);
+        process.exit(1);
+        return;
+      }
+      console.log(result.message ?? `Deleted session ${target}.`);
     } catch (err) {
       console.error(`Failed to delete session: ${(err as Error).message}`);
       process.exit(1);

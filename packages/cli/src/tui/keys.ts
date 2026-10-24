@@ -194,7 +194,13 @@ function decodeKitty(seq: string): Key | undefined {
     if (alt) return { name: `alt-${letter}` };
     return { name: 'char', char: shift ? letter.toUpperCase() : letter };
   }
-  if (code >= 32 && !ctrl && !alt) return { name: 'char', char: String.fromCodePoint(code) };
+  // A text key is a Unicode scalar outside the surrogate range, and not one of
+  // the protocol's own functional keys (the BMP private-use block): fromCodePoint
+  // throws above U+10FFFF, and a garbled code would otherwise kill the process
+  // out of the stdin handler.
+  const text = code >= 32 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff)
+    && !(code >= 0xe000 && code <= 0xf8ff);
+  if (text && !ctrl && !alt) return { name: 'char', char: String.fromCodePoint(code) };
   // Ctrl+Space and the protocol's own functional keys (modifier presses,
   // keypad) have no binding here; naming them avoids typing their code.
   return { name: 'unknown' };

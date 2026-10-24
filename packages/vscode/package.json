@@ -39,7 +39,8 @@
     "planner"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:ordewellTaskLog"
   ],
   "main": "./dist/extension.js",
   "scripts": {

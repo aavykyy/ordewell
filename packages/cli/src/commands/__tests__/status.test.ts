@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import http from 'http';
-import { readFileSync, mkdtempSync } from 'fs';
+import { readFileSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { ApiClient } from '../../apiClient';
@@ -49,12 +49,18 @@ const SESSION_WITH_SUBTASKS = {
 };
 
 describe('handleStatus --output', () => {
+  let outDir = '';
+  afterEach(() => {
+    if (outDir) rmSync(outDir, { recursive: true, force: true });
+  });
+
   it('writes the session JSON to a file and implies --json', async () => {
     const srv = await startServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(SESSION));
     });
-    const out = join(mkdtempSync(join(tmpdir(), 'ordewell-status-')), 'plan.json');
+    outDir = mkdtempSync(join(tmpdir(), 'ordewell-status-'));
+    const out = join(outDir, 'plan.json');
     const { handleStatus } = await import('../status');
     const { stdout } = await capture(() =>
       handleStatus(['--session-id', 'session-1', '--output', out], new ApiClient(srv.port)),

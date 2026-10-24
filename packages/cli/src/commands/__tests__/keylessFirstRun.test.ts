@@ -136,7 +136,7 @@ describe('keyless first-run entry points at the process boundary', () => {
     const { token, file } = mintDaemonToken(port);
     const admission = { port, token, tokenFile: file };
     vendorBase = `http://127.0.0.1:${port}/vendor`;
-    const daemonListener = createRequestListener(createApp(pool, admission));
+    const daemonListener = createRequestListener(createApp(pool, admission), admission);
     server.on('request', async (req, res) => {
       if (!req.url?.startsWith('/vendor/')) { daemonListener(req, res); return; }
       let body = '';

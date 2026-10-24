@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { spawn } from 'child_process';
 import { SettingsService, getSettingsPath } from '../SettingsService';
+import { filterModelsForPrompt } from '../ModelAllowlistResolver';
 
 function tempSettingsDir() {
   const dir = path.join(os.tmpdir(), `ordewell-settings-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -205,6 +206,17 @@ describe('SettingsService', () => {
       const listener = vi.fn();
       const watching = service.watch(listener);
       try {
+        // A directory watcher arms asynchronously, and macOS may report a save
+        // written in the same turn as one event naming the directory, which
+        // the watcher ignores. Space the arming saves out until one is heard,
+        // then forget those calls: the counts below are the saves under test.
+        for (let attempt = 0; attempt < 10 && listener.mock.calls.length === 0; attempt++) {
+          new SettingsService(tempFile).setEnabledRunners(['opencode']);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        expect(listener).toHaveBeenCalled();
+        listener.mockClear();
+
         new SettingsService(tempFile).setEnabledRunners(['codex']);
         await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
         await new Promise((resolve) => setTimeout(resolve, 150));
@@ -311,6 +323,22 @@ describe('SettingsService', () => {
       expect(s2.getModelAllowlist('claude-code')).toEqual(['x', 'y']);
       expect(s2.getModelAllowlist('nonexistent')).toBeUndefined();
     });
+
+    it('reads a hand-edited allowlist of the wrong shape as nothing, instead of handing the planner a string', () => {
+      fs.writeFileSync(tempFile, JSON.stringify({
+        modelAllowlist: { 'claude-code': 'opus', codex: ['gpt-5', 7, '   '], opencode: [' zen/glm-4.6 '] },
+      }));
+      const s2 = new SettingsService(tempFile);
+
+      expect(s2.getModelAllowlist('claude-code')).toBeUndefined();
+      expect(s2.getModelAllowlist('codex')).toEqual(['gpt-5']);
+      expect(s2.getModelAllowlist('opencode')).toEqual(['zen/glm-4.6']);
+      // The real failure was every planner turn throwing on `allowlist.filter`.
+      expect(() => filterModelsForPrompt(
+        { 'claude-code': [{ modelId: 'opus', modelLabel: 'Opus', variants: [] }] },
+        s2.getAll().modelAllowlist ?? {},
+      )).not.toThrow();
+    });
   });
 
   describe('plannerModels', () => {
@@ -359,6 +387,14 @@ describe('SettingsService', () => {
     it('is absent — never an empty object — when nothing has been recorded', () => {
       service.setEnabledRunners([]);
       expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8'))).not.toHaveProperty('plannerModels');
+    });
+
+    it('stores a remembered model and effort without the spaces a copy-paste leaves', () => {
+      fs.writeFileSync(tempFile, JSON.stringify({
+        plannerModels: { codex: { model: ' claude-sonnet-5 ', effort: ' high ' } },
+      }));
+
+      expect(new SettingsService(tempFile).getPlannerModel('codex')).toEqual({ model: 'claude-sonnet-5', effort: 'high' });
     });
 
     it('a plannerModels of the wrong shape does not throw and does not wipe the rest of the file', () => {
@@ -489,6 +525,26 @@ describe('SettingsService', () => {
       fs.writeFileSync(tempFile, JSON.stringify({ autonomousMode: 'guarded' }));
 
       expect(new SettingsService(tempFile).autonomousMode()).toBe(true);
+    });
+
+    it.each([
+      ['off', false], ['guarded', false], ['auto', false],
+      ['FALSE', false], [' false ', false],
+      ['FULL', true], ['on', true],
+    ])('reads %s as the level the environment names', (value, level) => {
+      service.setAutonomousMode(!level);
+      process.env.ORDEWELL_AUTONOMOUS_MODE = value;
+
+      expect(service.autonomousMode()).toBe(level);
+      expect(service.autonomousModeOverridden()).toBe(true);
+    });
+
+    it.each([['no'], ['maybe'], ['   ']])('leaves the saved level alone when the environment names no level (%s)', (value) => {
+      service.setAutonomousMode(false);
+      process.env.ORDEWELL_AUTONOMOUS_MODE = value;
+
+      expect(service.autonomousMode()).toBe(false);
+      expect(service.autonomousModeOverridden()).toBe(false);
     });
   });
 });

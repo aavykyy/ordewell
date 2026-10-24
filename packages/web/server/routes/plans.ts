@@ -27,11 +27,12 @@ import {
   type RewindTargetsResponse,
   type StopResponse,
   type TaskMessageResponse,
+  type Task,
   type CancelPlanningResponse,
   type CancelResumeResponse,
 } from '@ordewell/core';
 import { OrchestratorPool } from '../pool/orchestratorPool';
-import { failure, refuse } from './errors';
+import { failure, jsonObject, refuse } from './errors';
 
 const NO_CHECKPOINT = 'The task is not waiting at a checkpoint: it was answered already, withdrawn, or has no runner left to hear it.';
 
@@ -52,7 +53,9 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.post('/:sessionId/generate', async (c) => {
     try {
-      const { goal, runners, workspace, model, allowInit } = await c.req.json();
+      const { goal, runners, workspace, model, allowInit } = await jsonObject<{
+        goal?: string; runners?: string[]; workspace?: string; model?: string; allowInit?: boolean;
+      }>(c);
       if (!goal) return c.json({ error: 'goal is required' }, 400);
       const ws = workspace || c.req.query('workspace') || process.cwd();
       const queryRunners = c.req.query('runners');
@@ -330,7 +333,7 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.put('/:sessionId/tasks/:taskId', async (c) => {
     try {
-      const changes = await c.req.json();
+      const changes = await jsonObject<Partial<Task>>(c);
       // JSON cannot carry undefined, so a null is a client clearing the model.
       if (changes.assignedModel === null) changes.assignedModel = undefined;
       // One edit, whatever it holds: the session takes the fields a direct
@@ -357,7 +360,7 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.post('/:sessionId/tasks', async (c) => {
     try {
-      const body = await c.req.json();
+      const body = await jsonObject<Partial<Task>>(c);
       const result = await pool.session(c.req.param('sessionId')).addTask(body);
       if (!result) return refuse(c, 404, 'Session not found', 'session_not_found');
       return c.json({ ok: true } satisfies OkResponse);
@@ -380,7 +383,7 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.post('/:sessionId/tasks/merge', async (c) => {
     try {
-      const { taskIds } = await c.req.json();
+      const { taskIds } = await jsonObject<{ taskIds?: unknown }>(c);
       if (!taskIds || !Array.isArray(taskIds) || taskIds.length < 2) {
         return c.json({ error: 'taskIds array with at least two ids is required' }, 400);
       }
@@ -405,7 +408,9 @@ export function plansRoute(pool: OrchestratorPool) {
   // planner committed the plan.
   router.post('/:sessionId/converse/start', async (c) => {
     try {
-      const { goal, runners, workspace, model, allowInit } = await c.req.json();
+      const { goal, runners, workspace, model, allowInit } = await jsonObject<{
+        goal?: string; runners?: string[]; workspace?: string; model?: string; allowInit?: boolean;
+      }>(c);
       if (!goal) return c.json({ error: 'goal is required' }, 400);
       const ws = workspace || c.req.query('workspace') || process.cwd();
       // As in generate: none requested is read by the session, after its gate.
@@ -421,7 +426,7 @@ export function plansRoute(pool: OrchestratorPool) {
   // The planner decides what happens next.
   router.post('/:sessionId/converse/message', async (c) => {
     try {
-      const { message } = await c.req.json();
+      const { message } = await jsonObject<{ message?: string }>(c);
       if (!message) return c.json({ error: 'message is required' }, 400);
       const plan = await pool.continuePlanning(c.req.param('sessionId'), message);
       return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
@@ -435,7 +440,7 @@ export function plansRoute(pool: OrchestratorPool) {
   // anything waiting. With no turn in flight it is the plain send above.
   router.post('/:sessionId/converse/message/now', async (c) => {
     try {
-      const { message } = await c.req.json();
+      const { message } = await jsonObject<{ message?: string }>(c);
       if (!message) return c.json({ error: 'message is required' }, 400);
       const plan = await pool.session(c.req.param('sessionId')).forceSendPrompt(message);
       return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
@@ -477,8 +482,8 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.post('/:sessionId/conversation/rewind', async (c) => {
     try {
-      const { index } = await c.req.json();
-      if (!Number.isInteger(index) || index < 0) return c.json({ error: 'index must be a non-negative integer' }, 400);
+      const { index } = await jsonObject<{ index?: number }>(c);
+      if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) return c.json({ error: 'index must be a non-negative integer' }, 400);
       const rewound = pool.rewindConversation(c.req.param('sessionId'), index);
       return c.json({ ...rewound, plan: surfacePlan(rewound.plan) } satisfies ConversationRewindResponse);
     } catch (err) {
