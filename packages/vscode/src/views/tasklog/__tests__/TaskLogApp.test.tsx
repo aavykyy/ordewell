@@ -32,6 +32,13 @@ describe('the task log tab (ADR-0018, V1)', () => {
     api.postMessage.mockClear();
   });
 
+  it('names a subtask by its dotted reference in the header', () => {
+    render(<TaskLogApp />);
+    init({ orderLabel: '2.1' });
+
+    expect(document.querySelector('.task-log-title')?.textContent).toBe('Task 2.1 · Parse JSON');
+  });
+
   it('draws a handoff from the attempt log and expands its full report with the shared detail switch', () => {
     const report = Array.from({ length: 12 }, (_, i) => `Report line ${i + 1}`).join('\n');
     const view = replayTaskLog([{ type: 'handoff', handoff: {
@@ -124,6 +131,18 @@ describe('the task log tab (ADR-0018, V1)', () => {
 
     send({ type: 'status', status: status({ usage: { totals: { inputTokens: 13000, outputTokens: 3200 } } }) });
     expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('draws an earlier attempt\'s own spend above the task total', () => {
+    render(<TaskLogApp />);
+    init({
+      attempt: 1, attempts: [1, 2],
+      usage: { totals: { inputTokens: 1000, reportedCost: { USD: 0.5 } }, contextFill: { usedTokens: 10_000, windowTokens: 200_000 } },
+      usageTotal: { totals: { inputTokens: 1500, reportedCost: { USD: 1.5 } }, contextFill: { usedTokens: 50_000, windowTokens: 200_000 } },
+    });
+
+    const lines = [...document.querySelectorAll('.usage-line')].map((el) => el.textContent);
+    expect(lines).toEqual(['attempt 1: ctx 10k (5%) · $0.50', 'task total: ctx 50k (25%) · $1.50']);
   });
 
   it('completes only the runner commands and sends a command with arguments', () => {

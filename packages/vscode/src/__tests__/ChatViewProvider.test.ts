@@ -173,6 +173,9 @@ describe('ChatViewProvider conversation reloads', () => {
 
     expect(posted).toEqual([
       { type: 'restoreChat' },
+      // A turn the old conversation asked for is closed with it, even if the
+      // host never opened it: the restored session's input must be free.
+      { type: 'plannerTurn', active: false },
       {
         type: 'conversationPatch',
         order: ['b1', 'b2', 'b3'],
@@ -185,11 +188,12 @@ describe('ChatViewProvider conversation reloads', () => {
     ]);
   });
 
-  it('redraws only the conversation after a compaction — a restoreChat would also wipe a running task\'s output', () => {
+  it('redraws the conversation after a compaction — a restoreChat would also wipe a running task\'s output', () => {
     const { provider, posted } = providerWithCapture();
     provider.replaceConversation({ conversationHistory: history, researchLog });
 
-    expect(posted.map((m) => m.type)).toEqual(['conversationPatch']);
+    expect(posted.some((m) => m.type === 'restoreChat')).toBe(false);
+    expect(posted.at(-1)).toMatchObject({ type: 'conversationPatch' });
   });
 
   it('tells the webview when to lock and free the input', () => {

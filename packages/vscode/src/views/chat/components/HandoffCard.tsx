@@ -1,6 +1,6 @@
 import React from 'react';
-import { capConflictFiles } from '@ordewell/core/plan-utils';
-import type { IsolationMergeBlock, IsolationMergeResult } from '@ordewell/core';
+import { capConflictFiles, describeMergeResult } from '@ordewell/core/plan-utils';
+import type { IsolationMergeResult } from '@ordewell/core';
 
 export interface HandoffLandedTask {
   taskId: string;
@@ -54,57 +54,14 @@ function sortLanded(tasks: HandoffLandedTask[]): HandoffLandedTask[] {
   return [...tasks].sort((a, b) => a.order - b.order);
 }
 
-/** Why one repo kept Merge all from touching anything, as one line. */
-function blockReason({ reason, files, expected, actual, rebasing }: IsolationMergeBlock): string {
-  switch (reason) {
-    case 'merge-in-progress': return 'has a merge in progress';
-    case 'conflict': return `would conflict${files.length > 0 ? ` in ${files.join(', ')}` : ''}`;
-    case 'uncommitted-changes': return `has uncommitted changes${files.length > 0 ? ` to ${files.join(', ')}` : ''}`;
-    case 'partial-landing': return 'holds part of a task whose landing could not be rolled back';
-    case 'wrong-branch': return rebasing
-      ? `is in the middle of a rebase; this run started on ${expected}. Finish or abort the rebase, then merge again`
-      : `is ${actual ? `on ${actual}` : 'on a detached HEAD'}; this run started on ${expected}. Check out ${expected} and merge again`;
-    case 'git-error': return 'could not be checked by git';
-  }
-}
-
 /**
- * What Merge all did after it ran. `blocked` is all-or-nothing across the group;
- * a group old enough to lack `merge-tree --write-tree` merges in turn and names
- * the repos it already landed instead.
+ * What Merge all did, in core's words so the card and the TUI cannot disagree
+ * about a blocked, part-landed or failed merge — for a lone repo as well as a
+ * group. `group` only changes core's wording of a clean merge.
  */
-function MergeOutcome({ result, branch }: { result: IsolationMergeResult; branch: string }) {
-  if (result.outcome === 'merged') {
-    return <div className="isolation-merge-result merged">Merged every repository&rsquo;s integration branch.</div>;
-  }
-  if (result.outcome === 'blocked') {
-    return (
-      <div className="isolation-merge-result blocked">
-        <div className="isolation-merge-blocked-title">Merged nothing, so every tree is as it was:</div>
-        <ul className="isolation-merge-blocks">
-          {result.blocked.map((block) => (
-            <li key={block.repo} className="isolation-merge-block">
-              <code>{block.repo}</code> {blockReason(block)}
-            </li>
-          ))}
-        </ul>
-        <div className="isolation-merge-hint">
-          Each repository&rsquo;s <code>{branch}</code> branch can be merged by hand.
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className={`isolation-merge-result ${result.outcome}`}>
-      <div className="isolation-merge-stopped">
-        Merging stopped in <code>{result.repo}</code>
-        {result.files && result.files.length > 0 ? ` (${result.files.join(', ')})` : ''}.
-      </div>
-      {result.landed && result.landed.length > 0 && (
-        <div className="isolation-merge-landed">{result.landed.join(', ')} were merged already and stay merged.</div>
-      )}
-    </div>
-  );
+function MergeOutcome({ result, branch, group, repaired }: { result: IsolationMergeResult; branch: string; group: boolean; repaired: HandoffLandedTask[] }) {
+  const { message } = describeMergeResult(result, branch, group, repaired);
+  return <div className={`isolation-merge-result ${result.outcome}`}>{message}</div>;
 }
 
 /**
@@ -176,7 +133,14 @@ export default function HandoffCard({ repos, landed, deferredTo, mergeResult, mi
           )}
         </>
       )}
-      {mergeResult && isGroup && <MergeOutcome result={mergeResult} branch={repos[0]?.integrationBranch ?? ''} />}
+      {mergeResult && (
+        <MergeOutcome
+          result={mergeResult}
+          branch={repos[0]?.integrationBranch ?? ''}
+          group={isGroup}
+          repaired={sorted.filter((t) => t.repairedFiles && t.repairedFiles.length > 0)}
+        />
+      )}
       <div className="isolation-handoff-actions">
         <button className="task-action-btn" onClick={() => onAction('reviewDiff')}>Review diff</button>
         <button className="task-action-btn run" onClick={() => onAction('merge')}>{isGroup ? 'Merge all' : 'Merge'}</button>

@@ -79,6 +79,7 @@ function fakeVscodeApi() {
   const api = {
     window: {
       registerWebviewViewProvider: vi.fn(() => ({ dispose: vi.fn() })),
+      registerWebviewPanelSerializer: vi.fn(() => ({ dispose: vi.fn() })),
       showWarningMessage,
       showInformationMessage: vi.fn(),
       showErrorMessage: vi.fn(),
@@ -334,6 +335,9 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     await h.host.start();
 
     expect(h.vscodeApi.api.window.registerWebviewViewProvider).toHaveBeenCalledWith('ordewellChatView', h.chat.provider, expect.anything());
+    // Task-log panels are created through the `vscode` module itself, so their
+    // serializer registers there rather than on this injected api.
+    expect(window.registerWebviewPanelSerializer).toHaveBeenCalledWith('ordewellTaskLog', expect.anything());
     expect(h.vscodeApi.api.commands.registerCommand).toHaveBeenCalledWith('ordewell.setPlanner', expect.any(Function));
   });
 
