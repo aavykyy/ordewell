@@ -290,6 +290,10 @@ describe('task_ops conversation turns', () => {
     expect(session.isExecuting).toBe(false);
 
     await expect(session.execute({ command: 'run_plan' }, { kind: 'user' })).resolves.toMatchObject({ ok: true });
+    // The stop held it: starting the plan again is not a retry.
+    expect(spawned).toEqual(['b']);
+
+    await expect(session.execute({ command: 'force_start', task: 'b' }, { kind: 'user' })).resolves.toMatchObject({ ok: true });
     expect(spawned).toEqual(['b', 'b']);
   });
 

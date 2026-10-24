@@ -175,6 +175,94 @@ describe('beginRun', () => {
   });
 });
 
+describe('a task stopped on its own', () => {
+  const HELD = 'cancelled; retry or force start to run it again';
+
+  /** `t1` was cancelled while the run was going; `t2` is independent and still running. */
+  async function stoppedOne() {
+    const ctx = setup();
+    ctx.orchestrator.loadPlan([
+      createTask({ id: 't1', order: 1, title: 'Audit', prompt: 'audit' }),
+      createTask({ id: 't2', order: 2, title: 'Other', prompt: 'other' }),
+    ]);
+    await ctx.orchestrator.approveReview();
+    await ctx.orchestrator.cancelTask('t1');
+    expect(ctx.orchestrator.holdReason('t1')).toBe(HELD);
+    return ctx;
+  }
+
+  it('stays held when the plan is started again, and its row still says so', async () => {
+    const { orchestrator, task, spawned } = await stoppedOne();
+
+    await orchestrator.beginRun('user');
+
+    expect(spawned()).toEqual(['t1', 't2', 't2']);
+    expect(task('t1').status).not.toBe('in_progress');
+    expect(orchestrator.holdReason('t1')).toBe(HELD);
+  });
+
+  it('stays held through the user\'s Stop of the whole run and the start after it', async () => {
+    const { orchestrator, spawned } = await stoppedOne();
+
+    orchestrator.stop();
+    await orchestrator.beginRun('user');
+
+    expect(spawned()).toEqual(['t1', 't2', 't2']);
+    expect(orchestrator.holdReason('t1')).toBe(HELD);
+  });
+
+  it('runs again when it is retried', async () => {
+    const { orchestrator, spawned } = await stoppedOne();
+    await orchestrator.beginRun('user');
+
+    await orchestrator.retryTask('t1');
+
+    expect(orchestrator.holdReason('t1')).toBeNull();
+    expect(spawned().filter((id) => id === 't1')).toHaveLength(2);
+  });
+
+  it('runs again when it is force started', async () => {
+    const { orchestrator, spawned } = await stoppedOne();
+    await orchestrator.beginRun('user');
+
+    await orchestrator.forceStartTask('t1');
+
+    expect(orchestrator.holdReason('t1')).toBeNull();
+    expect(spawned().filter((id) => id === 't1')).toHaveLength(2);
+  });
+
+  it('stays held when the plan is edited and loaded as the same plan', async () => {
+    const { orchestrator } = await stoppedOne();
+    const tasks = orchestrator.storeInstance.planTasks.map((t) => ({ ...t, subtasks: [] }));
+
+    orchestrator.loadPlan(tasks, ['claude-code'], true);
+
+    expect(orchestrator.holdReason('t1')).toBe(HELD);
+  });
+
+  it('is released when a different plan is loaded', async () => {
+    const { orchestrator } = await stoppedOne();
+    const tasks = orchestrator.storeInstance.planTasks.map((t) => ({ ...t, subtasks: [] }));
+
+    orchestrator.loadPlan(tasks, ['claude-code']);
+
+    expect(orchestrator.holdReason('t1')).toBeNull();
+  });
+});
+
+describe('a task marked not done', () => {
+  it('stays held when the plan is started again', async () => {
+    const { orchestrator, spawned } = setup();
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Done', prompt: 'do', status: 'completed' })]);
+    await orchestrator.markTaskIncomplete('t1');
+
+    await orchestrator.beginRun('user');
+
+    expect(spawned()).toEqual([]);
+    expect(orchestrator.holdReason('t1')).toBe('marked not done; retry or force start to run it again');
+  });
+});
+
 describe('joinRun', () => {
   it('makes tasks started on their own the plan\'s run, so what waits on them starts', async () => {
     const { orchestrator, task, spawned, session } = setup();
