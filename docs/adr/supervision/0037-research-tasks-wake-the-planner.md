@@ -75,7 +75,9 @@ ends.**
   task counts against its runner's usage like any task.
 - **Who explores is decided by what the result is (R5).** A planner cannot
   know how long a lookup takes before it starts, so the line is drawn by what
-  the result is, never by its duration.
+  the result is, never by its duration. The test it applies on the spot: if
+  any of the result would end up in a task's brief, it is evidence; if it only
+  decides what the planner writes or asks, it is orientation.
   - *Orientation* is what the planner needs this turn to answer, ask or
     outline, when only the conclusion matters and no later task acts on it. It
     stays in the turn: the planner's own reads, or its own agents awaited
@@ -84,14 +86,31 @@ ends.**
     subagents, the harness's own subagents for a harness planner as ADR-0009
     T8 says, none for an OpenCode or a Gemini planner), each briefed to
     return a digest of the conclusion and file:line references.
-  - *Evidence* is a research task: when finding out needs a worktree (a
+  - *Evidence* is a task of its own: when finding out needs a worktree (a
     failing test, a build, a reproduction), another runner or model should
     judge it, the user should see it and be able to stop it, or a later task
-    will act on its findings. In the last case the later task depends on the
-    research task, so the findings reach it in its handoff (ADR-0047) instead
-    of being re-typed by the planner into the later task's brief.
+    will act on its findings. In the last case the later task depends on it,
+    so the findings reach it in its handoff (ADR-0047) instead of being
+    re-typed by the planner into the later task's brief. It is a research
+    task only when the planner must decide something on its report; one whose
+    report only later tasks read is a plain read-only task they depend on,
+    since waking the planner for a report it will not act on spends its
+    context for nothing. The planner takes a research task's summary, and
+    pulls the full report with `task_output` only where the plan rests on the
+    detail.
+  - *A first plan may be research tasks alone*, when the plan cannot be
+    outlined without their evidence: its outline says in a line what each
+    asks, they start as R4 says, and the planner plans the rest when their
+    reports wake it. A vague goal the user can clarify is not one: the planner
+    asks first.
   - *Search*, a problem that needs rounds of branching where each round's
     reports decide the next, is the `explore` skill: rounds of research tasks.
+    Where the question is which of several approaches to take, the skill has
+    read-only explorers try them side by side and one judge task that depends
+    on all of them choose on the checks they ran: a research task when the
+    choice reshapes the plan, the first build task when it is local. An
+    explorer's code goes with its worktree, so the builder re-creates the
+    chosen approach from its report.
 
   #24 draws a line at the task boundary: inside a task the harness decides,
   and across tasks Ordewell does. This keeps it: what another task acts on, or
@@ -159,3 +178,4 @@ ends.**
 - 2026-10-23 — retitled from "Research that outlives a planner turn"; who explores is decided by what the result is: orientation in the turn, evidence a research task that a task acting on it depends on, search the explore skill; the duration line is dropped (R4, R5).
 - 2026-10-23 — a Gemini planner has no in-turn agents: it neither declares nor is taught `spawn_research_agent`, as ADR-0005 now says (R5).
 - 2026-10-24 — research's unasked approval is withdrawn as the tree changes, by `ApprovalRecord`, not at the next save; surfaces are told with the plan (R4).
+- 2026-10-24 — who explores gets a test by the brief, a first plan may be research tasks alone, a report only later tasks read is a plain read-only task, and the explore skill gains explorers then a judge (R5).

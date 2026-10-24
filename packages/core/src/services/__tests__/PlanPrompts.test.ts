@@ -272,7 +272,7 @@ describe('research tasks (ADR-0037)', () => {
 
   it.each([false, true])('teaches when to use one, and that its report wakes the planner (harness: %s)', (harness) => {
     const guide = section(prompt(harness), 'READ-ONLY TASKS:');
-    expect(guide).toMatch(/Add "research": true to a read-only top-level AI task whose report should come back to you: evidence, as WHO EXPLORES defines it\./);
+    expect(guide).toMatch(/Add "research": true to a read-only top-level AI task whose report should come back to you, as WHO EXPLORES says\./);
     expect(guide).toMatch(/wakes you with that report, at every supervisor level, while you keep talking with the user/);
     expect(guide).not.toMatch(/outlive this turn|in the background/);
     expect(guide).toMatch(/Never on a subtask, an ops task or a loop's body/);
@@ -335,14 +335,24 @@ describe('who explores: orientation, evidence, search (ADR-0037 R5)', () => {
     expect(rule).toMatch(/by what the result is, never by how long it may take/);
     expect(rule).toMatch(/- Orientation: you need it this turn to answer, ask or outline, only its conclusion matters, and no later task acts on it\./);
     expect(rule).toMatch(inTurn);
-    expect(rule).toMatch(/- Evidence: a research task, when any of these holds: finding out needs a worktree \(write a failing test, build, reproduce\); another runner or model should judge it.*; the user should see it and be able to stop it; or a later task will act on its findings\./);
-    expect(rule).toMatch(/the later task depends on the research task, so the findings reach it in the research task's handoff: do not re-type them into the later task's brief/);
-    expect(rule).toMatch(/A loop's fix may depend on the research task only when the check does: make the check depend on it, and the fix reads the report with `read_task`\./);
+    expect(rule).toMatch(/- Evidence: a task of its own, when any of these holds: finding out needs a worktree \(write a failing test, build, reproduce\); another runner or model should judge it.*; the user should see it and be able to stop it; or a later task will act on its findings\./);
+    expect(rule).toMatch(/the later task depends on it, so the findings reach it in its handoff: do not re-type them into the later task's brief/);
+    expect(rule).toMatch(/A loop's fix may depend on it only when the check does: make the check depend on it, and the fix reads the report with `read_task`\./);
     expect(rule).toMatch(/- Search: a problem that needs rounds of branching.* is the explore skill/);
-    for (const text of ['WHO EXPLORES:', '- Orientation:', '- Evidence:', '- Search:', 'file:line references, no pasted file bodies']) {
+    for (const text of ['WHO EXPLORES:', '- Orientation:', '- Evidence:', '- Search:', 'file:line references, no pasted file bodies', 'The test:', 'A first plan may be research tasks alone', 'pull its full report with task_output']) {
       expect(count(p, text)).toBeLessThanOrEqual(1);
     }
     expect(p).not.toMatch(/should outlive this turn|otherwise run in the background|worth running in the background|Delegate when a piece is independent|parallel read-only scouts/);
+  });
+
+  // A planner that re-typed its agents' results into twelve briefs had no test to tell evidence from orientation, and saw no plan it could submit before the evidence was in.
+  it.each(backends)('gives a test it can apply on the spot, and a research-only first plan, for $name', ({ harness, runner }) => {
+    const rule = section(prompt(harness, runner), 'WHO EXPLORES:');
+    expect(rule).toMatch(/The test: if any of the result would end up in a task's brief, it is evidence; if it only decides what you write or ask, it is orientation\./);
+    expect(rule).toMatch(/Make it a research task only when you must decide something on its report; one whose report only later tasks read is a read-only task they depend on\./);
+    expect(rule).toMatch(/- A research task's summary is what you take in: pull its full report with task_output only where the plan rests on the detail\./);
+    expect(rule).toMatch(/- A first plan may be research tasks alone, when the plan cannot be outlined without their evidence: the outline is a line per task saying what it asks, and you plan the rest when their reports wake you\./);
+    expect(rule).toMatch(/A vague goal the user can clarify is not one: ask first\./);
   });
 
   it.each(backends)('asks for a digest only where there are agents to brief, for $name', ({ harness, runner }) => {
@@ -356,7 +366,7 @@ describe('who explores: orientation, evidence, search (ADR-0037 R5)', () => {
     expect(section(p, 'YOUR CONTEXT:')).toMatch(/Delegate the rest as WHO EXPLORES says/);
     expect(section(p, 'STRATEGY:')).toMatch(/research task of its own .*\(WHO EXPLORES\)/);
     expect(section(p, 'STRATEGY:')).toMatch(/An open problem with no known path: a search \(WHO EXPLORES\)/);
-    expect(section(p, 'READ-ONLY TASKS:')).toMatch(/whose report should come back to you: evidence, as WHO EXPLORES defines it/);
+    expect(section(p, 'READ-ONLY TASKS:')).toMatch(/whose report should come back to you, as WHO EXPLORES says/);
     if (harness && runner !== 'opencode') expect(section(p, 'RESEARCH PHASE:')).toMatch(/When you delegate orientation to your own agents \(WHO EXPLORES below\), WAIT/);
   });
 

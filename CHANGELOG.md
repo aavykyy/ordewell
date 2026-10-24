@@ -162,6 +162,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   findings reach that task in its handoff. A search that takes rounds is the
   `explore` skill
   ([ADR-0037](docs/adr/supervision/0037-research-tasks-wake-the-planner.md)).
+- **The planner tells evidence from orientation by the brief.** A result any
+  of which would go into a task's brief is a task of its own, which the later
+  task depends on and reads, instead of being re-typed. A first plan may be
+  research tasks alone when the plan cannot be outlined without them, and the
+  planner marks a task as research only when it must decide something on its
+  report. The `explore` skill can have several read-only explorers try
+  different approaches and one judge task choose on the checks they ran
+  ([ADR-0037](docs/adr/supervision/0037-research-tasks-wake-the-planner.md)).
 - **The planner is sent its plan whole once, then only what changed.** A later
   turn carries the tasks added or changed, the tasks removed and what runs now.
   The whole plan goes again after a reorder, a reset or compaction, or a turn
