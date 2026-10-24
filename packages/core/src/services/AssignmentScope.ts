@@ -26,6 +26,16 @@ export interface AssignedTask {
   assignedModel?: { modelId: string; modelLabel?: string };
 }
 
+/**
+ * The runner a task is assigned, which only an AI task has: a script task runs
+ * with no model (ADR-0035) and a manual one is done by the user. The plan may
+ * still store one for them (a default taken at intake), so every surface reads
+ * the runner through this rather than off the task.
+ */
+export function assignedRunnerOf(task: { type: string; assignedRunner?: string }): string | undefined {
+  return task.type === 'ai' ? task.assignedRunner || undefined : undefined;
+}
+
 export type AssignmentIssue =
   | { kind: 'runner-off'; runner: string }
   | { kind: 'model-off-list'; runner: string; modelId: string; modelLabel: string };

@@ -400,3 +400,33 @@ describe('ordewell task labels on a subtask', () => {
     d.close();
   });
 });
+
+describe('ordewell task-model, task-effort, task-mode and task-runner on a task with no runner', () => {
+  // The plan stores a runner for every task it holds, whatever its type.
+  const NON_AI = {
+    tasks: [
+      { id: 'task-script', order: 1, title: 'Push', type: 'script', status: 'pending', dependencies: [], assignedRunner: 'claude-code', commands: [['git', 'push']] },
+      { id: 'task-manual', order: 2, title: 'Sign off', type: 'user', status: 'pending', dependencies: [], assignedRunner: 'claude-code' },
+    ],
+  };
+
+  it.each([
+    ['handleTaskModel', 'task-script', ['sonnet'], 'A script task runs no model'],
+    ['handleTaskModel', 'task-manual', ['sonnet'], 'Manual tasks do not run an executor'],
+    ['handleTaskModel', 'task-script', [], 'A script task runs no model'],
+    ['handleTaskMode', 'task-script', ['build'], 'A script task runs no model'],
+    ['handleTaskMode', 'task-manual', [], 'Manual tasks do not run an executor'],
+    ['handleTaskEffort', 'task-script', ['high'], 'A script task runs no model'],
+    ['handleTaskEffort', 'task-manual', ['high'], 'Manual tasks do not run an executor'],
+    ['handleTaskRunner', 'task-script', ['codex'], 'A script task runs no model'],
+  ] as const)('%s on %s %j is refused, naming no runner and sending nothing', async (handler, id, rest, message) => {
+    const d = await fakeDaemon(NON_AI);
+    const commands = await import('../task-assign');
+    const { stdout, stderr, exitCode } = await capture(() => commands[handler]([...SESSION, id, ...rest], new ApiClient(d.port)));
+    expect(stderr).toContain(message);
+    expect(`${stdout}${stderr}`).not.toContain('claude-code');
+    expect(exitCode).toBe(1);
+    expect(updates(d.sent)).toEqual([]);
+    d.close();
+  });
+});

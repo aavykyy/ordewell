@@ -436,6 +436,26 @@ describe('texts', () => {
   });
 });
 
+describe('the runner a row shows — only an AI task has one', () => {
+  it('is the assigned runner of an AI task, an ops task included', () => {
+    expect(taskRowView(subject({ assignedRunner: 'codex' })).runner).toBe('codex');
+    expect(taskRowView(subject({ assignedRunner: 'codex', ops: true })).runner).toBe('codex');
+  });
+
+  it.each(['script', 'user'] as const)('is nothing for a %s task, whatever runner the plan holds for it', (type) => {
+    expect(taskRowView(subject({ type, assignedRunner: 'opencode' })).runner).toBeNull();
+  });
+
+  it('is nothing for an AI task that holds no runner', () => {
+    expect(taskRowView(subject()).runner).toBeNull();
+  });
+
+  it.each(['script', 'user'] as const)('flags a %s task for a runner that is off in no scope: it has none to be off', (type) => {
+    const scope = { enabledRunners: ['claude-code'], allowlist: {} };
+    expect(taskRowView(subject({ type, assignedRunner: 'opencode' }), { runnerScope: scope }).assignmentFlag).toBeNull();
+  });
+});
+
 describe('the assignment flag — a task on a runner or model the user has since moved away from', () => {
   const scope = { enabledRunners: ['claude-code'], allowlist: { 'claude-code': ['claude-sonnet-4'] } };
   const flag = (over: Partial<TaskRowSubject>, context = { runnerScope: scope }) => taskRowView(subject(over), context).assignmentFlag;

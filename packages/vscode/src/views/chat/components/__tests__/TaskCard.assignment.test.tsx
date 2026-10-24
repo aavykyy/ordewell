@@ -54,6 +54,24 @@ describe('the assignment while a plan executes', () => {
   });
 });
 
+describe('a script or manual card names no runner, whatever runner the plan stores for it', () => {
+  beforeEach(cleanup);
+
+  it.each([
+    ['script', { type: 'script' as const, commands: [['git', 'push']], assignedModel: undefined }],
+    ['manual', { type: 'user' as const, assignedModel: undefined }],
+  ])('on a %s task, running or not, collapsed or open', (_kind, over) => {
+    for (const isExecuting of [false, true]) {
+      const { container } = render(<TaskCard task={task({ status: 'pending', ...over })} models={[]} isExecuting={isExecuting} {...pickers} />);
+      expect(container.textContent).not.toContain('codex');
+      fireEvent.click(screen.getByText('Work'));
+      expect(container.textContent).not.toContain('codex');
+      expect(screen.queryByLabelText('Runner')).toBeNull();
+      cleanup();
+    }
+  });
+});
+
 describe('the assignment flag on a subtask card', () => {
   beforeEach(cleanup);
 

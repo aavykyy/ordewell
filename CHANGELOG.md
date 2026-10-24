@@ -353,6 +353,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   reading its arguments.
 - **The npm packages and the VSIX ship NOTICE, AUTHORS.md and the third-party
   licences** of the code they bundle.
+- **A script task and a manual task no longer show a runner they do not have.**
+  The terminal's plan row and task header, the plan the planner reads, a task's
+  prompt plan map and the `task-runner`, `task-model`, `task-effort` and
+  `task-mode` commands (and their `/` forms) read a task's runner only for an
+  AI task, and refuse the others instead of sending an edit nothing applies.
 
 ## [0.10.12] - 2026-10-22
 

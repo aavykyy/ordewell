@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { taskActionCommand, canContinue, taskLogHeaderView, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { assignedRunnerOf, taskActionCommand, canContinue, taskLogHeaderView, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG_FOLLOW, followTaskLog } from '@ordewell/core/plan-utils';
 import { diffConversation } from '../shared/conversationPatch';
 import { renderWebviewHtml } from './webviewHtml';
@@ -210,7 +210,7 @@ export class TaskLogPanel {
       order: task?.order ?? 0,
       orderLabel: this.deps.orderLabel?.(this.taskId),
       title: task?.title ?? '',
-      runner: task?.assignedRunner ?? '',
+      runner: (task && assignedRunnerOf(task)) ?? '',
       header: taskLogHeaderView({
         status: task?.status ?? '',
         ...(task?.awaitingReason ? { awaitingReason: task.awaitingReason } : {}),

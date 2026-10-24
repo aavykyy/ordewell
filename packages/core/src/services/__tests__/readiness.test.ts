@@ -381,6 +381,12 @@ describe('the start rule', () => {
     expect(why(readiness, 't1')).toEqual([{ kind: 'usage-limit', runner: 'codex' }]);
   });
 
+  it('does not hold a script task for the usage limit of a runner the plan stored for it: it runs on none', () => {
+    const paused: Task = { ...createTask({ id: 'p0', order: 0, title: 'Paused', prompt: 'x', assignedRunner: 'codex' }), status: 'awaiting_user', awaitingReason: 'usage-limit' };
+    const script = createTask({ id: 's1', order: 3, title: 'Push', type: 'script', commands: [['git', 'push']], assignedRunner: 'codex' });
+    expect(selectReadyTasks(input([paused, script])).ready.map((t) => t.id)).toEqual(['s1']);
+  });
+
   it('says a task that started, has no prompt, or is the user\'s waits for that', () => {
     const user = createTask({ id: 'u1', order: 1, title: 'Check', type: 'user' });
     const empty = createTask({ id: 'a1', order: 2, title: 'Later' });

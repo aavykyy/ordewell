@@ -1,14 +1,11 @@
 import { codexSandboxNotice } from '@ordewell/core';
-import { dependentsNotice, dependentsOf, loopLeaveNotice, loopRemovalRefusal, pastGateConfirmation, titledRefs, resolveUserTaskRef } from '@ordewell/core/plan-utils';
+import { noExecutorRefusal, dependentsNotice, dependentsOf, loopLeaveNotice, loopRemovalRefusal, pastGateConfirmation, titledRefs, resolveUserTaskRef } from '@ordewell/core/plan-utils';
 import { findTask, refFor, titledRefFor, type ModelView, type TaskView, type TuiState } from '../state';
 import { assignedModelFor, effortsForTask, modesForTask, runnerAccepts } from '../taskAssignment';
 import { picker, pickerItemsFor } from './pickers';
 import { fail, step, withSession, type Step } from './shared';
 
-/** Why a manual or script task offers no executor choice; a script task runs no model (ADR-0035). */
-function noExecutor(task: TaskView, manual: string, script: string): string {
-  return task.type === 'script' ? `A script task runs no model, so ${script}` : `Manual tasks do not run an executor, so ${manual}`;
-}
+const noExecutor = (task: TaskView, manual: string, script: string): string => noExecutorRefusal(task.type, manual, script);
 
 export function openTaskRunnerPicker(state: TuiState, task: TaskView): Step {
   if (task.type !== 'ai') return fail(state, noExecutor(task, 'they have no runner.', 'it has no runner.'));
@@ -262,7 +259,8 @@ export function assignTaskEffort(
 export function taskModelCommand(state: TuiState, args: string[]): Step {
   return taskCommand(state, args[0], (sessionId, taskId) => {
     const task = findTask(state.tasks, taskId)!;
-    if (!args[1]) return openTaskModelPicker(state, task);
+    // The picker is where a task with no model is refused, so a named one never reaches an update.
+    if (!args[1] || task.type !== 'ai') return openTaskModelPicker(state, task);
     const model = state.models.find((candidate) => candidate.id === args[1]) ?? {
       id: args[1],
       label: args[1],
@@ -279,7 +277,7 @@ export function taskModelCommand(state: TuiState, args: string[]): Step {
 export function taskRunnerCommand(state: TuiState, args: string[]): Step {
   return taskCommand(state, args[0], (sessionId, taskId) => {
     const task = findTask(state.tasks, taskId)!;
-    if (!args[1]) return openTaskRunnerPicker(state, task);
+    if (!args[1] || task.type !== 'ai') return openTaskRunnerPicker(state, task);
     const runner = state.runners.find((candidate) => candidate.id === args[1]);
     if (!runner) return fail(state, `Unknown runner "${args[1]}".`);
     return assignTaskRunner(state, sessionId, task, runner.id, runner.name);
@@ -289,7 +287,7 @@ export function taskRunnerCommand(state: TuiState, args: string[]): Step {
 export function taskModeCommand(state: TuiState, args: string[]): Step {
   return taskCommand(state, args[0], (sessionId, taskId) => {
     const task = findTask(state.tasks, taskId)!;
-    if (!args[1]) return openTaskModePicker(state, task);
+    if (!args[1] || task.type !== 'ai') return openTaskModePicker(state, task);
     const mode = modesForTask(state.modesByRunner, task).find((candidate) => candidate.id === args[1]);
     if (!mode) return fail(state, `Unsupported mode "${args[1]}" for ${task.assignedRunner}.`);
     if (mode.unavailable) return fail(state, `Mode "${mode.id}" of ${task.assignedRunner} is unavailable on this host: ${mode.unavailable}`);
@@ -300,7 +298,7 @@ export function taskModeCommand(state: TuiState, args: string[]): Step {
 export function taskEffortCommand(state: TuiState, args: string[]): Step {
   return taskCommand(state, args[0], (sessionId, taskId) => {
     const task = findTask(state.tasks, taskId)!;
-    if (!args[1]) return openTaskEffortPicker(state, task);
+    if (!args[1] || task.type !== 'ai') return openTaskEffortPicker(state, task);
     if (!task.assignedModel) return fail(state, 'Choose a model for this task before setting its thinking effort.');
     const effort = args[1].toLowerCase();
     const value = effort === 'default' || effort === 'none' ? undefined : args[1];

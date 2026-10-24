@@ -104,6 +104,8 @@
 - **Merge all's guidance in the handoff card is the terminal's next step**,
   including for a lone repository whose merge conflicted: your tree is as it
   was, and you merge the branch yourself with git.
+- **A script task's or a manual task's log tab no longer names a runner** it does
+  not have.
 
 ## [0.10.12] - 2026-10-22
 

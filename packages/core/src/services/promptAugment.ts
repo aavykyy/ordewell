@@ -3,6 +3,7 @@ import { flattenTasksWithParents } from '../models/Task';
 import type { PreservedWork, PreviousWork } from '../interfaces/IWorktreeIsolation';
 import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
+import { assignedRunnerOf } from './AssignmentScope';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
 import { REPORT_MAX_CHARS, artifactLines, boundedHandoffLines, findingLines, namedHandoff, openingLines, type HandoffDigest, type StoredHandoff } from '../models/Handoff';
 
@@ -193,14 +194,14 @@ export function renderPlanMap(planTasks: readonly Task[], currentTaskId: string,
     const order = row.parent ? row.label : row.label.padStart(2, ' ');
     const arrow = isCurrent ? '   ← you are here' : '';
     // A script task runs on no runner (ADR-0035): what it is says more than the runner it was never given.
-    const runner = row.task.type === 'script' ? ' (script)' : row.task.assignedRunner ? ` (${row.task.assignedRunner})` : '';
+    const assigned = assignedRunnerOf(row.task);
+    const runner = row.task.type === 'script' ? ' (script)' : assigned ? ` (${assigned})` : '';
     return `${order}. [${tag.padEnd(7, ' ')}] ${row.task.title}${runner}${arrow}`;
   });
 
   const footer = omitted > 0 ? `\n(${omitted} task${omitted === 1 ? '' : 's'} omitted from this view)` : '';
-  const runnerNote = currentTask?.assignedRunner
-    ? `\nYou are running as: ${currentTask.assignedRunner}`
-    : '';
+  const currentRunner = currentTask && assignedRunnerOf(currentTask);
+  const runnerNote = currentRunner ? `\nYou are running as: ${currentRunner}` : '';
 
   return [
     '## Plan map',

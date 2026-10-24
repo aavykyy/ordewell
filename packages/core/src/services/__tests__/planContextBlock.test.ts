@@ -68,6 +68,9 @@ describe('the plan block\'s task-shape fields', () => {
     // Model/mode fields are meaningless for a MAN task and must not appear.
     expect(manLine).not.toContain('mode:');
     expect(manLine).not.toContain('model:');
+    // The runner the plan stored for it is nothing a manual task runs on.
+    expect(manLine).not.toContain('runner:');
+    expect(aiLine).toContain('runner:');
   });
 
   it('marks a task in its runner\'s read-only mode as read-only', async () => {
