@@ -88,7 +88,7 @@ or run `code --install-extension ordewell.ordewell`. In Cursor, Windsurf or VSCo
 get it from [Open VSX](https://open-vsx.org/extension/ordewell/ordewell). The
 extension bundles its own core and needs nothing from npm.
 
-**Requirements:** Node.js 20 or newer, at least one of Claude Code, Codex or
+**Requirements:** Node.js 20.3 or newer, at least one of Claude Code, Codex or
 OpenCode, and git for task isolation. On Windows, run the terminal UI under WSL.
 
 ## What Ordewell sends

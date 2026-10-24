@@ -97,6 +97,7 @@ const STEPS = {
   'Test with coverage': () => npm('run', 'test:coverage'),
   'Lint': () => npm('run', 'lint'),
   'Package VS Code Extension': () => npm('run', 'package', '-w', 'packages/vscode'),
+  'Verify packaged npm and VS Code artifacts': () => sh('node', ['scripts/package-check.mjs']),
 };
 
 /** Named in ci.yml but not run here, and why. */
@@ -106,6 +107,7 @@ const CI_ONLY = {
   // `npm ci` would also wipe the node_modules you are working in.
   'Install dependencies': 'run `npm ci` yourself after a lockfile change',
   'Cache the VS Code download': 'packages/vscode/.vscode-test is already kept between runs',
+  'Resolve the VS Code version under test': 'the workflow asks the update service which stable it will download; a local run keeps the .vscode-test it has',
   'Install xvfb if the image lacks it': 'the integration step checks for a display itself',
   'Append coverage summaries to the job summary': 'a GitHub job summary',
   'Upload coverage reports': 'reports stay in packages/*/coverage/',
