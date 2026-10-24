@@ -701,9 +701,24 @@ export class OrchestratorPool {
     return session;
   }
 
-  destroy(sessionId: string): void {
+  /**
+   * Stop a session and drop it. A replacement under the same id (re-planning,
+   * adopting) keeps its subscribers: they are watching the id, and the new
+   * session's broadcasts continue on the same socket. An explicit delete or
+   * close is different — the surface must stop drawing a session that no
+   * longer exists — so those pass `notifyClients`.
+   */
+  destroy(sessionId: string, options?: { notifyClients?: boolean }): void {
     this.sessions.get(sessionId)?.destroy();
     this.sessions.delete(sessionId);
+    if (!options?.notifyClients) return;
+    const clients = this.clients.get(sessionId);
+    if (!clients) return;
+    this.broadcast(sessionId, { type: 'notice', level: 'info', message: 'Session closed.' });
+    for (const ws of clients) {
+      if (ws.readyState === ws.OPEN) ws.close(1001, 'Session closed');
+    }
+    this.clients.delete(sessionId);
   }
 
   destroyAll(): void { for (const id of this.sessions.keys()) this.destroy(id); }

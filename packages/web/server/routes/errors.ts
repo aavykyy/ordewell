@@ -22,6 +22,32 @@ interface Classified {
   code: DaemonErrorCode;
 }
 
+/** A request body that is missing, not JSON, or not an object: the request's fault, never a fault of the daemon. */
+export class InvalidBodyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidBodyError';
+  }
+}
+
+/**
+ * The body of a route that needs one object. Every route that read
+ * `c.req.json()` directly turned a client's typo into a 500 with the parser's
+ * message and a logged stack, while its neighbours answered 400.
+ */
+export async function jsonObject<T extends object = Record<string, unknown>>(c: Context): Promise<T> {
+  let parsed: unknown;
+  try {
+    parsed = await c.req.json();
+  } catch {
+    throw new InvalidBodyError('The request body must be valid JSON.');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new InvalidBodyError('The request body must be a JSON object.');
+  }
+  return parsed as T;
+}
+
 /**
  * The one table from a thrown class to a status and a stable code. A refusal is
  * the request being wrong (400) or arriving at a bad moment (409), a missing
@@ -32,6 +58,7 @@ interface Classified {
  * Order matters: `ConversationBusyError` extends `ConversationEditError`.
  */
 function classify(err: unknown): Classified | undefined {
+  if (err instanceof InvalidBodyError) return { status: 400, code: 'refused' };
   if (err instanceof SessionNotFoundError) return { status: 404, code: 'session_not_found' };
   if (err instanceof NoPlanError) return { status: 400, code: 'no_plan' };
   if (err instanceof AlreadyExecutingError) return { status: 409, code: 'already_executing' };

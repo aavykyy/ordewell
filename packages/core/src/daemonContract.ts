@@ -74,6 +74,12 @@ export interface OkResponse extends Worded {
   ok: boolean;
 }
 
+/** `GET /api/server`: which process owns the port, so a stop can be verified before it signals one. */
+export interface ServerInfoResponse {
+  pid: number;
+  port: number;
+}
+
 /** A task start's answer: `queued` says why it did not start now, when the task waits for its dependencies instead. */
 export interface TaskStartResponse extends OkResponse {
   queued?: string;

@@ -44,8 +44,8 @@ ordewell handoff review             # read the diff
 ordewell handoff merge              # bring it onto your branch
 ```
 
-Run `ordewell --help` for the full list, or `ordewell setup` for guided
-configuration.
+Run `ordewell --help` for the full list, or `ordewell setup` to write a
+starter `.env` file.
 
 Type `/name` in the conversation to load a skill, and use `ordewell skills` to
 list the ones a workspace sees and `ordewell task-skills` to attach them to a

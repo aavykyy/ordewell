@@ -3,6 +3,8 @@ import { createApp, attachWsHandler } from './app';
 import { createRequestListener } from './nodeAdapter';
 import { OrchestratorPool } from './pool/orchestratorPool';
 import { createServer } from 'http';
+import { mkdirSync, unlinkSync, writeFileSync } from 'fs';
+import { dirname } from 'path';
 import { clearDaemonToken, mintDaemonToken, StructuredRunner } from '@ordewell/core';
 
 const args = process.argv.slice(2);
@@ -22,6 +24,13 @@ if (portIdx !== -1 && args[portIdx + 1]) {
 const watchParentIdx = args.indexOf('--watch-parent');
 const watchParentPid = watchParentIdx !== -1 ? parseInt(args[watchParentIdx + 1], 10) : undefined;
 
+// Written by the daemon itself only once it is listening, and removed on
+// shutdown, so `ordewell stop --server` never reads an entry belonging to a
+// process that failed to bind or a daemon that is already gone.
+const pidFileIdx = args.indexOf('--pid-file');
+const pidFile = pidFileIdx !== -1 ? args[pidFileIdx + 1] : undefined;
+let ownsPidFile = false;
+
 // Tasks run on the structured transport (ADR-0018) as plain child processes,
 // so one runner serves every plan whatever the host has.
 const pool = new OrchestratorPool({ runner: new StructuredRunner() });
@@ -36,10 +45,15 @@ server.listen(port, '127.0.0.1', () => {
   // This callback installs admission before the event loop can serve a request.
   const { token, file: tokenFile } = mintDaemonToken(port);
   ownsToken = true;
+  if (pidFile) {
+    mkdirSync(dirname(pidFile), { recursive: true });
+    writeFileSync(pidFile, String(process.pid), { mode: 0o600 });
+    ownsPidFile = true;
+  }
   const admission = { port, token, tokenFile };
   const app = createApp(pool, admission);
   app.get('/', (c) => c.json({ message: 'Ordewell API', docs: '/api/workspaces' }));
-  server.on('request', createRequestListener(app));
+  server.on('request', createRequestListener(app, admission));
   attachWsHandler(server, pool, admission);
   pool.getProviderModels().catch((err) => {
     console.error(`[web] model discovery warmup failed: ${err?.message ?? err}`);
@@ -49,6 +63,9 @@ server.listen(port, '127.0.0.1', () => {
 
 function shutdown(): void {
   if (ownsToken) clearDaemonToken(port);
+  if (ownsPidFile && pidFile) {
+    try { unlinkSync(pidFile); } catch { /* already gone */ }
+  }
   pool.destroyAll();
   server.close();
   process.exit(0);

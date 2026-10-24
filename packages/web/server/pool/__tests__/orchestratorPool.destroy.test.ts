@@ -82,6 +82,63 @@ describe('re-planning under a live session id', () => {
   });
 });
 
+describe('deleting a session under a live subscriber', () => {
+  function stubPlanning() {
+    return {
+      planSpy: vi.spyOn(Session.prototype, 'planState', 'get').mockReturnValue({ conversationHistory: [] } as unknown as LegacyPlanState),
+      startSpy: vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue({} as LegacyPlanState),
+    };
+  }
+
+  it('sends a notice, closes the socket, and drops the subscriber set', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'ordewell-destroy-subscriber-'));
+    mkdirSync(join(workspace, '.git'));
+    const pool = new OrchestratorPool();
+    const { planSpy, startSpy } = stubPlanning();
+
+    try {
+      await pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
+      const ws = { OPEN: 1, readyState: 1, send: vi.fn(), close: vi.fn() };
+      pool.subscribe('s1', ws as unknown as Parameters<OrchestratorPool['subscribe']>[1]);
+
+      pool.destroy('s1', { notifyClients: true });
+
+      expect(ws.send).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(ws.send.mock.calls[0][0] as string)).toMatchObject({ type: 'notice', message: 'Session closed.' });
+      expect(ws.close).toHaveBeenCalledWith(1001, 'Session closed');
+      expect((pool as unknown as { clients: Map<string, unknown> }).clients.has('s1')).toBe(false);
+    } finally {
+      planSpy.mockRestore();
+      startSpy.mockRestore();
+      pool.destroyAll();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps subscribers when the session is replaced under the same id', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'ordewell-replace-subscriber-'));
+    mkdirSync(join(workspace, '.git'));
+    const pool = new OrchestratorPool();
+    const { planSpy, startSpy } = stubPlanning();
+
+    try {
+      await pool.startPlanning('s1', 'first', ['claude-code'], workspace);
+      const ws = { OPEN: 1, readyState: 1, send: vi.fn(), close: vi.fn() };
+      pool.subscribe('s1', ws as unknown as Parameters<OrchestratorPool['subscribe']>[1]);
+
+      await pool.startPlanning('s1', 'second', ['claude-code'], workspace);
+
+      expect(ws.close).not.toHaveBeenCalled();
+      expect((pool as unknown as { clients: Map<string, unknown> }).clients.has('s1')).toBe(true);
+    } finally {
+      planSpy.mockRestore();
+      startSpy.mockRestore();
+      pool.destroyAll();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('subscribing to a session', () => {
   it('sends a new socket nothing of the transcript: every client reads the conversation over REST, and a turn opens a socket each time', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'ordewell-subscribe-'));

@@ -16,7 +16,6 @@ import type {
   ExecuteResponse,
   ForceSendResponse,
   GeneratePlanResponse,
-  HandoffDigest,
   IsolationDiffResponse,
   IsolationMergeResponse,
   MergeGateEntry,
@@ -28,7 +27,6 @@ import type {
   PlannerNotReady,
   SurfacePlan,
   SurfacePlanState,
-  TaskLoop,
   RemoveMessageResponse,
   ResolveConflictResponse,
   RewindTarget,
@@ -46,7 +44,6 @@ import type {
   TaskLogResponse,
   TaskMessageResponse,
   TaskStartResponse,
-  TaskType,
 } from '@ordewell/core';
 
 const DEFAULT_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
@@ -114,40 +111,6 @@ export type { RunnersResponse };
 
 export type { SessionMeta };
 
-
-export interface TaskStatus {
-  id: string;
-  /** The daemon sends it so a status-only surface can tag a script task (ADR-0035); absent from an older daemon. */
-  type?: TaskType;
-  status: string;
-  verdict: { outcome: string; reason: string; checks: unknown[]; reported?: string } | null;
-  /** Added after the user approved the plan, so the scheduler leaves it for them (ADR-0035). */
-  waitsForApproval?: boolean;
-  /** Why a held task is out of auto-scheduling, in the user's words (ADR-0022). */
-  holdReason?: string;
-  /** Why a task was skipped; set only while its status is `skipped`. */
-  skipReason?: string;
-  /** Set only on a research task, so a stream of statuses alone can say which task is one (ADR-0037). */
-  research?: true;
-  /** Set on a loop's check, with its round once past the first (ADR-0045). */
-  loop?: TaskLoop;
-  loopRound?: number;
-  /**
-   * The latest attempt's handoff, as the plan keeps it (ADR-0047); absent from
-   * an older daemon and from an attempt that left none.
-   */
-  handoff?: HandoffDigest;
-}
-
-export interface StatusUpdate {
-  tasks: TaskStatus[];
-}
-
-export interface ExecutionSummary {
-  total: number;
-  completed: number;
-  failed: number;
-}
 
 /**
  * What the daemon pushes over a websocket: the core union itself, not a bag
@@ -548,28 +511,24 @@ export class ApiClient {
     return res.plan;
   }
 
-  async closeSession(sessionId: string): Promise<OkResponse> {
-    const res = await this.httpRequest<OkResponse>('POST', `/api/sessions/${sessionId}/close`);
-    return res.data;
+  closeSession(sessionId: string): Promise<OkResponse> {
+    return this.call('POST', `/api/sessions/${sessionId}/close`, 'Close session failed');
   }
 
-  async stopExecution(sessionId: string): Promise<StopResponse> {
-    const res = await this.httpRequest<StopResponse>('POST', `/api/plans/${sessionId}/stop`);
-    return res.data;
+  stopExecution(sessionId: string): Promise<StopResponse> {
+    return this.call('POST', `/api/plans/${sessionId}/stop`, 'Stop failed');
   }
 
   /** Aborts a planning turn in flight. A harmless no-op when the session isn't planning. */
-  async cancelPlanning(sessionId: string): Promise<CancelPlanningResponse> {
-    const res = await this.httpRequest<CancelPlanningResponse>('POST', `/api/plans/${sessionId}/planning/stop`);
-    return res.data;
+  cancelPlanning(sessionId: string): Promise<CancelPlanningResponse> {
+    return this.call('POST', `/api/plans/${sessionId}/planning/stop`, 'Cancel planning failed');
   }
 
-  async getSessions(workspace?: string): Promise<SessionListResponse> {
+  getSessions(workspace?: string): Promise<SessionListResponse> {
     const qs = workspace
       ? `?workspace=${encodeURIComponent(workspace)}`
       : '';
-    const res = await this.httpRequest<SessionListResponse>('GET', `/api/sessions${qs}`);
-    return res.data || [];
+    return this.call('GET', `/api/sessions${qs}`, 'Failed to list sessions');
   }
 
   getSession(sessionId: string, workspace?: string): Promise<SessionResponse> {

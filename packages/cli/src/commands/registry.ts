@@ -42,7 +42,9 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   approve: handleApprove,
   status: handleStatus,
   stop: handleStop,
-  'stop-server': handleStop,
+  // An alias for `stop --server`: without the injected flag, handleStop takes
+  // its no-argument branch and stops the last session instead of the daemon.
+  'stop-server': (args) => handleStop(['--server', ...args]),
   models: handleModels,
   model: handleModel,
   planner: handlePlanner,

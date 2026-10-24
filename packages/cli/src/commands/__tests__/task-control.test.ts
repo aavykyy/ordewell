@@ -186,6 +186,18 @@ describe('handleAddTask', () => {
   it('posts a task with title, type and dependencies', async () => {
     let body = '';
     const srv = await startServer((req, res) => {
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          meta: { id: 'session-1' },
+          plan: {
+            tasks: [
+              { id: 'task-1', order: 1, title: 'One', status: 'pending' },
+              { id: 'task-2', order: 2, title: 'Two', status: 'pending' },
+            ],
+          },
+        }));
+      }
       req.on('data', (c) => { body += c.toString(); });
       req.on('end', () => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
