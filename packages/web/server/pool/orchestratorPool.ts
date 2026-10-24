@@ -55,6 +55,7 @@ import {
   PlannerNotReadyError,
   PlannerTurnDiscardedError,
   PlannerTurnStoppedError,
+  type LeaseHost,
 } from '@ordewell/core';
 import { WebConfig, type PlannerPick } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
@@ -92,6 +93,11 @@ export interface OrchestratorPoolDeps {
   codexSandbox?: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
   /** Overrides the pool's installation checks; tests inject one so no real agent binary is asked. */
   runnerInstallation?: RunnerInstall;
+  /**
+   * The host whose leases the pool's sessions hold (ADR-0049); this process's
+   * unless a test runs two pools as two hosts.
+   */
+  leaseHost?: LeaseHost;
 }
 
 export class OrchestratorPool {
@@ -120,6 +126,7 @@ export class OrchestratorPool {
   private runner: IRunner;
   /** One probe per daemon, asked again whenever the runner list is refreshed (ADR-0033). */
   private codexSandbox: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
+  private readonly leaseHost: LeaseHost | undefined;
 
   constructor(deps: OrchestratorPoolDeps = {}) {
     const pluginNotice = removedPluginNotice();
@@ -129,6 +136,7 @@ export class OrchestratorPool {
     this.modelResolver = deps.modelResolver ?? new ModelResolver(this.registry, new WebConfig());
     this.codexSandbox = deps.codexSandbox
       ?? new CodexSandboxAvailability(this.registry, { spawn: nodeSpawn, fetch: globalThis.fetch }, { cwd: process.cwd(), env: process.env });
+    this.leaseHost = deps.leaseHost;
   }
 
   /**
@@ -260,6 +268,7 @@ export class OrchestratorPool {
       modelResolver: this.modelResolver,
       settings: () => this.runtimeSettings(),
       sessionId,
+      ...(this.leaseHost ? { leaseHost: this.leaseHost } : {}),
     });
   }
 
@@ -662,8 +671,15 @@ export class OrchestratorPool {
 
     const session = this.createSessionFor(sessionId, workspace);
     // The saved id is adopted too, so later persists rewrite the same file
-    // instead of forking the session under a fresh identity.
-    session.loadPlan(saved.plan, saved.meta.goal, workspace, { sessionId: saved.meta.id });
+    // instead of forking the session under a fresh identity. Refused while
+    // another live host runs the session (ADR-0049); the session built for
+    // it is let go, and the one live here, if any, keeps running.
+    try {
+      session.loadPlan(saved.plan, saved.meta.goal, workspace, { sessionId: saved.meta.id });
+    } catch (err) {
+      session.destroy();
+      throw err;
+    }
     // A live session with no plan yet is mid-planning; replacing it must stop that turn.
     this.destroy(sessionId);
     this.sessions.set(sessionId, session);

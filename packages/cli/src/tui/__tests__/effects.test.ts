@@ -1250,6 +1250,18 @@ describe('catalogs and sessions', () => {
     expect(messageOf(h.actions, 'failed')).toContain('Reload it with /sessions');
   });
 
+  // ADR-0049: the daemon's words name the host that holds it; the advice to
+  // reload with /sessions would be refused the same way.
+  it('reports a session another host runs in the daemon\'s words, naming that host', async () => {
+    const held = 'This session is open in another Ordewell host: a TUI (pid 76271), through its daemon on port 49558 (pid 76279) has held it since 10/24/2026, 1:40:00 AM. Close it there, or stop that process, then open it here.';
+    const h = harness({ adoptSession: vi.fn().mockRejectedValue(new DaemonError(held, 409, 'session_held')) });
+    await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
+
+    const failure = h.actions.find((a) => a.type === 'failed') as Extract<Action, { type: 'failed' }>;
+    expect(failure).toMatchObject({ message: held, code: 'session_held' });
+    expect(types(h.actions)).not.toContain('sessionLoaded');
+  });
+
   it('words a missing session from the daemon\'s code, never from its message', async () => {
     const h = harness({ adoptSession: vi.fn().mockRejectedValue(new Error('Session not found')) });
     await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
@@ -1311,6 +1323,16 @@ describe('failures', () => {
     expect(failure.message).not.toMatch(/re-?plan/i);
     // Another surface may have deleted it: a restart is not the only way a session goes.
     expect(failure.message).toMatch(/deleted/);
+  });
+
+  it('names the host that runs the session when a call\'s re-adoption was refused, not a reload', async () => {
+    const held = 'This session is open in another Ordewell host: the Ordewell daemon on port 3742 (pid 37797) has held it since 10/24/2026, 1:40:00 AM. Close it there, or stop that process, then open it here.';
+    const h = harness({ markTaskComplete: vi.fn().mockRejectedValue(new DaemonError(held, 409, 'session_held')) });
+    await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'complete' }, h.deps);
+
+    const failure = h.actions.find((a) => a.type === 'failed') as Extract<Action, { type: 'failed' }>;
+    expect(failure.message).toBe(held);
+    expect(failure.message).not.toContain('/sessions');
   });
 
   it('shows why a model edit was refused, without the success notice (#106)', async () => {

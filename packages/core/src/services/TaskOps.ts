@@ -1,13 +1,13 @@
 import {
   Task, RunnerId, flattenTasks,
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan, renumberTasks,
-  opsFlag, inheritedOps, skillNames,
+  opsFlag, inheritedOps, skillNames, waitsMidAttempt,
 } from '../models/Task';
 import { v4 as uuidv4 } from 'uuid';
 import { resolveTaskRef } from './TaskRefs';
 import { taskPlacement } from './PlanTree';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
-import { validateTaskEdit, lockedTaskRefusal, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
+import { validateTaskEdit, lockedTaskRefusal, reshapeRefusal, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
 import { resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
 import { plannedTask, checkPlanInvariants, detectCycle, notOnAScriptMessage, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, OPS_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask, type PlanTaskError } from './PlannedTask';
 import { clearedBodyFields } from '../models/ScriptTask';
@@ -183,13 +183,13 @@ function findTopLevel(tasks: Task[], id: string): Task | undefined {
 
 /** A task the repair may not reposition: execution has already reached it. */
 function isPinned(t: Task): boolean {
-  return t.status === 'in_progress' || t.status === 'completed';
+  return t.status === 'in_progress' || waitsMidAttempt(t) || t.status === 'completed';
 }
 
 /** The first task in `parent`'s subtree execution has reached, if any: removing the parent would take it (ADR-0029). */
 function lockedInSubtree(parent: Task): string | null {
   for (const sub of parent.subtasks ?? []) {
-    const locked = lockedTaskRefusal(sub, 'removed') ?? lockedInSubtree(sub);
+    const locked = reshapeRefusal(sub, 'removed') ?? lockedInSubtree(sub);
     if (locked) return locked;
   }
   return null;
@@ -254,7 +254,7 @@ function describeMoves(before: Task[], after: Task[]): string | null {
 }
 
 function pinnedRefusal(other: Task, pin: Task, side: 'before' | 'after'): string {
-  const word = pin.status === 'in_progress' ? 'running' : 'completed';
+  const word = pin.status === 'completed' ? 'completed' : 'running';
   return `"${other.title}" would have to run ${side} "${pin.title}", which is ${word} and cannot be moved`;
 }
 
@@ -597,7 +597,7 @@ export function applyTaskOps(
         if (!target) { errors.push(`${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)`); break; }
         // Removing the task takes its whole subtree, so every task in it meets
         // the same lock rule as the named one (ADR-0029).
-        const locked = lockedTaskRefusal(target, 'removed') ?? lockedInSubtree(target) ?? loopRemovalRefusal(target);
+        const locked = reshapeRefusal(target, 'removed') ?? lockedInSubtree(target) ?? loopRemovalRefusal(target);
         if (locked) { errors.push(`${label}: ${locked}`); break; }
         tasks = removeTaskFromPlan(tasks, target.id);
         summary.push(`Removed "${target.title}"`);
@@ -628,7 +628,7 @@ export function applyTaskOps(
         if (resolved.some((t) => !t)) { errors.push(`${label}: unknown task in merge list (already removed, merged, or split by an earlier op)`); break; }
         const toMerge = [...new Map(resolved.map((t) => [t!.id, t!])).values()].sort((a, b) => a.order - b.order);
         if (toMerge.length < 2) { errors.push(`${label}: merge needs at least two tasks`); break; }
-        const locked = toMerge.map((t) => lockedTaskRefusal(t, 'merged') ?? loopReshapeRefusal(tasks, t, 'merged')).find((refusal) => refusal !== null);
+        const locked = toMerge.map((t) => reshapeRefusal(t, 'merged') ?? loopReshapeRefusal(tasks, t, 'merged')).find((refusal) => refusal !== null);
         if (locked) { errors.push(`${label}: ${locked}`); break; }
         const idSet = new Set(toMerge.map((t) => t.id));
         const unionDepsRaw = [...new Set(toMerge.flatMap((t) => t.dependencies))].filter((d) => !idSet.has(d));
@@ -688,7 +688,7 @@ export function applyTaskOps(
         if ('error' in ref) { errors.push(`${label}: ${ref.error}`); break; }
         const target = findTopLevel(tasks, ref.id);
         if (!target) { errors.push(`${label}: task "${op.taskId}" not found`); break; }
-        const locked = lockedTaskRefusal(target, 'split') ?? loopReshapeRefusal(tasks, target, 'split');
+        const locked = reshapeRefusal(target, 'split') ?? loopReshapeRefusal(tasks, target, 'split');
         if (locked) { errors.push(`${label}: ${locked}`); break; }
         const parts = op.parts ?? [];
         if (parts.length < 2) { errors.push(`${label}: split needs at least two parts`); break; }

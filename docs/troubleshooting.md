@@ -235,3 +235,32 @@ Model and effort are locked while a task's runner is up, and so is its runner.
 Stop the task, edit, and continue, or use the runner's own `/model` in the task's chat: the plan then
 follows it. A model the runner changed by itself is stated in the task log and
 is not written to the plan.
+
+## A session is open in another Ordewell host
+
+Loading a session shows **This session is open in another Ordewell host: … has
+held it since …**, or **The Ordewell host that last ran this session … is gone,
+but runners it started are still running**.
+
+### Cause
+
+One session is run by one host at a time
+([ADR-0049](adr/isolation/0049-a-session-has-one-live-host.md)). Every TUI starts
+a daemon of its own, and a VS Code window is a host too, so a second one in the
+same checkout could otherwise run a session again beside the first, in the same
+worktrees. The message names the host that has it: its kind, its pid, and since
+when.
+
+### Fix
+
+Close the session in that host, or quit it, and load the session again. A host
+that crashed or was killed lets the session go once its pid is gone, or a minute
+after it last refreshed its lease.
+
+If the host is gone but its runners are not, stop the process groups the
+message names before loading again:
+
+```bash
+ps -eo pid,pgid,command | awk '$2 == <group>'   # what is still running in that group
+kill -TERM -- -<group>
+```

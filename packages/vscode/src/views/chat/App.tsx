@@ -151,10 +151,15 @@ export default function App() {
   // unlock the input instead of leaving the chat bricked. A harness planner
   // quiet on screen still sends liveness, so only real silence trips it; the
   // window is generous — non-streaming providers can legitimately stay quiet
-  // for a minute while a model thinks.
+  // for a minute while a model thinks. A turn waiting on the user's approval
+  // card is quiet by design, and must never be called a hang.
   const WATCHDOG_MS = 120_000;
+  const approvalWaiting = useMemo(
+    () => blocks.some((b) => b.type === 'approval' && b.status === 'pending'),
+    [blocks],
+  );
   useEffect(() => {
-    if (!isResearchActive) return;
+    if (!isResearchActive || approvalWaiting) return;
     lastActivityRef.current = Date.now();
     const timer = setInterval(() => {
       if (Date.now() - lastActivityRef.current < WATCHDOG_MS) return;
@@ -162,7 +167,7 @@ export default function App() {
       pushSystem('The planner stopped responding, so the input was re-enabled. Your last message may not have been processed: try sending it again.');
     }, 5_000);
     return () => clearInterval(timer);
-  }, [isResearchActive, pushSystem]);
+  }, [isResearchActive, approvalWaiting, pushSystem]);
 
   const handleNewSession = useCallback(() => {
     dispatch({ type: 'resetSession', kind: 'new' });

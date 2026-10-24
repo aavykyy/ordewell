@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { createTask, type AttemptUsage, type CommandOutcome, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { TaskLogRegistry } from '../providers/TaskLogRegistry';
 import type { HostToTaskLog } from '../shared/taskLogProtocol';
-import { __panels, __resetPanels } from '../test/vscode.mock';
+import { __panels, __resetPanels, createFakeWebviewPanel, window } from '../test/vscode.mock';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks } from '../shared/conversationPatch';
 
 const createWebviewPanel = vscode.window.createWebviewPanel as unknown as ReturnType<typeof vi.fn>;
@@ -88,25 +88,43 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     expect(h.session.invokeTaskCommand).toHaveBeenCalledWith('t1', 'compact', 'retain tests');
   });
 
-  it('carries the task\'s whole spend in its status and re-sends it when a usage event moves it', () => {
-    const h = harness();
+  it('carries the spend and meter of the attempt on screen, with the task total beneath an earlier one', () => {
+    const h = harness({ 1: attemptOne, 2: attemptTwo });
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
     expect(posted(__panels[0])[0]).toMatchObject({ type: 'init' });
     expect((posted(__panels[0])[0] as { status: { usage?: unknown } }).status.usage).toBeUndefined();
 
-    const spend = (attempt: number, inputTokens: number): AttemptUsage => ({
-      attempt, runner: 'claude-code', startedAt: '', wallTimeMs: 1000, totals: { inputTokens, outputTokens: 10 },
-      lastPromptTokens: 50_000, contextWindow: 200_000,
+    const spend = (attempt: number, inputTokens: number, usd: number, lastPromptTokens: number): AttemptUsage => ({
+      attempt, runner: 'claude-code', startedAt: '', wallTimeMs: 1000,
+      totals: { inputTokens, outputTokens: 10, reportedCost: { USD: usd } },
+      lastPromptTokens, contextWindow: 200_000,
     });
-    h.task.attemptUsage = [spend(1, 1000), spend(2, 500)];
+    h.task.attemptUsage = [spend(1, 1000, 0.5, 10_000), spend(2, 500, 1, 50_000)];
     __panels[0].webview.postMessage.mockClear();
     h.registry.receive({ type: 'status_update', tasks: [] });
 
-    expect(posted(__panels[0])).toEqual([expect.objectContaining({
-      type: 'status',
-      status: expect.objectContaining({ usage: { totals: { inputTokens: 1500, outputTokens: 20 }, contextFill: { usedTokens: 50_000, windowTokens: 200_000 } } }),
-    })]);
+    // The latest attempt: the task's whole spend, with the meter it left.
+    const latest = (posted(__panels[0])[0] as { status: { usage?: unknown; usageTotal?: unknown } }).status;
+    expect(latest.usage).toEqual({
+      totals: { inputTokens: 1500, outputTokens: 20, reportedCost: { USD: 1.5 } },
+      contextFill: { usedTokens: 50_000, windowTokens: 200_000 },
+    });
+    expect(latest.usageTotal).toBeUndefined();
+
+    // An earlier attempt: its own numbers, and the task total labelled below.
+    __panels[0].webview.postMessage.mockClear();
+    __panels[0].__receive({ type: 'selectAttempt', attempt: 1 });
+    const earlier = posted(__panels[0]).at(-1);
+    if (earlier?.type !== 'init') throw new Error('Expected an attempt init');
+    expect(earlier.status.usage).toEqual({
+      totals: { inputTokens: 1000, outputTokens: 10, reportedCost: { USD: 0.5 } },
+      contextFill: { usedTokens: 10_000, windowTokens: 200_000 },
+    });
+    expect(earlier.status.usageTotal).toEqual({
+      totals: { inputTokens: 1500, outputTokens: 20, reportedCost: { USD: 1.5 } },
+      contextFill: { usedTokens: 50_000, windowTokens: 200_000 },
+    });
   });
 
   it('draws an old log\'s own usage when the task kept no attempt ledger', () => {
@@ -135,6 +153,23 @@ describe('the task-log registry (ADR-0018, V1)', () => {
 
     expect(createWebviewPanel).toHaveBeenCalledWith('ordewellTaskLog', 'Task 1 · Parse JSON', vscode.ViewColumn.Active, expect.anything());
     expect(__panels).toHaveLength(1);
+  });
+
+  it('titles a subtask tab with its dotted reference, not its own order', () => {
+    const subtask = createTask({ id: 's1', order: 1, title: 'Subtask', assignedRunner: 'claude-code', status: 'in_progress' }) as Task;
+    const registry = new TaskLogRegistry({
+      extensionUri: vscode.Uri.file('/ext'),
+      session: () => harness().session,
+      getTask: () => subtask,
+      orderLabel: (taskId) => (taskId === 's1' ? '2.1' : undefined),
+      log: vi.fn(),
+    });
+
+    registry.open('s1');
+    __panels[0].__receive({ type: 'ready' });
+
+    expect(__panels[0].title).toBe('Task 2.1 · Subtask');
+    expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { orderLabel: '2.1' } });
   });
 
   it('focuses the open tab instead of opening a second', () => {
@@ -487,5 +522,38 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
     expect(posted(__panels[0])).toEqual([]);
     h.registry.open('t1');
     expect(__panels).toHaveLength(2);
+  });
+
+  it('reopens a tab a window reload restores, for the task it was showing', () => {
+    const h = harness();
+    const panel = createFakeWebviewPanel('ordewellTaskLog', 'Task log');
+
+    h.registry.restore(panel as unknown as vscode.WebviewPanel, { taskId: 't1' });
+    panel.__receive({ type: 'ready' });
+
+    expect(posted(panel)[0]).toMatchObject({ type: 'init', status: { taskId: 't1' } });
+    expect(panel.dispose).not.toHaveBeenCalled();
+  });
+
+  it('drops a restored tab whose task has left the plan', () => {
+    const registry = new TaskLogRegistry({
+      extensionUri: vscode.Uri.file('/ext'),
+      session: () => harness().session,
+      getTask: () => undefined,
+      log: vi.fn(),
+    });
+    const panel = createFakeWebviewPanel('ordewellTaskLog', 'Task log');
+
+    registry.restore(panel as unknown as vscode.WebviewPanel, { taskId: 'gone' });
+
+    expect(panel.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers the serializer that restores task-log tabs', () => {
+    const h = harness();
+
+    h.registry.register();
+
+    expect(window.registerWebviewPanelSerializer).toHaveBeenCalledWith('ordewellTaskLog', expect.anything());
   });
 });

@@ -475,3 +475,24 @@ describe('through the Session', () => {
     await expect(sendTaskMessage(inactive, 't1', 'hi')).rejects.toThrow(TaskControlError);
   });
 });
+
+describe('a plan edit while a task waits on the user mid-attempt', () => {
+  it('keeps a task at a checkpoint waiting there', async () => {
+    const { orchestrator, structured } = await started({ autonomy: 'HITL' });
+    void structured.callCheckpoint('ok?');
+    expect(task(orchestrator)).toMatchObject({ status: 'awaiting_user', awaitingReason: 'checkpoint' });
+
+    orchestrator.reconcilePlan(orchestrator.storeInstance.planTasks.map((t) => ({ ...t, status: 'pending' as const, awaitingReason: undefined })));
+
+    expect(task(orchestrator)).toMatchObject({ status: 'awaiting_user', awaitingReason: 'checkpoint' });
+  });
+
+  it('keeps a task waiting for input waiting', async () => {
+    const { orchestrator, structured } = await started();
+    structured.waitForInput();
+
+    orchestrator.reconcilePlan(orchestrator.storeInstance.planTasks.map((t) => ({ ...t })));
+
+    expect(task(orchestrator)).toMatchObject({ status: 'awaiting_user', awaitingReason: 'input' });
+  });
+});

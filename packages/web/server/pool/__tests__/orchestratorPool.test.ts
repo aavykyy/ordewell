@@ -87,11 +87,13 @@ describe('OrchestratorPool.adoptSavedSession', () => {
   // entry with the same id.
   it('does not fork a second file for the session it adopted', () => {
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
-    const before = readdirSync(join(workspace, '.ordewell', 'sessions'));
+    // Session files only: the session's own directory beside it holds its lease while it is open (ADR-0049).
+    const sessionFiles = () => readdirSync(join(workspace, '.ordewell', 'sessions')).filter((f) => f.endsWith('.json'));
+    const before = sessionFiles();
 
     pool.adoptSavedSession(meta.id, workspace);
 
-    expect(readdirSync(join(workspace, '.ordewell', 'sessions'))).toEqual(before);
+    expect(sessionFiles()).toEqual(before);
   });
 
   it('keeps the saved plan visible to a later listing', () => {
