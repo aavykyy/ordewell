@@ -212,7 +212,12 @@ export function renderPlanMap(planTasks: readonly Task[], currentTaskId: string,
   ].join('\n');
 }
 
+/** What a read-only task is told it may do beyond reading (ADR-0050): the tool that keeps its prototype past its worktree. */
+export const READ_ONLY_PATCH_NOTE = 'This task is read-only and its worktree is thrown away when it ends. If you build a prototype there, keep it with the `save_patch` tool before you finish: a later task can then apply it.';
+
 export interface ComposeOptions {
+  /** A read-only task: told of `save_patch` (ADR-0050). */
+  readOnly?: boolean;
   planMapEnabled?: boolean;
   planMapMaxEntries?: number;
   /** The task's skills as resolved where this attempt runs. */
@@ -340,6 +345,8 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
   if (opts?.carriedOver) blocks.push(renderCarriedOver(opts.carriedOver.from, opts.carriedOver.work));
 
   if (opts?.skills?.length) blocks.push(renderTaskSkills(opts.skills));
+
+  if (opts?.readOnly) blocks.push(READ_ONLY_PATCH_NOTE);
 
   if (isHitlTask(task)) blocks.push(CHECKPOINT_INSTRUCTION);
 

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createTask, resolveTaskRef, type Task, type TaskSkillSnapshot } from '../../models/Task';
 import type { HandoffDigest, HandoffFinding } from '../../models/Handoff';
 import { TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../mcp';
-import { augmentPromptWithPriorOutputs, composeAugmentedPrompt, composeContinuationPrompt, renderPlanMap, summarizeOutput } from '../promptAugment';
+import { augmentPromptWithPriorOutputs, composeAugmentedPrompt, composeContinuationPrompt, READ_ONLY_PATCH_NOTE, renderPlanMap, summarizeOutput } from '../promptAugment';
 
 describe('summarizeOutput', () => {
   it('clips output to last 500 chars', () => {
@@ -608,6 +608,14 @@ describe('composeAugmentedPrompt', () => {
     ];
     expect(composeAugmentedPrompt(tasks[0], tasks)).not.toContain('## Task skills');
     expect(composeAugmentedPrompt(tasks[0], tasks, { skills: [] })).not.toContain('## Task skills');
+  });
+
+  // The prompt is the only place a read-only task learns its worktree's prototype can be kept (ADR-0050).
+  it('tells a read-only task, and no other, that save_patch keeps its prototype', () => {
+    const tasks = [createTask({ id: 'a', order: 1, title: 'A', prompt: 'try it' })];
+    expect(composeAugmentedPrompt(tasks[0], tasks, { readOnly: true })).toContain(READ_ONLY_PATCH_NOTE);
+    expect(READ_ONLY_PATCH_NOTE).toMatch(/keep it with the `save_patch` tool before you finish: a later task can then apply it/);
+    expect(composeAugmentedPrompt(tasks[0], tasks)).not.toContain('save_patch');
   });
 
   it('includes checkpoint instructions for HITL tasks (autonomy=HITL)', () => {

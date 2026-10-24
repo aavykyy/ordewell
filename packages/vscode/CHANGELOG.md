@@ -67,8 +67,9 @@
 - **The planner chooses between its own agents and a research task by what the
   result is, not by how long it will take.** A conclusion it needs this turn
   stays in the turn; evidence that needs a worktree, another runner's judgement
-  or your eye is a research task, and a search that takes rounds is the
-  `explore` skill.
+  or your eye, or that a later task acts on, is a task of its own, marked as
+  research only when the planner must decide something on its report, and a
+  search that takes rounds is the `explore` skill.
 - **The planner is sent its plan whole once, then only what changed.** The
   whole plan goes again after a reorder, a reset or compaction, or a turn that
   did not land.

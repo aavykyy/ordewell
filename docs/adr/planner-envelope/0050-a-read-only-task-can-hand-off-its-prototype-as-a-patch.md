@@ -1,8 +1,6 @@
 ---
 status: accepted
-implemented: partial
 amends: ["0022", "0046", "0047"]
-note: "The capture, the kept patch, its artifact, task_diff, a change task's apply_patch and the three surfaces are built; the planner's guidance is not."
 ---
 
 # 0050 — A read-only task can hand off its prototype as a patch
@@ -231,7 +229,6 @@ No field records the pick, and core reads nothing from the judge.
 
 ## Out of scope
 
-- The planner's guidance for explorers, judges and builders.
 - A repo group's several repositories.
 - Candidate change tasks: see below.
 
@@ -282,3 +279,4 @@ No field records the pick, and core reads nothing from the judge.
 - 2026-10-24 — accepted; the capture, the kept patch, its artifact and `task_diff` implemented.
 - 2026-10-24 — a change task's `apply_patch` implemented.
 - 2026-10-24 — the TUI, VS Code and CLI show a saved patch: its changes, the file to open and the paths it left out.
+- 2026-10-24 — the planner's guidance implemented: the explore skill, `WHO EXPLORES` and the read-only task's own prompt teach `save_patch`, the shared check and `apply_patch`.

@@ -195,8 +195,9 @@ export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): str
       // the next one is told what the last one did.
       return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, previousAttempt: src.previousAttempt(task.id), loop });
     case 'change':
-    case 'readOnly':
       return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, loop });
+    case 'readOnly':
+      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, loop, readOnly: true });
     case 'carryOver':
       return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, carriedOver: { from: kind.from, work: src.previousWork }, loop });
   }
