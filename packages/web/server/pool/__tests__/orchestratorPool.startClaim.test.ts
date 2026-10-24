@@ -68,7 +68,7 @@ describe('task starts and Stop sent to the daemon at once', () => {
       body: JSON.stringify({ command: 'run_task', task }),
     });
     const holdSpawns = () => { hold = new Promise<void>((resolve) => { release = resolve; }); };
-    return { pool, post, run, holdSpawns, releaseSpawns: () => release(), spawnedIds: () => spawned.map((s) => s.taskId) };
+    return { pool, post, run, holdSpawns, releaseSpawns: () => release(), spawns: runner.spawn, spawnedIds: () => spawned.map((s) => s.taskId), spawnedSessions: () => spawned };
   }
 
   function approvedPlan(): LegacyPlanState {
@@ -97,11 +97,12 @@ describe('task starts and Stop sent to the daemon at once', () => {
   }
 
   it('answers a Run sent beside Stop as not started, Stop as stopped, and leaves the task not started', async () => {
-    const { post, run: runTask, holdSpawns, releaseSpawns, id, session, spawnedIds } = adopted('session-run-stop');
+    const { post, run: runTask, holdSpawns, releaseSpawns, spawns, id, session, spawnedSessions } = adopted('session-run-stop');
     holdSpawns();
 
     const running = runTask(id, 't1');
-    await vi.waitFor(() => expect(session.startsPending).toBe(true));
+    // The spawn itself is what the Stop lands in: waiting on the session's pending starts would race the claim that reaches it.
+    await vi.waitFor(() => expect(spawns).toHaveBeenCalled());
     const stop = await post(id, 'stop');
     releaseSpawns();
     const run = await running;
@@ -111,7 +112,8 @@ describe('task starts and Stop sent to the daemon at once', () => {
     expect(run.status).toBe(400);
     expect(await run.json()).toMatchObject({ error: STOPPED_BEFORE_START, code: 'refused' });
     await vi.waitFor(() => expect(session.isExecuting).toBe(false));
-    expect(spawnedIds()).toEqual([]);
+    // A session the runner returned after the Stop is let go, not kept running for a task that is not.
+    await vi.waitFor(() => expect(spawnedSessions().map((s) => s.killed || s.stopped)).toEqual([true]));
     expect(status(session, 't1')).toBe('pending');
   });
 

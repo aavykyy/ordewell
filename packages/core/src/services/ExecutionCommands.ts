@@ -925,6 +925,8 @@ export class ExecutionCommands {
         // A Stop while the retry let go of the old worktree withdrew the start that would follow it.
         if (stopped()) throw new Error(STOPPED_BEFORE_START);
         if (!this.host.running(task.id) && !(settled && this.host.scheduling())) await this.host.startTask(task.id, actor);
+        // The start claims under an admission of its own, so a Stop while its spawn was under way ends the attempt quietly: only the seam's admission sees that it came.
+        if (stopped()) throw new Error(STOPPED_BEFORE_START);
         if (this.host.runBlocked()) return { message: voice.blockedRun };
         const verb = how === 'run' ? 'Started' : 'Retrying';
         return {
