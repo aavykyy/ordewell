@@ -271,7 +271,11 @@ everything below applies per repo of the group.
   directories and branches under the run that no record owns, and stale
   registrations. Kept, failed and conflicted worktrees are what the user may
   want, so they stay. `release(..., { keep: true })` exists so a task whose
-  verification failed is moved off `active` and survives that sweep.
+  verification failed is moved off `active` and survives that sweep. Only the
+  host holding the session's lease adopts it, continues its run or changes it
+  in any way ([ADR-0049](0049-a-session-has-one-live-host.md)): a second host
+  continuing the same run id names the same worktrees, and its prune and
+  `prepare` would remove a live host's.
 - **Persistence.** `LegacyPlanState.isolation` holds `{ run, resolvers }`,
   written from the orchestrator at persist time like `tasks`, and saved on every
   change to it rather than at the end of the run — the record is what lets a
@@ -512,3 +516,4 @@ literal git command lines or private fields.
 - 2026-10-23 — Merge all's merge, a continue's merge of kept work and the rescue commit are named for the tasks and carry the trailer, like the landing.
 - 2026-10-23 — the messages Ordewell writes land as written, whatever the user's `commit.cleanup`.
 - 2026-10-24 — preparing a task workspace takes its turn, and a replaced run's integration branch is deleted only where HEAD contains it, never on the word of its records.
+- 2026-10-24 — only the host holding the session's lease adopts, continues or changes its run (ADR-0049).

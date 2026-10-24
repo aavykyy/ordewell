@@ -6,6 +6,7 @@ import type { ResearchShell, ShellLaunch } from '../researchShell';
 import { SEALED_RUN_MARK } from '../researchStepSummary';
 import { BubblewrapBackend, findBubblewrap } from './bubblewrap';
 import { SANDBOX_EXEC, SeatbeltBackend } from './seatbelt';
+import { processAlive } from '../../utils/processTree';
 import { execProbe, type ProbeExec, type SandboxBackend, type SandboxGitEntry, type SandboxInvocation, type SandboxLaunch, type SandboxLimits, type SandboxProfile } from './SandboxBackend';
 
 /**
@@ -407,15 +408,6 @@ function removeScratch(dir: string): void {
     fsSync.rmSync(dir, { recursive: true, force: true });
   } catch {
     // The OS temporary directory is cleaned eventually; a failed removal must not fail the session.
-  }
-}
-
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 

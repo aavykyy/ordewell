@@ -77,6 +77,34 @@ describe('ApiClient', () => {
     expect(hits).toHaveLength(2);
   });
 
+  // ADR-0049: "not found" would send the user to /sessions to reload it, which
+  // is refused the same way; who holds the session is what they need to hear.
+  it('surfaces a re-adoption refused because another host holds the session, not the 404 before it', async () => {
+    const hits: string[] = [];
+    const holder = { hostId: 'host-a', pid: 37797, host: { kind: 'daemon', port: 3742 }, since: '2026-10-24T01:40:00.000Z', heartbeatAt: '2026-10-24T01:54:00.000Z', runnerGroups: [] };
+    const srv = await startCustomServer((req, res) => {
+      hits.push(`${req.method} ${req.url}`);
+      res.setHeader('Content-Type', 'application/json');
+      if (req.url?.startsWith('/api/sessions/session-1/load')) {
+        res.statusCode = 409;
+        return res.end(JSON.stringify({ error: 'This session is open in another Ordewell host: the Ordewell daemon on port 3742 (pid 37797)', code: 'session_held', sessionHeld: { holder } }));
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'Session not found', code: 'session_not_found' }));
+    });
+    servers.push(srv);
+
+    const err = await new ApiClient(srv.port, '/work/app').taskControl('session-1', 't1', 'retry').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(DaemonError);
+    expect((err as DaemonError).code).toBe('session_held');
+    expect((err as DaemonError).status).toBe(409);
+    expect((err as DaemonError).sessionHeld?.holder.pid).toBe(37797);
+    expect((err as Error).message).toContain('pid 37797');
+    // Refused, so never retried.
+    expect(hits).toHaveLength(2);
+  });
+
   it('keeps each instance bound to its own port (no shared static clobbering)', async () => {
     const a = await startServer('server-a');
     const b = await startServer('server-b');

@@ -153,6 +153,8 @@ function fakeSession() {
     reset: vi.fn(),
     abortPlannerTurn: vi.fn(() => false),
     loadPlan: vi.fn(),
+    destroy: vi.fn(),
+    heldElsewhere: vi.fn(() => null),
     execute: vi.fn(async () => ({ ok: true, message: 'done' })),
     executePlan: vi.fn(async () => {}),
     stopExecution: vi.fn(),
@@ -499,6 +501,8 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     expect(stopAll).toHaveBeenCalled();
     // A goal still waiting for the probe is stopped with the host's runners.
     expect(h.session.spies.abortPlannerTurn).toHaveBeenCalled();
+    // Closed with the window, so another host may open it (ADR-0049).
+    expect(h.session.spies.destroy).toHaveBeenCalled();
   });
 
   it('opens a task log tab on request, through the one registry', async () => {
