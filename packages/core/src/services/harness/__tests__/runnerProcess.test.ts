@@ -211,6 +211,31 @@ describe('a runner that fails to start', () => {
   });
 });
 
+describe('a runner disposed while it is still starting', () => {
+  // A Stop takes the adapter back while its start runs on. Nothing is running
+  // yet for the dispose to kill, so a spawn that went ahead anyway would be a
+  // process no one owns.
+  const adapters: Array<[string, (processDeps: AgentProcessDeps) => AgentAdapter]> = [
+    ['stdio', (processDeps) => new ClaudeCodeAdapter(processDeps)],
+    ['server', (processDeps) => new OpenCodeAdapter(processDeps)],
+  ];
+
+  it.each(adapters)('never launches the %s runner', async (_name, make) => {
+    const spawned = fakeSpawn([]);
+    let envReady!: () => void;
+    const slowEnv = new Promise<Record<string, string>>((resolve) => { envReady = () => resolve({}); });
+    const adapter = make({ ...deps(spawned), workspaceEnv: () => slowEnv });
+    const started = adapter.start(taskStart);
+    const rejected = expect(started).rejects.toThrow();
+
+    adapter.dispose();
+    envReady();
+    await rejected;
+
+    expect(spawned.processes).toHaveLength(0);
+  });
+});
+
 describe('the OpenCode server banner', () => {
   it('takes the address from stdout, not from a URL in a stderr warning', async () => {
     const spawned = fakeSpawn([]);

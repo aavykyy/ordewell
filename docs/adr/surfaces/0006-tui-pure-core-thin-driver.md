@@ -56,5 +56,5 @@ We decided to build `ordewell tui` as a **pure state core** (`state`, `reducer`,
 - 2026-10-09 — skill toggles replaced by skills (ADR-0024); the Context and E1 wording follows.
 - 2026-10-11 — adoption replays planner turn inputs no turn answered ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-18 — the task-log view shares core's saved-log and live-stream follow reducer with VS Code.
-- 2026-10-24 — skip's note corrected: the daemon has a skip route, and all three surfaces send core's `skip_task`, which lands nothing.
+- 2026-10-24 — skip's note corrected: every surface sends core's `skip_task`, which lands nothing.
 - 2026-10-24 — the daemon's forwarding routes for execution controls are replaced by one `execute-command` route (S3); `taskActionCommand` maps a task action to its command for the TUI, the CLI and VS Code.

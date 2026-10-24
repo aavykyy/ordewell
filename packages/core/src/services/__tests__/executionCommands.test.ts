@@ -1222,6 +1222,28 @@ describe('the command seam\'s extension points', () => {
     expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: STOPPED_BEFORE_START });
   });
 
+  const failedWithSession: Task = { ...task('t1', 1), status: 'failed', runnerSessionId: 'sess-1' };
+  const pausedWithSession: Task = { ...task('t1', 1), status: 'awaiting_user', awaitingReason: 'usage-limit', runnerSessionId: 'sess-1' };
+
+  it.each([
+    ['continues a failed task in its saved session', { command: 'retry_task', task: 't1', from: 'session', message: 'go on' }, [failedWithSession], { kind: 'user' }, false, 'continueTask'],
+    ['resumes a task paused on its usage limit', { command: 'retry_task', task: 't1', from: 'session' }, [pausedWithSession], { kind: 'user' }, false, 'resumeNow'],
+    ['joins a run under way, for the user', { command: 'run_plan' }, [task('t1', 1)], { kind: 'user' }, true, 'joinRun'],
+    ['joins a run under way, for the planner', { command: 'run_plan' }, [task('t1', 1)], PLANNER, true, 'joinRun'],
+  ] as const)('refuses a start that %s whose admission a Stop ended while it acted, as stopped before it started', async (_name, command, tasks, actor, liveWork, act) => {
+    let live = true;
+    const host = {
+      ...stubHost(), tasks: () => [...tasks], running: () => liveWork, hasLiveWork: () => liveWork,
+      admitStart: () => ({ current: () => live, release: vi.fn() }),
+      [act]: vi.fn(async () => { live = false; return ''; }),
+    };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    const outcome = await commands.run(command, actor);
+    expect(host[act]).toHaveBeenCalled();
+    expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: STOPPED_BEFORE_START });
+  });
+
   it('names no held edit when there is none', async () => {
     const commands = new ExecutionCommands({ host: stubHost(), consent: { request: vi.fn() } });
 

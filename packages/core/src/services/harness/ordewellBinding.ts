@@ -143,8 +143,8 @@ export interface SpawnAttachSteps<A extends SpawnedAdapter> {
   dispose?(adapter: A): void;
   /**
    * Aborted once nobody wants the runner any more: what was spawned is taken
-   * back and nothing is returned. A start is let finish first, since a process
-   * it has yet to launch would outlive a dispose; an attach check is not.
+   * back and nothing is returned. Neither a start nor an attach check is waited
+   * for: a dispose before the start has launched its process stops the launch.
    */
   cancelled?: AbortSignal;
   /**

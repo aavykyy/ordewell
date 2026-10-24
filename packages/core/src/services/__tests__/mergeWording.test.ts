@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { handoffBaseLine, handoffBranchName, isRepoGroup, repoBaseLine, repoResultLines } from '../mergeWording';
+import { checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, mergeTarget, repoBaseLine, repoResultLines } from '../mergeWording';
 
 const t = (order: number) => ({ taskId: `t${order}`, order, title: `Task ${order}` });
 
@@ -51,5 +51,36 @@ describe('a repo group in a handoff', () => {
       { path: 'infra', landed: [] },
     ] };
     expect(repoResultLines(handoff)).toEqual(['api: 3 tasks landed', 'web: 1 task landed', 'infra: nothing to merge']);
+  });
+});
+
+describe('where Merge all lands, for a confirmation', () => {
+  const withBranch = (path: string, baseBranch: string | undefined, landed = [t(1)]) => ({ path, baseBranch, landed });
+
+  it('names the branch for a lone repo, and the branch that must be checked out', () => {
+    const handoff = { repos: [withBranch('.', 'main')] };
+
+    expect(mergeTarget(handoff)).toBe('main');
+    expect(checkoutRule(handoff)).toBe(' Nothing is merged unless main is checked out.');
+  });
+
+  it('keeps saying the branch you have checked out for a run that started detached', () => {
+    const handoff = { repos: [withBranch('.', undefined)] };
+
+    expect(mergeTarget(handoff)).toBe('the branch you have checked out');
+    expect(checkoutRule(handoff)).toBe('');
+  });
+
+  it('names one branch once for a group, leaving out a repo with nothing to merge', () => {
+    const handoff = { repos: [withBranch('api', 'main'), withBranch('web', 'main'), withBranch('infra', 'main', [])] };
+
+    expect(mergeTarget(handoff)).toBe('main in each of api, web');
+  });
+
+  it('names each repo with its own branch when they differ, and a detached one as checked out', () => {
+    const handoff = { repos: [withBranch('api', 'main'), withBranch('web', 'develop'), withBranch('docs', undefined)] };
+
+    expect(mergeTarget(handoff)).toBe('each of api (main), web (develop), docs (as checked out)');
+    expect(checkoutRule(handoff)).toBe(' Nothing is merged unless each repository is on the branch it started on.');
   });
 });

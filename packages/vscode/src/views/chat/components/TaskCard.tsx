@@ -221,6 +221,36 @@ export function AssignmentFlag({ row }: { row: Pick<TaskRowView, 'assignmentFlag
   );
 }
 
+/** What holds a task back or runs on its isolated work, on the collapsed card: a merge gate, a stopped integration, a conflict repair. */
+export function IsolationBadges({ row }: { row: Pick<TaskRowView, 'mergeGate' | 'conflict' | 'repairing'> }) {
+  return (
+    <>
+      {row.mergeGate && (
+        <span className="task-isolation-badge gate"
+          title={`The work of ${row.mergeGate.join(', ')} is not merged into your branch yet. Merge all lets this task go on.`}>
+          Waits for Merge all
+        </span>
+      )}
+
+      {/* A stopped integration is not a hidden failure (US33) — visible on the
+          collapsed card, since it is the one isolation state that needs a
+          decision, not just inspection. */}
+      {row.conflict && (
+        <span className="task-isolation-badge conflict" title={`Integrating this task conflicted${row.conflict.repo ? ` in ${row.conflict.repo}` : ''}${row.conflict.files ? `: ${row.conflict.files}` : ''}. Its worktree and branch are kept.`}>
+          Conflict{row.conflict.repo ? ` in ${row.conflict.repo}` : ''}
+        </span>
+      )}
+
+      {/* Still running, so it reads as progress, not a blocker like a conflict (ADR-0015). */}
+      {row.repairing && (
+        <span className="task-isolation-badge repairing" title={`Repairing the conflict in its own worktree${row.repairing.files ? `: ${row.repairing.files}` : ''}.`}>
+          Repairing{row.repairing.attempt ? ` (${row.repairing.attempt.attempt} of ${row.repairing.attempt.limit})` : ''}
+        </span>
+      )}
+    </>
+  );
+}
+
 /**
  * The header's controls for a task paused on a usage limit (#84), shown
  * whether or not the plan reads as executing: the pause holds the run, so a
@@ -757,28 +787,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
 
         <LoopBadge loop={row.loop} />
 
-        {row.mergeGate && (
-          <span className="task-isolation-badge gate"
-            title={`The work of ${row.mergeGate.join(', ')} is not merged into your branch yet. Merge all lets this task go on.`}>
-            Waits for Merge all
-          </span>
-        )}
-
-        {/* A stopped integration is not a hidden failure (US33) — visible on the
-            collapsed card, since it is the one isolation state that needs a
-            decision, not just inspection. */}
-        {row.conflict && (
-          <span className="task-isolation-badge conflict" title={`Integrating this task conflicted${row.conflict.repo ? ` in ${row.conflict.repo}` : ''}${row.conflict.files ? `: ${row.conflict.files}` : ''}. Its worktree and branch are kept.`}>
-            Conflict{row.conflict.repo ? ` in ${row.conflict.repo}` : ''}
-          </span>
-        )}
-
-        {/* Still running, so it reads as progress, not a blocker like a conflict (ADR-0015). */}
-        {row.repairing && (
-          <span className="task-isolation-badge repairing" title={`Repairing the conflict in its own worktree${row.repairing.files ? `: ${row.repairing.files}` : ''}.`}>
-            Repairing{row.repairing.attempt ? ` (${row.repairing.attempt.attempt} of ${row.repairing.attempt.limit})` : ''}
-          </span>
-        )}
+        <IsolationBadges row={row} />
 
         {/* Approvals arrive mid-turn and leave the status alone (ADR-0018,
             A1), so waiting on one is a badge beside it, which opens the log

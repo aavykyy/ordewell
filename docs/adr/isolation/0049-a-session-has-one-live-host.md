@@ -78,12 +78,14 @@ Session — the daemon, the VS Code extension host — is covered at one seam.
   saves nothing more. What it holds is older than what the new holder has saved,
   so it never claims the lease back on its own; opening the session again is
   the user's.
-- **Released on close and shutdown (L7).** `Session.destroy` lets the lease go,
-  as does a new plan under a fresh id; the daemon's shutdown destroys its
-  sessions, VS Code's deactivation its Session, and the process lease host
-  lets every lease go on exit. A host in one process holds a lease once for
-  all its Sessions of that session, so a daemon replacing a live Session under
-  its id keeps it.
+- **Released on close and shutdown (L7).** `Session.destroy` lets the lease go
+  and the Session never takes it again: a save that settles afterwards is
+  dropped, not a reason to hold the session from every other host. A new plan
+  under a fresh id lets it go too; the daemon's shutdown destroys its sessions,
+  VS Code's deactivation its Session, and the process lease host lets every
+  lease go on exit. A host in one process holds a lease once for all its
+  Sessions of that session, so a daemon replacing a live Session under its id
+  keeps it.
 
 ## The lease file
 
@@ -163,3 +165,4 @@ throwaway HTTP server, the TUI effect and the CLI command against a refusal.
 ## History
 
 - 2026-10-24 — accepted.
+- 2026-10-24 — L7 states that a destroyed Session never takes its lease again: a late save claimed it back and held the session from every other host.

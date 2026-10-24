@@ -3,9 +3,9 @@ import SkillChips from './SkillChips';
 import ModelSelector from './ModelSelector';
 import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import TaskHandoff, { HandoffPeek } from './TaskHandoff';
-import { capConflictFiles, pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
+import { pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope, RunTask } from '@ordewell/core';
-import { AssignmentFlag, StatusBadge, TaskActions, TaskCheck, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
+import { AssignmentFlag, IsolationBadges, StatusBadge, TaskActions, TaskCheck, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
 import { checkLabel } from '../checkLabel';
 
@@ -78,7 +78,6 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
     ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
   }, { parent: parentTask, placement: 'subtask', tasks, runnerScope });
   const status = statusBadge(row);
-  const conflictFiles = isolation?.state === 'conflict' ? isolation.conflictFiles ?? [] : [];
 
   const handlePromptSave = () => {
     if (editingPrompt !== null && editingPrompt !== task.prompt) {
@@ -248,24 +247,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
           </button>
         )}
 
-        {row.mergeGate && (
-          <span className="task-isolation-badge gate"
-            title={`The work of ${row.mergeGate.join(', ')} is not merged into your branch yet. Merge all lets this task go on.`}>
-            Waits for Merge all
-          </span>
-        )}
-
-        {row.conflict && (
-          <span className="task-isolation-badge conflict" title={`Integrating this task conflicted${row.conflict.repo ? ` in ${row.conflict.repo}` : ''}${conflictFiles.length > 0 ? `: ${capConflictFiles(conflictFiles)}` : ''}. Its worktree and branch are kept.`}>
-            Conflict{row.conflict.repo ? ` in ${row.conflict.repo}` : ''}
-          </span>
-        )}
-
-        {row.repairing && (
-          <span className="task-isolation-badge repairing" title={`Repairing the conflict in its own worktree${row.conflict?.files ? `: ${row.conflict.files}` : ''}.`}>
-            Repairing{row.repairing.attempt ? ` (${row.repairing.attempt.attempt} of ${row.repairing.attempt.limit})` : ''}
-          </span>
-        )}
+        <IsolationBadges row={row} />
 
         {row.approvals && (
           <button type="button" className="task-approval-badge"

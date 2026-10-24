@@ -313,6 +313,20 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     expect(status).toMatchObject({ type: 'status', status: { header: { state: { kind: 'awaiting', label: 'Waiting for your input' } } } });
   });
 
+  it('reads a runner gone quiet as Stalled, as the TUI does, and as Working again once it speaks', () => {
+    const h = harness();
+    h.registry.open('t1');
+    __panels[0].__receive({ type: 'ready' });
+    __panels[0].webview.postMessage.mockClear();
+
+    h.registry.receive({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null, idleSince: '2026-10-24T01:00:00.000Z' }] });
+    expect(posted(__panels[0]).find((m) => m.type === 'status')).toMatchObject({ status: { header: { state: { kind: 'quiet', label: 'Stalled' } } } });
+
+    __panels[0].webview.postMessage.mockClear();
+    h.registry.receive({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null, idleSince: null }] });
+    expect(posted(__panels[0]).find((m) => m.type === 'status')).toMatchObject({ status: { header: { state: { kind: 'running', label: 'Running' } } } });
+  });
+
   it('offers Continue only for a finished structured task with a saved session (ADR-0018, K1)', () => {
     const h = harness();
     h.registry.open('t1');

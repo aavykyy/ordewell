@@ -44,6 +44,20 @@ describe('SubTaskCard — its own run entry', () => {
     expect(screen.getByText('Conflict in api')).toBeTruthy();
   });
 
+  it('names the files a conflicted subtask conflicts in', () => {
+    render(<SubTaskCard task={makeTask()} parentTask={parent} models={[]}
+      run={{ isolation: { state: 'conflict', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['api'], conflictRepo: 'api', conflictFiles: ['src/a.ts', 'src/b.ts'] } }} />);
+
+    expect(screen.getByText('Conflict in api').getAttribute('title')).toContain('in api: src/a.ts, src/b.ts.');
+  });
+
+  it('names the files a repairing subtask is repairing', () => {
+    render(<SubTaskCard task={makeTask()} parentTask={parent} models={[]}
+      run={{ isolation: { state: 'repairing', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['api'], conflictFiles: ['src/a.ts', 'src/b.ts'], repair: { attempt: 1, limit: 3 } } }} />);
+
+    expect(screen.getByText('Repairing (1 of 3)').getAttribute('title')).toBe('Repairing the conflict in its own worktree: src/a.ts, src/b.ts.');
+  });
+
   it('says the scheduler waits for the user on a subtask added after the plan was approved', () => {
     render(<SubTaskCard task={makeTask({ status: 'pending' })} parentTask={parent} models={[]} run={{ waitsForApproval: true }} />);
 

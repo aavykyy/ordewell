@@ -151,8 +151,8 @@ export function plansRoute(pool: OrchestratorPool) {
   // Answer the checkpoint a task waits at: approve lets it go on, reject sends
   // it the reason. Nothing waiting — settled elsewhere, withdrawn, or no runner
   // left to hear it — is a 409, so a surface says so instead of claiming success.
-  // The seam refuses a checkpoint nobody waits at too; the daemon contract
-  // keeps that distinct as the 409 a surface says instead of claiming success.
+  // The seam refuses a checkpoint nobody waits at too; this route keeps that
+  // case apart as its own 409 and code.
   for (const answer of ['approve', 'reject'] as const) {
     router.post(`/:sessionId/tasks/:taskId/checkpoint/${answer}`, async (c) => {
       try {

@@ -178,6 +178,33 @@ describe('mergeOutcome — the next step every surface gives', () => {
     );
   });
 
+  it('words a clean merge of a lone repo as the branch the user has checked out', () => {
+    expect(mergeOutcome({ outcome: 'merged' }, branch, false)).toEqual({ ok: true, message: `Merged ${branch} into your checked-out branch.` });
+  });
+
+  it('names each repo that blocked a group, why and in which files, before the hand-merge line', () => {
+    const { ok, message } = mergeOutcome({
+      outcome: 'blocked',
+      blocked: [
+        { repo: 'api', reason: 'conflict', files: ['src/a.ts'] },
+        { repo: 'web', reason: 'uncommitted-changes', files: ['index.html'] },
+      ],
+    }, branch, true);
+
+    expect(ok).toBe(false);
+    expect(message).toContain('api would conflict in src/a.ts; web has uncommitted changes to index.html');
+    expect(message).toContain(`Each repository's ${branch} is a plain branch you can merge by hand.`);
+  });
+
+  it('says which repos had landed when a group stopped part-way, and still offers the hand-merge', () => {
+    const { ok, message } = mergeOutcome({ outcome: 'conflict', repo: 'web', files: ['w.txt'], landed: ['api'] }, branch, true);
+
+    expect(ok).toBe(false);
+    expect(message).toContain('conflicted in web (w.txt)');
+    expect(message).toContain('api was merged already and stays merged.');
+    expect(message).toContain(`Each repository's ${branch} is a plain branch you can merge by hand.`);
+  });
+
   it('adds no hand-merge advice to a clean merge or a lone repo', () => {
     expect(mergeOutcome({ outcome: 'merged' }, branch, true)).toEqual({
       ok: true,
