@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { rmSync } from 'fs';
 import http from 'http';
 import { ApiClient } from '../../apiClient';
 
@@ -93,7 +94,10 @@ beforeEach(async () => {
   envDir = mkdtempSync(join(tmpdir(), 'ordewell-cli-test-'));
   vi.stubEnv('HOME', envDir);
 });
-afterEach(() => { vi.unstubAllEnvs(); });
+afterEach(() => {
+  vi.unstubAllEnvs();
+  rmSync(envDir, { recursive: true, force: true });
+});
 
 const CATALOG = {
   models: [

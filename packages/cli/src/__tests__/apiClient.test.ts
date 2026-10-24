@@ -205,9 +205,14 @@ describe('ApiClient', () => {
     const wss = new WebSocketServer({ port: 0 });
     await new Promise<void>((resolve) => wss.once('listening', () => resolve()));
     const port = (wss.address() as { port: number }).port;
+    let markGone!: () => void;
+    const gone = new Promise<void>((resolve) => { markGone = resolve; });
     wss.on('connection', (ws) => {
+      // Both frames are queued in this turn, before the client's handler sees
+      // the first and closes, so the second is on the wire and must be dropped.
       ws.send(JSON.stringify({ type: 'planner_turn_ended', turnId: 't1', outcome: 'message' }));
       ws.send(JSON.stringify({ type: 'planner_text_delta', turnId: 't2', segmentId: 's', text: 'uno' }));
+      ws.on('close', markGone);
     });
     servers.push({ close: () => wss.close() });
 
@@ -217,7 +222,9 @@ describe('ApiClient', () => {
       if ((e as { type: string }).type === 'planner_turn_ended') stream.close();
     });
     await stream.ready;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // The close handshake completing means the client has handled what the
+    // server queued; a fixed sleep would race a loaded machine's handshake.
+    await gone;
 
     expect(events.map((e) => e.type)).toEqual(['planner_turn_ended']);
   });

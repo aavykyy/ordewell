@@ -1342,6 +1342,16 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
   });
 
   it('is a runner whose structured tasks are taught the tools', () => {
+    const instructions = CODEX_ORDEWELL.taskInstructions();
+    for (const tool of ['task_complete', 'checkpoint', 'read_task']) expect(instructions).toContain(`\`mcp__ordewell__${tool}\``);
+    expect(instructions).toContain('ALL_TOOLS');
+    expect(instructions.endsWith(TASK_COMPLETION_CONTRACT)).toBe(true);
+
+    // A read-only task is told its one shell is Ordewell's, and a plain task is not (ADR-0046).
+    const readOnly = CODEX_ORDEWELL.taskInstructions({ readOnly: true });
+    expect(readOnly).toContain('`mcp__ordewell__run_command`');
+    expect(readOnly).toContain('It is your only shell');
+    expect(instructions).not.toContain('run_command');
   });
 });
 

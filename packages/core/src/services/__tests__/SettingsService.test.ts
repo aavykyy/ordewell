@@ -206,6 +206,17 @@ describe('SettingsService', () => {
       const listener = vi.fn();
       const watching = service.watch(listener);
       try {
+        // A directory watcher arms asynchronously, and macOS may report a save
+        // written in the same turn as one event naming the directory, which
+        // the watcher ignores. Space the arming saves out until one is heard,
+        // then forget those calls: the counts below are the saves under test.
+        for (let attempt = 0; attempt < 10 && listener.mock.calls.length === 0; attempt++) {
+          new SettingsService(tempFile).setEnabledRunners(['opencode']);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        expect(listener).toHaveBeenCalled();
+        listener.mockClear();
+
         new SettingsService(tempFile).setEnabledRunners(['codex']);
         await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
         await new Promise((resolve) => setTimeout(resolve, 150));
