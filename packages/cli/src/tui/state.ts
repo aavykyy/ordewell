@@ -1,5 +1,5 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type HandoffDigest, type PromptHold, type RunnerCommand, type RunTask, type RunView, type SupervisorLevel, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type PromptHold, type RunnerCommand, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { SaveSettingsEffect } from './reducers/settings';
 import type { StepperState } from './reducers/stepper';
@@ -83,51 +83,15 @@ export interface TaskView {
   subtasks?: TaskView[];
 }
 
-/** Where a task's isolated work stands (ADR-0013); `none` is a task with no worktree in a run that has some. */
-export type TaskIsolationState = 'none' | 'active' | 'integrated' | 'conflict' | 'repairing' | 'kept';
-
-export interface TaskIsolationView {
-  state: TaskIsolationState;
-  branch?: string;
-  /** The task workspace; for a single repo, the task's worktree. */
-  worktree?: string;
-  /** Paths of the repos the task changed. */
-  repos?: string[];
-  conflictRepo?: string;
-  /** Repo-relative paths, in `conflictRepo`, that conflicted. */
-  conflictFiles?: string[];
-  /** The conflict repair running or last run (ADR-0015), of the most a task may have. */
-  repair?: { attempt: number; limit: number };
-  repairedFiles?: string[];
-}
-
-export interface LandedTaskView {
-  taskId: string;
-  order: number;
-  title: string;
-  /** Set when the task landed only after a conflict repair (ADR-0015): the files it was started for. */
-  repairedFiles?: string[];
-}
-
-/** One repo's part of a handoff: its integration branch, where it forked, and what landed in it. */
-export interface HandoffRepoView {
-  path: string;
-  integrationBranch: string;
-  baseRef: string;
-  /** The branch the run started on; absent when it started on a detached HEAD or the record never noted one. */
-  baseBranch?: string;
-  /** Set when the run started on a detached HEAD. */
-  startedDetached?: true;
-  landed: LandedTaskView[];
-}
-
-/** What an isolated run left for the user to land: each repo's branch and base, and what landed, in plan order. */
-export interface HandoffView {
-  repos: HandoffRepoView[];
-  landed: LandedTaskView[];
-  /** An Act supervisor looks at this run first and may merge it, so it is shown without taking over the screen. */
-  deferredTo?: 'supervisor';
-}
+/**
+ * The isolation view a surface shows, in core's own shape (ADR-0013): a mark
+ * per task the run touched, and the handoff, read from a live status update or
+ * from the saved plan by `isolationViewOfPlan`. The CLI names them for its own
+ * callers; none of the values is re-declared here.
+ */
+export type TaskIsolationView = TaskIsolation;
+export type LandedTaskView = IsolationLandedTask;
+export type HandoffView = IsolationHandoff;
 
 /**
  * Landed work not yet in the user's branch, including a possible merge gate.

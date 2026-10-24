@@ -3,7 +3,8 @@ import type { IConfig } from '../interfaces/IConfig';
 import type { IsolationOutcome, IsolationRun, RepairEvidence } from '../interfaces/IWorktreeIsolation';
 import type { PlanStore } from './PlanStore';
 import type { IsolationRunController } from './IsolationRunController';
-import { changedReposOf, integrationBranchNameOf, SELF_REPO } from './isolationRecord';
+import { changedReposOf, SELF_REPO } from './isolationRecord';
+import { handoffBranchName } from './mergeWording';
 import { capConflictFiles } from './conflictFiles';
 import { buildConflictRepairPrompt, buildConflictResolutionPrompt } from './PlanPrompts';
 import { landsNothing, type AttemptKind } from './attemptKind';
@@ -185,7 +186,7 @@ export class Landing {
       ...(record?.conflictRepo ? { conflictRepo: record.conflictRepo } : {}),
       ...(record?.conflictFiles ? { conflictFiles: record.conflictFiles } : {}),
     };
-    return buildConflictRepairPrompt(task, conflict, integrationBranchNameOf(run), this.tasks.planTasks);
+    return buildConflictRepairPrompt(task, conflict, handoffBranchName(run), this.tasks.planTasks);
   }
 
   private hasUnlandedWork(taskId: string): boolean {
@@ -201,7 +202,7 @@ export class Landing {
 
   private unmerged(task: Readonly<Task>, landing: Exclude<IsolationOutcome, 'merged'>): UnlandedOutcome {
     const run = this.runs.current;
-    const branch = run ? integrationBranchNameOf(run) : 'the integration branch';
+    const branch = run ? handoffBranchName(run) : 'the integration branch';
     const record = run?.tasks[task.id];
     // Named only where there is a repo to name: a group of one reads as it always has.
     const inRepo = record?.conflictRepo && record.conflictRepo !== SELF_REPO ? record.conflictRepo : null;
@@ -252,7 +253,7 @@ export class Landing {
   private describeEvidence(evidence: Exclude<RepairEvidence, { ok: true }>): string {
     const run = this.runs.current;
     const inRepo = evidence.repo !== SELF_REPO ? ` in ${evidence.repo}` : '';
-    const branch = run ? integrationBranchNameOf(run) : 'the integration branch';
+    const branch = run ? handoffBranchName(run) : 'the integration branch';
     switch (evidence.reason) {
       case 'not-merged': return `finished, but its branch${inRepo} does not contain ${branch}`;
       case 'conflict-markers': {
@@ -278,7 +279,7 @@ export class Landing {
 export function conflictResolverTask(task: Readonly<Task>, run: IsolationRun | null, plan?: readonly Task[], plannedWith = false): Partial<Task> | null {
   const record = run?.tasks[task.id];
   if (!run || record?.status !== 'conflict') return null;
-  const integrationBranch = integrationBranchNameOf(run);
+  const integrationBranch = handoffBranchName(run);
   const conflict = {
     branch: record.branch,
     message: landingMessage('repair-merge', record, plannedWith),

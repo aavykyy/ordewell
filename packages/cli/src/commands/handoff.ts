@@ -1,6 +1,6 @@
 import { hasFlag, positionals } from '../utils';
 import type { ApiClient } from '../apiClient';
-import { checkoutRule, handoffBase, handoffBranch, isolationOfPlan, isRepoGroup, mergeOutcome, mergeTarget, repairedLanded, repairedNotice, repoResultLines } from '../isolation';
+import { checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, isolationViewOfPlan, mergeOutcome, mergeTarget, repairedLanded, repairedNotice, repoResultLines } from '@ordewell/core';
 import { HANDOFF_ACTIONS } from '../tui/handoff';
 import { adopted } from './conversation';
 import { askYesNo, fail } from './shared';
@@ -27,9 +27,9 @@ export async function handleHandoff(
   if (!HANDOFF_ACTIONS.some((a) => a.id === action)) fail(`Unknown handoff action "${action}".`, USAGE);
 
   const { api, sessionId, plan } = await adopted(subArgs, injectedApi);
-  const handoff = isolationOfPlan(plan)?.handoff;
+  const handoff = isolationViewOfPlan(plan)?.handoff;
   if (!handoff) fail('This session has no isolated run to hand off.');
-  const branch = handoffBranch(handoff);
+  const branch = handoffBranchName(handoff);
   const group = isRepoGroup(handoff);
   if (group) for (const line of repoResultLines(handoff)) console.error(line);
 
@@ -52,7 +52,7 @@ export async function handleHandoff(
   switch (action) {
     case 'review': {
       const diff = await attempt(() => api.reviewRunDiff(sessionId));
-      console.log(diff.trim() === '' ? `Nothing differs from ${handoffBase(handoff, 8)}.` : diff);
+      console.log(diff.trim() === '' ? `Nothing differs from ${handoffBaseLine(handoff, 8)}.` : diff);
       return;
     }
     case 'merge': {

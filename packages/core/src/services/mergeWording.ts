@@ -39,3 +39,46 @@ export function checkoutRule(handoff: MergeWordingHandoff): string {
   if (!isRepoGroup(handoff)) return ` Nothing is merged unless ${named[0]!.baseBranch} is checked out.`;
   return ' Nothing is merged unless each repository is on the branch it started on.';
 }
+
+/**
+ * The run's integration branch as one line names it. Every repo's has the same
+ * name (ADR-0014), so the line collapses to that one; a record written when
+ * they differed still names each.
+ */
+export function handoffBranchName(handoff: { repos: readonly { integrationBranch: string }[] }): string {
+  return [...new Set(handoff.repos.map((r) => r.integrationBranch))].join(', ');
+}
+
+/** The facts a repo's fork line is written from. */
+export interface HandoffForkRepo {
+  path: string;
+  baseRef: string;
+  /** The branch the run started on; absent on a detached HEAD, and on a record saved before this was noted. */
+  baseBranch?: string;
+  /** Set when the run started on a detached HEAD, so that is told from a record that never noted its branch. */
+  startedDetached?: true;
+}
+
+/**
+ * Where one repo's run forked: the branch and the commit, or that it started
+ * detached, or just the commit when the record never noted a branch.
+ */
+export function repoBaseLine(repo: HandoffForkRepo, length: number): string {
+  const commit = repo.baseRef.slice(0, length);
+  return repo.baseBranch ? `${repo.baseBranch} @ ${commit}` : `${repo.startedDetached ? 'detached at' : 'base'} ${commit}`;
+}
+
+/**
+ * Where the run forked, as one line names it: each repo's line, headed by its
+ * path when the run spans a group, so a surface drawing one base reads the
+ * same wording a surface drawing all of them does.
+ */
+export function handoffBaseLine(handoff: { repos: readonly HandoffForkRepo[] }, length: number): string {
+  const group = isRepoGroup(handoff);
+  return handoff.repos.map((repo) => `${group ? `${repo.path}: ` : ''}${repoBaseLine(repo, length)}`).join(', ');
+}
+
+/** One line per repo: what landed on its integration branch, or that there is nothing to merge. */
+export function repoResultLines(handoff: { repos: readonly { path: string; landed: readonly unknown[] }[] }): string[] {
+  return handoff.repos.map(({ path, landed }) => `${path}: ${landed.length === 0 ? 'nothing to merge' : `${landed.length} task${landed.length === 1 ? '' : 's'} landed`}`);
+}

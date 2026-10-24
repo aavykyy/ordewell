@@ -1,8 +1,7 @@
 import { flag, hasFlag, readLastSession } from '../utils';
-import { handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
 import { iconFor } from '../utils/output';
 import type { ApiClient } from '../apiClient';
-import { holdLabel, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, scriptTaskText, skippedLabel, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, type SerializedTaskStatus } from '@ordewell/core';
+import { handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repoResultLines, scriptTaskText, skippedLabel, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, type SerializedTaskStatus } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { connect } from './shared';
 import { taskHandoffLines } from './taskHandoff';
@@ -144,7 +143,7 @@ export async function followExecution(
     if (event.type === 'isolation_handoff') {
       const n = event.landed.length;
       const where = isRepoGroup(event) ? ` in ${event.repos.map((r) => r.path).join(', ')}` : '';
-      console.log(`\nRun finished on ${handoffBranch(event)}${where}: ${n} task${n === 1 ? '' : 's'} landed.`);
+      console.log(`\nRun finished on ${handoffBranchName(event)}${where}: ${n} task${n === 1 ? '' : 's'} landed.`);
       if (isRepoGroup(event)) for (const line of repoResultLines(event)) console.log(`  ${line}`);
       if (event.deferredTo === 'supervisor') console.log('  The supervisor may merge it.');
       console.log('  `ordewell handoff review|merge|discard|cleanup` to land it.');

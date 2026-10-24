@@ -52,7 +52,7 @@ describe('plan footer — the keys that fit the selected task', () => {
     ['a completed task', { status: 'completed' }, {}, ['m undone', 'enter log']],
     [
       'a task with a merge conflict',
-      { status: 'awaiting_user', awaitingReason: 'conflict', isolation: { state: 'conflict', branch: 'b', worktree: '/w' } },
+      { status: 'awaiting_user', awaitingReason: 'conflict', isolation: { state: 'conflict', branch: 'b', worktree: '/w', repos: [] } },
       {},
       ['x resolve conflict', 'enter log'],
     ],
@@ -86,7 +86,7 @@ describe('plan footer — the keys that fit the selected task', () => {
     ['failed', { status: 'failed' }, {}],
     ['completed', { status: 'completed' }, {}],
     ['paused on a usage limit', { status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt: '2999-01-01T00:00:00.000Z', continuable: true }, {}],
-    ['conflicted', { status: 'awaiting_user', awaitingReason: 'conflict', isolation: { state: 'conflict', branch: 'b', worktree: '/w' } }, {}],
+    ['conflicted', { status: 'awaiting_user', awaitingReason: 'conflict', isolation: { state: 'conflict', branch: 'b', worktree: '/w', repos: [] } }, {}],
   ] as const)('fits one row at 100 columns for a %s task', (_name, over, stateOver) => {
     const state = plan([task({ ...over } as Partial<TaskView>)], { ...stateOver });
     expect(packHints(footerHints(state), 100)).toHaveLength(1);

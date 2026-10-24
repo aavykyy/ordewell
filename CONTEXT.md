@@ -1720,8 +1720,12 @@ not listening — a reloaded session, a reconnected webview or socket — is re-
 the handoff and the per-task marks by `Session.runSnapshot()`, not rebuilt from
 the saved run record: the daemon's socket greeting and session reads carry it to
 the terminal, and VS Code adopts it whenever its webview reconnects or a session
-is loaded (the handoff card waits while a run executes). The run is closed only
-on the Session's `run_closed`. A conflicted task carries a **conflict mark** in the plan pane;
+is loaded (the handoff card waits while a run executes). The one exception is a
+CLI command reading a saved plan — `ordewell status` and `ordewell handoff` — where
+the run record is the only thing it has: `isolationViewOfPlan` reads that record —
+migrating the ADR-0013 shape — into the same view, and the branch, base, block and
+repair lines have one wording in core, so the CLI, the TUI and VS Code cannot draw
+the handoff differently. The run is closed only on the Session's `run_closed`. A conflicted task carries a **conflict mark** in the plan pane;
 every other isolation state stays out of the row and appears, with the task's
 branch, only in the expanded detail.
 

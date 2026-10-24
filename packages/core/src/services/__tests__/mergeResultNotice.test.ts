@@ -1,6 +1,59 @@
 import { describe, it, expect } from 'vitest';
-import { describeMergeResult, mergeOutcome } from '../mergeResultNotice';
+import { blockNotice, blockNotices, describeMergeResult, mergeOutcome, repairedLanded, repairedNotice } from '../mergeResultNotice';
 import type { IsolationLandedTask } from '../../interfaces/IWorktreeIsolation';
+
+const repairedTask = (order: number, files?: string[]): IsolationLandedTask => ({
+  taskId: `r${order}`, order, title: `Task ${order}`, ...(files ? { repairedFiles: files } : {}),
+});
+
+describe('repairedNotice — the landing note a surface appends', () => {
+  it('says nothing when no landed task was repaired', () => {
+    expect(repairedNotice({ landed: [{ taskId: 'p', order: 1, title: 'Task p' }] })).toBe('');
+  });
+
+  it('names a repaired task and its files, as a leading-space sentence', () => {
+    expect(repairedNotice({ landed: [repairedTask(1, ['a.ts', 'b.ts'])] })).toBe(' Task 1 (a.ts, b.ts) landed through a conflict repair.');
+  });
+
+  it('names more than one repaired task', () => {
+    expect(repairedNotice({ landed: [repairedTask(1, ['a.ts']), repairedTask(2, ['b.ts']), repairedTask(3)] }))
+      .toBe(' Task 1 (a.ts) and Task 2 (b.ts) landed through conflict repairs.');
+  });
+
+  it('names no task whose repair listed no file, and leaves no empty brackets', () => {
+    expect(repairedNotice({ landed: [repairedTask(1, [])] })).toBe('');
+    expect(repairedLanded({ landed: [repairedTask(1, [])] })).toEqual([]);
+  });
+
+  it('leaves no empty brackets in a merge note either', () => {
+    expect(mergeOutcome({ outcome: 'merged' }, 'ordewell/r1/integration', false, [repairedTask(1, [])]).message)
+      .toBe('Merged ordewell/r1/integration into your checked-out branch.');
+  });
+});
+
+describe('blockNotice — one repo, one line', () => {
+  it('words each reason a Merge all can stop on', () => {
+    const branch = 'ordewell/r1/integration';
+    expect(blockNotice({ repo: 'api', reason: 'merge-in-progress', files: [] })).toBe('api has a merge in progress');
+    expect(blockNotice({ repo: 'api', reason: 'conflict', files: ['a.ts', 'b.ts'] })).toBe('api would conflict in a.ts, b.ts');
+    expect(blockNotice({ repo: 'api', reason: 'uncommitted-changes', files: ['a.ts'] })).toBe('api has uncommitted changes to a.ts');
+    expect(blockNotice({ repo: 'api', reason: 'partial-landing', files: [] })).toBe('api holds part of a task whose landing could not be rolled back');
+    expect(blockNotice({ repo: 'api', reason: 'git-error', files: [] })).toBe('git could not check api');
+    expect(blockNotice({ repo: '.', reason: 'wrong-branch', files: [], expected: 'main', actual: 'feature-x' }))
+      .toBe('your checkout is on feature-x; this run started on main');
+    expect(blockNotice({ repo: 'api', reason: 'wrong-branch', files: [], expected: 'main', rebasing: true }))
+      .toBe('api is in the middle of a rebase; this run started on main');
+    expect(blockNotice({ repo: 'api', reason: 'wrong-branch', files: [], expected: branch, actual: undefined }))
+      .toBe(`api is on a detached HEAD; this run started on ${branch}`);
+  });
+
+  it('keeps every blocked repo in the order Merge all named them', () => {
+    expect(blockNotices([
+      { repo: 'api', reason: 'conflict', files: ['a.ts'] },
+      { repo: 'web', reason: 'uncommitted-changes', files: ['b.ts'] },
+    ])).toEqual(['api would conflict in a.ts', 'web has uncommitted changes to b.ts']);
+  });
+});
 
 describe('describeMergeResult — repaired tasks (ADR-0015)', () => {
   const repaired: IsolationLandedTask[] = [

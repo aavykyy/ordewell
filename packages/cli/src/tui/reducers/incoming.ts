@@ -94,7 +94,7 @@ function runTaskToView(t: RunTask): TaskView {
           ...(Array.isArray(model.availableVariants) ? { availableVariants: model.availableVariants.map((variant) => planLabel(variant)) } : {}),
         }
       : undefined,
-    isolation: t.isolation as TaskView['isolation'],
+    isolation: t.isolation,
     awaitingReason: t.status === 'awaiting_user' && isAwaitingReason(t.awaitingReason) ? t.awaitingReason : undefined,
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && typeof t.resumeAt === 'string' ? { resumeAt: t.resumeAt } : {}),
     ...(t.status === 'skipped' && typeof t.skipReason === 'string' ? { skipReason: sanitize(t.skipReason) } : {}),
