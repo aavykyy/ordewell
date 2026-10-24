@@ -3,7 +3,7 @@ import { createApp, attachWsHandler } from './app';
 import { createRequestListener } from './nodeAdapter';
 import { OrchestratorPool } from './pool/orchestratorPool';
 import { createServer } from 'http';
-import { clearDaemonToken, mintDaemonToken, StructuredRunner } from '@ordewell/core';
+import { clearDaemonToken, mintDaemonToken, processLeaseHost, StructuredRunner } from '@ordewell/core';
 
 const args = process.argv.slice(2);
 let port = 3742;
@@ -21,6 +21,10 @@ if (portIdx !== -1 && args[portIdx + 1]) {
 // outlives its CLI and orphans don't accumulate.
 const watchParentIdx = args.indexOf('--watch-parent');
 const watchParentPid = watchParentIdx !== -1 ? parseInt(args[watchParentIdx + 1], 10) : undefined;
+
+// What another host's refusal names this one as (ADR-0049). Only a TUI starts
+// a daemon it watches, as its private one.
+processLeaseHost().describe({ kind: 'daemon', port, ...(watchParentPid ? { ownerPid: watchParentPid } : {}) });
 
 // Tasks run on the structured transport (ADR-0018) as plain child processes,
 // so one runner serves every plan whatever the host has.

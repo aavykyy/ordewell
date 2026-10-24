@@ -9,6 +9,7 @@ import {
   PlannerNotReadyError,
   PlannerTurnDiscardedError,
   PlannerTurnStoppedError,
+  SessionHeldError,
   SessionNotFoundError,
   TaskControlError,
   WorkspaceNotAProjectError,
@@ -33,6 +34,8 @@ interface Classified {
  */
 function classify(err: unknown): Classified | undefined {
   if (err instanceof SessionNotFoundError) return { status: 404, code: 'session_not_found' };
+  // 409: the session exists; another host has it open right now (ADR-0049).
+  if (err instanceof SessionHeldError) return { status: 409, code: 'session_held' };
   if (err instanceof NoPlanError) return { status: 400, code: 'no_plan' };
   if (err instanceof AlreadyExecutingError) return { status: 409, code: 'already_executing' };
   if (err instanceof WorkspaceNotAProjectError) return { status: 400, code: 'workspace_not_a_project' };
@@ -78,6 +81,7 @@ export function failure(
     ...(classified ? { code: classified.code } : {}),
     ...(err instanceof WorkspaceNotAProjectError ? { workspace: err.workspace } : {}),
     ...(err instanceof PlannerNotReadyError ? { plannerNotReady: err.reason } : {}),
+    ...(err instanceof SessionHeldError ? { sessionHeld: err.held } : {}),
   };
   return c.json(body, status);
 }

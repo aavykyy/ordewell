@@ -127,6 +127,27 @@ what a turn in flight has spent — over the plan's saved copies.
 *Avoid:* "session reset" for the adopt or new-plan cases — only `reset` also
 mints a new identity and clears the model cache.
 
+**Host** — the process that runs Sessions: a daemon (the local daemon a CLI
+command or a TUI's private one drives) or the VS Code extension host. Several
+can run in one checkout at once, which is why a session has a **session lease**.
+A surface is not a host: the TUI and the CLI drive a daemon, which is.
+*Avoid:* "client" for the host (the TUI is the daemon's client), "instance".
+
+**Session lease** (`services/sessionLease.ts`, ADR-0049) — the claim a host
+holds on a session while it has it open, in `lease.json` in the session's
+directory: the holder's pid, a host id minted per process, what kind of host it
+is, since when, a heartbeat, and the process groups of the runners it started.
+A Session claims it before adopting a saved session and before its first save,
+and lets it go when it closes; without it a Session saves nothing and changes
+nothing of its isolation run. Another host is refused the session
+(`SessionHeldError`, daemon code `session_held`) with the holder named, while
+the holder lives; it takes the lease over once the holder's pid is gone or its
+heartbeat is stale, and none of the holder's runner groups is still running. A
+holder that finds its lease taken has *lost* the session: it stops its run and
+never claims it back on its own.
+*Avoid:* "session lock" (the lease outlives no holder, and is taken over
+rather than waited for), "owner" for anything but the holder.
+
 **SessionCatalog** (`services/SessionCatalog.ts`) — what one session may
 assign, behind one interface: the enabled runners, their manifest modes, the
 models discovery found for them, and the allowlist narrowing those. Built in

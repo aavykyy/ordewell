@@ -65,6 +65,7 @@ function host(workspace: string, aiService?: IAiService) {
     setCurrentGoal: (g) => { goal = g; },
     workspaceRoot: () => workspace,
     log: () => {},
+    warn: () => {},
   });
   const deps = {
     get session() { return cell.session!; },

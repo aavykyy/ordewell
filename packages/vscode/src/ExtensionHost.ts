@@ -103,6 +103,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     setCurrentGoal: (goal) => { state.goal = goal; },
     workspaceRoot: () => services.fsAdapter.getWorkspaceRoot(),
     log,
+    warn: (msg) => { void vscodeApi.window.showWarningMessage(msg); },
   });
   const persist = (): void => persistState(persistenceDeps());
   const saveSession = (): void => saveCurrentSession(persistenceDeps());
@@ -415,6 +416,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     taskLogs.dispose();
     persistState(persistenceDeps());
     services.runner.stopAll();
+    // The session closes with the window, and with it its lease (ADR-0049).
+    sessionCell.current?.destroy();
     log('Ordewell deactivated');
   }
 

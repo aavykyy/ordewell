@@ -51,6 +51,8 @@ import { SCRIPT_RUNNER, ScriptRunner } from './ScriptRunner';
 import { checkHandoff, type StoredHandoff } from '../models/Handoff';
 import { userTaskHandoff } from '../models/DerivedHandoff';
 import { readTask, type TaskLogReader } from './readTask';
+import { leasedIsolation } from './leasedIsolation';
+import type { SessionHeld } from './sessionLease';
 
 /** What ran an automatic Merge all: a task reaching its merge gate, or the run settling with landed work unmerged. */
 export type AutoMergeTrigger = { kind: 'gate'; taskId: string } | { kind: 'run_end' };
@@ -384,6 +386,11 @@ export interface TaskOrchestratorOptions {
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
   recordHandoff?: (sessionId: string | undefined, taskId: string, handoff: StoredHandoff) => void;
   taskLog?: TaskLogReader;
+  /**
+   * Who holds the session when it is not this host, read before each change
+   * to the run (ADR-0049); the run is changed only while it answers null.
+   */
+  sessionHeld?: () => SessionHeld | null;
 }
 
 /**
@@ -540,7 +547,8 @@ export class TaskOrchestrator {
   static compose(options: TaskOrchestratorOptions): TaskOrchestrator {
     const store = options.store ?? new PlanStore();
     const output = options.output ?? new BufferedTaskOutputSource();
-    const isolation = options.isolation ?? createWorktreeIsolation({ config: options.config, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}) });
+    const git = options.isolation ?? createWorktreeIsolation({ config: options.config, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}) });
+    const isolation = options.sessionHeld ? leasedIsolation(git, options.sessionHeld) : git;
     const workspaceRoot = options.workspaceRoot ?? (() => process.cwd());
     // The listener callbacks fire only after construction, so the reference
     // below is settled by the time any of them runs.
