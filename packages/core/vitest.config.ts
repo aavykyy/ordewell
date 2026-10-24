@@ -22,6 +22,7 @@ export default defineConfig({
       include: ['src/**/*.ts'],
       exclude: ['**/*.test.ts', '**/__tests__/**', '**/fixtures/**', '**/*.d.ts', 'dist/**'],
       thresholds: {
+        'src/conversation/labels.ts': floor(100, 100, 100),
         'src/services/PlanEditError.ts': floor(100, 100, 100),
         'src/services/PlanEditor.ts': floor(100, 92, 100),
         'src/services/TaskAssignment.ts': floor(100, 97, 100),

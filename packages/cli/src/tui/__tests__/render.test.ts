@@ -1525,8 +1525,8 @@ describe('plan markers', () => {
   it('then says what the plan became, and how many tasks it has', () => {
     const building: SessionMessage = { type: 'plan_token', turnId: 't1', token: '{"tasks":' };
 
-    expect(blockRows(heard(80, building, plan('Plan generated with 2 tasks.', 't1')), '◇')).toEqual(['◇ Plan generated (2 tasks)']);
-    expect(blockRows(heard(80, plan('Plan updated — now 1 task.')), '◇')).toEqual(['◇ Plan updated (1 task)']);
+    expect(blockRows(heard(80, building, plan('Plan generated with 2 tasks.', 't1')), '◇')).toEqual(['◇ Plan generated · 2 tasks']);
+    expect(blockRows(heard(80, plan('Plan updated — now 1 task.')), '◇')).toEqual(['◇ Plan updated · 1 task']);
   });
 });
 
