@@ -128,6 +128,11 @@ selectable, not runnable. End-to-end execution uses `bench/pipeline/fake-claude`
 
 ## Tests
 
+The unit-style suites here use `node:test`, not vitest, so `npm test` does not
+pick them up. They need core built first, and CI runs them right after the
+built core exists:
+
 ```bash
-node --test "bench/**/*.test.mjs"
+npm run build:core
+npm run test:bench
 ```
