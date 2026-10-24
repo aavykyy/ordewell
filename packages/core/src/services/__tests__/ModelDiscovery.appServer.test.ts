@@ -86,4 +86,30 @@ lines.on('line', (line) => {
     const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
     await expect.poll(alive, { timeout: 5000 }).toBe(false);
   });
+
+  it('reports no models, instead of crashing, when the server exits before answering', async () => {
+    const script = stub('process.exit(3);');
+    const started = Date.now();
+
+    const models = await defaultAppServerClient(process.execPath, [script], { timeout: 5000 });
+
+    expect(models).toBeNull();
+    // The exit ends the wait at once; waiting out the deadline would be a stall.
+    expect(Date.now() - started).toBeLessThan(2500);
+  });
+
+  it('gives up at the deadline when the server never answers model/list', async () => {
+    const script = stub(`
+lines.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.id === 1) send({ id: 1, result: {} });
+  // model/list is never answered: a hung server, not a dead one.
+});`);
+    const started = Date.now();
+
+    const models = await defaultAppServerClient(process.execPath, [script], { timeout: 400 });
+
+    expect(models).toBeNull();
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
 });

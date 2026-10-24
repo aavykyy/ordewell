@@ -84,11 +84,23 @@ jobs:
       # The extension integration test drives a real VS Code instance. Cache the
       # ~320 MB download so only the first run on a new VS Code version pays for
       # it; `test:integration` builds its own bundle (tsup.integration.config.ts).
+      #
+      # @vscode/test-electron downloads the latest stable satisfying ^1.90.0, so
+      # a key built from package.json alone restores the previous build after
+      # every VS Code release and still pays the download again. Resolve the list
+      # it resolves and key the cache on the version being tested.
+      - name: Resolve the VS Code version under test
+        id: vscode-version
+        run: |
+          version=$(node -e "fetch('https://update.code.visualstudio.com/api/releases/stable?released=true').then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }).then((v) => process.stdout.write(String(v[0])))")
+          echo "VS Code under test: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Cache the VS Code download
         uses: actions/cache@v4
         with:
           path: packages/vscode/.vscode-test
-          key: vscode-test-${{ runner.os }}-${{ hashFiles('packages/vscode/package.json') }}
+          key: vscode-test-${{ runner.os }}-${{ steps.vscode-version.outputs.version }}
 
       - name: Install xvfb if the image lacks it
         run: |
@@ -154,6 +166,12 @@ jobs:
 
       - name: Package VS Code Extension
         run: npm run package -w packages/vscode
+
+      # What a user installs: the four npm tarballs and this VSIX. This fails on
+      # a missing entry target, a LICENSE or NOTICE npm left out of `files`, a
+      # bundle that cannot start, and a third-party notice the VSIX dropped.
+      - name: Verify packaged npm and VS Code artifacts
+        run: node scripts/package-check.mjs
 
       - name: Upload .vsix
         uses: actions/upload-artifact@v4
