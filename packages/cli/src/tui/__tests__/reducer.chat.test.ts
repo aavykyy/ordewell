@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { initialState, reduce, type Action } from '../reducer';
+import { decodeKey } from '../keys';
 import { render } from '../render';
 import { stripAnsi, style } from '../ansi';
 import type { TuiState } from '../state';
@@ -29,6 +30,13 @@ describe('reduce — typing', () => {
   it('emits no effects for plain typing', () => {
     const { effects } = reduce(initialState(), { type: 'key', key: { name: 'char', char: 'h' } });
     expect(effects).toEqual([]);
+  });
+
+  it('does not type a control key the decoder could not name', () => {
+    // Ctrl-B has no binding and is invisible once drawn; as text it would be
+    // sent with the next goal and stored in the session.
+    const { state } = reduce(initialState(), { type: 'key', key: decodeKey('\x02') });
+    expect(state.editor.text).toBe('');
   });
 
   it('a paste with newlines lands in the editor without submitting', () => {
