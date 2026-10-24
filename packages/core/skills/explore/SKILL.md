@@ -34,7 +34,17 @@ For each promising claim, add a refuter:
 
 A claim is trusted only after its refuter fails to break it.
 
-## 5. Extend the plan
+## 5. Let one judge choose between competing approaches
+
+When the question is which of several approaches to take, explore them side by side and have one task choose:
+
+- Explorers: read-only tasks, each trying one deliberately different approach, with no dependencies between them. Each brief asks for a check the explorer runs, such as a test, a build or a measurement, reported with its commands and their output.
+- A judge: one task that depends on every explorer. It reads their handoffs with `read_task` (with `include_report` where the summary is not enough), tries to break the most promising claim, and names its choice with the evidence: the explorers' checks and its own, not its opinion.
+- Make the judge a research task when its choice changes the shape of the rest of the plan, since only you re-plan. When the choice is local, such as which of three ways to build one module, make the judge the first build task instead, and the build goes on from its choice.
+
+An explorer's code is thrown away with its worktree. Whoever builds re-creates the chosen approach from its report, so ask each explorer for a report that is enough to do that, and promise no prototype that survives.
+
+## 6. Extend the plan
 
 Extend the plan as reports arrive, with the next round, not all of it at once:
 
@@ -44,10 +54,10 @@ Extend the plan as reports arrive, with the next round, not all of it at once:
 
 At the end of each round tell the user what survived, what died and what the next round is.
 
-## 6. Spend your own context on integration
+## 7. Spend your own context on integration
 
 The reports are your input. Do not redo a task's research yourself; read its report, and its output or diff only where the plan rests on it. Your work is to compare claims, reconcile reports that disagree, choose, and see what no single task could.
 
-## 7. Stop
+## 8. Stop
 
 Stop when a claim has survived its refuter and the next step is known: plan the build, as vertical slices with a loop at the end if it has a checkable bar, or answer the user if the finding is the result. Stop too when rounds stop producing anything new: say what is established, what is not and what more would cost, and let the user decide.

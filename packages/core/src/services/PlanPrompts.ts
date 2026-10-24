@@ -91,7 +91,7 @@ function readOnlyGuide(runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefin
  */
 function researchTasksGuide(tools: boolean): string[] {
   return [
-    'Add "research": true to a read-only top-level AI task whose report should come back to you: evidence, as WHO EXPLORES defines it. Its report is its task_complete summary, and when the task ends (passes, fails or is blocked) it wakes you with that report, at every supervisor level, while you keep talking with the user meanwhile. Never on a subtask, an ops task or a loop\'s body.',
+    'Add "research": true to a read-only top-level AI task whose report should come back to you, as WHO EXPLORES says. Its report is its task_complete summary, and when the task ends (passes, fails or is blocked) it wakes you with that report, at every supervisor level, while you keep talking with the user meanwhile. Never on a subtask, an ops task or a loop\'s body.',
     'A research task may run anything sealed and try changes in its own throwaway worktree, but lands nothing. Write its prompt as a brief it can act on without this conversation: what to find out, where to start, what the report must contain (evidence for and against, file paths and line references, what it ran and what happened), and how you will check it. Prefer a command whose exit status settles a point over its prose.',
     `You add a research task with the plan, or ${tools ? 'with edit_plan' : 'in a task-ops reply'} later, and it starts at once without asking. Start one research task for each independent question; the run's Parallel limit bounds what runs at once. In a report turn, start another only when the report opens a genuinely new question.`,
   ];
@@ -173,7 +173,10 @@ export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = tr
  * planner cannot know how long a lookup takes before it starts, so a line
  * drawn by duration sent lookups to cold task sessions and kept evidence the
  * plan rests on in the planner's context, from where only re-typing passes it
- * on. Every other section refers to this one instead of restating it, and it
+ * on. The test is the brief because that is where re-typed evidence ends up,
+ * and a planner that saw no way to plan without evidence explored in its own
+ * turn, so it hears that a first plan may be research alone. Every other
+ * section refers to this one instead of restating it, and it
  * names no section around it, so a sub-planner's role prompt (#33, #112) can
  * include it unchanged.
  */
@@ -185,9 +188,11 @@ export function whoExploresSection(agents: InTurnAgents): string[] {
       : `Find it with your own reads, or with ${agents}, awaited inside this turn.`;
   return [
     'WHO EXPLORES:',
-    'Decide who finds something out by what the result is, never by how long it may take.',
+    'Decide who finds something out by what the result is, never by how long it may take. The test: if any of the result would end up in a task\'s brief, it is evidence; if it only decides what you write or ask, it is orientation.',
     `- Orientation: you need it this turn to answer, ask or outline, only its conclusion matters, and no later task acts on it. ${inTurn}${agents === null ? '' : ' Brief each agent to return a digest: the conclusion and file:line references, no pasted file bodies, a few lines per point.'}`,
-    '- Evidence: a research task, when any of these holds: finding out needs a worktree (write a failing test, build, reproduce); another runner or model should judge it, for a second view or a stronger model; the user should see it and be able to stop it; or a later task will act on its findings. In the last case the later task depends on the research task, so the findings reach it in the research task\'s handoff: do not re-type them into the later task\'s brief. A loop\'s fix may depend on the research task only when the check does: make the check depend on it, and the fix reads the report with `read_task`.',
+    '- Evidence: a task of its own, when any of these holds: finding out needs a worktree (write a failing test, build, reproduce); another runner or model should judge it, for a second view or a stronger model; the user should see it and be able to stop it; or a later task will act on its findings. In the last case the later task depends on it, so the findings reach it in its handoff: do not re-type them into the later task\'s brief. Make it a research task only when you must decide something on its report; one whose report only later tasks read is a read-only task they depend on. A loop\'s fix may depend on it only when the check does: make the check depend on it, and the fix reads the report with `read_task`.',
+    '- A research task\'s summary is what you take in: pull its full report with task_output only where the plan rests on the detail.',
+    '- A first plan may be research tasks alone, when the plan cannot be outlined without their evidence: the outline is a line per task saying what it asks, and you plan the rest when their reports wake you. A vague goal the user can clarify is not one: ask first.',
     '- Search: a problem that needs rounds of branching, where each round\'s reports decide the next, is the explore skill: rounds of research tasks.',
   ];
 }
