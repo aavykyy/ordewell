@@ -822,8 +822,9 @@ export class ExecutionCommands {
         return { refusal: `${NOT_APPROVED_YET} Tasks started with run_task are not a scheduled run, so their dependents start only once the user executes the plan.` };
       }
       return {
-        act: async () => {
+        act: async (stopped) => {
           await this.host.joinRun(0, waiting.length);
+        if (stopped()) throw new Error(STOPPED_BEFORE_START);
           const held = waiting.length === 0 ? '' : ` ${capitalize(named(waiting))} ${waiting.length === 1 ? 'was' : 'were'} added after the user approved the plan, so ${waiting.length === 1 ? 'it waits' : 'they wait'} until they start ${waiting.length === 1 ? 'it' : 'them'} or execute the plan.`;
           return { message: `The plan is running: ${named(live)} ${live.length === 1 ? 'is' : 'are'} already running, and each approved task starts as its dependencies finish.${held}` };
         },
@@ -847,8 +848,10 @@ export class ExecutionCommands {
     }
     return {
       ...(approves.length > 0 ? { approves } : {}),
-      act: async () => {
+      act: async (stopped) => {
         await this.host.runPlan(actor);
+        // A Stop while the run's tasks were spawning withdrew them, so the run this reports never began.
+        if (stopped()) throw new Error(STOPPED_BEFORE_START);
         if (this.host.runBlocked()) return { message: voiceOf(actor).blockedRun };
         const started = this.all().filter(({ task }) => this.host.running(task.id));
         if (started.length > 0) return { message: `The plan is running: ${named(started)} started, and the rest start as their dependencies finish.` };
@@ -953,8 +956,9 @@ export class ExecutionCommands {
     // that there is nothing to run (ADR-0034).
     if (waitOf(this.host.startWaits(task), 'no-prompt')) return { refusal: noPromptRefusal(label, task) };
     return {
-      act: async () => {
+      act: async (stopped) => {
         const queued = await this.host.forceStart(task.id);
+        if (stopped()) throw new Error(STOPPED_BEFORE_START);
         if (queued) return { message: queued, payload: { kind: 'queued', line: queued } };
         if (this.host.runBlocked()) return { message: USER_VOICE.blockedRun };
         return { message: this.host.running(task.id) ? `Started ${label}.` : `${capitalize(label)} is back in the run and starts when a slot is free.` };
@@ -965,8 +969,9 @@ export class ExecutionCommands {
   /** Signing off the review approves every task in the plan, as executing it does: the seam records that before it acts. */
   private prepareApproveReview(): Prepared {
     return {
-      act: async () => {
+      act: async (stopped) => {
         await this.host.approveReview();
+        if (stopped()) throw new Error(STOPPED_BEFORE_START);
         return { message: this.host.runBlocked() ? USER_VOICE.blockedRun : 'Approved the plan: it runs, each task starting once its dependencies finish.' };
       },
     };
