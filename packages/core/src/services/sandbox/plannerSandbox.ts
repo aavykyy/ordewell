@@ -559,6 +559,11 @@ export class PlannerShellSandbox {
     );
   }
 
+  /** The scratch directory every launch here gets as `$TMPDIR` and `$HOME`, made if it is not there. */
+  scratchPath(): string {
+    return this.scratchDir();
+  }
+
   /** The session ended: its scratch directory goes, and a next session starts with a fresh one and its own notice. */
   end(): void {
     if (this.scratch) removeScratch(this.scratch);

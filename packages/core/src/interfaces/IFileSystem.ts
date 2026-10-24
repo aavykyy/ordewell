@@ -90,6 +90,24 @@ export interface TaskShellSite {
 }
 
 /**
+ * Sealed runs of Ordewell's own scripts in a read-only task's shell, while
+ * the shell is held for them (ADR-0050). They are judged by no command rule,
+ * since the task did not write them, but run under the task's sealed profile
+ * and are checked after as each of its sealed runs is: Ordewell runs no git
+ * in a worktree a sealed run wrote anywhere but inside the seal (ADR-0046).
+ */
+export interface OwnSealedRuns {
+  /** The repository roots the task's sealed runs may write: one per repo, none without a worktree. */
+  readonly worktrees: readonly string[];
+  /** Whether a sealed run has started in the shell: until one has, its worktree holds only what Ordewell checked out. */
+  readonly touched: boolean;
+  /** The attempt's scratch directory, which a sealed run has as `$TMPDIR` and `$HOME`. */
+  readonly scratch: string;
+  /** `script` run sealed from `cwd`, one of {@link worktrees}; refused once the shell is stopped, or where no sandbox can seal. */
+  run(script: string, cwd: string): Promise<ToolOutcome>;
+}
+
+/**
  * A read-only task's `run_command` (ADR-0046): the planner's command rules at
  * the task's working directory, with nobody to ask. One per attempt, with a
  * scratch directory of its own; once one of its commands has run sealed,
@@ -97,6 +115,12 @@ export interface TaskShellSite {
  */
 export interface TaskShell {
   run(command: string, signal?: AbortSignal): Promise<ToolOutcome>;
+  /**
+   * Hold the shell for Ordewell's own `work` (ADR-0050): no command of the
+   * task runs until it settles, so nothing changes the worktree between the
+   * sealed runs it makes. `signal` stops those runs.
+   */
+  hold?<T>(work: (runs: OwnSealedRuns) => Promise<T>, signal?: AbortSignal): Promise<T>;
   /** The attempt ended: its scratch directory goes. */
   end(): void;
 }

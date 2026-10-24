@@ -59,6 +59,8 @@ interface ShellSite {
 
 /** Why a read-only task's command did not run where the planner's would have asked or run sealed (ADR-0046). */
 const TASK_UNSEALED = 'A read-only task asks nobody, so this command could only run sealed, and this machine has no sandbox to seal it in.';
+/** Why Ordewell's own script did not run in a read-only task's worktree (ADR-0050). */
+const OWN_UNSEALED = "this machine has no sandbox to seal it in, and Ordewell runs nothing in a read-only task's worktree outside one.";
 const TASK_CONTINUE = 'Continue without it, and say in your report if what it would have shown matters.';
 const OUTWARD_LINKS_REMOVED = 'Removed, since a read-only task may leave no link leading out of its worktree and the workspace:';
 const PLANTED_GIT_REMOVED = 'Removed, since a read-only task may leave no .git for git outside the sandbox to load:';
@@ -334,22 +336,50 @@ export abstract class BaseFileSystem implements IFileSystem {
    */
   taskShell({ cwd, writable, worktrees }: TaskShellSite): TaskShell {
     const sandbox = this.sandbox.withOwnScratch();
+    const task: NonNullable<ShellSite['task']> = { worktree: writable !== undefined, sealed: false };
     const site: ShellSite = {
       root: cwd,
       approval: allowlistOnly(() => this.approval),
       sandbox,
       sealed: { workspace: this.getWorkspaceRoot(), ...(writable ? { writable } : {}), ...(worktrees?.length ? { worktrees } : {}), limits: TASK_SEALED_LIMITS },
-      task: { worktree: writable !== undefined, sealed: false },
+      task,
     };
     // One command at a time: an unsealed one must never read the worktree
     // while a sealed one is still writing it, before its links are checked.
     let last: Promise<unknown> = Promise.resolve();
-    const run = (command: string, signal?: AbortSignal): Promise<ToolOutcome> => {
-      const next = last.then(() => this.runIn(site, command, signal));
-      last = next.catch(() => undefined);
-      return next;
+    const queued = <T>(next: () => Promise<T>): Promise<T> => {
+      const settled = last.then(next);
+      last = settled.catch(() => undefined);
+      return settled;
     };
-    return { run, end: () => sandbox.end() };
+    const roots = worktrees?.length ? [...worktrees] : writable ? [writable] : [];
+    return {
+      run: (command, signal) => queued(() => this.runIn(site, command, signal)),
+      hold: (work, signal) => queued(() => work({
+        worktrees: roots,
+        touched: task.sealed,
+        get scratch() { return sandbox.scratchPath(); },
+        run: (script, at) => this.runOwn(site, roots, script, at, signal),
+      })),
+      end: () => sandbox.end(),
+    };
+  }
+
+  /**
+   * Ordewell's own script in a read-only task's shell (ADR-0050), sealed from
+   * one of its worktree roots. No command rule judges it, since the task did
+   * not write it; it runs under the task's sealed profile and is checked
+   * after as the task's own sealed runs are, so git that reads a worktree a
+   * sealed run wrote runs only inside the seal (ADR-0046).
+   */
+  private async runOwn(site: ShellSite, roots: readonly string[], script: string, cwd: string, signal?: AbortSignal): Promise<ToolOutcome> {
+    if (site.task?.stopped) return refusal(`Not run: ${site.task.stopped}.`);
+    if (!roots.includes(cwd)) return refusal(`Not run: ${cwd} is not a worktree of this task.`);
+    if (!(await site.sandbox.canSeal())) return refusal(`Not run: ${OWN_UNSEALED}`);
+    const sealed = await this.sealedRun(site, script, cwd, signal);
+    if ('refused' in sealed) return sealed.refused;
+    if (site.task?.stopped) return { ...sealed.outcome, success: false, output: `${sealed.outcome.output}${sealed.swept}` };
+    return sealed.outcome;
   }
 
   private async runIn(site: ShellSite, command: string, signal?: AbortSignal, opts: BashOptions = {}): Promise<ToolOutcome> {
@@ -491,6 +521,24 @@ export abstract class BaseFileSystem implements IFileSystem {
     const denied = this.deniedInnerScope(approval, command);
     if (denied) return refusal(`Command not approved: ${command}\nThe user denied "${denied}" this session, and a denial holds for a sealed run too. Continue without it.`);
 
+    const sealed = await this.sealedRun(site, command, site.root, signal);
+    if ('refused' in sealed) return sealed.refused;
+    const { outcome, shell, first, swept } = sealed;
+    if (signal?.aborted) return { ...outcome, output: `${outcome.output}${swept}` };
+    const failed = outcome.timedOut && shell.wallTimeMs !== undefined
+      ? sealedTimeLimitNote(shell.wallTimeMs, site.task !== undefined)
+      : site.task ? TASK_SEALED_FAILURE_NOTE : SEALED_FAILURE_NOTE;
+    const output = `${sealedRunHeader(why, site.task && { worktree: site.task.worktree, first })}\n${outcome.output}${outcome.success ? '' : `\n\n[${failed}]`}${swept}`;
+    return { ...outcome, output };
+  }
+
+  /**
+   * One sealed run from `cwd`, and what follows every one in a read-only
+   * task's shell (ADR-0046): the `.git` record checked, a planted `.git` and
+   * every link out of the worktree removed, and the shell stopped where that
+   * could not hold. `swept` says what was removed, for the result.
+   */
+  private async sealedRun(site: ShellSite, command: string, cwd: string, signal?: AbortSignal): Promise<{ outcome: ToolOutcome; shell: ShellLaunch; first: boolean; swept: string } | { refused: ToolOutcome }> {
     // What the writable directory held before the first sealed run, so the
     // sweep can tell a repository the checkout brought from one a run planted
     // (ADR-0046). Taken lazily, here, before the first run can write.
@@ -508,13 +556,13 @@ export abstract class BaseFileSystem implements IFileSystem {
         : site.sealed;
       shell = await site.sandbox.launchSealed(this.researchShell, sealed);
     } catch (err) {
-      return refusal(`Command not run: its sealed sandbox could not be prepared (${err instanceof Error ? err.message : String(err)}).`);
+      return { refused: refusal(`Command not run: its sealed sandbox could not be prepared (${err instanceof Error ? err.message : String(err)}).`) };
     }
     // As the run starts, not once it succeeds: one that fails, times out or is
     // aborted may still have written.
     const first = site.task !== undefined && !site.task.sealed;
     if (site.task) site.task.sealed = true;
-    const outcome = await this.execBashImpl(command, shell, signal, site.root);
+    const outcome = await this.execBashImpl(command, shell, signal, cwd);
     let removedLinks: string[] = [];
     let removedGit: string[] = [];
     let stuckGit: string[] = [];
@@ -544,12 +592,7 @@ export abstract class BaseFileSystem implements IFileSystem {
       + `${removedGit.length > 0 ? `\n\n[${PLANTED_GIT_REMOVED} ${removedGit.join(', ')}]` : ''}`
       + `${stuckGit.length > 0 ? `\n\n[${PLANTED_GIT_STUCK} ${stuckGit.join(', ')}]` : ''}`
       + `${changedGit.length > 0 ? `\n\n[${GIT_CHANGED} ${changedGit.join(', ')}]` : ''}`;
-    if (signal?.aborted) return { ...outcome, output: `${outcome.output}${swept}` };
-    const failed = outcome.timedOut && shell.wallTimeMs !== undefined
-      ? sealedTimeLimitNote(shell.wallTimeMs, site.task !== undefined)
-      : site.task ? TASK_SEALED_FAILURE_NOTE : SEALED_FAILURE_NOTE;
-    const output = `${sealedRunHeader(why, site.task && { worktree: site.task.worktree, first })}\n${outcome.output}${outcome.success ? '' : `\n\n[${failed}]`}${swept}`;
-    return { ...outcome, output };
+    return { outcome, shell, first, swept };
   }
 
   /** Every command the planner's shell starts goes through here, inside the sandbox where this host has one (ADR-0011 B1, B6). */

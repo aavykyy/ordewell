@@ -206,6 +206,8 @@ export interface TaskOrchestratorDeps {
   isApproved: (taskId: string) => boolean;
   /** A read-only attempt's shell (ADR-0046); absent, its runner is given no `run_command`. */
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
+  /** Keep a read-only attempt's saved patch beside its log (ADR-0050); absent, `save_patch` is not available. */
+  keepPatch?: (taskId: string, attempt: number, patch: Buffer) => string;
   /**
    * Write an attempt's whole handoff into the log of the attempt `sessionId`
    * ran (ADR-0047). A task that ran no session, a user task, gets a log of its own.
@@ -243,6 +245,7 @@ export interface TaskOrchestratorOptions {
   /** Every task is approved unless a Session supplies its record: an orchestrator on its own has no user to ask. */
   isApproved?: (taskId: string) => boolean;
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
+  keepPatch?: (taskId: string, attempt: number, patch: Buffer) => string;
   recordHandoff?: (sessionId: string | undefined, taskId: string, handoff: StoredHandoff) => void;
   taskLog?: TaskLogReader;
   /**
@@ -363,6 +366,7 @@ export class TaskOrchestrator {
       previousHandoffFromLog: deps.previousHandoffFromLog,
       lastLoggedAttempt: deps.lastLoggedAttempt,
       ...(deps.taskShell ? { taskShell: deps.taskShell } : {}),
+      ...(deps.keepPatch ? { keepPatch: deps.keepPatch } : {}),
       recordHandoff: deps.recordHandoff,
       taskLog: deps.taskLog,
       ...(deps.research ? { research: deps.research } : {}),
@@ -445,6 +449,7 @@ export class TaskOrchestrator {
       isApproved: options.isApproved ?? (() => true),
       research: options.research,
       ...(options.taskShell ? { taskShell: options.taskShell } : {}),
+      ...(options.keepPatch ? { keepPatch: options.keepPatch } : {}),
       recordHandoff: options.recordHandoff ?? (() => undefined),
       taskLog: options.taskLog ?? { attempts: () => [], events: () => [] },
     });

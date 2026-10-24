@@ -27,7 +27,7 @@ text markers have no role.
 
 | token | bound to | tools |
 |---|---|---|
-| **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, findings?, artifacts?, report?, reason?})`, `checkpoint({question})`, `read_task({task, attempt?, include_report?})`; a read-only task's also `run_command({command})`, its only shell ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)) |
+| **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, findings?, artifacts?, report?, reason?})`, `checkpoint({question})`, `read_task({task, attempt?, include_report?})`; a read-only task's also `run_command({command})`, its only shell ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)), and `save_patch({})`, which keeps what that shell changed as a patch ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)) |
 | **Planner token** | one session's planner conversation | `list_runners()`, `list_models({runner})`, `submit_plan({tasks})`, `edit_plan({ops})`, `task_query({...})`, `task_output({task, attempt?, kinds?, ...})`, `task_diff({task, repo?, path?, ...})`, `load_skill({name})` (a model-invocable planner skill's instructions; [ADR-0024](../planner/0024-unified-skills.md)) |
 
 #37's runner-facing tools (`board_post`, `report`, …) join the task side later,
@@ -311,3 +311,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-24 — P2: one check (`PlanChangeCheck`) for every planner change, at submit and at landing, with structured refusals; a whole plan is re-held to the plan's rules as it lands.
 - 2026-10-24 — `answer_checkpoint` joins the execution tools, for the supervisor at Act ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-24 — S4 holds for the runner's whole life: OpenCode 2.1.4 evicted an idle planner's services after an hour and rebuilt them with Ordewell's tools inside code mode, out of the planner's reach.
+- 2026-10-24 — a read-only task's token serves `save_patch` (ADR-0050).

@@ -72,7 +72,7 @@ describe('OrdewellMcpServer', () => {
     expect(writer.readOnly).toBeUndefined();
     expect(mcpClientConfig(writer).readOnly).toBeUndefined();
     const tools = (await readOnly.listTools()).tools;
-    expect(tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'read_task', 'run_command', 'task_complete']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'read_task', 'run_command', 'save_patch', 'task_complete']);
     // The hint names what lands, even when a command changes its disposable worktree.
     expect(tools.find((t) => t.name === 'run_command')?.annotations?.readOnlyHint).toBe(true);
     expect((await change.listTools()).tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'read_task', 'task_complete']);
@@ -80,6 +80,28 @@ describe('OrdewellMcpServer', () => {
     expect(await readOnly.callTool({ name: 'run_command', arguments: { command: 'npm test' } })).toMatchObject({ content: [{ type: 'text', text: 'ran npm test' }], isError: false });
     await expect(change.callTool({ name: 'run_command', arguments: { command: 'npm test' } })).rejects.toThrow(/Unknown tool/);
     expect(runCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers save_patch to a read-only task's token alone, and routes its call to that attempt with the call's signal (ADR-0050)", async () => {
+    const server = newServer();
+    const savePatch = vi.fn(async (_args: Record<string, never>, context: McpToolContext): Promise<McpToolReply> => ({ text: `saved, signal ${context.signal.aborted ? 'aborted' : 'live'}` }));
+    const readOnly = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1, readOnly: true }, { savePatch }));
+    const change = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't2', attempt: 1 }, { savePatch }));
+
+    const offered = (await readOnly.listTools()).tools.find((t) => t.name === 'save_patch');
+    expect(offered?.annotations?.readOnlyHint).toBe(true);
+    expect(offered?.inputSchema).toMatchObject({ type: 'object', properties: {} });
+    expect((await change.listTools()).tools.map((t) => t.name)).not.toContain('save_patch');
+
+    expect(await readOnly.callTool({ name: 'save_patch', arguments: {} })).toMatchObject({ content: [{ type: 'text', text: 'saved, signal live' }], isError: false });
+    await expect(change.callTool({ name: 'save_patch', arguments: {} })).rejects.toThrow(/Unknown tool/);
+    expect(savePatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers save_patch as not available where the attempt has no handler for it', async () => {
+    const server = newServer();
+    const readOnly = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1, readOnly: true }, {}));
+    expect(await readOnly.callTool({ name: 'save_patch', arguments: {} })).toMatchObject({ content: [{ type: 'text', text: 'save_patch is not available in this session.' }], isError: true });
   });
 
   // Claude Code in plan mode refuses any MCP tool not marked read-only, even

@@ -120,6 +120,8 @@ const readTaskInput = z.object({
   include_report: z.boolean().optional().describe(`Also return its report, the long form, of at most ${HANDOFF_LIMITS.report} characters.`),
 });
 
+const savePatchInput = z.object({});
+
 const modelAssignment = z.looseObject({
   modelId: z.string(),
   modelLabel: z.string().optional(),
@@ -252,6 +254,7 @@ const answerCheckpointInput = z.object({
 export type TaskCompleteArgs = z.infer<typeof taskCompleteInput>;
 export type CheckpointArgs = z.infer<typeof checkpointInput>;
 export type ReadTaskArgs = z.infer<typeof readTaskInput>;
+export type SavePatchArgs = z.infer<typeof savePatchInput>;
 export type ListRunnersArgs = z.infer<typeof listRunnersInput>;
 export type ListModelsArgs = z.infer<typeof listModelsInput>;
 export type LoadSkillArgs = z.infer<typeof loadSkillInput>;
@@ -317,6 +320,8 @@ export interface TaskToolHandler {
   readTask?: Run<ReadTaskArgs>;
   /** A read-only task's shell (ADR-0046); only its token lists `run_command`. */
   runCommand?: Run<TaskRunCommandArgs>;
+  /** A read-only task's prototype kept as a patch (ADR-0050); only its token lists `save_patch`. */
+  savePatch?: Run<SavePatchArgs>;
 }
 
 export interface PlannerToolHandler {
@@ -516,14 +521,17 @@ export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
 const PLANNER_READ_ONLY = { readOnlyHint: true };
 
 /**
- * A read-only task's tools (ADR-0046): the task tools, and `run_command`, its
- * only shell. Its hint describes its landing effects: nothing it changes
- * reaches the plan's branches.
+ * A read-only task's tools (ADR-0046): the task tools, `run_command`, its
+ * only shell, and `save_patch`, which keeps what that shell changed as a
+ * patch (ADR-0050). Their hints describe their landing effects: nothing either
+ * changes reaches the plan's branches.
  */
 export const READ_ONLY_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   ...TASK_TOOLS,
-  tool('run_command', "Run a shell command: git, the project's tests and scripts, anything you need to look at or try. Nothing you change lands: this task's own worktree, when it has one, is thrown away when the task ends, and only your task_complete summary comes back. Read-only commands, and those the user's allowlist covers, run at once; anything else runs sealed instead, and nobody is ever asked: no network, no home directory or credentials, nothing writable but $TMPDIR (which is also $HOME) and the task's own worktree, so you can try a fix or add a failing test and run the suite there. Once one command has run sealed, every later one does too, so run what needs the network first. git can read the repository but not record anything in it. Where this machine has no sandbox, a command that would run sealed is refused. Use it instead of a shell of your own.",
+  tool('run_command', "Run a shell command: git, the project's tests and scripts, anything you need to look at or try. Nothing you change lands: this task's own worktree, when it has one, is thrown away when the task ends, and only your task_complete handoff comes back, with the patch save_patch kept if you saved one. Read-only commands, and those the user's allowlist covers, run at once; anything else runs sealed instead, and nobody is ever asked: no network, no home directory or credentials, nothing writable but $TMPDIR (which is also $HOME) and the task's own worktree, so you can try a fix or add a failing test and run the suite there. Once one command has run sealed, every later one does too, so run what needs the network first. git can read the repository but not record anything in it. Where this machine has no sandbox, a command that would run sealed is refused. Use it instead of a shell of your own.",
     taskRunCommandInput, (h) => h.runCommand?.bind(h), PLANNER_READ_ONLY),
+  tool('save_patch', "Keep what your commands changed in this task's worktree as a patch, so a later task can apply your prototype after the worktree is thrown away. Ordewell takes every change against the commit the worktree was cut from (new, changed, deleted, renamed and binary files and modes), runs the capture sealed, checks that the patch replays to the same tree, keeps it with this attempt and names it in your handoff as a patch artifact. Nothing of it lands. Not carried: links, submodules, ignored files, empty directories, and what Ordewell linked in. A file over the size cap is dropped and named; one git normalizes on the way in (its text, eol or filter attributes) is carried as git stores it, and named; a case-only rename, or an unreadable file, refuses the whole save. Saving again replaces the patch. Save once your prototype is as you want it handed on, before task_complete.",
+    savePatchInput, (h) => h.savePatch?.bind(h), PLANNER_READ_ONLY),
 ];
 
 /**

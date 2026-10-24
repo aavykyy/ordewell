@@ -170,7 +170,7 @@ describe('OpenCode 2.x — start', () => {
       expect(created.agent).toBe('build');
       expect(created.model).toEqual({ providerID: 'opencode-go', id: 'deepseek-v4.1-flash' });
       for (const action of ['*', 'external_directory', 'edit', 'write', 'patch', 'apply_patch', 'multiedit', 'bash', 'shell', 'task', 'subagent', 'webfetch', 'websearch', 'execute']) expect(created.permissions).toContainEqual({ action, resource: '*', effect: 'deny' });
-      for (const action of ['read', 'grep', 'glob', 'list', 'ordewell_run_command', 'ordewell_task_complete', 'ordewell_checkpoint']) expect(created.permissions).toContainEqual({ action, resource: '*', effect: 'allow' });
+      for (const action of ['read', 'grep', 'glob', 'list', 'ordewell_run_command', 'ordewell_save_patch', 'ordewell_task_complete', 'ordewell_checkpoint']) expect(created.permissions).toContainEqual({ action, resource: '*', effect: 'allow' });
       expect(created.permissions).toContainEqual({ action: 'external_directory', resource: '/workspace/*', effect: 'allow' });
       expect(server.requests.find((r) => r.path === '/api/experimental/mcp/ordewell')?.body).toMatchObject({ config: { codemode: false } });
       const events: AgentEvent[] = [];

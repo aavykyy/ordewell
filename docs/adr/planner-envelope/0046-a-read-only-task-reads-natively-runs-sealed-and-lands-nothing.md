@@ -30,7 +30,9 @@ which runs sealed whatever the planner's envelope would ask about or refuse,
 and every command once one has run sealed, with the task's own worktree
 writable and nobody asked; and it lands nothing:
 its worktree is thrown away when it ends, and its `task_complete` handoff is
-its result ([ADR-0047](../supervision/0047-structured-task-handoffs.md)).**
+its result ([ADR-0047](../supervision/0047-structured-task-handoffs.md)), with
+the patch it saved of its worktree, if it saved one
+([ADR-0050](0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)).**
 The plan flag stays `readOnly`, and means a task that lands nothing.
 
 ### Its shell
@@ -200,9 +202,12 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - **Its worktree is kept for nothing.** Its record is marked read-only
   (`IsolationTaskRecord.readOnly`): `integrate` refuses it, and every release —
   a pass, a failure, a stop, a cancel, a crash-recovery prune — removes it
-  whole, with nothing kept on a branch. Ordewell runs no git inside it once the
-  task has run there: keeping its changes would mean committing, as the user,
-  in a tree its sealed commands wrote, `.git` file included. Removing it
+  whole, with nothing kept on a branch. Ordewell runs no git inside it outside
+  the task's seal once the task has run there: keeping its changes would mean
+  committing, as the user, in a tree its sealed commands wrote, `.git` file
+  included. What the task changed is kept only as the patch it asks for with
+  `save_patch`, which Ordewell captures as the task's own sealed runs, never
+  outside them (ADR-0050). Removing it
   follows no link the task put on the way. `task_diff` refuses a read-only task
   for the same reason — a live read-only worktree's `.git` could be one a
   sealed run planted — and the release and crash-recovery prune of its record
@@ -309,7 +314,8 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   and on macOS one inside a directory the run moved in. Closing that on Linux
   needs a seccomp filter in the bubblewrap backend.
 - No unsealed git runs below a read-only task's working directory: Ordewell's
-  git runs only at repo roots, each runner's own only at the task's working
+  git runs only at repo roots, its patch capture only inside the task's seal
+  (ADR-0050), each runner's own only at the task's working
   directory, and a repo group's root is not persistently writable to its
   sealed runs: a write there is refused where the root is bound read-only, and
   under bubblewrap's throwaway overlay one may succeed only into the layer
@@ -346,3 +352,4 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 
 - 2026-10-22 — the group-root consequence names the refusal where the root is bound read-only, and the testing decisions say which host proves which rule: macOS for Seatbelt, Linux CI for the bind mount, the group-root overlay and the read-only binds.
 - 2026-10-22 — handoffs carry read-only results and `read_task` joins the allowed task tools (ADR-0047, #120).
+- 2026-10-24 — a task's saved patch comes back with its handoff, captured by Ordewell's git only inside the task's seal (ADR-0050).

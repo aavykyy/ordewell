@@ -223,8 +223,8 @@ interface SessionLaunch {
   createAdapter: (runner: string, deps: AgentProcessDeps) => TaskModeAgentAdapter;
   startOptions: TaskStartOptions;
   interruptGraceMs: number;
-  /** Where this attempt's task tools are served (ADR-0022), and a read-only attempt's shell (ADR-0046). */
-  tools: { server: OrdewellMcpServer; scope: TaskTokenScope; shell?: TaskShell };
+  /** Where this attempt's task tools are served (ADR-0022), and a read-only attempt's shell (ADR-0046) and patch (ADR-0050). */
+  tools: { server: OrdewellMcpServer; scope: TaskTokenScope; shell?: TaskShell; savePatch?: (signal: AbortSignal) => Promise<McpToolReply> };
   checkHandoff: (completion: TaskCompleteArgs) => HandoffCheck<TaskCompleteArgs>;
   readTask?: (args: ReadTaskArgs) => McpToolReply;
   onNotice?: (message: string) => void;
@@ -325,7 +325,7 @@ export class StructuredSession extends AbstractRunnerSession {
    * at all throws instead: spawning it again would fail the same way.
    */
   private async startAttached(opts: TaskStartOptions): Promise<void> {
-    const { server, scope, shell } = this.launch.tools;
+    const { server, scope, shell, savePatch } = this.launch.tools;
     const spawned = await spawnAttached({
       runner: this.launch.runner,
       create: () => this.launch.createAdapter(this.launch.runner, this.launch.deps),
@@ -347,6 +347,7 @@ export class StructuredSession extends AbstractRunnerSession {
         ...(this.launch.readTask ? { readTask: async (args) => this.launch.readTask!(args) } : {}),
         // The call's signal aborts when the token is revoked, so a command still running ends with the attempt.
         ...(shell ? { runCommand: async ({ command }, { signal }) => commandReply(await shell.run(command, signal)) } : {}),
+        ...(savePatch ? { savePatch: async (_args, { signal }) => savePatch(signal) } : {}),
       }),
       revoke: (token) => server.revoke(token),
       start: (adapter, credential) => {
@@ -1005,6 +1006,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
         server: this.mcp,
         scope: { sessionId: opts.planSessionId ?? '', taskId: opts.taskId, attempt: opts.attempt ?? 1, ...(opts.shell || opts.mode !== undefined && opts.mode === taggedReadOnlyMode(manifest.modes) ? { readOnly: true } : {}) },
         ...(opts.shell ? { shell: opts.shell } : {}),
+        ...(opts.shell && opts.savePatch ? { savePatch: opts.savePatch } : {}),
       },
       checkHandoff: opts.checkHandoff ?? ((completion) => checkHandoff(completion, opts.taskId, [])),
       ...(opts.readTask ? { readTask: opts.readTask } : {}),

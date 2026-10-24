@@ -10,7 +10,9 @@ import { idSegment, sessionDataDir } from './sessionStore';
  * append-only file per attempt, one event per line. Earlier attempts are
  * kept; the whole tree goes with its session (`deleteSession`). A script
  * task's attempt keeps all of its output beside its log, in
- * `<attempt>.output.txt`: the log holds only the ends of a long one.
+ * `<attempt>.output.txt`: the log holds only the ends of a long one. A
+ * read-only attempt keeps the patch it saved there too, in `<attempt>.patch`
+ * (ADR-0050).
  */
 
 /** Which session's logs, in which workspace. */
@@ -88,6 +90,36 @@ export function prepareTaskOutputFile(location: TaskLogLocation, taskId: string,
   const dir = taskDir(location, taskId);
   fs.mkdirSync(dir, { recursive: true });
   return path.join(dir, `${attempt}.output.txt`);
+}
+
+/** Where a read-only attempt's saved patch is kept, beside its log (ADR-0050). */
+export function taskPatchFile(location: TaskLogLocation, taskId: string, attempt: number): string {
+  return path.join(taskDir(location, taskId), `${attempt}.patch`);
+}
+
+/**
+ * Keep a read-only attempt's patch beside its log, in place of one it saved
+ * before (ADR-0050). Written whole under another name first, so a reader
+ * never finds half a patch. Returns where it is.
+ */
+export function saveTaskPatch(location: TaskLogLocation, taskId: string, attempt: number, patch: Buffer): string {
+  ensureStateDirIgnored(location.baseDir);
+  const file = taskPatchFile(location, taskId, attempt);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const partial = `${file}.${process.pid}-${Date.now()}.partial`;
+  fs.writeFileSync(partial, patch, { flag: 'wx' });
+  fs.renameSync(partial, file);
+  return file;
+}
+
+/** A saved patch, or undefined when that attempt kept none. */
+export function readTaskPatch(location: TaskLogLocation, taskId: string, attempt: number): Buffer | undefined {
+  if (!Number.isInteger(attempt) || attempt < 1) return undefined;
+  try {
+    return fs.readFileSync(taskPatchFile(location, taskId, attempt));
+  } catch {
+    return undefined;
+  }
 }
 
 function isEvent(value: unknown): value is TaskLogEvent {

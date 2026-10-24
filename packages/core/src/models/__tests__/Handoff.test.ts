@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { handoffPreviewLines, handoffReferenceText, handoffWakeLines, readableTaskIds, severityLabel, storedHandoff, worstSeverity, type HandoffDigest } from '../Handoff';
+import { checkHandoff, handoffPreviewLines, handoffReferenceText, handoffWakeLines, readableTaskIds, savedPatchOf, severityLabel, storedHandoff, withPatch, worstSeverity, type HandoffDigest, type HandoffPatch } from '../Handoff';
 import { createTask } from '../Task';
 
 describe('the tasks a task may read (ADR-0047)', () => {
@@ -115,5 +115,34 @@ describe('the commit a done call states', () => {
 
   it('keeps no body when only trailers were in it', () => {
     expect(done('Co-authored-by: Someone <a@b.c>\n')).toEqual({ subject: 'Add the check' });
+  });
+});
+
+describe('a patch a read-only task saved (ADR-0050)', () => {
+  const patch: HandoffPatch = {
+    kind: 'patch', path: '.ordewell/sessions/s/tasks/t/2.patch', attempt: 2, base: '0123456789abcdef0123456789abcdef01234567',
+    files: 3, added: 40, removed: 2, binary: 1, bytes: 5 * 1024 + 512,
+    flags: [{ kind: 'excluded', count: 1, paths: ['.claude'] }, { kind: 'dropped', count: 12, paths: ['big.bin (1.5 MB)'] }],
+  };
+
+  it('reads as one line: where, how much, from which commit, and what it does not carry', () => {
+    expect(handoffReferenceText(patch)).toBe(
+      'patch .ordewell/sessions/s/tasks/t/2.patch (attempt 2): 3 files, 1 binary, +40 -2, 5.5 KB, from commit 0123456789ab; '
+      + 'not carried (links and submodules): 1 file (.claude); dropped over the size cap: 12 files (big.bin (1.5 MB), +11 more)',
+    );
+    expect(handoffReferenceText({ ...patch, files: 1, binary: 0, bytes: 900, flags: undefined })).toBe('patch .ordewell/sessions/s/tasks/t/2.patch (attempt 2): 1 file, +40 -2, 900 B, from commit 0123456789ab');
+  });
+
+  it("is added after the author's artifacts, or alone where the attempt left no handoff", () => {
+    const authored = storedHandoff({ summary: 'Tried it.', artifacts: [{ kind: 'url', url: 'https://example.test' }] })!;
+    expect(withPatch(authored, patch).artifacts).toEqual([{ kind: 'url', url: 'https://example.test' }, patch]);
+    expect(withPatch(undefined, patch)).toEqual({ summary: '', findings: [], findingCount: 0, artifacts: [patch] });
+    expect(savedPatchOf(withPatch(authored, patch))).toBe(patch);
+    expect(savedPatchOf(authored)).toBeUndefined();
+  });
+
+  it('passes the completion check untouched: it is Ordewell\'s own record, not a reference to resolve', () => {
+    const plan = [createTask({ id: 't', order: 1, title: 'T' })];
+    expect(checkHandoff({ summary: '', artifacts: [patch] }, 't', plan)).toEqual({ ok: true, handoff: { summary: '', artifacts: [patch] } });
   });
 });

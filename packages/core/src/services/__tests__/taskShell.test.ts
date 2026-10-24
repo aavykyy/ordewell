@@ -633,6 +633,70 @@ describe("a read-only task's shell (ADR-0046)", () => {
     expect(fs.ran.map((r) => r.command)).toEqual(['npm test', 'cat a.md']);
   });
 
+  describe("Ordewell's own scripts, while the shell is held for them (ADR-0050)", () => {
+    it('runs each sealed from the worktree root, judged by no command rule and with nobody asked, under the task\'s sealed profile', async () => {
+      const fs = session(new RecordingBackend(), guarded({ preApproved: ['!git add *'] }));
+      const shell = fs.taskShell({ cwd: join(worktree, 'pkg'), writable: worktree });
+      await shell.run('npm test');
+      expect((await shell.run('git add -A')).output).toContain('the planner allowlist excludes it');
+
+      const outcome = await shell.hold!(async (own) => {
+        expect(own).toMatchObject({ worktrees: [worktree], touched: true });
+        expect(own.scratch).toBe(fs.ran[0].profile!.env.TMPDIR);
+        return own.run('git add -A', worktree);
+      });
+
+      expect(outcome).toEqual({ success: true, output: 'ran', truncated: false });
+      expect(fs.ran.map((r) => r.command)).toEqual(['npm test', 'git add -A']);
+      expect(fs.ran.at(-1)).toMatchObject({ command: 'git add -A', cwd: worktree, sealed: true, profile: { write: expect.arrayContaining([worktree]), network: false, gitWorktrees: [worktree] } });
+      expect(asked).toEqual([]);
+    });
+
+    it('tells it whether a sealed run has started, before which the worktree is as Ordewell checked it out', async () => {
+      const shell = session().taskShell({ cwd: worktree, writable: worktree });
+      expect(await shell.hold!(async (own) => own.touched)).toBe(false);
+      await shell.run('npm test');
+      expect(await shell.hold!(async (own) => own.touched)).toBe(true);
+    });
+
+    it('runs no command of the task until the work settles', async () => {
+      const fs = session();
+      const shell = fs.taskShell({ cwd: worktree, writable: worktree });
+      let release!: () => void;
+      const held = shell.hold!(async (own) => {
+        await own.run('stage', worktree);
+        await new Promise<void>((resolve) => { release = resolve; });
+        return own.run('export', worktree);
+      });
+      const command = shell.run('cat a.md');
+      await vi.waitFor(() => expect(fs.ran.map((r) => r.command)).toEqual(['stage']));
+
+      release();
+      await Promise.all([held, command]);
+      expect(fs.ran.map((r) => r.command)).toEqual(['stage', 'export', 'cat a.md']);
+    });
+
+    it('refuses a directory that is not a worktree of the task, a shell that is stopped, and a host with no sandbox', async () => {
+      const elsewhere = session().taskShell({ cwd: worktree, writable: worktree });
+      expect(await elsewhere.hold!((own) => own.run('git add -A', workspace))).toMatchObject({ success: false, output: expect.stringContaining('is not a worktree of this task') });
+
+      const none = session(null);
+      expect(await none.taskShell({ cwd: worktree, writable: worktree }).hold!((own) => own.run('git add -A', worktree)))
+        .toMatchObject({ success: false, output: "Not run: this machine has no sandbox to seal it in, and Ordewell runs nothing in a read-only task's worktree outside one." });
+      expect(none.ran).toEqual([]);
+
+      mkdirSync(join(worktree, 'sub'), { recursive: true });
+      writeFileSync(join(worktree, 'sub', '.git'), 'gitdir: /repo/.git/modules/sub\n');
+      const fs = session();
+      fs.effect = ({ sealed }) => { if (sealed) writeFileSync(join(worktree, 'sub', '.git'), 'gitdir: fake\n'); };
+      const stopped = fs.taskShell({ cwd: worktree, writable: worktree });
+      const own = await stopped.hold!((runs) => runs.run('git add -A', worktree));
+      expect(own).toMatchObject({ success: false, output: expect.stringContaining("A .git entry this task's checkout brought changed") });
+      expect(await stopped.hold!((runs) => runs.run('git add -A', worktree))).toMatchObject({ success: false, output: expect.stringContaining("this task's shell is stopped") });
+      expect(fs.ran.map((r) => r.command)).toEqual(['git add -A']);
+    });
+  });
+
   it('asks the sandbox to refuse links in its worktree where it can, and only there (macOS)', async () => {
     const backend = new RecordingBackend();
     const fs = session(backend);
