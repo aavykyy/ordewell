@@ -1018,6 +1018,8 @@ describe('OpenCodeAdapter task mode — resume', () => {
 describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
   const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret' });
   const ordewell = { type: 'remote', url: 'http://127.0.0.1:4555/mcp', headers: { Authorization: 'Bearer tok-secret' }, enabled: true };
+  /** What a process given the server is launched with so OpenCode 2.x never rebuilds the services holding it. */
+  const unevicted = { experimental: { location_idle_timeout: false } };
   const configOf = (env: NodeJS.ProcessEnv) => JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? 'null') as unknown;
   // One rule per tool by its exact name: a pattern would cover a repository server named `ordewell_<anything>` too.
   const taskAllow = { ordewell_task_complete: 'allow', ordewell_checkpoint: 'allow', ordewell_read_task: 'allow' };
@@ -1033,7 +1035,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
   it('hands a task the server and an allow rule for its tools through the environment, never the command line', async () => {
     const { adapter, spawned, env } = await startTask(fakeServer(), taskStart({ mcp }));
 
-    expect(configOf(env)).toEqual({ mcp: { ordewell }, permission: taskAllow });
+    expect(configOf(env)).toEqual({ mcp: { ordewell }, ...unevicted, permission: taskAllow });
     expect(spawned.lastArgs().join(' ')).not.toContain('tok-secret');
     adapter.dispose();
   });
@@ -1055,7 +1057,17 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
   it('hands the planner the same, beside the read-only agent', async () => {
     const { adapter, env } = await startTask(fakeServer(), { kind: 'planner', cwd: '/repo', systemPrompt: 'plan read-only', mcp });
 
-    expect(configOf(env)).toEqual({ mcp: { ordewell }, lsp: false, permission: { ...OPENCODE_PLANNER_PERMISSION, ...plannerAllow } });
+    expect(configOf(env)).toEqual({ mcp: { ordewell }, lsp: false, ...unevicted, permission: { ...OPENCODE_PLANNER_PERMISSION, ...plannerAllow } });
+    adapter.dispose();
+  });
+
+  it('keeps the services holding the server from being evicted, over the workspace\'s own idle timeout', async () => {
+    // 2.x evicts a location idle past this timeout (an hour unless set) and rebuilds it from the launch configuration,
+    // without the runtime replacement that lists Ordewell's tools as tools of their own (checked against 2.1.4).
+    vi.stubEnv('OPENCODE_CONFIG_CONTENT', JSON.stringify({ experimental: { location_idle_timeout: '5 minutes', batch_tool: true } }));
+    const { adapter, env } = await startTask(fakeServer(), taskStart({ mcp }));
+
+    expect((configOf(env) as { experimental: unknown }).experimental).toEqual({ location_idle_timeout: false, batch_tool: true });
     adapter.dispose();
   });
 
@@ -1131,6 +1143,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
       expect(configOf(env)).toEqual({
         ...unrelated,
         mcp: { ...unrelated.mcp, ordewell },
+        ...unevicted,
         permission: { ...unrelated.permission, ...taskAllow },
       });
       expect(carriesParent(env)).toBe(false);
@@ -1148,7 +1161,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
       bare.adapter.dispose();
 
       const tooled = await startTask(fakeServer(), taskStart({ mcp }), workspace);
-      expect(configOf(tooled.env)).toEqual({ model: 'workspace/model', mcp: { ordewell }, permission: taskAllow });
+      expect(configOf(tooled.env)).toEqual({ model: 'workspace/model', mcp: { ordewell }, ...unevicted, permission: taskAllow });
       expect(carriesParent(tooled.env)).toBe(false);
       tooled.adapter.dispose();
     });
@@ -1174,6 +1187,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     expect(configOf(env)).toEqual({
       model: 'anthropic/claude-sonnet-4',
       mcp: { other: { type: 'local', command: ['x'] }, ordewell },
+      ...unevicted,
       permission: { bash: { '*': 'allow' }, ...taskAllow },
       agent: { build: { permission: { edit: 'ask' } } },
     });

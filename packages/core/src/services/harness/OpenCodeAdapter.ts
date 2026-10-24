@@ -28,6 +28,13 @@ const STATUS_POLL_INTERVAL_MS = 1000;
 /** The Basic-auth username `serve` defaults to. Set explicitly so a host's own `OPENCODE_SERVER_USERNAME` cannot win. */
 const SERVER_USERNAME = 'opencode';
 const MCP_STATUS_POLL_MS = 200;
+/**
+ * How long 2.x takes, after it says a server is connected, to offer the model
+ * that server's tools: its tool list refreshes 100 ms after a server's tools
+ * change, debounced (checked against 2.1.4). A prompt sent sooner is offered
+ * none of them.
+ */
+const V2_TOOLS_OFFERED_MS = 300;
 /** The error name of a message that was aborted, which an interrupt causes. */
 const ABORTED = 'MessageAbortedError';
 
@@ -1139,16 +1146,21 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
   /** 2.x only: a 1.x server's saved output was never checked, so it is asked about as any outside read. */
   savedOutput(abs: string): boolean { return this.v2?.savedOutput(abs) ?? false; }
 
-  /** Asks the server, which lists every MCP server it has with the state of its connection. */
+  /**
+   * Asks the server, which lists every MCP server it has with the state of its
+   * connection. On 2.x, connected once the model would be offered the tools.
+   */
   async mcpAttached(): Promise<AttachState> {
     const ordewell = this.ordewell;
     if (!ordewell || !this.baseUrl) return 'failed';
-    return awaitAttach(async () => {
+    const state = await awaitAttach(async () => {
       if (this.exited) return 'failed';
       const servers = this.v2 ? await this.v2McpStatus() : await this.json<Record<string, { status?: string } | undefined>>('GET', '/mcp').catch(() => null);
       if (servers) this.mcpServers = Object.keys(servers).filter((name) => name !== ordewell.name);
       return OPENCODE_ORDEWELL.attachState(servers?.[ordewell.name]?.status);
     }, MCP_ATTACH_TIMEOUT_MS, MCP_STATUS_POLL_MS, this.processEnded);
+    if (state === 'connected' && this.v2) await new Promise((resolve) => setTimeout(resolve, V2_TOOLS_OFFERED_MS));
+    return state;
   }
 
   /** 2.x lists its servers as `{ name, status: { status } }`, and only once it has started connecting them. */

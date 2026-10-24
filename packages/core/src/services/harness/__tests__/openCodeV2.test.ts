@@ -865,6 +865,90 @@ describe('OpenCode 2.x — MCP servers', () => {
     adapter.dispose();
   });
 
+  it.each([
+    ['planner', () => plannerStart({ mcp: ORDEWELL })],
+    ['task', () => taskStart({ mcp: ORDEWELL })],
+  ])('keeps a %s\'s Ordewell tools out of code mode on a turn after OpenCode rebuilt its services', async (_role, opts) => {
+    // 2.x rebuilds an evicted or reloaded location from the configuration it
+    // was launched with: a server replaced at runtime is back in code mode,
+    // still connected, its tools offered to the model only inside `execute`
+    // (checked against 2.1.4).
+    let outsideCodeMode = false;
+    const offered: boolean[] = [];
+    const server = fakeServer({
+      'PUT /api/experimental/mcp/ordewell': (body) => {
+        outsideCodeMode = (body as { config: { codemode?: boolean } }).config.codemode === false;
+        return { status: 204 };
+      },
+      [`POST /api/session/${SES}/prompt`]: () => {
+        offered.push(outsideCodeMode);
+        return { data: { id: 'msg_user', type: 'user' } };
+      },
+    });
+    const { adapter } = await start(server, opts());
+    const turn = async (n: number) => {
+      const ended = adapter.send('go', () => {});
+      const stream = await server.stream(n);
+      await until(() => offered.length > n);
+      stream.push(started());
+      stream.push(succeeded());
+      await ended;
+    };
+
+    await turn(0);
+    outsideCodeMode = false;
+    await turn(1);
+
+    expect(offered).toEqual([true, true]);
+    adapter.dispose();
+  });
+
+  it('reports Ordewell\'s server connected only once OpenCode offers the model its tools', async () => {
+    // 2.x hands a server's tools to the model 100 ms after they change, debounced, and says
+    // the server is connected before that: a prompt sent at once is offered none (checked against 2.1.4).
+    let connectedAt: number | null = null;
+    const offered: boolean[] = [];
+    const server = fakeServer({
+      'GET /api/mcp': () => {
+        connectedAt ??= Date.now();
+        return { data: [{ name: 'ordewell', status: { status: 'connected' } }] };
+      },
+      [`POST /api/session/${SES}/prompt`]: () => {
+        offered.push(connectedAt !== null && Date.now() - connectedAt >= 100);
+        return { data: { id: 'msg_user', type: 'user' } };
+      },
+    });
+    const { adapter } = await start(server, plannerStart({ mcp: ORDEWELL }));
+    expect(await adapter.mcpAttached()).toBe('connected');
+
+    const ended = adapter.send('go', () => {});
+    const stream = await server.stream();
+    await until(() => offered.length > 0);
+    stream.push(started());
+    stream.push(succeeded());
+    await ended;
+
+    expect(offered).toEqual([true]);
+    adapter.dispose();
+  });
+
+  it('fails a planner\'s turn, sending nothing, when OpenCode will not take Ordewell\'s tools out of code mode again', async () => {
+    let refuse = false;
+    const server = fakeServer({ 'PUT /api/experimental/mcp/ordewell': () => ({ status: refuse ? 500 : 204 }) });
+    const { adapter } = await start(server, plannerStart({ mcp: ORDEWELL }));
+    refuse = true;
+
+    const events: AgentEvent[] = [];
+    await adapter.send('go', (e) => events.push(e));
+
+    expect(events).toEqual([{
+      type: 'error',
+      message: 'OpenCode would not list Ordewell\'s tools as tools of their own again, and the planner may not reach them inside code mode: the message was not sent.',
+    }]);
+    expect(server.requests.some((r) => r.path.endsWith('/prompt'))).toBe(false);
+    adapter.dispose();
+  });
+
   it('denies a planner `execute`, which 2.x never asks about', async () => {
     const server = fakeServer();
     (await start(server, plannerStart({ mcp: ORDEWELL }))).adapter.dispose();
