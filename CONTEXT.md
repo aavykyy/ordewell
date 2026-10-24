@@ -2872,6 +2872,22 @@ in the surface.
 one — see *Waiting for input*), "task card" (VS Code's component) and "task
 line" (the TUI's) for the view itself — they are drawings of it.
 
+**Task log header view** (`taskLogHeaderView`, `core/src/taskRow/logHeader.ts`)
+— what an opened task's log says above its blocks, decided once and drawn by
+the TUI and VS Code's task-log tab (ADR-0018, V1): the state word and its kind
+(a settled task first, then a runner request waiting for an answer, a live turn
+as `Working`, what an `awaiting_user` task waits on — its *AWAITING_LABELS*
+reason, with a *Checkpoint* kind — then the store's own status, with a failed or
+stopped turn named first), `Resumes at 8:10pm` while a usage-limit pause resumes
+on its own, whether the composer continues or resumes the task in its saved
+session (ADR-0018, K1), the usage rows for the attempt on screen (that
+attempt's own numbers with the task total under a past one), and the runner
+commands that attempt loaded. A surface paints and cases these and derives none
+of them; an earlier attempt shows the commands it loaded, not the latest log's.
+*Avoid:* "log status" for the view — the store's status is one input to its
+state, not the state — and deriving a header word from `planStatus` in a
+surface.
+
 **Command surface** — the set of things a user can ask for by name. It is one set
 with two spellings: a TUI slash command (`SLASH_COMMANDS` in `tui/slash.ts`) and
 an `ordewell` subcommand (`COMMANDS` in `commands/registry.ts`), and

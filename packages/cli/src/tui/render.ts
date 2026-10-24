@@ -12,8 +12,8 @@ import {
 } from './layout';
 import { chatEditorRoomFor, chatPaneWidth, chatPromptLabel, paneColumns, planPaneWidth } from './geometry';
 import { currentHandoff, diffRoom, handoffActions } from './handoff';
-import { capConflictFiles, handoffBaseLine, handoffBranchName, isRepoGroup, repoResultLines, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
-import { matchingItems, runnerCommands, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
+import { capConflictFiles, handoffBaseLine, handoffBranchName, isRepoGroup, repoResultLines, taskLogCommands, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
+import { matchingItems, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
 import type { StepperState } from './reducers/stepper';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 
@@ -347,11 +347,11 @@ function composerLines(state: TuiState, view: ComposerView | null): string[] {
   // following row down one line, so newlines/tabs are squashed to one row.
   if (!lines || !view) {
     const visible = text.replace(/\n/g, '¶').replace(/\t/g, ' ');
-    const painted = paintSpans(visible, 0, highlightSpans(text, state.taskView ? runnerCommands(state.taskView) : null));
+    const painted = paintSpans(visible, 0, highlightSpans(text, state.taskView ? taskLogCommands(state.taskView.view) : null));
     return [prompt + painted + suggest(state, room - width(visible))];
   }
 
-  const spans = highlightSpans(view.text, state.taskView ? runnerCommands(state.taskView) : null);
+  const spans = highlightSpans(view.text, state.taskView ? taskLogCommands(state.taskView.view) : null);
   // The caret is derived from the same wrapped lines rather than re-wrapping,
   // which doubled the cost of every keystroke on a long input.
   const { line: lineIndex, col } = cursorInLines(lines, cursor - view.base, view.text.length);
@@ -379,7 +379,7 @@ function suggest(state: TuiState, room: number): string {
   if (state.focus === 'plan' || room <= 2) return '';
   const token = activeToken(state.editor.text, state.editor.cursor);
   if (!token) return '';
-  const matches = composerCompletions(token, state.taskView ? runnerCommands(state.taskView) : null);
+  const matches = composerCompletions(token, state.taskView ? taskLogCommands(state.taskView.view) : null);
   if (matches.length === 0) return '';
   const names = matches.join(' ');
   return style.bandGrey(`  ${truncate(names, Math.max(0, room - 2))}`);

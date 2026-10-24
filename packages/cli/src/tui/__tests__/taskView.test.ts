@@ -308,6 +308,11 @@ describe('the task view draws as a runner, not the planner', () => {
     expect(plain(waiting)).toContain('waiting for your input');
   });
 
+  it('says why a skipped task was skipped', () => {
+    const skipped = opened({ tasks: [task({ status: 'skipped', skipReason: 'no GPU on this host' })] });
+    expect(plain(skipped)).toContain('skipped: no GPU on this host');
+  });
+
   it('labels the composer with the task number', () => {
     expect(plain(opened())).toContain('→ Task 1');
     expect(plain(opened({ taskView: null }))).not.toContain('→ Task 1');

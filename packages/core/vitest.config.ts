@@ -34,6 +34,7 @@ export default defineConfig({
         'src/services/runState.ts': floor(100, 100, 100),
         'src/taskRow/actions.ts': floor(100, 100, 100),
         'src/taskRow/index.ts': floor(100, 100, 100),
+        'src/taskRow/logHeader.ts': floor(100, 100, 100),
         'src/taskRow/status.ts': floor(100, 100, 100),
         'src/taskRow/texts.ts': floor(100, 100, 100),
         'src/taskRow/view.ts': floor(100, 100, 100),

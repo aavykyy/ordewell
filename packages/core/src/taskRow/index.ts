@@ -4,6 +4,8 @@ export { taskRowActions, markAction, taskActionCommand, opsEditable } from './ac
 export type { TaskRowAction, TaskRowPlacement, TaskAction } from './actions';
 export { taskRowView, namedRepos, loopRowParts } from './view';
 export type { TaskRowUsage, TaskRowHandoff, TaskRowView, TaskRowLoop, TaskRowSubject, TaskRowIsolation, TaskRowContext, TaskRowKind } from './view';
+export { taskLogHeaderView, taskLogCommands, logContinues, logResumes } from './logHeader';
+export type { TaskLogHeaderTask, TaskLogHeaderView, TaskLogHeaderKind, TaskLogHeaderUsage } from './logHeader';
 export { titledRefs, dependentsNotice, loopLeaveNotice, pastGateConfirmation, newTaskFields } from './texts';
 export type { NewTaskFields } from './texts';
 export { assignmentIssue, assignmentIssueText } from '../services/AssignmentScope';

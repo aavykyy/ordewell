@@ -1,4 +1,4 @@
-import type { ApprovalDecision, AwaitingReason, DisplayBlock, RunnerCommand, StructuredTurnEnd, TaskStatus, TaskUsageSummary } from '@ordewell/core';
+import type { ApprovalDecision, DisplayBlock, TaskLogHeaderView } from '@ordewell/core';
 
 /*
  * The messages between the extension host and a task-log panel (ADR-0018, V1).
@@ -19,50 +19,26 @@ export interface TaskLogQueuedMessage {
 }
 
 /**
- * Everything the panel draws besides the log blocks: the header's identity and
- * live state, the attempt switcher, and the composer's queue. Derived on the
- * host from the reduced view and the task, so the panel never has to know the
- * plan.
+ * Everything the panel draws besides the log blocks: the header's identity,
+ * core's one reading of what it says, the attempt switcher, and the
+ * composer's queue. Derived on the host from the reduced view and the task, so
+ * the panel never has to know the plan.
  */
 export interface TaskLogStatus {
-  commands?: readonly RunnerCommand[];
   taskId: string;
   order: number;
   /** The task's dotted reference ("2", "2.1"), for a subtask whose own order restarts at 1. */
   orderLabel?: string;
   title: string;
   runner: string;
-  planStatus: TaskStatus;
-  awaitingReason?: AwaitingReason;
-  /** Why a skipped task was skipped, so its header says more than "Skipped" (ADR-0018, W1). */
-  skipReason?: string;
-  /** "Resumes at 8:10pm" while a task paused on a usage limit resumes on its own (#84); absent otherwise. */
-  resumes?: string;
-  /** How many of the runner's tool requests wait for an answer (ADR-0018, A1). */
-  awaitingApproval: number;
-  /** A turn is live. */
-  working: boolean;
-  /** How the last turn ended; absent before the first one does. */
-  lastTurnEnd?: StructuredTurnEnd;
+  /** The state, resume time, continuation, usage and runner commands, worded once in core (ADR-0018, V1). */
+  header: TaskLogHeaderView;
   /** Messages the runner has not read yet, oldest first. */
   queued: readonly TaskLogQueuedMessage[];
   /** Attempts that have a saved log, oldest first. */
   attempts: readonly number[];
   /** Which attempt the blocks below belong to. */
   attempt: number;
-  /** The task finished and can be continued in its saved session (ADR-0018, K1): the message box continues it. */
-  continuable: boolean;
-  /** Paused on a usage limit with a saved session: Resume now is offered, and the message box resumes it. */
-  resumable?: boolean;
-  /**
-   * The usage line for the attempt on screen: that attempt's own spend and
-   * meter on a past attempt, and the task's whole spend with the latest
-   * meter on the latest one (as the TUI's task view draws it). A task with no
-   * attempt ledger falls back to the loaded log's own report.
-   */
-  usage?: Pick<TaskUsageSummary, 'totals' | 'contextFill'>;
-  /** The task's whole spend while an earlier attempt is on screen, labelled "task total" beside `usage`. */
-  usageTotal?: Pick<TaskUsageSummary, 'totals' | 'contextFill'>;
 }
 
 export type HostToTaskLog =

@@ -1,11 +1,11 @@
-import { blockingFailures, DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, NO_TURN, fromTranscript, holdPrompt, taskStartedNotice, type RunnerId } from '@ordewell/core';
+import { blockingFailures, DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, NO_TURN, fromTranscript, holdPrompt, taskLogCommands, taskStartedNotice, type RunnerId } from '@ordewell/core';
 import { chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
 import { applyKey, commit } from './editor';
 import { say, wiped } from './transcript';
 import { blockedPicker, handoffArrived, showDiff } from './handoff';
-import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, runnerCommands, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { syncApprovals } from './reducers/approvals';
@@ -560,7 +560,7 @@ function handleKey(state: TuiState, key: Key): Step {
   if (key.name === 'wheelignored') return step(state);
   if (key.name === 'tab' && state.focus === 'chat') {
     const token = activeToken(state.editor.text, state.editor.cursor);
-    const matches = token ? composerCompletions(token, state.taskView ? runnerCommands(state.taskView) : null) : [];
+    const matches = token ? composerCompletions(token, state.taskView ? taskLogCommands(state.taskView.view) : null) : [];
     if (token && matches.length > 0) {
       const { text: full } = state.editor;
       const completed = `/${matches[0]} `;
@@ -632,7 +632,7 @@ function submit(state: TuiState): Step {
     const taskId = state.taskView.taskId;
     const task = findTask(state.tasks, taskId);
     const command = parseRunnerCommand(text);
-    const offered = runnerCommands(state.taskView);
+    const offered = taskLogCommands(state.taskView.view);
     if (command && offered.length > 0 && !runnerCommandFor(offered, command.name)) {
       const notice = `/${command.name} is not a command ${task?.assignedRunner ?? 'the runner'} offers this task: type / to see them.`;
       return step({ ...cleared, taskView: { ...state.taskView, notice } });

@@ -10,7 +10,7 @@ import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { approvalLabel, scriptTaskText, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeLabel, resumeTime, runnerForProvider, severityLabel, taskRowView, taskStatusKind, tasksTotalText, taskUsageSummary, plannerContextFill, usageText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
+import { scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, severityLabel, taskLogHeaderView, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -256,13 +256,7 @@ function queuedTaskBubble(message: QueuedTaskMessage, target: boolean, sends: bo
     : truncate(`  ${line}`, cols));
 }
 
-/**
- * Completion can kill a runner before its log's turn ends, so a settled
- * task's status wins. Otherwise a runner request waiting for an answer wins,
- * then a live turn, then what an `awaiting_user` task waits on (a checkpoint
- * over plain input), then the task's own status — which is worded through
- * core's `TaskStatusKind`, not printed raw as the store spells it.
- */
+/** Every status kind's word in a plan row, sentence case. */
 const STATUS_WORD: Record<TaskStatusKind, string> = {
   done: 'Done',
   failed: 'Failed',
@@ -274,33 +268,46 @@ const STATUS_WORD: Record<TaskStatusKind, string> = {
   todo: 'To do',
 };
 
-function taskActivity(task: TaskView | undefined, working: boolean): string {
-  if (task?.status === 'completed' || task?.status === 'failed') return inRow(STATUS_WORD[taskStatusKind(task)]);
-  const approvals = approvalLabel(task?.awaitingApproval);
-  if (approvals) return inRow(approvals);
-  if (working) return 'working';
-  if (task?.status === 'awaiting_user') {
-    const resumes = resumeLabel(task);
-    return [inRow(awaitingLabel(task) ?? 'Waiting for your input'), resumes ? inRow(resumes) : ''].filter(Boolean).join(' · ');
-  }
-  return task ? inRow(STATUS_WORD[taskStatusKind(task)]) : '';
+/**
+ * The task as the opened log's header reads it: the store's facts plus the
+ * silence only this surface tracks. The daemon's count of runner requests
+ * waiting for an answer is passed beside it.
+ */
+function logHeaderTask(task: TaskView | undefined): TaskLogHeaderTask {
+  return {
+    status: task?.status ?? '',
+    ...(task?.awaitingReason ? { awaitingReason: task.awaitingReason } : {}),
+    ...(task?.skipReason !== undefined ? { skipReason: task.skipReason } : {}),
+    resumeAt: task?.resumeAt ?? null,
+    idleSince: task?.idleSince ?? null,
+    continuable: task?.continuable === true,
+    attemptUsage: task?.attemptUsage ?? [],
+  };
+}
+
+/** What core says the opened task's log header shows: one reading for both surfaces (ADR-0018, V1). */
+function logHeader(state: TuiState, tv: NonNullable<TuiState['taskView']>): TaskLogHeaderView {
+  const task = findTask(state.tasks, tv.taskId);
+  return taskLogHeaderView(logHeaderTask(task), tv, task?.awaitingApproval ?? 0, tv.attempt);
 }
 
 /** The task view's two pinned rows: the accent bar, and the keys it owns. */
 function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>, cols: number): string[] {
   const task = findTask(state.tasks, tv.taskId);
+  const header = logHeader(state, tv);
   const parts = [
     `→ Task ${task ? refFor(state, task).slice(1) : '?'}`,
     task?.title ?? '(task removed)',
     task?.assignedRunner ?? '',
-    taskActivity(task, tv.view.working),
+    task ? inRow(header.state.label) : '',
+    header.resumes ? inRow(header.resumes) : '',
   ].filter(Boolean);
   const approval = waitingApproval(tv);
   const hint = approval
     ? ['ctrl-y allow', ...(approval.allowForTask ? ['ctrl-t allow for task'] : []), 'ctrl-g deny (composer text is the note)']
     : waitingCheckpoint(task)
       ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject', 'ctrl-x stop runner']
-      : task && resumeLabel(task)
+      : header.resumes
         ? ['ctrl-x don\'t resume']
         : [...(runnerStoppable(state) ? ['ctrl-x stop runner'] : []), 'ctrl-r remove queued', 'ctrl-s send now'];
   if (approval && waitingCheckpoint(task)) hint.push('then the checkpoint');
@@ -479,7 +486,7 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   // The usage rows are the session's (or the opened task's), not lines of the
   // transcript: they keep the pane's bottom rows while everything above them
   // scrolls — unless the pane is a single row, which belongs to the conversation.
-  const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, blocks, cols) : [...plannerResendRow(state, cols), ...tokenRow(blocks, cols)];
+  const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, cols) : [...plannerResendRow(state, cols), ...tokenRow(blocks, cols)];
   // The per-model rows are the expendable part: they yield to the transcript
   // so a short pane never trades its last conversation row for a breakdown.
   const footer = usage.slice(0, Math.max(1, rows - taskHeader.length - 1));
@@ -504,22 +511,14 @@ const tokenRow = (blocks: readonly DisplayBlock[], cols: number): string[] => {
 };
 
 /**
- * The opened task's usage: its whole spend across every attempt, with the meter
- * of the latest. On a past attempt that attempt's own numbers come first, the
- * task total under them. An attempt with no ledger of its own — a log saved
- * before logs and ledgers shared one number — has the log's own last usage
- * block there instead, and still the task total.
+ * The opened task's usage, as core's log header words it: its whole spend
+ * across every attempt, with the meter of the latest. On a past attempt that
+ * attempt's own numbers come first, the task total under them. An attempt with
+ * no ledger of its own — a log saved before logs and ledgers shared one number
+ * — has the log's own last usage block there instead, and still the task total.
  */
-function taskUsageFooter(state: TuiState, tv: NonNullable<TuiState['taskView']>, blocks: readonly DisplayBlock[], cols: number): string[] {
-  const task = findTask(state.tasks, tv.taskId);
-  const reported = task?.attemptUsage ?? [];
-  if (!task || reported.length === 0) return tokenRow(blocks, cols);
-  const onScreen = tv.attempt > 0 ? reported.find((a) => a.attempt === tv.attempt) : reported.at(-1);
-  const total = usageText(taskUsageSummary(task));
-  const totalRow = total ? [style.grey(truncate(onScreen === reported.at(-1) ? total : `task total: ${total}`, cols))] : [];
-  if (onScreen === reported.at(-1)) return totalRow;
-  const own = onScreen ? usageText({ totals: onScreen.totals, contextFill: plannerContextFill(onScreen) }) : null;
-  return [...(onScreen ? (own ? [style.grey(truncate(`attempt ${onScreen.attempt}: ${own}`, cols))] : []) : tokenRow(blocks, cols)), ...totalRow];
+function taskUsageFooter(state: TuiState, tv: NonNullable<TuiState['taskView']>, cols: number): string[] {
+  return logHeader(state, tv).usage.map((row) => style.grey(truncate(row.text, cols)));
 }
 
 /** How far back the chat pane can be scrolled at the size it is about to be painted. */

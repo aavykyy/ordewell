@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { ConversationBlocks } from '../chat/components/ChatMessage';
 import { useFollowOutput } from '../chat/followOutput';
-import { contextMeterTitle, hasHiddenDetail, usageText } from '@ordewell/core/plan-utils';
+import { contextMeterTitle, hasHiddenDetail } from '@ordewell/core/plan-utils';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type PatchedView } from '../../shared/conversationPatch';
 import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../../shared/taskLogProtocol';
 import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
-import { taskLogState } from './taskLogState';
 import PendingMessages, { QUEUE_TITLE, SendKeyHint, isSendNowKey, type PendingMessage } from '../chat/components/PendingMessages';
+import type { TaskLogHeaderView } from '@ordewell/core';
 
 declare function acquireVsCodeApi(): { postMessage(message: TaskLogToHost): void; setState(state: unknown): void };
 
@@ -15,6 +15,20 @@ const vscode = acquireVsCodeApi();
 function noop(): void {}
 
 const STOP_ARM_MS = 2_000;
+
+/** How a header state is painted: the CSS class each kind shares, decided beside the markup that uses it. */
+const STATE_CLASS: Record<TaskLogHeaderView['state']['kind'], string> = {
+  done: 'done',
+  failed: 'failed',
+  skipped: 'idle',
+  blocked: 'waiting',
+  awaiting: 'waiting',
+  checkpoint: 'checkpoint',
+  approval: 'approval',
+  running: 'working',
+  quiet: 'waiting',
+  todo: 'idle',
+};
 
 /**
  * One structured task's log (ADR-0018, V1), in its own editor tab. It draws
@@ -27,17 +41,16 @@ export default function TaskLogApp() {
   const [view, setView] = useState<PatchedView>(EMPTY_PATCHED_VIEW);
   const [status, setStatus] = useState<TaskLogStatus | null>(null);
   const [detailAll, setDetailAll] = useState(false);
-  const usageLine = status?.usage ? usageText(status.usage) : null;
-  const usageTotalLine = status?.usageTotal ? usageText(status.usageTotal) : null;
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   const [stopArmed, setStopArmed] = useState(false);
 
   const blocks = useMemo(() => patchedBlocks(view), [view]);
   const followRef = useFollowOutput<HTMLDivElement>(blocks);
-  const state = status ? taskLogState(status) : null;
+  const header = status?.header;
+  const state = header?.state;
   const hasDetail = useMemo(() => hasHiddenDetail(blocks), [blocks]);
-  const commands = status?.commands ?? [];
+  const commands = header?.commands ?? [];
   const completion = useRunnerCommands(text, setText, commands);
   const canSend = text.trim().length > 0;
 
@@ -79,8 +92,8 @@ export default function TaskLogApp() {
 
   // A finished task has no turn to message: its box continues it instead, and
   // one paused on a usage limit is resumed by it.
-  const continues = status?.continuable === true;
-  const resumes = status?.resumable === true;
+  const continues = header?.continuable === true;
+  const resumes = header?.resumable === true;
 
   const send = (): void => {
     const value = text.trim();
@@ -100,7 +113,7 @@ export default function TaskLogApp() {
     setText('');
   };
 
-  const working = status?.working === true && state?.kind !== 'done' && state?.kind !== 'failed';
+  const working = header?.working === true && state?.kind !== 'done' && state?.kind !== 'failed';
   // Force send (ADR-0023, F1) needs a turn to interrupt; a finished task's box continues it instead.
   const canSendNow = working && canSend && !continues && !(commands.length > 0 && text.trim().startsWith('/'));
 
@@ -160,15 +173,15 @@ export default function TaskLogApp() {
         <div className="task-log-header">
           <span className="task-log-title">Task {status.orderLabel ?? status.order} · {status.title}</span>
           {status.runner && <span className="task-log-runner">{status.runner}</span>}
-          {state && <span className={`task-log-state ${state.kind}`}>{state.label}</span>}
-          {status.resumes && <span className="task-log-runner">{status.resumes}</span>}
+          {state && <span className={`task-log-state ${STATE_CLASS[state.kind]}`}>{state.label}</span>}
+          {header?.resumes && <span className="task-log-runner">{header.resumes}</span>}
           {resumes && (
             <button type="button" className="task-log-detail" onClick={() => vscode.postMessage({ type: 'resumeNow' })}
               title="The limit has reset: resume it in its saved session now">
               Resume now
             </button>
           )}
-          {status.resumes && (
+          {header?.resumes && (
             <button type="button" className="task-log-detail" onClick={() => vscode.postMessage({ type: 'cancelResume' })}
               title="Keep it from resuming on its own: resume or retry it yourself once the limit resets">
               Don't resume
@@ -207,19 +220,11 @@ export default function TaskLogApp() {
               onAnswerApproval={(id, decision) => vscode.postMessage({ type: 'answerApproval', id, decision })} />}
       </div>
 
-      {usageLine && (
-        <div className="usage-line" role="status">
-          <span title={status?.usage?.contextFill && contextMeterTitle(status.usage.contextFill)}>
-            {usageTotalLine ? `attempt ${status?.attempt}: ${usageLine}` : usageLine}
-          </span>
+      {header?.usage.map((row, i) => (
+        <div key={i} className={i === 0 ? 'usage-line' : 'usage-line usage-line-total'} role="status">
+          <span title={row.contextFill ? contextMeterTitle(row.contextFill) : undefined}>{row.text}</span>
         </div>
-      )}
-
-      {usageTotalLine && (
-        <div className="usage-line usage-line-total" role="status">
-          <span>task total: {usageTotalLine}</span>
-        </div>
-      )}
+      ))}
 
       {stopArmed && <div className="stop-hint" role="status">Press Esc again to stop</div>}
 
