@@ -158,3 +158,4 @@ ends.**
 - 2026-10-22 — implemented research handoffs in report wake-ups and their surfaces (R1, R2, R6; ADR-0047, #120).
 - 2026-10-23 — retitled from "Research that outlives a planner turn"; who explores is decided by what the result is: orientation in the turn, evidence a research task that a task acting on it depends on, search the explore skill; the duration line is dropped (R4, R5).
 - 2026-10-23 — a Gemini planner has no in-turn agents: it neither declares nor is taught `spawn_research_agent`, as ADR-0005 now says (R5).
+- 2026-10-24 — research's unasked approval is withdrawn as the tree changes, by `ApprovalRecord`, not at the next save; surfaces are told with the plan (R4).

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { taskOf } from './sessionTestKit';
-import { ctx, NOW, prose, settled, supervised, task, until, type Env, type Options } from './supervisorTestKit';
+import { flushMicrotasks } from '../../testing';
+import { taskOf, testWorkspace } from './sessionTestKit';
+import { ctx, NOW, plan, prose, settled, supervised, task, until, type Env, type Options } from './supervisorTestKit';
 
 /**
  * Approval is of a task the user saw (ADR-0029): it lasts while the task stays
@@ -187,5 +188,48 @@ describe('a session saved by an older version', () => {
     expect(recorded.session.isApproved('t2')).toBe(false);
     // An id whose task left before the save is not carried, so no later task can take it up.
     expect(recorded.session.planState!.approvedTasks).toEqual(['t1']);
+  });
+});
+
+describe('a withdrawal reaches the surfaces', () => {
+  const lastStatus = (env: Env, id: string) => {
+    const status = env.messages.filter((m): m is Extract<typeof m, { type: 'status_update' }> => m.type === 'status_update').at(-1);
+    return status?.tasks.find((t) => t.id === id);
+  };
+
+  it('as a plan update and a status that shows the task waiting, when an edit lifts research', async () => {
+    const scout = task('r', 2, { research: true, taskMode: 'plan' });
+    const env = await supervised([task('t1', 1), scout], {
+      execute: false,
+      plan: { approved: true, approvedTasks: ['t1', 'r'], researchApprovals: ['r'] },
+    });
+    expect(env.session.isApproved('r')).toBe(true);
+    env.messages.length = 0;
+
+    await env.session.updateTask('r', { research: false });
+
+    expect(env.session.isApproved('r')).toBe(false);
+    expect(env.session.isApproved('t1')).toBe(true);
+    expect(env.messages.some((m) => m.type === 'plan_generated')).toBe(true);
+    expect(lastStatus(env, 'r')?.waitsForApproval).toBe(true);
+    expect(lastStatus(env, 't1')?.waitsForApproval).toBeUndefined();
+  });
+
+  it('on its own, when the tree changed on a route that announces nothing of the plan', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2)], { execute: false, plan: { approved: true, approvedTasks: ['t1', 't2'] } });
+    env.messages.length = 0;
+
+    // A plan reloaded without t2: nothing announces the plan here.
+    env.session.loadPlan(plan([task('t1', 1)], { approved: true, approvedTasks: ['t1', 't2'] }), 'build it', testWorkspace);
+    await flushMicrotasks();
+
+    expect(env.messages.filter((m) => m.type === 'plan_generated')).toHaveLength(1);
+    expect(env.session.isApproved('t2')).toBe(false);
+  });
+
+  it('is not saved by a save: persisting alone changes no approval', async () => {
+    const env = await supervised([task('t1', 1)], { execute: false, plan: { approved: true, approvedTasks: ['t1'] } });
+    await env.session.updateTask('t1', { title: 'renamed' });
+    expect(env.session.isApproved('t1')).toBe(true);
   });
 });
