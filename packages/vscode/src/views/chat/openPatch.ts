@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react';
 
-/** Opens a workspace-relative file a handoff saved — the patch beside the task log (ADR-0050) — in an editor tab. */
+/** Opens a workspace-relative file a handoff saved, the patch beside the task log (ADR-0050), in an editor tab. */
 export type OpenPatch = (path: string) => void;
 
 /**

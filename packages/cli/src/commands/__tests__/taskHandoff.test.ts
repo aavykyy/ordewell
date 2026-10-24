@@ -20,7 +20,7 @@ describe('taskHandoffLines', () => {
   it('prints a saved patch with its changes, the file to open and what it left out (ADR-0050)', () => {
     const patch: HandoffPatch = {
       kind: 'patch', path: '.ordewell/sessions/s1/tasks/t1/1.patch', attempt: 1,
-      base: 'a'.repeat(40), files: 2, added: 9, removed: 1, binary: 0, bytes: 900,
+      base: 'a'.repeat(40), files: 2, added: 9, removed: 1, binary: 0, bytes: 900, sha256: 'f'.repeat(64),
       flags: [
         { kind: 'excluded', count: 1, paths: ['docs/link'] },
         { kind: 'dropped', count: 1, paths: ['big.bin'] },

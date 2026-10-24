@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -88,7 +89,7 @@ describe.skipIf(process.platform === 'win32')('capturePatch', () => {
 
     const result = saved(await capture());
 
-    expect(result.stats).toEqual({ base: git(repo, 'rev-parse', 'HEAD').trim(), files: 3, added: 3, removed: 1, binary: 0, bytes: result.patch.length, flags: [] });
+    expect(result.stats).toEqual({ base: git(repo, 'rev-parse', 'HEAD').trim(), files: 3, added: 3, removed: 1, binary: 0, bytes: result.patch.length, sha256: createHash('sha256').update(result.patch).digest('hex'), flags: [] });
     const text = result.patch.toString('utf8');
     expect(text).toContain('diff --git a/added.ts b/added.ts\nnew file mode 100644');
     expect(text).toContain('deleted file mode 100644');
@@ -226,6 +227,57 @@ describe.skipIf(process.platform === 'win32')('capturePatch', () => {
     expect(saved(await capture()).stats).toMatchObject({ files: 1, added: 1, flags: [] });
   });
 
+  it('keeps a large file that only moved, measuring it by its rename in the patch and not by the removal and addition it is on disk', async () => {
+    writeFileSync(join(repo, 'big.txt'), `${'y'.repeat(1023)}\n`.repeat(PATCH_LIMITS.fileBytes / 1024 + 1));
+    git(repo, 'add', 'big.txt');
+    git(repo, 'commit', '-qm', 'big');
+    renameSync(join(repo, 'big.txt'), join(repo, 'moved é.txt'));
+    writeFileSync(join(repo, 'moved é.txt'), `${readFileSync(join(repo, 'moved é.txt'), 'utf8')}one more\n`);
+
+    const result = saved(await capture());
+
+    expect(result.stats).toMatchObject({ files: 1, added: 1, removed: 0, flags: [] });
+    expect(result.patch.toString('utf8')).toContain('rename from big.txt\nrename to "moved \\303\\251.txt"');
+    expect(result.patch.length).toBeLessThan(16 * 1024);
+  });
+
+  it('drops a large file that was rewritten as it moved with its removal, as the one file the patch holds', async () => {
+    writeFileSync(join(repo, 'big.txt'), `${'y'.repeat(1023)}\n`.repeat(PATCH_LIMITS.fileBytes / 1024 + 1));
+    git(repo, 'add', 'big.txt');
+    git(repo, 'commit', '-qm', 'big');
+    rmSync(join(repo, 'big.txt'));
+    writeFileSync(join(repo, 'rewritten.txt'), `${'z'.repeat(1023)}\n`.repeat(PATCH_LIMITS.fileBytes / 1024 + 1));
+    writeFileSync(join(repo, 'small.txt'), 'small\n');
+
+    const result = saved(await capture());
+
+    expect(result.stats).toMatchObject({ files: 1, flags: [{ kind: 'dropped', count: 1, paths: [expect.stringMatching(/^rewritten\.txt \(/)] }] });
+    expect(result.patch.toString('utf8')).not.toContain('big.txt');
+  });
+
+  it('counts a file whose type changed once, as the patch lists it', async () => {
+    symlinkSync('README.md', join(repo, 'ln'));
+    git(repo, 'add', 'ln');
+    git(repo, 'commit', '-qm', 'link');
+    rmSync(join(repo, 'ln'));
+    writeFileSync(join(repo, 'ln'), 'a file now\n');
+
+    const result = saved(await capture());
+
+    expect(result.patch.toString('utf8').match(/^diff --git /gm)).toHaveLength(2);
+    expect(result.stats).toMatchObject({ files: 1, added: 1, removed: 1 });
+  });
+
+  it('reads no git configuration from the home directory the task writes, which is scratch', async () => {
+    writeFileSync(join(scratch, 'ignore'), 'added.ts\n');
+    writeFileSync(join(scratch, '.gitconfig'), `[core]\n\texcludesFile = ${join(scratch, 'ignore')}\n`);
+    writeFileSync(join(repo, 'added.ts'), 'new\n');
+
+    const result = saved(await capture());
+
+    expect(result.patch.toString('utf8')).toContain('diff --git a/added.ts b/added.ts');
+  });
+
   /** The shell, with what a process the sealed run left behind does to scratch after each script. */
   const tampered = (after: (script: number, file: (suffix: string) => string) => void): TaskShell => {
     const plain = plainShell({ worktrees: [repo], scratch });
@@ -270,6 +322,40 @@ describe.skipIf(process.platform === 'win32')('capturePatch', () => {
     expect(await capturePatch(shell)).toMatchObject({ kind: 'refused', reason: expect.stringContaining('did not replay to the same tree') });
   });
 
+  // A process a sealed command left behind outlives it, and scratch is its to write, so the capture trusts the bytes it reads and nothing git wrote beside them.
+  describe('against a patch rewritten in scratch after git wrote it', () => {
+    const linkPatch = (mode: string) => `diff --git a/evil b/evil\nnew file mode ${mode}\nindex 0000000..e69de29\n--- /dev/null\n+++ b/evil\n@@ -0,0 +1 @@\n+/etc\n\\ No newline at end of file\n`;
+    const rewriting = (patch: string) => tampered((script, file) => {
+      if (script === 2) writeFileSync(file('patch'), patch);
+    });
+
+    it.each([['120000'], ['0120000'], ['120755'], ['160000']])('keeps no patch that creates a %s entry', async (mode) => {
+      writeFileSync(join(repo, 'added.ts'), 'new\n');
+
+      expect(await capturePatch(rewriting(linkPatch(mode)))).toMatchObject({ kind: 'refused', reason: expect.stringContaining('link or a submodule') });
+      expect(readdirSync(scratch)).toEqual([]);
+    });
+
+    it('keeps no patch that turns a file it modifies into a link, by its index line or its mode change', async () => {
+      writeFileSync(join(repo, 'added.ts'), 'new\n');
+      for (const header of ['index 1111111..2222222 120000', 'old mode 100644\nnew mode 120000']) {
+        const patch = `diff --git a/README.md b/README.md\n${header}\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-one\n+two\n`;
+
+        expect(await capturePatch(rewriting(patch)), header).toMatchObject({ kind: 'refused', reason: expect.stringContaining('link or a submodule') });
+      }
+    });
+
+    it('counts the files and lines of the patch it keeps, not of a listing git wrote beside it', async () => {
+      writeFileSync(join(repo, 'added.ts'), 'new\n');
+      const rewritten = 'diff --git a/a.ts b/a.ts\nnew file mode 100644\nindex 0000000..e69de29\n--- /dev/null\n+++ b/a.ts\n@@ -0,0 +1,2 @@\n+one\n+two\n'
+        + 'diff --git a/b.ts b/b.ts\nnew file mode 100644\nindex 0000000..e69de29\n--- /dev/null\n+++ b/b.ts\n@@ -0,0 +1 @@\n+three\n';
+
+      const result = saved(await capturePatch(rewriting(rewritten)));
+
+      expect(result.stats).toMatchObject({ files: 2, added: 3, removed: 0, binary: 0, bytes: rewritten.length });
+    });
+  });
+
   it('carries a rename, a mode change and a binary file as git would apply them', async () => {
     git(repo, 'mv', 'NOTES.md', 'docs.md');
     git(repo, 'reset', '-q');
@@ -287,11 +373,11 @@ describe.skipIf(process.platform === 'win32')('capturePatch', () => {
 });
 
 describe('patchReply', () => {
-  const stats = { base: 'a'.repeat(40), files: 2, added: 5, removed: 1, binary: 0, bytes: 2048, flags: [] };
+  const stats = { base: 'a'.repeat(40), files: 2, added: 5, removed: 1, binary: 0, bytes: 2048, sha256: 'b'.repeat(64), flags: [] };
 
   it('says what was saved, where, and that it is already in the handoff', () => {
     const artifact = patchArtifact(stats, { path: '.ordewell/sessions/s/tasks/t/1.patch', attempt: 1 });
-    expect(artifact).toEqual({ kind: 'patch', path: '.ordewell/sessions/s/tasks/t/1.patch', attempt: 1, base: 'a'.repeat(40), files: 2, added: 5, removed: 1, binary: 0, bytes: 2048 });
+    expect(artifact).toEqual({ kind: 'patch', path: '.ordewell/sessions/s/tasks/t/1.patch', attempt: 1, base: 'a'.repeat(40), files: 2, added: 5, removed: 1, binary: 0, bytes: 2048, sha256: 'b'.repeat(64) });
     const reply = patchReply({ kind: 'saved', patch: Buffer.alloc(0), stats }, artifact, undefined);
     expect(reply.isError).toBeUndefined();
     expect(reply.text).toContain('Saved 2 files, +5 -1, 2.0 KB, as a patch against commit aaaaaaaaaaaa: .ordewell/sessions/s/tasks/t/1.patch.');

@@ -177,7 +177,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   first plan may be research tasks alone when the plan cannot be outlined
   without them. The `explore` skill can have several read-only explorers try
   different approaches against one check fixed beforehand, and one judge task
-  choose when several pass
+  recommend one when several pass
   ([ADR-0037](docs/adr/supervision/0037-research-tasks-wake-the-planner.md)).
 - **The planner is sent its plan whole once, then only what changed.** A later
   turn carries the tasks added or changed, the tasks removed and what runs now.

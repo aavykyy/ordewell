@@ -179,7 +179,7 @@ describe('the compact handoff a row shows (ADR-0047)', () => {
   });
 
   it('carries the saved patch its attempt kept, when it saved one (ADR-0050)', () => {
-    const patch = { kind: 'patch' as const, path: '.ordewell/sessions/s1/tasks/t1/1.patch', attempt: 1, base: 'a'.repeat(40), files: 2, added: 9, removed: 1, binary: 0, bytes: 900 };
+    const patch = { kind: 'patch' as const, path: '.ordewell/sessions/s1/tasks/t1/1.patch', attempt: 1, base: 'a'.repeat(40), files: 2, added: 9, removed: 1, binary: 0, bytes: 900, sha256: 'f'.repeat(64) };
     const row = taskRowView(subject({
       status: 'completed',
       handoff: { summary: 'Tried it.', findings: [], findingCount: 0, artifacts: [patch] },

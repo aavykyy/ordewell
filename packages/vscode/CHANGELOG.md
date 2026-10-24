@@ -9,6 +9,10 @@
   Dependents can pull the full handoff, and a loop's check gets its fix's
   handoff and its own previous findings. Research run updates carry summaries
   and whole findings; long reports stay in attempt logs.
+- **A read-only task's saved patch.** A task that tried a change can keep it as
+  a patch. Its task card and its log show how many files and lines the patch
+  changes, where it is saved and what it left out, with an Open patch button
+  that opens the file in an editor tab.
 - **Script tasks.** A plan can hold a task with no runner and no model, a list
   of commands or one script that Ordewell runs at the workspace root; its exit
   status is its verdict. The plan shows its body, read-only, in place of a
@@ -22,10 +26,10 @@
 - **Check-and-fix loops.** A task can be a loop's check: while it fails with
   rounds left, the tasks of its body fix what it found and the check runs
   again, with no planner turn in between. The plan shows each loop's rounds.
-- **Research tasks.** The planner can hand a longer investigation to a
-  read-only task whose report wakes it with the result, at every supervisor
-  level. Research tasks run within the run's Parallel limit like any other
-  task.
+- **Research tasks.** When the planner must decide something on what a
+  read-only task finds, it marks that task as research, and its report wakes it
+  with the result, at every supervisor level. Research tasks run within the
+  run's Parallel limit like any other task.
 - **The planner chooses a strategy before it outlines a plan**, from answering
   a question with no plan to exploring an open problem one round at a time,
   and each of its turns tells it how full its context is and what remains of

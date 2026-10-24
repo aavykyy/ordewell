@@ -40,7 +40,7 @@ function inside(root: string, target: string): boolean {
 }
 
 /** A C-quoted path as git writes one with special characters (`"a\tb"`, `"caf\303\251"`), read back. */
-function unquoted(quoted: string): string {
+export function unquoted(quoted: string): string {
   const bytes: number[] = [];
   const escapes: Record<string, number> = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11, '"': 34, '\\': 92 };
   for (let i = 1; i < quoted.length - 1; i++) {
@@ -84,10 +84,29 @@ function sectionStats(section: string): { added: string; removed: string } {
   return { added: String(added), removed: String(removed) };
 }
 
-/** The files a patch changes, each with its own part and line counts (`-` for a binary change). */
+/** The sum of two sections' counts for one path, or `-` when either change is binary. */
+function summed(a: string, b: string): string {
+  return a === '-' || b === '-' ? '-' : String(Number(a) + Number(b));
+}
+
+/**
+ * The files a patch changes, each with its own part and line counts (`-` for
+ * a binary change). A file whose type changes is two sections of a patch, a
+ * removal and an addition, and one file: its parts are joined.
+ */
 export function patchFiles(patch: Buffer): Array<{ path: string; section: string; added: string; removed: string }> {
-  const sections = patch.toString('utf8').split(/^(?=diff --git )/m).filter((section) => section.startsWith('diff --git '));
-  return sections.map((section) => ({ path: sectionPath(section), section, ...sectionStats(section) }));
+  // A section starts at the beginning of a line: only a newline ends one for git, where `^` also takes a carriage return.
+  const sections = patch.toString('utf8').split(/(?<![^\n])(?=diff --git )/).filter((section) => section.startsWith('diff --git '));
+  const files = new Map<string, { path: string; section: string; added: string; removed: string }>();
+  for (const section of sections) {
+    const path = sectionPath(section);
+    const counts = sectionStats(section);
+    const earlier = files.get(path);
+    files.set(path, earlier
+      ? { path, section: earlier.section + section, added: summed(earlier.added, counts.added), removed: summed(earlier.removed, counts.removed) }
+      : { path, section, ...counts });
+  }
+  return [...files.values()];
 }
 
 /**

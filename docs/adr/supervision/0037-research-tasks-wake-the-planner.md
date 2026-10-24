@@ -113,10 +113,11 @@ awaited before the turn ends.**
     keeps its prototype with `save_patch` ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)),
     since its worktree goes with it. If exactly one passes it is chosen; if
     several do, one judge task that depends on all of them recommends one and
-    cites the checks they ran: a research task when the choice reshapes the
-    plan, the first build task when it is local. The build task depends on
-    the chosen explorer and applies its patch with `apply_patch`, resolving
-    the conflicts the tool reports.
+    cites the checks they ran. The judge is a research task, so its
+    recommendation wakes the planner, which adds the build task on the
+    recommended patch, and approving that task is the pick. The build task
+    depends on the chosen explorer and applies its patch with `apply_patch`,
+    resolving the conflicts the tool reports.
 
   #24 draws a line at the task boundary: inside a task the harness decides,
   and across tasks Ordewell does. This keeps it: what another task acts on, or
@@ -187,3 +188,4 @@ awaited before the turn ends.**
 - 2026-10-24 — who explores gets a test by the brief, a first plan may be research tasks alone, a report only later tasks read is a plain read-only task, and the explore skill gains explorers then a judge (R5).
 - 2026-10-24 — retitled from "Evidence the planner needs is a research task, and its report wakes the planner": only evidence the planner must decide on is a research task (R5).
 - 2026-10-24 — the explore skill's choice between approaches: explorers save their prototypes as patches, a check fixed beforehand decides eligibility, a judge only when several pass, and the build task applies the chosen patch (R5).
+- 2026-10-24 — the judge only recommends and is always a research task: the planner adds the build task on the recommended patch, and approving that task is the pick, as [ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md) says (R5).

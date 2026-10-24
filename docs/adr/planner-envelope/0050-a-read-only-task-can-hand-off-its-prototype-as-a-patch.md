@@ -70,7 +70,7 @@ directory as its alternate. The script then lists four things:
 
 - the changes;
 - every path the index holds;
-- the size of each change's part of a patch;
+- the size of each change's part of a patch, and of each rename's;
 - the base commit.
 
 **Between the scripts**, Ordewell decides what is refused and what is left out.
@@ -88,10 +88,26 @@ the repository:
 - ctime trusted;
 - prefixes `a/` and `b/`;
 - no external diff, textconv or order file;
-- no system configuration and no replace objects.
+- no system or global configuration, since the seal's home is the task's
+  scratch directory, and no replace objects.
 
 **What the scripts wrote** is read from unguessable names in the attempt's
 scratch, with no link followed and every size bounded.
+
+**What Ordewell keeps is judged on the bytes it reads**, not on what git listed
+beside them. A process a sealed command left running outlives its run, and
+scratch is the task's to write, so it can rewrite any file the scripts leave
+there. Ordewell therefore checks the patch itself, in TypeScript and with no
+git:
+
+- It refuses a patch whose headers would create a symbolic link or a
+  submodule, or turn a file into one. A mode counts as a regular file's only
+  when it is `100644` or `100755`, since git reads `0120000` and `120755` as
+  links too. Deleting a link or a submodule is the one place a header may name
+  another mode.
+- It counts the files, the lines added and removed and the binary files from
+  the patch, so the artifact says what a reader of the file finds.
+- It records the SHA-256 of the patch in the artifact.
 
 ### Applying it
 
@@ -105,7 +121,9 @@ scratch, with no link followed and every size bounded.
   for mode. At a later commit it merges with what has landed since. Ordewell
   runs this git as the user, like its other git in a change task's worktree,
   with fsmonitor off. It is not sealed: the worktree is the caller's own,
-  which can already run anything.
+  which can already run anything. Before git runs, Ordewell checks the patch
+  for a link or a submodule, as the capture did, since git creates whichever a
+  header names.
 - **What came of it is read from the index, never predicted.**
   `git apply --check --3way` returns 0 for a patch that then conflicts. After
   the apply, the paths the index holds unmerged are the conflicts:
@@ -121,15 +139,16 @@ scratch, with no link followed and every size bounded.
     the task has changed and not yet staged. The answer gives git's errors,
     and the file the patch is in, to apply by hand.
 - **It refuses, applying nothing,** a task outside the readable set, a task or
-  attempt that saved no patch, a patch whose file is gone or whose size is not
-  the artifact's (cut short, or changed since), a call from a read-only task,
+  attempt that saved no patch, a patch whose file is gone or whose size or
+  SHA-256 is not the artifact's (cut short, or changed since), a patch that
+  would create a link or a submodule, a call from a read-only task,
   a caller with no worktree of its own or one across several repositories, a
   base commit this repository does not have, and a worktree that still holds
   an earlier conflict.
 - **A patch is another task's work.** The answer says to read what it changed
   and to run the checks, since the author ran its own at its base. Git itself
-  refuses a patch that writes through a link it creates, or into `.git`.
-  Nothing applies on its own: a call is the caller's.
+  refuses a patch that writes through a link, or into `.git`. Nothing applies
+  on its own: a call is the caller's.
 - **Nothing is committed.** The staged changes land with the task's own work,
   as everything in its worktree does.
 
@@ -146,8 +165,13 @@ scratch, with no link followed and every size bounded.
 | a file git cannot read | refuses the save, in git's words |
 | ignored files and empty directories | leaves them out, as any commit would |
 
-A file's part is measured in the patch, not on disk, so a small edit to a
-large file counts as small.
+A patch that holds a link or a submodule anyway is refused, at the save and at
+the apply.
+
+A file's part is measured in the patch that is saved, not on disk. A small edit
+to a large file counts as small, and so does a large file that only moved,
+which the patch holds as a rename. A removal and an addition the patch pairs as
+a rename are kept or dropped together, as the one file the patch holds.
 
 ### Where it is kept, and who reads it
 
@@ -156,7 +180,8 @@ large file counts as small.
   another name first, and it goes with the session.
 - **The artifact** is a fifth kind, `patch`, that only Ordewell adds:
   `{kind: 'patch', path, attempt, base, files, added, removed, binary, bytes,
-  flags?}`.
+  sha256, flags?}`. A file whose type changes is one file there, as the
+  patch's file list has it.
   - It comes after the author's own artifacts and outside their limit.
   - It is added whatever the verdict, and an attempt that ended without a
     *Completion call* still hands it on.
@@ -210,7 +235,9 @@ No field records the pick, and core reads nothing from the judge.
   in throwaway repositories, a plain shell standing in for the sealed runs.
   Each rule is shown on git's own output: carried, excluded, dropped,
   normalized and refused. So is a refusal when a sealed run swaps one of the
-  capture's files for a link, and when a replay differs.
+  capture's files for a link, when a replay differs, and when the patch is
+  rewritten in scratch to hold a link or a submodule; the counts are then those
+  of the bytes read.
 - **End to end.** `PatchCapture.e2e.test.ts` runs the capture through a real
   task shell in the host's sandbox. It applies the patch outside the sandbox,
   in a fresh worktree at the same base, and compares every file and mode. CI's
@@ -220,8 +247,8 @@ No field records the pick, and core reads nothing from the judge.
   tree; at a base that moved, merging cleanly, with a rename carrying the
   other work's edit; and at a base with conflicting work, where the conflicts
   are named, a binary one as binary, and the worktree holds the markers.
-  `PatchApply.test.ts` shows what is refused before git runs and how each
-  outcome is worded.
+  `PatchApply.test.ts` shows what is refused before git runs, a patch with a
+  link or a different hash among it, and how each outcome is worded.
 - **The seams around it.** `taskShell.test.ts` covers `TaskShell.hold` with the
   recording backend. The orchestrator's side, the artifact in the handoff
   whatever the verdict, uses `FakeWorktreeIsolation`. Which token is offered
@@ -272,7 +299,8 @@ No field records the pick, and core reads nothing from the judge.
 - What a patch holds is the task's doing. Whoever applies it treats it as
   untrusted content, as they treat a report.
 - A file ignored only by the user's global gitignore is not ignored inside the
-  seal, which has no home directory.
+  seal, whose home is the task's scratch directory, and the capture reads no
+  global git configuration.
 
 ## History
 
@@ -280,3 +308,4 @@ No field records the pick, and core reads nothing from the judge.
 - 2026-10-24 — a change task's `apply_patch` implemented.
 - 2026-10-24 — the TUI, VS Code and CLI show a saved patch: its changes, the file to open and the paths it left out.
 - 2026-10-24 — the planner's guidance implemented: the explore skill, `WHO EXPLORES` and the read-only task's own prompt teach `save_patch`, the shared check and `apply_patch`.
+- 2026-10-24 — a review's fixes: Ordewell judges the saved patch on the bytes it reads (no link or submodule, counts and a SHA-256 taken from them, checked again at the apply), measures a rename as one section, and reads no global git configuration.
