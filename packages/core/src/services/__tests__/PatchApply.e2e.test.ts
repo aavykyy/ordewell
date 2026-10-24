@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { applyPatch, capturePatch, patchArtifact, type PatchApplyResult } from '../PatchCapture';
 import { defaultExecFile } from '../gitExec';
 import type { OwnSealedRuns, TaskShell } from '../../interfaces/IFileSystem';
@@ -80,6 +81,8 @@ describe.skipIf(process.platform === 'win32')('applyPatch', () => {
     writeFileSync(join(repo, 'assets.bin'), binaryA);
     writeFileSync(join(repo, 'gone.txt'), 'to be deleted\n');
     writeFileSync(join(repo, '.gitignore'), '.ordewell/\n');
+    // A link the repository tracks: a capture never carries a change to one, so a patch that edits it was not written by one.
+    symlinkSync('README.md', join(repo, 'latest'));
     git(repo, 'add', '-A');
     git(repo, 'commit', '-qm', 'base');
     base = git(repo, 'rev-parse', 'HEAD').trim();
@@ -244,5 +247,57 @@ describe.skipIf(process.platform === 'win32')('applyPatch', () => {
     const dir = builder(base);
 
     expect(await applyPatch(invoker, join(dir, 'src'), patch, saved)).toMatchObject({ kind: 'refused', reason: expect.stringContaining('not the root') });
+  });
+  describe('a link the repository tracks', () => {
+    const blob = (content: string) => spawnSync('git', ['hash-object', '--stdin'], { cwd: repo, input: content, encoding: 'utf8' }).stdout.trim();
+
+    /** A patch written by hand, as a process that rewrote the saved file would, with the artifact that vouches for it: its size and hash are of these bytes. */
+    function rewritten(text: string): { patch: Buffer; saved: HandoffPatch } {
+      const hostile = Buffer.from(text, 'latin1');
+      return { patch: hostile, saved: { ...saved, bytes: hostile.length, sha256: createHash('sha256').update(hostile).digest('hex') } };
+    }
+
+    /** A hunk that points `latest` at /etc/passwd, git's own way of writing a one-line file with no newline at its end. */
+    const retarget = ['@@ -1 +1 @@', '-README.md', '\\ No newline at end of file', '+/etc/passwd', '\\ No newline at end of file', ''];
+    const was = () => blob('README.md').slice(0, 12);
+    const now = () => blob('/etc/passwd').slice(0, 12);
+
+    // Each is a section git would apply to `latest` and keep a link, though no mode line says so.
+    const attacks: Array<[string, string[]]> = [
+      ['edits it and names no mode', ['diff --git a/latest b/latest', `index ${was()}..${now()}`, '--- a/latest', '+++ b/latest', ...retarget]],
+      ['renames it with an edit', ['diff --git a/latest b/moved', 'similarity index 50%', 'rename from latest', 'rename to moved', `index ${was()}..${now()}`, '--- a/latest', '+++ b/moved', ...retarget]],
+      ['copies it with an edit', ['diff --git a/latest b/copied', 'similarity index 50%', 'copy from latest', 'copy to copied', `index ${was()}..${now()}`, '--- a/latest', '+++ b/copied', ...retarget]],
+      ['names another file in its first line and the link in its --- and +++ lines', ['diff --git a/README.md b/README.md', `index ${was()}..${now()}`, '--- a/latest', '+++ b/latest', ...retarget]],
+    ];
+
+    it.each(attacks)('is not retargeted by a patch that %s', async (_, section) => {
+      const dir = builder(base);
+      const { patch: hostile, saved: vouched } = rewritten(section.join('\n'));
+      const status = git(dir, 'status', '--porcelain=v2');
+
+      const result = await applyPatch(invoker, dir, hostile, vouched);
+
+      expect(result).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/would leave .*(latest|moved|copied).* as a link or a submodule/) });
+      expect(readlinkSync(join(dir, 'latest'))).toBe('README.md');
+      expect(existsSync(join(dir, 'moved')) || existsSync(join(dir, 'copied'))).toBe(false);
+      expect(git(dir, 'status', '--porcelain=v2')).toBe(status);
+      expect(git(dir, 'ls-files', '-s', 'latest').split(' ')[0]).toBe('120000');
+    });
+
+    it('still takes the capture\'s own deletion of it, and leaves the rest of the tree as it was', async () => {
+      const explorer = join(repo, '.ordewell', 'worktrees', 'drops-link');
+      git(repo, 'worktree', 'add', '-q', '-b', 'drops-link', explorer, base);
+      rmSync(join(explorer, 'latest'));
+      writeFileSync(join(explorer, 'README.md'), lines('# repo', '', 'one', 'two', 'three', 'four', 'five', 'six', 'edited'));
+      const captured = await capturePatch(plainShell(explorer, scratch));
+      if (captured.kind !== 'saved') throw new Error(`not saved: ${captured.reason}`);
+      const dir = builder(base);
+
+      const result = await applyPatch(invoker, dir, captured.patch, patchArtifact(captured.stats, { path: '.ordewell/sessions/s/tasks/t/2.patch', attempt: 1 }));
+
+      expect(result).toMatchObject({ kind: 'applied', sameBase: true });
+      expect(git(dir, 'ls-files', '-s', 'latest')).toBe('');
+      expect(git(dir, 'status', '--porcelain').split('\n').filter(Boolean).sort()).toEqual(['D  latest', 'M  README.md']);
+    });
   });
 });

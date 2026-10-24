@@ -109,6 +109,11 @@ git:
   the patch, so the artifact says what a reader of the file finds.
 - It records the SHA-256 of the patch in the artifact.
 
+The per-file cap is the one limit not read from the patch: the size of each
+part comes from listings in scratch, which a process left behind can rewrite.
+The cap on the whole patch is read from the patch, so what is kept is bounded
+whatever the listings say.
+
 ### Applying it
 
 - **`apply_patch({task, attempt?})`** is on a change task's token, and a
@@ -121,9 +126,15 @@ git:
   for mode. At a later commit it merges with what has landed since. Ordewell
   runs this git as the user, like its other git in a change task's worktree,
   with fsmonitor off. It is not sealed: the worktree is the caller's own,
-  which can already run anything. Before git runs, Ordewell checks the patch
+  which can already run anything. Before the apply, Ordewell checks the patch
   for a link or a submodule, as the capture did, since git creates whichever a
-  header names.
+  header names. That is only the first look: a section with no mode line takes
+  its path's mode from the index, so it can edit or rename a link the
+  repository tracks, and keep it a link, without naming one; and git patches
+  the path a section's `---` and `+++` lines name, which its first line need
+  not. Ordewell therefore also runs the same apply against a copy of the
+  index, which writes no file, and refuses if the copy holds a link or a
+  submodule the index does not, whichever path or header said so.
 - **What came of it is read from the index, never predicted.**
   `git apply --check --3way` returns 0 for a patch that then conflicts. After
   the apply, the paths the index holds unmerged are the conflicts:
@@ -141,7 +152,7 @@ git:
 - **It refuses, applying nothing,** a task outside the readable set, a task or
   attempt that saved no patch, a patch whose file is gone or whose size or
   SHA-256 is not the artifact's (cut short, or changed since), a patch that
-  would create a link or a submodule, a call from a read-only task,
+  would create or change a link or a submodule, a call from a read-only task,
   a caller with no worktree of its own or one across several repositories, a
   base commit this repository does not have, and a worktree that still holds
   an earlier conflict.
@@ -166,7 +177,9 @@ git:
 | ignored files and empty directories | leaves them out, as any commit would |
 
 A patch that holds a link or a submodule anyway is refused, at the save and at
-the apply.
+the apply. The apply refuses more: a patch that would change a link the
+repository tracks, though a capture never carries a change to one, only its
+deletion.
 
 A file's part is measured in the patch that is saved, not on disk. A small edit
 to a large file counts as small, and so does a large file that only moved,
@@ -247,6 +260,10 @@ No field records the pick, and core reads nothing from the judge.
   tree; at a base that moved, merging cleanly, with a rename carrying the
   other work's edit; and at a base with conflicting work, where the conflicts
   are named, a binary one as binary, and the worktree holds the markers.
+  It also shows a hand-written patch refused, applying nothing, when it edits,
+  renames or copies a link the repository tracks with no mode line to say so,
+  or names another file in its first line than in its `---` and `+++` lines,
+  and the capture's own deletion of that link applied.
   `PatchApply.test.ts` shows what is refused before git runs, a patch with a
   link or a different hash among it, and how each outcome is worded.
 - **The seams around it.** `taskShell.test.ts` covers `TaskShell.hold` with the
@@ -309,3 +326,4 @@ No field records the pick, and core reads nothing from the judge.
 - 2026-10-24 — the TUI, VS Code and CLI show a saved patch: its changes, the file to open and the paths it left out.
 - 2026-10-24 — the planner's guidance implemented: the explore skill, `WHO EXPLORES` and the read-only task's own prompt teach `save_patch`, the shared check and `apply_patch`.
 - 2026-10-24 — a review's fixes: Ordewell judges the saved patch on the bytes it reads (no link or submodule, counts and a SHA-256 taken from them, checked again at the apply), measures a rename as one section, and reads no global git configuration.
+- 2026-10-24 — the apply asks git, against a copy of the index, what the patch would leave, so a patch with no mode line cannot retarget a link the repository tracks.
