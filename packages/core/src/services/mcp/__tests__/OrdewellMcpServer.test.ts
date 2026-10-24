@@ -52,7 +52,7 @@ describe('OrdewellMcpServer', () => {
     const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }));
 
     const names = async (client: Client) => (await client.listTools()).tools.map((t) => t.name).sort();
-    expect(await names(task)).toEqual(['checkpoint', 'read_task', 'task_complete']);
+    expect(await names(task)).toEqual(['apply_patch', 'checkpoint', 'read_task', 'task_complete']);
     expect(await names(planner)).toEqual([
       'answer_approval', 'answer_checkpoint', 'edit_plan', 'fetch', 'list_models', 'list_runners', 'load_skill', 'merge_all', 'message_task', 'retry_task', 'run_command',
       'run_plan', 'run_script', 'run_task', 'skip_task', 'stop_run', 'stop_task', 'submit_plan', 'task_diff', 'task_output', 'task_query', 'web_search',
@@ -75,7 +75,7 @@ describe('OrdewellMcpServer', () => {
     expect(tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'read_task', 'run_command', 'save_patch', 'task_complete']);
     // The hint names what lands, even when a command changes its disposable worktree.
     expect(tools.find((t) => t.name === 'run_command')?.annotations?.readOnlyHint).toBe(true);
-    expect((await change.listTools()).tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'read_task', 'task_complete']);
+    expect((await change.listTools()).tools.map((t) => t.name).sort()).toEqual(['apply_patch', 'checkpoint', 'read_task', 'task_complete']);
 
     expect(await readOnly.callTool({ name: 'run_command', arguments: { command: 'npm test' } })).toMatchObject({ content: [{ type: 'text', text: 'ran npm test' }], isError: false });
     await expect(change.callTool({ name: 'run_command', arguments: { command: 'npm test' } })).rejects.toThrow(/Unknown tool/);
@@ -104,6 +104,26 @@ describe('OrdewellMcpServer', () => {
     expect(await readOnly.callTool({ name: 'save_patch', arguments: {} })).toMatchObject({ content: [{ type: 'text', text: 'save_patch is not available in this session.' }], isError: true });
   });
 
+  it("offers apply_patch to a change task's token alone, and routes its call to that attempt (ADR-0050)", async () => {
+    const server = newServer();
+    const applyPatch = vi.fn(async (args: { task: string | number; attempt?: number }, _context: McpToolContext): Promise<McpToolReply> => ({ text: `applied ${args.task} attempt ${args.attempt ?? 'latest'}` }));
+    const change = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 }, { applyPatch }));
+    const readOnly = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't2', attempt: 1, readOnly: true }, { applyPatch }));
+
+    expect((await change.listTools()).tools.find((t) => t.name === 'apply_patch')?.inputSchema).toMatchObject({ type: 'object', required: ['task'] });
+    expect((await readOnly.listTools()).tools.map((t) => t.name)).not.toContain('apply_patch');
+
+    expect(await change.callTool({ name: 'apply_patch', arguments: { task: '#2', attempt: 2 } })).toMatchObject({ content: [{ type: 'text', text: 'applied #2 attempt 2' }], isError: false });
+    await expect(readOnly.callTool({ name: 'apply_patch', arguments: { task: '#2' } })).rejects.toThrow(/Unknown tool/);
+    expect(applyPatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers apply_patch as not available where the attempt has no handler for it', async () => {
+    const server = newServer();
+    const change = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 }, {}));
+    expect(await change.callTool({ name: 'apply_patch', arguments: { task: '#1' } })).toMatchObject({ content: [{ type: 'text', text: 'apply_patch is not available in this session.' }], isError: true });
+  });
+
   // Claude Code in plan mode refuses any MCP tool not marked read-only, even
   // one pre-allowed with --allowedTools (verified against 2.1.289). The
   // execution tools change what runs, and say so (ADR-0029).
@@ -116,7 +136,7 @@ describe('OrdewellMcpServer', () => {
     const executing = ['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'answer_checkpoint', 'merge_all', 'run_script'];
     for (const [name, hint] of Object.entries(hints)) expect(hint, name).toBe(!executing.includes(name));
     expect(Object.keys(hints)).toHaveLength(22);
-    expect((await task.listTools()).tools.map((t) => [t.name, t.annotations?.readOnlyHint])).toEqual([['task_complete', undefined], ['checkpoint', undefined], ['read_task', true]]);
+    expect((await task.listTools()).tools.map((t) => [t.name, t.annotations?.readOnlyHint])).toEqual([['task_complete', undefined], ['checkpoint', undefined], ['read_task', true], ['apply_patch', undefined]]);
   });
 
   it('answers an unknown or revoked token with 401, and the SDK client cannot connect with it', async () => {

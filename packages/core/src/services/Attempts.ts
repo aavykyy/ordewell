@@ -31,9 +31,11 @@ import { quotedList } from '../utils/quotedList';
 import { scriptBodyOf } from '../models/ScriptTask';
 import { SCRIPT_RUNNER } from './ScriptRunner';
 import { checkHandoff, withPatch, type HandoffPatch, type StoredHandoff } from '../models/Handoff';
-import { capturePatch, patchArtifact, patchReply } from './PatchCapture';
+import { applySavedPatch, capturePatch, patchArtifact, patchReply } from './PatchCapture';
 import { readTask, type TaskLogReader } from './readTask';
-import type { McpToolReply } from './mcp/tools';
+import { defaultExecFile, type GitInvoker } from './gitExec';
+import { augmentedPath } from '../utils/shellPath';
+import type { ApplyPatchArgs, McpToolReply } from './mcp/tools';
 import { TaskControlError } from './TaskControlError';
 import type { OrchestratorObserver, StartAdmission } from './TaskOrchestrator';
 
@@ -118,6 +120,8 @@ interface TaskAttempt extends EndedAttempt {
   /** The patch it last saved (ADR-0050), which its handoff names. */
   patch: HandoffPatch | null;
 }
+
+const DEFAULT_GIT: GitInvoker = { exec: defaultExecFile, resolvePath: () => augmentedPath() };
 
 /** Read-only view of a task's live attempt. */
 export interface TaskAttemptSnapshot {
@@ -251,6 +255,8 @@ export interface AttemptsDeps {
    * Absent, `save_patch` is not available.
    */
   keepPatch?: (taskId: string, attempt: number, patch: Buffer) => string;
+  /** The git a change attempt's `apply_patch` runs; the system's by default. */
+  git?: GitInvoker;
   /**
    * Write an attempt's whole handoff into the log of the attempt `sessionId`
    * ran (ADR-0047). A task that ran no session, a user task, gets a log of its own.
@@ -812,6 +818,7 @@ export class Attempts {
       checkHandoff: (completion) => checkHandoff(completion, task.id, store.planTasks),
       readTask: (args) => readTask(args, task.id, store.planTasks, this.deps.taskLog),
       ...(shell ? { savePatch: (signal: AbortSignal) => this.savePatch(task, attempt, signal) } : {}),
+      applyPatch: (args) => this.applyPatch(task, attempt, args),
       workspaceRoot: this.deps.workspaceRoot(),
       onNotice: (message) => this.host.tell('warn', `Task "${task.title}": ${message}`),
     });
@@ -838,6 +845,23 @@ export class Attempts {
     }
     attempt.patch = patchArtifact(result.stats, { path: where, attempt: attempt.attempt });
     return patchReply(result, attempt.patch, undefined);
+  }
+
+  /**
+   * A change attempt's `apply_patch` (ADR-0050): a saved patch of a task it
+   * may read, merged into its own worktree. A read-only attempt has no
+   * worktree it keeps, so it is refused here as well as by its tool list.
+   */
+  private applyPatch(task: Task, attempt: TaskAttempt, args: ApplyPatchArgs): Promise<McpToolReply> {
+    const repos = Object.values(this.deps.runs.openRecord(task.id)?.repos ?? {});
+    return applySavedPatch(args, {
+      callerId: task.id,
+      plan: this.deps.store.planTasks,
+      log: this.deps.taskLog,
+      worktrees: repos.map((repo) => repo.worktree),
+      readOnly: landsNothing(attempt.kind),
+      git: this.deps.git ?? DEFAULT_GIT,
+    });
   }
 
   /**

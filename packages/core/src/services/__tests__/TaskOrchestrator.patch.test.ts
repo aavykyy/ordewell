@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,6 +11,7 @@ import { fakeConfig, FakeRunnerSession, FakeWorktreeIsolation } from '../../test
 import { fakeNotification } from './sessionTestKit';
 import { savedPatchOf, type StoredHandoff } from '../../models/Handoff';
 import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
+import type { TaskLogEvent } from '../../models/TaskLog';
 import type { OwnSealedRuns, TaskShell } from '../../interfaces/IFileSystem';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 
@@ -47,6 +48,9 @@ describe.skipIf(process.platform === 'win32')("a read-only task's saved patch (A
     const requests: RunnerSpawnOptions[] = [];
     const kept: Array<{ taskId: string; attempt: number; patch: string }> = [];
     const recorded: StoredHandoff[] = [];
+    // The session's task logs, as `read_task` and `apply_patch` read them: one attempt each, with what was kept for it.
+    const logged = new Map<string, StoredHandoff>();
+    const patches = new Map<string, Buffer>();
     const runner = {
       spawn: vi.fn(async (o: RunnerSpawnOptions): Promise<IRunnerSession> => {
         requests.push(o);
@@ -83,9 +87,18 @@ describe.skipIf(process.platform === 'win32')("a read-only task's saved patch (A
       taskShell: () => shell,
       keepPatch: (taskId, attempt, patch) => {
         kept.push({ taskId, attempt, patch: patch.toString('utf8') });
+        patches.set(`${taskId}/${attempt}`, patch);
         return `.ordewell/sessions/s/tasks/${taskId}/${attempt}.patch`;
       },
-      recordHandoff: (_session, _taskId, handoff) => recorded.push(handoff),
+      recordHandoff: (_session, taskId, handoff) => {
+        recorded.push(handoff);
+        logged.set(taskId, handoff);
+      },
+      taskLog: {
+        attempts: (taskId) => (logged.has(taskId) ? [1] : []),
+        events: (taskId): TaskLogEvent[] => (logged.has(taskId) ? [{ type: 'handoff', handoff: logged.get(taskId)! } as TaskLogEvent] : []),
+        patch: (taskId, attempt) => patches.get(`${taskId}/${attempt}`),
+      },
     });
     const request = (taskId: string) => requests.filter((r) => r.taskId === taskId).at(-1)!;
     const latest = (taskId: string) => sessions.filter((s) => s.taskId === taskId).at(-1)!;
@@ -167,5 +180,61 @@ describe.skipIf(process.platform === 'win32')("a read-only task's saved patch (A
 
     expect(reply.text).toContain('Nothing saved: the worktree has no changes');
     expect(env.kept).toEqual([]);
+  });
+
+  describe("a change task's apply_patch", () => {
+    let builder: string;
+
+    beforeEach(() => {
+      builder = join(realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-patch-builder-'))), 'worktree');
+      git(repo, 'worktree', 'add', '-q', '--detach', builder, 'HEAD');
+    });
+
+    afterEach(() => {
+      rmSync(join(builder, '..'), { recursive: true, force: true });
+    });
+
+    /** A read-only explorer that saved a prototype and ended, and the builder that depends on it. */
+    async function explored() {
+      const env = setup();
+      env.orchestrator.loadPlan([readOnly('r1', 1), task('c2', 2, { dependencies: ['r1'] })]);
+      await env.orchestrator.approveReview();
+      await vi.waitFor(() => expect(env.request('r1')).toBeDefined());
+      writeFileSync(join(repo, 'a.ts'), 'one\ntwo\n');
+      await env.request('r1').savePatch!(signal());
+      env.latest('r1').reportComplete({ status: 'done', summary: 'Prototype saved.' });
+      await vi.waitFor(() => expect(env.request('c2')).toBeDefined());
+      // The builder's worktree, as a real prepare records it.
+      env.orchestrator.runs.current!.tasks.c2.repos['.'].worktree = builder;
+      return env;
+    }
+
+    it('applies the patch of the task it depends on into its own worktree, and says what it applied', async () => {
+      const env = await explored();
+
+      const reply = await env.request('c2').applyPatch!({ task: '#1' });
+
+      expect(reply.isError).toBeUndefined();
+      expect(reply.text).toContain("Applied #1 Task r1's patch (1 file, +1 -0) cleanly");
+      expect(readFileSync(join(builder, 'a.ts'), 'utf8')).toBe('one\ntwo\n');
+      expect(git(builder, 'status', '--porcelain')).toBe('M  a.ts\n');
+    });
+
+    it('refuses a read-only task, which keeps its own prototype with save_patch', async () => {
+      const env = await explored();
+
+      const reply = await env.request('r1').applyPatch!({ task: '#1' });
+
+      expect(reply).toMatchObject({ isError: true, text: expect.stringContaining('read-only task lands nothing') });
+    });
+
+    it('refuses where the task has no worktree of its own', async () => {
+      const env = await explored();
+      delete env.orchestrator.runs.current!.tasks.c2;
+
+      const reply = await env.request('c2').applyPatch!({ task: '#1' });
+
+      expect(reply).toMatchObject({ isError: true, text: expect.stringContaining('no worktree of its own') });
+    });
   });
 });
