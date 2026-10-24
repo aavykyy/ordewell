@@ -167,6 +167,37 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   The whole plan goes again after a reorder, a reset or compaction, or a turn
   that did not land
   ([ADR-0012](docs/adr/planner/0012-the-task-query-read-channel.md)).
+- **A session is open in one host at a time.** A second host, whether another
+  VS Code window, a CLI command or a TUI, that opens a session another host
+  holds is refused with the holder named, instead of both continuing its run
+  and removing each other's live worktrees. The session is taken over once the
+  holder and the runners it started are gone
+  ([ADR-0049](docs/adr/isolation/0049-a-session-has-one-live-host.md)).
+- **The supervisor at Act answers a task's checkpoint** with
+  `answer_checkpoint`, approving or rejecting with a reason. A checkpoint that
+  asks about an irreversible or outward effect still goes to you, and a refusal
+  now says who has to answer it: the supervisor, or you in your own turn
+  ([ADR-0029](docs/adr/supervision/0029-the-supervisor.md)).
+- **The planner's `run_plan` joins a run under way.** A plan whose tasks the
+  planner started one by one can be made the plan's run, so their dependents
+  start; the join approves nothing, Guarded still asks you first, and an
+  unapproved plan is refused with that reason
+  ([ADR-0035](docs/adr/supervision/0035-effects-are-consented-and-recorded.md)).
+- **A start a Stop withdrew no longer answers success.** A Run, Force start,
+  `run_plan`, `approve_review`, a retry or a continue that began a start a Stop
+  then withdrew is refused, instead of answering done while the task stayed
+  pending.
+- **The chat's approval cards, the plan markers and the handoff preview use the
+  same words on both surfaces.** The plan marker reads
+  `Plan generated · 3 tasks`, and a handoff preview names its findings count,
+  severity, commit and the first line of the summary.
+- **The local daemon's per-control routes are replaced by one execution
+  route.** The TUI, the CLI and VS Code send every task control, run verb and
+  message through `POST /api/plans/:id/execute-command`; a hand-written client
+  of the old per-control routes has to move to it
+  ([ADR-0006](docs/adr/surfaces/0006-tui-pure-core-thin-driver.md)).
+- **The inert `ordewell.researchEnabled` setting is gone.** It never changed
+  what Ordewell did.
 
 ### Security
 
@@ -215,6 +246,114 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   it into another type of task, takes it out of the approved set. Autorun in
   Guarded never approves one, and a denied or unanswered card leaves it
   unapproved.
+- **The planner's shell closes three more escapes from its command rules.** A
+  `git branch` or `git tag` whose `-f`, `-m` or `-C` swallowed the ref name no
+  longer passes as a read, a glob such as `.?` that expands to `..` no longer
+  reads outside the workspace, and a `jq` or `yq` program that reads `$ENV` or
+  loads a module is refused or asks
+  ([ADR-0008](docs/adr/planner-envelope/0008-planner-exploration-envelope.md)).
+- **`ORDEWELL_AUTONOMOUS_MODE` can no longer raise your autonomy by accident.**
+  Only `true`, `1`, `false`, `0` and the level names count; `off`, a typo or an
+  unknown word no longer reads as Full.
+
+### Fixed
+
+- **A usage limit that pauses a task no longer closes the run.** Whether the
+  limit ends the runner's turn, fails it or refuses the start, the task records
+  no verdict and waits for its reset, and the run stays open until then. A
+  retry or skip while it waits keeps the run held rather than closing it as
+  finished
+  ([ADR-0018](docs/adr/runners/0018-structured-runner-transport.md), U1).
+- **A task at a checkpoint or waiting for input keeps that wait through an
+  edit or a plan the planner reshapes.** Its runner is still live, so the plan
+  no longer carries it over as pending and runs its work twice.
+- **A control is refused while Mark complete is landing a task**, since
+  stopping or retrying it would end the attempt whose work is being merged.
+- **A conflict repair owed with every slot busy starts when one frees** instead
+  of waiting for another event.
+- **Ordewell's own git checks now see new files.** A
+  `status.showUntrackedFiles=no` in your git config made a worktree that held
+  only new files read as empty and be removed unkept; Ordewell asks git for
+  untracked files itself. Merge all also checks the untracked and staged files
+  its merge would write over, besides overlapping tracked edits, so it no
+  longer starts a merge that leaves a half-merge in a tree holding your work.
+  A merge or a landing that fails says what git said.
+- **Clearing up never deletes landed work.** A run's integration branches and
+  worktrees go only where your checked-out branch already contains the work, so
+  a retry that dropped a task's record no longer takes the branch holding its
+  landed work with it
+  ([ADR-0013](docs/adr/isolation/0013-worktree-isolation.md)).
+- **A stale worktree registration no longer blocks re-creating a task's
+  worktree.** Preparing a task prunes what no run record names, keeps any work
+  it finds on an `ordewell-preserved/…` branch, and never removes another
+  task's worktree. A prepare that fails after it replaced an attempt says where
+  that attempt's work was kept
+  ([ADR-0013](docs/adr/isolation/0013-worktree-isolation.md)).
+- **A planner goal that is refused no longer wipes the plan it was holding**,
+  and a Stop while the planner condenses its context reads as a stopped turn
+  rather than a refusal.
+- **A plan is checked against the runners enabled at the time**, both when the
+  planner submits it and when it lands, so a plan is no longer accepted with a
+  runner you had switched off while it planned.
+- **A chat reloaded after the planner answered no longer keeps an old message
+  marked as waiting.**
+- **A task log's header shows the attempt on screen.** Its usage is that
+  attempt's, with the task total beneath it, its `/` commands come from that
+  attempt, and a skipped task's reason and a live turn read the same in the
+  terminal and in VS Code.
+- **A planner reply lost in transit no longer drops the session.** A timeout or
+  a reset on a turn that is still running keeps the session and the queued
+  messages; the next reply continues the same conversation, and a reconnected
+  terminal reads the session back for the turn's end.
+- **A `task_complete` call that is refused says what arrived.** Every bounded
+  field names its received length and its limit, and tool-call markup leaked
+  into the summary is named so the runner can resend each argument.
+- **A coding-agent planner that exits before it answers reports its own
+  words**, instead of being respawned and then failing as an MCP attach error.
+- **An OpenCode command turn survives a POST whose socket died.** Requests
+  carry a deadline, so one that never answers fails instead of hanging, and an
+  interrupt is decided by the runner's own end, so the abort error OpenCode
+  raises for it is not shown as a failure.
+- **An OpenCode 2.x planner keeps its Ordewell tools after an hour idle.** The
+  tools used to come back behind code mode, out of the planner's reach, until
+  a later turn could not call one
+  ([ADR-0022](docs/adr/runners/0022-ordewell-mcp-server.md)).
+- **A crash mid-save cannot erase the only copy of a session or a plan.** Saves
+  are written beside the file and renamed into place, and a session file that
+  will not read is moved aside with its bytes kept rather than skipped
+  silently.
+- **A settings file that will not parse is kept aside instead of reset.** A
+  read error no longer marks a healthy session corrupt, a hand-edited model
+  allowlist written as one string no longer fails every planner turn, a
+  read-only home no longer breaks skill reads, and a settings watcher error no
+  longer takes the host down.
+- **A plan change that withdraws a task's approval now says so.** The approval
+  record is checked on each plan change, so a task the planner unapproves is
+  announced as a plan update and a status instead of changing silently at the
+  next save.
+- **Stop ends a Gemini turn.**
+- **`ordewell stop` checks the daemon's PID against the server before it
+  signals**, so a stale PID file cannot kill an unrelated process. A daemon
+  writes and removes its own PID file.
+- **A refused daemon call no longer reads as success** in a CLI command, and a
+  request body over the daemon's limit is refused with its reason.
+- **`add-task --depends-on` resolves order numbers and titles**, and refuses one
+  that names no task instead of adding a task that can start beside the one it
+  should wait for. `ordewell setup` stores a key under the variable it came
+  from, so a bare `OPENAI_API_KEY` is not saved as an OpenRouter key.
+- **The terminal's keys work in terminals that send kitty's codepoints.** A
+  wrapped line keeps its colours and never splits an escape sequence, the
+  composer scrolls around the caret instead of hiding it, and `NO_COLOR` keeps
+  the caret, since inverse video marks a position rather than a colour.
+- **An idle terminal keeps following its session.** A dropped stream is retried
+  with a backoff, so a run the daemon starts on its own still shows, and a turn
+  whose end was missed settles when the stream is back.
+- **The CLI starts on every Node version its engines promise.** Its ESM-only
+  width library is bundled, so Node 20.0 to 20.18 no longer fails before
+  reading its arguments.
+- **The npm packages and the VSIX ship NOTICE, AUTHORS.md and the third-party
+  licences** of the code they bundle.
+
 ## [0.10.12] - 2026-10-22
 
 ### Fixed
