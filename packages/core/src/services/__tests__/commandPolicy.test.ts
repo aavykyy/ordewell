@@ -225,10 +225,36 @@ describe('classifyCommand', () => {
       expect(classifyCommand('git tag -a v1.0.0 -m "release"').tier).toBe('refuse');
     });
 
+    // The version-control flag set reads -f/-m/-M/-C as taking a value (for
+    // `git log`), so under branch/tag they swallowed the ref name and left no
+    // positional for the check above to see. Each of these rewrote a ref on
+    // real git with no prompt.
+    it.each([
+      'git tag -f v1',
+      'git branch -f other',
+      'git branch -qm renamed',
+      'git branch -qM renamed',
+      'git branch -qC copied',
+      'git branch -c copied',
+      'git branch -C copied',
+      'git branch --force other',
+      'git branch --copy copied',
+      'git branch --move renamed',
+      'git tag --force v1',
+      'git branch --delete feature',
+      'git tag -fa v1 -m x',
+    ])('refuses the force, copy and move forms of git branch/tag: %s', (cmd) => {
+      expect(classifyCommand(cmd).tier).toBe('refuse');
+    });
+
     it('still allows listing branches/tags by name pattern, which is read-only', () => {
       expect(classifyCommand('git branch --list "feature/*"').tier).toBe('auto');
       expect(classifyCommand('git tag -l "v0.4.*"').tier).toBe('auto');
       expect(classifyCommand('git branch --contains HEAD~5').tier).toBe('auto');
+      expect(classifyCommand('git branch -vv').tier).toBe('auto');
+      expect(classifyCommand('git branch -a --sort=-committerdate').tier).toBe('auto');
+      expect(classifyCommand('git -C packages/core branch --list').tier).toBe('auto');
+      expect(classifyCommand('git tag -n5 -l "v0.*"').tier).toBe('auto');
     });
 
     it('refuses sed -i and awk -i inplace, which edit files in place', () => {
@@ -965,6 +991,55 @@ describe('sed and awk programs are read for commands they run and files they wri
   });
 });
 
+// jq and yq ran unprompted with any program, and a program can read the
+// environment (`$ENV`, `env`, yq's `strenv`) or load a file from a directory
+// no argument names (`import … {search: "~"}`, yq's `load`). With a provider
+// key set, `jq -rn '$ENV.ANTHROPIC_API_KEY'` printed it while `printenv` asked.
+describe('jq and yq programs are read for the environment and files they reach', () => {
+  it.each([
+    "jq -rn '$ENV.ANTHROPIC_API_KEY'",
+    "jq -n 'env'",
+    "jq -r 'env.HOME' package.json",
+    'jq -rn \'"\\(env.HOME)"\'',
+    "jq -n '[$ENV[]] | length'",
+    "jq -n 'import \"secrets\" as $d {search: \"~\"}; $d'",
+    "jq -n 'include \"lib\" {search: \"/tmp\"}; 1'",
+    "jq -n '\"lib\" | modulemeta'",
+    "jq --arg k v -r '$ENV[$k]' package.json",
+    "jq -f prog.jq package.json",
+    "jq -rf prog.jq package.json",
+    "jq --from-file prog.jq package.json",
+    "jq -n '# \"\nenv\n# \"'",
+    'jq "$PROGRAM" package.json',
+    "yq 'env(HOME)' a.yml",
+    "yq '.a = strenv(TOKEN)' a.yml",
+    "yq '\"${HOME}\" | envsubst' a.yml",
+    "yq 'load(\"/etc/hosts.yml\")' a.yml",
+    "yq '.a = load_str(\"../x\")' a.yml",
+    "yq eval 'env(HOME)' a.yml",
+    "yq --expression='strenv(HOME)' a.yml",
+  ])('refuses %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  it.each([
+    'jq . package.json',
+    "jq -r '.version' package.json",
+    "jq --arg k version -r '.[$k]' package.json",
+    "jq -r '.env.NODE_ENV' compose.json",
+    "jq '.services[] | select(.name == \"env\")' compose.json",
+    "jq '{name, env: .environment}' compose.json",
+    "jq -r 'map(.load) | add' stats.json",
+    "jq -n --arg env prod '$env'",
+    "jq -c . env.json",
+    "jq '.a' -n -r env",
+    "yq -o json '.jobs' ci.yml",
+    "yq '.load' load-balancer.yml",
+  ])('keeps an ordinary filter unprompted: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('auto');
+  });
+});
+
 describe('an input redirect names a file the shell opens, not an argument', () => {
   // The word after `<` was pushed as an argument, and it can come first.
   it('classifies the command after a leading input redirect', () => {
@@ -1020,6 +1095,32 @@ describe('pathLikeArgs — path arguments an auto-tier binary could still read o
   it('looks inside every chained segment and command substitution', () => {
     expect(pathLikeArgs('git status && cat /etc/passwd')).toEqual(['/etc/passwd']);
     expect(pathLikeArgs('echo $(cat /etc/hostname)')).toEqual(['/etc/hostname']);
+  });
+
+  // bash 3.2 (macOS /bin/sh) and dash expand a name segment that starts with a
+  // dot and a glob character to `..` among its matches, so `cat .?/secret.txt`
+  // read a file above the workspace with no prompt while `cat ../secret.txt`
+  // asked. No path the command line spells is outside, so confinement cannot
+  // judge it, and it asks under the line the human read, as a steered `cd` does.
+  it.each([
+    'cat .?/secret.txt',
+    'cat .[.]/secret.txt',
+    'cat \\.?/secret.txt',
+    'grep -r X .?',
+    'head .?/.?/notes.txt',
+    'ls src/.*/x',
+    'git status && cat .*/secret.txt',
+    'cat < .?/secret.txt',
+  ])('asks about a glob that can climb out through "..": %s', (cmd) => {
+    expect(classifyCommand(cmd)).toEqual({ tier: 'ask', scope: cmd });
+  });
+
+  it('still runs a glob that cannot climb, and a dotted pattern that is never opened', () => {
+    expect(classifyCommand('cat docs/*.md').tier).toBe('auto');
+    expect(classifyCommand('ls src/?.ts').tier).toBe('auto');
+    expect(classifyCommand('grep -E ".*TODO" src/*.ts').tier).toBe('auto');
+    expect(classifyCommand('find . -name ".*rc"').tier).toBe('auto');
+    expect(classifyCommand("cat '.?/literal'").tier).toBe('auto');
   });
 });
 
