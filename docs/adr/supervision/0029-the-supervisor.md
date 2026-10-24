@@ -298,7 +298,14 @@ supervisor's judgement on the rest.
   effect allowlist rule that covers it. Choosing Act is the consent.
 
 **Tasks the supervisor adds under Act count as pre-approved and may start —
-ops tasks and script tasks included.** This is a deliberate choice, and it carries the risk
+ops tasks and script tasks included.** A `run_task`, a fresh `retry_task` or a
+`run_plan` it asks for in the reply whose edit adds the task waits for the edit
+and then starts the task as a start of any approved task does, whether or not a
+run is in progress: nothing else would start it once the run has ended. The
+edit's approval is what lets the start through, so below Act the start is
+refused in the words of the level, and a task the plan already holds that the
+user has not approved stays refused. A skip of a task the same edit adds is
+refused instead. This is a deliberate choice, and it carries the risk
 #23's comment describes: an instruction injected into something the planner
 read — an issue body, a fetched page, a task's output — can become an ops task
 that runs unattended on real systems, in the session's mode, with no one asked
@@ -638,3 +645,4 @@ until #30 exists.
 - 2026-10-24 — the supervisor at Act may answer a checkpoint with `answer_checkpoint`, a planner tool of its own; a planner turn in the user's turn, the supervisor below Act and autorun are refused, a rejection needs a reason, and one that asks for the user's judgement on an irreversible or outward effect is escalated to them.
 - 2026-10-24 — the daemon's per-control routes are replaced by one `execute-command` route (ADR-0006 S3); the seam's lines and payloads travel as before.
 - 2026-10-24 — the approval record's rules live in one module, `ApprovalRecord`, and run on each change to the task tree rather than inside a save: a task that leaves the plan takes its approval, and a save only writes. Approval taken from a task is announced to surfaces as a plan update with a status, wherever the change was made. `Session.isApproved` stays the one read.
+- 2026-10-24 — a start the Act supervisor asks for of a task its own edit adds waits for the edit instead of being refused as "tell the user".
