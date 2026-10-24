@@ -1492,7 +1492,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation never deletes work that has not land
 
 describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
   function repoWithLocalState(): string {
-    const root = repo({ '.gitignore': 'node_modules/\n.env\n.venv/\n', 'README.md': 'hi\n', '.env.example': 'KEY=\n' });
+    const root = repo({ '.gitignore': 'node_modules/\n.env\n.venv/\n.claude/\n', 'README.md': 'hi\n', '.env.example': 'KEY=\n' });
     mkdirSync(join(root, 'node_modules', 'left-pad'), { recursive: true });
     writeFileSync(join(root, 'node_modules', 'left-pad', 'index.js'), 'module.exports = 1;\n');
     mkdirSync(join(root, '.venv'));
@@ -1544,7 +1544,9 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
     expect(await iso.integrate(t, run)).toBe('merged');
     const tree = git(root, 'ls-tree', '-r', '--name-only', run.repos[0].integrationBranch).split('\n');
     expect(tree).toContain('feature.txt');
-    expect(tree.some((f) => f.startsWith('node_modules') || f.startsWith('.venv') || f === '.envrc' || f === '.env')).toBe(false);
+    // `.claude/` is a directory-only rule, so it would not match the symlink
+    // a task worktree gets: the landing commit must exclude it by name.
+    expect(tree.some((f) => f.startsWith('node_modules') || f.startsWith('.venv') || f === '.envrc' || f === '.env' || f === '.claude')).toBe(false);
     expect(tree.some((f) => f.startsWith('.ordewell'))).toBe(false);
   });
 
