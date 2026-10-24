@@ -242,6 +242,12 @@ const answerApprovalInput = z.object({
   note: z.string().optional().describe('With "deny": what the runner should do instead. It reads this.'),
 });
 
+const answerCheckpointInput = z.object({
+  task: taskRef,
+  answer: z.enum(['approve', 'reject']).describe('"approve": the task goes on. "reject": the runner is told the reason and acts on it.'),
+  reason: z.string().optional().describe('Required with "reject": what the runner should do instead. It reads this.'),
+});
+
 export type TaskCompleteArgs = z.infer<typeof taskCompleteInput>;
 export type CheckpointArgs = z.infer<typeof checkpointInput>;
 export type ReadTaskArgs = z.infer<typeof readTaskInput>;
@@ -263,6 +269,7 @@ export type RetryTaskArgs = z.infer<typeof retryTaskInput>;
 export type MessageTaskArgs = z.infer<typeof messageTaskInput>;
 export type SkipTaskArgs = z.infer<typeof skipTaskInput>;
 export type AnswerApprovalArgs = z.infer<typeof answerApprovalInput>;
+export type AnswerCheckpointArgs = z.infer<typeof answerCheckpointInput>;
 export type RunScriptArgs = z.infer<typeof runScriptInput>;
 
 /** What a handler answers with. `isError` marks a refusal the caller should act on. */
@@ -331,6 +338,7 @@ export interface PlannerToolHandler {
   skipTask?: Run<SkipTaskArgs>;
   messageTask?: Run<MessageTaskArgs>;
   answerApproval?: Run<AnswerApprovalArgs>;
+  answerCheckpoint?: Run<AnswerCheckpointArgs>;
   mergeAll?: Run<RunPlanArgs>;
   runScript?: Run<RunScriptArgs>;
 }
@@ -542,10 +550,12 @@ export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     retryTaskInput, (h) => h.retryTask?.bind(h), PLANNER_EXECUTES),
   tool('skip_task', 'Give up waiting for a task that failed, is blocked or is waiting for input: it ends as skipped, none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done, told your reason. It never marks work complete. Only the supervisor at Act may, in a wake-up turn; a reason is required.',
     skipTaskInput, (h) => h.skipTask?.bind(h), PLANNER_EXECUTES),
-  tool('message_task', 'Send a message to a running task, or answer one waiting for input. A message to a task paused on a usage limit resumes it in its saved session.',
+  tool('message_task', 'Send a message to a running task, or answer one waiting for input. A message to a task paused on a usage limit resumes it in its saved session. A task waiting at a checkpoint is answered with answer_checkpoint, not a message.',
     messageTaskInput, (h) => h.messageTask?.bind(h), PLANNER_EXECUTES),
-  tool('answer_approval', 'Answer a request a task\'s runner is waiting on: deny it with a note, or escalate it to the user. It never allows.',
+  tool('answer_approval', 'Answer a request a task\'s runner is waiting on: deny it with a note, or escalate it to the user. It never allows. It does not cover a checkpoint: that is answer_checkpoint.',
     answerApprovalInput, (h) => h.answerApproval?.bind(h), PLANNER_EXECUTES),
+  tool('answer_checkpoint', 'Answer the checkpoint a task\'s runner waits at, as the user does from its card: approve it and the task goes on, or reject it with a reason the runner acts on. Only the supervisor at Act may, in a wake-up turn; in the user\'s own turn they answer it from the task\'s checkpoint card, so tell them what it asks. A checkpoint that asks for the user\'s judgement on an irreversible or outward effect is not yours to approve: leave it for the user and say why. A message does not answer a checkpoint.',
+    answerCheckpointInput, (h) => h.answerCheckpoint?.bind(h), PLANNER_EXECUTES),
   tool('merge_all', 'Merge the run\'s landed work into the user\'s branch, as their Merge all does, opening the merge gates that wait on it. Only the supervisor at Act may, in a wake-up turn; otherwise the user presses Merge all.',
     runPlanInput, (h) => h.mergeAll?.bind(h), PLANNER_EXECUTES),
   tool('run_script', 'Perform an exact effect yourself — a push, a tag, one setting on a cloud resource — as a script task: added to the plan and started at once, at the workspace root, with no model. Returns its verdict and the end of its output, or after a minute that it is still running; its result then reaches you in a run update when it ends. The user consents first: in Guarded, or in Full without autorun, they are asked on the approval card, shown the commands as written, and a denial leaves the task in the plan, not approved. For an effect that needs judgment, add an ops task instead; a change to repository files is a change task.',

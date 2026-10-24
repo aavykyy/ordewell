@@ -218,6 +218,20 @@ describe('Supervisor', () => {
     expect(turn.brief).toMatch(/up to 3 times/);
   });
 
+  it('tells a wake-up turn at Act that it answers checkpoints, and leaves the ones that need the user\'s judgement to them', () => {
+    const turn = new Supervisor({ ...host({ level: 'act' }), retryLimit: () => 3 }).wakeUpTurn();
+
+    expect(turn.brief).toMatch(/answer_checkpoint/);
+    expect(turn.brief).toMatch(/irreversible or outward effect.*escalate it to the user rather than approving it/);
+    expect(turn.brief).toMatch(/When you reject, give the reason/);
+  });
+
+  it('does not offer the checkpoint tool to a wake-up turn at Watch, which only suggests', () => {
+    const turn = new Supervisor({ ...host({ level: 'watch' }), retryLimit: () => 3 }).wakeUpTurn();
+
+    expect(turn.brief).not.toMatch(/answer_checkpoint/);
+  });
+
   it('applies a level lowered during the turn at once', () => {
     let run: SupervisedRun = { level: 'act' };
     const turn = new Supervisor({ ...host(null), run: () => run }).wakeUpTurn();
