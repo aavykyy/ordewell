@@ -5,7 +5,7 @@ import { OrchestratorPool } from './pool/orchestratorPool';
 import { createServer } from 'http';
 import { mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
-import { clearDaemonToken, mintDaemonToken, StructuredRunner } from '@ordewell/core';
+import { clearDaemonToken, mintDaemonToken, processLeaseHost, StructuredRunner } from '@ordewell/core';
 
 const args = process.argv.slice(2);
 let port = 3742;
@@ -30,6 +30,10 @@ const watchParentPid = watchParentIdx !== -1 ? parseInt(args[watchParentIdx + 1]
 const pidFileIdx = args.indexOf('--pid-file');
 const pidFile = pidFileIdx !== -1 ? args[pidFileIdx + 1] : undefined;
 let ownsPidFile = false;
+
+// What another host's refusal names this one as (ADR-0049). Only a TUI starts
+// a daemon it watches, as its private one.
+processLeaseHost().describe({ kind: 'daemon', port, ...(watchParentPid ? { ownerPid: watchParentPid } : {}) });
 
 // Tasks run on the structured transport (ADR-0018) as plain child processes,
 // so one runner serves every plan whatever the host has.

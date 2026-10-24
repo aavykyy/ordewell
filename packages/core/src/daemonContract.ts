@@ -4,6 +4,7 @@ import type { IsolationMergeResult } from './interfaces/IWorktreeIsolation';
 import type { SessionMeta } from './models/Session';
 import type { DiscoveredModel } from './models/Task';
 import type { PlannerNotReady } from './services/plannerReadiness';
+import type { SessionHeld } from './services/sessionLease';
 import type { PendingApproval } from './services/PendingApprovals';
 import type { RunView, SessionMessage, SessionNotice, SurfacePlan, SurfacePlanState } from './services/SessionMessage';
 import type { ConversationCompaction, RewindTarget } from './services/PlannerConversation';
@@ -49,7 +50,9 @@ export type DaemonErrorCode =
   /** The request asked for something the plan, task or conversation does not allow. */
   | 'refused'
   | 'checkpoint_not_waiting'
-  | 'approval_not_outstanding';
+  | 'approval_not_outstanding'
+  /** Another live Ordewell host runs this session (ADR-0049); `sessionHeld` names it. */
+  | 'session_held';
 
 /** The body of every non-2xx answer a route gives. */
 export interface ErrorBody {
@@ -59,6 +62,8 @@ export interface ErrorBody {
   workspace?: string;
   /** Set with `planner_not_ready`: the reason as data, so a client can word it in its own commands. */
   plannerNotReady?: PlannerNotReady;
+  /** Set with `session_held`: the host that holds the session, and the runners a gone one left. */
+  sessionHeld?: SessionHeld;
 }
 
 /**

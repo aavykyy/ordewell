@@ -1,4 +1,4 @@
-import { Task, flattenTasksWithParents } from '../models/Task';
+import { Task, flattenTasksWithParents, waitsMidAttempt } from '../models/Task';
 import { canSetDependencies } from './PlanTree';
 import { NOT_STARTED } from '../taskRow/status';
 import { notOnAScriptMessage, opsPlacementRefusal } from './PlannedTask';
@@ -36,9 +36,23 @@ export interface TaskEditCheck {
  * Null for a task the planner may edit.
  */
 export function lockedTaskRefusal(task: Pick<Task, 'title' | 'status'>, action = 'changed'): string | null {
-  if (task.status === 'in_progress') return `"${task.title}" is running and cannot be ${action} now: the user can stop it first, or change it after it finishes`;
+  if (task.status === 'in_progress') return runningRefusal(task, action);
   if (task.status === 'completed') return `"${task.title}" is completed and cannot be ${action}: rearm it to run it again, or add a new task for further work`;
   return null;
+}
+
+/**
+ * {@link lockedTaskRefusal} for an op that takes the task out of the plan:
+ * remove, merge or split. One waiting at a checkpoint or for input still has
+ * its runner live, so the plan would carry it over and run its work twice; an
+ * update leaves it in place, under the live-runner checks of its fields.
+ */
+export function reshapeRefusal(task: Pick<Task, 'title' | 'status' | 'awaitingReason'>, action: string): string | null {
+  return waitsMidAttempt(task) ? runningRefusal(task, action) : lockedTaskRefusal(task, action);
+}
+
+function runningRefusal(task: Pick<Task, 'title'>, action: string): string {
+  return `"${task.title}" is running and cannot be ${action} now: the user can stop it first, or change it after it finishes`;
 }
 
 const AI_ONLY_FIELDS = ['assignedModel', 'taskMode', 'autonomy', 'ops'] as const satisfies readonly (keyof Task)[];

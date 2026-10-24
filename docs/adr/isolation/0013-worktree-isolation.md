@@ -194,6 +194,11 @@ everything below applies per repo of the group.
   and excluded from the task's commit; removal unlinks every link inside it
   before anything deletes the worktree, and finds the workspace packages'
   directories again from `package.json` when a crash left no record.
+- **A start over what no record holds.** `prepare` prunes git's stale
+  registrations, then keeps and removes whatever the task's own path and branch
+  still hold when no live record does — a crashed attempt's, or one whose record
+  was lost — by the rules a retry follows, and refuses when that work cannot be
+  kept. A path or branch another record of the run holds is never touched.
 - **Windows needs no privilege (ADR-0010).** Directories become junctions and
   files hard links, copied only when a hard link is impossible (a different
   volume), with a notice. Copies are what make the recorded link list matter
@@ -271,7 +276,11 @@ everything below applies per repo of the group.
   directories and branches under the run that no record owns, and stale
   registrations. Kept, failed and conflicted worktrees are what the user may
   want, so they stay. `release(..., { keep: true })` exists so a task whose
-  verification failed is moved off `active` and survives that sweep.
+  verification failed is moved off `active` and survives that sweep. Only the
+  host holding the session's lease adopts it, continues its run or changes it
+  in any way ([ADR-0049](0049-a-session-has-one-live-host.md)): a second host
+  continuing the same run id names the same worktrees, and its prune and
+  `prepare` would remove a live host's.
 - **Persistence.** `LegacyPlanState.isolation` holds `{ run, resolvers }`,
   written from the orchestrator at persist time like `tasks`, and saved on every
   change to it rather than at the end of the run — the record is what lets a
@@ -512,3 +521,5 @@ literal git command lines or private fields.
 - 2026-10-23 — Merge all's merge, a continue's merge of kept work and the rescue commit are named for the tasks and carry the trailer, like the landing.
 - 2026-10-23 — the messages Ordewell writes land as written, whatever the user's `commit.cleanup`.
 - 2026-10-24 — preparing a task workspace takes its turn, and a replaced run's integration branch is deleted only where HEAD contains it, never on the word of its records.
+- 2026-10-24 — only the host holding the session's lease adopts, continues or changes its run (ADR-0049).
+- 2026-10-24 — preparing a task prunes stale worktree registrations and clears an unrecorded leftover at the task's path or branch, keeping its work first.

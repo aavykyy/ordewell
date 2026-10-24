@@ -129,6 +129,27 @@ what a turn in flight has spent — over the plan's saved copies.
 *Avoid:* "session reset" for the adopt or new-plan cases — only `reset` also
 mints a new identity and clears the model cache.
 
+**Host** — the process that runs Sessions: a daemon (the local daemon a CLI
+command or a TUI's private one drives) or the VS Code extension host. Several
+can run in one checkout at once, which is why a session has a **session lease**.
+A surface is not a host: the TUI and the CLI drive a daemon, which is.
+*Avoid:* "client" for the host (the TUI is the daemon's client), "instance".
+
+**Session lease** (`services/sessionLease.ts`, ADR-0049) — the claim a host
+holds on a session while it has it open, in `lease.json` in the session's
+directory: the holder's pid, a host id minted per process, what kind of host it
+is, since when, a heartbeat, and the process groups of the runners it started.
+A Session claims it before adopting a saved session and before its first save,
+and lets it go when it closes; without it a Session saves nothing and changes
+nothing of its isolation run. Another host is refused the session
+(`SessionHeldError`, daemon code `session_held`) with the holder named, while
+the holder lives; it takes the lease over once the holder's pid is gone or its
+heartbeat is stale, and none of the holder's runner groups is still running. A
+holder that finds its lease taken has *lost* the session: it stops its run and
+never claims it back on its own.
+*Avoid:* "session lock" (the lease outlives no holder, and is taken over
+rather than waited for), "owner" for anything but the holder.
+
 **SessionCatalog** (`services/SessionCatalog.ts`) — what one session may
 assign, behind one interface: the enabled runners, their manifest modes, the
 models discovery found for them, and the allowlist narrowing those. Built in
@@ -658,9 +679,11 @@ session is never started in its place.
 for it — a retry starts a fresh attempt with no message; "continue" across
 runners.
 
-**Usage-limit resume** (`readUsageLimitReset`, `UsageLimitWaits`,
+**Usage-limit resume** (`readUsageLimitReset`, `LimitPauses`,
 `cancelScheduledResume`; ADR-0018, U1) — a task whose runner stopped on its
-account's usage limit is `awaiting_user` with reason `usage-limit`; a pause with
+account's usage limit is `awaiting_user` with reason `usage-limit`, however the
+limit arrived: its runner exited mid-turn on it, a turn failed with it, or it
+refused the start. That pause is no verdict and nothing of it is archived; a pause with
 a reset to wait for holds the run, and one without a time keeps only that
 runner's tasks from starting. The limit counts only under the *in-flight rule*. When the runner's message names the reset (Claude Code and Codex do,
 read by their connectors' `usageLimitReset`; OpenCode does not), the task carries a `resumeAt` saved with the plan, and at
@@ -1721,9 +1744,9 @@ its **label** with or without `#` (`#2`, `2`, or `#2.1` for the first subtask of
 task 2), or its exact title. A label is the task's order under its parent,
 written as the full path from the top level at any depth (`#3.2.1`): subtask
 orders restart at 1 under each parent, so `#N` always means top-level task N and
-a subtask is reachable only by its dotted label. Every read tool (`task_query`,
-`task_read`, `task_output`, `task_diff`) names a task by that label, never by a
-bare order. One module
+a subtask is reachable only by its dotted label. Every planner read tool
+(`task_query`, `task_output`, `task_diff`) names a task by that label, never by
+a bare order. One module
 both renders labels (`taskOrderLabel`, `taskRef`, `titledTaskRef`) and resolves
 references against the plan tree (`resolveTaskRef`) — every planner op and read
 tool, the per-turn plan block (which lists subtasks under their dotted labels),
@@ -2030,7 +2053,7 @@ API-key resolution (skipped), provider routing (skipped), and the planner-model
 picker (fed by per-runner discovery instead of the vendor catalog). The
 transport lives behind the existing `IAiService` seam (`CliAgentAiService` plus
 one adapter per agent); everything above it — reply classification, the repair
-loop, `ResearchProgress`, the four surfaces — is untouched. Read-only is
+loop, `ResearchProgress`, the three surfaces — is untouched. Read-only is
 enforced at spawn *and* at the request surface: whatever an agent can ask a
 human for is either withheld (OpenCode's `question` tool) or answered with a
 refusal (its `permission.asked` events; every Codex server→client request,
@@ -2102,9 +2125,10 @@ what gives the surfaces' icon/label switches their exhaustiveness checking.
 **Provider model lists** — the canonical `{ openrouter[], google[] }` id lists
 `resolveProvider` matches a chosen model id against to pick its serving API. The
 ModelResolver is the **sole producer**: native Gemini ids are always minted with
-the `gemini:` qualifier (`geminiOptionId`) so a stored `gemini:<id>` routes to
-the Gemini API, never to OpenRouter's `google/<id>` namespace. Built in one place to
-keep the two surfaces from diverging. The lists only route when nobody named a
+the `gemini:` qualifier (`prefixModelId`, from the provider's `modelPrefix`), so
+a stored `gemini:<id>` routes to the Gemini API, never to OpenRouter's
+`google/<id>` namespace. Built in one place to keep the two surfaces from
+diverging. The lists only route when nobody named a
 planner: an explicit `AI_PROVIDER` or VS Code `aiProvider` always wins over them.
 The daemon drops a vendor's list when its credential is removed, and every config
 it builds reads the current lists, so a session never routes to a vendor the
@@ -2696,7 +2720,7 @@ refusal as the daemon worded it. No planner tool reaches into
 `TaskOrchestrator` directly, and the mandate (#23) plugs in here. Plan approval
 is the user's: executing the plan approves every task in it, and a task the
 user starts, retries or adds by hand is approved too (`approvedTasks` on the
-plan, read through `Session.isApproved`); a start from anyone else is refused
+plan, kept by `ApprovalRecord` and read through `Session.isApproved`); a start from anyone else is refused
 for a task outside that set, and the scheduler starts nothing outside it
 either (ADR-0035), so a task the planner added since *waits for approval to
 start*. A start the seam lets through is approved before it acts.

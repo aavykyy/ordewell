@@ -330,3 +330,16 @@ describe('PlanStore owns its tasks', () => {
     expect(store.get('a')!.status).toBe('completed');
   });
 });
+
+describe('PlanStore.load of a plan with a task on a runner outside its set', () => {
+  it('throws and keeps the plan it held', () => {
+    const store = new PlanStore();
+    store.load([createTask({ id: 'kept', order: 1, title: 'Kept', assignedRunner: 'claude-code' })], ['claude-code']);
+
+    expect(() => store.load([createTask({ id: 'n1', order: 1, title: 'Foreign', assignedRunner: 'codex' })], ['claude-code']))
+      .toThrow('not in the plan\'s runner set');
+
+    expect(store.allTasks.map((t) => t.id)).toEqual(['kept']);
+    expect(store.get('n1')).toBeUndefined();
+  });
+});

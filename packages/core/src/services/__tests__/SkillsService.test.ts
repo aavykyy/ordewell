@@ -7,7 +7,7 @@ import { createSkillsService, workspaceSkillRoots } from '../SkillsService';
 let home = '';
 let workspaceRoot = '';
 
-const h = vi.hoisted(() => ({ builtinDir: '', caseInsensitive: false }));
+const h = vi.hoisted(() => ({ builtinDir: '', caseInsensitive: false, seedFails: false }));
 
 // What macOS and Windows do by default, switched on per test: a path opens a
 // folder whatever the case it is written in.
@@ -27,7 +27,22 @@ vi.mock('fs', async (importOriginal) => {
   };
   const readFileSync = (file: Parameters<typeof actual.readFileSync>[0], ...rest: unknown[]): unknown =>
     (actual.readFileSync as (...args: unknown[]) => unknown)(fold(file), ...rest);
-  return { ...actual, existsSync: (p: fs.PathLike) => actual.existsSync(fold(p)), readFileSync };
+  // A home that refuses writes (EACCES on a read-only home, ENOSPC on a full
+  // disk) is what the seeding fallback must survive; mkdir/copy are its I/O.
+  const refuses = (p: unknown): boolean =>
+    h.seedFails && typeof p === 'string' && p.startsWith(path.join(home, '.ordewell', 'skills'));
+  const denied = (): never => {
+    throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+  };
+  return {
+    ...actual,
+    existsSync: (p: fs.PathLike) => actual.existsSync(fold(p)),
+    readFileSync,
+    mkdirSync: (p: Parameters<typeof actual.mkdirSync>[0], ...rest: unknown[]) =>
+      refuses(p) ? denied() : (actual.mkdirSync as (...args: unknown[]) => unknown)(p, ...rest),
+    copyFileSync: (src: Parameters<typeof actual.copyFileSync>[0], dest: Parameters<typeof actual.copyFileSync>[1], ...rest: unknown[]) =>
+      refuses(dest) ? denied() : (actual.copyFileSync as (...args: unknown[]) => unknown)(src, dest, ...rest),
+  };
 });
 
 vi.mock('os', async (importOriginal) => {
@@ -283,6 +298,27 @@ describe('SkillsService', () => {
       const svc = createSkillsService(workspaceRoot);
       const names = svc.listSkills().map((s) => s.name).sort();
       expect(names).toEqual(['diagnose', 'explore', 'grilling', 'improve-codebase-architecture', 'tdd', 'to-spec']);
+    });
+
+    it('still lists and reads the built-ins when the global skills dir cannot be written', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      h.seedFails = true;
+      try {
+        const svc = createSkillsService(workspaceRoot);
+
+        expect(svc.listSkills().map((s) => s.name).sort()).toEqual(['diagnose', 'explore', 'grilling', 'improve-codebase-architecture', 'tdd', 'to-spec']);
+        expect(svc.findSkill('tdd')?.content).toContain('Builtin tdd body.');
+        // Read from the package, never seeded anywhere the home could not hold.
+        expect(fs.existsSync(path.join(home, '.ordewell', 'skills', 'tdd'))).toBe(false);
+
+        // Every read retries the seed; the warning is said once, not per turn.
+        svc.listSkills();
+        const grillingWarnings = warn.mock.calls.filter((call) => String(call[0]).includes('grilling'));
+        expect(grillingWarnings).toHaveLength(1);
+      } finally {
+        h.seedFails = false;
+        warn.mockRestore();
+      }
     });
 
     it('prunes a stale grill-me seed left by an older build', () => {
@@ -559,6 +595,17 @@ describe('SkillsService', () => {
       expect(svc.seedBuiltinSkill('grilling')).toBe(false);
       expect(warn).toHaveBeenCalled();
       warn.mockRestore();
+    });
+
+    it('returns false rather than throwing when the global dir refuses the copy', () => {
+      h.seedFails = true;
+      try {
+        const svc = createSkillsService(workspaceRoot);
+        expect(() => svc.seedBuiltinSkill('grilling')).not.toThrow();
+        expect(svc.seedBuiltinSkill('grilling')).toBe(false);
+      } finally {
+        h.seedFails = false;
+      }
     });
   });
 

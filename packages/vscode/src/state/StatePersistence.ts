@@ -1,4 +1,4 @@
-import { LegacyPlanState, Session, saveState, loadState, saveSession, loadSession, flattenTasks, isUserMessage } from '@ordewell/core';
+import { LegacyPlanState, Session, SessionHeldError, describeHeld, saveState, loadState, saveSession, loadSession, flattenTasks, isUserMessage } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 
 export interface PersistenceDeps {
@@ -10,12 +10,20 @@ export interface PersistenceDeps {
   setCurrentGoal: (goal: string) => void;
   workspaceRoot: () => string;
   log: (msg: string) => void;
+  /** Said to the user, not only to the output channel. */
+  warn: (msg: string) => void;
 }
 
 export function saveCurrentSession(deps: PersistenceDeps): void {
   const plan = deps.getCurrentPlan();
   if (plan.tasks.length === 0) return;
   const goal = deps.getCurrentGoal() || plan.tasks[0]?.title || '(untitled)';
+  // The Session's own saves check the lease; this one writes the file directly (ADR-0049).
+  const held = deps.session.heldElsewhere();
+  if (held) {
+    deps.log(`Session not saved: ${describeHeld(held)}`);
+    return;
+  }
   try {
     const meta = saveSession(plan, goal, deps.workspaceRoot(), deps.session.sessionId);
     deps.log(`Session saved: ${meta.id}: "${goal}" (${meta.taskCount} tasks)`);
@@ -42,6 +50,7 @@ export function restoreState(deps: PersistenceDeps): void {
   // worth restoring — otherwise a window reload mid-dialogue loses the chat.
   if (saved && (saved.tasks.length > 0 || hasDialogue)) {
     deps.log(`Restoring saved plan with ${saved.tasks.length} tasks, status: ${saved.status}`);
+    const shownBefore = { plan: deps.getCurrentPlan(), goal: deps.getCurrentGoal() };
     deps.setCurrentPlan(saved);
 
     // The goal is not persisted on the plan; recover it from the dialogue so
@@ -64,6 +73,15 @@ export function restoreState(deps: PersistenceDeps): void {
     try {
       deps.session.loadPlan(saved, deps.getCurrentGoal(), deps.workspaceRoot(), { sessionId: restored?.sessionId, persist: false });
     } catch (err) {
+      // Another host is running it (ADR-0049): this window shows nothing it
+      // could neither run nor save, and says who has it.
+      if (err instanceof SessionHeldError) {
+        deps.setCurrentPlan(shownBefore.plan);
+        deps.setCurrentGoal(shownBefore.goal);
+        deps.log(`Restored session not opened: ${err.message}`);
+        deps.warn(err.message);
+        return;
+      }
       deps.log(`Restored plan could not be loaded into the session: ${err}`);
     }
     deps.chatProvider.conversation.reload(saved);

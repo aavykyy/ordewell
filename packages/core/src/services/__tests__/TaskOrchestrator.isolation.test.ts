@@ -1103,6 +1103,42 @@ describe('TaskOrchestrator with worktree isolation', () => {
       expect(orchestrator.activeTaskIds).toEqual(['t1']);
     });
 
+    it('leaves the repair Mark complete starts without the summary of the completion it did not reach', async () => {
+      const { orchestrator, latest, spawn } = repairing(undefined, { conflictRepairAttempts: 1 });
+      orchestrator.loadPlan([task('t1', 1), task('t2', 2)]);
+      await orchestrator.approveReview();
+      latest('t1').emitExit(1);
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('failed'));
+
+      await orchestrator.markTaskComplete('t1');
+
+      await vi.waitFor(() => expect(spawn.mock.calls.filter(([o]) => o.taskId === 't1')).toHaveLength(2));
+      expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
+      expect(orchestrator.storeInstance.get('t1')!.outputSummary).toBeUndefined();
+    });
+
+    it('starts a repair owed outside a scheduled run once the slot it waited for frees', async () => {
+      const { orchestrator, pass, latest, spawn, notifications } = repairing(undefined, { maxParallelSessions: 1, conflictRepairAttempts: 1 });
+      const t1 = task('t1', 1);
+      const t2 = task('t2', 2);
+      orchestrator.loadPlan([t1, t2]);
+      await orchestrator.forceStartTask('t1');
+      latest('t1').emitExit(1);
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('failed'));
+      await orchestrator.forceStartTask('t2');
+      expect(orchestrator.activeTaskIds).toEqual(['t2']);
+
+      await orchestrator.markTaskComplete('t1');
+      expect(messages(notifications.info)).toContain('Task "Task t1" is repaired once a slot is free.');
+
+      pass(t2);
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(3));
+      expect(spawn.mock.calls[2][0]).toMatchObject({ taskId: 't1', cwd: '/fake-worktrees/run1/1-t1' });
+      expect(orchestrator.runs.taskIsolation('t1')).toMatchObject({ state: 'repairing' });
+      expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
+      expect(orchestrator.isScheduling).toBe(false);
+    });
+
     it('starts a retried task over with every repair available again, from a fresh worktree', async () => {
       const { orchestrator, isolation, pass, latest, passLatest, spawn } = repairing(undefined, { conflictRepairAttempts: 1 });
       const t1 = task('t1', 1);

@@ -61,6 +61,8 @@ const stopping = new WeakSet<ChildProcess>();
  */
 const ownGroups = new Map<number, ChildProcess>();
 let hostTeardownHooked = false;
+/** Told of each runner group as it starts, so a session lease records it at once (ADR-0049). */
+const groupStartListeners = new Set<() => void>();
 
 /**
  * Start a runner as the leader of a new process group, so {@link killTree}
@@ -87,7 +89,39 @@ export function spawnInOwnGroup(spawn: (detached: boolean) => ChildProcess, plat
   // to signal.
   proc.once('exit', () => { if (!groupHasMembers(pgid)) forgetGroup(proc, pgid); });
   hookHostTeardown();
+  for (const listener of groupStartListeners) listener();
   return proc;
+}
+
+/**
+ * The process groups this host's runners lead that still have members. A
+ * session lease records them (ADR-0049): the teardown below cannot run for a
+ * host killed outright, and what it would have stopped runs on in the
+ * session's worktrees.
+ */
+export function runnerGroups(): number[] {
+  return [...ownGroups.keys()].filter((pgid) => groupHasMembers(pgid));
+}
+
+/** Hear of each runner group {@link spawnInOwnGroup} starts; the returned function stops it. */
+export function onRunnerGroupStarted(listener: () => void): () => void {
+  groupStartListeners.add(listener);
+  return () => { groupStartListeners.delete(listener); };
+}
+
+/** Whether a process answers to `pid`: one owned by another user, which refuses the signal, is alive too. */
+export function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** Whether any process is left in the group `pgid` leads. */
+export function groupAlive(pgid: number): boolean {
+  return groupHasMembers(pgid);
 }
 
 /** Whether any process still answers to `pgid`, as `kill(2)` sees it. */

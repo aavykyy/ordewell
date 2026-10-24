@@ -1,10 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { randomUUID } from 'crypto';
 import { globalDataDir, migrateOldConfigDir } from '../utils/globalDataDir';
+import { withFileLock } from '../utils/fileLock';
 import type { SupervisorLevel } from '../models/Execution';
 import { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './LoopGuards';
 import { DEFAULT_WAKE_UP_READ_BUDGET } from './Supervisor';
+import { parseAutonomyLevel } from './ModeResolver';
 
 /** How a run is started, watched and merged: the user's, not a plan's (ADR-0030). */
 export interface GlobalRunSettings {
@@ -113,8 +114,28 @@ function readPlannerModels(raw: unknown): Record<string, { model: string; effort
     const { model, effort } = entry as { model?: unknown; effort?: unknown };
     if (typeof model !== 'string' || !model.trim()) continue;
     out[provider] = typeof effort === 'string' && effort.trim()
-      ? { model, effort }
-      : { model };
+      ? { model: model.trim(), effort: effort.trim() }
+      : { model: model.trim() };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * The allowlist is read entry by entry like the planner models above: the
+ * obvious single-model hand edit is `{"claude-code": "opus"}`, and handing
+ * that string on makes every planner turn throw on `allowlist.filter` (or, where
+ * the catalog is not filtered, match model ids by substring). A runner whose
+ * entry is not a list of real ids is left out, so no restriction stands.
+ */
+function readModelAllowlist(raw: unknown): Record<string, string[]> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, string[]> = {};
+  for (const [runner, ids] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(ids)) continue;
+    const usable = ids
+      .filter((id): id is string => typeof id === 'string' && id.trim() !== '')
+      .map((id) => id.trim());
+    if (usable.length > 0) out[runner] = usable;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -130,114 +151,6 @@ export function runSettingsOf(settings: UserSettings): GlobalRunSettings {
 
 /** How many times a save is made afresh when another process keeps saving under it. */
 const SAVE_TRIES = 5;
-
-/**
- * A lock held this long belongs to a process that died between its check and
- * its swap: no live save holds it for more than a moment.
- */
-const LOCK_STALE_MS = 2_000;
-/** How long a save waits for a lock it cannot take before it gives up and says so. */
-const LOCK_TIMEOUT_MS = 10_000;
-const LOCK_POLL_MS = 5;
-const LOCK_POLL_MAX_MS = 100;
-
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * Runs `swap` holding `<file>.lock`, created exclusively, so no other process
- * that saves the file can swap it in between `swap`'s look at it and its
- * rename. Saves are synchronous, so the wait is too.
- *
- * The lock names its holder. A holder frees only its own lock; a waiter may
- * remove one only when two looks a poll apart agree that it is still the same
- * lock — same token, same mtime — and its age says the process that made it
- * died holding it. A lock another waiter has since taken over is a different
- * lock, with another token and a fresh mtime, and is left to its holder. The
- * wait is bounded: a lock that is never free is raised after
- * {@link LOCK_TIMEOUT_MS}, and one that cannot be removed is raised at once,
- * rather than retried for ever. What that leaves is the known window of a
- * holder that neither dies nor finishes: one stalled past the stale age can
- * still be taken over, and the saves then overlap.
- */
-function withFileLock<T>(file: string, swap: () => T): T {
-  const lock = `${file}.lock`;
-  const token = `${process.pid}:${randomUUID()}`;
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  let last: { token: string; mtimeMs: number } | null = null;
-  let poll = LOCK_POLL_MS;
-  for (;;) {
-    try {
-      const fd = fs.openSync(lock, 'wx');
-      try {
-        fs.writeSync(fd, token);
-      } finally {
-        fs.closeSync(fd);
-      }
-      break;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-    }
-    // Every wait is bounded, whatever it is waiting on: a lock that is never
-    // free is said rather than polled for ever.
-    if (Date.now() >= deadline) {
-      throw new Error(`Cannot save the settings file: ${lock} is still held after ${Math.round(LOCK_TIMEOUT_MS / 1000)} seconds by a process that is not finishing, or it cannot be removed. Check for a process stuck saving there, and delete the file if there is none.`);
-    }
-    let holder: string;
-    let mtimeMs: number;
-    try {
-      holder = fs.readFileSync(lock, 'utf8');
-      mtimeMs = fs.statSync(lock).mtimeMs;
-    } catch (err) {
-      if (gone(err)) {
-        last = null;
-        continue; // released between the calls
-      }
-      throw err;
-    }
-    const stale = Date.now() - mtimeMs > LOCK_STALE_MS;
-    if (last && last.token === holder && last.mtimeMs === mtimeMs && stale) {
-      unlinkLock(lock);
-      last = null;
-      continue;
-    }
-    last = stale ? { token: holder, mtimeMs } : null;
-    sleepSync(poll);
-    poll = Math.min(poll * 2, LOCK_POLL_MAX_MS);
-  }
-  try {
-    return swap();
-  } finally {
-    releaseLock(lock, token);
-  }
-}
-
-/** True for the one error every look at a lock may meet by racing: it is not there any more. */
-function gone(err: unknown): boolean {
-  return (err as NodeJS.ErrnoException).code === 'ENOENT';
-}
-
-/** Frees the lock this save holds, and leaves one another process has taken over. */
-function releaseLock(lock: string, token: string): void {
-  let holder: string;
-  try {
-    holder = fs.readFileSync(lock, 'utf8');
-  } catch (err) {
-    if (gone(err)) return; // already released
-    throw err;
-  }
-  if (holder === token) unlinkLock(lock);
-}
-
-/** Removes a lock, tolerating the race that removed it first and nothing else: a refusal is raised. */
-function unlinkLock(lock: string): void {
-  try {
-    fs.unlinkSync(lock);
-  } catch (err) {
-    if (!gone(err)) throw err;
-  }
-}
 
 export class SettingsService {
   private filePath: string;
@@ -294,10 +207,12 @@ export class SettingsService {
     const name = path.basename(this.filePath);
     let seen = this.fileStamp();
     let timer: NodeJS.Timeout | undefined;
+    let dead = false;
     let watcher: fs.FSWatcher;
     try {
       fs.mkdirSync(dir, { recursive: true });
       watcher = fs.watch(dir, (_event, changed) => {
+        if (dead) return;
         if (changed && changed !== name) return;
         // One save is several events; the stamp tells whether the file really moved.
         clearTimeout(timer);
@@ -311,7 +226,23 @@ export class SettingsService {
     } catch {
       return { dispose() {} };
     }
-    return { dispose: () => { clearTimeout(timer); watcher.close(); } };
+    // fs.watch reports a watch it can no longer keep asynchronously (ENOSPC,
+    // EMFILE, the directory being removed), and an 'error' with no listener
+    // takes the whole process down. A lost notification channel is not worth
+    // the user's terminal or extension host: say so once and stop watching.
+    const die = (reason: unknown): void => {
+      if (dead) return;
+      dead = true;
+      clearTimeout(timer);
+      try {
+        watcher.close();
+      } catch {
+        // Already unusable; the failure above is the one worth reporting.
+      }
+      console.warn(`[SettingsService] stopped watching ${dir} for settings changes: ${String(reason)}`);
+    };
+    watcher.on('error', die);
+    return { dispose: () => { dead = true; clearTimeout(timer); watcher.close(); } };
   }
 
   getModelAllowlist(runner: string): string[] | undefined {
@@ -400,15 +331,29 @@ export class SettingsService {
    * the user's file.
    */
   autonomousMode(): boolean {
-    const env = process.env.ORDEWELL_AUTONOMOUS_MODE;
-    if (this.autonomousModeOverridden()) return env !== 'false' && env !== '0';
-    return this.getAll().autonomousMode ?? true;
+    const override = this.autonomyOverride();
+    return override ?? this.getAll().autonomousMode ?? true;
   }
 
   /** Whether `ORDEWELL_AUTONOMOUS_MODE` decides the level, whatever this file says. */
   autonomousModeOverridden(): boolean {
-    const env = process.env.ORDEWELL_AUTONOMOUS_MODE;
-    return env !== undefined && env.trim() !== '';
+    return this.autonomyOverride() !== undefined;
+  }
+
+  /**
+   * The level `ORDEWELL_AUTONOMOUS_MODE` names, or undefined when it names
+   * none. It speaks the flag's own words (`true`/`false`, `1`/`0`) as well as
+   * the level names {@link parseAutonomyLevel} knows, case and surrounding
+   * space aside. Anything else is not an override at all rather than Full: a
+   * typo, `off` in a shell that spells Guarded that way, or a lower-case
+   * `false` must never raise the user's autonomy.
+   */
+  private autonomyOverride(): boolean | undefined {
+    const env = process.env.ORDEWELL_AUTONOMOUS_MODE?.trim().toLowerCase();
+    if (!env) return undefined;
+    if (env === 'true' || env === '1') return true;
+    if (env === 'false' || env === '0') return false;
+    return parseAutonomyLevel(env) ?? undefined;
   }
 
   setAutonomousMode(enabled: boolean): void {
@@ -447,8 +392,9 @@ export class SettingsService {
         // and `verification` toggles and the `runnerTransport` setting of older
         // files are dropped on the next write.
         const settings: UserSettings = {};
-        if (raw.modelAllowlist !== undefined) {
-          settings.modelAllowlist = raw.modelAllowlist;
+        const modelAllowlist = readModelAllowlist(raw.modelAllowlist);
+        if (modelAllowlist) {
+          settings.modelAllowlist = modelAllowlist;
         }
         const plannerModels = readPlannerModels(raw.plannerModels);
         if (plannerModels) {
@@ -505,7 +451,7 @@ export class SettingsService {
       if (expected !== undefined && this.fileStamp() !== expected) return false;
       fs.renameSync(staging, this.filePath);
       return true;
-    });
+    }, 'save the settings file');
     if (!swapped) {
       fs.rmSync(staging, { force: true });
       return false;

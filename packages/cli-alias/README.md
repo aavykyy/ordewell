@@ -8,7 +8,7 @@ verifies it.
 npm install -g ordewell
 
 ordewell          # full-screen terminal UI
-ordewell --help   # the full command list
+ordewell --help   # every subcommand and option
 ```
 
 Or without installing:

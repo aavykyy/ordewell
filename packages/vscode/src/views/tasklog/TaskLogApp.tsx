@@ -8,7 +8,7 @@ import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommand
 import { taskLogState } from './taskLogState';
 import PendingMessages, { QUEUE_TITLE, SendKeyHint, isSendNowKey, type PendingMessage } from '../chat/components/PendingMessages';
 
-declare function acquireVsCodeApi(): { postMessage(message: TaskLogToHost): void };
+declare function acquireVsCodeApi(): { postMessage(message: TaskLogToHost): void; setState(state: unknown): void };
 
 const vscode = acquireVsCodeApi();
 
@@ -28,6 +28,7 @@ export default function TaskLogApp() {
   const [status, setStatus] = useState<TaskLogStatus | null>(null);
   const [detailAll, setDetailAll] = useState(false);
   const usageLine = status?.usage ? usageText(status.usage) : null;
+  const usageTotalLine = status?.usageTotal ? usageText(status.usageTotal) : null;
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   const [stopArmed, setStopArmed] = useState(false);
@@ -45,6 +46,9 @@ export default function TaskLogApp() {
       const msg = event.data;
       switch (msg.type) {
         case 'init':
+          // A reload restores this tab by task id, so the id has to outlive the
+          // webview's own memory.
+          vscode.setState({ taskId: msg.status.taskId });
           setView(applyConversationPatch(EMPTY_PATCHED_VIEW, {
             type: 'conversationPatch',
             order: msg.blocks.map((b) => b.id),
@@ -154,7 +158,7 @@ export default function TaskLogApp() {
     <div className="task-log-container">
       {status && (
         <div className="task-log-header">
-          <span className="task-log-title">Task {status.order} · {status.title}</span>
+          <span className="task-log-title">Task {status.orderLabel ?? status.order} · {status.title}</span>
           {status.runner && <span className="task-log-runner">{status.runner}</span>}
           {state && <span className={`task-log-state ${state.kind}`}>{state.label}</span>}
           {status.resumes && <span className="task-log-runner">{status.resumes}</span>}
@@ -205,7 +209,15 @@ export default function TaskLogApp() {
 
       {usageLine && (
         <div className="usage-line" role="status">
-          <span title={status?.usage?.contextFill && contextMeterTitle(status.usage.contextFill)}>{usageLine}</span>
+          <span title={status?.usage?.contextFill && contextMeterTitle(status.usage.contextFill)}>
+            {usageTotalLine ? `attempt ${status?.attempt}: ${usageLine}` : usageLine}
+          </span>
+        </div>
+      )}
+
+      {usageTotalLine && (
+        <div className="usage-line usage-line-total" role="status">
+          <span>task total: {usageTotalLine}</span>
         </div>
       )}
 

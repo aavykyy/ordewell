@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { listSessions, loadSessionPlanState, openTaskLog, saveSession, SessionNotFoundError } from '@ordewell/core';
+import { listSessions, loadSessionPlanState, openTaskLog, saveSession, SessionHeldError, SessionNotFoundError } from '@ordewell/core';
 import { sessionsRoute } from '../sessions';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
@@ -154,6 +154,25 @@ describe('POST /api/sessions/:id/load', () => {
 
     expect(res.status).toBe(404);
     expect(((await res.json()) as { error?: string }).error).toBe('Session not found');
+  });
+
+  // ADR-0049: a session another live host runs is refused with a code a client
+  // switches on, and the holder as data beside the plain-words message.
+  it('answers 409 session_held, naming the holder, when another host runs the session', async () => {
+    const holder = { hostId: 'host-a', pid: 37797, host: { kind: 'daemon' as const, port: 3742 }, since: '2026-10-24T01:40:00.000Z', heartbeatAt: '2026-10-24T01:54:00.000Z', runnerGroups: [] };
+    const held = fakePool({
+      adoptSavedSession: vi.fn().mockImplementation(() => { throw new SessionHeldError({ holder }); }),
+    });
+    const app2 = new Hono();
+    app2.route('/api/sessions', sessionsRoute(held));
+
+    const res = await app2.request('/api/sessions/s1/load', { method: 'POST' });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string; code?: string; sessionHeld?: { holder: { pid: number } } };
+    expect(body.code).toBe('session_held');
+    expect(body.sessionHeld?.holder.pid).toBe(37797);
+    expect(body.error).toContain('the Ordewell daemon on port 3742 (pid 37797)');
   });
 
   it('answers 500 when adopting fails for another reason', async () => {

@@ -174,6 +174,26 @@ describe('handleSessions', () => {
     srv.close();
   });
 
+  it('load names the host that runs the session, and keeps the marker where it was (ADR-0049)', async () => {
+    const held = 'This session is open in another Ordewell host: a TUI (pid 76271), through its daemon on port 49558 (pid 76279) has held it since 10/24/2026, 1:40:00 AM. Close it there, or stop that process, then open it here.';
+    const srv = await startServer((req, res) => {
+      if ((req.url || '').includes('/load')) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: held, code: 'session_held' }));
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ meta: META, plan: { tasks: [] } }));
+    });
+    const { handleSessions } = await import('../sessions');
+    const { stderr, exitCode } = await capture(() =>
+      handleSessions(['load', 'session-42'], new ApiClient(srv.port)),
+    );
+    expect(stderr).toContain(held);
+    expect(exitCode).toBe(1);
+    expect(saved).toEqual([]);
+    srv.close();
+  });
+
   it('delete removes the session', async () => {
     const hits: string[] = [];
     const srv = await sessionsServer(hits);

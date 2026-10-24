@@ -28,10 +28,14 @@ export interface TaskLogStatus {
   commands?: readonly RunnerCommand[];
   taskId: string;
   order: number;
+  /** The task's dotted reference ("2", "2.1"), for a subtask whose own order restarts at 1. */
+  orderLabel?: string;
   title: string;
   runner: string;
   planStatus: TaskStatus;
   awaitingReason?: AwaitingReason;
+  /** Why a skipped task was skipped, so its header says more than "Skipped" (ADR-0018, W1). */
+  skipReason?: string;
   /** "Resumes at 8:10pm" while a task paused on a usage limit resumes on its own (#84); absent otherwise. */
   resumes?: string;
   /** How many of the runner's tool requests wait for an answer (ADR-0018, A1). */
@@ -50,8 +54,15 @@ export interface TaskLogStatus {
   continuable: boolean;
   /** Paused on a usage limit with a saved session: Resume now is offered, and the message box resumes it. */
   resumable?: boolean;
-  /** The task's whole spend across every attempt, the meter read on the latest one; a task with no attempt ledger falls back to the loaded log's own report. */
+  /**
+   * The usage line for the attempt on screen: that attempt's own spend and
+   * meter on a past attempt, and the task's whole spend with the latest
+   * meter on the latest one (as the TUI's task view draws it). A task with no
+   * attempt ledger falls back to the loaded log's own report.
+   */
   usage?: Pick<TaskUsageSummary, 'totals' | 'contextFill'>;
+  /** The task's whole spend while an earlier attempt is on screen, labelled "task total" beside `usage`. */
+  usageTotal?: Pick<TaskUsageSummary, 'totals' | 'contextFill'>;
 }
 
 export type HostToTaskLog =

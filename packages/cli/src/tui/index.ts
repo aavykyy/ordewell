@@ -12,9 +12,11 @@ import { startCliVersionCheck } from '../versionCheck';
 /**
  * `ordewell tui` — the full-screen terminal client. By default each launch
  * gets its own private daemon, so two terminals never share a session list.
- * Pass `--port`/`ORDEWELL_PORT` to instead drive the well-known daemon the
- * VS Code extension and the web UI use, so a plan started here can be picked
- * up anywhere else.
+ * Pass `--port`/`ORDEWELL_PORT` to instead drive the well-known daemon other
+ * CLI invocations use, so a plan started here can be picked up from another
+ * terminal. (The VS Code extension runs core's `Session` in-process; a plan
+ * travels between it and the terminal through the saved-session store, not the
+ * daemon.)
  */
 export async function handleTui(subArgs: string[]): Promise<void> {
   if (!process.stdin.isTTY) {
@@ -49,8 +51,7 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   // daemon's process-wide session map, so a task added in one shows up live
   // in the other. Each unflagged launch instead gets its own daemon on a
   // free port, private by construction; `--port`/`ORDEWELL_PORT` opts back
-  // into the shared daemon (e.g. to pick up a plan from the VS Code
-  // extension or the web UI).
+  // into the shared daemon (e.g. to pick up a plan from another CLI or TUI).
   const explicitPort = flag(subArgs, '--port') || process.env.ORDEWELL_PORT;
   const targetPort = explicitPort ? resolvePort(subArgs) : await findFreePort();
   const { port, owned: ownedAtLaunch } = await ensureDaemonOwned(targetPort, { detached: false });

@@ -5152,24 +5152,6 @@ body.vscode-high-contrast-light .task-card.expanded {
   color: var(--red);
 }
 
-.isolation-merge-blocked-title {
-  font-weight: 600;
-}
-
-.isolation-merge-blocks {
-  margin: 4px 0;
-  padding-left: 18px;
-}
-
-.isolation-merge-block code,
-.isolation-merge-hint code {
-  font-family: var(--font-mono, monospace);
-}
-
-.isolation-merge-hint {
-  margin-top: 2px;
-}
-
 .task-isolation-conflict-repo code {
   color: var(--red);
 }
@@ -5566,6 +5548,12 @@ body.vscode-high-contrast-light .pending-message {
   padding: 0 6px;
   border-radius: var(--radius-full);
   background: var(--bg-secondary);
+}
+
+/* The task total sits under an earlier attempt's own line, so only the pair
+   has one rule above it. */
+.usage-line.usage-line-total {
+  border-top: none;
 }
 
 /* ---- Task log tab (ADR-0018, V1) ---- */

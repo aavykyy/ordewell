@@ -36,6 +36,7 @@ import type {
   SessionFrame,
   SessionListResponse,
   SessionMeta,
+  SessionHeld,
   SessionResponse,
   SettingsResponse,
   SettingsUpdateResponse,
@@ -70,7 +71,14 @@ export type ConversationRewindResult = ConversationRewindResponse;
  * switches on. The message is for display only: nothing may branch on its text.
  */
 export class DaemonError extends Error {
-  constructor(message: string, readonly status: number, readonly code?: DaemonErrorCode, readonly plannerNotReady?: PlannerNotReady) {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: DaemonErrorCode,
+    readonly plannerNotReady?: PlannerNotReady,
+    /** With `session_held`: the host that runs the session (ADR-0049). */
+    readonly sessionHeld?: SessionHeld,
+  ) {
     super(message);
     this.name = 'DaemonError';
   }
@@ -127,7 +135,8 @@ export type WsEvent = SessionFrame | RunSnapshotFrame;
 
 /** A held subscription to a session (`followSession`). `ended` is `'lost'` unless `close` ended it. */
 export interface SessionFollow {
-  ready: Promise<void>;
+  /** True when the socket opened; false when it could not — resolved either way, never rejected. */
+  ready: Promise<boolean>;
   ended: Promise<'lost' | void>;
   close(): void;
 }
@@ -137,9 +146,9 @@ const SESSION_PATH = /^\/api\/(?:plans|sessions)\/([^/?]+)/;
 
 /** A non-200 answer as an error. The body is not trusted to be JSON: an HTML error page arrives as a string. */
 function daemonError(status: number, data: unknown, fallback: string): DaemonError {
-  const { error, code, workspace, plannerNotReady } = (typeof data === 'object' && data !== null ? data : {}) as Partial<ErrorBody>;
+  const { error, code, workspace, plannerNotReady, sessionHeld } = (typeof data === 'object' && data !== null ? data : {}) as Partial<ErrorBody>;
   if (code === 'workspace_not_a_project') return new WorkspaceInitNeededError(error || 'Not a project directory', workspace ?? '');
-  return new DaemonError(error || fallback, status, code, plannerNotReady);
+  return new DaemonError(error || fallback, status, code, plannerNotReady, sessionHeld);
 }
 
 export class ApiClient {
@@ -172,7 +181,9 @@ export class ApiClient {
    * user ran `ordewell sessions load`. The saved session is adopted here
    * instead — idempotent for one the daemon still holds — and the call made
    * once more; a 404 means the first attempt never ran, so the retry cannot
-   * act twice.
+   * act twice. An adoption refused because another host runs the session
+   * (ADR-0049) is the answer the caller gets: its 404 would say to reload a
+   * session that reloading cannot open.
    */
   private async httpRequest<T = unknown>(
     method: string,
@@ -184,8 +195,9 @@ export class ApiClient {
     const sessionId = urlPath.match(SESSION_PATH)?.[1];
     const missing = res.status === 404 && (res.data as Partial<ErrorBody> | undefined)?.code === 'session_not_found';
     if (!missing || !sessionId || urlPath.split('?')[0].endsWith('/load')) return res;
-    const adopted = await this.rawRequest('POST', `/api/sessions/${sessionId}/load?workspace=${encodeURIComponent(this.workspace)}`);
-    return adopted.status === 200 ? this.rawRequest<T>(method, urlPath, body, turn) : res;
+    const adopted = await this.rawRequest<T>('POST', `/api/sessions/${sessionId}/load?workspace=${encodeURIComponent(this.workspace)}`);
+    if (adopted.status === 200) return this.rawRequest<T>(method, urlPath, body, turn);
+    return (adopted.data as Partial<ErrorBody> | undefined)?.code === 'session_held' ? adopted : res;
   }
 
   /** One request whose only good answer is a 200: anything else becomes a {@link DaemonError} carrying the daemon's code. */
@@ -672,10 +684,10 @@ export class ApiClient {
   followSession(sessionId: string, onEvent: (event: WsEvent) => void): SessionFollow {
     const socket = this.openSessionSocket(sessionId);
     let closing = false;
-    const ready = new Promise<void>((resolve) => {
-      socket.once('open', () => resolve());
-      socket.once('error', () => resolve());
-      socket.once('close', () => resolve());
+    const ready = new Promise<boolean>((resolve) => {
+      socket.once('open', () => resolve(true));
+      socket.once('error', () => resolve(false));
+      socket.once('close', () => resolve(false));
     });
     const ended = new Promise<'lost' | void>((resolve) => {
       socket.once('close', () => resolve(closing ? undefined : 'lost'));

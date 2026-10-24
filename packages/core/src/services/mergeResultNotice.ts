@@ -1,5 +1,5 @@
 import type { IsolationLandedTask, IsolationMergeBlock, IsolationMergeResult } from '../interfaces/IWorktreeIsolation';
-import { SELF_REPO } from './isolationRecord';
+import { SELF_REPO } from './repoPath';
 import { capConflictFiles } from './conflictFiles';
 
 /** One repo that kept "Merge all" from touching anything, as part of one line. */

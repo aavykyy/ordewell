@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { spawn as nodeSpawn } from 'child_process';
-import { createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider } from '@ordewell/core';
+import { createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider, processLeaseHost } from '@ordewell/core';
 import { ChatViewProvider } from './providers/ChatViewProvider';
 import { VsCodeConfig, moveAutonomyFromVsCodeSetting, moveEnabledRunnersFromVsCodeSetting } from './adapters/VsCodeConfig';
 import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
@@ -28,6 +28,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (pluginNotice) logTo(outputChannel, pluginNotice);
 
   try {
+    // What another host's refusal names this window as (ADR-0049).
+    processLeaseHost().describe({ kind: 'vscode' });
     const secretStore = new SecretStore(context.secrets);
     await secretStore.load();
     // Bound once the resolver exists, which is itself built from this config.

@@ -67,7 +67,7 @@ describe('loading another session during a planner turn', () => {
   it('does not send the old session\'s held prompt to the loaded one, nor keep its turn', async () => {
     const actions: Action[] = [];
     const api: Partial<OrdewellApi> = {
-      followSession: () => ({ ready: Promise.resolve(), ended: new Promise(() => {}), close: () => {} }),
+      followSession: () => ({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: () => {} }),
       adoptSession: vi.fn().mockResolvedValue({ plan: { tasks: [] }, goal: 'Other goal' }),
     };
     await runEffect({ type: 'loadSession', sessionId: 's2' }, deps(api, actions));

@@ -2,7 +2,8 @@ import { resolveHandoffReferences } from './handoffReferences';
 import { createAiService, type IAiService } from './AiService';
 import { PlannerBackend } from './PlannerBackend';
 import { applyTaskOps, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
-import { carryPlannedModes, taggedReadOnlyMode } from './ModeResolver';
+import { carryPlannedModes } from './ModeResolver';
+import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
 import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome } from './plannerTools';
@@ -49,8 +50,9 @@ import { plannerContextFill } from '../models/Usage';
 import { TurnBudgets, contextLine, taskReadsLine, webReadsLine } from './PlannerBudgets';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
-import { approvalRecordOf, dropRetiredPlanFields, flattenTasks, keepExecutionState, stampOrigin, waitsForApproval, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
+import { approvalRecordOf, flattenTasks, keepExecutionState, migrateLoadedPlan, stampOrigin, type LegacyPlanState, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
+import { describeHeld, describeLost, processLeaseHost, UNLEASED, type LeaseHost, type SessionHeld, type SessionLease } from './sessionLease';
 import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
 import { installedPlannerAnswered, installedPlannerDetected } from './InstalledPlanner';
 import type { IConfig } from '../interfaces/IConfig';
@@ -60,7 +62,6 @@ import type { INotification } from '../interfaces/INotification';
 import type { IRunner } from '../interfaces/IRunner';
 import type { TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { IsolationHandoff, IsolationMergeResult, IsolationView, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
-import { migratePlanStateIsolation } from './isolationRecord';
 import type { IsolationRunController } from './IsolationRunController';
 import { PlanEditor } from './PlanEditor';
 import { PlanEditError } from './PlanEditError';
@@ -103,18 +104,6 @@ export interface SessionRuntimeSettings {
   enabledRunners?: RunnerId[];
   /** The user's run settings (ADR-0030); absent means every default. */
   run?: GlobalRunSettings;
-}
-
-/**
- * A mid-run edit an older build queued for its next batch boundary was never
- * answered, so it waits as a pending turn input like any other.
- */
-function carryOverQueuedEdits(plan: LegacyPlanState): void {
-  const queued = plan.queuedMessages ?? [];
-  delete plan.queuedMessages;
-  if (queued.length === 0) return;
-  const carried = queued.map(({ id, text, timestamp, skills }): PendingPlanTurn => ({ id, source: 'user', text, timestamp, ...(skills ? { skills } : {}) }));
-  plan.pendingTurns = [...(plan.pendingTurns ?? []), ...carried];
 }
 
 /** Calls an ops retry is told about; earlier ones are counted, not listed (ADR-0020). */
@@ -205,6 +194,13 @@ export interface SessionDeps {
   isolation?: IWorktreeIsolation;
   /** Persistence seam. Defaults to the saved-session store under the workspace. */
   saveSession?: SaveSession;
+  /**
+   * The host whose lease the session holds while it is open (ADR-0049).
+   * Defaults to this process's when saves go to the session store; a session
+   * given its own `saveSession` owns nothing on disk, so it holds no lease
+   * unless given a host too.
+   */
+  leaseHost?: LeaseHost;
   /** Where a structured task's log is saved (ADR-0018, P1). Defaults to a file per attempt beside the session's. */
   openTaskLog?: (location: TaskLogLocation, taskId: string, attempt?: number) => TaskLogFile;
   /** The Ordewell MCP server a harness planner's tools are served from (ADR-0022). Defaults to the process's one. */
@@ -324,6 +320,7 @@ export function createSession(deps: SessionDeps): Session {
     taskShell: (site) => deps.fsAdapter.taskShell?.(site),
     recordHandoff: (sessionId, taskId, handoff) => taskLogs.note(sessionId, taskId, { type: 'handoff', handoff }),
     taskLog: { attempts: (taskId) => session.taskLogAttempts(taskId), events: (taskId, attempt) => session.taskLog(taskId, attempt) },
+    sessionHeld: () => session.heldElsewhere(),
   });
   const usage = new PlannerUsageLedger(windows);
   const events = new SessionEventRelay({
@@ -404,6 +401,10 @@ export function createSession(deps: SessionDeps): Session {
     fetcher: new HttpWebFetcher({ policy: webReads, cache: sharedWebResponseCache, searchProvider: sharedSearchProvider }),
     skillsService: deps.skillsService ?? new SkillsService(deps.workspaceRoot()),
     saveSession: deps.saveSession ?? saveSession,
+    lease: (onLost) => {
+      const host = deps.leaseHost ?? (deps.saveSession ? undefined : processLeaseHost());
+      return host ? host.lease(onLost) : UNLEASED;
+    },
     conversation: (host) => (conversation = new PlannerConversation(host)),
   });
   return session;
@@ -451,6 +452,8 @@ export interface SessionParts {
   fetcher: IWebFetcher;
   skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs' | 'forRoot'>;
   saveSession: SaveSession;
+  /** Its lease, told by the Session what to do when another host takes it (ADR-0049). */
+  lease: (onLost: (held: SessionHeld) => void) => SessionLease;
   /** The conversation's host is the Session itself, so only the Session can make it. */
   conversation: (host: PlannerConversationHost) => PlannerConversation;
 }
@@ -505,11 +508,19 @@ export class Session {
   private readonly modelResolver: ModelResolver;
   private readonly fsAdapter: IFileSystem;
   private readonly approvals: PendingApprovals;
+  /** What the user, and the planner for research, approved to run; kept by {@link ApprovalRecord}, saved on the plan. */
+  private readonly record: ApprovalRecord;
+  /** Approval was withdrawn and no plan broadcast has carried it to the surfaces yet; see {@link withdrawalOwed}. */
+  private withdrawalUnannounced = false;
   private readonly approvalPolicy: ApprovalPolicy;
   private readonly taskLogs: SessionParts['taskLogs'];
   private readonly fetcher: IWebFetcher;
   private readonly settingsFn: () => SessionRuntimeSettings;
   private readonly save: SaveSession;
+  /** One live host per session (ADR-0049): no save, and no run, without it. */
+  private readonly lease: SessionLease;
+  /** The host a save was refused for, so the refusal is said once rather than at every save. */
+  private saveRefusedFor: string | null = null;
   /** User controls in flight; see {@link withSave}. */
   private controlsInFlight = 0;
   private unsubObserver: (() => void) | null;
@@ -581,7 +592,13 @@ export class Session {
     this.backend = parts.backend;
     this.planner = parts.planner;
     this.store = parts.store;
-    this.store.onTree = (ids) => this.keepApprovals(ids);
+    this.record = new ApprovalRecord({
+      plan: () => this.plan,
+      store: this.store,
+      runnerModes: (runner) => this.catalog.edit().runnerModes?.[runner],
+      onWithdrawn: () => this.withdrawalOwed(),
+    });
+    this.store.onTree = (ids) => this.record.reconcile(ids);
     this.orchestrator = parts.orchestrator;
     this.runs = parts.runs;
     this.events = parts.events;
@@ -593,6 +610,7 @@ export class Session {
     this.fetcher = parts.fetcher;
     this.skillsService = parts.skillsService;
     this.save = parts.saveSession;
+    this.lease = parts.lease((held) => this.leaseLost(held));
 
     this.conversation = parts.conversation({
       plan: () => this.plan,
@@ -605,12 +623,12 @@ export class Session {
       autorun: () => this.userRunSettings().autorun,
       tasks: () => this.store.planTasks,
       // Before plan approval, only research has start rules to explain (ADR-0037 R4).
-      startWaits: (task) => (this.plan?.approved || task.research ? this.orchestrator.startWaits(task) : []),
+      startWaits: (task) => (this.record.planApproved || task.research ? this.orchestrator.startWaits(task) : []),
       liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
       isExecuting: () => this.isExecuting,
       mutate: (op, notify) => this.mutatePlan(op, notify),
       broadcast: (msg) => this.broadcast(msg),
-      broadcastPlan: (turnId) => this.events.planGenerated(this.plan, this.goal, turnId),
+      broadcastPlan: (turnId) => this.announcePlan(turnId),
       validateOps: (ops) => this.checkPlannerOps(ops),
       taskSkills: () => this.workspaceSkills(),
       notice: (level, message) => this.notice(level, message),
@@ -644,7 +662,7 @@ export class Session {
       persist: () => this.persist(),
       announce: () => {
         this.persist();
-        this.events.planGenerated(this.plan, this.goal);
+        this.announcePlan();
       },
       interrupt: () => { this.conversation.stopTurn('force_send'); },
       holdStarts: () => this.orchestrator.holdStarts(),
@@ -711,7 +729,7 @@ export class Session {
       plannerTools: () => this.backend.current().plannerToolsAttached?.() ?? false,
       taskSkills: () => this.workspaceSkills(),
       notice: (level, message) => this.notice(level, message),
-      approve: (taskIds) => this.approve(taskIds),
+      approve: (taskIds) => this.record.approve(taskIds),
       plannedWith: () => this.plannedWithTrailer(),
     });
 
@@ -789,10 +807,10 @@ export class Session {
   private executionHost(): ExecutionHost {
     return {
       tasks: () => (this.plan ? this.store.planTasks : null),
-      planApproved: () => this.plan?.approved === true,
-      taskApproved: (taskId) => this.isApproved(taskId),
-      waitsForApproval: (taskId) => this.waitsForApproval(taskId),
-      approve: (taskIds) => this.approve(taskIds),
+      planApproved: () => this.record.planApproved,
+      taskApproved: (taskId) => this.record.isApproved(taskId),
+      waitsForApproval: (taskId) => this.record.waitsForApproval(taskId),
+      approve: (taskIds) => this.record.approve(taskIds),
       autonomous: () => this.config.autonomousMode,
       autorun: () => this.userRunSettings().autorun,
       scheduling: () => this.orchestrator.isScheduling,
@@ -808,7 +826,7 @@ export class Session {
         .filter(({ request }) => isRunnerApproval(request) && request.taskId === taskId)
         .map(({ id, request }) => ({ id, subject: request.subject })),
       runPlan: (actor) => this.runWholePlan(runOrigin(actor)),
-      joinRun: (approved) => this.joinRun(approved),
+      joinRun: (approved, left) => this.joinRun(approved, left),
       startTask: (taskId, actor) => this.startOneTask(taskId, runOrigin(actor)),
       forceStart: (taskId) => this.withSave(() => this.orchestrator.forceStartTask(taskId, 'user')),
       markComplete: (taskId) => this.withSave(() => this.orchestrator.markTaskComplete(taskId)),
@@ -828,7 +846,7 @@ export class Session {
       awaitsCheckpoint: (taskId) => this.awaitsCheckpoint(taskId),
       approveReview: async () => {
         // The plan's own mark beside the record the seam keeps: planner starts read it (ADR-0029).
-        this.plan!.approved = true;
+        this.record.approvePlan();
         await this.withSave(() => this.orchestrator.approveReview('user'));
       },
       answerCheckpoint: (taskId, approve, reason) => (approve ? this.approveCheckpoint(taskId) : this.rejectCheckpoint(taskId, reason)),
@@ -1034,47 +1052,14 @@ export class Session {
     }, () => this.broadcast({ type: 'execution_action', record, text }));
   }
 
-  /**
-   * Whether the user approved this task to run (ADR-0029, ADR-0035): it was in
-   * the plan they executed, or they started it, added it or let it start since,
-   * and it has been in the plan ever since. The one reading of the approval
-   * record — the seam and the scheduler both ask it.
-   */
+  /** Whether the user approved this task to run; see {@link ApprovalRecord.isApproved}. */
   isApproved(taskId: string): boolean {
-    return !!this.store.get(taskId) && (this.plan?.approvedTasks?.includes(taskId) ?? false);
+    return this.record.isApproved(taskId);
   }
 
-  /** A task the scheduler leaves for the user to approve; see {@link waitsForApproval}. */
+  /** A task the scheduler leaves for the user to approve; see {@link ApprovalRecord.waitsForApproval}. */
   waitsForApproval(taskId: string): boolean {
-    const task = this.store.get(taskId);
-    return !!this.plan && !!task && waitsForApproval(task, this.plan);
-  }
-
-  /** What the user approved to run (ADR-0029): a start of their own approves the task and its subtasks. */
-  private approve(taskIds: readonly string[]): void {
-    // Only tasks in the plan now: an id approved while absent would approve whatever task later comes to carry it.
-    const present = taskIds.filter((id) => this.store.get(id));
-    if (!this.plan || present.length === 0) return;
-    this.plan.approvedTasks = [...new Set([...(this.plan.approvedTasks ?? []), ...present])];
-  }
-
-  /** Take tasks out of the approval record: what they would run now is not what was approved. */
-  private withdrawApprovals(taskIds: readonly string[]): void {
-    const approved = this.plan?.approvedTasks;
-    if (!approved || !taskIds.some((id) => approved.includes(id))) return;
-    this.plan!.approvedTasks = approved.filter((id) => !taskIds.includes(id));
-  }
-
-  /**
-   * A task that leaves the plan takes its approval with it, whichever route
-   * removed it: an edit, a merge or split, a whole plan that leaves it out.
-   * Approval is of the task the user saw, and a planner may later write a new
-   * task under the same id (ADR-0029).
-   */
-  private keepApprovals(ids: ReadonlySet<string>): void {
-    const approved = this.plan?.approvedTasks;
-    if (!approved || approved.every((id) => ids.has(id))) return;
-    this.plan!.approvedTasks = approved.filter((id) => ids.has(id));
+    return this.record.waitsForApproval(taskId);
   }
 
   /**
@@ -1134,7 +1119,7 @@ export class Session {
         if (!this.plan) return;
         this.supervision.runStarted(origin);
         this.persist();
-        this.events.planGenerated(this.plan, this.goal);
+        this.announcePlan();
       },
       onAutoMerge: ({ trigger, result }) => {
         if (!this.plan) return;
@@ -1214,15 +1199,13 @@ export class Session {
    */
   private persist(): void {
     if (!this.plan) return;
-    // Removing research or its read-only profile ends its unasked approval on every edit route (ADR-0037 R4).
-    const unsafe = (this.plan.researchApprovals ?? []).filter((id) => {
-      const task = this.store.get(id);
-      const modes = task && this.catalog.edit().runnerModes?.[task.assignedRunner];
-      return !task?.research || task.type !== 'ai' || (modes !== undefined && task.taskMode !== taggedReadOnlyMode(modes));
-    });
-    this.withdrawApprovals(unsafe);
-    for (const id of unsafe) if (this.store.get(id)?.researchOrigin) this.store.update(id, { reportTo: undefined, researchOrigin: undefined });
-    this.plan.researchApprovals = this.plan.researchApprovals?.filter((id) => !unsafe.includes(id));
+    // A host that does not hold the session must not write over the one that
+    // does (ADR-0049): the last writer would otherwise win.
+    const held = this.heldElsewhere();
+    if (held) {
+      this.saveRefused(held);
+      return;
+    }
     this.syncPlanTasks();
     this.plan.isolation = this.runs.planIsolation ?? undefined;
     this.plan.plannerUsage = this.usage.snapshot();
@@ -1236,7 +1219,45 @@ export class Session {
 
   /** A new plan on a long-lived Session gets its own persisted identity (unless the host fixed one). */
   private remintSessionId(): void {
-    if (!this.hostSessionId) this.currentSessionId = mintSessionId();
+    if (this.hostSessionId) return;
+    this.currentSessionId = mintSessionId();
+    // The session left is no longer open here; the new one is claimed at its first save.
+    this.lease.release();
+  }
+
+  /**
+   * Null while this Session may save its session and run in its isolation
+   * run; otherwise the host that holds it (ADR-0049). Claims the lease when
+   * no live host holds it, as a new session's first save does.
+   */
+  heldElsewhere(): SessionHeld | null {
+    return this.lease.hold(this.currentSessionId, this.workspace);
+  }
+
+  /**
+   * A new plan under the host's fixed id writes that session's file: refused
+   * before any planner turn while another host has it open (ADR-0049). A
+   * minted id is new, and is claimed at its first save.
+   */
+  private claimHostSession(): void {
+    if (this.hostSessionId) this.lease.claim(this.hostSessionId, this.workspace);
+  }
+
+  private saveRefused(held: SessionHeld): void {
+    if (this.saveRefusedFor === held.holder.hostId) return;
+    this.saveRefusedFor = held.holder.hostId;
+    this.notice('error', `${describeHeld(held)} Nothing of this session is saved from here meanwhile.`);
+  }
+
+  /**
+   * Another host took the session over, judging this one gone (ADR-0049). Its
+   * runners must not work on beside that host's, in the worktrees that host
+   * now prepares, so the run here stops.
+   */
+  private leaseLost(held: SessionHeld): void {
+    this.saveRefusedFor = held.holder.hostId;
+    this.notice('error', describeLost(held));
+    if (this.isExecuting || this.orchestrator.isRunning || this.orchestrator.awaitsResume || this.orchestrator.startsPending) this.stopExecution();
   }
 
   /**
@@ -1464,6 +1485,7 @@ export class Session {
     const opening = this.plannerTurnMayOpen(options?.signal);
     if (opening) await opening;
     const chosenRunners = this.chosenRunners(runners);
+    this.claimHostSession();
     this.plan = null;
     this.goal = goal;
     this.remintSessionId();
@@ -1525,6 +1547,7 @@ export class Session {
       const gate = this.plannerTurnMayOpen(options?.signal);
       if (gate) await gate;
       const chosenRunners = this.chosenRunners(runners);
+      this.claimHostSession();
       this.plan = null;
       this.goal = goal;
       this.remintSessionId();
@@ -1790,11 +1813,11 @@ export class Session {
       this.orchestrator.loadPlan(coerced, runners, true);
       this.store.resetForRun({ keepScheduledResumes: true });
     }
-    this.withdrawApprovals(rewritten);
+    this.record.withdraw(rewritten);
     // Once they are in the plan: approval is only ever of a task the plan holds.
-    if (bySupervisor) this.approve(added);
+    if (bySupervisor) this.record.approve(added);
     // With autorun on the user said they need not approve what the planner writes in their turn; read as it lands, so turning it off first holds the task.
-    else if (this.turnActor().kind === 'planner-turn' && this.userRunSettings().autorun) this.approve(this.commands.autorunApproves(writtenTasks(before, coerced)));
+    else if (this.turnActor().kind === 'planner-turn' && this.userRunSettings().autorun) this.record.approve(this.commands.autorunApproves(writtenTasks(before, coerced)));
     this.adoptResearch(before);
     return coerced.length;
   }
@@ -1805,10 +1828,7 @@ export class Session {
       if (!task.research || known.get(task.id)?.research) continue;
       const to = researchReportTo(this.turnActor());
       this.store.update(task.id, { reportTo: to, researchOrigin: to });
-      if (!this.isApproved(task.id)) {
-        this.approve([task.id]);
-      }
-      this.plan!.researchApprovals = [...new Set([...(this.plan!.researchApprovals ?? []), task.id])];
+      this.record.approveResearch(task.id);
       // Queue only as it lands: re-queuing on each turn would undo the user's Stop (ADR-0037 R4).
       this.orchestrator.startAtGate(task.id);
     }
@@ -1865,7 +1885,7 @@ export class Session {
       // run starts cleanly; with nothing live, stopping has nothing to interrupt.
       this.orchestrator.stop('restart');
 
-      plan.approved = true;
+      this.record.approvePlan();
       plan.status = 'approved';
       this.store.clearLog();
       this.store.resetForRun();
@@ -1880,19 +1900,20 @@ export class Session {
    * Execute while a run is under way (#95): the seam has approved every task,
    * as executing does, and the run takes them in. A run the scheduler was not
    * driving, one task started on its own, becomes the plan's run, as Execute
-   * would make it.
+   * would make it. The planner's run_plan joins with `approved` 0: the
+   * scheduler starts only approved tasks, so `left` tasks still wait.
    */
-  private async joinRun(approved: number): Promise<string> {
-    const plan = this.plan!;
+  private async joinRun(approved: number, left: number): Promise<string> {
     const scheduling = this.orchestrator.isScheduling;
     await this.withSave(async () => {
-      plan.approved = true;
+      this.record.approvePlan();
       if (scheduling) await this.orchestrator.tick();
       else if (this.orchestrator.isReviewApproved) await this.orchestrator.start('user');
       else await this.orchestrator.approveReview('user');
     });
     const line = approved === 0
-      ? scheduling ? 'The plan is already running, and no task waits for your approval.' : 'The plan is running: each task starts once its dependencies finish.'
+      ? left > 0 ? `The plan is ${scheduling ? 'already ' : ''}running; ${left} ${left === 1 ? 'task waits' : 'tasks wait'} for your approval.`
+        : scheduling ? 'The plan is already running, and no task waits for your approval.' : 'The plan is running: each task starts once its dependencies finish.'
       : approved === 1 ? 'Approved 1 task; it starts once its dependencies finish.' : `Approved ${approved} tasks; each starts once its dependencies finish.`;
     this.notice('info', line);
     return line;
@@ -2186,14 +2207,41 @@ export class Session {
    * Direct edits reach it through the {@link PlanEditor}, which adds the
    * reschedule they owe.
    */
-  private mutatePlan(op: () => boolean, notify: () => void = () => this.events.planGenerated(this.plan, this.goal)): LegacyPlanState | null {
+  private mutatePlan(op: () => boolean, notify: () => void = () => this.announcePlan()): LegacyPlanState | null {
     if (!this.plan) return null;
     const changed = this.events.holdStatus(op);
     if (changed) this.persist();
     this.events.releaseStatus(this.plan);
     if (!changed) return null;
     notify();
+    // A notify of another kind (a timeline entry) does not carry the plan's approvals.
+    if (this.withdrawalUnannounced) this.announcePlan();
     return this.plan;
+  }
+
+  /** The plan to every surface, with the approvals it holds now. */
+  private announcePlan(turnId?: string): void {
+    const withdrew = this.withdrawalUnannounced;
+    this.withdrawalUnannounced = false;
+    this.events.planGenerated(this.plan, this.goal, turnId);
+    // The plan does not carry who waits for approval; the status does.
+    if (withdrew) this.events.status(this.plan);
+  }
+
+  /**
+   * Approval was taken from a task, by a rule that runs wherever the tree
+   * changes (ADR-0029). A mutation that is under way announces the plan as it
+   * ends, and that broadcast carries this; one that is not, a load or a route
+   * that announces nothing of the plan, is followed by one of its own as soon
+   * as the synchronous work is done, so no surface keeps showing the task
+   * approved.
+   */
+  private withdrawalOwed(): void {
+    if (this.withdrawalUnannounced) return;
+    this.withdrawalUnannounced = true;
+    queueMicrotask(() => {
+      if (this.withdrawalUnannounced && this.plan) this.announcePlan();
+    });
   }
 
   /** Patch one task's fields, checked as the planner's task ops are; see {@link PlanEditor.updateTask}. */
@@ -2250,6 +2298,9 @@ export class Session {
     // re-adopting the current plan on approval) keeps the conversation; after
     // a drop, the first user send reseeds it from this plan's own transcript.
     const adopting = plan !== this.plan;
+    // Before anything of the plan held now is dropped, so a refusal leaves it
+    // as it was: another live host has this session open (ADR-0049).
+    if (adopting) this.lease.claim(opts?.sessionId ?? this.currentSessionId, workspace);
     if (adopting) this.dropPlanScope();
     this.plan = plan;
     // A plan adopted off disk carries what supervision remembered: the loop
@@ -2261,13 +2312,10 @@ export class Session {
     if (adopting) this.turns.restoreResend();
     this.goal = goal;
     this.workspace = workspace;
-    // Saved before approval had its own record: the status said it, and
-    // executing a plan approved every task it held. Read once, here, and never
-    // again — a surface rewrites the status for display.
-    plan.approved ??= plan.status !== 'draft' && plan.status !== 'rejected';
-    if (!plan.approvedTasks && plan.approved) {
-      plan.approvedTasks = flattenTasks(plan.tasks).map((t) => t.id);
-    }
+    // Every plan-shape migration lives in one place (models/Task.ts); this load
+    // only calls it. A saved pause is reset before the orchestrator clones the
+    // tasks, so its copy is idle too.
+    migrateLoadedPlan(plan, { adopting });
     // The saved ledger is the session's own history: adopt it before the
     // persist below writes the plan back, so a load does not zero the totals.
     // The same-object load keeps the live ledger, which holds what the turn in
@@ -2279,26 +2327,10 @@ export class Session {
     // Adopting the saved session's id keeps subsequent persists writing to the
     // same file instead of forking the session under a fresh identity.
     if (opts?.sessionId) this.currentSessionId = opts.sessionId;
-    if (adopting) {
-      for (const task of flattenTasks(plan.tasks)) delete task.resumeAt;
-    }
     this.orchestrator.loadPlan(plan.tasks, plan.runners);
     // Loading normalizes statuses (a failed task gets a fresh chance) on the
     // store's copy; the adopted plan shows that result, not the caller's input.
     this.syncPlanTasks();
-    migratePlanStateIsolation(plan);
-    // Older builds copied the since-removed transport setting onto the plan.
-    // Every plan now runs structured (ADR-0018), so the copy is not carried on.
-    delete (plan as { runnerTransport?: unknown }).runnerTransport;
-    // Run settings are the user's now (ADR-0030); an older plan's own copies
-    // are not read, and go with this save.
-    for (const key of ['supervisorLevel', 'mergeAtGatesAutomatically', 'supervisorRetryLimit', 'wakeUpReadBudget']) {
-      delete (plan as unknown as Record<string, unknown>)[key];
-    }
-    // The per-message research budget is gone (ADR-0037); a plan saved before
-    // its removal is read once and written back without its keys.
-    dropRetiredPlanFields(plan);
-    carryOverQueuedEdits(plan);
     // The run record is taken synchronously; the orphan prune and the look at
     // what the user has merged since are awaited in the background, and git
     // serializes them ahead of any worktree a run adds.
@@ -2348,6 +2380,8 @@ export class Session {
     this.unsubObserver?.();
     this.unsubObserver = null;
     this.fsAdapter.endSession?.();
+    // Last: stopping the run above saves what it changed, which needs the lease.
+    this.lease.release();
   }
 
   /**

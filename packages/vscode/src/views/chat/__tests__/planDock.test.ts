@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import type { Task } from '@ordewell/core';
 import { isPlanRevision, planSummaryLabel, nextDock, dragDockHeight, DOCK_MIN_HEIGHT } from '../planDock';
 
@@ -25,6 +26,14 @@ function task(overrides: Partial<Task> = {}): Task {
  * run the status ticks arrive constantly.
  */
 describe('isPlanRevision', () => {
+  it('keeps its fingerprint separators escaped, so the source stays a text file to git', () => {
+    const source = readFileSync(new URL('../planDock.ts', import.meta.url), 'utf8');
+    // eslint-disable-next-line no-control-regex
+    expect(source).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/);
+    expect(source).toContain(".join('\\u0000')");
+    expect(source).toContain(".join('\\u0001')");
+  });
+
   it('does not call a status-only change a revision', () => {
     const before = [task()];
     const after = [task({ status: 'in_progress' })];

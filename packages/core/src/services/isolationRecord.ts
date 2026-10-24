@@ -12,9 +12,9 @@ import type {
   RepoGroupLayout,
   TaskIsolation,
 } from '../interfaces/IWorktreeIsolation';
+import { SELF_REPO } from './repoPath';
 
-/** The path of the repo in a workspace that is itself the repository. */
-export const SELF_REPO = '.';
+export { SELF_REPO };
 
 export function integrationBranchFor(runId: string): string {
   return `ordewell/${runId}/integration`;
