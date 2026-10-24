@@ -11,9 +11,10 @@ import { validatePlanTasks } from '../PlanValidator';
 import { makeSession, FakeRunnerSession, taskOf, fakeConfig } from './sessionTestKit';
 
 /**
- * Evidence a later task acts on is a research task the later task depends on
- * (ADR-0037 R5): its findings reach that task as a handoff (ADR-0047), never
- * re-typed by the planner into the later task's brief.
+ * Evidence a later task acts on is a task of its own that the later task
+ * depends on (ADR-0037 R5), a research task when the planner must decide on
+ * its report: its findings reach the later task as a handoff (ADR-0047), never
+ * re-typed by the planner into its brief.
  */
 const research = { title: 'Why does the cache serve stale entries?', description: 'Reports the evidence', type: 'ai' as const, prompt: 'Investigate', readOnly: true, research: true, autonomy: 'AFK' as const, sliceType: 'AFK' as const };
 /** The research task as the plan holds it: read-only is its runner's read-only mode. */
