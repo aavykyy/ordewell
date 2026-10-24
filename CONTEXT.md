@@ -1072,10 +1072,26 @@ evidence.
 *Loop check*), "error".
 
 **Artifact** (ADR-0047) — a typed reference in a *Handoff* to something the
-task produced, of the same four kinds as an *Evidence reference*. It is in the
+task produced, of the same four kinds as an *Evidence reference*, or a `patch`
+that only Ordewell adds, for a *Patch handoff* (ADR-0050). It is in the
 digest and on the surfaces, not in the budgeted text a dependent is given.
 *Avoid:* "output", and "artifact" for a file the task wrote that the handoff
 does not name.
+
+**Patch handoff** (`save_patch`, `PatchCapture`; ADR-0050) — a *Read-only
+task*'s prototype, kept past its worktree. On the task's `save_patch` call
+Ordewell captures every change in the worktree as a git patch, inside the
+task's own seal, and keeps it only if it replays to the same tree at its base
+commit. It is kept as `<attempt>.patch` beside the attempt's *Task log* and
+named in the attempt's *Handoff* as a `patch` *Artifact*: the base, files,
+lines added and removed, size, and flags (`excluded` links and submodules,
+files `dropped` over the size cap, files git `normalized`). What Ordewell
+linked into the worktree never goes in; a case-only rename or an unreadable
+file refuses the save. A later save replaces it. It lands nothing and is no
+*Verdict*; the planner's `task_diff` reads it, since the worktree is gone.
+*Avoid:* "candidate" (a change task held unlanded until one is chosen, which
+was deferred), "diff" for the kept file (`task_diff` reads a diff, live or
+saved), "export".
 
 **Evidence reference** (ADR-0047) — how a *Finding* points at what supports it:
 a `file` (a repository path, optional line), a `commit` (a sha, the repo
@@ -2210,7 +2226,8 @@ marks it `readOnly: true` (ADR-0031), and the task stores that as its runner's
 `readOnly`-tagged mode (`plan` on every built-in runner), at either level. It
 works in a worktree of its own where the run isolates, which is thrown away
 whatever it changed when the attempt ends (`AttemptKind` `readOnly`,
-`IsolationTaskRecord.readOnly`), and keeps its runner's own read tools. Its
+`IsolationTaskRecord.readOnly`): what it changed survives only as a *Patch
+handoff* it saves. It keeps its runner's own read tools. Its
 shell is Ordewell's `run_command`, on its token alone (`BaseFileSystem.taskShell`):
 the planner's command rules from the task's working directory, asking
 nobody, where what would ask or be refused is a *sealed run* with the

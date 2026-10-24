@@ -74,7 +74,7 @@ describe('read-only runner profiles (ADR-0046)', () => {
       expect(args[args.indexOf('--disallowedTools') + 1].split(',')).toEqual(expect.arrayContaining(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'PowerShell', 'KillShell', 'EnterPlanMode', 'ExitPlanMode']));
       expect(args[args.indexOf('--setting-sources') + 1]).toBe('user');
       expect(JSON.parse(args[args.indexOf('--settings') + 1])).toMatchObject({ disableAllHooks: true });
-      expect(args[args.indexOf('--allowedTools') + 1].split(',')).toEqual(['mcp__ordewell__task_complete', 'mcp__ordewell__checkpoint', 'mcp__ordewell__read_task', 'mcp__ordewell__run_command']);
+      expect(args[args.indexOf('--allowedTools') + 1].split(',')).toEqual(['mcp__ordewell__task_complete', 'mcp__ordewell__checkpoint', 'mcp__ordewell__read_task', 'mcp__ordewell__run_command', 'mcp__ordewell__save_patch']);
       const events: AgentEvent[] = [];
       void adapter.send('Review', (e) => events.push(e));
       const requests: Array<[string, Record<string, unknown>, string]> = [
@@ -83,6 +83,7 @@ describe('read-only runner profiles (ADR-0046)', () => {
         ['Write', { file_path: '/task/a', content: 'bad' }, 'deny'], ['Bash', { command: 'echo bad' }, 'deny'],
         ['WebFetch', { url: 'https://example.test' }, 'deny'], ['WebSearch', { query: 'docs' }, 'deny'],
         ['mcp__other__write', {}, 'deny'], ['mcp__ordewell__run_command', { command: 'npm test' }, 'allow'],
+        ['mcp__ordewell__save_patch', {}, 'allow'],
       ];
       const proc = spawned.processes[0];
       for (const [i, [tool_name, input, behavior]] of requests.entries()) {
@@ -105,6 +106,7 @@ describe('read-only runner profiles (ADR-0046)', () => {
       expect(thread?.params).toMatchObject({ model: 'chosen-model', sandbox: 'read-only', approvalPolicy: 'never', config: { features: { shell_tool: false, unified_exec: false }, web_search: 'disabled' } });
       expect(thread?.params?.developerInstructions).toContain('ALL_TOOLS');
       expect(thread?.params?.developerInstructions).toContain('mcp__ordewell__run_command');
+      expect(thread?.params?.developerInstructions).toContain('mcp__ordewell__save_patch');
       expect(spawned.probeArgs()).toEqual([]);
       const events: AgentEvent[] = [];
       void adapter.send('Review', (e) => events.push(e));

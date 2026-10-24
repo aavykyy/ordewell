@@ -272,6 +272,12 @@ export interface IRunner {
      * and the session's task logs. Without one the call says it is not available.
      */
     readTask?: (args: ReadTaskArgs) => McpToolReply;
+    /**
+     * Answers a read-only attempt's `save_patch` calls (ADR-0050): its shell
+     * captures the worktree's changes and the attempt keeps them. Without one
+     * the call says it is not available.
+     */
+    savePatch?: (signal: AbortSignal) => Promise<McpToolReply>;
   }): Promise<IRunnerSession>;
 
   /** Wind one session down ({@link IRunnerSession.stop}); resolves once its process is gone. */

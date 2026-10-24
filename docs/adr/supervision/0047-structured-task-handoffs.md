@@ -73,7 +73,10 @@ handoff:
   advice to the reader. It is never evidence: it reaches `VerdictEngine`
   nowhere, and a `done` with a blocker finding is a `done`.
 - **`artifacts`**: typed references to what the task produced, of the same
-  four kinds as evidence.
+  four kinds as evidence. A read-only task's saved patch is a fifth kind,
+  `patch`, which Ordewell adds from its own capture and the author never states
+  ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md));
+  it comes after the author's artifacts and outside their limit.
 - **`report`** (at most 20,000 characters): the long form, for the reader who
   needs it all. It is stored in the attempt's log and is never put in a prompt.
 
@@ -292,3 +295,4 @@ merges findings; and any new setting.
 - 2026-10-22 — bounded reference strings to keep artifacts and the plan digest bounded.
 - 2026-10-22 — implemented the completion envelope, scoped reads, loop context, derived handoffs and all surfaces (#120).
 - 2026-10-23 — a change task's handoff carries its commit message, and its summary stops repeating it.
+- 2026-10-24 — a fifth artifact kind, `patch`, which only Ordewell adds, for a read-only task's saved patch (ADR-0050).

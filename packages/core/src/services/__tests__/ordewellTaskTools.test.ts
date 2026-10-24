@@ -646,7 +646,7 @@ describe('read_task over HTTP: a task pulls a handoff it may read (ADR-0047)', (
   });
 
   it('is on a read-only task\'s token too: it reads Ordewell\'s record, not the tree', async () => {
-    expect(READ_ONLY_TASK_TOOLS.map((t) => t.name)).toEqual(['task_complete', 'checkpoint', 'read_task', 'run_command']);
+    expect(READ_ONLY_TASK_TOOLS.map((t) => t.name)).toEqual(['task_complete', 'checkpoint', 'read_task', 'run_command', 'save_patch']);
     expect(TASK_TOOLS.find((t) => t.name === 'read_task')?.annotations).toEqual({ readOnlyHint: true });
   });
 });

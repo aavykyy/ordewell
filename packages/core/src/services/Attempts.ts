@@ -30,8 +30,10 @@ import { supportsTaskMode } from './harness/connectors';
 import { quotedList } from '../utils/quotedList';
 import { scriptBodyOf } from '../models/ScriptTask';
 import { SCRIPT_RUNNER } from './ScriptRunner';
-import { checkHandoff, type StoredHandoff } from '../models/Handoff';
+import { checkHandoff, withPatch, type HandoffPatch, type StoredHandoff } from '../models/Handoff';
+import { capturePatch, patchArtifact, patchReply } from './PatchCapture';
 import { readTask, type TaskLogReader } from './readTask';
+import type { McpToolReply } from './mcp/tools';
 import { TaskControlError } from './TaskControlError';
 import type { OrchestratorObserver, StartAdmission } from './TaskOrchestrator';
 
@@ -113,6 +115,8 @@ interface TaskAttempt extends EndedAttempt {
   readonly script: boolean;
   /** A read-only attempt's `run_command` (ADR-0046), ended with the attempt. */
   shell: TaskShell | null;
+  /** The patch it last saved (ADR-0050), which its handoff names. */
+  patch: HandoffPatch | null;
 }
 
 /** Read-only view of a task's live attempt. */
@@ -241,6 +245,12 @@ export interface AttemptsDeps {
   lastLoggedAttempt: (taskId: string) => number;
   /** A read-only attempt's shell (ADR-0046); absent, its runner is given no `run_command`. */
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
+  /**
+   * Keep a read-only attempt's saved patch beside its log, in place of one it
+   * kept before, and say where, relative to the workspace root (ADR-0050).
+   * Absent, `save_patch` is not available.
+   */
+  keepPatch?: (taskId: string, attempt: number, patch: Buffer) => string;
   /**
    * Write an attempt's whole handoff into the log of the attempt `sessionId`
    * ran (ADR-0047). A task that ran no session, a user task, gets a log of its own.
@@ -393,6 +403,7 @@ export class Attempts {
       planScope: this.planScope,
       script,
       shell: null,
+      patch: null,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.live.set(task.id, attempt);
@@ -800,9 +811,47 @@ export class Attempts {
       ...(writesCommit(kind) ? { commits: true } : {}),
       checkHandoff: (completion) => checkHandoff(completion, task.id, store.planTasks),
       readTask: (args) => readTask(args, task.id, store.planTasks, this.deps.taskLog),
+      ...(shell ? { savePatch: (signal: AbortSignal) => this.savePatch(task, attempt, signal) } : {}),
       workspaceRoot: this.deps.workspaceRoot(),
       onNotice: (message) => this.host.tell('warn', `Task "${task.title}": ${message}`),
     });
+  }
+
+  /**
+   * A read-only attempt's `save_patch` (ADR-0050): its shell captures what
+   * the attempt changed, sealed, and the attempt keeps the patch beside its
+   * log for its handoff to name. What Ordewell linked into the worktree stays
+   * out, as it stays out of a landing commit.
+   */
+  private async savePatch(task: Task, attempt: TaskAttempt, signal: AbortSignal): Promise<McpToolReply> {
+    const { shell } = attempt;
+    const keep = this.deps.keepPatch;
+    if (!shell || !keep) return { text: 'save_patch is not available in this session.', isError: true };
+    const result = await capturePatch(shell, { linked: this.linkedPaths(task.id, attempt.cwd) }, signal);
+    if (result.kind !== 'saved') return patchReply(result, undefined, attempt.patch ?? undefined);
+    if (this.live.get(task.id) !== attempt) return patchReply({ kind: 'refused', reason: 'the attempt ended while its changes were being captured.' }, undefined, undefined);
+    let where: string;
+    try {
+      where = keep(task.id, attempt.attempt, result.patch);
+    } catch (err) {
+      return patchReply({ kind: 'refused', reason: `Ordewell could not keep the patch (${err instanceof Error ? err.message : String(err)}).` }, undefined, attempt.patch ?? undefined);
+    }
+    attempt.patch = patchArtifact(result.stats, { path: where, attempt: attempt.attempt });
+    return patchReply(result, attempt.patch, undefined);
+  }
+
+  /**
+   * What Ordewell linked into a lone repository's worktree, relative to its
+   * root: its record names them relative to the task's working directory,
+   * which sits below the root when the workspace is a folder of the repo.
+   */
+  private linkedPaths(taskId: string, cwd: string | null): string[] {
+    const repos = Object.values(this.deps.runs.openRecord(taskId)?.repos ?? {});
+    if (repos.length !== 1 || cwd === null) return [];
+    const [{ worktree, linked }] = repos;
+    const prefix = path.relative(worktree, cwd).split(path.sep).join('/');
+    if (prefix.startsWith('..') || path.isAbsolute(prefix)) return [];
+    return linked.map((name) => (prefix ? `${prefix}/${name}` : name).split(path.sep).join('/'));
   }
 
   /**
@@ -1008,7 +1057,9 @@ export class Attempts {
     await Promise.resolve();
     if (this.live.get(taskId) !== attempt) return;
     const summary = output.finalText(taskId);
-    const handoff = output.handoff(taskId);
+    const authored = output.handoff(taskId);
+    // Whatever the verdict: a prototype is worth reading even from a task that failed (ADR-0050).
+    const handoff = attempt.patch ? withPatch(authored, attempt.patch) : authored;
     const landing = verdict.outcome === 'pass' ? await this.land(attempt, () => this.deps.landing.landPassed(task, attempt, handoff?.commit)) : null;
     const changedFiles = landing && checksTree(attempt.kind) ? await runs.filesChangedSince(attempt.snapshot) : [];
     const unresumed = this.unresumed(attempt) ? unresumedMessage(task, `${attempt.runner} could not find its saved session`) : null;
@@ -1019,7 +1070,7 @@ export class Attempts {
       return this.host.settle({ kind: 'usage-limited', taskId, attempt, said: stoppedMidTurn, output: summary });
     }
     store.setTaskVerdict(taskId, verdict);
-    this.handOver(taskId, summarizeOutput(unresumed ?? verdict.reason, handoff ? '' : summary), handoff, attempt.session?.id);
+    this.handOver(taskId, summarizeOutput(unresumed ?? verdict.reason, authored ? '' : summary), handoff, attempt.session?.id);
     console.error(`[Attempts] Output summary:\n${summary || '(empty: no output captured)'}`);
     // The evidence the ops rule rests on: a runner cannot be kept from
     // writing, only caught.

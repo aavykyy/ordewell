@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { listTaskLogAttempts, openTaskLog, prepareTaskOutputFile, readTaskLog, type TaskLogLocation } from '../taskLogStore';
+import { listTaskLogAttempts, openTaskLog, prepareTaskOutputFile, readTaskLog, readTaskPatch, saveTaskPatch, type TaskLogLocation } from '../taskLogStore';
 import { deleteSession, saveSession, sessionDataDir } from '../sessionStore';
 import { createEmptyPlan } from '../../models/Task';
 import type { TaskLogEvent } from '../../models/TaskLog';
@@ -30,6 +30,19 @@ describe('taskLogStore', () => {
     const onDisk = path.join(baseDir, '.ordewell', 'sessions', 'session-abc', 'tasks', 'task-1', '1.jsonl');
     expect(file.attempt).toBe(1);
     expect(fs.readFileSync(onDisk, 'utf-8')).toBe('');
+  });
+
+  it("keeps a read-only attempt's patch beside its log, replaced whole by a later save, and no attempt of its own (ADR-0050)", () => {
+    openTaskLog(where, 'task-1');
+    const file = saveTaskPatch(where, 'task-1', 1, Buffer.from('diff --git a/a b/a\n'));
+    expect(file).toBe(path.join(sessionDataDir('session-abc', baseDir), 'tasks', 'task-1', '1.patch'));
+    saveTaskPatch(where, 'task-1', 1, Buffer.from('diff --git a/b b/b\n'));
+
+    expect(readTaskPatch(where, 'task-1', 1)?.toString()).toBe('diff --git a/b b/b\n');
+    expect(fs.readdirSync(path.dirname(file)).sort()).toEqual(['1.jsonl', '1.patch']);
+    expect(listTaskLogAttempts(where, 'task-1')).toEqual([1]);
+    expect(readTaskPatch(where, 'task-1', 2)).toBeUndefined();
+    expect(readTaskPatch(where, 'task-1', 0)).toBeUndefined();
   });
 
   it('appends events as JSON lines and reads them back in order', () => {

@@ -1,4 +1,7 @@
+import * as path from 'path';
 import { resolveHandoffReferences } from './handoffReferences';
+import { readSavedPatch } from './taskDiffRead';
+import { savedPatchOf } from '../models/Handoff';
 import { createAiService, type IAiService } from './AiService';
 import { PlannerBackend } from './PlannerBackend';
 import type { TaskOp } from './TaskOps';
@@ -39,7 +42,7 @@ import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
 import { SubagentRuns } from './SubagentRuns';
 import { saveSession } from '../utils/sessionStore';
-import { listTaskLogAttempts, prepareTaskOutputFile, readTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
+import { listTaskLogAttempts, prepareTaskOutputFile, readTaskLog, readTaskPatch, saveTaskPatch, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
 import { digestTaskLog, type TaskLogEvent } from '../models/TaskLog';
 import { TaskLogRecorder } from './TaskLogRecorder';
 import { ScriptRunner, type ScriptRunnerDeps } from './ScriptRunner';
@@ -322,6 +325,13 @@ export function createSession(deps: SessionDeps): Session {
     },
     // The planner's command rules, at the read-only task's own working directory (ADR-0046).
     taskShell: (site) => deps.fsAdapter.taskShell?.(site),
+    // Beside the attempt's log, as a script's whole output is, and by the same rule: a swapped log store keeps the disk untouched (ADR-0050).
+    ...(deps.openTaskLog ? {} : {
+      keepPatch: (taskId: string, attempt: number, patch: Buffer) => {
+        const location = session.taskLogLocation;
+        return path.relative(location.baseDir, saveTaskPatch(location, taskId, attempt, patch)).split(path.sep).join('/');
+      },
+    }),
     recordHandoff: (sessionId, taskId, handoff) => taskLogs.note(sessionId, taskId, { type: 'handoff', handoff }),
     taskLog: { attempts: (taskId) => session.taskLogAttempts(taskId), events: (taskId, attempt) => session.taskLog(taskId, attempt) },
     sessionHeld: () => session.heldElsewhere(),
@@ -572,7 +582,12 @@ export class Session {
     lastAttempt: (taskId) => lastAttemptDigest(this.taskLogLocation, taskId),
     taskLogAttempts: (taskId) => this.taskLogAttempts(taskId),
     taskLog: (taskId, attempt) => this.taskLog(taskId, attempt),
-    taskDiff: (taskId, options) => this.runs.taskDiff(taskId, options),
+    taskDiff: (taskId, options) => {
+      // A read-only task lands nothing and its worktree is gone: the patch it saved is what it changed (ADR-0050).
+      const patch = savedPatchOf(this.store.get(taskId)?.handoff);
+      if (patch) return Promise.resolve(readSavedPatch(readTaskPatch(this.taskLogLocation, taskId, patch.attempt), patch, options));
+      return this.runs.taskDiff(taskId, options);
+    },
     runCommand: (command, signal, opts) => this.fsAdapter.bash(command, signal, opts),
     fetchUrl: (url) => this.fetcher.fetch(url),
     webSearch: async (query) => this.fetcher.search?.(query),
