@@ -1,13 +1,9 @@
 import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
-import type { ChildProcess } from 'child_process';
 import type { RunnerCommand, RunnerMcpServer } from '../../models/RunnerCommand';
 import { randomBytes } from 'crypto';
 import { isCredentialVariable } from './credentialEnv';
-import { PlannerShellSandbox } from '../sandbox/plannerSandbox';
-import { createNativeShellLauncher, type NativeShellLauncher } from '../sandbox/nativeShellLauncher';
-import { assertWorkspaceExists } from '../../utils/workspace';
-import { augmentedPath } from '../../utils/shellPath';
-import { RunnerProcess } from './runnerProcess';
+import type { NativeShellLauncher } from '../sandbox/nativeShellLauncher';
+import { ProcessLifecycle } from './ProcessLifecycle';
 import { OpenCodeV2 } from './OpenCodeV2';
 import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV, OPENCODE_READ_ONLY_PERMISSION } from './openCodeOrdewell';
 import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
@@ -19,7 +15,7 @@ import {
   REQUEST_TIMEOUT_MS, streamTurn, turnLatch, usageRecord, withDeadline, type EventStream, type PermissionAnswer, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
-import type { AgentEvent, AgentProcessDeps, AgentStartOptions, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
+import type { AgentEvent, AgentStartOptions, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
 
 const SERVER_READY_TIMEOUT_MS = 30000;
 /** The banner is one short line; a longer unterminated one is not it, and is not kept growing. */
@@ -265,22 +261,19 @@ function newTurnState(): TurnState {
  * detail, never the final reply. A task turn is posted asynchronously and read
  * entirely from the stream — see {@link sendTask}.
  */
-export class OpenCodeAdapter implements TaskModeAgentAdapter {
+export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAdapter {
   readonly agentId = 'opencode';
   private nativeCommands: RunnerCommand[] = [];
   private readonly nativeSkills = new Map<string, string>();
   private manualCompaction = false;
   private loaded: { commands: RunnerCommand[]; mcpServers: RunnerMcpServer[] } | null = null;
 
-  private process: ChildProcess | null = null;
   private baseUrl: string | null = null;
   /** The server's version from `/api/info`; null on 1.x, which does not report one (ADR-0036 N2). */
   private serverVersion: string | null = null;
   /** Sent on every request to a task's server, which a per-task password secures. */
   private authorization: string | null = null;
   private sessionId: string | null = null;
-  private readonly runner: RunnerProcess;
-  private disposed = false;
   private planner: PlannerStartOptions | null = null;
   private task: TaskStartOptions | null = null;
   /** The last assistant message already settled — the baseline {@link recoverReply} measures a new reply against. */
@@ -302,19 +295,14 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   private ordewell: McpClientConfig | null = null;
   /** The sealed launcher this planner's own shell goes through, when the opt-in is on (ADR-0036 N2). */
   private nativeShell: NativeShellLauncher | null = null;
-  /** The sandbox that holds the native shell; its scratch directory goes with the process. */
-  private nativeSandbox: PlannerShellSandbox | null = null;
-
-  constructor(private deps: AgentProcessDeps) {
-    this.runner = new RunnerProcess(deps);
-  }
-
-  private get processEnded(): Promise<void> { return this.runner.ended; }
-  get exited(): boolean { return this.runner.hasExited; }
 
   async start(opts: AgentStartOptions): Promise<void> {
+    this.role = opts.kind;
     try {
-      await this.prepareNativeShell(opts);
+      // OpenCode takes a shell program rather than a prefix, so the launcher is
+      // named as `SHELL` and as the `shell` of the config layer that carries
+      // Ordewell's policy.
+      this.nativeShell = await this.ownNativeShell(opts);
       await this.launch(opts);
       if (opts.kind === 'task') await this.loadCommands();
     } catch (err) {
@@ -322,35 +310,6 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       this.dispose();
       throw err;
     }
-  }
-
-  /**
-   * Prepare the native shell before the server starts, or fail the start
-   * rather than run it outside a sandbox (ADR-0036 N2). OpenCode takes a shell
-   * program rather than a prefix, so the launcher is named as `SHELL` and as
-   * the `shell` of the config layer that carries Ordewell's policy.
-   */
-  private async prepareNativeShell(opts: AgentStartOptions): Promise<void> {
-    if (opts.kind !== 'planner' || opts.nativeShell !== true) return;
-    // The launcher resolves the workspace on disk before the runner's own
-    // check would run, so a missing one must be reported as itself.
-    assertWorkspaceExists(opts.cwd, { isDirectory: this.deps.isDirectory });
-    const sandbox = (this.deps.nativeShellSandbox ?? (() => new PlannerShellSandbox()))();
-    try {
-      // The same PATH the harness itself starts with, so a command finds the
-      // tools the user's CLI does even when the host was launched from a GUI.
-      const PATH = await (this.deps.resolvePath ?? augmentedPath)();
-      this.nativeShell = await createNativeShellLauncher({
-        workspace: opts.cwd,
-        sandbox,
-        platform: this.deps.platform,
-        env: { ...process.env, PATH },
-      });
-    } catch (err) {
-      sandbox.end();
-      throw new Error(`The native-shell setting is on, but Ordewell could not put this planner's shell in its sandbox (${err instanceof Error ? err.message : String(err)}). Turn the setting off, or fix the sandbox, and start the conversation again.`);
-    }
-    this.nativeSandbox = sandbox;
   }
 
   private async launch(opts: AgentStartOptions): Promise<void> {
@@ -398,8 +357,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       // own login stays (N3).
       ...(nativeShell ? { envDrop: isCredentialVariable } : {}),
     });
-    await this.runner.start(opts.cwd, command, (child) => {
-      this.process = child;
+    await this.startProcess(opts.cwd, command, () => {
       this.authorization = `Basic ${Buffer.from(`${SERVER_USERNAME}:${password}`).toString('base64')}`;
       return this.connect(opts, this.serverAddress());
     });
@@ -437,7 +395,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   private async connect(opts: AgentStartOptions, address: Promise<string | null>): Promise<void> {
     this.baseUrl = await address;
     if (!this.baseUrl) {
-      throw new Error(this.runner.withStderrTail(`The OpenCode ${this.role()} server did not start.`));
+      throw new Error(this.runner.withStderrTail(`The OpenCode ${this.role} server did not start.`));
     }
 
     const version = await this.v2Version();
@@ -453,7 +411,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
         isExited: () => this.exited,
         exitMessage: () => this.exitMessage(),
         mcpServers: () => this.mcpServers,
-      }, { ...opts, mcp: this.ordewell ?? undefined }, this.role());
+      }, { ...opts, mcp: this.ordewell ?? undefined }, this.role);
       await this.v2.start();
       this.sessionId = this.v2.nativeSessionId();
       return;
@@ -481,7 +439,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       }
     }
     const created = await this.json<{ id?: string }>('POST', '/session', {});
-    if (!created?.id) throw new Error(`The OpenCode ${this.role()} server did not return a session id.`);
+    if (!created?.id) throw new Error(`The OpenCode ${this.role} server did not return a session id.`);
     this.sessionId = created.id;
   }
 
@@ -541,7 +499,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   }
 
   async send(message: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, onActivity?: () => void): Promise<void> {
-    if (!this.baseUrl || !this.sessionId) throw new Error(`OpenCode ${this.role()} session is not started`);
+    if (!this.baseUrl || !this.sessionId) throw new Error(`OpenCode ${this.role} session is not started`);
     this.emitLoaded(onEvent);
     if (this.exited) {
       onEvent({ type: 'error', message: this.exitMessage() });
@@ -876,10 +834,6 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     return interruptAcknowledged(turn, this.processEnded, timeoutMs);
   }
 
-  onProcessExit(listener: (code: number, lastWords?: string) => void): void {
-    void this.processEnded.then(() => listener(this.runner.exitCode, this.exitMessage()));
-  }
-
   answerPermission(id: string, decision: ApprovalDecision): boolean | Promise<boolean> {
     if (this.v2) return this.process ? this.v2.answerPermission(id, decision) : false;
     return this.process ? this.permissions.answerAsync(id, decision) : false;
@@ -893,10 +847,6 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   private async v2Version(): Promise<string | null> {
     const info = await this.json<{ version?: unknown }>('GET', '/api/info').catch(() => null);
     return typeof info === 'object' && info !== null && typeof info.version === 'string' ? info.version : null;
-  }
-
-  private role(): 'planner' | 'task' {
-    return this.task ? 'task' : 'planner';
   }
 
   /**
@@ -943,7 +893,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   private async recoverReply(signal: AbortSignal | undefined, onActivity?: () => void): Promise<OpenCodeMessageResponse | null> {
     const deadline = Date.now() + RECOVERY_TIMEOUT_MS;
     for (;;) {
-      if (signal?.aborted || this.exited || this.disposed || !this.sessionId) return null;
+      if (signal?.aborted || this.exited || this.isDisposed || !this.sessionId) return null;
       const messages = await this.json<OpenCodeMessageResponse[]>('GET', `/session/${this.sessionId}/message`).catch(() => null);
       const pending = Array.isArray(messages)
         ? [...messages].reverse().find((m) => m.info?.role === 'assistant' && m.info.id && m.info.id !== this.lastAssistantId)
@@ -1212,22 +1162,16 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     return servers;
   }
 
-  dispose(): void {
-    if (this.disposed) return;
-    this.disposed = true;
+  override dispose(): void {
+    if (this.isDisposed) return;
     // The server is gone with its session; its stored messages are unreachable.
     this.steers.drain();
-    this.process = null;
     this.baseUrl = null;
-    this.nativeShell?.remove();
-    this.nativeShell = null;
-    this.nativeSandbox?.end();
-    this.nativeSandbox = null;
     // A surviving server keeps the port and the session.
-    this.runner.dispose();
+    super.dispose();
   }
 
-  private exitMessage(): string {
-    return this.runner.withStderrTail(`The OpenCode ${this.role()} server exited.`);
+  protected exitMessage(): string {
+    return this.runner.withStderrTail(`The OpenCode ${this.role} server exited.`);
   }
 }

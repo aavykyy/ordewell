@@ -1,15 +1,17 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { existsSync } from 'fs';
+import type { ChildProcess } from 'child_process';
+import { describe, it, expect, afterEach, beforeEach, vi, type MockInstance } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { CONNECTORS } from '../harness/connectors';
-import type { AgentEvent, AgentStartOptions } from '../harness/AgentAdapter';
+import type { AgentEvent, AgentProcessDeps, AgentStartOptions } from '../harness/AgentAdapter';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { OrdewellMcpServer, PLANNER_EXECUTION_TOOLS, PLANNER_TOOLS, TASK_TOOLS, mcpClientConfig } from '../mcp';
 import { CLI_PROVIDERS, providerForRunner, runnerForProvider } from '../ProviderRegistry';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { fakeConfig, fakeFileSystem } from '../../testing';
-import { modeIds, planJson } from './harnessTestKit';
+import { modeIds, planJson, type FakeAgentProcess } from './harnessTestKit';
 import { FAKE_RUNNERS, type FakeRunnerScript } from './fakeRunners';
 
 /**
@@ -233,5 +235,102 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
     expect(fake.injectedUrl(1)).toBe(server.url);
     expect(fake.killed(1)).toBe(true);
     svc.reset();
+  });
+});
+
+/**
+ * What a runner's process owns goes with it (ADR-0018 L1): the one registry
+ * every adapter's resources are claimed in is freed by a dispose, by a turn's
+ * abort and by the process ending on its own, and the process group is killed
+ * rather than only the CLI at its head.
+ */
+describe.each(runners)('the %s connector and what its process owns', (runner) => {
+  let nextPid = 3_800_000;
+  const launched: FakeAgentProcess[] = [];
+  let kill: MockInstance<typeof process.kill>;
+
+  /** `deps`, with every runner it launches given a pid, so it leads a process group the way a real one does. */
+  function tracked(deps: AgentProcessDeps): AgentProcessDeps {
+    return {
+      ...deps,
+      spawn: (command, args, options) => {
+        const proc = deps.spawn(command, args, options);
+        // Codex's sandbox probe is a side process that ends itself, not the runner.
+        if (args[0] !== 'sandbox') {
+          Object.defineProperty(proc, 'pid', { value: nextPid++ });
+          launched.push(proc as unknown as FakeAgentProcess);
+        }
+        return proc;
+      },
+    };
+  }
+
+  const groupSignals = (proc: ChildProcess) => kill.mock.calls.filter(([pid]) => pid === -(proc.pid ?? 0)).map(([, signal]) => String(signal));
+
+  beforeEach(() => {
+    kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    for (const proc of launched.splice(0)) proc.exit(0);
+    kill.mockRestore();
+    vi.useRealTimers();
+  });
+
+  /** A turn open under `signal`, with a probe resource claimed the way an adapter claims its own. */
+  async function inTurn(signal?: AbortSignal) {
+    const fake = FAKE_RUNNERS[runner]({ attach: 'connected' });
+    const adapter = CONNECTORS[runner].create(tracked(fake.deps));
+    await adapter.start(plannerStart);
+    const released = vi.fn();
+    (adapter as unknown as { own(name: string, release: () => void): void }).own('probe', released);
+    const turn = adapter.send('go', () => {}, signal);
+    await fake.turnOpen();
+    const config = fake.commandLine().match(/--mcp-config (\S+)/)?.[1];
+    // After the turn is open, which waits on timers of its own: the forced
+    // follow-up kill is a timer, and faked it fires under the spy rather than
+    // against a real group after the test.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    return { adapter, turn, released, config };
+  }
+
+  const stops = [
+    ['disposed', (adapter: { dispose(): void }) => adapter.dispose(), false],
+    ['aborted mid-turn', () => undefined, true],
+  ] as const;
+
+  it.each(stops)('frees every resource it owns and kills the process group when %s', async (_how, stop, aborts) => {
+    const controller = new AbortController();
+    const { adapter, turn, released, config } = await inTurn(controller.signal);
+    if (config) expect(existsSync(config)).toBe(true);
+    expect(released).not.toHaveBeenCalled();
+    expect(groupSignals(launched[0])).toEqual([]);
+
+    stop(adapter);
+    // A disposed adapter's open turn is abandoned, not settled; an aborted one ends.
+    if (aborts) {
+      controller.abort();
+      await turn.catch(() => undefined);
+    }
+
+    expect(released).toHaveBeenCalledTimes(1);
+    if (config) expect(existsSync(config)).toBe(false);
+    expect(groupSignals(launched[0])).toEqual(['SIGTERM']);
+    vi.advanceTimersByTime(5_000);
+    expect(groupSignals(launched[0])).toEqual(['SIGTERM', 'SIGKILL']);
+    adapter.dispose();
+    expect(released).toHaveBeenCalledTimes(1);
+  });
+
+  it('frees what the process owns when it ends on its own, before anything disposes it', async () => {
+    const { adapter, turn, released, config } = await inTurn();
+
+    launched[0].exit(1);
+    await turn;
+
+    expect(released).toHaveBeenCalledTimes(1);
+    if (config) expect(existsSync(config)).toBe(false);
+    adapter.dispose();
+    expect(released).toHaveBeenCalledTimes(1);
   });
 });
