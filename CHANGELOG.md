@@ -275,6 +275,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **A supervisor at Act can start the task it just added.** Its `run_task`,
+  fresh `retry_task` or `run_plan` in the reply whose edit adds the task now
+  waits for the edit and then starts it, as the planner's start does in your
+  turn, instead of being refused and left for you to click. Below Act it is
+  still refused
+  ([ADR-0029](docs/adr/supervision/0029-the-supervisor.md)).
 - **Starting the plan no longer runs a task you stopped.** A task held by a
   stop, or by taking its completion back, stays held when the plan is started
   again, after Stop of the whole run, and when the plan is edited; only a retry

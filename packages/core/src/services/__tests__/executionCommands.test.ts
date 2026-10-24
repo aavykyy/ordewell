@@ -1111,6 +1111,72 @@ describe('the command seam\'s extension points', () => {
     expect(host.record).not.toHaveBeenCalled();
   });
 
+  // Seen live: an Act supervisor added a fix task with edit_plan and was told its run_task could not start in the turn.
+  it.each([
+    ['run_task', { command: 'run_task', task: 'Fix it' } as ExecutionCommand, { command: 'run_task', task: 't2' }, 'start task #2 "Fix it"'],
+    ['a fresh retry_task', { command: 'retry_task', task: 'Fix it', from: 'fresh' } as ExecutionCommand, { command: 'retry_task', task: 't2', from: 'fresh' }, 'retry task #2 "Fix it"'],
+  ])('holds the Act supervisor\'s %s of a task its own edit adds until the edit lands, with no run in progress', async (_, asked, queued, intent) => {
+    const edited = [task('t1', 1), task('t2', 2, { title: 'Fix it' })];
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, taskApproved: (id: string) => id === 't1', heldEdit: vi.fn(() => true), editedTasks: () => edited };
+    const actor: ExecutionActor = { kind: 'supervisor', level: 'act' };
+    const request = vi.fn();
+    const commands = new ExecutionCommands({ host, consent: { request } });
+
+    expect(await commands.run(asked, actor)).toMatchObject({ ok: true, message: expect.stringMatching(new RegExp(`^Queued: ${intent} happens once your edit lands`)) });
+    expect(host.deferUntilLanded).toHaveBeenCalledWith(queued, actor, intent, expect.objectContaining({ current: expect.any(Function) }));
+    expect(request).not.toHaveBeenCalled();
+    expect(host.startTask).not.toHaveBeenCalled();
+  });
+
+  it('starts, once the edit has landed and approved the supervisor\'s task, what the Act supervisor queued', async () => {
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, taskApproved: () => true };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+    const actor: ExecutionActor = { kind: 'supervisor', level: 'act' };
+
+    await commands.replay({ command: 'run_task', task: 't1' }, actor, admission());
+
+    expect(host.startTask).toHaveBeenCalledWith('t1', actor);
+    expect(host.queuedNotRun).not.toHaveBeenCalled();
+  });
+
+  it('holds the Act supervisor\'s run of a plan whose edit adds a task, which its edit approves as it lands', async () => {
+    const edited = [task('t1', 1), task('t2', 2, { title: 'Fix it' })];
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, taskApproved: (id: string) => id === 't1', heldEdit: () => true, editedTasks: () => edited };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    expect(await commands.run({ command: 'run_plan' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: true, message: expect.stringMatching(/^Queued: /) });
+    expect(host.deferUntilLanded).toHaveBeenCalled();
+  });
+
+  it('still refuses an unapproved task the plan already holds to the Act supervisor, which no edit of its own adds', async () => {
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, taskApproved: () => false, heldEdit: () => true };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    expect(await commands.run({ command: 'run_task', task: 't1' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringContaining('not approved to run') });
+    expect(host.deferUntilLanded).not.toHaveBeenCalled();
+  });
+
+  it.each(['watch', 'off'] as const)('still refuses the %s supervisor\'s start of a task its edit adds, in the words of its level', async (level) => {
+    const edited = [task('t1', 1), task('t2', 2, { title: 'Fix it' })];
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, heldEdit: () => true, editedTasks: () => edited };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    const outcome = await commands.run({ command: 'run_task', task: 'Fix it' }, { kind: 'supervisor', level });
+
+    expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringContaining('Suggest it to the user instead') });
+    expect(host.deferUntilLanded).not.toHaveBeenCalled();
+  });
+
+  it('keeps a skip of a task the supervisor\'s own edit adds refused, and never held', async () => {
+    const edited = [task('t1', 1), task('t2', 2, { title: 'Fix it' })];
+    const host = { ...stubHost(), heldEdit: () => true, editedTasks: () => edited };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    expect(await commands.run({ command: 'skip_task', task: 'Fix it', reason: 'not needed' }, { kind: 'supervisor', level: 'act' }))
+      .toMatchObject({ ok: false, outcome: 'refused', message: expect.stringContaining('cannot be skipped in it') });
+    expect(host.deferUntilLanded).not.toHaveBeenCalled();
+  });
+
   it('with autorun on and Full, starts an unapproved task the planner asks for, and approves it with its subtasks', async () => {
     const host = { ...stubHost(), autorun: () => true, running: () => false, hasLiveWork: () => false, taskApproved: () => false };
     const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });

@@ -397,8 +397,10 @@ export class ExecutionCommands {
       const missing = `No task matches "${command.task}" in the current plan.`;
       const naming = 'Name it by id, "#order" (a subtask "#order.sub") or exact title.';
       if (!this.host.heldEdit()) return this.refuse(command, actor, undefined, `${missing} ${naming}`);
-      // The turn's own edit may be adding it: a start the user is asked for, or one under the autorun exception, waits for it, as a start of an edited task does.
-      if (startsFromPrompt(command) && (this.addedMayStart(actor) || this.asksToApprove(actor))) {
+      // The supervisor's level decides what it may start, so below Act it is told that, not that the task is missing.
+      if (actor.kind === 'supervisor' && startsFromPrompt(command) && consent.kind === 'refuse') return this.refuse(command, actor, undefined, consent.reason);
+      // The turn's own edit may be adding it: a start the user is asked for, one under the autorun exception, or the Act supervisor's, whose edit approves what it adds, waits for it, as a start of an edited task does.
+      if (startsFromPrompt(command) && (this.addedMayStart(actor) || this.asksToApprove(actor) || this.supervisorEditApproves(actor))) {
         return this.locateAsEdited(command.task)
           ? this.judgeAsEdited(command, actor, undefined, consent)
           : this.refuse(command, actor, undefined, `${missing} Your edit does not add it either. ${naming}`);
@@ -731,6 +733,20 @@ export class ExecutionCommands {
   }
 
   /**
+   * The Act supervisor's edit approves the tasks it adds as it lands, so a
+   * start of one waits for the edit and then runs as a start of an approved
+   * task does (ADR-0029). Below Act the supervisor starts nothing.
+   */
+  private supervisorEditApproves(actor: ExecutionActor): boolean {
+    return actor.kind === 'supervisor' && actor.level === 'act' && this.supervisor(actor.level, 'run_task').kind === 'allow';
+  }
+
+  /** Whether the task is one the Act supervisor's held edit adds, which the plan does not hold yet. */
+  private addedBySupervisorEdit(actor: ExecutionActor, taskId: string): boolean {
+    return this.supervisorEditApproves(actor) && !this.located(taskId);
+  }
+
+  /**
    * Guarded means "ask the user first": a planner start in the user's own
    * turn asks, so tasks they have not approved go into the question rather
    * than refusing it. The supervisor's starts stay within what the user
@@ -842,7 +858,7 @@ export class ExecutionCommands {
       if (!this.host.planApproved()) {
         return { refusal: NOT_APPROVED_YET };
       }
-      approves = this.addedMayStart(actor) ? [] : toRun.filter(({ task }) => !this.host.taskApproved(task.id));
+      approves = this.addedMayStart(actor) ? [] : toRun.filter(({ task }) => !this.host.taskApproved(task.id) && !this.addedBySupervisorEdit(actor, task.id));
       if (approves.length > 0 && !this.asksToApprove(actor)) {
         const one = approves.length === 1;
         return { refusal: `${capitalize(named(approves))} ${one ? 'was' : 'were'} added after the user approved the plan, so ${one ? 'it is' : 'they are'} not approved to run. Ask the user to execute the plan themselves, which approves ${one ? 'it' : 'them'}.` };
@@ -1290,7 +1306,7 @@ export class ExecutionCommands {
    * approve, or null: the user's own call is its own approval.
    */
   private unapproved(located: Located, actor: ExecutionActor): { refusal: string } | { approves: Located[] } | null {
-    if (actor.kind === 'user' || actor.kind === 'autorun' || this.addedMayStart(actor) || this.host.taskApproved(located.task.id)) return null;
+    if (actor.kind === 'user' || actor.kind === 'autorun' || this.addedMayStart(actor) || this.addedBySupervisorEdit(actor, located.task.id) || this.host.taskApproved(located.task.id)) return null;
     const label = describe(located);
     if (!this.host.planApproved()) {
       return { refusal: `The user has not approved ${label}: they approve the plan by executing it themselves (Execute plan), or a task by starting it. Ask them to.` };

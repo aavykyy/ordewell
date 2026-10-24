@@ -338,6 +338,19 @@ describe('the loop guards', () => {
     expect(env.run.runner.spawn.mock.calls[2][0].prompt).toContain('do t2, importing from ./lib');
   });
 
+  it('starts a task its own edit adds, asked for by title in the same reply, once the edit lands on a run that had finished', async () => {
+    const env = await finishedWithAFailure();
+
+    await env.planner.tools().editPlan!({ ops: [{ op: 'add', task: { title: 'Fix the import', prompt: 'fix the import' } }] }, ctx);
+    const start = await env.planner.tools().runTask!({ task: 'Fix the import' }, ctx);
+    expect(start.isError, start.text).toBeFalsy();
+    expect(JSON.parse(start.text).result).toMatch(/^Queued: start task #\d+ "Fix the import" happens once your edit lands/);
+    env.planner.calls[0].finish(prose('Added a fix task and started it.'));
+
+    await until(() => env.session.planTasks.some((t) => t.title === 'Fix the import' && env.run.spawnedIds().includes(t.id)));
+    expect(env.run.runner.spawn.mock.calls.at(-1)![0].prompt).toContain('fix the import');
+  });
+
   it('refuses at once a retry behind an edit that leaves the prompt and model as they failed', async () => {
     const env = await failedOnce();
 
