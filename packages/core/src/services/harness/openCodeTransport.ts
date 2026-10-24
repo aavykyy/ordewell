@@ -19,6 +19,30 @@ import { settleWithin } from './settleWithin';
 /** How long each event-stream connection attempt can take. */
 const STREAM_CONNECT_TIMEOUT_MS = 5000;
 
+/**
+ * How long an ordinary request to the server may take. Only a turn's own
+ * POST is held open for the turn, and it opts out; anything else is a quick
+ * read or write, and a server that never answers one would hold the start, the
+ * attach check or an interrupt for undici's 300s header timeout.
+ */
+export const REQUEST_TIMEOUT_MS = 30000;
+
+/**
+ * `signal` joined with a deadline of `timeoutMs`; null leaves the request
+ * undated. The deadline aborts with an error that names itself, which is what
+ * a failed request reports. `clear` drops the timer once the headers are in.
+ */
+export function withDeadline(signal: AbortSignal | undefined, timeoutMs: number | null): { signal: AbortSignal | undefined; clear(): void } {
+  if (timeoutMs === null) return { signal, clear: () => {} };
+  const controller = new AbortController();
+  const follow = () => controller.abort(signal?.reason);
+  if (signal?.aborted) follow();
+  else signal?.addEventListener('abort', follow, { once: true });
+  const timer = setTimeout(() => controller.abort(new Error(`OpenCode did not answer within ${timeoutMs}ms`)), timeoutMs);
+  timer.unref?.();
+  return { signal: controller.signal, clear: () => clearTimeout(timer) };
+}
+
 type OnEvent = (event: AgentEvent) => void;
 
 /**
@@ -348,15 +372,20 @@ export interface TurnSettlement {
  */
 export async function settleTurn(turn: TurnLatch, how: TurnSettlement, onEvent: OnEvent): Promise<boolean> {
   const { signal } = how;
+  let onAbort: () => void = () => {};
   const aborted = new Promise<void>((resolve) => {
+    onAbort = resolve;
     if (signal?.aborted) resolve();
-    signal?.addEventListener('abort', () => resolve(), { once: true });
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
   try {
     await Promise.race([turn.ended, aborted, how.processEnded, how.streamFailed]);
   } catch (err) {
     how.permissions.endTurn(onEvent);
     throw err;
+  } finally {
+    // A signal reused across turns would otherwise gather one listener per turn.
+    signal?.removeEventListener('abort', onAbort);
   }
   if (signal?.aborted) return false;
   if (!turn.done) {

@@ -76,7 +76,10 @@ fails, the merges already made for that task on the other repos' integration
 branches are rolled back, and the task is `conflict` (or `failed`) as a whole,
 with `conflictRepo` naming the repo that stopped it. `merged` always means the
 whole task landed. A merge a hook refuses (a merge in progress with nothing
-unmerged) is `failed`, not `conflict`, in a group of one too.
+unmerged) is `failed`, not `conflict`, in a group of one too, and the task's
+`landingError` carries the first line git said. A task workspace is cut from
+the group's integration tips only between landings: one cut after a landing
+merged into some repos would keep that merge when the rollback undoes it.
 
 - **The tips are recorded on the run, before the first merge.**
   `IsolationRun.landing` holds the task id and each changed repo's integration
@@ -202,7 +205,10 @@ progress in a repo the run never touched is none of its business:
 
 - no merge is already in progress;
 - `git merge-tree --write-tree` against the checked-out HEAD shows no conflict;
-- no uncommitted user changes overlap the incoming files.
+- nothing of the user's stands in the way of the incoming files: no uncommitted
+  edit to one, no untracked file where the merge would write one and, when the
+  merge needs a merge commit rather than a fast-forward, nothing staged at all,
+  which git refuses to merge over.
 
 Before any of that, every repo of the group, with work or not, must be on the
 branch the run started on, or the answer is `blocked` with `wrong-branch`
@@ -212,7 +218,9 @@ It merges all repos only if every repo passes; otherwise it merges none and
 answers `blocked` with each repo, its reason (`merge-in-progress`, `conflict`,
 `uncommitted-changes`, `partial-landing`, `wrong-branch`, `git-error`) and its files. A merge
 that still fails part-way answers `conflict` or `failed`, naming the repo it
-stopped in and the repos already `landed`, which stay merged. On git older than
+stopped in and the repos already `landed`, which stay merged; a `failed` one
+carries the first line git said, which the notice quotes, and none only for the
+user's own merge in progress. On git older than
 2.38, which has no `merge-tree --write-tree`, it merges repo by repo and stops at
 the first failure. A group of one needs no preflight — its one merge lands or is
 aborted whole — so it answers `merged`, `conflict` or `failed`, and is `blocked`
@@ -382,3 +390,4 @@ Core, daemon, TUI, CLI and VS Code.
   task (ADR-0020).
 - 2026-10-17 — ADR-0019 folded in as *Nested repositories*.
 - 2026-10-17 — Merge all refuses unless every repo is on the branch the run started on ([ADR-0042](0042-merge-all-lands-only-on-the-branch-the-run-started-on.md)).
+- 2026-10-24 — Merge all's preflight also refuses over untracked collisions and staged changes, a failed merge says what git said, and a task workspace is cut between landings.

@@ -53,7 +53,16 @@ function fakeServer(routes: Record<string, (body: unknown) => Reply | Promise<Re
 
     const key = `${method} ${path}`;
     let reply: Reply;
-    if (routes[key]) reply = await routes[key](body);
+    if (routes[key]) {
+      const answering = Promise.resolve(routes[key](body));
+      // A request that is aborted stops waiting on its route, as a real socket does.
+      reply = await (init?.signal
+        ? Promise.race([answering, new Promise<never>((_resolve, reject) => {
+          const abort = () => reject(init.signal?.reason instanceof Error ? init.signal.reason : new Error('The operation was aborted.'));
+          if (init.signal?.aborted) abort(); else init.signal?.addEventListener('abort', abort, { once: true });
+        })])
+        : answering);
+    }
     else if (key === 'GET /api/info') reply = { version: '2.0.22' };
     else if (key === 'POST /api/session') reply = { data: { id: SES } };
     else if (key === 'GET /api/session/active') reply = { data: {} };
@@ -1033,6 +1042,34 @@ describe('OpenCode 2.x — interrupt', () => {
   });
 });
 
+describe('OpenCode 2.x — an interrupt that raced the turn\'s own end', () => {
+  async function interruptedThen(end: unknown) {
+    const server = fakeServer({ [`POST /api/session/${SES}/interrupt`]: () => ({ interrupted: true }) });
+    const { adapter } = await start(server, taskStart());
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => events.push(e));
+    const stream = await server.stream();
+    await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
+    stream.push(started());
+    const interrupted = adapter.interrupt(5000);
+    await until(() => server.requests.some((r) => r.path.endsWith('/interrupt')));
+    stream.push(end);
+    await interrupted;
+    await turn;
+    adapter.dispose();
+    return events;
+  }
+
+  it('ends a turn OpenCode reports succeeded as completed, so its completion reminder is still owed', async () => {
+    expect(await interruptedThen(succeeded())).toEqual([{ type: 'turn_end' }]);
+  });
+
+  it('ends a turn OpenCode reports failed as failed, with its error', async () => {
+    const events = await interruptedThen(frame('session.execution.failed', { error: { type: 'provider.rate-limit', message: 'Usage limit reached' } }));
+    expect(events).toEqual([{ type: 'error', message: 'Usage limit reached' }]);
+  });
+});
+
 describe('OpenCode 2.x — subagents', () => {
   it('ties a child session to the call that spawned it, and keeps its report out of the reply', async () => {
     const server = fakeServer();
@@ -1116,6 +1153,18 @@ describe('OpenCode 2.x — shared protocol behaviour', () => {
     const { adapter, turn, stream } = await turnOf(server);
 
     expect(await adapter.interrupt(50)).toBe(false);
+    stream.push(succeeded());
+    await turn;
+    adapter.dispose();
+  });
+
+  it('reports an interrupt false when the server never answers the request within the time it was given', async () => {
+    const server = fakeServer({ [`POST /api/session/${SES}/interrupt`]: () => new Promise<Reply>(() => {}) });
+    const { adapter, turn, stream } = await turnOf(server);
+
+    const answer = await Promise.race([adapter.interrupt(50), new Promise<string>((resolve) => setTimeout(() => resolve('hung'), 1500))]);
+
+    expect(answer).toBe(false);
     stream.push(succeeded());
     await turn;
     adapter.dispose();

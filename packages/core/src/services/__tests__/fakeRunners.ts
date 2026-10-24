@@ -279,7 +279,13 @@ function openCode(script: FakeRunnerScript): FakeRunner {
     }
     if (method === 'POST' && path === `/session/${SES}/message`) {
       // A planner's turn is this request; with nothing scripted it stays open, as a working server's does.
-      if (script.reply === undefined) return new Promise<Response>(() => undefined);
+      // Held as a real socket is: it ends with an abort, or with the server's death.
+      if (script.reply === undefined) {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')), { once: true });
+          spawned.processes[spawned.processes.length - 1]?.once('close', () => reject(new Error('socket hang up')));
+        });
+      }
       return respond(200, { info: { id: 'msg_reply', role: 'assistant', sessionID: SES }, parts: [{ id: 'prt_reply', messageID: 'msg_reply', type: 'text', text: script.reply }] });
     }
     if (path.endsWith('/prompt_async')) return respond(204);

@@ -422,12 +422,12 @@ export function createSession(deps: SessionDeps): Session {
   return session;
 }
 
-/** Every credential the config holds, read afresh so a key set mid-session is covered. */
 /** The planner allowlist in force: the built-in reads unless turned off, then the user's entries. */
 function plannerAllowlistOf(config: IConfig): string[] {
   return [...(config.approvalDefaults ? DEFAULT_PLANNER_ALLOWLIST : []), ...config.approvalPreApproved];
 }
 
+/** Every credential the config holds, read afresh so a key set mid-session is covered. */
 function configSecrets(config: IConfig): string[] {
   return [
     config.apiKey, config.openAiApiKey, config.openrouterKey, config.geminiKey, config.openaiCompatibleApiKey,
@@ -1420,9 +1420,9 @@ export class Session {
    * A task is running right now. Deliberately live work, not the scheduler's
    * armed flag: a run paused on a user task, a hold or a cancellation has
    * nothing executing, and reporting it as executing is what left the plan
-   * unstartable after its last live task was cancelled.
+   * unstartable after its last live task was cancelled. See
+   * {@link TaskOrchestrator.hasLiveWork}: a spawned runner, not merely an armed scheduler.
    */
-  /** See {@link TaskOrchestrator.hasLiveWork} — a spawned runner, not merely an armed scheduler. */
   get isExecuting(): boolean { return this.orchestrator.hasLiveWork; }
   get status(): 'approved' | 'running' | 'completed' { return this.orchestrator.status; }
 
@@ -1517,18 +1517,23 @@ export class Session {
     return chosen;
   }
 
+  /** Whether a first turn for `requested` would be refused for want of an enabled runner: a host calls it before it replaces a live session. */
+  assertRunnersEnabled(requested: RunnerId[] | undefined): void {
+    this.chosenRunners(requested);
+  }
+
   async generatePlan(goal: string, runners?: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
     // A new goal replaces whatever still waits to open: the latest intent wins.
     this.endWaiting(() => new PlannerTurnDiscardedError());
     // Before the plan scope is dropped, so a refusal leaves the plan held now as it was.
     const opening = this.plannerTurnMayOpen(options?.signal);
     if (opening) await opening;
+    const chosenRunners = this.chosenRunners(runners);
     this.claimHostSession();
     this.plan = null;
     this.goal = goal;
     this.remintSessionId();
     this.beginFreshPlan({ keepGrants: true });
-    const chosenRunners = this.chosenRunners(runners);
 
     const generated = await this.conversation.hold(options?.signal, async (turn) => {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
@@ -1585,12 +1590,12 @@ export class Session {
     try {
       const gate = this.plannerTurnMayOpen(options?.signal);
       if (gate) await gate;
+      const chosenRunners = this.chosenRunners(runners);
       this.claimHostSession();
       this.plan = null;
       this.goal = goal;
       this.remintSessionId();
       this.beginFreshPlan({ keepGrants: true });
-      const chosenRunners = this.chosenRunners(runners);
 
       const now = new Date().toISOString();
       this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
@@ -1797,6 +1802,10 @@ export class Session {
       runners,
       modelsByRunner: filteredModels,
       runnerModes,
+      liveScope: () => {
+        const { runners, modes } = this.catalog.current();
+        return { runners, runnerModes: modes };
+      },
       autonomousDefault: this.config.autonomousMode,
       autorun: this.userRunSettings().autorun,
       isolatedExecution: await this.runs.plannerLayout(),

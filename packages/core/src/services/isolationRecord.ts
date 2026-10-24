@@ -8,6 +8,7 @@ import type {
   IsolationTaskRecord,
   IsolationTaskStatus,
   PlanIsolation,
+  PreservedWork,
   RepoGroupLayout,
   TaskIsolation,
 } from '../interfaces/IWorktreeIsolation';
@@ -26,6 +27,20 @@ export function repoRootOf(workspaceRoot: string, repoPath: string): string {
 /** A removal that kept nothing back. */
 export function noRemoval(): IsolationRemoval {
   return { preserved: [], refused: [] };
+}
+
+/**
+ * A `prepare` that failed after it had already replaced the last attempt of
+ * the task: that attempt's unlanded work was kept on `preserved` first, and no
+ * record names it any more, so whoever tells the user about the failure has to
+ * tell them where it went. Reads as the failure it wraps.
+ */
+export class PrepareFailedError extends Error {
+  constructor(readonly failure: unknown, readonly preserved: PreservedWork[]) {
+    super(failure instanceof Error ? failure.message : String(failure));
+    this.name = failure instanceof Error ? failure.name : 'Error';
+    this.cause = failure;
+  }
 }
 
 /** Add what `from` kept back to `into`. */

@@ -10,7 +10,7 @@ import { claudeThinkingArgs } from '../../plugins/resolveArgs';
 import type { AgentEvent, AgentStartOptions, PlannerAsk, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines, structuredPatchText } from './fileDiff';
-import { ORDEWELL_MCP_SERVER_NAME, taskCompletionContract, type McpClientConfig, type OwnerOnlyFile } from '../mcp';
+import { ORDEWELL_MCP_SERVER_NAME, taskCompletionContract, type McpClientConfig } from '../mcp';
 import { CLAUDE_ORDEWELL } from './claudeOrdewell';
 import { PermissionLedger } from './permissionLedger';
 import { ReplyRuns } from './replyRuns';
@@ -19,10 +19,7 @@ import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState, type OrdewellTool
 import { claudeLocalServers } from './claudeRepoConfig';
 import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 import { isCredentialVariable } from './credentialEnv';
-import { PlannerShellSandbox } from '../sandbox/plannerSandbox';
-import { createNativeShellLauncher, type NativeShellLauncher } from '../sandbox/nativeShellLauncher';
-import { assertWorkspaceExists } from '../../utils/workspace';
-import { augmentedPath } from '../../utils/shellPath';
+import type { NativeShellLauncher } from '../sandbox/nativeShellLauncher';
 
 /**
  * Native plan mode permits Bash writes to its plan file, and saved allow rules
@@ -443,8 +440,6 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private readOnlySite: TaskStartOptions | null = null;
   /** The sealed launcher this process's shell goes through, when the opt-in is on (ADR-0036 N2). */
   private nativeShell: NativeShellLauncher | null = null;
-  /** The sandbox that holds the native shell; its scratch directory goes with the process. */
-  private nativeSandbox: PlannerShellSandbox | null = null;
 
   /** This turn's runs of reply text, each a text block named `<message id>:<block index>`. */
   private replyRuns = new ReplyRuns();
@@ -494,8 +489,6 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private requestedMode: string | null = null;
   /** The session `--resume` asked for, until the CLI's `init` shows it was taken up. */
   private pendingResume: string | null = null;
-  /** The `--mcp-config` file of the running process, which holds its token; removed with the process. */
-  private mcpConfig: OwnerOnlyFile | null = null;
   /** Whether this process was given the server, so its tools' requests are Ordewell's own. */
   private givenOrdewell = false;
   /** The `CLAUDE_CONFIG_DIR` a planner runs under, where the CLI saves its long tool results. */
@@ -504,6 +497,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private readonly steers = new Map<string, string>();
   /** The last turn's `result` ended it, so a steer's echo now opens a turn the CLI started for that message. */
   private turnClosed = false;
+  /** The model is working in a turn the CLI opened itself, after the last one closed: a background wake. */
+  private runnerTurn = false;
   /** The task's commands as the CLI last listed them, and what its `init` said of them (#66). */
   private listedCommands: ClaudeCommand[] = [];
   private skillNames = new Set<string>();
@@ -531,27 +526,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * hands it the whole command as one argument (ADR-0036 N2).
    */
   override async start(opts: AgentStartOptions): Promise<void> {
-    if (opts.kind === 'planner' && opts.nativeShell === true) {
-      // The launcher resolves the workspace on disk before the runner's own
-      // check would run, so a missing one must be reported as itself.
-      assertWorkspaceExists(opts.cwd, { isDirectory: this.deps.isDirectory });
-      const sandbox = (this.deps.nativeShellSandbox ?? (() => new PlannerShellSandbox()))();
-      try {
-        // The same PATH the harness itself starts with, so a command finds the
-        // tools the user's CLI does even when the host was launched from a GUI.
-        const PATH = await (this.deps.resolvePath ?? augmentedPath)();
-        this.nativeShell = await createNativeShellLauncher({
-          workspace: opts.cwd,
-          sandbox,
-          platform: this.deps.platform,
-          env: { ...process.env, PATH },
-        });
-      } catch (err) {
-        sandbox.end();
-        throw new Error(`The native-shell setting is on, but Ordewell could not put this planner's shell in its sandbox (${err instanceof Error ? err.message : String(err)}). Turn the setting off, or fix the sandbox, and start the conversation again.`);
-      }
-      this.nativeSandbox = sandbox;
-    }
+    this.nativeShell = await this.ownNativeShell(opts);
     await super.start(opts);
   }
 
@@ -673,17 +648,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
 
   /** The file holding the token lives exactly as long as the process that reads it. */
   private ordewellServerArgs(mcp: McpClientConfig, role: OrdewellToolRole, servers?: Record<string, unknown>): string[] {
-    this.removeMcpConfig();
     const { args, config } = CLAUDE_ORDEWELL.launch(mcp, role, servers);
-    this.mcpConfig = config;
-    void this.processEnded.then(() => config.remove());
+    this.own('mcp-config', () => config.remove());
     this.givenOrdewell = true;
     return args;
-  }
-
-  private removeMcpConfig(): void {
-    this.mcpConfig?.remove();
-    this.mcpConfig = null;
   }
 
   protected override async handshake(): Promise<void> {
@@ -720,7 +688,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * with it, and no answer would ever come.
    */
   async mcpAttached(): Promise<AttachState> {
-    if (!this.mcpConfig) return 'failed';
+    if (!this.givenOrdewell || this.isDisposed) return 'failed';
     return awaitAttach(async (left) => {
       if (this.exited) return 'failed';
       const answer = await this.control({ subtype: 'mcp_status' }, left);
@@ -728,7 +696,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       if (!answer) return 'pending';
       const server = answer.response?.mcpServers?.find((s) => s.name === ORDEWELL_MCP_SERVER_NAME);
       return server ? CLAUDE_ORDEWELL.attachState(server.status) : 'pending';
-    }, MCP_ATTACH_TIMEOUT_MS, MCP_STATUS_POLL_MS);
+    }, MCP_ATTACH_TIMEOUT_MS, MCP_STATUS_POLL_MS, this.processEnded);
   }
 
   /**
@@ -738,7 +706,17 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * as an interrupted `turn_end`.
    */
   async interrupt(timeoutMs: number): Promise<boolean> {
-    if (!this.process) return false;
+    // Between turns there is nothing to stop, and remembering the request
+    // would call the next turn the runner opens by itself interrupted.
+    if (!this.process || (this.turnClosed && !this.runnerTurn)) return false;
+    // A held turn's model is idle and only background work runs: the CLI has
+    // no turn to end, so the turn ends here and that work is left alone.
+    if (this.resultHeld) {
+      this.resultHeld = false;
+      this.clearFollowOnTimer();
+      this.closeTurn({ type: 'turn_end', interrupted: true }, (event) => this.announce(event));
+      return true;
+    }
     this.interruptRequested = true;
     return (await this.control({ subtype: 'interrupt' }, timeoutMs))?.subtype === 'success';
   }
@@ -809,13 +787,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     return this.send(args ? `/${name} ${args}` : `/${name}`, onEvent, signal);
   }
 
-  dispose(): void {
+  override dispose(): void {
     this.clearFollowOnTimer();
-    this.removeMcpConfig();
-    this.nativeShell?.remove();
-    this.nativeShell = null;
-    this.nativeSandbox?.end();
-    this.nativeSandbox = null;
     super.dispose();
   }
 
@@ -849,6 +822,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     this.interruptRequested = false;
     this.resultHeld = false;
     this.turnClosed = false;
+    this.runnerTurn = false;
     this.clearFollowOnTimer();
     // A turn names its own model on its first call; a command turn makes none,
     // and reading the last turn's id here would report its window against the
@@ -930,7 +904,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       }
 
       case 'assistant':
-        if (!subagentId) this.clearFollowOnTimer();
+        if (!subagentId) {
+          this.clearFollowOnTimer();
+          this.runnerTurn = this.turnClosed;
+        }
         if (subagentId) {
           this.handleSubagentMessage(msg, subagentId, emit);
           return;
@@ -1033,14 +1010,18 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         // blocks, so this only settles the turn.
         this.reportSessionCost(msg, emit);
         for (const command of this.modelCommands) command.turnsLeft = Math.max(0, command.turnsLeft - 1);
+        // The request belongs to the turn this result closes, so a result that
+        // finished anyway clears it too: left set, it would call the next turn interrupted.
         if (this.interruptRequested && (msg.is_error || msg.subtype !== 'success')) {
           this.interruptRequested = false;
           this.closeTurn({ type: 'turn_end', interrupted: true }, emit);
         } else if (msg.is_error || (msg.subtype && msg.subtype !== 'success')) {
           this.closeTurn({ type: 'error', message: msg.result?.trim() || msg.errors?.join('\n').trim() || `Claude Code ended the turn: ${msg.subtype ?? 'error'}` }, emit);
         } else if (this.role === 'task' && this.backgroundTaskCount > 0) {
+          this.interruptRequested = false;
           this.resultHeld = true;
         } else {
+          this.interruptRequested = false;
           this.resultHeld = false;
           this.closeTurn({ type: 'turn_end' }, emit);
         }
@@ -1048,7 +1029,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
 
       case 'stream_event':
         // Only the planner's own messages stream; a subagent's arrive whole.
-        if (msg.event && !subagentId) this.handleStreamEvent(msg.event, emit);
+        if (msg.event && !subagentId) {
+          this.runnerTurn = this.turnClosed;
+          this.handleStreamEvent(msg.event, emit);
+        }
         return;
 
       default:
@@ -1154,6 +1138,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   /** A subagent left running in the background outlives the turn, and a request it raised still waits on its answer. */
   private closeTurn(end: AgentEvent, emit: (event: AgentEvent) => void): void {
     this.turnClosed = true;
+    this.runnerTurn = false;
     if (this.backgroundTaskCount === 0) this.permissions.endTurn(emit);
     emit(end);
   }

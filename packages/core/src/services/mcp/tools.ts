@@ -344,6 +344,103 @@ export interface McpTool<H> {
   call(handler: H, args: unknown, context: McpToolContext): Promise<McpToolReply>;
 }
 
+/** A field's path as a runner reads it in a refusal: `summary`, `findings[0].title`. */
+function fieldPath(path: readonly PropertyKey[]): string {
+  return path.reduce<string>((text, part) => (typeof part === 'number' ? `${text}[${part}]` : text ? `${text}.${String(part)}` : String(part)), '');
+}
+
+function valueAt(value: unknown, path: readonly PropertyKey[]): unknown {
+  let current = value;
+  for (const part of path) {
+    if (typeof part === 'number') {
+      if (!Array.isArray(current)) return undefined;
+      current = current[part];
+    } else if (current !== null && typeof current === 'object') {
+      current = (current as Record<PropertyKey, unknown>)[part];
+    } else return undefined;
+  }
+  return current;
+}
+
+/**
+ * A refusal that says how far past its bound an argument went. Naming only the
+ * limit left a runner that had cut its summary to 380 characters with no way
+ * to see that 9000 had arrived, and that its findings and report had leaked in
+ * beside it (ADR-0047).
+ */
+function boundedRefusal(issue: z.core.$ZodIssue, args: unknown): string | undefined {
+  if (issue.code !== 'too_big' || (issue.origin !== 'string' && issue.origin !== 'array')) return undefined;
+  const value = valueAt(args, issue.path);
+  const size = issue.origin === 'string'
+    ? typeof value === 'string' ? value.length : typeof value === 'number' ? String(value).length : undefined
+    : Array.isArray(value) ? value.length : undefined;
+  if (size === undefined) return undefined;
+  const unit = issue.origin === 'string' ? 'characters' : 'items';
+  const hint = issue.message.startsWith('Too big:') ? '' : ` ${issue.message}`;
+  return `${fieldPath(issue.path)} is ${size} ${unit}; the limit is ${issue.maximum}.${hint}`;
+}
+
+const LEAKED_PARAMETER = /<\/parameter>|<parameter\s+name\s*=\s*"([^"]*)">/g;
+
+interface LeakedMarkup {
+  path: string;
+  names: string[];
+  closing: boolean;
+}
+
+/** The tool-call markup a runner's harness left inside a string argument instead of sending it as an argument. */
+function leakedMarkupIn(value: unknown): LeakedMarkup[] {
+  const found: LeakedMarkup[] = [];
+  const walk = (node: unknown, path: string): void => {
+    if (typeof node === 'string') {
+      const names: string[] = [];
+      let closing = false;
+      for (const match of node.matchAll(LEAKED_PARAMETER)) {
+        if (match[1] !== undefined) names.push(match[1]);
+        else closing = true;
+      }
+      if (names.length > 0 || closing) found.push({ path, names: [...new Set(names)], closing });
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.forEach((item, i) => walk(item, `${path}[${i}]`));
+      return;
+    }
+    if (node !== null && typeof node === 'object') {
+      for (const [key, item] of Object.entries(node)) walk(item, path ? `${path}.${key}` : key);
+    }
+  };
+  walk(value, '');
+  return found;
+}
+
+/**
+ * Says which parameters leaked into a string, without reading them out of it:
+ * another tool's markup is not evidence of what the runner meant (ADR-0047),
+ * so the runner is told to send each one as its own argument.
+ */
+function markupRefusal(leaks: readonly LeakedMarkup[]): string {
+  return leaks.map(({ path, names, closing }) => {
+    const tags = [...names.map((n) => `<parameter name="${n}">`), ...(closing ? ['</parameter>'] : [])];
+    const guide = names.length > 0
+      ? ` The parameters ${names.map((n) => JSON.stringify(n)).join(', ')} are inside it; pass them as separate arguments, not inside ${path}.`
+      : ' Pass each argument separately, not inside one string.';
+    return `${path} contains leaked tool-call markup: ${tags.join(', ')}.${guide}`;
+  }).join('\n');
+}
+
+function invalidArguments(name: string, error: z.ZodError, args: unknown): string {
+  const issues = error.issues.map((issue) => {
+    const refusal = boundedRefusal(issue, args);
+    return refusal === undefined ? issue : { ...issue, message: refusal };
+  });
+  const leaks = leakedMarkupIn(args);
+  return [
+    `Invalid ${name} arguments: ${z.prettifyError(new z.ZodError(issues))}`,
+    ...(leaks.length > 0 ? [markupRefusal(leaks)] : []),
+  ].join('\n');
+}
+
 function tool<H, S extends z.ZodObject>(
   name: string,
   description: string,
@@ -360,7 +457,7 @@ function tool<H, S extends z.ZodObject>(
       const run = pick(handler);
       if (!run) return { text: `${name} is not available in this session.`, isError: true };
       const parsed = input.safeParse(args ?? {});
-      if (!parsed.success) return { text: `Invalid ${name} arguments: ${z.prettifyError(parsed.error)}`, isError: true };
+      if (!parsed.success) return { text: invalidArguments(name, parsed.error, args ?? {}), isError: true };
       return run(parsed.data, context);
     },
   };

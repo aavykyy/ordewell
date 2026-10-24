@@ -84,7 +84,9 @@ through `editPlan`, which adds the reschedule they owe an armed scheduler:
 nothing else wakes one after a hand edit, because no planner turn ends to let
 a start hold go, so a task the edit unblocked would sit ready and never start. PlanStore is the single source of truth for task
 state; `LegacyPlanState.tasks` is written from it (a `snapshot()`, never the
-live tree) at persist and status-broadcast time and never read back into it. The old
+live tree) at persist and status-broadcast time and never read back into it,
+except by `loadPlan`, which adopts a plan from outside (a saved session, a
+restored window) and so is the one load a surface makes. The old
 `syncStoreFromPlan` (plan → store direction) is removed — there is only one
 direction (store → plan, at persist). Emits
 **SessionMessage** (the plan-lifecycle events) through the `broadcast` seam;
@@ -570,10 +572,15 @@ its whole tree killed on dispose (**Kill tree**). Its end is the process's
 `close`, after stdout has drained — acting on `exit` reported a runner's last
 line as never having arrived — and a last line left unterminated when the pipe
 closed is flushed rather than dropped. Its `start` runs the adapter's handshake
-and takes the process down if that throws. The stdio adapters and OpenCode's
-server both build on it, so a lifecycle fix lands once; the protocol stays in
-the adapter.
-*Avoid:* spawning or killing a runner in an adapter directly.
+and takes the process down if that throws. Every adapter holds one through
+`ProcessLifecycle` (`harness/ProcessLifecycle.ts`), which also owns what the
+process owns — its MCP config file, its sealed native-shell launcher and that
+launcher's sandbox — in a registry freed when the process ends or the adapter
+is disposed, whichever is first. Stdio line framing sits on that base for Claude
+Code and Codex; OpenCode's server uses it without any, so a lifecycle fix lands
+once and the protocol stays in the adapter.
+*Avoid:* spawning or killing a runner in an adapter directly; a resource an
+adapter frees by hand in its own `dispose`.
 
 **Ordewell tool binding** (`OrdewellToolBinding`) — how one connector hands its
 runner the Ordewell MCP server (ADR-0022). It covers the runner's names for the

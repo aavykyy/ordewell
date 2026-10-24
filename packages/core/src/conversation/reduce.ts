@@ -79,10 +79,16 @@ function openTurn(view: ConversationView, { turnId, prompt = '', skills = [], wa
   return { ...said, blocks: [...said.blocks.slice(0, at), ...updates, ...said.blocks.slice(at)], nextId: said.nextId + updates.length };
 }
 
-function takePendingInputs(view: ConversationView, prompt: string | undefined, wakeUps: readonly string[], turnId?: string): { view: ConversationView; prompt: boolean; wakeUps: number } {
+/**
+ * `heldAt`: the entry is one a surface already passed by its time, which a
+ * landing turn writes for what it held (its own start) behind the notes written
+ * while it ran. Only an input that arrived by then can be that entry's.
+ */
+function takePendingInputs(view: ConversationView, prompt: string | undefined, wakeUps: readonly string[], turnId?: string, heldAt?: string): { view: ConversationView; prompt: boolean; wakeUps: number } {
   const pending = view.pendingInputs ?? [];
-  const users = pending.filter(({ input }) => input.source === 'user');
-  const updates = pending.filter(({ input }) => input.source === 'supervisor');
+  const arrived = ({ input }: { input: SerializedPendingTurn }) => heldAt === undefined || input.timestamp <= heldAt;
+  const users = pending.filter((p) => p.input.source === 'user' && arrived(p));
+  const updates = pending.filter((p) => p.input.source === 'supervisor' && arrived(p));
   const taken = new Set<string>();
   let matchedPrompt = false;
   // PlanTurns joins a batch's user messages, but reload draws each arrival.
@@ -318,8 +324,9 @@ function syncTranscript(view: ConversationView, { plan, turnId }: Message<'plan_
   let latest = view.transcriptAt;
   for (const [i, entry] of history.entries()) {
     const isNew = view.transcriptAt === undefined || entry.timestamp > view.transcriptAt;
-    if (isNew && entry.role === 'user' && !entry.kind) next = takePendingInputs(next, entry.content, []).view;
-    if (isNew && entry.kind === 'wake_up') next = takePendingInputs(next, undefined, [entry.content]).view;
+    const heldAt = isNew ? undefined : entry.timestamp;
+    if (entry.role === 'user' && !entry.kind) next = takePendingInputs(next, entry.content, [], undefined, heldAt).view;
+    if (entry.kind === 'wake_up') next = takePendingInputs(next, undefined, [entry.content], undefined, heldAt).view;
     if (isNew && entry.kind === 'plan_generated') next = markPlan(next, entry.content, i === committed ? turnId : undefined);
     if (isNew && entry.kind === 'system') next = append(next, (id) => settledMessage(id, 'system', entry.content));
     if (isNew && entry.kind === 'error') next = append(next, (id) => settledMessage(id, 'error', entry.content));

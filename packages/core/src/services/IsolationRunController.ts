@@ -15,6 +15,7 @@ import type {
   IsolationView,
   IWorktreeIsolation,
   PlanIsolation,
+  PreparedTask,
   PrepareIntent,
   PreservedWork,
   PreviousWork,
@@ -26,7 +27,7 @@ import type {
 } from '../interfaces/IWorktreeIsolation';
 import { describeMergeResult } from './mergeResultNotice';
 import { quotedList } from '../utils/quotedList';
-import { handoffOf, integrationBranchNameOf, layoutOf, SELF_REPO, taskIsolationOf } from './isolationRecord';
+import { handoffOf, integrationBranchNameOf, layoutOf, PrepareFailedError, SELF_REPO, taskIsolationOf } from './isolationRecord';
 import type { IsolatedExecution } from './plannerModes';
 import { PlanEditError } from './PlanEditError';
 import { workspaceRepoGroup } from './repoGroup';
@@ -416,7 +417,15 @@ export class IsolationRunController {
   }
 
   private async prepareCwd(task: Task, run: IsolationRun, intent: PrepareIntent, readOnly: boolean): Promise<AttemptWorkspace> {
-    const { cwd, copied, setupFailed, preserved, restoration } = await this.isolation.prepare(task, run, intent, readOnly ? { readOnly } : {});
+    let result: PreparedTask;
+    try {
+      result = await this.isolation.prepare(task, run, intent, readOnly ? { readOnly } : {});
+    } catch (err) {
+      // The attempt this one replaced is gone, record and all: only this says where its work went.
+      if (err instanceof PrepareFailedError) this.report({ preserved: err.preserved, refused: [] });
+      throw err;
+    }
+    const { cwd, copied, setupFailed, preserved, restoration } = result;
     this.reportCopies(copied);
     this.reportSetupFailures(setupFailed ?? []);
     if (preserved) this.report({ preserved, refused: [] });
@@ -786,10 +795,10 @@ export class IsolationRunController {
   }
 
   /**
-   * A run with no records at all holds only superseded attempts, so it goes
-   * whole. One that cannot be continued for another reason — it ran from a
-   * different workspace path — keeps its integration branch in each repo that
-   * has not merged it: only the user gives landed work up.
+   * A run with no records at all holds only superseded attempts, so it goes —
+   * but its integration branch only where the user's HEAD contains it, as does
+   * that of a run that cannot be continued for another reason (it ran from a
+   * different workspace path): only the user gives landed work up.
    *
    * False when `interrupted` came while git was minting: a newer activation
    * may be minting its own run, so this one is never installed over it, and
@@ -801,8 +810,8 @@ export class IsolationRunController {
     if (previous && live.length > 0) {
       this.tell('warn', `The last run's worktrees are left in place: ${tasksNamed(live)} ${live.length === 1 ? 'is' : 'are'} still running or waiting on you there.`);
     } else if (previous) {
-      const landed = Object.values(previous.tasks).some((r) => r.status === 'merged');
-      const removal = await this.isolation.discard(previous, { integration: landed ? 'delete-merged' : 'delete' }).catch(() => null);
+      // Not decided from the records: a retry drops a landed task's, and the branch then holds work no record names. A branch with nothing landed is behind HEAD, so this deletes it too.
+      const removal = await this.isolation.discard(previous, { integration: 'delete-merged' }).catch(() => null);
       if (removal) this.report(removal);
     }
     if (this.run === previous) this.run = null;

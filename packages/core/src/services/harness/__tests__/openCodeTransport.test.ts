@@ -235,6 +235,25 @@ describe('settleTurn', () => {
     expect(events).toEqual([{ type: 'permission_cancelled', id: 'per_1' }, { type: 'turn_end' }]);
   });
 
+  it('leaves no listener behind on the caller\'s signal once the turn is settled', async () => {
+    const signal = new AbortController().signal;
+    const listening = new Set<unknown>();
+    const add = signal.addEventListener.bind(signal);
+    const remove = signal.removeEventListener.bind(signal);
+    signal.addEventListener = ((type: string, listener: Parameters<typeof signal.addEventListener>[1], options?: AddEventListenerOptions) => { listening.add(listener); add(type, listener, options); }) as typeof signal.addEventListener;
+    signal.removeEventListener = ((type: string, listener: Parameters<typeof signal.addEventListener>[1]) => { listening.delete(listener); remove(type, listener); }) as typeof signal.removeEventListener;
+
+    for (let i = 0; i < 3; i++) {
+      const turn = turnLatch();
+      const { how, onEvent } = settlement({ signal });
+      const settled = settleTurn(turn, how, onEvent);
+      turn.finish();
+      await settled;
+    }
+
+    expect(listening.size).toBe(0);
+  });
+
   it('fails the turn when the server exits first', async () => {
     let exit: () => void = () => {};
     const { how, order, events, onEvent } = settlement({ processEnded: new Promise<void>((resolve) => { exit = resolve; }) });

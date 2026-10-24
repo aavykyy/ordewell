@@ -181,6 +181,23 @@ function hasLineBreak(parts: string[]): boolean {
 }
 
 /**
+ * Thrown when only a batch shim resolved for an argument holding a double
+ * quote. cmd.exe flips its quote state at every `"`, whether or not a backslash
+ * precedes it, so the quote ends the quoting we added and the rest of the
+ * argument is read as commands: `--model "x\" & calc & \"y"` runs `calc`.
+ */
+export class BatchQuoteError extends Error {
+  constructor(readonly command: string) {
+    super(
+      `Cannot start "${command}" on Windows: an argument holds a double quote, and the only launcher found on PATH was a batch shim (${command}.cmd).\n\n` +
+      `cmd.exe has no way to carry a quote inside a quoted argument, so the text after it would run as commands of their own.\n\n` +
+      `Install the native executable from the coding agent's own Windows installer or release binary. Ordewell will launch it directly, with no interpreter in the way. A PowerShell shim (${command}.ps1) beside the batch one is also enough.`,
+    );
+    this.name = 'BatchQuoteError';
+  }
+}
+
+/**
  * Thrown when `command` cannot be resolved to a real file. Kept distinguishable
  * from `WorkspaceNotFoundError` (utils/workspace) even though both a missing
  * cwd and a missing binary surface as the same `spawn` ENOENT to Node — the two
@@ -365,8 +382,8 @@ async function findWindowsExecutables(command: string, deps: LaunchDeps): Promis
   return found;
 }
 
-/** Why a candidate was rejected: `tooLong` is fatal, `lineBreak` falls through to the next route. */
-type Disqualified = { tooLong: number; limit: number } | { lineBreak: true };
+/** Why a candidate was rejected: `tooLong` is fatal, `lineBreak` and `quote` fall through to the next route. */
+type Disqualified = { tooLong: number; limit: number } | { lineBreak: true } | { quote: true };
 
 function planFor(found: FoundExecutable, args: string[], deps: LaunchDeps): LaunchPlan | Disqualified {
   if (found.route === 'direct') {
@@ -378,6 +395,7 @@ function planFor(found: FoundExecutable, args: string[], deps: LaunchDeps): Laun
 
   if (found.route === 'cmd') {
     if (hasLineBreak([found.file, ...args])) return { lineBreak: true };
+    if (args.some((arg) => arg.includes('"'))) return { quote: true };
 
     const comSpec = (deps.comSpec ?? (() => process.env.ComSpec || 'cmd.exe'))();
     const cmdLine = cmdArgs(windowsCommandLine(found.file, args));
@@ -422,11 +440,14 @@ function planFor(found: FoundExecutable, args: string[], deps: LaunchDeps): Laun
  * a `.ps1` beside a too-long `.cmd` still raises.
  *
  * A line break does reorder them: cmd.exe cannot carry one at any length, so a
- * `.ps1` beside a `.cmd` wins, and a lone `.cmd` raises.
+ * `.ps1` beside a `.cmd` wins, and a lone `.cmd` raises. So does a double
+ * quote, which cmd.exe cannot carry safely.
  *
  * @throws {CommandLineTooLongError} when the selected route's buffer cannot
  * carry the arguments.
  * @throws {EmbeddedNewlineError} when the arguments span lines and only the
+ * batch route resolved.
+ * @throws {BatchQuoteError} when an argument holds a double quote and only the
  * batch route resolved.
  */
 export async function planDirectLaunch(
@@ -439,13 +460,15 @@ export async function planDirectLaunch(
   const found = await findWindowsExecutables(command, deps);
   if (found.length === 0) return { file: command, args };
 
+  let quoted = false;
   for (const candidate of found) {
     const plan = planFor(candidate, args, deps);
     if ('lineBreak' in plan) continue;
+    if ('quote' in plan) { quoted = true; continue; }
     if ('tooLong' in plan) throw new CommandLineTooLongError(command, plan.tooLong, plan.limit);
     return plan;
   }
-  // Only the batch route declines for a line break, so exhausting the loop means
-  // every candidate was that route.
-  throw new EmbeddedNewlineError(command);
+  // Only the batch route declines for a line break or a quote, so exhausting the
+  // loop means every candidate was that route.
+  throw quoted ? new BatchQuoteError(command) : new EmbeddedNewlineError(command);
 }

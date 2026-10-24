@@ -362,6 +362,54 @@ describe('CodexAdapter task interrupt', () => {
     adapter.dispose();
   });
 
+  it('takes the runner\'s own end for an interrupted turn: a finish that raced the interrupt is a finish', async () => {
+    const { adapter, proc } = await startedTask();
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
+    proc.emitStdout(turnStarted('turn-a'));
+    const acknowledged = adapter.interrupt(1000);
+    await until(() => sentNamed(proc.written, 'turn/interrupt').length > 0);
+    proc.emitStdout(line({ id: sentNamed(proc.written, 'turn/interrupt')[0].id, result: {} }) + turnCompleted('turn-a', 'completed'));
+    await acknowledged;
+    await turn;
+
+    expect(events).toEqual([{ type: 'turn_end' }]);
+    adapter.dispose();
+  });
+
+  it('reports a turn that failed after an interrupt as failed, with the runner\'s error', async () => {
+    const { adapter, proc } = await startedTask();
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
+    proc.emitStdout(turnStarted('turn-a'));
+    const acknowledged = adapter.interrupt(1000);
+    await until(() => sentNamed(proc.written, 'turn/interrupt').length > 0);
+    const error = { message: 'Rate limit reached for gpt-5.5.', codexErrorInfo: 'other', additionalDetails: null };
+    proc.emitStdout(line({ id: sentNamed(proc.written, 'turn/interrupt')[0].id, result: {} })
+      + line({ method: 'turn/completed', params: { threadId: 'thr-task-1', turn: { id: 'turn-a', status: 'failed', error, items: [] } } }));
+    await acknowledged;
+    await turn;
+
+    expect(events).toEqual([expect.objectContaining({ type: 'error', message: 'Rate limit reached for gpt-5.5.' })]);
+    adapter.dispose();
+  });
+
+  it('forgets an interrupt the runner refused, so the turn that follows is not called interrupted', async () => {
+    const { adapter, proc } = await startedTask();
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
+    proc.emitStdout(turnStarted('turn-a'));
+    const refused = adapter.interrupt(1000);
+    await until(() => sentNamed(proc.written, 'turn/interrupt').length > 0);
+    proc.emitStdout(line({ id: sentNamed(proc.written, 'turn/interrupt')[0].id, error: { code: -32600, message: 'no active turn' } }));
+    expect(await refused).toBe(false);
+    proc.emitStdout(turnCompleted('turn-a'));
+    await turn;
+
+    expect(events).toEqual([{ type: 'turn_end' }]);
+    adapter.dispose();
+  });
+
   it('drops the late report of a command the interrupt left running, inside the turn that replaced it (ADR-0023, F4)', async () => {
     const { adapter, proc } = await startedTask();
     const sleep = { id: 'cmd-1', type: 'commandExecution', command: 'sleep 60', cwd: '/repo' };
