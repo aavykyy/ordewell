@@ -5,6 +5,7 @@ import { globalDataDir, migrateOldConfigDir } from '../utils/globalDataDir';
 import type { SupervisorLevel } from '../models/Execution';
 import { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './LoopGuards';
 import { DEFAULT_WAKE_UP_READ_BUDGET } from './Supervisor';
+import { parseAutonomyLevel } from './ModeResolver';
 
 /** How a run is started, watched and merged: the user's, not a plan's (ADR-0030). */
 export interface GlobalRunSettings {
@@ -113,8 +114,28 @@ function readPlannerModels(raw: unknown): Record<string, { model: string; effort
     const { model, effort } = entry as { model?: unknown; effort?: unknown };
     if (typeof model !== 'string' || !model.trim()) continue;
     out[provider] = typeof effort === 'string' && effort.trim()
-      ? { model, effort }
-      : { model };
+      ? { model: model.trim(), effort: effort.trim() }
+      : { model: model.trim() };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * The allowlist is read entry by entry like the planner models above: the
+ * obvious single-model hand edit is `{"claude-code": "opus"}`, and handing
+ * that string on makes every planner turn throw on `allowlist.filter` (or, where
+ * the catalog is not filtered, match model ids by substring). A runner whose
+ * entry is not a list of real ids is left out, so no restriction stands.
+ */
+function readModelAllowlist(raw: unknown): Record<string, string[]> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, string[]> = {};
+  for (const [runner, ids] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(ids)) continue;
+    const usable = ids
+      .filter((id): id is string => typeof id === 'string' && id.trim() !== '')
+      .map((id) => id.trim());
+    if (usable.length > 0) out[runner] = usable;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -294,10 +315,12 @@ export class SettingsService {
     const name = path.basename(this.filePath);
     let seen = this.fileStamp();
     let timer: NodeJS.Timeout | undefined;
+    let dead = false;
     let watcher: fs.FSWatcher;
     try {
       fs.mkdirSync(dir, { recursive: true });
       watcher = fs.watch(dir, (_event, changed) => {
+        if (dead) return;
         if (changed && changed !== name) return;
         // One save is several events; the stamp tells whether the file really moved.
         clearTimeout(timer);
@@ -311,7 +334,23 @@ export class SettingsService {
     } catch {
       return { dispose() {} };
     }
-    return { dispose: () => { clearTimeout(timer); watcher.close(); } };
+    // fs.watch reports a watch it can no longer keep asynchronously (ENOSPC,
+    // EMFILE, the directory being removed), and an 'error' with no listener
+    // takes the whole process down. A lost notification channel is not worth
+    // the user's terminal or extension host: say so once and stop watching.
+    const die = (reason: unknown): void => {
+      if (dead) return;
+      dead = true;
+      clearTimeout(timer);
+      try {
+        watcher.close();
+      } catch {
+        // Already unusable; the failure above is the one worth reporting.
+      }
+      console.warn(`[SettingsService] stopped watching ${dir} for settings changes: ${String(reason)}`);
+    };
+    watcher.on('error', die);
+    return { dispose: () => { dead = true; clearTimeout(timer); watcher.close(); } };
   }
 
   getModelAllowlist(runner: string): string[] | undefined {
@@ -400,15 +439,29 @@ export class SettingsService {
    * the user's file.
    */
   autonomousMode(): boolean {
-    const env = process.env.ORDEWELL_AUTONOMOUS_MODE;
-    if (this.autonomousModeOverridden()) return env !== 'false' && env !== '0';
-    return this.getAll().autonomousMode ?? true;
+    const override = this.autonomyOverride();
+    return override ?? this.getAll().autonomousMode ?? true;
   }
 
   /** Whether `ORDEWELL_AUTONOMOUS_MODE` decides the level, whatever this file says. */
   autonomousModeOverridden(): boolean {
-    const env = process.env.ORDEWELL_AUTONOMOUS_MODE;
-    return env !== undefined && env.trim() !== '';
+    return this.autonomyOverride() !== undefined;
+  }
+
+  /**
+   * The level `ORDEWELL_AUTONOMOUS_MODE` names, or undefined when it names
+   * none. It speaks the flag's own words (`true`/`false`, `1`/`0`) as well as
+   * the level names {@link parseAutonomyLevel} knows, case and surrounding
+   * space aside. Anything else is not an override at all rather than Full: a
+   * typo, `off` in a shell that spells Guarded that way, or a lower-case
+   * `false` must never raise the user's autonomy.
+   */
+  private autonomyOverride(): boolean | undefined {
+    const env = process.env.ORDEWELL_AUTONOMOUS_MODE?.trim().toLowerCase();
+    if (!env) return undefined;
+    if (env === 'true' || env === '1') return true;
+    if (env === 'false' || env === '0') return false;
+    return parseAutonomyLevel(env) ?? undefined;
   }
 
   setAutonomousMode(enabled: boolean): void {
@@ -447,8 +500,9 @@ export class SettingsService {
         // and `verification` toggles and the `runnerTransport` setting of older
         // files are dropped on the next write.
         const settings: UserSettings = {};
-        if (raw.modelAllowlist !== undefined) {
-          settings.modelAllowlist = raw.modelAllowlist;
+        const modelAllowlist = readModelAllowlist(raw.modelAllowlist);
+        if (modelAllowlist) {
+          settings.modelAllowlist = modelAllowlist;
         }
         const plannerModels = readPlannerModels(raw.plannerModels);
         if (plannerModels) {
