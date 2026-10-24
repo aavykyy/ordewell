@@ -934,7 +934,8 @@ token decides the role), "MCP bridge", "plugin".
 **Task token** — the credential that binds one structured task attempt to the
 *Ordewell MCP server*: one session, one task, one attempt generation (the
 generations `VerdictEngine` tracks). It lists `task_complete`, `checkpoint`
-and `read_task`; a read-only task also gets `run_command`, its only shell.
+and `read_task`, and `apply_patch` for a change task; a read-only task gets
+`run_command`, its only shell, and `save_patch` instead of `apply_patch`.
 It is revoked when the attempt ends, and a call carrying it after
 that is refused. It reaches the runner only in the injected MCP configuration,
 as an HTTP header — never in a prompt and never on a command line.
@@ -1089,7 +1090,11 @@ lines added and removed, size, and flags (`excluded` links and submodules,
 files `dropped` over the size cap, files git `normalized`). What Ordewell
 linked into the worktree never goes in; a case-only rename or an unreadable
 file refuses the save. A later save replaces it. It lands nothing and is no
-*Verdict*; the planner's `task_diff` reads it, since the worktree is gone.
+*Verdict*; the planner's `task_diff` reads it, since the worktree is gone. A
+change task brings it into its own worktree with `apply_patch`, a three-way
+merge of a patch from a task it may read: it answers that the patch applied
+cleanly and staged, or names each conflicted path (a binary one as binary) and
+leaves the markers for the task to resolve, or that git applied none of it.
 *Avoid:* "candidate" (a change task held unlanded until one is chosen, which
 was deferred), "diff" for the kept file (`task_diff` reads a diff, live or
 saved), "export".

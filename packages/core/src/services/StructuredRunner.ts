@@ -13,7 +13,7 @@ import type {
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import type { RunnerSessionCost } from '../models/Usage';
-import { checkpointReply, commandReply, type CheckpointAnswer, type McpToolReply, type ReadTaskArgs, type TaskCompleteArgs } from './mcp/tools';
+import { checkpointReply, commandReply, type CheckpointAnswer, type ApplyPatchArgs, type McpToolReply, type ReadTaskArgs, type TaskCompleteArgs } from './mcp/tools';
 import { sharedMcpServer, type OrdewellMcpServer, type TaskTokenScope } from './mcp/OrdewellMcpServer';
 import { mcpClientConfig } from './mcp/clientConfig';
 import type { ResearchToolType } from '../models/Task';
@@ -227,6 +227,7 @@ interface SessionLaunch {
   tools: { server: OrdewellMcpServer; scope: TaskTokenScope; shell?: TaskShell; savePatch?: (signal: AbortSignal) => Promise<McpToolReply> };
   checkHandoff: (completion: TaskCompleteArgs) => HandoffCheck<TaskCompleteArgs>;
   readTask?: (args: ReadTaskArgs) => McpToolReply;
+  applyPatch?: (args: ApplyPatchArgs) => Promise<McpToolReply>;
   onNotice?: (message: string) => void;
 }
 
@@ -345,6 +346,7 @@ export class StructuredSession extends AbstractRunnerSession {
           return checkpointReply(await this.checkpointHandler(question, signal));
         },
         ...(this.launch.readTask ? { readTask: async (args) => this.launch.readTask!(args) } : {}),
+        ...(this.launch.applyPatch ? { applyPatch: async (args) => this.launch.applyPatch!(args) } : {}),
         // The call's signal aborts when the token is revoked, so a command still running ends with the attempt.
         ...(shell ? { runCommand: async ({ command }, { signal }) => commandReply(await shell.run(command, signal)) } : {}),
         ...(savePatch ? { savePatch: async (_args, { signal }) => savePatch(signal) } : {}),
@@ -1010,6 +1012,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
       },
       checkHandoff: opts.checkHandoff ?? ((completion) => checkHandoff(completion, opts.taskId, [])),
       ...(opts.readTask ? { readTask: opts.readTask } : {}),
+      ...(opts.applyPatch ? { applyPatch: opts.applyPatch } : {}),
       onNotice: opts.onNotice,
     });
 

@@ -1,8 +1,16 @@
 import { randomBytes } from 'crypto';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import type { OwnSealedRuns, TaskShell, ToolOutcome } from '../interfaces/IFileSystem';
-import { HANDOFF_LIMITS, byteSize, patchFlagText, type HandoffPatch, type PatchFlag } from '../models/Handoff';
+import { HANDOFF_LIMITS, byteSize, patchFlagText, readableTaskIds, savedPatchOf, type HandoffPatch, type PatchFlag } from '../models/Handoff';
+import { flattenTasks, type Task } from '../models/Task';
+import { git, tryGit, type GitInvoker } from './gitExec';
+import { patchFiles } from './taskDiffRead';
+import { loggedHandoff, type TaskLogReader } from './readTask';
+import { listed } from './harness/ordewellBinding';
+import { resolveTaskRef, titledTaskRefOf } from './TaskRefs';
+import type { ApplyPatchArgs, McpToolReply } from './mcp/tools';
 
 /*
  * A read-only task's prototype, kept as a patch (ADR-0050). Its worktree is
@@ -19,6 +27,10 @@ import { HANDOFF_LIMITS, byteSize, patchFlagText, type HandoffPatch, type PatchF
  * what is not carried. The second takes that back out of the private index,
  * writes the patch, and replays it on a fresh index at the same base: the
  * patch is kept only if that gives the very tree that was staged.
+ *
+ * Applying one is the same concept seen from the other side: a change task
+ * brings a saved patch into its own worktree as a three-way merge and is told
+ * exactly what merged and what did not. That half is at the end of this file.
  */
 
 /** How large a saved patch may grow. A file's part is measured in the patch, so a small edit to a large file counts as small. */
@@ -414,4 +426,176 @@ export function patchReply(result: PatchCaptureResult, saved: HandoffPatch | und
       };
     }
   }
+}
+
+/**
+ * One path the three-way merge could not settle. A binary file has no
+ * conflict markers. A patch that deletes or adds a file the worktree has
+ * changed is not a conflict git leaves behind: it applies none of the patch.
+ */
+export interface PatchConflict {
+  path: string;
+  binary: boolean;
+}
+
+/** What an apply found about where it was made. */
+interface AppliedAt {
+  /** Whether the worktree's HEAD is the commit the patch was taken against. */
+  sameBase: boolean;
+  head: string;
+  files: number;
+}
+
+/** How an apply ended: merged whole, merged with conflicts left in the worktree, or applied nothing. */
+export type PatchApplyResult =
+  | ({ kind: 'applied' } & AppliedAt)
+  | ({ kind: 'conflicted'; conflicts: PatchConflict[] } & AppliedAt)
+  | { kind: 'refused'; reason: string };
+
+// A change task's worktree is the user's own repository, so git's fsmonitor hook is not run for it.
+const APPLY_GIT = ['--no-pager', '-c', 'core.fsmonitor=false'];
+
+/** The paths the index holds unmerged, sorted. */
+async function unmergedPaths(invoker: GitInvoker, worktree: string): Promise<string[]> {
+  const listing = await git(invoker, worktree, [...APPLY_GIT, 'ls-files', '-u', '-z']);
+  const paths = listing.split('\0').flatMap((record) => /^\d{6} [0-9a-f]+ [123]\t([\s\S]+)$/.exec(record)?.[1] ?? []);
+  return [...new Set(paths)].sort();
+}
+
+/**
+ * Apply a saved patch (ADR-0050) in the root of a change task's own worktree
+ * as a three-way merge, `git apply --3way`: at the commit the patch was taken
+ * against it reproduces the explorer's tree, and at a later one it merges
+ * with what has landed since. What came of it is read from the index, never
+ * from `--check`, which says yes to a patch that then conflicts.
+ *
+ * An unresolved conflict of the task's own, or a file of the patch's that the
+ * task changed and has not staged, would make the result unreadable, so
+ * either applies nothing.
+ */
+export async function applyPatch(invoker: GitInvoker, worktree: string, patch: Buffer, saved: Pick<HandoffPatch, 'base' | 'files' | 'bytes'>): Promise<PatchApplyResult> {
+  if (patch.length !== saved.bytes) {
+    return { kind: 'refused', reason: `the patch is ${byteSize(patch.length)} where its artifact says ${byteSize(saved.bytes)}, so it was cut short or changed after it was saved.` };
+  }
+  const refused = (reason: string): PatchApplyResult => ({ kind: 'refused', reason });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-apply-'));
+  try {
+    const toplevel = (await git(invoker, worktree, [...APPLY_GIT, 'rev-parse', '--show-toplevel'])).trim();
+    if (fs.realpathSync(toplevel) !== fs.realpathSync(worktree)) return refused(`${worktree} is not the root of a worktree of its own.`);
+    const head = (await git(invoker, worktree, [...APPLY_GIT, 'rev-parse', '--verify', 'HEAD^{commit}'])).trim();
+    if (!(await tryGit(invoker, worktree, [...APPLY_GIT, 'cat-file', '-e', `${saved.base}^{commit}`])).ok) {
+      return refused(`the commit the patch was taken against (${saved.base.slice(0, 12)}) is not in this repository, so there is nothing to merge it from.`);
+    }
+    const before = await unmergedPaths(invoker, worktree);
+    if (before.length > 0) return refused(`your worktree still has unresolved conflicts (${listed(before.slice(0, 10))}${before.length > 10 ? `, +${before.length - 10} more` : ''}). Resolve them and git add them, or undo them, then apply the patch.`);
+
+    const file = path.join(dir, 'saved.patch');
+    fs.writeFileSync(file, patch, { flag: 'wx', mode: 0o600 });
+    // --3way implies --index. The whitespace policy is pinned so a repository's apply.whitespace=error cannot refuse a patch whole.
+    const applied = await tryGit(invoker, worktree, [...APPLY_GIT, 'apply', '--3way', '--whitespace=nowarn', file]);
+    const conflicted = await unmergedPaths(invoker, worktree);
+    const at: AppliedAt = { sameBase: head === saved.base, head, files: saved.files };
+    if (conflicted.length > 0) {
+      const binary = new Set(patchFiles(patch).filter((f) => f.added === '-').map((f) => f.path));
+      return { kind: 'conflicted', ...at, conflicts: conflicted.map((name) => ({ path: name, binary: binary.has(name) })) };
+    }
+    if (!applied.ok) {
+      // Git narrates the files it merged before the one it could not; only its errors say why nothing was applied.
+      const lines = applied.stderr.trim().split('\n');
+      const errors = lines.filter((line) => line.startsWith('error:'));
+      const said = (errors.length > 0 ? errors : lines).join('\n');
+      const staged = /does not match index/.test(said) ? ' Stage (git add) or commit your changes to those files, then apply again.' : '';
+      return refused(`git applied none of it: ${said.length > 1500 ? `…${said.slice(-1500)}` : said || 'it failed with no output'}.${staged}`);
+    }
+    return { kind: 'applied', ...at };
+  } catch (err) {
+    return refused(`git could not apply the patch (${err instanceof Error ? err.message : String(err)}).`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** What to do with one conflicted path, for the task that has to settle it. */
+function resolution(c: PatchConflict): string {
+  return c.binary
+    ? `binary, so the file holds no markers: \`git checkout --ours -- ${c.path}\` keeps your version, \`--theirs\` takes the patch's`
+    : 'the file holds conflict markers, your side above the `=======` and the patch\'s below';
+}
+
+/** What `apply_patch` answers: what merged and what did not, and what is left to do. */
+export function applyReply(result: PatchApplyResult, from: string, saved: HandoffPatch): McpToolReply {
+  if (result.kind === 'refused') return { text: `Nothing applied: ${result.reason} The patch is the file ${saved.path}, if you would rather apply part of it by hand.`, isError: true };
+  const counts = `${saved.files} file${saved.files === 1 ? '' : 's'}, +${saved.added} -${saved.removed}`;
+  const where = result.sameBase
+    ? 'Your worktree is at the commit the patch was taken against.'
+    : `Your worktree is at commit ${result.head.slice(0, 12)}, not ${saved.base.slice(0, 12)}, the commit the patch was taken against: whatever its author ran, it ran there, so run your checks here.`;
+  const flags = saved.flags?.length ? ['', 'Not as its author\'s worktree had it:', ...saved.flags.map((f) => `- ${patchFlagText(f)}`)] : [];
+  const care = 'The patch is another task\'s work, as much a claim as its report: read what it changed before you rely on it.';
+  if (result.kind === 'applied') {
+    return { text: [`Applied ${from}'s patch (${counts}) cleanly. Its changes are in your worktree, staged, and land with your task's.`, where, ...flags, '', care].join('\n') };
+  }
+  const { conflicts } = result;
+  return {
+    text: [
+      `Applied ${from}'s patch (${counts}) with ${conflicts.length} conflicted path${conflicts.length === 1 ? '' : 's'}. The rest of it is in your worktree, staged. Settle each conflicted path, then \`git add\` it:`,
+      ...conflicts.map((c) => `- ${c.path}: ${resolution(c)}`),
+      where,
+      ...flags,
+      '',
+      care,
+    ].join('\n'),
+  };
+}
+
+/** Where an `apply_patch` call comes from and what it may reach. */
+export interface ApplyPatchSite {
+  callerId: string;
+  plan: readonly Task[];
+  /** The session's task logs, the handoffs and the patch files the handoffs name. */
+  log: TaskLogReader;
+  /** The root of each repository worktree the calling task works in. */
+  worktrees: readonly string[];
+  /** A read-only task lands nothing, so it has no worktree of its own to apply a patch into. */
+  readOnly: boolean;
+  git: GitInvoker;
+}
+
+/**
+ * A task's `apply_patch` call (ADR-0050): the patch of a task it may read, as
+ * `read_task` scopes that, applied into its own worktree. The patch is found
+ * the way the planner's `task_diff` finds it, by the artifact the attempt's
+ * handoff names; a patch file that is gone, or cut short, applies nothing.
+ */
+export async function applySavedPatch(args: ApplyPatchArgs, site: ApplyPatchSite): Promise<McpToolReply> {
+  const refuse = (text: string): McpToolReply => ({ text: `Nothing applied: ${text}`, isError: true });
+  if (site.readOnly) return refuse('a read-only task lands nothing and has no worktree of its own to apply a patch into. It keeps its own prototype with save_patch.');
+  if (site.worktrees.length === 0) return refuse('this task has no worktree of its own, and Ordewell applies a patch only into one.');
+  if (site.worktrees.length > 1) return refuse('this task works across several repositories, and a saved patch is one repository\'s changes.');
+
+  const target = resolveTaskRef(site.plan, String(args.task));
+  if (!target) return refuse(`${JSON.stringify(String(args.task))} names no task in the plan: give its "#order", its id or its title.`);
+  const named = (id: string) => titledTaskRefOf(site.plan, id) ?? id;
+  const name = named(target.id);
+  const readable = readableTaskIds(site.plan, site.callerId);
+  if (!readable.has(target.id)) {
+    const allowed = flattenTasks(site.plan).filter((t) => readable.has(t.id)).map((t) => named(t.id));
+    return refuse(`${name} is not a task this one may read. It may read itself, the tasks it depends on, directly or not, and its loop's other end: ${listed(allowed)}.`);
+  }
+
+  const attempts = site.log.attempts(target.id);
+  if (args.attempt !== undefined && !attempts.includes(args.attempt)) {
+    return refuse(`${name} has no saved attempt ${args.attempt}: ${attempts.length > 0 ? `its saved attempts are ${listed(attempts.map(String))}` : 'it has none'}.`);
+  }
+  const attempt = args.attempt ?? attempts.at(-1);
+  const patchOf = (n: number) => savedPatchOf(loggedHandoff(site.log.events(target.id, n)));
+  const logged = attempt === undefined ? undefined : loggedHandoff(site.log.events(target.id, attempt));
+  // A forked session has the plan's digest, the latest attempt's, and none of the logs behind it, as read_task has.
+  const saved = savedPatchOf(logged ?? (attempt === attempts.at(-1) ? target.handoff : undefined));
+  if (!saved) {
+    const saving = attempts.filter((n) => patchOf(n));
+    return refuse(`${name} saved no patch${attempt === undefined ? '' : ` in attempt ${attempt}`}${saving.length > 0 ? `; its attempts that did are ${listed(saving.map(String))}, and apply_patch takes an attempt` : ''}.`);
+  }
+  const bytes = site.log.patch?.(target.id, saved.attempt);
+  if (!bytes) return refuse(`the patch ${name} saved in attempt ${saved.attempt} is no longer in this session's task logs.`);
+  return applyReply(await applyPatch(site.git, site.worktrees[0], bytes, saved), name, saved);
 }
