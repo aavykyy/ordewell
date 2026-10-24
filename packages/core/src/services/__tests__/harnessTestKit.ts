@@ -68,6 +68,8 @@ export interface FakeSpawnOptions {
    * scenarios that are not about the sandbox never mention it.
    */
   probe?: (args: string[]) => { code: number; output?: string };
+  /** Every spawned agent says `output` on stderr and exits with `code` at once, before it answers anything, as a CLI that refuses to start does. */
+  exitOnSpawn?: { code: number; output: string };
 }
 
 function makeProcess(): FakeAgentProcess {
@@ -168,6 +170,10 @@ function spawner(onWrite: (written: string, proc: FakeAgentProcess, args: string
     env = spawnOptions?.env ?? {};
     const proc = makeProcess();
     processes.push(proc);
+    if (options.exitOnSpawn) {
+      const { code, output } = options.exitOnSpawn;
+      queueMicrotask(() => { proc.emitStderr(output); proc.exit(code); });
+    }
     proc.on('__written', (chunk: string) => onWrite(chunk, proc, argv));
     return proc as unknown as ChildProcess;
   };

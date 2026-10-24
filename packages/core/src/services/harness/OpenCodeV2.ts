@@ -149,9 +149,10 @@ export interface OpenCodeV2Host {
   nativeShell?: string | null;
   /** The user's MCP servers the server listed, for telling a planner's MCP tool request from a built-in's (ADR-0026). */
   mcpServers?(): readonly string[];
-  request(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Response>;
+  /** `timeoutMs` is how long the server may take to answer, a default when left out and none when null. */
+  request(method: string, path: string, body?: unknown, signal?: AbortSignal, timeoutMs?: number | null): Promise<Response>;
   /** A request whose body is the answer or throws, as `request` + status check. */
-  json<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T | null>;
+  json<T>(method: string, path: string, body?: unknown, signal?: AbortSignal, timeoutMs?: number | null): Promise<T | null>;
   /** The server's event stream, as `data:` frames. */
   openEvents(signal: AbortSignal): Promise<Response | null>;
   /** Resolves when the server process is gone. */
@@ -383,17 +384,17 @@ export class OpenCodeV2 {
   }
 
   async send(message: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, onActivity?: () => void): Promise<void> {
-    return this.runTurn(() => this.host.json('POST', `/api/session/${this.sessionId}/prompt`, { text: message }, signal), onEvent, signal, onActivity);
+    return this.runTurn(() => this.host.json('POST', `/api/session/${this.sessionId}/prompt`, { text: message }, signal, null), onEvent, signal, onActivity);
   }
 
   async invokeCommand(name: string, args: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, skillId?: string): Promise<void> {
     if (name === 'compact') {
       if (args.trim()) { onEvent({ type: 'error', message: 'OpenCode native compaction does not accept arguments.' }); return; }
-      await this.runTurn(() => this.host.json('POST', `/api/session/${this.sessionId}/compact`, {}, signal), onEvent, signal);
+      await this.runTurn(() => this.host.json('POST', `/api/session/${this.sessionId}/compact`, {}, signal, null), onEvent, signal);
       return;
     }
     return this.runTurn(() => this.host.json('POST', `/api/session/${this.sessionId}/${skillId ? 'prompt' : 'command'}`,
-      skillId ? { text: args, skills: [{ id: skillId }] } : { name, text: args }, signal), onEvent, signal);
+      skillId ? { text: args, skills: [{ id: skillId }] } : { name, text: args }, signal, null), onEvent, signal);
   }
 
   private async runTurn(post: () => Promise<unknown>, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, onActivity?: () => void): Promise<void> {
@@ -428,7 +429,8 @@ export class OpenCodeV2 {
         readBack: () => this.readBack(state, onEvent),
         permissions: this.permissions,
         outcome: () => {
-          if (turn.outcome === 'interrupted' || this.interruptRequested) return { type: 'turn_end', interrupted: true };
+          // OpenCode's own end decides; the request only stands in where it named none.
+          if (turn.outcome === 'interrupted' || (turn.outcome === null && this.interruptRequested)) return { type: 'turn_end', interrupted: true };
           if (turn.outcome === 'failed' || turn.failure) return { type: 'error', message: turn.failure ?? 'OpenCode reported that the turn failed.' };
           return { type: 'turn_end' };
         },
@@ -464,7 +466,7 @@ export class OpenCodeV2 {
         const messages = await this.messages();
         const idle = [...(messages ?? [])].reverse().find((m) => m.type === 'idle');
         if (idle?.outcome === 'failed' || idle?.outcome === 'interrupted' || idle?.outcome === 'succeeded') turn.outcome ??= idle.outcome;
-        turn.outcome ??= 'succeeded';
+        turn.outcome ??= this.interruptRequested ? 'interrupted' : 'succeeded';
         if (!turn.done) turn.finish();
       }
     }
@@ -505,8 +507,12 @@ export class OpenCodeV2 {
     if (!this.sessionId || this.host.isExited()) return false;
     const turn = this.turn;
     this.interruptRequested = true;
-    const response = await this.host.json<{ interrupted?: boolean }>('POST', `/api/session/${this.sessionId}/interrupt`).catch(() => null);
-    if (!response) return false;
+    const response = await this.host.json<{ interrupted?: boolean }>('POST', `/api/session/${this.sessionId}/interrupt`, undefined, undefined, timeoutMs).catch(() => null);
+    if (!response) {
+      // An interrupt the server did not take stops nothing, so it must not colour the turn's end.
+      this.interruptRequested = false;
+      return false;
+    }
     if (!turn || turn.done) return true;
     return interruptAcknowledged(turn, this.host.processEnded, timeoutMs);
   }

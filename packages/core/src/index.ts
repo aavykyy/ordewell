@@ -228,6 +228,7 @@ export {
   windowsCommandLine,
   CommandLineTooLongError,
   EmbeddedNewlineError,
+  BatchQuoteError,
   ExecutableNotFoundError,
   isExecutableResolved,
   CMD_EXE_MAX_COMMAND_LINE,

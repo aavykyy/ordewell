@@ -682,6 +682,25 @@ describe('StructuredSession interrupt', () => {
     turn.session.kill();
   });
 
+  it('restarts the runner when its interrupt request never answers within the grace', async () => {
+    const adapters: TaskModeAgentAdapter[] = [];
+    const makeAdapter = (hung: boolean): TaskModeAgentAdapter => ({
+      agentId: 'opencode', exited: false, start: async () => {}, nativeSessionId: () => 'ses_1', dispose: () => {},
+      mcpAttached: async () => true, onProcessExit: () => {}, answerPermission: () => false,
+      send: () => new Promise<void>(() => {}),
+      interrupt: () => (hung ? new Promise<boolean>(() => {}) : Promise.resolve(true)),
+    });
+    const runner = new StructuredRunner({ createAdapter: () => { const next = makeAdapter(adapters.length === 0); adapters.push(next); return next; }, interruptGraceMs: 20 });
+    const turn = observe(await runner.spawn(options({ runner: 'opencode', mode: 'build' })));
+    await tick();
+
+    const interrupted = turn.session.interrupt();
+    await expect(Promise.race([interrupted.then(() => 'done'), new Promise((resolve) => setTimeout(() => resolve('hung'), 500))])).resolves.toBe('done');
+    expect(adapters).toHaveLength(2);
+    expect(turn.turnEnds).toEqual(['interrupted']);
+    turn.session.kill();
+  });
+
   it('kills and resumes the session when the runner ignores the interrupt', async () => {
     const { runner, spawned } = harness([fixture('claude-code', 'task-interrupt')], 20);
     const turn = observe(await runner.spawn(options()));

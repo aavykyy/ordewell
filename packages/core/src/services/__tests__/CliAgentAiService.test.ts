@@ -551,6 +551,16 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(turn.text).toContain('Credit balance is too low');
   });
 
+  it('fails a planner that exits while it starts in its own words, without a respawn on the same arguments', async () => {
+    const { svc, spawned } = service('claude-code', [], {}, { exitOnSpawn: { code: 1, output: 'Invalid API key · Please run /login\n' } });
+
+    const started = svc.startConversation(request());
+
+    await expect(started).rejects.toThrow('Invalid API key · Please run /login');
+    await expect(started).rejects.not.toThrow('Respawn');
+    expect(spawned.processes).toHaveLength(1);
+  });
+
   it('reuses one process across turns instead of respawning', async () => {
     const { svc, spawned } = service('claude-code', [
       fixture('claude-code', 'prose'),

@@ -9,7 +9,8 @@ import type { RunnerManifest, DiscoveryCommand, ApiDiscoveryConfig, ApiAuthMetho
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { globalDataDir } from '../utils/globalDataDir';
 import { planDirectLaunch } from '../utils/launch';
-import { killTree } from '../utils/processTree';
+import { killTree, spawnInOwnGroup } from '../utils/processTree';
+import { StringDecoder } from 'string_decoder';
 
 const execAsync = promisify(exec);
 
@@ -61,7 +62,8 @@ export type AppServerClientImpl = (
   options?: { timeout?: number }
 ) => Promise<AppServerModel[] | null>;
 
-const defaultAppServerClient: AppServerClientImpl = async (command, args, options) => {
+/** Exported for its test: the real client is the one place that spawns an app-server. */
+export const defaultAppServerClient: AppServerClientImpl = async (command, args, options) => {
   const PATH = await augmentedPath();
   // No shell here, so on Windows the command has to be resolved against
   // PATHEXT first — `codex` alone is a `.cmd` shim that CreateProcess cannot
@@ -72,11 +74,13 @@ const defaultAppServerClient: AppServerClientImpl = async (command, args, option
   return new Promise((resolve) => {
     let child: import('child_process').ChildProcess;
     try {
-      child = spawn(launch.file, launch.args, {
+      // Its own group, so the tree-wide kill below reaches what a shim started.
+      child = spawnInOwnGroup((detached) => spawn(launch.file, launch.args, {
         env: withPath(process.env, PATH),
         stdio: ['pipe', 'pipe', 'ignore'],
         windowsVerbatimArguments: launch.verbatim,
-      });
+        detached,
+      }));
     } catch {
       resolve(null);
       return;
@@ -96,7 +100,10 @@ const defaultAppServerClient: AppServerClientImpl = async (command, args, option
     const timer = setTimeout(() => finish(null), options?.timeout ?? 20000);
     child.on('error', () => finish(null));
     child.on('exit', () => finish(null));
+    // A write racing the server's death fails with EPIPE asynchronously; unheard, it crashes the host.
+    child.stdin!.on('error', () => finish(null));
 
+    const decoder = new StringDecoder('utf8');
     let buffer = '';
     const send = (id: number, method: string, params: unknown) => {
       try {
@@ -106,7 +113,7 @@ const defaultAppServerClient: AppServerClientImpl = async (command, args, option
       }
     };
     child.stdout!.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString();
+      buffer += decoder.write(chunk);
       let newline: number;
       while ((newline = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, newline);

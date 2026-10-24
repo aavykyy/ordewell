@@ -16,7 +16,7 @@ import type { ProjectMcpServer } from './repoConfig';
 import { hunksOf, markedLines } from './fileDiff';
 import {
   PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId,
-  streamTurn, turnLatch, usageRecord, type EventStream, type PermissionAnswer, type StreamTurn, type TurnLatch,
+  REQUEST_TIMEOUT_MS, streamTurn, turnLatch, usageRecord, withDeadline, type EventStream, type PermissionAnswer, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
@@ -32,6 +32,8 @@ const STATUS_POLL_INTERVAL_MS = 1000;
 /** The Basic-auth username `serve` defaults to. Set explicitly so a host's own `OPENCODE_SERVER_USERNAME` cannot win. */
 const SERVER_USERNAME = 'opencode';
 const MCP_STATUS_POLL_MS = 200;
+/** The error name of a message that was aborted, which an interrupt causes. */
+const ABORTED = 'MessageAbortedError';
 
 /**
  * Tools withheld from a planning session (T1). `question` is the load-bearing
@@ -161,6 +163,8 @@ interface TaskTurn extends TurnLatch {
   failure: string | null;
   /** The newest assistant message's own error, cleared by a later message that has none. */
   messageError: string | null;
+  /** Whether {@link messageError} is the abort of an interrupt, not a failure. */
+  messageAborted: boolean;
 }
 
 interface OpenCodeMessageResponse {
@@ -175,6 +179,9 @@ interface OpenCodeMessageResponse {
  * failure it was (a socket reset, a refused connect, undici's 300s header
  * timeout) lives only in `cause`, so a message without it names nothing.
  */
+/** The server answered, and refused. */
+class OpenCodeHttpError extends Error {}
+
 function describeError(err: unknown): string {
   const visited = new Set<unknown>();
   const lines: string[] = [];
@@ -439,8 +446,8 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       this.v2 = new OpenCodeV2({
         version,
         nativeShell: this.nativeShell?.prefix ?? null,
-        request: (method, path, body, signal) => this.request(method, path, body, signal),
-        json: (method, path, body, signal) => this.json(method, path, body, signal),
+        request: (method, path, body, signal, timeoutMs) => this.request(method, path, body, signal, timeoutMs),
+        json: (method, path, body, signal, timeoutMs) => this.json(method, path, body, signal, timeoutMs),
         openEvents: (signal) => this.deps.fetch(`${this.baseUrl}/api/event`, { signal, headers: this.headers() }),
         processEnded: this.processEnded,
         isExited: () => this.exited,
@@ -561,7 +568,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
         ...(this.planner?.effort ? { variant: this.planner.effort } : {}),
         ...(this.planner ? plannerSystem(this.planner) : {}),
       };
-      const reply = await Promise.race([this.json<OpenCodeMessageResponse>('POST', `/session/${this.sessionId}/message`, body, signal), stream.failed]);
+      const reply = await Promise.race([this.json<OpenCodeMessageResponse>('POST', `/session/${this.sessionId}/message`, body, signal, null), stream.failed]);
 
       if (signal?.aborted) { this.dispose(); return; }
       this.settle(reply, turn, onEvent);
@@ -587,7 +594,8 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
    * to the turn before, and {@link pollStatus} stands behind the stream,
    * which can miss a status frame. No request is held open for the turn, so
    * fetch's 300s header timeout, the planner's reason for
-   * {@link recoverReply}, never applies.
+   * {@link recoverReply}, never applies — except to a native command, whose
+   * POST is held and is followed by {@link heldPost}.
    */
   private async sendTask(
     task: TaskStartOptions,
@@ -599,42 +607,42 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   ): Promise<void> {
     const state = newTurnState();
     this.interruptRequested = false;
-    const turn: TaskTurn = Object.assign(turnLatch(), { userMessages: new Set<string>(), failure: null, messageError: null });
+    const turn: TaskTurn = Object.assign(turnLatch(), { userMessages: new Set<string>(), failure: null, messageError: null, messageAborted: false });
     this.taskTurn = turn;
     const stream = await this.openStream(state, onEvent, onActivity);
     const poll = new AbortController();
 
     try {
       try {
-        if (command?.name === 'compact') {
-          if (command.args.trim()) { onEvent({ type: 'error', message: 'OpenCode native compaction does not accept arguments.' }); return; }
-          const model = task.model ? splitModelId(task.model) : null;
-          if (!model) { onEvent({ type: 'error', message: 'OpenCode 1.x compaction requires an assigned model.' }); return; }
-          this.manualCompaction = true;
-          const compacted = await this.json<boolean>('POST', `/session/${this.sessionId}/summarize`, { ...model, auto: false }, signal);
-          if (compacted !== true) { onEvent({ type: 'error', message: 'OpenCode did not compact the session.' }); return; }
-          if (signal?.aborted) { this.dispose(); return; }
-          onEvent({ type: 'turn_end' });
-          return;
-        }
         if (command) {
-          const reply = await this.json<OpenCodeMessageResponse>('POST', `/session/${this.sessionId}/command`, {
-            command: command.name, arguments: command.args, agent: task.flags.permissionMode,
-            ...(task.model ? { model: task.model } : {}),
-            ...(task.flags.effort ? { variant: task.flags.effort } : {}),
-          }, signal);
+          const post = this.commandPost(task, command, onEvent, signal);
+          if (!post) return;
+          void this.pollStatus(turn, poll.signal);
+          const held = await this.heldPost(post, turn);
           if (signal?.aborted) { this.dispose(); return; }
-          this.settle(reply, state, onEvent);
-          return;
+          // An interrupted command's reply is the abort, not the turn's end: the idle after it is.
+          if (held.kind === 'answered' && !this.interruptRequested) {
+            this.permissions.endTurn(onEvent);
+            if (command.name !== 'compact') this.settle(held.value as OpenCodeMessageResponse | null, state, onEvent);
+            else if (held.value === true) onEvent({ type: 'turn_end' });
+            else onEvent({ type: 'error', message: 'OpenCode did not compact the session.' });
+            return;
+          }
+          if (held.kind === 'refused') {
+            this.permissions.endTurn(onEvent);
+            onEvent({ type: 'error', message: `OpenCode did not take the message: ${describeError(held.reason)}` });
+            return;
+          }
+        } else {
+          await this.json('POST', `/session/${this.sessionId}/prompt_async`, this.taskPromptBody(task, message), signal);
         }
-        await this.json('POST', `/session/${this.sessionId}/prompt_async`, this.taskPromptBody(task, message), signal);
       } catch (err) {
         if (signal?.aborted) { this.dispose(); return; }
         onEvent({ type: 'error', message: `OpenCode did not take the message: ${describeError(err)}` });
         return;
       }
 
-      void this.pollStatus(turn, poll.signal);
+      if (!command) void this.pollStatus(turn, poll.signal);
       const settled = await settleTurn(turn, {
         signal,
         processEnded: this.processEnded,
@@ -643,8 +651,9 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
         readBack: () => this.readBack(state, onEvent),
         permissions: this.permissions,
         outcome: () => {
-          const failure = turn.failure ?? turn.messageError;
-          if (this.interruptRequested) return { type: 'turn_end', interrupted: true };
+          // 1.x names no end status. The abort the interrupt asked for is no failure of the turn, but an error of its own is.
+          const failure = turn.failure ?? (turn.messageAborted && this.interruptRequested ? null : turn.messageError);
+          if (this.interruptRequested && !failure) return { type: 'turn_end', interrupted: true };
           return failure ? { type: 'error', message: failure } : { type: 'turn_end' };
         },
       }, onEvent);
@@ -660,6 +669,47 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       poll.abort();
       await stream.close();
     }
+  }
+
+  /**
+   * The POST of a native command, or null when it was refused before sending
+   * (and said so). Unlike `prompt_async`, `/command` and `/summarize` answer
+   * only when the turn is done, so the request carries no deadline.
+   */
+  private commandPost(task: TaskStartOptions, command: { name: string; args: string }, onEvent: (event: AgentEvent) => void, signal?: AbortSignal): Promise<unknown> | null {
+    if (command.name !== 'compact') {
+      return this.json<OpenCodeMessageResponse>('POST', `/session/${this.sessionId}/command`, {
+        command: command.name, arguments: command.args, agent: task.flags.permissionMode,
+        ...(task.model ? { model: task.model } : {}),
+        ...(task.flags.effort ? { variant: task.flags.effort } : {}),
+      }, signal, null);
+    }
+    if (command.args.trim()) { onEvent({ type: 'error', message: 'OpenCode native compaction does not accept arguments.' }); return null; }
+    const model = task.model ? splitModelId(task.model) : null;
+    if (!model) { onEvent({ type: 'error', message: 'OpenCode 1.x compaction requires an assigned model.' }); return null; }
+    this.manualCompaction = true;
+    return this.json<boolean>('POST', `/session/${this.sessionId}/summarize`, { ...model, auto: false }, signal, null);
+  }
+
+  /**
+   * How a command turn's held POST came out. A socket that died under it says
+   * nothing about the turn — the server works on regardless, as it does for
+   * the planner's {@link recoverReply} — so that, like the session going idle
+   * first, leaves the turn to the idle wait. Only a server's refusal, or a
+   * transport that failed with the session never seen working, is the
+   * message not having been taken.
+   */
+  private async heldPost<T>(post: Promise<T | null>, turn: TaskTurn): Promise<{ kind: 'answered'; value: T | null } | { kind: 'refused'; reason: unknown } | { kind: 'lost' }> {
+    const outcome = post.then(
+      (value) => ({ kind: 'answered' as const, value }),
+      async (reason: unknown) => {
+        if (reason instanceof OpenCodeHttpError) return { kind: 'refused' as const, reason };
+        if (this.interruptRequested || turn.live) return { kind: 'lost' as const };
+        if (await this.sessionBusy() === true) { turn.live = true; return { kind: 'lost' as const }; }
+        return { kind: 'refused' as const, reason };
+      },
+    );
+    return Promise.race([outcome, turn.ended.then(() => ({ kind: 'lost' as const }))]);
   }
 
   /**
@@ -794,10 +844,11 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     if (working) turn.live = true;
     if (frame.type === 'message.updated' && props.info?.role === 'assistant') {
       turn.messageError = props.info.error ? errorText(props.info.error) : null;
+      turn.messageAborted = props.info.error?.name === ABORTED;
     } else if (frame.type === 'session.error' && props.error) {
       // An overflowing context is compacted and the turn carries on; when it
       // cannot be, the message itself carries the error.
-      if (props.error.name !== 'ContextOverflowError') turn.failure = errorText(props.error);
+      if (props.error.name !== 'ContextOverflowError' && !(props.error.name === ABORTED && this.interruptRequested)) turn.failure = errorText(props.error);
       void this.confirmIdle(turn);
     }
   }
@@ -812,8 +863,12 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     if (this.v2) return this.v2.interrupt(timeoutMs);
     const turn = this.taskTurn;
     this.interruptRequested = true;
-    const posted = await this.json('POST', `/session/${this.sessionId}/abort`).then(() => true, () => false);
-    if (!posted) return false;
+    const posted = await this.json('POST', `/session/${this.sessionId}/abort`, undefined, undefined, timeoutMs).then(() => true, () => false);
+    if (!posted) {
+      // An abort the server did not take stops nothing, so it must not colour the turn's end.
+      this.interruptRequested = false;
+      return false;
+    }
     if (!turn || turn.done) return true;
     // Whatever the turn had shown so far, the idle after an abort is its end.
     turn.live = true;
@@ -1104,19 +1159,21 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     );
   }
 
-  private async json<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T | null> {
-    const response = await this.request(method, path, body, signal);
-    if (!response.ok) throw new Error(`${method} ${path} failed: ${response.status} ${response.statusText}`);
+  private async json<T>(method: string, path: string, body?: unknown, signal?: AbortSignal, timeoutMs?: number | null): Promise<T | null> {
+    const response = await this.request(method, path, body, signal, timeoutMs);
+    if (!response.ok) throw new OpenCodeHttpError(`${method} ${path} failed: ${response.status} ${response.statusText}`);
     return (await response.json().catch(() => null)) as T | null;
   }
 
-  private request(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
+  /** `timeoutMs` null is for a turn's own POST, which the server answers when the turn is done. */
+  private request(method: string, path: string, body?: unknown, signal?: AbortSignal, timeoutMs: number | null = REQUEST_TIMEOUT_MS): Promise<Response> {
+    const deadline = withDeadline(signal, timeoutMs);
     return this.deps.fetch(`${this.baseUrl}${path}`, {
       method,
       headers: this.headers({ 'content-type': 'application/json' }),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      ...(signal ? { signal } : {}),
-    });
+      ...(deadline.signal ? { signal: deadline.signal } : {}),
+    }).finally(deadline.clear);
   }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
@@ -1141,7 +1198,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       const servers = this.v2 ? await this.v2McpStatus() : await this.json<Record<string, { status?: string } | undefined>>('GET', '/mcp').catch(() => null);
       if (servers) this.mcpServers = Object.keys(servers).filter((name) => name !== ordewell.name);
       return OPENCODE_ORDEWELL.attachState(servers?.[ordewell.name]?.status);
-    }, MCP_ATTACH_TIMEOUT_MS, MCP_STATUS_POLL_MS);
+    }, MCP_ATTACH_TIMEOUT_MS, MCP_STATUS_POLL_MS, this.processEnded);
   }
 
   /** 2.x lists its servers as `{ name, status: { status } }`, and only once it has started connecting them. */
