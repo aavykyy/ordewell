@@ -199,8 +199,8 @@ class PlannerSession {
  * which is precisely the part a coding agent replaces. What it reuses instead
  * is everything above the transport — `settleReply` (the empty-reply nudge
  * and the turn's settling), the plan validator, the `ResearchProgress` events the
- * four surfaces already render. That is why this backend reaches VS Code, the
- * web UI, the CLI and the TUI without any of them learning a coding agent is
+ * three surfaces already render. That is why this backend reaches VS Code, the
+ * CLI and the TUI without any of them learning a coding agent is
  * on the other end.
  */
 export class CliAgentAiService implements IAiService {

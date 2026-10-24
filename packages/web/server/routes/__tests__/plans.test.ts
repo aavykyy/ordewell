@@ -69,7 +69,7 @@ describe('POST /:sessionId/generate', () => {
   });
 
   // A missing workspace is a readable 400, not a 500 with a stack — the
-  // client (TUI, VS Code, web) shows the message directly.
+  // client (TUI, VS Code) shows the message directly.
   it('reports a missing workspace as a 400 with a readable message, not a 500', async () => {
     const badWorkspacePool = fakePool({
       generatePlan: vi.fn().mockRejectedValue(new WorkspaceNotFoundError('/nope')),

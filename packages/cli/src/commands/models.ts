@@ -90,8 +90,13 @@ export async function handleModels(subArgs: string[]): Promise<void> {
     }
   }
 
+  // No fabricated fallback: an unset planner model is refused by an API
+  // planner (no_model) and means the agent's own default for a harness one.
+  const currentModel = config.orchestratorModel;
   console.log(
-    `\n  Current planner model: ${process.env.ORCHESTRATOR_MODEL || 'deepseek/deepseek-v4-flash'}`,
+    currentModel
+      ? `\n  Current planner model: ${currentModel}`
+      : '\n  Current planner model: none set',
   );
   console.log(`  Set with: ordewell models --set <model_id>`);
 }

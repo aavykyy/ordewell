@@ -80,7 +80,7 @@ TUI planner chat keys (in the composer):
   ctrl-s              Send now: stop the running planner turn and send this message next
                       (with the composer empty, the newest queued prompt)
 
-TUI task view keys (t on a structured task; /help in the TUI lists them all):
+TUI task view keys (enter on a task; /help in the TUI lists them all):
   ctrl-s              Send now: interrupt the running step and deliver the composer text next
                       (with the composer empty, the highlighted pending message,
                       one the runner already has included)
@@ -145,7 +145,8 @@ Environment:
                              ${runnerIdList()}: plan with that CLI,
                              no API key (uses its own subscription)
   ORDEWELL_PLANNER_EFFORT    Thinking effort for a coding-agent planner
-  ORCHESTRATOR_MODEL         Default: deepseek/deepseek-v4-flash
+  ORCHESTRATOR_MODEL         Planner model; no default. Required for an API planner, optional
+                             for a coding-agent planner (unset: the agent's own default)
   OPENROUTER_BASE_URL        Default: https://openrouter.ai/api/v1
   ORDEWELL_AUTONOMOUS_MODE   true: Full, false: Guarded; overrides what "ordewell auto" saved
   ORDEWELL_APPROVAL_MODE     What the planner may run beyond read-only commands: auto (default:
