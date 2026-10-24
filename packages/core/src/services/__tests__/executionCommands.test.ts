@@ -1204,6 +1204,24 @@ describe('the command seam\'s extension points', () => {
     expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: STOPPED_BEFORE_START });
   });
 
+  it.each([
+    ['run_plan', { command: 'run_plan' }, 'runPlan'],
+    ['force_start', { command: 'force_start', task: 't1' }, 'forceStart'],
+    ['approve_review', { command: 'approve_review' }, 'approveReview'],
+  ] as const)('refuses a %s whose start a Stop ended while it acted, as stopped before it started', async (_name, command, act) => {
+    let live = true;
+    const host = {
+      ...stubHost(), running: () => false, hasLiveWork: () => false, admitStart: () => ({ current: () => live, release: vi.fn() }),
+      [act]: vi.fn(async () => { live = false; }),
+    };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    const outcome = await commands.run(command, { kind: 'user' });
+
+    expect(host[act]).toHaveBeenCalled();
+    expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: STOPPED_BEFORE_START });
+  });
+
   it('names no held edit when there is none', async () => {
     const commands = new ExecutionCommands({ host: stubHost(), consent: { request: vi.fn() } });
 
