@@ -7,6 +7,9 @@ import { openStepper, type StepperDefinition } from '../reducers/stepper';
 
 beforeAll(() => {
   style.enabled = false;
+  // These assertions read layout as plain text, not a tty: inverse video is an
+  // escape too (see `style.attributes`). The paint describes turn it on.
+  style.attributes = false;
 });
 
 function pickerScreen(over: Partial<PickerState>, state: Partial<TuiState> = {}): string[] {
@@ -123,8 +126,10 @@ describe('picker rows', () => {
 describe('picker paint', () => {
   beforeAll(() => {
     style.enabled = true;
+    style.attributes = true;
     return () => {
       style.enabled = false;
+      style.attributes = false;
     };
   });
 
@@ -198,11 +203,13 @@ describe('stepper', () => {
 
   it('highlights the active step in the header', () => {
     style.enabled = true;
+    style.attributes = true;
     try {
       const out = render(openStepper(initialState({ rows: 24, cols: 60 }), definition).state);
       expect(out.some((l) => l.includes(style.highlight(style.bold('Harness'))))).toBe(true);
     } finally {
       style.enabled = false;
+      style.attributes = false;
     }
   });
 

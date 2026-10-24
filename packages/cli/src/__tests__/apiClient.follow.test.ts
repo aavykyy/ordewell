@@ -16,7 +16,7 @@ describe('ApiClient.followSession', () => {
     const events: string[] = [];
 
     const follow = client.followSession('s1', (e) => events.push(e.type));
-    await follow.ready;
+    await expect(follow.ready).resolves.toBe(true);
     await vi.waitFor(() => expect(sockets).toHaveLength(1));
     sockets[0].send(JSON.stringify({ type: 'execution_complete', summary: { total: 1, completed: 1, failed: 0 } }));
     sockets[0].send(JSON.stringify({ type: 'task_started', taskId: 'a', order: 1, title: 'A', runner: 'claude-code' }));
@@ -42,7 +42,7 @@ describe('ApiClient.followSession', () => {
     await new Promise<void>((resolve) => wss.close(() => resolve()));
 
     const follow = client.followSession('s1', () => {});
-    await expect(follow.ready).resolves.toBeUndefined();
+    await expect(follow.ready).resolves.toBe(false);
     await expect(follow.ended).resolves.toBe('lost');
   });
 });

@@ -164,7 +164,8 @@ export type WsEvent = SessionFrame | RunSnapshotFrame;
 
 /** A held subscription to a session (`followSession`). `ended` is `'lost'` unless `close` ended it. */
 export interface SessionFollow {
-  ready: Promise<void>;
+  /** True when the socket opened; false when it could not — resolved either way, never rejected. */
+  ready: Promise<boolean>;
   ended: Promise<'lost' | void>;
   close(): void;
 }
@@ -713,10 +714,10 @@ export class ApiClient {
   followSession(sessionId: string, onEvent: (event: WsEvent) => void): SessionFollow {
     const socket = this.openSessionSocket(sessionId);
     let closing = false;
-    const ready = new Promise<void>((resolve) => {
-      socket.once('open', () => resolve());
-      socket.once('error', () => resolve());
-      socket.once('close', () => resolve());
+    const ready = new Promise<boolean>((resolve) => {
+      socket.once('open', () => resolve(true));
+      socket.once('error', () => resolve(false));
+      socket.once('close', () => resolve(false));
     });
     const ended = new Promise<'lost' | void>((resolve) => {
       socket.once('close', () => resolve(closing ? undefined : 'lost'));

@@ -112,6 +112,9 @@ export function openTerminal(options: TerminalOptions): Terminal {
   const output = options.output ?? process.stdout;
 
   style.enabled = output.isTTY === true && process.env.NO_COLOR === undefined;
+  // NO_COLOR takes colour only: inverse video is how the composer marks the
+  // caret once the hardware cursor is hidden below, so it stays on a tty.
+  style.attributes = output.isTTY === true;
 
   if (input.isTTY) input.setRawMode(true);
   input.resume();

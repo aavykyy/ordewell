@@ -146,6 +146,8 @@ export type Action =
   | { type: 'executionLost'; sessionId?: string }
   /** The session's standing subscription went with the daemon (see `follow` in effects). */
   | { type: 'followLost'; sessionId: string }
+  /** A standing subscription opened; on a reconnect this is what reads a lost turn's end back. */
+  | { type: 'followRestored'; sessionId: string }
   | { type: 'settingsLoaded'; settings: Partial<SettingsResponse> }
   | { type: 'modelsLoaded'; models: ModelView[]; orchestratorModels?: ModelView[]; providers?: AiProvider[]; providerErrors?: Record<string, string>; modesByRunner?: Record<string, ModeView[]> }
   | { type: 'sessionsLoaded'; sessions: SessionView[] }

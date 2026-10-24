@@ -50,7 +50,7 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
         return Promise.resolve();
       }),
       closeExecutionStream: vi.fn(),
-      followSession: vi.fn().mockReturnValue({ ready: Promise.resolve(), ended: new Promise(() => {}), close: vi.fn() }),
+      followSession: vi.fn().mockReturnValue({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: vi.fn() }),
       ...api,
     } as OrdewellApi,
     workspace: '/ws',
@@ -2189,7 +2189,7 @@ describe('following the session', () => {
         const ended = new Promise<'lost' | void>((resolve) => { end = resolve; });
         const close = vi.fn(() => end());
         follows.push({ sessionId, emit: cb, close, end });
-        return { ready: Promise.resolve(), ended, close };
+        return { ready: Promise.resolve(true), ended, close };
       }),
       ...api,
     });
@@ -2343,6 +2343,26 @@ describe('following the session', () => {
     await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
     h.follows[0].end('lost');
     await vi.waitFor(() => expect(h.actions).toContainEqual({ type: 'followLost', sessionId: 's1' }));
+  });
+
+  it('reopens a follow that dropped while idle, so a run nobody here started is still seen', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = following();
+      await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
+      h.follows[0].end('lost');
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(h.api.followSession).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(h.api.followSession).toHaveBeenCalledTimes(2);
+      expect(h.follows[1].sessionId).toBe('s1');
+      expect(h.actions).toContainEqual({ type: 'followRestored', sessionId: 's1' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('leaves a loss to the run\'s own stream while one is open, so it is reported once', async () => {
