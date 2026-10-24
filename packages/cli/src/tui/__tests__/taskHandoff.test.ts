@@ -59,15 +59,21 @@ describe('a task\'s handoff in its row (ADR-0047)', () => {
   it('shows the summary and its finding count and severity without opening the task', () => {
     const state = initialState({ rows: 24, cols: 100, focus: 'plan', tasks: [task({ handoff: { ...handoff, summary: 'OK' } })] });
 
-    expect(planText(state)).toContain('handed over · 2 findings · blocker · OK');
+    expect(planText(state)).toContain('handed over · 2 findings · Blocker · OK');
+  });
+
+  it('starts the summary at its first line with words', () => {
+    const state = initialState({ rows: 24, cols: 140, focus: 'plan', tasks: [task({ handoff: { ...handoff, summary: '\n\n  Done, with caveats.' } })] });
+
+    expect(planText(state)).toContain('handed over · 2 findings · Blocker · Done, with caveats.');
   });
 
   it('leads with the commit subject, and shows a commit-only handoff', () => {
     const commit = { subject: 'Add the route' };
     const both = initialState({ rows: 24, cols: 140, focus: 'plan', tasks: [task({ handoff: { ...handoff, summary: 'OK', commit } })] });
-    expect(planText(both)).toContain('handed over · 2 findings · blocker · commit: Add the rou');
+    expect(planText(both)).toContain('handed over · 2 findings · Blocker · Commit: Add the rou');
     const only = initialState({ rows: 24, cols: 140, focus: 'plan', tasks: [task({ handoff: { summary: '', findings: [], findingCount: 0, commit } })] });
-    expect(planText(only)).toContain('handed over · no findings · commit: Add the route');
+    expect(planText(only)).toContain('handed over · no findings · Commit: Add the route');
   });
 
   it('takes the digest from a plan refresh and from a live status update', () => {
@@ -76,7 +82,7 @@ describe('a task\'s handoff in its row (ADR-0047)', () => {
       sessionId: 's1',
       plan: { tasks: [{ id: 't1', order: 1, title: 'Add the route', type: 'ai', status: 'completed', dependencies: [], handoff }] },
     }).state;
-    expect(planText(planned)).toContain('handed over · 2 findings · blocker');
+    expect(planText(planned)).toContain('handed over · 2 findings · Blocker');
 
     const live = reduce(planned, {
       type: 'statusUpdate',

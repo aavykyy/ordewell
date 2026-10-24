@@ -1,7 +1,7 @@
 import {
-  diffRows, diffSummary, formatTokenCount, handoffReferenceText, loadedSkillTokens, outputPreview, severityLabel, usageText, wakeUpItems, worstSeverity, REPORT_PREVIEW_LINES,
+  approvalKindText, approvalStatusText, diffRows, diffSummary, formatTokenCount, handoffFindingsText, handoffReferenceText, loadedSkillTokens, outputPreview, planMarkerParts, severityLabel, usageText, wakeUpItems, worstSeverity, REPORT_PREVIEW_LINES,
   type DiffRow, type DiffStat,
-  type ApprovalBlock, type ApprovalKind, type ApprovalSource, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
+  type ApprovalBlock, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
   type CommandBlock, type CommandStatus, type CompactionBlock, type RunnerLoadedBlock,
   type FindingSeverity, type HandoffBlock, type HandoffFinding,
   type SkillLoadBlock, type SubagentBlock, type SubagentStatus, type ThinkingDisplayBlock, type ToolBlock,
@@ -495,42 +495,17 @@ function subagentLines(block: SubagentBlock, cols: number, detailAll: boolean): 
 
 // ── One-line markers ─────────────────────────────────────────────────────────
 
-const APPROVAL_KIND: Record<ApprovalKind, string> = {
-  shell_command: 'Run a command',
-  url_fetch: 'Fetch a URL',
-  web_search: 'Search the web',
-  external_path: 'Read outside the workspace',
-  mcp_tool: 'Use an MCP tool',
-  mcp_server: 'Start a project MCP server',
-  runner_tool: 'Use a tool',
-  task_start: 'Start work',
-};
-
-// A request the user answered reads "Approved": naming `asked` would state the obvious.
-const DECIDED_BY: Record<Exclude<ApprovalSource, 'asked'>, string> = {
-  'pre-approved': 'pre-approved',
-  remembered: 'remembered',
-  mode: 'policy',
-  'no-channel': 'no approval channel',
-  excluded: 'excluded',
-  guard: 'blocked address',
-  secret: 'secret check',
-  budget: 'web-read budget',
-  unsupported: 'not usable on this runner version',
-};
-
 /** Status first, so a long subject is what the pane cuts. */
 function approvalLine(block: ApprovalBlock, cols: number): string {
-  const policy = block.decidedBy && block.decidedBy !== 'asked' ? DECIDED_BY[block.decidedBy] : undefined;
-  const [mark, status, paint] = block.status === 'pending'
-    ? ['?', 'Waiting for you', style.yellow]
+  const [mark, paint] = block.status === 'pending'
+    ? ['?', style.yellow]
     : block.status === 'granted'
-      ? ['✓', policy ? `Auto-approved (${policy})` : block.forTask ? 'Approved for this task' : 'Approved', style.green]
+      ? ['✓', style.green]
       : block.status === 'withdrawn'
-        ? ['·', 'Withdrawn', style.grey]
-        : ['⊘', policy ? `Auto-denied (${policy})` : 'Denied', style.yellow];
+        ? ['·', style.grey]
+        : ['⊘', style.yellow];
   const note = block.note ? `: “${firstLine(block.note)}”` : '';
-  const line = `${mark} ${status} · ${APPROVAL_KIND[block.kind]}: ${firstLine(block.subject)}${note}`;
+  const line = `${mark} ${approvalStatusText(block)} · ${approvalKindText(block.kind)}: ${firstLine(block.subject)}${note}`;
   return `${paint(mark)}${truncate(line, cols).slice(mark.length)}`;
 }
 
@@ -714,7 +689,7 @@ function handoffLines(block: HandoffBlock, cols: number, detailAll: boolean): st
   const { handoff } = block;
   const severity = worstSeverity(handoff.findings);
   const summary = handoff.findingCount > 0
-    ? `${countOf(handoff.findingCount, 'finding')}${severity ? ` · ${severityLabel(severity).toLowerCase()}` : ''}`
+    ? `${handoffFindingsText(handoff.findingCount)}${severity ? ` · ${severityLabel(severity).toLowerCase()}` : ''}`
     : null;
   const rows = [`${style.brand('◆')} ${style.bold('Handoff')}${summary ? style.grey(` · ${summary}`) : ''}`];
   if (handoff.commit) {
@@ -736,8 +711,7 @@ function handoffLines(block: HandoffBlock, cols: number, detailAll: boolean): st
 }
 
 function planLine(block: PlanBlock, cols: number): string {
-  const count = block.taskCount === undefined ? '' : ` (${countOf(block.taskCount, 'task')})`;
-  const text = block.status === 'building' ? 'Building plan…' : `Plan ${block.status}${count}`;
+  const text = planMarkerParts(block).join(' · ');
   return `${style.brand('◇')}${truncate(`◇ ${text}`, cols).slice(1)}`;
 }
 

@@ -10,7 +10,7 @@ import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, severityLabel, taskLogHeaderView, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
+import { scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -1018,12 +1018,9 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   // What it handed over (ADR-0047): one compact row, its count first so a long
   // summary can be cut without taking what a reader scans for with it.
   if (row.handoff) {
-    const said = sanitize(row.handoff.summary).split('\n').map((line) => line.trim()).find((line) => line !== '') ?? '';
-    const summary = row.handoff.commit ? [`commit: ${sanitize(row.handoff.commit.subject).trim()}`, said].filter(Boolean).join(' · ') : said;
-    const findings = row.handoff.findingCount === 0
-      ? 'no findings'
-      : `${row.handoff.findingCount} finding${row.handoff.findingCount === 1 ? '' : 's'}${row.handoff.severity ? ` · ${inRow(severityLabel(row.handoff.severity))}` : ''}`;
-    lines.push(style.grey(truncate(`${bodyPad}↳ handed over · ${findings}${summary ? ` · ${summary}` : ''}`, cols)));
+    // The commit subject and summary are the author's text, so they are cleaned here rather than in core.
+    const handed = handoffPeekParts(row.handoff).map(sanitize).join(' · ');
+    lines.push(style.grey(truncate(`${bodyPad}↳ handed over · ${handed}`, cols)));
   }
   // The one isolation state that needs the user; every other stays out of the
   // row and shows only in the expanded detail below.

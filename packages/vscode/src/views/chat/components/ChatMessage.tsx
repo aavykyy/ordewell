@@ -2,10 +2,10 @@ import React, { useState } from 'react';
 import TaskHandoff from './TaskHandoff';
 import type {
   CommandBlock, RunnerLoadedBlock,
-  ApprovalBlock, ApprovalDecision, ApprovalKind, ApprovalSource, DisplayBlock, MessageBlock, PlanBlock, SkillLoadBlock, SubagentBlock, SubagentStatus,
+  ApprovalBlock, ApprovalDecision, DisplayBlock, MessageBlock, PlanBlock, SkillLoadBlock, SubagentBlock, SubagentStatus,
   ThinkingDisplayBlock, ToolBlock, ToolStatus, DiffRow, DiffStat,
 } from '@ordewell/core';
-import { diffRows, diffSummary, formatTokenCount, loadedSkillTokens, markdownHtml, outputLines, outputPreview, REPORT_PREVIEW_LINES, wakeUpItems } from '@ordewell/core/plan-utils';
+import { approvalKindText, approvalStatusText, diffRows, diffSummary, formatTokenCount, loadedSkillTokens, markdownHtml, outputLines, outputPreview, planMarkerParts, REPORT_PREVIEW_LINES, wakeUpItems } from '@ordewell/core/plan-utils';
 
 /*
  * The planner conversation (#51 display blocks) as the webview draws it.
@@ -275,61 +275,17 @@ export function SubagentCard({ block, expanded }: { block: SubagentBlock; expand
   );
 }
 
-function planLabel(block: PlanBlock): string {
-  if (block.status === 'building') return 'Building plan…';
-  const count = block.taskCount === undefined ? '' : ` · ${block.taskCount} task${block.taskCount === 1 ? '' : 's'}`;
-  return `Plan ${block.status}${count}`;
-}
-
 function PlanMarker({ block, onShowPlan }: { block: PlanBlock; onShowPlan: () => void }) {
   return (
     <div className="plan-revision-chip-row">
       <button type="button" className="plan-revision-chip" onClick={onShowPlan} title="Show the plan" disabled={block.status === 'building'}>
-        {planLabel(block)}
+        {planMarkerParts(block).join(' · ')}
       </button>
     </div>
   );
 }
 
 function noop(): void {}
-
-const APPROVAL_KIND: Record<ApprovalKind, string> = {
-  shell_command: 'Run a command',
-  url_fetch: 'Fetch a URL',
-  web_search: 'Search the web',
-  external_path: 'Read outside the workspace',
-  mcp_tool: 'Use an MCP tool',
-  mcp_server: 'Start a project MCP server',
-  runner_tool: 'Use a tool',
-  task_start: 'Start work',
-};
-
-// The source the policy decided under. `asked` is omitted: a card a user
-// answered reads "Approved", not "Approved (asked)".
-function approvalSourceLabel(source: ApprovalSource | undefined): string {
-  switch (source) {
-    case 'pre-approved': return 'pre-approved';
-    case 'remembered': return 'remembered';
-    case 'mode': return 'policy';
-    case 'no-channel': return 'no approval channel';
-    case 'excluded': return 'excluded';
-    case 'guard': return 'blocked address';
-    case 'secret': return 'secret check';
-    case 'budget': return 'web-read budget';
-    case 'unsupported': return 'not usable on this runner version';
-    default: return '';
-  }
-}
-
-function approvalStatusLabel(block: ApprovalBlock): string {
-  const silent = block.decidedBy !== undefined && block.decidedBy !== 'asked';
-  switch (block.status) {
-    case 'pending': return 'Waiting for you';
-    case 'granted': return silent ? `Auto-approved (${approvalSourceLabel(block.decidedBy)})` : block.forTask ? 'Approved for this task' : 'Approved';
-    case 'denied': return silent ? `Auto-denied (${approvalSourceLabel(block.decidedBy)})` : 'Denied';
-    case 'withdrawn': return 'Withdrawn';
-  }
-}
 
 /**
  * A task runner's tool request (ADR-0018, A1), in its task's log. Its answers
@@ -343,8 +299,8 @@ function RunnerApprovalCard({ block, onAnswer }: { block: ApprovalBlock; onAnswe
   return (
     <div className={`approval-card ${block.status}`} data-status={block.status}>
       <div className="approval-card-head">
-        <span className="approval-card-kind">{APPROVAL_KIND[block.kind]}</span>
-        <span className="approval-card-status">{approvalStatusLabel(block)}</span>
+        <span className="approval-card-kind">{approvalKindText(block.kind)}</span>
+        <span className="approval-card-status">{approvalStatusText(block)}</span>
       </div>
       <code className="approval-card-subject">{block.subject}</code>
       {block.note && <div className="approval-card-detail">Note to the agent: {block.note}</div>}
@@ -368,12 +324,11 @@ function RunnerApprovalCard({ block, onAnswer }: { block: ApprovalBlock; onAnswe
 }
 
 export function ApprovalCard({ block, onResolve }: { block: ApprovalBlock; onResolve: (id: string, granted: boolean) => void }) {
-  const status = approvalStatusLabel(block);
   return (
     <div className={`approval-card ${block.status}`} data-status={block.status}>
       <div className="approval-card-head">
-        <span className="approval-card-kind">{APPROVAL_KIND[block.kind]}</span>
-        <span className="approval-card-status">{status}</span>
+        <span className="approval-card-kind">{approvalKindText(block.kind)}</span>
+        <span className="approval-card-status">{approvalStatusText(block)}</span>
       </div>
       <code className="approval-card-subject">{block.subject}</code>
       {block.detail && <div className="approval-card-detail">{block.detail}</div>}

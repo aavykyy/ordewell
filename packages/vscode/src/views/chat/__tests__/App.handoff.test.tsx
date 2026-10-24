@@ -43,6 +43,11 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     expect(document.querySelector('.task-handoff-peek')).toBeNull();
   });
 
+  it('starts the summary at its first line with words', () => {
+    update({ ...task, handoff: { ...handoff, summary: '\n\n  Keep the token scoped.\nMore context.' } });
+    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Handed over · 28 findings · Blocker · Keep the token scoped.');
+  });
+
   it('shows the commit before the summary, and a handoff with only a commit', () => {
     update({ ...task, handoff: { ...handoff, commit: { subject: 'Scope the token', body: 'Reads stay in the tenant.' } } });
     expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Commit: Scope the token · Keep the token scoped.');

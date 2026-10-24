@@ -1,16 +1,12 @@
 import React from 'react';
 import type { HandoffDigest, StoredHandoff, TaskRowHandoff } from '@ordewell/core';
-import { handoffReferenceText, REPORT_PREVIEW_LINES, severityLabel, worstSeverity } from '@ordewell/core/plan-utils';
-
-function findingCount(count: number): string {
-  return count === 0 ? 'no findings' : `${count} finding${count === 1 ? '' : 's'}`;
-}
+import { handoffFindingsText, handoffPeekParts, handoffReferenceText, REPORT_PREVIEW_LINES, severityLabel, worstSeverity } from '@ordewell/core/plan-utils';
 
 export function HandoffPeek({ handoff }: { handoff: TaskRowHandoff | null }) {
   if (!handoff) return null;
   return (
     <div className="task-handoff-peek" title={handoff.commit ? `${handoff.commit.subject}\n\n${handoff.summary}` : handoff.summary}>
-      Handed over · {findingCount(handoff.findingCount)}{handoff.severity ? ` · ${severityLabel(handoff.severity)}` : ''}{handoff.commit ? ` · Commit: ${handoff.commit.subject}` : ''}{handoff.summary ? ` · ${handoff.summary.split('\n')[0]}` : ''}
+      Handed over · {handoffPeekParts(handoff).join(' · ')}
     </div>
   );
 }
@@ -30,7 +26,7 @@ export default function TaskHandoff({ handoff, expanded = false, taskName, onRea
   const more = handoff.findingCount - handoff.findings.length;
   return (
     <section className="task-handoff" aria-label="Handoff">
-      <div className="task-handoff-heading">Handoff · {findingCount(handoff.findingCount)}{severity ? ` · ${severityLabel(severity)}` : ''}</div>
+      <div className="task-handoff-heading">Handoff · {handoffFindingsText(handoff.findingCount)}{severity ? ` · ${severityLabel(severity)}` : ''}</div>
       {handoff.commit && (
         <div className="task-handoff-commit">
           <div className="task-handoff-commit-subject">Commit: {handoff.commit.subject}</div>
