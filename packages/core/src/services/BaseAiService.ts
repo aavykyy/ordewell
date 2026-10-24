@@ -101,6 +101,8 @@ export interface ConversationTurnContext {
   fs: IFileSystem;
   runners: RunnerId[];
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
+  /** See {@link ConversationRequest.liveScope}. */
+  liveScope?: () => { runners: RunnerId[]; runnerModes?: Record<RunnerId, RunnerModeInfo[]> };
   autonomousDefault?: boolean;
   fetcher?: IWebFetcher;
   /** The session's planner tools; the conversation offers their task reads and execution tools (ADR-0029) when set. */
@@ -383,7 +385,7 @@ export abstract class BaseAiService {
       // The turn's own input carries the budgets, not the system prompt, which stays cacheable.
       message: withTurnBudgets(this.turnBudgets, message),
       send: (text) => this.runToolRounds(chat, ctx, text, onProgress, signal),
-      classify: { runners: ctx.runners, runnerModes: ctx.runnerModes, autonomousDefault: ctx.autonomousDefault },
+      classify: { ...(ctx.liveScope?.() ?? { runners: ctx.runners, runnerModes: ctx.runnerModes }), autonomousDefault: ctx.autonomousDefault },
       onProgress,
       signal,
       compactHistory: chat.compactHistory,

@@ -13,6 +13,7 @@ import { flattenTasksWithParents, isUserMessage } from '../models/Task';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
+import { checkPlanRunners } from './PlannedTask';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
 import { heldEditTasks } from './heldEdit';
 import { classifyRunnerStop, type TurnFailure } from './runnerExit';
@@ -805,6 +806,8 @@ export class PlannerConversation {
         this.host.broadcastPlan();
       });
       return { summary, keptMessages: tail.length };
+    } catch (err) {
+      throw interrupted(turn, err);
     } finally {
       // Success and failure alike: the live context either holds the
       // conversation this replaced or a summary exchange nobody kept. An
@@ -833,7 +836,9 @@ export class PlannerConversation {
     } else {
       turn = await this.resume(await this.reopen(), request, [...this.transcript], signal, onProgress);
     }
-    if (signal.aborted) throw new ConversationEditError('Condensing was stopped: the conversation is unchanged.');
+    // Not a ConversationEditError: the caller's catch turns an aborted turn into
+    // the stop or discard it was, which a surface answers differently from a refusal.
+    if (signal.aborted) throw new Error('Condensing was stopped: the conversation is unchanged.');
     const summary = extractSummary(turn.text);
     if (!summary) throw new ConversationEditError('The planner returned no summary, so the conversation is unchanged. Try again.');
     return summary;
@@ -1378,10 +1383,12 @@ export class PlannerConversation {
           return { retry: { errors, corrective: (tools ? resubmitEditPrompt : taskOpsRejectedPrompt)(errors) } };
         }
         if (t.kind === 'plan') {
+          // A submitted plan waits out the rest of its reply, so the runners it was accepted against may be gone (ADR-0003 V1).
+          const live = this.host.catalog();
           const skills = await checkPlanSkills(t.tasks, this.host.taskSkills());
           this.assertStillCurrent(userTurn);
-          if (skills.errors.length === 0) return { done: { turn: t, skillWarnings: skills.warnings } };
-          const errors = skills.errors.map((e) => e.message);
+          const errors = [...checkPlanRunners(t.tasks, live.runners), ...skills.errors].map((e) => e.message);
+          if (errors.length === 0) return { done: { turn: t, skillWarnings: skills.warnings } };
           if (!ai.hasActiveConversation() || signal.aborted) return { done: invalidPlan(errors, t) };
           return { retry: { errors, corrective: tools ? resubmitPlanPrompt(errors) : reEmitPlanPrompt(errors.join('; ')) } };
         }

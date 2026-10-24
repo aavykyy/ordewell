@@ -53,4 +53,18 @@ describe('enabled runners read live', () => {
     setEnabled(['claude-code']);
     expect((await session.liveCatalog()).runners).toEqual(['claude-code']);
   });
+
+  // Refusing a goal must not cost the plan the session holds now.
+  it.each([
+    ['startPlanning', (session: ReturnType<typeof liveSession>['session']) => session.startPlanning('new goal', ['opencode'])],
+    ['generatePlan', (session: ReturnType<typeof liveSession>['session']) => session.generatePlan('new goal', ['opencode'])],
+  ])('leaves the plan as it was when %s names no enabled runner', async (_name, refuse) => {
+    const { session } = liveSession();
+    const held = await session.startPlanning('first goal', ['claude-code']);
+
+    await expect(refuse(session)).rejects.toThrow('None of the requested runners are enabled');
+
+    expect(session.planState).toBe(held);
+    expect(session.planState?.conversationHistory?.[0]?.content).toBe('first goal');
+  });
 });

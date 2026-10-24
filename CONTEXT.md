@@ -84,7 +84,9 @@ through `editPlan`, which adds the reschedule they owe an armed scheduler:
 nothing else wakes one after a hand edit, because no planner turn ends to let
 a start hold go, so a task the edit unblocked would sit ready and never start. PlanStore is the single source of truth for task
 state; `LegacyPlanState.tasks` is written from it (a `snapshot()`, never the
-live tree) at persist and status-broadcast time and never read back into it. The old
+live tree) at persist and status-broadcast time and never read back into it,
+except by `loadPlan`, which adopts a plan from outside (a saved session, a
+restored window) and so is the one load a surface makes. The old
 `syncStoreFromPlan` (plan → store direction) is removed — there is only one
 direction (store → plan, at persist). Emits
 **SessionMessage** (the plan-lifecycle events) through the `broadcast` seam;

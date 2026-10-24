@@ -272,6 +272,35 @@ describe('a turn whose transcript marker arrives while the segment streams', () 
   });
 });
 
+describe('a pending input the transcript carries behind a note written meanwhile', () => {
+  const history = (...entries: [string, string, string, string?][]) => entries.map(([role, content, ms, kind]) => ({ role, content, timestamp: at(Number(ms)), ...(kind ? { kind } : {}) }));
+  const sync = (view: ConversationView, conversationHistory: unknown[]) =>
+    reduceConversation(view, { type: 'plan_generated', plan: { conversationHistory } } as unknown as SessionMessage);
+  const reloaded = (earlier: unknown[]) => fromTranscript(earlier as never, [], undefined, [{ id: 'p1', source: 'user', text: 'go on', timestamp: at(0) }]);
+
+  // The turn writes what it held at its own start, ahead of the notes written while it ran.
+  it('takes it though a sync of the note has already moved the transcript past its time', () => {
+    const start = history(['user', 'plan it', '-3000'], ['assistant', 'Which?', '-2000']);
+    const note: [string, string, string, string] = ['assistant', 'Codex was enabled.', '5000', 'system'];
+    let view = sync(reloaded(start), [...start, ...history(note)]);
+    expect(view.pendingInputs).toHaveLength(1);
+
+    view = sync(view, [...start, ...history(['user', 'go on', '1000'], note, ['assistant', 'Plan generated with 1 task.', '6000', 'plan_generated'])]);
+
+    expect(view.pendingInputs).toEqual([]);
+    expect(timeline(view).filter((line) => line === 'user: go on')).toHaveLength(1);
+  });
+
+  it('leaves it pending beside an identical message sent before it arrived', () => {
+    const earlier = history(['user', 'go on', '-5000'], ['assistant', 'Which?', '-4000']);
+    let view = sync(reloaded(earlier), [...earlier, ...history(['assistant', 'Codex was enabled.', '5000', 'system'])]);
+
+    view = sync(view, [...earlier, ...history(['assistant', 'Codex was enabled.', '5000', 'system'], ['assistant', 'Plan generated with 1 task.', '6000', 'plan_generated'])]);
+
+    expect(view.pendingInputs).toHaveLength(1);
+  });
+});
+
 describe('a corrective retry after a botched envelope', () => {
   it('keeps the narration above the tool call and never draws the botched envelope beside the retry', async () => {
     const messages: SessionMessage[] = [];

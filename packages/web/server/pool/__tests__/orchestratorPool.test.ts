@@ -460,3 +460,23 @@ describe('OrchestratorPool run notices', () => {
   });
 });
 
+describe('OrchestratorPool planning with no enabled runner', () => {
+  it('keeps the live session when the runners a new goal names are not enabled', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'ordewell-pool-'));
+    mkdirSync(join(workspace, '.git'));
+    const pool = new OrchestratorPool();
+    vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue({} as LegacyPlanState);
+    try {
+      await pool.startPlanning('s1', 'first', undefined, workspace);
+      const live = pool.session('s1');
+
+      await expect(pool.startPlanning('s1', 'second', ['no-such-runner'], workspace)).rejects.toThrow('None of the requested runners are enabled');
+
+      expect(pool.session('s1')).toBe(live);
+    } finally {
+      pool.destroyAll();
+      vi.restoreAllMocks();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});

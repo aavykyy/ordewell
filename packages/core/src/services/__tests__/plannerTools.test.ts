@@ -1074,6 +1074,41 @@ describe('task_query with a task report', () => {
   });
 });
 
+describe('task_query with a loop (ADR-0045)', () => {
+  it('says where a check stands and which check a body task runs for, as the text read does', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'ordewell-task-loop-'));
+    let read: { isError: boolean; body: unknown } | undefined;
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp) => {
+        read = await call(mcp!, 'task_query', { tasks: ['#1', '#2', '#3'], fields: ['description'] });
+        return 'I see.';
+      },
+    }));
+    try {
+      session.loadPlan({
+        tasks: [
+          createTask({ id: 'review', order: 1, title: 'Review', prompt: 'p', assignedRunner: 'claude-code', status: 'in_progress', loop: { body: ['fix'], maxRounds: 3 }, loopRound: 2 }),
+          createTask({ id: 'fix', order: 2, title: 'Fix', prompt: 'p', assignedRunner: 'claude-code' }),
+          createTask({ id: 'plain', order: 3, title: 'Plain', prompt: 'p', assignedRunner: 'claude-code' }),
+        ],
+        generatedAt: '2026-10-05T09:00:00Z', lastUpdated: '2026-10-05T09:00:00Z', status: 'approved', runners: ['claude-code'],
+        conversationHistory: [{ role: 'user', content: 'loop it', timestamp: '2026-10-05T09:00:00Z' }],
+      }, 'loop it', workspace, { persist: false });
+
+      await session.continueConversation('where is the loop?');
+
+      const tasks = (read?.body as { tasks: { loop?: unknown }[] }).tasks;
+      expect(tasks.map((t) => t.loop)).toEqual([
+        { body: ['#2'], maxRounds: 3, round: 2, betweenRounds: false },
+        { check: '#1' },
+        undefined,
+      ]);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('task_query with a handoff (ADR-0047)', () => {
   const handoff = {
     summary: 'Reviewed the cache; two blockers.',
