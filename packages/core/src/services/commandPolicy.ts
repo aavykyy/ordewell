@@ -46,7 +46,7 @@ import type { ShellDialect } from './researchShell';
 import { SHELL_STATE_COMMANDS, dialectFor, lexAll, literalCdTarget, type Segment } from './shellLexer';
 import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
 import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, takesNextToken, valueFlagIn } from './flagPolicy';
-import { AWK_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
+import { AWK_FAMILY, JQ_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, jqRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
 import { commandAllowedBy, commandExcludedBy, scopeExcluded, type PlannerAllowlist } from './plannerAllowlist';
 import { EFFECT_REFUSAL_HINT, READ_REFUSAL_HINT, webCommand, wgetVersionCommands } from './webCommands';
 import { EFFECT_ROUTE } from './effectRoute';
@@ -582,6 +582,22 @@ function scopeFor(seg: Segment): string {
   return [name, ...lead].join(' ');
 }
 
+/**
+ * A file name word the shell may expand through `..`. bash 3.2 (macOS
+ * `/bin/sh`) and dash let a name segment that starts with a dot match `..`,
+ * so `.?`, `.*` and `.[.]` climb out of the workspace under a spelling that
+ * {@link looksLikePath} and lexical confinement both read as inside it. The
+ * lexer only says some word in the segment is an unquoted glob, so a quoted
+ * look-alike beside one asks too; patterns are skipped, since they are never
+ * opened (ADR-0008).
+ */
+function climbsByGlob(seg: Segment): boolean {
+  if (!seg.globbed) return false;
+  const patterns = patternArgs(seg);
+  return [...seg.args.filter((_, i) => !patterns.has(i)), ...seg.inputs]
+    .some((a) => /(^|[\\/])\.[*?[]/.test(a));
+}
+
 function isAuto(seg: Segment, opts: CommandPolicyOptions): boolean {
   // Navigation is read-only, but only a target the command line spells out, on
   // a line where nothing else can steer it. Its effect on later commands is
@@ -600,9 +616,23 @@ function isAuto(seg: Segment, opts: CommandPolicyOptions): boolean {
   // confinement escape this file exists to close, so treat any variable
   // reference as disqualifying the fast path rather than trying to resolve it.
   if (seg.expandable) return false;
+  if (climbsByGlob(seg)) return false;
   if (seg.binary !== 'git') return true;
   const sub = subcommandOf(seg);
   return sub !== undefined && GIT_READONLY_SUBCOMMANDS.includes(sub);
+}
+
+/**
+ * A short flag, alone or inside a cluster, that git's shared flag set reads as
+ * taking a value (for `git log`) but that under `git branch`/`git tag` is a
+ * force, move or copy whose operand is the ref it writes: `git tag -f v1`,
+ * `git branch -qC copied`. Read that way it swallowed the ref name, so the
+ * positional check never saw one. `-n` is spared: `git tag -n` lists.
+ */
+function swallowsRefName(arg: string): boolean {
+  if (!/^-[^-]/.test(arg)) return false;
+  const values = FLAG_POLICY.git.values ?? [];
+  return [...arg.slice(1)].some((c) => c !== 'n' && values.includes(`-${c}`));
 }
 
 function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string | undefined {
@@ -669,7 +699,8 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   if (seg.binary === 'git') {
     const sub = subcommandOf(seg);
     if (sub === 'branch' || sub === 'tag') {
-      const flag = seg.args.find((a) => ['-D', '-d', '-m', '-M', '--delete', '--move'].includes(a));
+      const flag = seg.args.find((a) => ['-D', '-d', '-m', '-M', '--delete', '--move'].includes(a))
+        ?? seg.args.slice(seg.args.indexOf(sub) + 1).find(swallowsRefName);
       if (flag) {
         return `"git ${sub} ${flag}" mutates refs. You are a read-only planner: ${EFFECT_ROUTE}`;
       }
@@ -696,14 +727,17 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
     }
   }
   // sed and awk carry a program that can run a command or write a file with no
-  // flag involved (see filterPrograms.ts), so the program itself is read. One
-  // the shell rewrites first cannot be: a `$` that survives lexing may be an
-  // expansion, and which token holds it is not tracked.
-  if (SED_FAMILY.includes(seg.binary) || AWK_FAMILY.includes(seg.binary)) {
+  // flag involved, and jq and yq one that can read the environment or load a
+  // file no argument names (see filterPrograms.ts), so the program itself is
+  // read. One the shell rewrites first cannot be: a `$` that survives lexing
+  // may be an expansion, and which token holds it is not tracked.
+  if (SED_FAMILY.includes(seg.binary) || AWK_FAMILY.includes(seg.binary) || JQ_FAMILY.includes(seg.binary)) {
     if (AWK_FAMILY.includes(seg.binary) && seg.args.some((a) => a === 'inplace')) {
       return `"${seg.binary} -i inplace" edits files in place. You are a read-only planner — describe the change as a task instead.`;
     }
-    const program = SED_FAMILY.includes(seg.binary) ? sedRefusal(seg.binary, seg.args) : awkRefusal(seg.binary, seg.args);
+    const program = SED_FAMILY.includes(seg.binary) ? sedRefusal(seg.binary, seg.args)
+      : AWK_FAMILY.includes(seg.binary) ? awkRefusal(seg.binary, seg.args)
+        : jqRefusal(seg.binary, seg.args);
     if (program) return program;
     if (seg.expandable) {
       return `The shell rewrites part of this "${seg.binary}" command before "${seg.binary}" sees it, so its program cannot be inspected. Put the program in single quotes, name files literally, and re-run.`;
@@ -914,9 +948,11 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   // approving `cd "$HOME"` once would wave through `cd "$HOME" && cat
   // .ssh/id_rsa` later. Its grant is the line the human read. `command` is
   // left out: `command cd` is unwrapped to `cd`, so what remains is a lookup.
+  // A glob that can climb through `..` is held to the line for the same
+  // reason: under `cat`, one approval would cover every later file it names.
   const lineScoped = nonAuto.some((u) => {
     const name = u.seg.binary.toLowerCase();
-    return name === 'cd' || (name !== 'command' && SHELL_STATE_COMMANDS.has(name));
+    return name === 'cd' || (name !== 'command' && SHELL_STATE_COMMANDS.has(name)) || climbsByGlob(u.seg);
   });
   const webUrls = nonAuto.flatMap((u) => webCommand(u.seg, opts.trustedWebResolves)?.urls ?? []);
   const webOutboundTexts = nonAuto.flatMap((u) => webCommand(u.seg, opts.trustedWebResolves)?.outboundTexts ?? []);

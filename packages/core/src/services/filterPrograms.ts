@@ -1,5 +1,5 @@
 /**
- * Reading the programs `sed` and `awk` are handed.
+ * Reading the programs `sed`, `awk`, `jq` and `yq` are handed.
  *
  * Both are text filters, and both can run a command or write a file from inside
  * their own program: sed's `e` command and the `e` flag of `s` hand text to the
@@ -18,6 +18,8 @@
  * inside a bracket in a regex literal), the construct is unreadable rather
  * than read either way.
  */
+
+import { FLAG_POLICY } from './flagPolicy';
 
 export const SED_FAMILY = ['sed', 'gsed'];
 export const AWK_FAMILY = ['awk', 'gawk', 'mawk', 'nawk'];
@@ -603,6 +605,108 @@ function awkProgramHazard(program: string): Hazard | undefined {
     // Any other operator leaves a `/` after it ambiguous.
     i++;
     slash = 'unclear';
+  }
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// jq and yq
+// ---------------------------------------------------------------------------
+
+/**
+ * JSON and YAML filters whose programs reach past the files they are handed:
+ * jq's `$ENV` and `env` read the process environment, provider keys included,
+ * and `import`/`include` load a module from any directory a `search` key
+ * names. yq has `env`, `strenv`, `envsubst` and the `load` family, and its
+ * `eval` runs a string as a program, which hides the rest from a reading.
+ * `yq` is either that yq or the jq wrapper of the same name, so both
+ * vocabularies are read for both (ADR-0008).
+ */
+export const JQ_FAMILY = ['jq', 'yq'];
+
+const JQ_ENV_WORDS = ['env', 'strenv', 'envsubst'];
+const JQ_LOAD_WORDS = ['import', 'include', 'modulemeta', 'eval'];
+/** jq's options that take a name and a value. */
+const JQ_PAIR_FLAGS = ['--arg', '--argjson', '--slurpfile', '--rawfile'];
+/** yq's subcommands, which come before the expression. */
+const YQ_SUBCOMMANDS = ['eval', 'e', 'eval-all', 'ea'];
+
+/** Why a jq or yq invocation is refused, or `undefined` when its program only filters what it is given. */
+export function jqRefusal(binary: string, args: string[]): string | undefined {
+  const programs = jqPrograms(binary, args);
+  if (typeof programs === 'string') {
+    return `"${binary} ${programs}" reads its program from a file this classifier cannot inspect. ${INSPECT_OR_TASK}`;
+  }
+  for (const program of programs) {
+    const word = jqHazard(program);
+    if (word === undefined) continue;
+    return JQ_ENV_WORDS.includes(word) || word === '$ENV'
+      ? `The "${binary}" program reads the environment ("${word}"), which holds credentials. Run printenv for the one variable you need, which asks first.`
+      : `The "${binary}" program uses "${word}", which loads a file or runs a string as a program where this classifier cannot follow it. ${INSPECT_OR_TASK}`;
+  }
+  return undefined;
+}
+
+/**
+ * The program text of an invocation, or the flag that names a program file.
+ * jq takes options anywhere, so every token is read; the program is the first
+ * operand, or what `--expression` gave. Value widths come from the flag
+ * allowlist, which refuses any flag outside it before this reading matters.
+ */
+function jqPrograms(binary: string, args: string[]): string[] | string {
+  const values = new Set(FLAG_POLICY[binary]?.values ?? []);
+  const expressions: string[] = [];
+  const operands: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+    if (token === '--') { operands.push(...args.slice(i + 1)); break; }
+    if (!/^-./.test(token)) { operands.push(token); continue; }
+    if (token.startsWith('--')) {
+      const eq = token.indexOf('=');
+      const name = eq > 0 ? token.slice(0, eq) : token;
+      if (name === '--from-file') return name;
+      if (name === '--expression') {
+        const value = eq > 0 ? token.slice(eq + 1) : args[++i];
+        if (value !== undefined) expressions.push(value);
+      } else if (JQ_PAIR_FLAGS.includes(name)) {
+        i += 2;
+      } else if (values.has(name) && eq < 0) {
+        i++;
+      }
+      continue;
+    }
+    for (let j = 1; j < token.length; j++) {
+      const short = `-${token[j]}`;
+      if (short === '-f') return short;
+      if (values.has(short)) { if (j === token.length - 1) i++; break; }
+    }
+  }
+  if (binary === 'yq' && YQ_SUBCOMMANDS.includes(operands[0])) operands.shift();
+  if (expressions.length > 0) return expressions;
+  return operands.length > 0 ? [operands[0]] : [];
+}
+
+/**
+ * The first word in a program that reaches the environment or another file.
+ * String literals are skipped, since `select(.name == "env")` compares text,
+ * unless the program interpolates (`"\(env.KEY)"` runs code inside a string)
+ * or has a comment (a `"` in one would pair with the wrong quote): then all of
+ * it is read. A field (`.env`) and an object key (`{env: …}`) are not calls.
+ */
+function jqHazard(program: string): string | undefined {
+  const code = program.includes('\\(') || program.includes('#')
+    ? program
+    : program.replace(/"(?:[^"\\]|\\.)*"/gs, '""');
+  for (const match of code.matchAll(/(\$?)([A-Za-z_][A-Za-z0-9_]*)/g)) {
+    const [, dollar, name] = match;
+    const at = match.index;
+    if (dollar) {
+      if (name === 'ENV') return '$ENV';
+      continue;
+    }
+    if (code[at - 1] === '.' && code[at - 2] !== '.') continue;
+    if (/^\s*:(?!:)/.test(code.slice(at + name.length))) continue;
+    if (JQ_ENV_WORDS.includes(name) || JQ_LOAD_WORDS.includes(name) || name.startsWith('load')) return name;
   }
   return undefined;
 }
