@@ -10,7 +10,7 @@ import { claudeThinkingArgs } from '../../plugins/resolveArgs';
 import type { AgentEvent, AgentStartOptions, PlannerAsk, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines, structuredPatchText } from './fileDiff';
-import { ORDEWELL_MCP_SERVER_NAME, taskCompletionContract, type McpClientConfig, type OwnerOnlyFile } from '../mcp';
+import { ORDEWELL_MCP_SERVER_NAME, taskCompletionContract, type McpClientConfig } from '../mcp';
 import { CLAUDE_ORDEWELL } from './claudeOrdewell';
 import { PermissionLedger } from './permissionLedger';
 import { ReplyRuns } from './replyRuns';
@@ -19,10 +19,7 @@ import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState, type OrdewellTool
 import { claudeLocalServers } from './claudeRepoConfig';
 import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 import { isCredentialVariable } from './credentialEnv';
-import { PlannerShellSandbox } from '../sandbox/plannerSandbox';
-import { createNativeShellLauncher, type NativeShellLauncher } from '../sandbox/nativeShellLauncher';
-import { assertWorkspaceExists } from '../../utils/workspace';
-import { augmentedPath } from '../../utils/shellPath';
+import type { NativeShellLauncher } from '../sandbox/nativeShellLauncher';
 
 /**
  * Native plan mode permits Bash writes to its plan file, and saved allow rules
@@ -443,8 +440,6 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private readOnlySite: TaskStartOptions | null = null;
   /** The sealed launcher this process's shell goes through, when the opt-in is on (ADR-0036 N2). */
   private nativeShell: NativeShellLauncher | null = null;
-  /** The sandbox that holds the native shell; its scratch directory goes with the process. */
-  private nativeSandbox: PlannerShellSandbox | null = null;
 
   /** This turn's runs of reply text, each a text block named `<message id>:<block index>`. */
   private replyRuns = new ReplyRuns();
@@ -494,8 +489,6 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private requestedMode: string | null = null;
   /** The session `--resume` asked for, until the CLI's `init` shows it was taken up. */
   private pendingResume: string | null = null;
-  /** The `--mcp-config` file of the running process, which holds its token; removed with the process. */
-  private mcpConfig: OwnerOnlyFile | null = null;
   /** Whether this process was given the server, so its tools' requests are Ordewell's own. */
   private givenOrdewell = false;
   /** The `CLAUDE_CONFIG_DIR` a planner runs under, where the CLI saves its long tool results. */
@@ -533,27 +526,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * hands it the whole command as one argument (ADR-0036 N2).
    */
   override async start(opts: AgentStartOptions): Promise<void> {
-    if (opts.kind === 'planner' && opts.nativeShell === true) {
-      // The launcher resolves the workspace on disk before the runner's own
-      // check would run, so a missing one must be reported as itself.
-      assertWorkspaceExists(opts.cwd, { isDirectory: this.deps.isDirectory });
-      const sandbox = (this.deps.nativeShellSandbox ?? (() => new PlannerShellSandbox()))();
-      try {
-        // The same PATH the harness itself starts with, so a command finds the
-        // tools the user's CLI does even when the host was launched from a GUI.
-        const PATH = await (this.deps.resolvePath ?? augmentedPath)();
-        this.nativeShell = await createNativeShellLauncher({
-          workspace: opts.cwd,
-          sandbox,
-          platform: this.deps.platform,
-          env: { ...process.env, PATH },
-        });
-      } catch (err) {
-        sandbox.end();
-        throw new Error(`The native-shell setting is on, but Ordewell could not put this planner's shell in its sandbox (${err instanceof Error ? err.message : String(err)}). Turn the setting off, or fix the sandbox, and start the conversation again.`);
-      }
-      this.nativeSandbox = sandbox;
-    }
+    this.nativeShell = await this.ownNativeShell(opts);
     await super.start(opts);
   }
 
@@ -675,17 +648,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
 
   /** The file holding the token lives exactly as long as the process that reads it. */
   private ordewellServerArgs(mcp: McpClientConfig, role: OrdewellToolRole, servers?: Record<string, unknown>): string[] {
-    this.removeMcpConfig();
     const { args, config } = CLAUDE_ORDEWELL.launch(mcp, role, servers);
-    this.mcpConfig = config;
-    void this.processEnded.then(() => config.remove());
+    this.own('mcp-config', () => config.remove());
     this.givenOrdewell = true;
     return args;
-  }
-
-  private removeMcpConfig(): void {
-    this.mcpConfig?.remove();
-    this.mcpConfig = null;
   }
 
   protected override async handshake(): Promise<void> {
@@ -722,7 +688,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * with it, and no answer would ever come.
    */
   async mcpAttached(): Promise<AttachState> {
-    if (!this.mcpConfig) return 'failed';
+    if (!this.givenOrdewell || this.isDisposed) return 'failed';
     return awaitAttach(async (left) => {
       if (this.exited) return 'failed';
       const answer = await this.control({ subtype: 'mcp_status' }, left);
@@ -821,13 +787,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     return this.send(args ? `/${name} ${args}` : `/${name}`, onEvent, signal);
   }
 
-  dispose(): void {
+  override dispose(): void {
     this.clearFollowOnTimer();
-    this.removeMcpConfig();
-    this.nativeShell?.remove();
-    this.nativeShell = null;
-    this.nativeSandbox?.end();
-    this.nativeSandbox = null;
     super.dispose();
   }
 
