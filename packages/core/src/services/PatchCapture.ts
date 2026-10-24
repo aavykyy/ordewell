@@ -552,6 +552,37 @@ async function unmergedPaths(invoker: GitInvoker, worktree: string): Promise<str
   return [...new Set(paths)].sort();
 }
 
+/** The index's links and submodules as `mode sha<TAB>path`, at whatever stage: a merge that conflicts holds a path three times. */
+async function linkEntries(invoker: GitInvoker, worktree: string): Promise<Set<string>> {
+  const entries = new Set<string>();
+  for (const record of (await git(invoker, worktree, [...APPLY_GIT, 'ls-files', '-s', '-z'])).split('\0')) {
+    const match = /^(120000|160000) ([0-9a-f]+) \d\t([\s\S]+)$/.exec(record);
+    if (match) entries.add(`${match[1]} ${match[2]}\t${match[3]}`);
+  }
+  return entries;
+}
+
+/**
+ * The paths that applying the patch would leave as a link or a submodule that
+ * the worktree's index does not already hold as such, as git itself says:
+ * the same apply, run against a copy of the index and writing no file. A
+ * patch's headers cannot say. A section with no mode line takes the mode of
+ * its path from the index, so it keeps a link a repository tracks and writes
+ * the hunk as its target, and the path git patches is the one its `---` and
+ * `+++` lines name, not the one its first line does.
+ */
+async function linksAdded(invoker: GitInvoker, worktree: string, patchFile: string, scratch: string): Promise<string[]> {
+  const index = path.resolve(worktree, (await git(invoker, worktree, [...APPLY_GIT, 'rev-parse', '--git-path', 'index'])).trim());
+  const copy = path.join(scratch, 'index');
+  fs.copyFileSync(index, copy);
+  const trial: GitInvoker = { ...invoker, exec: (file, args, opts) => invoker.exec(file, args, { ...opts, env: { ...opts.env, GIT_INDEX_FILE: copy } }) };
+  const held = await linkEntries(invoker, worktree);
+  // Its own outcome is the real apply's to report: a refusal leaves the copy as it was, and a conflict leaves what the real one would.
+  await tryGit(trial, worktree, [...APPLY_GIT, 'apply', '--cached', '--3way', '--whitespace=nowarn', patchFile]);
+  const added = [...await linkEntries(trial, worktree)].filter((entry) => !held.has(entry));
+  return [...new Set(added.map((entry) => entry.slice(entry.indexOf('\t') + 1)))].sort();
+}
+
 /**
  * Apply a saved patch (ADR-0050) in the root of a change task's own worktree
  * as a three-way merge, `git apply --3way`: at the commit the patch was taken
@@ -562,7 +593,7 @@ async function unmergedPaths(invoker: GitInvoker, worktree: string): Promise<str
  * An unresolved conflict of the task's own, or a file of the patch's that the
  * task changed and has not staged, would make the result unreadable, so
  * either applies nothing. So does a patch that is not the file that was saved,
- * or that would create a link or a submodule.
+ * or that would leave a link or a submodule the worktree does not hold.
  */
 export async function applyPatch(invoker: GitInvoker, worktree: string, patch: Buffer, saved: Pick<HandoffPatch, 'base' | 'files' | 'bytes' | 'sha256'>): Promise<PatchApplyResult> {
   const refused = (reason: string): PatchApplyResult => ({ kind: 'refused', reason });
@@ -572,7 +603,7 @@ export async function applyPatch(invoker: GitInvoker, worktree: string, patch: B
   if (createHash('sha256').update(patch).digest('hex') !== saved.sha256) {
     return refused('the patch is not the file that was saved: its hash is not the one its artifact records, so it was changed after it was saved.');
   }
-  // Applying is not sealed, and git creates whatever link a header names; a saved patch holds none, so one here was not written by the capture.
+  // Applying is not sealed, and git creates whatever link a header names; a saved patch holds none, so one here was not written by the capture. The headers are only the first look: linksAdded asks git what the apply would leave.
   const link = linkInPatch(patch);
   if (link !== undefined) {
     return refused(`the patch holds a link or a submodule (${JSON.stringify(link.slice(0, 80))}), which a saved patch never does, so it is not one that was saved.`);
@@ -590,6 +621,10 @@ export async function applyPatch(invoker: GitInvoker, worktree: string, patch: B
 
     const file = path.join(dir, 'saved.patch');
     fs.writeFileSync(file, patch, { flag: 'wx', mode: 0o600 });
+    const links = await linksAdded(invoker, worktree, file, dir);
+    if (links.length > 0) {
+      return refused(`the patch would leave ${listed(links.slice(0, 10))}${links.length > 10 ? `, +${links.length - 10} more` : ''} as a link or a submodule, which a saved patch never does, so it is not one that was saved.`);
+    }
     // --3way implies --index. The whitespace policy is pinned so a repository's apply.whitespace=error cannot refuse a patch whole.
     const applied = await tryGit(invoker, worktree, [...APPLY_GIT, 'apply', '--3way', '--whitespace=nowarn', file]);
     const conflicted = await unmergedPaths(invoker, worktree);
