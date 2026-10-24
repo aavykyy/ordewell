@@ -226,7 +226,10 @@ everything below applies per repo of the group.
   the user's tree untouched, and the gate, or the handoff, waits for the user.
   Merge all is available whenever a run has unmerged landings, including to open
   a merge gate during a run (ADR-0020); it takes turns with the landing queue,
-  so it never reads an integration branch mid-landing.
+  so it never reads an integration branch mid-landing. Preparing a task
+  workspace takes its turn too: a group's integration tips are consistent only
+  between landings, and a branch cut from one a landing had merged into some
+  repos but not yet the others would keep that merge after its rollback.
 - **Integration branches go once their work is merged, never before.** Ordewell
   never deletes landed work the user has not merged, and never touches a branch
   it does not own. A Merge all that answers `merged` on a settled run clears it
@@ -251,8 +254,9 @@ everything below applies per repo of the group.
   `blocked`, `conflict` and `failed` — part-way or not — delete nothing. Clean-up keeps the integration
   branch for a user who has not decided; discard deletes it. `discard` takes
   `integration: 'keep' | 'delete' | 'delete-merged'`; `delete-merged` is the
-  only mode that decides per branch, and is how a replaced run that holds landed
-  work is discarded.
+  only mode that decides per branch, and is how a replaced run is discarded,
+  whatever its records say: a retry drops a landed task's record, and the branch
+  alone still knows what landed.
 - **Every run start sweeps.** Once a run is minted or continued, `sweep` deletes,
   in each repo of the group, every `ordewell/<run-id>/…` branch of another run
   that HEAD contains, after a `git worktree prune`. It never touches the current
@@ -507,3 +511,4 @@ literal git command lines or private fields.
 - 2026-10-23 — the commits and merges Ordewell writes end with a `Planned-with: Ordewell` trailer, which the user can turn off (ADR-0030).
 - 2026-10-23 — Merge all's merge, a continue's merge of kept work and the rescue commit are named for the tasks and carry the trailer, like the landing.
 - 2026-10-23 — the messages Ordewell writes land as written, whatever the user's `commit.cleanup`.
+- 2026-10-24 — preparing a task workspace takes its turn, and a replaced run's integration branch is deleted only where HEAD contains it, never on the word of its records.

@@ -875,7 +875,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     await orchestrator.start();
 
     expect(spawn).toHaveBeenCalledTimes(2);
-    expect(isolation.calls).toContainEqual({ op: 'discard', integration: 'delete' });
+    expect(isolation.calls).toContainEqual({ op: 'discard', integration: 'delete-merged' });
     expect(spawn.mock.calls[1][0].cwd).toBe('/fake-worktrees/run2/1-t1');
     expect(spawnedCwd('t1')).toBe('/fake-worktrees/run1/1-t1');
   });

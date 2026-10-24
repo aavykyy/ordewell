@@ -287,7 +287,7 @@ export type IsolationMergeBlockReason = 'merge-in-progress' | 'conflict' | 'unco
 export interface IsolationMergeBlock {
   repo: string;
   reason: IsolationMergeBlockReason;
-  /** The files that would conflict, or the user's uncommitted ones the merge also changes; empty for the other reasons. */
+  /** The files that would conflict, or the user's uncommitted ones the merge would change or stand in the way of; empty for the other reasons. */
   files: string[];
   /** `wrong-branch` only: the branch the run started on. */
   expected?: string;
@@ -307,6 +307,9 @@ export interface IsolationMergeBlock {
  *   which cannot preflight, or for a reason no preflight could foresee. That
  *   merge was aborted, leaving `repo` as it was; `landed` names the repos
  *   merged before it, which stay merged, and is absent when there are none.
+ *   A `failed` merge git itself refused carries the first line it said as
+ *   `error`; one that never started, for a merge of the user's already in
+ *   progress, carries none.
  *
  * A group of one is blocked only by a partial landing or by being on the wrong
  * branch; otherwise its one merge lands or is aborted whole, so it reports as
@@ -315,7 +318,7 @@ export interface IsolationMergeBlock {
 export type IsolationMergeResult =
   | { outcome: 'merged' }
   | { outcome: 'blocked'; blocked: IsolationMergeBlock[] }
-  | { outcome: 'conflict' | 'failed'; repo: string; files?: string[]; landed?: string[] };
+  | { outcome: 'conflict' | 'failed'; repo: string; files?: string[]; landed?: string[]; error?: string };
 
 /**
  * What `discard` does with each repo's integration branch: `keep` it for review
@@ -453,7 +456,9 @@ export interface IWorktreeIsolation {
    * the Runner into. Fresh attempts start clean from the tips. A `restore`
    * puts the previous attempt's preserved work on top of them, falling back
    * to the tips in every repo when any restoration conflicts (ADR-0018).
-   * `readOnly` marks the record as a read-only task's (ADR-0046).
+   * `readOnly` marks the record as a read-only task's (ADR-0046). A failure
+   * after the last attempt was replaced throws `PrepareFailedError`, naming
+   * the work that was kept on branches as that attempt's record went.
    */
   prepare(task: Task, run: IsolationRun, intent?: PrepareIntent, opts?: { readOnly?: boolean }): Promise<PreparedTask>;
 
