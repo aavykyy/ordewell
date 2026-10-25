@@ -8,6 +8,7 @@ import type { AccountLimitCollector, AccountLimitReading } from '../AccountLimit
 import type { AgentProcessDeps } from './AgentAdapter';
 import { ClaudeCodeAdapter, type ClaudeControlAnswer } from './ClaudeCodeAdapter';
 import { settleWithin } from './settleWithin';
+import { workspaceEnvOf } from '../workspaceEnv';
 
 /** Spawn, `initialize` and `get_usage` together; the usage handler fetches from the network with no deadline of its own. */
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -39,6 +40,8 @@ export interface ClaudeAccountLimitOptions {
   timeoutMs?: number;
   /** Installed, not enabled: an account's limits are worth showing before Claude Code is given a task. */
   isInstalled: () => Promise<boolean>;
+  /** The workspace the planner and its tasks run in; its environment can choose another account than the host's (ADR-0016). */
+  workspaceRoot?: () => string | undefined;
   /** Tests inject the process boundary; the real call stays on the defaults. */
   deps?: Partial<AgentProcessDeps>;
 }
@@ -56,10 +59,10 @@ const text = (value: unknown): string | undefined => (typeof value === 'string' 
  * resumes or saves a session, or reads a credential: the CLI uses its own
  * login, as it would for a planner.
  *
- * It runs from an empty directory of its own with no workspace environment,
- * so no project's settings, hooks or direnv run on every poll, while the
- * host's own environment — `CLAUDE_CONFIG_DIR` included — still decides
- * whose account it is.
+ * It runs from an empty directory of its own, so no project's settings or
+ * hooks run on every poll, but with the workspace's environment on top of the
+ * host's, as the planner and its tasks run: a `CLAUDE_CONFIG_DIR` the
+ * workspace sets decides whose account it is, not the host's.
  */
 export function claudeAccountLimitCollector(options: ClaudeAccountLimitOptions): AccountLimitCollector {
   return {
@@ -77,10 +80,12 @@ export function claudeAccountLimitCollector(options: ClaudeAccountLimitOptions):
 async function readClaudeAccountLimits(options: ClaudeAccountLimitOptions, signal: AbortSignal): Promise<AccountLimitReading> {
   const cwd = mkdtempSync(join(tmpdir(), 'ordewell-claude-limits-'));
   const removeCwd = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch { /* still the cwd of a dying process on Windows: its exit retries */ } };
+  const root = options.workspaceRoot?.();
   const adapter = new ClaudeCodeAdapter({
     spawn: nodeSpawn,
     fetch: globalThis.fetch,
-    workspaceEnv: async () => ({}),
+    // Resolved from the workspace, not the probe's empty cwd, which has no environment of its own.
+    workspaceEnv: root ? () => workspaceEnvOf(root) : async () => ({}),
     ...options.deps,
   });
   adapter.onProcessExit(removeCwd);

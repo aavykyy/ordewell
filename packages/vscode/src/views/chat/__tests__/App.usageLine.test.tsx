@@ -121,6 +121,24 @@ describe('account limits under the planner', () => {
     expect(document.querySelector('.message-list')!.contains(row)).toBe(false);
   });
 
+  it('reaches each row\'s resets, plan and read time from the keyboard and a screen reader, not only a mouse hover', () => {
+    host.provider.setAccountLimits([codexLimits({ status: 'stale' })]);
+
+    const row = document.querySelector<HTMLElement>('.account-limit')!;
+    expect(row.tabIndex).toBe(0);
+    const detail = document.getElementById(row.getAttribute('aria-describedby')!)!;
+    const lines = Array.from(detail.children, (line) => line.textContent);
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toMatch(/^Codex 5h: 24% used, resets \S/);
+    expect(lines[1]).toMatch(/^Codex Weekly: 61% used, resets \S/);
+    expect(lines[2]).toBe('Plan: plus');
+    expect(lines[3]).toMatch(/^Last read \S.*; not current, a newer read is pending or failed$/);
+    // A passive readout: a poll that moves a percentage is not announced over what the user is doing.
+    const region = document.querySelector('.account-limits')!;
+    expect(region.getAttribute('role')).not.toBe('status');
+    expect(region.getAttribute('aria-live')).toBeNull();
+  });
+
   it('keeps the planner\'s context and cost beside them', () => {
     host.session(turnStarted, usage({ totals: { reportedCost: { USD: 0.5 } }, contextFill: { usedTokens: 700, windowTokens: 10_000 } }));
     host.provider.setAccountLimits([codexLimits()]);

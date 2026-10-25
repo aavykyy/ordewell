@@ -4,6 +4,7 @@ import type { AccountLimitCollector, AccountLimitReading } from '../AccountLimit
 import type { AgentProcessDeps } from './AgentAdapter';
 import { APP_SERVER_CLIENT_INFO, openAppServer } from './appServerModels';
 import { settleWithin } from './settleWithin';
+import { workspaceEnvOf } from '../workspaceEnv';
 
 /** Spawn, handshake, account and limits together; the limits handler has no deadline of its own. */
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -20,6 +21,8 @@ export interface CodexAccountLimitOptions {
   timeoutMs?: number;
   /** Installed, not enabled: an account's limits are worth showing before Codex is given a task. */
   isInstalled: () => Promise<boolean>;
+  /** The workspace the planner and its tasks run in; its environment can choose another account than the host's (ADR-0016). */
+  workspaceRoot?: () => string | undefined;
   /** Tests inject the process boundary; the real call stays on the defaults. */
   deps?: Partial<AgentProcessDeps>;
 }
@@ -37,10 +40,10 @@ const finite = (value: unknown): number | null => (typeof value === 'number' && 
  * here opens a thread, starts a turn, logs in or out, or asks Codex to
  * refresh its token, and Codex's `auth.json` is never read.
  *
- * It runs from the temp directory with no workspace environment, so a
- * project's config, hooks and direnv are not run on every poll, while the
- * host's own environment — `CODEX_HOME` included — still decides whose
- * account it is.
+ * It runs from the temp directory, so a project's config and hooks are not
+ * run on every poll, but with the workspace's environment on top of the
+ * host's, as the planner and its tasks run: a `CODEX_HOME` the workspace sets
+ * decides whose account it is, not the host's.
  */
 export function codexAccountLimitCollector(options: CodexAccountLimitOptions): AccountLimitCollector {
   const command = options.command ?? 'codex';
@@ -61,9 +64,10 @@ async function readCodexAccountLimits(command: string, args: string[], options: 
   let accountChanged = false;
   let followUp = false;
   let owner: string | undefined;
+  const root = options.workspaceRoot?.();
   const server = await openAppServer(command, args, {
     cwd: tmpdir(),
-    deps: options.deps,
+    deps: { ...(root ? { workspaceEnv: () => workspaceEnvOf(root) } : {}), ...options.deps },
     onMessage: (message) => {
       // No stable identity comes with it, so whatever this read says may be
       // the account that was just replaced.

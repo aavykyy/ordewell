@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { codexAccountLimitCollector } from '../codexAccountLimits';
@@ -30,6 +30,7 @@ function stub(answers: StubAnswers): string {
 const fs = require('fs');
 const readline = require('readline');
 const answers = ${JSON.stringify(answers)};
+fs.writeFileSync(${JSON.stringify(join(dir, 'codex-home.txt'))}, process.env.CODEX_HOME ?? '');
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
 const lines = readline.createInterface({ input: process.stdin });
 lines.on('line', (line) => {
@@ -214,6 +215,22 @@ describe('the Codex account-limit collector', () => {
 
     expect(await c.acquire(controller.signal)).toEqual({ kind: 'failed' });
     expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it('reads the account the workspace\'s own environment chooses, as the planner and its tasks run under', async () => {
+    const workspace = join(dir, 'workspace');
+    mkdirSync(join(workspace, '.ordewell'), { recursive: true });
+    writeFileSync(join(workspace, '.ordewell', 'env'), 'CODEX_HOME=/accounts/work-codex\n');
+    const c = codexAccountLimitCollector({
+      command: process.execPath,
+      args: [stub({ account: SIGNED_IN, limits: { rateLimits: { limitId: 'codex', primary: { usedPercent: 1, windowDurationMins: 300, resetsAt: null } } } })],
+      timeoutMs: 5000,
+      isInstalled: async () => true,
+      workspaceRoot: () => workspace,
+    });
+
+    expect((await read(c)).kind).toBe('limits');
+    expect(readFileSync(join(dir, 'codex-home.txt'), 'utf8')).toBe('/accounts/work-codex');
   });
 
   it('spawns nothing for a Codex that is not installed', async () => {
