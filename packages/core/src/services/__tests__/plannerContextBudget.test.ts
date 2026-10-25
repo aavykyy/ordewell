@@ -18,6 +18,20 @@ describe('callBudget', () => {
     expect(callBudget({ contextWindow: 131_072 })?.lowWater).toBe(74_304);
   });
 
+  // Gemini states the prompt's limit apart from the reply's: the reply takes
+  // nothing out of it, and no share of it caps the reply.
+  it.each([
+    [{ inputTokenLimit: 1_048_576, maxOutputTokens: 65_536 }, 16_384, { maxOutputTokens: 16_384, ceiling: 943_718, promptLimit: 1_048_576, lowWater: 707_788 }],
+    [{ inputTokenLimit: 32_768, maxOutputTokens: 8_192 }, 16_384, { maxOutputTokens: 8_192, ceiling: 29_491, promptLimit: 32_768 }],
+    [{ inputTokenLimit: 16_384 }, 16_384, { maxOutputTokens: 16_384, ceiling: 14_745, promptLimit: 16_384 }],
+  ])('budgets an input-only limit %o, asking for at most %d, as %o', (limits, wanted, expected) => {
+    expect(callBudget(limits, wanted)).toMatchObject({ contextWindow: limits.inputTokenLimit, ...expected });
+  });
+
+  it('refuses a call outright only past what the prompt may hold: the window less the reply', () => {
+    expect(callBudget({ contextWindow: 131_072 })?.promptLimit).toBe(99_072);
+  });
+
   it('budgets nothing on a window it does not know', () => {
     expect(callBudget(undefined)).toBeUndefined();
     expect(callBudget({ maxOutputTokens: 4_096 })).toBeUndefined();

@@ -241,7 +241,7 @@ export function createAiService(config: IConfig, deps?: CliAgentAiServiceDeps & 
     return new CliAgentAiService(config, deps);
   }
   if (config.aiProvider === 'google') {
-    return new GeminiService(config, deps?.turnBudgets);
+    return new GeminiService(config, { turnBudgets: deps?.turnBudgets, modelLimits: deps?.modelLimits, autoCompaction: deps?.autoCompaction });
   }
   return new OpenAiService(config, { turnBudgets: deps?.turnBudgets, modelLimits: deps?.modelLimits, autoCompaction: deps?.autoCompaction });
 }

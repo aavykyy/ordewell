@@ -90,8 +90,7 @@ export interface ResearchChat {
   /**
    * Optional: prune older workspace reads from the history (everything else,
    * and the newest rounds, are kept) so a follow-up emission has context to
-   * spend on output. Returns the number of characters removed. Providers
-   * whose SDK owns the history (Gemini) may not support it.
+   * spend on output. Returns the number of characters removed.
    */
   compactHistory?(): number;
   /**

@@ -29,7 +29,7 @@ import { toOpenAiTools, toOpenAiSubagentTools } from './researchTools';
 import { getProviderMeta, isApiProvider, stripModelPrefix } from './ProviderRegistry';
 import { PLANNER_ESCAPE_HINT } from './plannerReadiness';
 import { ChatHistory, messageChars, type CompactableMessage } from './contextCompaction';
-import { PlannerContextExhaustedError, TokenGauge, callBudget, replyTokens, type ModelLimits, type PlannerContextDeps, type PlannerContextStatus } from './plannerContextBudget';
+import { PlannerContextExhaustedError, TokenGauge, callBudget, replyTokens, type ChatBudget, type ModelLimits, type PlannerContextDeps, type PlannerContextStatus } from './plannerContextBudget';
 import type { UsageRecord } from '../models/Usage';
 
 /** The subset of an OpenAI-compatible `usage` block this service reads. OpenRouter
@@ -49,15 +49,6 @@ type Message = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 interface CallInput {
   kind: 'message' | 'results';
   messages: Message[];
-}
-
-/** How a planner's chat budgets each call (`plannerContextBudget`). A subagent's chat has none. */
-interface ChatBudget {
-  limits(model: string): ModelLimits | undefined;
-  autoCompaction(): boolean;
-  gauge: TokenGauge;
-  /** The model's context changed under what earlier turns were sent (ADR-0012 T10). */
-  onCompacted(): void;
 }
 
 interface ChatOptions {
@@ -202,7 +193,7 @@ class OpenAiResearchChat implements ResearchChat {
     this.prune(toLowWater(), 0);
     if (chars() / perToken > budget.ceiling) this.prune(toLowWater(), this.turnStart(input));
     const plain = gauge.plainCharsPerToken(model);
-    if (plain !== undefined && chars() / plain > budget.contextWindow - budget.maxOutputTokens) {
+    if (plain !== undefined && chars() / plain > budget.promptLimit) {
       this.held = input;
       throw new PlannerContextExhaustedError(model, false);
     }
