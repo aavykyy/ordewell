@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import SkillChips from './SkillChips';
 import ModelSelector from './ModelSelector';
 import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import TaskHandoff, { HandoffPeek } from './TaskHandoff';
-import { pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
-import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope, RunTask } from '@ordewell/core';
+import { editableWhileRunning, pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
+import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope } from '@ordewell/core';
 import { AssignmentFlag, IsolationBadges, StatusBadge, TaskActions, TaskCheck, TaskMarkControl, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
-import type { RunnerMode, RunnerOption } from './TaskCard';
+import type { RunnerMode, RunnerOption, TaskCardRun } from './TaskCard';
 import { checkLabel } from '../checkLabel';
 
 interface SubTaskCardProps {
@@ -24,7 +24,7 @@ interface SubTaskCardProps {
   modelApiMapping?: Record<string, ('openrouter' | 'google' | 'openai_compatible')[]>;
   isExecuting?: boolean;
   /** This subtask's own run entry: what its status badges read, as a task's do. */
-  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage'>;
+  run?: TaskCardRun;
   onRunnerChange?: (taskId: string, runner: string) => void;
   onModelChange?: (taskId: string, assignment: TaskModelAssignment) => void;
   onModelsRefreshNeeded?: () => void;
@@ -80,6 +80,17 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
     ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
   }, { parent: parentTask, placement: 'subtask', tasks, runnerScope });
   const status = statusBadge(row);
+  // A subtask's own state decides, never its parent's: a queued subtask of a
+  // running parent keeps its editors, and one that has started keeps none. The
+  // run's status is the newer word: `task_started` reaches it first.
+  const canEdit = !isExecuting || editableWhileRunning({ status: run?.status ?? task.status }, run
+    ? { awaitingApproval: run.awaitingApproval, isolation }
+    : undefined);
+
+  useEffect(() => {
+    if (!canEdit) setEditingPrompt(null);
+  }, [canEdit]);
+
   // Its own attempt history, never its parent's.
   const chatAvailable = row.chatAvailable;
 
@@ -127,7 +138,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
             {handoff && <TaskHandoff handoff={handoff} taskName={(id) => taskRefOf(tasks ?? [], id)}
               onReadFull={onOpenLog && chatAvailable ? () => onOpenLog(task.id) : undefined} />}
 
-            {!isExecuting && task.type === 'ai' && task.prompt && (
+            {canEdit && task.type === 'ai' && task.prompt && (
               editingPrompt === null ? (
                 <div className="subtask-prompt subtask-prompt-editable" onClick={(e) => { e.stopPropagation(); setEditingPrompt(task.prompt ?? ''); }} title="Click to edit prompt">
                   {task.prompt}
@@ -146,15 +157,15 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
               )
             )}
 
-            {isExecuting && task.type === 'ai' && task.prompt && (
+            {!canEdit && task.type === 'ai' && task.prompt && (
               <div className="subtask-prompt subtask-prompt-readonly">{task.prompt}</div>
             )}
 
-            {/* The pickers are hidden once the plan runs; what they decided stays readable. */}
-            {isExecuting && <TaskAssignmentReadout task={task} />}
+            {/* A subtask execution has reached shows what its pickers decided; one still queued keeps them. */}
+            {isExecuting && !canEdit && <TaskAssignmentReadout task={task} />}
 
             {/* Runner first: it decides which models, efforts and modes exist below it. */}
-            {!isExecuting && task.type === 'ai' && runnerOptions.length > 0 && onRunnerChange && (
+            {canEdit && task.type === 'ai' && runnerOptions.length > 0 && onRunnerChange && (
               <div className="model-selector" style={{ marginTop: '8px' }}>
                 <label htmlFor={`subtask-runner-${task.id}`}>Runner</label>
                 <select id={`subtask-runner-${task.id}`} value={task.assignedRunner}
@@ -166,14 +177,14 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
               </div>
             )}
 
-            {!isExecuting && task.type === 'ai' && models.length > 0 && onModelChange && (
+            {canEdit && task.type === 'ai' && models.length > 0 && onModelChange && (
               <ModelSelector models={models} currentModel={task.assignedModel}
                 configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
                 onChange={(assignment) => onModelChange(task.id, assignment)}
                 onOpen={onModelsRefreshNeeded} />
             )}
 
-            {!isExecuting && task.type === 'ai' && onModeChange && (
+            {canEdit && task.type === 'ai' && onModeChange && (
               <div className="model-selector" style={{ marginTop: '8px' }}>
                 <label htmlFor={`subtask-mode-${task.id}`}>Mode</label>
                 <select id={`subtask-mode-${task.id}`} value={task.taskMode ?? activeModes[0]?.id ?? 'build'}
@@ -187,7 +198,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
 
             {task.type === 'ai' && (
               <SkillChips idPrefix="subtask" taskId={task.id} skills={task.skills} catalog={taskSkills}
-                onChange={!isExecuting ? onSkillsChange : undefined} />
+                onChange={canEdit ? onSkillsChange : undefined} />
             )}
 
             {!isExecuting && task.type === 'ai' && onRunTask && (

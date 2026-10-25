@@ -131,14 +131,24 @@ describe('TaskCard — dependency editor', () => {
     expect(screen.getByText(/No earlier siblings/i)).toBeTruthy();
   });
 
-  it('stays read-only while the plan is executing', () => {
+  it('stays editable on a queued task while the plan is executing', () => {
     render(
       <TaskCard task={makeTask({ dependencies: ['t1'] })} models={noModels} siblings={SIBLINGS}
         onDependenciesChange={vi.fn()} isExecuting />,
     );
     expand();
 
-    expect(screen.queryByTitle('Edit dependencies')).toBeNull();
+    expect(screen.getByTitle(/click to edit/i)).toBeTruthy();
+  });
+
+  it('stays read-only once that task has started', () => {
+    render(
+      <TaskCard task={makeTask({ status: 'in_progress', dependencies: ['t1'] })} models={noModels} siblings={SIBLINGS}
+        onDependenciesChange={vi.fn()} isExecuting />,
+    );
+    expand();
+
+    expect(screen.queryByTitle(/click to edit/i)).toBeNull();
   });
 });
 

@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { taskCommand, useRunnerCommands, useTaskCommands } from './RunnerCommands';
 import SubTaskCard from './SubTaskCard';
 import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
@@ -10,7 +10,7 @@ import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
-import { blockedByLabel, dependencyCandidates, capConflictFiles, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
+import { blockedByLabel, dependencyCandidates, capConflictFiles, editableWhileRunning, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind, AssignmentScope } from '@ordewell/core';
 
 export interface RunnerMode {
@@ -27,6 +27,13 @@ export interface RunnerOption {
   id: string;
   displayName: string;
 }
+
+/**
+ * A task's entry in the run view. Its status is the newest word while a run
+ * streams — `task_started` reaches it before the plan refresh does — so the
+ * card's editability reads it when present.
+ */
+export type TaskCardRun = Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage'> & { status?: Task['status'] };
 
 interface TaskCardProps {
   task: Task;
@@ -51,7 +58,7 @@ interface TaskCardProps {
    * runner approvals, isolation and merge gate. Absent before the host has
    * folded the run, in which case the plan's own fields are all there is.
    */
-  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage'>;
+  run?: TaskCardRun;
   /** Every task's run entry, keyed by id, so a subtask card can read its own hold. */
   runsByTask?: ReadonlyMap<string, RunTask>;
   /** Opt in to resolving this task's merge conflict as an AI task. */
@@ -453,6 +460,20 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
 
   const status = statusBadge(row);
   const isUserTask = task.type === 'user';
+  // While the plan runs, a task that has not itself started keeps its editors;
+  // execution, a start the run already shows, and a settled task do not. The
+  // run's status is the newer word: `task_started` reaches it first.
+  const canEdit = !isExecuting || editableWhileRunning({ status: run?.status ?? task.status }, run
+    ? { awaitingApproval, isolation }
+    : undefined);
+
+  // A draft is not the plan's: once execution reaches the task, drop it rather
+  // than bring it back if the task returns to pending.
+  useEffect(() => {
+    if (canEdit) return;
+    setEditingPrompt(null);
+    setEditingDeps(false);
+  }, [canEdit]);
 
   const handlePromptSave = () => {
     if (editingPrompt !== null && editingPrompt !== task.prompt) {
@@ -482,7 +503,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
 
 
   const runnerOptions = runnerOptionsFor(runners, task.assignedRunner);
-  const canEditDeps = !isExecuting && !!onDependenciesChange;
+  const canEditDeps = canEdit && !!onDependenciesChange;
   // Only a running or waiting AI task has a runner turn to reach; a manual task
   // or one not yet started has none. One paused on a usage limit is reached
   // by resuming it, which needs its saved session.
@@ -669,7 +690,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
               </div>
             )}
 
-            {!isExecuting && task.type === 'ai' && task.prompt && (
+            {canEdit && task.type === 'ai' && task.prompt && (
               editingPrompt === null ? (
                 <div className="task-prompt task-prompt-editable" onClick={(e) => { e.stopPropagation(); setEditingPrompt(task.prompt ?? ''); }} title="Click to edit prompt">
                   {task.prompt}
@@ -688,15 +709,15 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
               )
             )}
 
-            {isExecuting && task.type === 'ai' && task.prompt && (
+            {!canEdit && task.type === 'ai' && task.prompt && (
               <div className="task-prompt task-prompt-readonly">{task.prompt}</div>
             )}
 
-            {/* The pickers are hidden once the plan runs; what they decided stays readable. */}
-            {isExecuting && <TaskAssignmentReadout task={task} />}
+            {/* A task execution has reached shows what its pickers decided; one still queued keeps them. */}
+            {isExecuting && !canEdit && <TaskAssignmentReadout task={task} />}
 
             {/* Runner first: it decides which models, efforts and modes exist below it. */}
-            {!isExecuting && task.type === 'ai' && runnerOptions.length > 0 && onRunnerChange && (
+            {canEdit && task.type === 'ai' && runnerOptions.length > 0 && onRunnerChange && (
               <div className="model-selector" style={{ marginTop: '8px' }}>
                 <label htmlFor={`task-runner-${task.id}`}>Runner</label>
                 <select id={`task-runner-${task.id}`} value={task.assignedRunner}
@@ -708,14 +729,14 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
               </div>
             )}
 
-            {!isExecuting && task.type === 'ai' && models.length > 0 && onModelChange && (
+            {canEdit && task.type === 'ai' && models.length > 0 && onModelChange && (
               <ModelSelector models={models} currentModel={task.assignedModel}
                 configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
                 onChange={(assignment) => onModelChange(task.id, assignment)}
                 onOpen={onModelsRefreshNeeded} />
             )}
 
-            {!isExecuting && task.type === 'ai' && onModeChange && (
+            {canEdit && task.type === 'ai' && onModeChange && (
               <div className="model-selector" style={{ marginTop: '8px' }}>
                 <label htmlFor={`task-mode-${task.id}`}
                   title={row.autonomous ? 'Full: runs without permission prompts. /settings changes the level' : undefined}>
@@ -732,10 +753,10 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
 
             {task.type === 'ai' && (
               <SkillChips idPrefix="task" taskId={task.id} skills={task.skills} catalog={taskSkills}
-                onChange={!isExecuting ? onSkillsChange : undefined} />
+                onChange={canEdit ? onSkillsChange : undefined} />
             )}
 
-            {!isExecuting && onOpsChange && row.opsEditable && (
+            {canEdit && onOpsChange && row.opsEditable && (
               <label className="task-ops-toggle" title="An ops task changes no repository files: it acts on outside systems or on your branch's refs, from your checkout, once the work it depends on is merged.">
                 <input type="checkbox" checked={!!task.ops} onChange={(e) => onOpsChange(task.id, e.target.checked)} />
                 Ops task: runs in your checkout, not a worktree

@@ -66,7 +66,7 @@ import type { IRunner } from '../interfaces/IRunner';
 import type { TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { IsolationHandoff, IsolationMergeResult, IsolationView, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
 import type { IsolationRunController } from './IsolationRunController';
-import { PlanEditor } from './PlanEditor';
+import { PlanEditor, type TaskEditOptions } from './PlanEditor';
 import { PlanEditError } from './PlanEditError';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { ExecutionCommands, mergeStopped, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
@@ -2285,18 +2285,18 @@ export class Session {
   }
 
   /** Patch one task's fields, checked as the planner's task ops are; see {@link PlanEditor.updateTask}. */
-  async updateTask(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
-    return this.editor.updateTask(taskId, changes);
+  async updateTask(taskId: string, changes: Partial<Task>, options?: TaskEditOptions): Promise<LegacyPlanState | null> {
+    return this.editor.updateTask(taskId, changes, options);
   }
 
   /** Move one task onto a different runner, re-deriving what is scoped to it; see {@link PlanEditor.setTaskRunner}. */
-  async setTaskRunner(taskId: string, runner: RunnerId): Promise<LegacyPlanState | null> {
-    return this.editor.setTaskRunner(taskId, runner);
+  async setTaskRunner(taskId: string, runner: RunnerId, options?: TaskEditOptions): Promise<LegacyPlanState | null> {
+    return this.editor.setTaskRunner(taskId, runner, options);
   }
 
   /** Replace one task's dependency list, under the same guard as a field patch; see {@link PlanEditor.setTaskDependencies}. */
-  async setTaskDependencies(taskId: string, dependencies: string[]): Promise<LegacyPlanState | null> {
-    return this.editor.setTaskDependencies(taskId, dependencies);
+  async setTaskDependencies(taskId: string, dependencies: string[], options?: TaskEditOptions): Promise<LegacyPlanState | null> {
+    return this.editor.setTaskDependencies(taskId, dependencies, options);
   }
 
   /** Delete one task, cancelling its runner first if it runs; see {@link PlanEditor.removeTask}. */

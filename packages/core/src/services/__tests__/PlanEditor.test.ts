@@ -138,6 +138,34 @@ describe('PlanEditor.updateTask', () => {
     expect(task('t1')).toMatchObject({ assignedRunner: 'claude-code', title: 'Setup' });
   });
 
+  // The card offers its editors only on a task that has not started. The
+  // wider direct path keeps its contract, where a live task's prompt can still
+  // be changed; this is the card's own narrower precondition.
+  it('refuses a card edit to a task whose runner is live, while a direct edit of its prompt still lands', async () => {
+    const { editor, task, mutate } = setup({ live: () => true });
+
+    await expect(editor.updateTask('t1', { prompt: 'do it differently' }, { requireUnstarted: true }))
+      .rejects.toThrow(/"Setup" started before this change was saved, so it was not changed/);
+    expect(mutate).not.toHaveBeenCalled();
+    expect(task('t1')!.prompt).toBe('setup');
+
+    await editor.updateTask('t1', { prompt: 'do it differently' });
+    expect(task('t1')!.prompt).toBe('do it differently');
+  });
+
+  it('refuses a card edit whose task started while its new runner was being discovered, changing nothing', async () => {
+    const { editor, store, task, mutate, catalog } = setup();
+    vi.mocked(catalog.runner).mockImplementationOnce(async () => {
+      store.update('t1', { status: 'in_progress' });
+      return CATALOGS.codex;
+    });
+
+    await expect(editor.updateTask('t1', { assignedRunner: 'codex', title: 'Set up' }, { requireUnstarted: true }))
+      .rejects.toThrow(/"Setup" started before this change was saved, so it was not changed/);
+    expect(mutate).not.toHaveBeenCalled();
+    expect(task('t1')).toMatchObject({ assignedRunner: 'claude-code', title: 'Setup', status: 'in_progress' });
+  });
+
   const skill = (name: string, appliesTo: SkillInfo['appliesTo']): SkillInfo => ({
     name, description: name, metadata: { name, description: name }, content: '', path: `/g/${name}/SKILL.md`, source: 'global', appliesTo, modelInvocable: false, userInvocable: true,
   });
