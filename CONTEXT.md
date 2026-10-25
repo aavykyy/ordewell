@@ -221,8 +221,8 @@ AI service only holds a disposable copy of it.
 
 **Planner turn** (`PlannerTurn`; `Session.isPlannerBusy`,
 `Session.abortPlannerTurn()`) — the one piece of planner work holding a
-session's conversation at a time: a reply (merge and split requests included),
-a compaction, the conversation's opening, or one-shot plan generation.
+session's conversation at a time: a reply, a compaction, the conversation's
+opening, or one-shot plan generation.
 Starting one creates its abort signal, and a caller's own signal is relayed
 into it. A turn that continues the dialogue is refused while another is live
 (`ConversationBusyError`, 409 from the daemon) — except a reply sent during a
@@ -1827,9 +1827,8 @@ cleared.
 *Avoid:* "disabled task" for a flagged one — nothing about it is disabled.
 
 **PlanEditor** — the module behind Session's direct plan edits: `updateTask`,
-`setTaskDependencies`, `setTaskRunner`, `addTask`, `removeTask`, the
-conflict-resolver task, and the requests that ask the planner to merge or split
-tasks. `Session`'s methods of those names are one-line delegations; the rules (the fields a direct edit may set, the runner retarget,
+`setTaskDependencies`, `setTaskRunner`, `addTask`, `removeTask` and the
+conflict-resolver task. `Session`'s methods of those names are one-line delegations; the rules (the fields a direct edit may set, the runner retarget,
 the resolved assignment of an edited or hand-added task, the ops mark) live here, reaching
 the plan only through the session's `mutate` ritual, so every edit saves and
 announces once. A refused edit throws `PlanEditError`, which a surface reads as

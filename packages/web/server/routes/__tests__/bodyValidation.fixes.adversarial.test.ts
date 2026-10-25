@@ -38,7 +38,6 @@ describe('a plan route given a body that is not JSON', () => {
   it.each([
     '/api/plans/s1/generate',
     '/api/plans/s1/tasks',
-    '/api/plans/s1/tasks/merge',
     '/api/plans/s1/converse/start',
     '/api/plans/s1/converse/message',
     '/api/plans/s1/converse/message/now',

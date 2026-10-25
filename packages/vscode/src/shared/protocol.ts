@@ -120,10 +120,6 @@ export type WebviewToHost =
   | { type: 'sendQueuedTaskMessageNow'; taskId: string; id: string }
   /** Stop a structured task's running turn; the task then waits for input. */
   | { type: 'interruptTask'; taskId: string }
-  /** The planner merges these tasks into one (issue #18). */
-  | { type: 'mergeTasks'; taskIds: string[] }
-  /** The planner splits this task into smaller ones (issue #18). */
-  | { type: 'splitTask'; taskId: string }
   /**
    * The user answered an in-chat approval card. The id is the request's, so the
    * host resolves the same prompt any other surface would.

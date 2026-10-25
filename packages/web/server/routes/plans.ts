@@ -285,28 +285,6 @@ export function plansRoute(pool: OrchestratorPool) {
     }
   });
 
-  router.post('/:sessionId/tasks/merge', async (c) => {
-    try {
-      const { taskIds } = await jsonObject<{ taskIds?: unknown }>(c);
-      if (!taskIds || !Array.isArray(taskIds) || taskIds.length < 2) {
-        return c.json({ error: 'taskIds array with at least two ids is required' }, 400);
-      }
-      const plan = await pool.session(c.req.param('sessionId')).requestMerge(taskIds);
-      return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
-    } catch (err) {
-      return failure(c, err, 'merge', { fallback: 400 });
-    }
-  });
-
-  router.post('/:sessionId/tasks/:taskId/split', async (c) => {
-    try {
-      const plan = await pool.session(c.req.param('sessionId')).requestSplit(c.req.param('taskId'));
-      return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
-    } catch (err) {
-      return failure(c, err, 'split', { fallback: 400 });
-    }
-  });
-
   // Conversational planning (ADR-0002): start the planner dialogue. The
   // response's plan carries conversationHistory; when tasks are non-empty the
   // planner committed the plan.

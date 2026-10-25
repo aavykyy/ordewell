@@ -88,7 +88,6 @@ interface TaskCardProps {
   onSendMessageNow?: (taskId: string, text: string) => void;
   /** Open (or focus) this task's log tab (ADR-0018, V1). */
   onOpenLog?: (taskId: string) => void;
-  planActions?: React.ReactNode;
   /** Controlled expansion. When both are supplied the parent owns which card is
    *  open (an accordion); omitted, the card keeps its own state. */
   expanded?: boolean;
@@ -382,7 +381,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, planActions, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -826,12 +825,10 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
         {(isExecuting || row.holdReason || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
           <StatusBadge status={status} />
         )}
-        {planActions}
-
-        {/* Beside Merge and Split rather than in the header, where it held the
-            title's last stretch for a button only shown on hover. The host
-            confirms removal with a real modal: a `confirm()` here would never
-            fire — VS Code sandboxes the webview without `allow-modals`. */}
+        {/* In the footer rather than in the header, where it held the title's
+            last stretch for a button only shown on hover. The host confirms
+            removal with a real modal: a `confirm()` here would never fire — VS
+            Code sandboxes the webview without `allow-modals`. */}
         {!isExecuting && onRemoveTask && (
           <button className="task-remove-btn" onClick={(e) => { e.stopPropagation(); onRemoveTask(task.id); }} title="Remove task">&#10005;</button>
         )}

@@ -33,7 +33,7 @@ import { SecretStore } from '../../adapters/SecretStore';
 import { PlannerSelection } from '../../PlannerSelection';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
 import type { HostToWebview } from '../../shared/protocol';
-import { handleStartPlanning, handleContinueConversation, handleStopPlanning, handleMergePlan, handleSplitPlan, handleSendMessageNow, type PlanManagerDeps } from '../PlanManager';
+import { handleStartPlanning, handleContinueConversation, handleStopPlanning, handleSendMessageNow, type PlanManagerDeps } from '../PlanManager';
 
 interface FakeAgentProcess extends ChildProcess { emitStdout(chunk: string): void }
 
@@ -239,7 +239,7 @@ describe('VS Code keyless first-run process boundary', () => {
     expect(h.runner.spawn).not.toHaveBeenCalled();
   });
 
-  for (const action of ['start', 'merge', 'split', 'force-send'] as const) {
+  for (const action of ['start', 'force-send'] as const) {
     it(`${action} checks the selected provider's own key through PlanManager and never calls a transport`, async () => {
       setConfig({ aiProvider: 'openai', orchestratorModel: 'gpt-4o' });
       const secrets = new SecretStore({
@@ -254,8 +254,6 @@ describe('VS Code keyless first-run process boundary', () => {
         h.deps.setCurrentPlan(plan);
       }
       if (action === 'start') await handleStartPlanning('Build a ledger', h.deps);
-      else if (action === 'merge') await handleMergePlan(['t1', 't2'], h.deps);
-      else if (action === 'split') await handleSplitPlan('t1', h.deps);
       else await handleSendMessageNow('Use Postgres', h.deps);
       expect(h.messages).toContainEqual({ type: 'showError', error: expect.stringContaining('OPENAI_API_KEY') });
       expect(argvs).toEqual([]);

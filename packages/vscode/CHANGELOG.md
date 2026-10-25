@@ -63,6 +63,9 @@
 
 ### Changed
 
+- **Merge and Split are planner requests, not task-card buttons.** Ask the
+  planner in chat to merge or split tasks; the task cards no longer carry the
+  controls, their selection banner or their inline error.
 - **A read-only task is the same on every runner.** It reads with its runner's
   own tools, runs commands sealed with its worktree writable, so a review can
   run the tests, and lands nothing: its report is its result.

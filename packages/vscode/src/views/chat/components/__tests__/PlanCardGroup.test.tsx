@@ -146,7 +146,7 @@ describe('PlanCardGroup — no reordering', () => {
 
   const renderGroup = () => render(
     <PlanCardGroup run={EMPTY_RUN} tasks={twoTasks} models={emptyModels} isExecuting={false}
-      onExecutePlan={vi.fn()} onMerge={vi.fn()} onSplit={vi.fn()} />,
+      onExecutePlan={vi.fn()} />,
   );
 
   it('offers no drag handle', () => {
@@ -187,6 +187,29 @@ describe('PlanCardGroup — no reordering', () => {
   it('drops the action row entirely when it would have no buttons', () => {
     render(<PlanCardGroup run={EMPTY_RUN} tasks={twoTasks} models={emptyModels} isExecuting={false} />);
     expect(document.querySelector('.task-inline-actions')).toBeNull();
+  });
+});
+
+describe('PlanCardGroup — no dedicated merge or split controls', () => {
+  // The planner edits the plan in natural language; a Merge/Split button only
+  // re-worded that request, so the cards carry neither control nor its banner.
+  it('offers no Merge or Split control, selection banner or error banner on a task card', () => {
+    render(
+      <PlanCardGroup run={EMPTY_RUN}
+        tasks={[makeTask({ id: 't1', order: 1, title: 'First' }), makeTask({ id: 't2', order: 2, title: 'Second', dependencies: ['t1'] })]}
+        models={emptyModels}
+        isExecuting={false}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: /^Merge/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Split/ })).toBeNull();
+    expect(screen.queryByTitle(/select.*merge|merge.*select|split this task/i)).toBeNull();
+    expect(document.querySelector('.plan-merge-banner')).toBeNull();
+    expect(document.querySelector('.merge-validation-error-banner')).toBeNull();
+    expect(document.querySelector('.task-inline-actions')).toBeNull();
+    expect(document.querySelector('.task-merge-btn')).toBeNull();
+    expect(document.querySelector('.task-split-btn')).toBeNull();
   });
 });
 
@@ -244,89 +267,5 @@ describe('PlanCardGroup — accordion expansion', () => {
     expect(document.querySelectorAll('.task-card-body')).toHaveLength(1);
     fireEvent.click(screen.getByText('First'));
     expect(document.querySelectorAll('.task-card-body')).toHaveLength(0);
-  });
-});
-
-describe('PlanCardGroup — planner-driven split', () => {
-  it('calls onSplit(taskId) directly with no manual spec dialog', () => {
-    const onSplit = vi.fn();
-    render(
-      <PlanCardGroup run={EMPTY_RUN}
-        tasks={[makeTask({ id: 't1', order: 1 }), makeTask({ id: 't2', order: 2, title: 'Other' })]}
-        models={emptyModels}
-        isExecuting={false}
-        onSplit={onSplit}
-      />,
-    );
-    // The split button for the first task.
-    const splitBtn = screen.getAllByTitle(/Split this task/)[0];
-    fireEvent.click(splitBtn);
-    expect(onSplit).toHaveBeenCalledWith('t1');
-    // No manual spec dialog is rendered.
-    expect(document.querySelector('.split-dialog-overlay')).toBeNull();
-  });
-
-  it('shows an inline error and does not call onSplit for a completed task', () => {
-    const onSplit = vi.fn();
-    render(
-      <PlanCardGroup run={EMPTY_RUN}
-        tasks={[makeTask({ id: 't1', order: 1, status: 'completed' })]}
-        models={emptyModels}
-        isExecuting={false}
-        onSplit={onSplit}
-      />,
-    );
-    fireEvent.click(screen.getAllByTitle(/Split this task/)[0]);
-    expect(onSplit).not.toHaveBeenCalled();
-    expect(document.querySelector('.merge-validation-error-banner')).toBeTruthy();
-  });
-});
-
-describe('PlanCardGroup — planner-driven merge', () => {
-  function chain() {
-    return [
-      makeTask({ id: 't1', order: 1, title: 'A' }),
-      makeTask({ id: 't2', order: 2, title: 'B', dependencies: ['t1'] }),
-      makeTask({ id: 't3', order: 3, title: 'C', dependencies: ['t2'] }),
-    ];
-  }
-
-  it('calls onMerge with the selected consecutive task ids', () => {
-    const onMerge = vi.fn();
-    render(
-      <PlanCardGroup run={EMPTY_RUN} tasks={chain()} models={emptyModels} isExecuting={false} onMerge={onMerge} />,
-    );
-    fireEvent.click(screen.getAllByTitle(/Select tasks to merge/)[0]); // t1
-    fireEvent.click(screen.getAllByTitle(/Select task to merge/)[0]);  // t2
-    fireEvent.click(screen.getByText('Merge 2 tasks'));
-    expect(onMerge).toHaveBeenCalledWith(['t1', 't2']);
-  });
-
-  it('shows an inline error for a non-consecutive selection and does not call onMerge', () => {
-    const onMerge = vi.fn();
-    render(
-      <PlanCardGroup run={EMPTY_RUN} tasks={chain()} models={emptyModels} isExecuting={false} onMerge={onMerge} />,
-    );
-    fireEvent.click(screen.getAllByTitle(/Select tasks to merge/)[0]); // t1
-    fireEvent.click(screen.getAllByTitle(/Select task to merge/)[1]);  // t3 (skips t2)
-    fireEvent.click(screen.getByText('Merge 2 tasks'));
-    expect(onMerge).not.toHaveBeenCalled();
-    expect(document.querySelector('.merge-validation-error-banner')).toBeTruthy();
-  });
-
-  it('shows an inline error when a selected task is running (canMergeTasks)', () => {
-    const onMerge = vi.fn();
-    const tasks = [
-      makeTask({ id: 't1', order: 1, title: 'A', status: 'in_progress' }),
-      makeTask({ id: 't2', order: 2, title: 'B' }),
-    ];
-    render(
-      <PlanCardGroup run={EMPTY_RUN} tasks={tasks} models={emptyModels} isExecuting={false} onMerge={onMerge} />,
-    );
-    fireEvent.click(screen.getAllByTitle(/Select tasks to merge/)[0]); // t1
-    fireEvent.click(screen.getAllByTitle(/Select task to merge/)[0]);  // t2
-    fireEvent.click(screen.getByText('Merge 2 tasks'));
-    expect(onMerge).not.toHaveBeenCalled();
-    expect(document.querySelector('.merge-validation-error-banner')).toBeTruthy();
   });
 });
