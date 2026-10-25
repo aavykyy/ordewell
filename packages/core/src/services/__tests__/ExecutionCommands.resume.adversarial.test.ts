@@ -89,8 +89,8 @@ describe('adversarial: a Resume now the seam cannot take changes nothing', () =>
     const refused = await env.session.execute({ command: 'retry_task', task: 't1', from: 'session' }, ACT);
     expect(refused.ok).toBe(false);
 
-    await env.session.execute({ command: 'mark_complete', task: taskOf(env.session, 'busy')!.id }, { kind: 'user' });
-    await env.session.execute({ command: 'mark_complete', task: taskOf(env.session, 'busy2')!.id }, { kind: 'user' });
+    await env.session.execute({ command: 'stop_task', task: taskOf(env.session, 'busy')!.id }, { kind: 'user' });
+    await env.session.execute({ command: 'stop_task', task: taskOf(env.session, 'busy2')!.id }, { kind: 'user' });
 
     await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
     await vi.waitFor(() => expect(env.spawned('t1')).toHaveLength(1));

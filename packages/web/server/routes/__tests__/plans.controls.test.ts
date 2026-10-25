@@ -33,11 +33,11 @@ describe('a control from the daemon lands one execution_action line, worded by t
   it('Mark complete and Mark not done answer the seam\'s line', async () => {
     const h = start([task('t1', 1)]);
 
-    const complete = await h.command({ command: 'mark_complete', task: 't1' });
+    const complete = await h.command({ command: 'mark_complete', task: 't1', confirmed: true });
     expect(await json(complete)).toEqual({ ok: true, message: 'Marked task #1 "Task t1" complete.' });
     expect(h.timeline().map((m) => m.text)).toEqual(['You marked task #1 "Task t1" complete.']);
 
-    const undone = await h.command({ command: 'mark_not_done', task: 't1' });
+    const undone = await h.command({ command: 'mark_not_done', task: 't1', confirmed: true });
     expect(await json(undone)).toEqual({ ok: true, message: 'Marked task #1 "Task t1" not done: it waits until you retry or start it.' });
     expect(h.timeline().map((m) => m.record.command)).toEqual(['mark_complete', 'mark_not_done']);
   });
@@ -45,16 +45,40 @@ describe('a control from the daemon lands one execution_action line, worded by t
   it('names a task by its order too, as the seam resolves it', async () => {
     const h = start([task('t1', 1), task('t2', 2)]);
 
-    const res = await h.command({ command: 'mark_complete', task: '#2' });
+    const res = await h.command({ command: 'mark_complete', task: '#2', confirmed: true });
 
     expect(await json(res)).toEqual({ ok: true, message: 'Marked task #2 "Task t2" complete.' });
     expect(h.timeline()).toHaveLength(1);
   });
 
+  it('refuses an AI task\'s override that carries no yes, and changes nothing', async () => {
+    const h = start([task('t1', 1)]);
+
+    const res = await h.command({ command: 'mark_complete', task: 't1' });
+    const refusal = await json(res) as { error: string; code: string };
+
+    expect(res.status).toBe(400);
+    expect(refusal.code).toBe('refused');
+    expect(refusal.error).toContain('needs the user\'s explicit yes');
+    expect(h.session.planState!.tasks[0].status).toBe('pending');
+    expect(h.timeline().map((m) => m.record.outcome)).toEqual(['refused']);
+  });
+
+  it('refuses an override of a task in a plan that is running, whatever the yes', async () => {
+    const h = start([task('t1', 1)]);
+    await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
+
+    const res = await h.command({ command: 'mark_complete', task: 't1', confirmed: true });
+
+    expect(res.status).toBe(400);
+    expect((await json(res) as { error: string }).error).toContain('Stop the run first');
+    expect(h.session.planState!.tasks[0].status).toBe('in_progress');
+  });
+
   it('answers a refusal as the seam words it, and keeps it once', async () => {
     const h = start([task('t1', 1, { status: 'completed' })]);
 
-    const res = await h.command({ command: 'mark_complete', task: 't1' });
+    const res = await h.command({ command: 'mark_complete', task: 't1', confirmed: true });
 
     expect(res.status).toBe(400);
     expect(await json(res)).toEqual({ error: 'Task #1 "Task t1" has already completed.', code: 'refused' });

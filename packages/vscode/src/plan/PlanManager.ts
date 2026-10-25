@@ -4,7 +4,7 @@ import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
   createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, pastGateConfirmation, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
-  taskActionCommand, type ExecutionCommand, type TaskAction,
+  taskActionCommand, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit } from '../shared/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -466,6 +466,37 @@ export async function forceStartPastGate(taskId: string, deps: Pick<PlanManagerD
 }
 
 /**
+ * Mark complete and Mark not done, from the card and from the command palette
+ * alike (ADR-0029). An AI or script task's override vouches for work no verdict
+ * passed, so a real modal explains it first and the seam gets the user's yes on
+ * the command; the core refuses it anyway while a run could advance the task,
+ * and the modal is not offered then. A manual task's is the user's own sign-off
+ * and asks nothing. The task is named by id and the status the user was asked
+ * about travels with the yes, so a task that moved on while the modal was open
+ * is refused rather than overridden.
+ */
+export async function markTaskByHand(direction: OverrideDirection, taskId: string, deps: Pick<PlanManagerDeps, 'session'>): Promise<void> {
+  const { session } = deps;
+  const tasks = session.planState?.tasks ?? [];
+  const task = flattenTasks(tasks).find((t) => t.id === taskId);
+  const command = taskActionCommand(direction, taskId);
+  if (!task || !overrideNeedsConfirmation(task)) {
+    await executeUserCommand(session, command);
+    return;
+  }
+  const label = `task ${titledTaskRefOf(tasks, taskId) ?? taskId}`;
+  const { starting, running, scheduled } = session.activity;
+  if (starting || running || scheduled) {
+    showRefusal(new Error(manualOverrideStopFirst(direction, label)));
+    return;
+  }
+  const yes = direction === 'complete' ? 'Mark complete' : 'Mark not done';
+  const choice = await vscode.window.showWarningMessage(manualOverrideConfirmation(direction, label), { modal: true }, yes);
+  if (choice !== yes) return;
+  await executeUserCommand(session, confirmedOverride(command, task.status));
+}
+
+/**
  * A start reopens the run whose cards its last end left up. Cleared only once
  * the seam accepts it: a refused start replaced no run, and the Session still
  * holds every mark and the handoff.
@@ -503,9 +534,11 @@ export async function handleSystemCommand(
       case 'resumeNow':
       case 'retry':
       case 'skip':
+        await executeUserCommand(deps.session, taskActionCommand(SYSTEM_TASK_ACTIONS[command], taskId));
+        break;
       case 'markComplete':
       case 'markIncomplete':
-        await executeUserCommand(deps.session, taskActionCommand(SYSTEM_TASK_ACTIONS[command], taskId));
+        await markTaskByHand(SYSTEM_TASK_ACTIONS[command], taskId, deps);
         break;
       case 'forceStart':
         await forceStartPastGate(taskId, deps);

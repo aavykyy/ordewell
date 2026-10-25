@@ -1,4 +1,4 @@
-import { isApiProvider } from '@ordewell/core';
+import { isApiProvider, overrideNeedsConfirmation } from '@ordewell/core';
 import { bodyRows, helpScrollMax } from '../layout';
 import { findTask, refFor, visibleItems, type PickerItem, type PickerState, type TuiState } from '../state';
 import type { Key } from '../keys';
@@ -79,6 +79,13 @@ function runConfirm(
   if (overlay.action.kind === 'force-start-gated') {
     if (!state.sessionId) return step(closed);
     return step(closed, [taskActionEffect(closed, state.sessionId, overlay.action.taskId, 'force-start')]);
+  }
+  if (overlay.action.kind === 'mark-override') {
+    const { taskId, direction, seen } = overlay.action;
+    const task = state.sessionId ? findTask(state.tasks, taskId) : undefined;
+    // The popup was open for a while: a task that left the plan is not marked by its id.
+    if (!state.sessionId || !task) return fail(closed, 'That task is no longer in the plan: nothing was changed.');
+    return step(closed, [taskActionEffect(closed, state.sessionId, taskId, direction, overrideNeedsConfirmation(task) ? { seen } : undefined)]);
   }
   if (overlay.action.kind === 'save-settings') return answerSaveSettings(state, overlay.action, true);
   if (overlay.action.kind === 'merge-run' || overlay.action.kind === 'discard-run') {

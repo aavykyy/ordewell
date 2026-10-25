@@ -40,14 +40,24 @@ describe('a control that goes through the command seam leaves its notice to the 
     expect(notes()).toEqual([]);
   });
 
-  it('a card\'s check asks to mark the task complete and writes no note of its own', () => {
+  it('Mark complete, at the bottom of the card\'s details, asks the host and writes no note of its own', () => {
     send({ type: 'planUpdated', plan: planOf('draft', 'pending') });
+    act(() => { fireEvent.click(screen.getByText('Only task')); });
     api.postMessage.mockClear();
 
-    act(() => { fireEvent.click(document.querySelector('.task-check.clickable')!); });
+    act(() => { fireEvent.click(screen.getByText('Mark complete')); });
 
     expect(api.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendSystemCommand', command: 'markComplete', taskId: 't1' }));
     expect(notes()).toEqual([]);
+  });
+
+  it('the card\'s check is a status, and asks for nothing', () => {
+    send({ type: 'planUpdated', plan: planOf('draft', 'pending') });
+    api.postMessage.mockClear();
+
+    act(() => { fireEvent.click(document.querySelector('.task-check')!); });
+
+    expect(api.postMessage).not.toHaveBeenCalled();
   });
 
   it('Skip asks and writes no note of its own', () => {

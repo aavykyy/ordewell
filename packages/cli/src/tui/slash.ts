@@ -34,8 +34,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   // Tasks
   { name: 'add-task', usage: '/add-task <title>', description: 'Add a task to the current plan', category: 'tasks' },
   { name: 'remove-task', usage: '/remove-task <id>', description: 'Remove a task from the plan', category: 'tasks' },
-  { name: 'complete', usage: '/complete <id>', description: 'Mark a task complete', category: 'tasks' },
-  { name: 'uncomplete', usage: '/uncomplete <id>', description: 'Mark a completed task not done', category: 'tasks' },
+  { name: 'complete', usage: '/complete <id>', description: 'Mark a task complete (asks first)', category: 'tasks' },
+  { name: 'uncomplete', usage: '/uncomplete <id>', description: 'Mark a completed task not done (asks first)', category: 'tasks' },
   { name: 'skip', usage: '/skip <id>', description: 'Skip a task', category: 'tasks' },
   { name: 'retry', usage: '/retry <id>', description: 'Re-run a failed task', category: 'tasks' },
   { name: 'cancel', usage: '/cancel <id>', description: 'Kill a running task', category: 'tasks' },

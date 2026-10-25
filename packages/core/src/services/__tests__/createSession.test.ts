@@ -381,7 +381,7 @@ describe('Session phase transitions', () => {
     };
 
     session.loadPlan(plan, 'Test', '/repo');
-    await session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
+    await session.execute({ command: 'mark_complete', task: 't1', confirmed: true }, { kind: 'user' });
     expect(session.executionLog).toHaveLength(1);
 
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
@@ -447,34 +447,41 @@ describe('currentPlanState — the live plan a surface refreshes from', () => {
   const statusOf = (session: Session, id: string): string | undefined =>
     session.currentPlanState?.pendingTasks.find((t) => t.id === id)?.status;
 
+  // Marking a running AI task complete by hand is refused while the run goes on, so the runner reports it done.
+  async function finish(session: Session, sessions: FakeRunnerSession[], id: string): Promise<void> {
+    sessions.find((s) => s.taskId === id)!.reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(taskOf(session, id)!.status).toBe('completed'));
+  }
+
   // The defect this pins: marking one task done re-read the plan through the
   // saved-session boundary, which normalizes `in_progress` to `pending` because
   // a session off disk has no runners behind it. Every sibling still executing
   // came back as never started, and the plan pane dropped its spinner.
   it('keeps a parallel sibling in_progress after another task is marked complete', async () => {
-    const { session } = twoParallel();
+    const { session, sessions } = twoParallel();
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(statusOf(session, 't2')).toBe('in_progress');
 
-    await session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
+    await finish(session, sessions, 't1');
 
     expect(statusOf(session, 't2')).toBe('in_progress');
   });
 
-  it('reports a task the mark-complete just fanned out to as in_progress', async () => {
-    const { session } = twoParallel();
+  it('reports a task the completion just fanned out to as in_progress', async () => {
+    const { session, sessions } = twoParallel();
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    await session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
+    await finish(session, sessions, 't1');
+    await vi.waitFor(() => expect(statusOf(session, 't3')).toBe('in_progress'));
 
     expect(statusOf(session, 't3')).toBe('in_progress');
   });
 
   it('moves a finished task to the execution log without duplicating it', async () => {
-    const { session } = twoParallel();
+    const { session, sessions } = twoParallel();
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    await session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
+    await finish(session, sessions, 't1');
     const state = session.currentPlanState;
 
     expect(state?.phase).toBe('executing');

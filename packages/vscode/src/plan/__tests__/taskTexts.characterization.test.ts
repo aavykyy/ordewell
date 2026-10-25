@@ -40,15 +40,6 @@ describe('host task texts, pinned before they move to core', () => {
     expect(session.execute).not.toHaveBeenCalledWith(expect.objectContaining({ command: 'mark_complete' }), expect.anything());
   });
 
-  it.each([
-    ['markComplete', 'mark_complete'],
-    ['markIncomplete', 'mark_not_done'],
-  ] as const)('%s reaches the command seam as %s', async (command, name) => {
-    const { d, session } = deps([]);
-    await handleSystemCommand(command, 'fix', d);
-    expect(session.execute).toHaveBeenCalledWith({ command: name, task: 'fix' }, { kind: 'user' });
-  });
-
   it('names the dependents a removal rewrites, in full', () => {
     const tasks = [
       createTask({ id: 'a', order: 1, title: 'Setup' }),

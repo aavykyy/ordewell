@@ -2282,8 +2282,8 @@ orchestrator schedules on the outcome, it does not re-derive it.
 *Avoid:* "review result", "verification result" as separate concepts — they were
 two redundant shapes for the same fact and collapse into the Verdict.
 
-**Mark complete** — the user action of force-completing any task regardless of
-runner state. Promotes the task to `status: 'completed'`, records a synthetic
+**Mark complete** — the user action of force-completing a task by hand.
+Promotes the task to `status: 'completed'`, records a synthetic
 `pass` Verdict with a `manual` verification check, archives the task to the
 execution log, and unblocks dependents so the scheduler can advance. Distinct
 from `cancelTask` (which returns a task to `pending` and places it on hold) and
@@ -2293,6 +2293,16 @@ A clean runner exit without a completion call is a failed verdict, never implici
 completion. It is the user's vouch for the work, and the only way to land work
 no passing verdict landed: the supervisor cannot Mark complete. Works on a
 *Skipped task* too, landing its kept work.
+For an AI or script task it is a recovery action taken with the run stopped
+(ADR-0029): refused while the plan is starting or running, an attempt is
+starting, running or integrating, or scheduled or resumed work could still
+advance the task, whatever its status, a completed task included; the refusal
+says to Stop the run first. Once stopped it needs the user's explicit yes
+(`confirmed` on the command, with the status they were asked about), which
+says it vouches for the work although no passing verdict said it was done, may
+land its kept changes and releases its dependents on a future run; a call
+without it, or about a task that moved on since, is refused. A manual task's
+sign-off is the user's own work and is never held up by a run.
 *Avoid:* "skip" for this concept — Skip lands nothing (see *Skipped task*).
 
 **Mark not done** — the inverse user action, and the only way back out of a
@@ -2303,9 +2313,16 @@ feeding them a result that no longer exists. The task is placed on hold like a
 cancel, so a running plan does not immediately re-spawn the work just un-marked
 (Retry / Force Start / Run release the hold), and a plan whose status had
 reached `completed` returns to `approved`. It is a no-op on any task that is not
-completed. Both directions are one affordance per surface, never two: the VS
-Code task-check ring toggles, and the TUI's `m` picks its direction from the
-selected task's status (footer hint follows: `m done` / `m undone`).
+completed. It clears only the completion: the work the task did stays, and
+tasks that already ran on its result are not undone. It is held to Mark
+complete's rules for an AI or script task: refused while a run could advance
+the task, and confirmed by the user once stopped. Both directions are one
+affordance per surface, never two, and never a status symbol: the VS Code
+task-check ring only shows status, and Mark complete / Mark not done are one
+button at the bottom of a task's or subtask's expanded details; the TUI's `m`
+picks its direction from the selected task's status (footer hint follows:
+`m done` / `m undone`) and asks before it sends; `ordewell complete` and
+`uncomplete` ask too, or take `--yes`.
 *Avoid:* "un-skip" — a skipped task is not completed, so this does not apply to
 it; "reopen" — and do not model it as `retryTask`, which counts a retry attempt
 and releases the hold.

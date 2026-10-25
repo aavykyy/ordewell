@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, taskActionCommand, opsEditable,
+  taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, taskActionCommand, overrideNeedsConfirmation, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, opsEditable,
   titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, noExecutorRefusal, blockedByLabel, holdLabel, skippedLabel, type TaskRowSubject, type TaskRowAction,
 } from '..';
 import { taskRef, titledTaskRef } from '../../services/TaskRefs';
@@ -162,6 +162,35 @@ describe('actions per status', () => {
   it('carries the reason only on a skip', () => {
     expect(taskActionCommand('skip', 't1', 'not needed')).toEqual({ command: 'skip_task', task: 't1', reason: 'not needed' });
     expect(taskActionCommand('cancel', 't1', 'not needed')).toEqual({ command: 'stop_task', task: 't1' });
+  });
+});
+
+describe('an override\'s yes (ADR-0029)', () => {
+  it.each([['ai', true], ['script', true], ['user', false]] as const)('a %s task needs the user\'s yes: %s', (type, needs) => {
+    expect(overrideNeedsConfirmation({ type })).toBe(needs);
+  });
+
+  it('puts the yes and the status the user was asked about on a mark, in either direction', () => {
+    expect(confirmedOverride({ command: 'mark_complete', task: 't1' }, 'failed')).toEqual({ command: 'mark_complete', task: 't1', confirmed: true, seen: 'failed' });
+    expect(confirmedOverride({ command: 'mark_not_done', task: 't1' }, 'completed')).toEqual({ command: 'mark_not_done', task: 't1', confirmed: true, seen: 'completed' });
+  });
+
+  it('carries no status for a yes that never looked, as a scripted --yes gives', () => {
+    expect(confirmedOverride({ command: 'mark_complete', task: 't1' })).toEqual({ command: 'mark_complete', task: 't1', confirmed: true });
+  });
+
+  it('words the question for each direction, naming what it leaves alone', () => {
+    expect(manualOverrideConfirmation('complete', 'task #1 Fix')).toBe('Mark task #1 Fix complete? You vouch for its work although no passing verdict said it was done. Any changes it kept may land in your run, and the tasks that depend on it are released to start on a future run.');
+    expect(manualOverrideConfirmation('uncomplete', 'task #1 Fix')).toBe('Mark task #1 Fix not done? This clears its completion and holds it until you retry or start it. The work it did stays where it is, and tasks that already ran on its result are not undone.');
+  });
+
+  it('tells the user to Stop the run first, in sentence case', () => {
+    expect(manualOverrideStopFirst('complete', 'task #1 Fix')).toBe('Task #1 Fix cannot be marked complete while the plan is starting, running or waiting to resume, because the run could still move it on. Stop the run first, and mark it once everything has stopped.');
+    expect(manualOverrideStopFirst('uncomplete', 'task #1 Fix')).toContain('cannot be marked not done');
+  });
+
+  it('leaves every other command as it was', () => {
+    expect(confirmedOverride({ command: 'skip_task', task: 't1' }, 'pending')).toEqual({ command: 'skip_task', task: 't1' });
   });
 });
 

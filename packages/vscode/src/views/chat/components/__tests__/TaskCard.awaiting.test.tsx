@@ -28,9 +28,9 @@ describe('what an awaiting task waits on (ADR-0018, W1)', () => {
     expect(screen.getByText('Awaiting User', { selector: '.task-status-badge' })).toBeTruthy();
   });
 
-  it('still offers Mark Complete on a task waiting for input', () => {
-    render(<TaskCard task={makeTask({ awaitingReason: 'input' })} models={[]} isExecuting onMarkComplete={() => {}} expanded onExpandedChange={() => {}} />);
-    expect(screen.getByText('Mark Complete')).toBeTruthy();
+  it('still offers Mark complete on a task waiting for input, once the run has stopped', () => {
+    render(<TaskCard task={makeTask({ awaitingReason: 'input' })} models={[]} onMarkComplete={() => {}} expanded onExpandedChange={() => {}} />);
+    expect((screen.getByText('Mark complete') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('does not require a running plan to show the wait — a stopped run leaves it held', () => {

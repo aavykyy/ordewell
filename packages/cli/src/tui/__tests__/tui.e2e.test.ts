@@ -673,17 +673,24 @@ describe('TUI end to end', () => {
     h.type('/complete t1');
     h.type('\r');
 
+    // An AI task's override is asked first; the daemon hears of it only with the user's yes.
+    await vi.waitFor(() => expect(h.app.getState().overlay).toMatchObject({ kind: 'confirm', action: { kind: 'mark-override', direction: 'complete' } }));
+    expect(h.daemon.mocks.execute).not.toHaveBeenCalled();
+    h.type('\r');
+
     await vi.waitFor(() => {
       expect(h.app.getState().tasks.find((t) => t.id === 't1')?.status).toBe('completed');
     });
-    expect(h.daemon.mocks.execute).toHaveBeenCalledWith('session-1', { command: 'mark_complete', task: 't1' });
+    expect(h.daemon.mocks.execute).toHaveBeenCalledWith('session-1', { command: 'mark_complete', task: 't1', confirmed: true, seen: 'pending' });
     expect(h.daemon.mocks.getSession).toHaveBeenCalled();
 
-    // Same key, other direction: `m` on the now-completed task un-marks it.
+    // Same key, other direction: `m` on the now-completed task asks to un-mark it.
     h.type('\t');
     h.type('m');
+    await vi.waitFor(() => expect(h.app.getState().overlay).toMatchObject({ kind: 'confirm', action: { kind: 'mark-override', direction: 'uncomplete' } }));
+    h.type('\r');
     await vi.waitFor(() => {
-      expect(h.daemon.mocks.execute).toHaveBeenCalledWith('session-1', { command: 'mark_not_done', task: 't1' });
+      expect(h.daemon.mocks.execute).toHaveBeenCalledWith('session-1', { command: 'mark_not_done', task: 't1', confirmed: true, seen: 'completed' });
     });
     expect(h.daemon.mocks.execute.mock.calls.filter(([, command]) => command.command === 'mark_complete')).toHaveLength(1);
   });

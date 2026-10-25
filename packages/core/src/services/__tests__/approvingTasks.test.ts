@@ -184,10 +184,9 @@ describe('force starting a task whose dependencies have not finished', () => {
     await until(() => env.run.spawnedIds().includes('t2'));
   });
 
-  it('starts once a dependency run on its own is marked complete instead, with no verdict', async () => {
-    const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { ...AUTORUN_OFF, execute: false });
+  it('starts once a manual dependency is marked complete instead, with no verdict', async () => {
+    const env = await supervised([task('t1', 1, { type: 'user' }), task('t2', 2, { dependencies: ['t1'] })], { ...AUTORUN_OFF, execute: false });
     await env.session.execute({ command: 'force_start', task: 't2' }, { kind: 'user' });
-    await env.session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
 
     await env.session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
 

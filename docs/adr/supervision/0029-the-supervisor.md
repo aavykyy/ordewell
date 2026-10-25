@@ -320,6 +320,35 @@ the level picker says so.
 planner turn, or the supervisor — and surfaces draw it as they draw the
 matching button press, so the plan pane looks the same whichever route acted.
 
+**Mark complete and Mark not done on an AI or script task are a recovery
+action, taken deliberately with the run stopped.** The user's vouch lands work
+no verdict passed, so the seam holds the call to two rules whichever surface
+sent it, and the surfaces only explain them. First, it is refused while
+anything could still move the task on without being asked: the plan starting,
+a scheduler driving it, an attempt starting, running or integrating, a start
+admitted and not yet claimed, a force start queued, or a usage-limit hold or
+scheduled resume. That holds for a task that has not started, failed, waits,
+or already completed. The refusal tells the user to Stop the run first, and
+the Stop makes the override possible once its attempts have settled. A run that
+ended on a failure is not in the way, since nothing advances until a retry or a
+skip, and overriding the failed task is how its dependents are released.
+Second, it needs the user's explicit yes, carried on the command as
+`confirmed`, with the `status` they were asked about as `seen`: a call without
+the yes is refused in the words of the question, and one whose task has moved
+on since is refused rather than overridden, so a stale click, the CLI and the
+API cannot skip the acknowledgment. The question says that Mark complete
+vouches for the work although no passing verdict said it was done, may land
+what the task kept, and releases its dependents on a future run; Mark not done
+clears the completion and holds the task until it is retried or started, and
+undoes neither the work nor what already ran on it. While an override lands,
+nothing starts and no second override is taken, so a run requested under it is
+refused until it has landed. A manual task's sign-off is the user's own work:
+it is never held up by a run and asks no yes of the seam, so it can release the
+tasks that wait on it mid-run. The VS Code card puts the two controls last in
+a task's expanded details, never on its status circle; the TUI's `m` and the
+slash commands and the CLI's `--yes` follow the same asking, and a call with no
+terminal to ask on is a no.
+
 **The user's own controls are commands at the same seam.** Besides the tools
 above, which the user's buttons reach as the user, the seam has a command for
 each control only the user presses: `force_start`, `mark_complete`,
@@ -646,3 +675,4 @@ until #30 exists.
 - 2026-10-24 — the daemon's per-control routes are replaced by one `execute-command` route (ADR-0006 S3); the seam's lines and payloads travel as before.
 - 2026-10-24 — the approval record's rules live in one module, `ApprovalRecord`, and run on each change to the task tree rather than inside a save: a task that leaves the plan takes its approval, and a save only writes. Approval taken from a task is announced to surfaces as a plan update with a status, wherever the change was made. `Session.isApproved` stays the one read.
 - 2026-10-24 — a start the Act supervisor asks for of a task its own edit adds waits for the edit instead of being refused as "tell the user".
+- 2026-10-25 — Mark complete and Mark not done on an AI or script task are refused while a run could advance the task and otherwise need the user's explicit yes, in both directions; a manual task's sign-off is never held up by a run.

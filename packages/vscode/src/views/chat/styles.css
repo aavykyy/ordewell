@@ -3317,15 +3317,6 @@ body.vscode-high-contrast-light .task-card.expanded {
   background: var(--bg-primary);
 }
 
-.task-check.clickable {
-  cursor: pointer;
-}
-
-.task-check.clickable:hover {
-  border-color: var(--green);
-  background: color-mix(in srgb, var(--green) 10%, transparent);
-}
-
 .task-check.done {
   background: var(--green);
   border-color: var(--green);
@@ -3557,35 +3548,38 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 .step-text { flex: 1; }
 
-.step-actions {
-  margin-top: 6px;
+/* Mark complete / Mark not done: the last thing in a card's expanded details. */
+.task-mark-control {
+  margin-top: 8px;
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.step-complete-btn {
+.task-mark-btn {
   font-size: 11px;
   padding: 2px 10px;
-  border: 1px solid var(--green);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--green);
+  color: var(--text-secondary);
   cursor: pointer;
   font-family: inherit;
-  transition: background var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
 }
 
-.step-complete-btn:hover {
+.task-mark-btn:hover:not(:disabled) {
+  border-color: var(--green);
+  color: var(--green);
   background: var(--green-subtle);
 }
 
-.step-complete-btn:disabled {
+.task-mark-btn:disabled {
   opacity: 0.4;
   cursor: default;
 }
 
-.step-hint {
+.task-mark-hint {
   font-size: 10px;
   color: var(--text-muted);
 }

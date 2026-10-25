@@ -843,6 +843,7 @@ export class Session {
       startsHeld: () => this.orchestrator.startsHeld,
       hasLiveWork: () => this.orchestrator.hasLiveWork,
       startsPending: () => this.orchestrator.startsPending,
+      advancesOnItsOwn: () => this.orchestrator.advancesOnItsOwn,
       admitStart: () => this.orchestrator.admitStart(),
       running: (taskId) => this.orchestrator.getAttempt(taskId) !== undefined,
       maxParallel: () => this.config.maxParallelSessions,

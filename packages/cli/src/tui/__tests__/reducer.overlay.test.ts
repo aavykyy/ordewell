@@ -618,7 +618,6 @@ describe('plan pane', () => {
 
   it.each([
     ['c', 'cancel'],
-    ['m', 'complete'],
     ['s', 'skip'],
   ])('%s acts on the selected task', (char, action) => {
     const s = { ...planned, selectedTask: 1 };

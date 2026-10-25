@@ -33,8 +33,9 @@ const SHAPES: Record<ExecutionCommandName, Record<string, Field>> = {
   merge_all: {},
   skip_task: { task, reason: { kind: 'string' } },
   force_start: { task },
-  mark_complete: { task },
-  mark_not_done: { task },
+  // `seen` is the status the user was asked about; the seam compares it, so any string is kept.
+  mark_complete: { task, confirmed: { kind: 'boolean' }, seen: { kind: 'string' } },
+  mark_not_done: { task, confirmed: { kind: 'boolean' }, seen: { kind: 'string' } },
   interrupt_task: { task },
   force_send_queued: { task, id },
   remove_queued: { task, id },
