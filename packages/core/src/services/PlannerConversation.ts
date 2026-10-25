@@ -8,7 +8,7 @@ import type { PlannerTurnOutcome, SessionBroadcaster, SessionNotice } from './Se
 import { TurnStream } from './replyStream';
 import type { ForkedDialogue } from './conversationFork';
 import { compactionCut, condensedNotice, contextFloor, extractSummary, modelContext, summaryRequest } from './conversationSummary';
-import type { ContextCheckpoint, ConversationMessage, LegacyPlanState, PlannerCompactionOutcome, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
+import type { ContextCheckpoint, ConversationMessage, LegacyPlanState, PlannerCompactionOutcome, PlannerContextPause, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
 import { flattenTasksWithParents, isUserMessage } from '../models/Task';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
@@ -25,6 +25,7 @@ import type { StartWait, StartWaitKind } from './readiness';
 import { SubagentRuns } from './SubagentRuns';
 import type { ConversationCompactionHost, LandedHistory } from './budgetedChat';
 import { ContextSummaryError } from './contextSummary';
+import { PlannerContextExhaustedError } from './plannerContextBudget';
 
 /**
  * Per-runner model cap for the always-on catalog block. Generous enough that
@@ -206,6 +207,12 @@ interface UserTurn {
   repaired?: boolean;
   /** Its message was force sent. */
   forced?: boolean;
+  /**
+   * The pause it retries, and whether it carries on the live context's held
+   * input — whose calls the chat still holds — or starts again from the
+   * transcript, told only what the pause listed.
+   */
+  recovery?: { pause: PlannerContextPause; live: boolean };
   /** Handed in since the backend last answered; see {@link PlannerConversation.submit}. */
   submitted?: PlannerSubmission;
   writes: TurnWrites;
@@ -330,6 +337,8 @@ export interface PlannerConversationHost {
   turnReleased?(): void;
   /** A turn ended on the planner's usage limit, which it reported as `said`: what is sent again, and when. */
   usageLimit(said: TurnFailure): PlannerLimit;
+  /** A turn ended with the planner paused on its context: arm the pause on the inputs it took, saved with the failure it records. */
+  contextPaused(details: Pick<PlannerContextPause, 'model' | 'reason' | 'done' | 'doneTruncated'>): PlannerContextPause;
 }
 
 /**
@@ -402,6 +411,37 @@ export class PlannerUsageLimitError extends PlannerTurnFailedError {
 }
 
 /**
+ * A planner turn ended with the planner paused on its context (ADR-0002): the
+ * call it was making could not be brought inside its model's window. Nothing
+ * of it lands; the transcript keeps why, and its inputs wait for the user's
+ * Retry compaction (`pause`).
+ */
+export class PlannerContextPausedError extends PlannerTurnFailedError {
+  constructor(readonly pause: PlannerContextPause, options?: ErrorOptions) {
+    super(pause.reason);
+    this.name = 'PlannerContextPausedError';
+    if (options?.cause !== undefined) this.cause = options.cause;
+  }
+}
+
+/** The calls a pause keeps for a retry that cannot continue the live context: a bound, so a long turn saves no second copy of itself. */
+const PAUSE_DONE_LIMIT = 40;
+
+/**
+ * Told to the planner when a paused turn is taken up again from the
+ * transcript, its live context gone: what it already did that a second call
+ * could do again, read off its own calls and never asked of a model.
+ */
+function recoveryNote(done: readonly string[]): string | undefined {
+  if (done.length === 0) return undefined;
+  return [
+    '[Context note from Ordewell] Your last turn on the message below paused when your context no longer fit its window, and is taken up again from the conversation: what that turn read is no longer in your context.',
+    'Already done in that turn — do not make these calls again; what each returned is as shown:',
+    ...done,
+  ].join('\n');
+}
+
+/**
  * The user stopped the turn and the backend reported that as a thrown error
  * rather than a settled reply. Typed so a surface can stay quiet for it without
  * reading the message: some SDKs' abort errors are plain `Error`s by name, and
@@ -469,6 +509,8 @@ export interface ReplyOptions {
   wakeUp?: WakeUpTurn;
   /** The user's message was force sent: the turn replaces the one it stopped (ADR-0023). */
   forced?: boolean;
+  /** The turn retries one the planner paused on its context, on the same inputs (ADR-0002). */
+  recovery?: PlannerContextPause;
 }
 
 /** Refused while tasks run: a whole plan replaces the run's, and only an edit can leave running work as it is. */
@@ -1024,7 +1066,7 @@ export class PlannerConversation {
     return this.userTurn({ refuseAs: 'send a message' }, sent, options.signal, (userTurn) => {
       userTurn.onCommit = options.onCommit;
       return this.replyTurn(sent, wakeUps, userTurn);
-    }, { wakeUps, wakeUp: options.wakeUp, forced: options.forced });
+    }, { wakeUps, wakeUp: options.wakeUp, forced: options.forced, recovery: options.recovery });
   }
 
   private async replyTurn(message: SkillInvocation, wakeUps: readonly string[], userTurn: UserTurn): Promise<SettledTurn> {
@@ -1043,9 +1085,26 @@ export class PlannerConversation {
     if (fromUser) entries.push(...this.userEntries(message, now, userTurn.forced));
     this.holdWrites(userTurn, entries, fromUser ? [this.userPrompt(message.text, now)] : []);
 
+    const turn = userTurn.recovery?.live
+      // The held input already carries what the paused turn was told: nothing is sent anew.
+      ? await this.host.aiService().retryHeldInput!(userTurn.stream.sink(), signal)
+      : await this.sendTurn(message, wakeUps, userTurn, priorHistory, fromUser);
+
+    const settleable = await this.drainTaskQueries(turn, userTurn);
+    this.assertNotLimited(settleable, userTurn);
+    if (userTurn.wakeUp) this.assertWakeUpAnswered(settleable, userTurn);
+    this.assertCurrent(userTurn);
+    return this.settle(settleable, userTurn);
+  }
+
+  /** The turn's message to the planner, sent on the live context or a replay of the transcript. */
+  private async sendTurn(message: SkillInvocation, wakeUps: readonly string[], userTurn: UserTurn, priorHistory: ConversationMessage[], fromUser: boolean): Promise<ConversationTurn> {
+    const { signal } = userTurn;
     // Decided before the briefing is built: a replay's opening states autorun
-    // and the runners itself, so the briefing says neither again.
-    const reopened = this.canContinueLive() ? null : await this.reopen(userTurn);
+    // and the runners itself, so the briefing says neither again. A paused
+    // turn taken up again from the transcript starts on a replay, whatever
+    // live context is left: its held input is not this turn's to send.
+    const reopened = this.canContinueLive() && !userTurn.recovery ? null : await this.reopen(userTurn);
     userTurn.briefing = this.briefing.brief();
     // The persisted transcript keeps the raw user message; the model gets the
     // catalog and the current plan (tasks, statuses, edit protocol — once
@@ -1054,17 +1113,59 @@ export class PlannerConversation {
     userTurn.blocks = this.blocks.next();
     const contextBlock = [...userTurn.blocks.blocks, ...userTurn.briefing.blocks].join('\n\n');
     const said = fromUser ? plannerMessage(message.text, message.skills) : '';
-    const outgoing = plannerInput([contextBlock, ...wakeUps, userTurn.wakeUp?.brief, said]);
+    const note = userTurn.recovery && recoveryNote(userTurn.recovery.pause.done ?? []);
+    const outgoing = plannerInput([contextBlock, note, ...wakeUps, userTurn.wakeUp?.brief, said]);
+    return reopened
+      ? this.resume(reopened, outgoing, priorHistory, signal, userTurn.stream.sink())
+      : this.host.aiService().continueConversation(outgoing, userTurn.stream.sink(), signal);
+  }
 
-    const turn = reopened
-      ? await this.resume(reopened, outgoing, priorHistory, signal, userTurn.stream.sink())
-      : await this.host.aiService().continueConversation(outgoing, userTurn.stream.sink(), signal);
+  /**
+   * How a paused turn can be retried now: on the live context, which still
+   * holds the input it could not send; or from the transcript, told what the
+   * pause listed. Neither when the live context is gone and the pause could
+   * not list every call that changed something: the reason why, for the user.
+   */
+  retryPlan(pause: PlannerContextPause): { live: boolean } | { refused: string } {
+    this.assertIdle('retry compaction');
+    return this.retryWay(pause);
+  }
 
-    const settleable = await this.drainTaskQueries(turn, userTurn);
-    this.assertNotLimited(settleable, userTurn);
-    if (userTurn.wakeUp) this.assertWakeUpAnswered(settleable, userTurn);
+  private retryWay(pause: PlannerContextPause): { live: boolean } | { refused: string } {
+    const ai = this.host.aiService();
+    if (this.canContinueLive() && (ai.heldInputRetryable?.() ?? false) && ai.retryHeldInput) return { live: true };
+    if (pause.doneTruncated) {
+      return { refused: `The paused turn made more calls that changed something than Ordewell keeps a list of, and its live context is gone, so it cannot be taken up again without risking one twice. Stop it to drop the turn, then tell the planner where to pick up.` };
+    }
+    return { live: false };
+  }
+
+  /**
+   * A turn whose call could not fit its model's window pauses the planner
+   * (ADR-0002): nothing it held lands, its failure is kept in its place, and
+   * the pause is armed on its inputs in the same save. A retry carries the
+   * calls listed before on: one from the transcript lists only what it made
+   * itself, one on the live context everything since the turn began.
+   */
+  private pauseOnContext(err: PlannerContextExhaustedError, userTurn: UserTurn): PlannerContextPausedError {
     this.assertCurrent(userTurn);
-    return this.settle(settleable, userTurn);
+    const recovery = userTurn.recovery;
+    const carried = recovery && !recovery.live ? recovery.pause.done ?? [] : [];
+    const listed = [...carried, ...err.done];
+    const action = err.tooLong === 'message' || err.tooLong === 'instructions'
+      ? `The planner is paused: switch it to a model with a larger window, then Retry compaction, or stop it to drop the ${err.tooLong === 'message' ? 'message' : 'turn'}.`
+      : 'The planner is paused: Retry compaction condenses its context and carries the turn on, or stop it to drop the turn.';
+    const pause = this.host.contextPaused({
+      model: err.model,
+      reason: `${err.message} ${action}`,
+      ...(listed.length > 0 ? { done: listed.slice(0, PAUSE_DONE_LIMIT) } : {}),
+      ...(listed.length > PAUSE_DONE_LIMIT || recovery?.pause.doneTruncated ? { doneTruncated: true } : {}),
+    });
+    this.host.mutate(() => {
+      this.recordFailure(pause.reason);
+      return true;
+    }, () => this.host.broadcastPlan());
+    return new PlannerContextPausedError(pause, { cause: err });
   }
 
   /**
@@ -1149,7 +1250,7 @@ export class PlannerConversation {
     prompt: SkillInvocation,
     signal: AbortSignal | undefined,
     run: (turn: UserTurn) => Promise<SettledTurn>,
-    delivered: { wakeUps?: readonly string[]; wakeUp?: WakeUpTurn; forced?: boolean } = {},
+    delivered: { wakeUps?: readonly string[]; wakeUp?: WakeUpTurn; forced?: boolean; recovery?: PlannerContextPause } = {},
   ): Promise<LegacyPlanState> {
     const { turn: planner, release } = this.claim(admission, signal);
     const turnId = uuidv4();
@@ -1160,11 +1261,18 @@ export class PlannerConversation {
       subagents.observe(p);
       this.host.onProgress(p);
     });
-    const { wakeUp, forced } = delivered;
+    const { wakeUp, forced, recovery } = delivered;
+    // Read as the turn opens, which is when its first call is made.
+    const retry = recovery && this.retryWay(recovery);
+    if (retry && 'refused' in retry) {
+      release();
+      throw new ConversationEditError(retry.refused);
+    }
     const turn: UserTurn = {
       stream, planner, signal: planner.signal, plan: this.host.plan(), reads: freshReadBudget(wakeUp), narration: [],
       writes: { entries: [], research: [], subagents },
       ...(wakeUp ? { wakeUp } : {}), ...(forced ? { forced } : {}),
+      ...(recovery && retry ? { recovery: { pause: recovery, live: retry.live } } : {}),
     };
     this.openTurn = turn;
     const skills = prompt.skills.map(skillLoadNotice);
@@ -1186,6 +1294,7 @@ export class PlannerConversation {
         outcome = 'stopped';
         throw err;
       }
+      if (err instanceof PlannerContextExhaustedError && !planner.signal.aborted && !planner.abandoned) throw this.pauseOnContext(err, turn);
       throw interrupted(planner, err);
     } finally {
       if (this.openTurn === turn) this.openTurn = null;

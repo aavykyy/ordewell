@@ -156,6 +156,8 @@ export type SerializedPlan = {
   runSettings?: LegacyPlanState['runSettings'];
   /** What waits on the planner's usage limit, and when it goes, so a surface can say so and offer to cancel it. */
   plannerResend?: LegacyPlanState['plannerResend'];
+  /** The planner paused on its context, so a surface can say why and offer Retry compaction. */
+  plannerContextPause?: LegacyPlanState['plannerContextPause'];
   tasks: SerializedTask[];
   runners: RunnerId[];
   generatedAt: string;
@@ -568,6 +570,7 @@ export function serializePlan(plan: LegacyPlanState): SerializedPlan {
     generatedAt: plan.generatedAt,
     runSettings: plan.runSettings,
     ...(plan.plannerResend ? { plannerResend: plan.plannerResend } : {}),
+    ...(plan.plannerContextPause ? { plannerContextPause: plan.plannerContextPause } : {}),
     conversationHistory: surfaceConversation(plan.conversationHistory),
     prdMarkdown: plan.prdMarkdown,
   };

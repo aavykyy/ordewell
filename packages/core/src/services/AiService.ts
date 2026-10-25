@@ -223,6 +223,22 @@ export interface IAiService {
   condenseContext?(request: ContextCondenseRequest): Promise<string>;
 
   /**
+   * Optional: whether the live conversation holds the input of a call that
+   * could not fit its model's window (`PlannerContextExhaustedError`), with a
+   * window known to compact it against, so {@link retryHeldInput} can send
+   * it. Absent on a harness planner, whose agent compacts its own context.
+   */
+  heldInputRetryable?(): boolean;
+
+  /**
+   * Optional: the user's Retry compaction of a paused planner (ADR-0002):
+   * condense the live context, then send the held input once and carry its
+   * turn on from there, as {@link continueConversation} carries on a message.
+   * No tool runs again and no result is sent twice.
+   */
+  retryHeldInput?(onProgress: (progress: ResearchProgress) => void, signal?: AbortSignal): Promise<ConversationTurn>;
+
+  /**
    * One-shot research + plan for non-conversational surfaces (CLI `plan --goal`,
    * web REST). Never asks questions — it plans with what it can find.
    */

@@ -62,7 +62,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   // Sessions
   { name: 'sessions', usage: '/sessions', description: 'List saved sessions', category: 'session' },
   { name: 'fork', usage: '/fork', description: 'Continue in a copy of this conversation and its tasks; the original stays as it is', category: 'session' },
-  { name: 'compact', usage: '/compact', description: 'Condense what the planner is sent into a summary; the full conversation, the last two exchanges and all tasks are kept', category: 'session' },
+  { name: 'compact', usage: '/compact [retry]', description: 'Condense what the planner is sent into a summary; the full conversation, the last two exchanges and all tasks are kept. retry: retry compaction of a planner paused on its context', category: 'session' },
   { name: 'rewind', usage: '/rewind [<message>]', description: 'Fork the conversation from just before one of your messages, after a confirmation (the original is kept)', category: 'session' },
   { name: 'new', usage: '/new', description: 'Start a new session', category: 'session' },
   { name: 'save', usage: '/save', description: 'Save the current session', category: 'session' },

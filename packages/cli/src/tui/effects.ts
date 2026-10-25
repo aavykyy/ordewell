@@ -19,7 +19,7 @@ import { inboundFor, forgetInbound } from './inbound';
  */
 export type OrdewellApi = Pick<ApiClient,
   | 'startConversation' | 'sendConversationMessage' | 'forceSendPlannerMessage' | 'executePlan' | 'stopExecution' | 'cancelPlanning'
-  | 'execute' | 'cancelPlannerResend'
+  | 'execute' | 'cancelPlannerResend' | 'retryPlannerCompaction'
   | 'getTaskLogAttempts' | 'getTaskLog'
   | 'invokeTaskCommand' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint'
   | 'addTask' | 'updateTask' | 'removeTask'
@@ -116,7 +116,7 @@ export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void>
 /** The effects that are a planner turn: their failure is the turn's, and ends it. */
 function isPlannerTurn(effect: Effect): boolean {
   return effect.type === 'startConversation' || effect.type === 'sendMessage'
-    || effect.type === 'forceSendPlannerMessage' || effect.type === 'compactConversation';
+    || effect.type === 'forceSendPlannerMessage' || effect.type === 'compactConversation' || effect.type === 'retryPlannerCompaction';
 }
 
 /**
@@ -566,6 +566,12 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       dispatch({ type: 'notice', message: `Forked ${effect.sessionId} into ${fork.sessionId} from before that message: the original is kept (/sessions to go back). The message is ready to edit and resend.` });
       return;
     }
+
+    // The paused turn opens again on the daemon and streams as any turn does;
+    // its answer is the plan it landed, or paused again on.
+    case 'retryPlannerCompaction':
+      await converse(deps, effect.sessionId, () => api.retryPlannerCompaction(effect.sessionId));
+      return;
 
     case 'cancelPlannerResend': {
       const { cancelled } = await api.cancelPlannerResend(effect.sessionId);

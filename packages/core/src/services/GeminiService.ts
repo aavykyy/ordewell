@@ -125,6 +125,14 @@ function isContextOverflow(err: unknown): boolean {
   return status === 400 && typeof message === 'string' && /input token count.*exceeds the maximum number of tokens/i.test(message);
 }
 
+/** The input limit an overflow refusal states, in Gemini's wording: the prompt's alone. */
+function statedLimits(err: unknown): ModelLimits | undefined {
+  const message = err && typeof err === 'object' ? (err as { message?: unknown }).message : undefined;
+  const stated = typeof message === 'string' ? /maximum number of tokens allowed \((\d+)\)/i.exec(message)?.[1] : undefined;
+  const limit = stated ? Number(stated) : NaN;
+  return Number.isSafeInteger(limit) && limit > 0 ? { inputTokenLimit: limit } : undefined;
+}
+
 /**
  * The turns Gemini is sent for `messages`. A tool message's run becomes one
  * `function` turn, as the API wants every call of a turn answered in the next;
@@ -238,6 +246,10 @@ class GeminiResearchChat extends BudgetedChat<GeminiMessage> {
 
   protected isContextOverflow(err: unknown): boolean {
     return isContextOverflow(err);
+  }
+
+  protected statedLimits(err: unknown): ModelLimits | undefined {
+    return statedLimits(err);
   }
 
   protected async callApi(input: CallInput<GeminiMessage>, model: string, maxOutputTokens: number, signal?: AbortSignal): Promise<ResearchTurn> {

@@ -29,6 +29,7 @@ export type {
   PlanStatus,
   PlannerCompaction,
   PlannerCompactionOutcome,
+  PlannerContextPause,
   PlannerResendState,
   ReplyRun,
   ResearchLogEntry,

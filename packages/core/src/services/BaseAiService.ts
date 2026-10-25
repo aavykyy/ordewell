@@ -102,6 +102,10 @@ export interface ResearchChat {
   holdsInput?(): boolean;
   /** Send the held input again, once room is made: no tool runs a second time. */
   resend?(signal?: AbortSignal): Promise<ResearchTurn>;
+  /** Whether {@link retry} can send the held input: a window is known to compact against. */
+  retryable?(): boolean;
+  /** The user's Retry compaction: condense with their consent, then send the held input once. */
+  retry?(signal?: AbortSignal): Promise<ResearchTurn>;
   /**
    * Take `history` in place of the whole message list in one step — a summary
    * swapped in for what it condensed. Refused, changing nothing, unless each
@@ -172,6 +176,26 @@ export abstract class BaseAiService {
     const combinedSignal = this.startAbortScope(signal);
     try {
       const result = await this.runConversationTurn(this.conversation.ctx, userMessage, onProgress, combinedSignal);
+      if (result.kind === 'plan') this.conversation = null;
+      return result;
+    } finally {
+      this.stopAbortScope();
+    }
+  }
+
+  heldInputRetryable(): boolean {
+    return this.conversation?.ctx.chat.retryable?.() ?? false;
+  }
+
+  /** The turn a held input was for, carried on from it: its first call is the retry, every later one as in any turn. */
+  async retryHeldInput(onProgress: (progress: ResearchProgress) => void, signal?: AbortSignal): Promise<ConversationTurn> {
+    this.ensureInit();
+    const chat = this.conversation?.ctx.chat;
+    if (!this.conversation || !chat?.retry || !this.heldInputRetryable()) throw new Error('The planner holds no input to retry.');
+    this.conversation.setProgress(onProgress);
+    const combinedSignal = this.startAbortScope(signal);
+    try {
+      const result = await this.runConversationTurn(this.conversation.ctx, '', onProgress, combinedSignal, () => chat.retry!(combinedSignal));
       if (result.kind === 'plan') this.conversation = null;
       return result;
     } finally {
@@ -392,13 +416,20 @@ export abstract class BaseAiService {
     message: string,
     onProgress: (progress: ResearchProgress) => void,
     signal?: AbortSignal,
+    /** What the turn's first call is, in place of sending `message`: a held input sent again. */
+    firstCall?: () => Promise<ResearchTurn>,
   ): Promise<ConversationTurn> {
     // Context pressure is the chat's to handle, before each of its calls.
     const { chat } = ctx;
+    let first = firstCall;
     return settleReply({
       // The turn's own input carries the budgets, not the system prompt, which stays cacheable.
       message: withTurnBudgets(this.turnBudgets, message),
-      send: (text) => this.runToolRounds(chat, ctx, text, onProgress, signal),
+      send: (text) => {
+        const opening = first;
+        first = undefined;
+        return this.runToolRounds(chat, ctx, text, onProgress, signal, opening);
+      },
       classify: { autonomousDefault: ctx.autonomousDefault, ...(ctx.liveScope?.() ?? { runners: ctx.runners, runnerModes: ctx.runnerModes }) },
       onProgress,
       signal,
@@ -413,6 +444,7 @@ export abstract class BaseAiService {
     message: string,
     onProgress: (progress: ResearchProgress) => void,
     signal?: AbortSignal,
+    firstCall?: () => Promise<ResearchTurn>,
   ): Promise<ReplyAttempt> {
     const researchLog: ResearchLogEntry[] = [];
     const MAX_STEPS = this.config.researchMaxSteps;
@@ -429,7 +461,7 @@ export abstract class BaseAiService {
       return next;
     };
     const runs = (): TurnRun[] => (last ? [...narration, last] : [...narration]);
-    let turn = await call(() => chat.sendMessage(message, signal));
+    let turn = await call(firstCall ?? (() => chat.sendMessage(message, signal)));
 
     // Wrap-up rounds after the tool budget runs out: the pending calls are
     // answered synthetically (never executed) so the API history stays

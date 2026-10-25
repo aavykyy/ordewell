@@ -214,12 +214,14 @@ describe('a Gemini planner that cannot prune enough room', () => {
     const provider = new FakeGemini(twoBuilds(), [says('<conversation_summary>The user is mapping the cache and', 'MAX_TOKENS')]);
     const { session, limits, bash, compactions } = await afterOneBuild(provider);
 
-    await expect(session.continueConversation('run the tests')).rejects.toMatchObject({ name: 'PlannerContextExhaustedError', summary: 'failed' });
+    await session.continueConversation('run the tests');
+    expect(session.planState!.plannerContextPause!.reason).toMatch(/no summary could be had/);
     expect(history(session).some((m) => m.kind === 'compaction')).toBe(false);
     expect(compactions().at(-1)).toMatchObject({ phase: 'ended', outcome: 'paused' });
 
+    // The held function responses go once, on the user's retry: none is dropped.
     limits.input['big-model'] = 1_000_000;
-    await session.continueConversation('go on');
+    await session.retryPlannerCompaction();
     expect(responses(provider.requests.at(-1)!).map((r) => r.response.output.length)).toEqual([45_000, 45_000]);
     expect(bash).toHaveBeenCalledTimes(2);
   });
@@ -336,7 +338,8 @@ describe('a Gemini planner condensing its context', () => {
     const { session, config } = await afterOneBuild(provider);
     during.summary = () => { (config as { orchestratorModel: string }).orchestratorModel = 'gemini:other-model'; };
 
-    await expect(session.continueConversation('run the tests')).rejects.toMatchObject({ name: 'PlannerContextExhaustedError', summary: 'failed' });
+    await session.continueConversation('run the tests');
+    expect(session.planState!.plannerContextPause).toBeDefined();
     expect(provider.summaries.map((r) => r.model)).toEqual(['big-model']);
     expect(history(session).some((m) => m.kind === 'compaction')).toBe(false);
   });

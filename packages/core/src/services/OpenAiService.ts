@@ -81,6 +81,14 @@ function isContextOverflow(err: unknown): boolean {
   return code === 'context_length_exceeded' || (typeof message === 'string' && /maximum context length/i.test(message));
 }
 
+/** The window an overflow refusal states, in OpenAI's wording: the whole window, the reply's share included. */
+function statedLimits(err: unknown): ModelLimits | undefined {
+  const message = err && typeof err === 'object' ? (err as { message?: unknown }).message : undefined;
+  const stated = typeof message === 'string' ? /maximum context length is ([\d,]+) tokens/i.exec(message)?.[1] : undefined;
+  const window = stated ? Number(stated.replace(/,/g, '')) : NaN;
+  return Number.isSafeInteger(window) && window > 0 ? { contextWindow: window } : undefined;
+}
+
 /**
  * The one record for an API call, built only from what the provider reported.
  * OpenRouter's `cost` is in USD (its credits are dollar-pegged); nothing is
@@ -132,6 +140,10 @@ class OpenAiResearchChat extends BudgetedChat<Message> {
 
   protected isContextOverflow(err: unknown): boolean {
     return isContextOverflow(err);
+  }
+
+  protected statedLimits(err: unknown): ModelLimits | undefined {
+    return statedLimits(err);
   }
 
   protected async callApi(input: CallInput<Message>, model: string, maxTokens: number, signal?: AbortSignal): Promise<ResearchTurn> {
