@@ -82,3 +82,39 @@ describe('the assignment flag on a subtask card', () => {
     expect(screen.getByText('codex is switched off').getAttribute('title')).toMatch(/^Failed; a retry would run it there unless moved\./);
   });
 });
+
+// The card and the host's edit guard read one run fact: an editor the card
+// offers is one the host accepts.
+describe('the editors follow whether the run could still move the plan on, not only a live attempt', () => {
+  beforeEach(cleanup);
+
+  it('holds a settled task read-only while the scheduler waits on a manual task, with nothing live', () => {
+    const { container } = render(<TaskCard task={task({ status: 'completed' })} models={[]} runActive {...pickers} />);
+    fireEvent.click(screen.getByText('Work'));
+
+    expect(screen.queryByLabelText('Runner')).toBeNull();
+    expect(container.querySelector('.task-assignment-readonly')?.textContent).toBe('Assignedcodex · GPT · high');
+  });
+
+  it('still lets a task that has not started keep its editors then', () => {
+    render(<TaskCard task={task({ status: 'pending' })} models={[]} runActive {...pickers} />);
+    fireEvent.click(screen.getByText('Work'));
+
+    expect(screen.getByLabelText('Runner')).toBeTruthy();
+  });
+
+  it('holds a settled subtask read-only the same way', () => {
+    const sub = task({ id: 'sub', status: 'completed' });
+    render(<SubTaskCard task={sub} parentTask={task({ subtasks: [sub] })} models={[]} runActive {...pickers} />);
+    fireEvent.click(screen.getByText('Work'));
+
+    expect(screen.queryByLabelText('Runner')).toBeNull();
+  });
+
+  it('keeps the failed task editable once a run has ended on it, so it can be fixed and retried', () => {
+    render(<TaskCard task={task({ status: 'failed' })} models={[]} runActive={false} {...pickers} />);
+    fireEvent.click(screen.getByText('Work'));
+
+    expect(screen.getByLabelText('Runner')).toBeTruthy();
+  });
+});

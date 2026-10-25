@@ -10,7 +10,7 @@ import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
-import { blockedByLabel, dependencyCandidates, capConflictFiles, editableWhileRunning, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
+import { blockedByLabel, dependencyCandidates, capConflictFiles, cardEditable, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind, AssignmentScope } from '@ordewell/core';
 
 export interface RunnerMode {
@@ -462,10 +462,12 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
 
   const status = statusBadge(row);
   const isUserTask = task.type === 'user';
-  // While the plan runs, a task that has not itself started keeps its editors;
-  // execution, a start the run already shows, and a settled task do not. The
-  // run's status is the newer word: `task_started` reaches it first.
-  const canEdit = !isExecuting || editableWhileRunning({ status: run?.status ?? task.status }, run
+  // While anything could still move the plan on (a live attempt, a start, a
+  // scheduler waiting on a manual task or a hold), a task that has not itself
+  // started keeps its editors; execution, a start the run already shows, and a
+  // settled task do not. The host's edit guard reads the same fact. The run's
+  // status is the newer word: `task_started` reaches it first.
+  const canEdit = cardEditable(runActive ?? !!isExecuting, { status: run?.status ?? task.status }, run
     ? { awaitingApproval, isolation }
     : undefined);
 
@@ -716,7 +718,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             )}
 
             {/* A task execution has reached shows what its pickers decided; one still queued keeps them. */}
-            {isExecuting && !canEdit && <TaskAssignmentReadout task={task} />}
+            {!canEdit && <TaskAssignmentReadout task={task} />}
 
             {/* Runner first: it decides which models, efforts and modes exist below it. */}
             {canEdit && task.type === 'ai' && runnerOptions.length > 0 && onRunnerChange && (

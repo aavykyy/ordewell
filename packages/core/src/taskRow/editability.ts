@@ -26,3 +26,30 @@ export function editableWhileRunning(task: { status: string }, run?: TaskRunFact
   if ((run.awaitingApproval ?? 0) > 0) return false;
   return run.isolation?.state !== 'active' && run.isolation?.state !== 'repairing';
 }
+
+/**
+ * The one run fact the card's editors and the host's edit guard both read:
+ * anything that could still move a task on without being asked — a live
+ * attempt, a start opening the run, a scheduler waiting on a manual task, a
+ * gate or a usage-limit hold. A run that ended on a failure is not here:
+ * nothing advances until a retry or skip, so the failed task stays editable.
+ */
+export function runHoldsEditors(isExecuting: boolean, activity: { starting: boolean; advancesOnItsOwn: boolean }): boolean {
+  return isExecuting || activity.starting || activity.advancesOnItsOwn;
+}
+
+/** Whether a card shows this task's editors, given {@link runHoldsEditors}. */
+export function cardEditable(runHolds: boolean, task: { status: string }, run?: TaskRunFacts): boolean {
+  return !runHolds || editableWhileRunning(task, run);
+}
+
+/**
+ * Whether a card edit carries the narrower precondition that the task has not
+ * started when the Session applies it. It does while a run holds the editors,
+ * and for a task that has not started even in an idle plan: the edit waits on
+ * discovery or a skills check, and a start can claim the task meanwhile. A
+ * settled task of an idle plan keeps the wider direct-edit contract.
+ */
+export function cardEditNeedsUnstarted(runHolds: boolean, task: { status: string }): boolean {
+  return runHolds || NOT_STARTED.has(task.status);
+}

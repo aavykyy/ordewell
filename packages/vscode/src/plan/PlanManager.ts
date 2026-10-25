@@ -4,7 +4,7 @@ import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
   createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, pastGateConfirmation, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
-  taskActionCommand, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction, type TaskEditOptions,
+  taskActionCommand, runHoldsEditors, cardEditNeedsUnstarted, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction, type TaskEditOptions,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit } from '../shared/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -314,14 +314,16 @@ function applyTaskEdit(session: Session, taskId: string, edit: TaskEdit, options
  * attempted.
  */
 export async function handleTaskEdit(taskId: string, edit: TaskEdit, deps: PlanManagerDeps): Promise<void> {
-  // A run under way means the card offered this only on a task that had not
-  // started; the Session checks that again after its own waits. With no run,
-  // the card keeps the wider direct-edit contract, settled tasks included.
-  // A run is under way before and between its tasks too: the scheduler waiting
-  // on a manual task or a hold claims the next one with nothing live to say so.
-  const { starting, scheduled, resumable } = deps.session.activity;
-  const underWay = deps.session.isExecuting || starting || scheduled || resumable;
-  const options: TaskEditOptions | undefined = underWay ? { requireUnstarted: true } : undefined;
+  // The card's own rule, from the same run fact: a run that could still move
+  // a task on holds its editors to a task that has not started, and the
+  // Session checks that again after its own waits. A task that has not started
+  // is held to it in an idle plan too, as a start can claim it while the edit
+  // waits on discovery. A settled task of an idle plan, a failed one a run
+  // ended on included, keeps the wider direct-edit contract.
+  const { session } = deps;
+  const target = flattenTasks(session.planTasks).find((t) => t.id === taskId);
+  const held = runHoldsEditors(session.isExecuting, session.activity);
+  const options: TaskEditOptions | undefined = (target ? cardEditNeedsUnstarted(held, target) : held) ? { requireUnstarted: true } : undefined;
   try {
     await applyTaskEdit(deps.session, taskId, edit, options);
   } catch (err) {
