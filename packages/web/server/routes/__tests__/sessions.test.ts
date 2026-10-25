@@ -21,6 +21,7 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     getPlanState: vi.fn().mockReturnValue(null),
     runSnapshot: vi.fn().mockReturnValue(null),
     plannerTurnId: vi.fn().mockReturnValue(undefined),
+    plannerCompaction: vi.fn().mockReturnValue(undefined),
     streamPosition: vi.fn().mockReturnValue({ stream: 'daemon', seq: 12 }),
     hasSession: vi.fn().mockReturnValue(false),
     destroy: vi.fn(),
@@ -75,6 +76,24 @@ describe('GET /api/sessions/:id', () => {
 
     expect(((await res.json()) as { run?: unknown }).run).toEqual(view);
     expect(pool.runSnapshot).toHaveBeenCalledWith('s1');
+  });
+
+  // A surface refreshing mid-compaction has no turn to follow; this is how it
+  // learns the planner is busy and which block to keep drawing.
+  it('names the planner compaction the live session is running', async () => {
+    const start = { type: 'planner_compaction', compaction: { phase: 'started', id: 'c1', origin: 'ordewell', trigger: 'manual', at: '2026-10-25T10:00:00.000Z' } };
+    const pool = fakePool({ getPlanState: vi.fn().mockReturnValue(savedPlan), plannerCompaction: vi.fn().mockReturnValue(start) } as Partial<OrchestratorPool>);
+
+    const res = await appWith(pool).request('/api/sessions/s1?workspace=/ws');
+
+    expect(((await res.json()) as { plannerCompaction?: unknown }).plannerCompaction).toEqual(start);
+    expect(pool.plannerCompaction).toHaveBeenCalledWith('s1');
+  });
+
+  it('leaves the compaction out when none is running', async () => {
+    const res = await appWith(fakePool()).request('/api/sessions/s1?workspace=/ws');
+
+    expect(await res.json()).not.toHaveProperty('plannerCompaction');
   });
 
   it('leaves the run view out for a session nobody holds', async () => {
@@ -135,6 +154,24 @@ describe('POST /api/sessions/:id/load', () => {
     const res = await app2.request('/api/sessions/s1/load', { method: 'POST' });
 
     expect(((await res.json()) as { plannerTurnId?: string }).plannerTurnId).toBe('t1');
+  });
+
+  it('names the planner compaction the adopted session is running, which has no turn of its own', async () => {
+    const start = { type: 'planner_compaction', compaction: { phase: 'started', id: 'c1', origin: 'ordewell', trigger: 'auto', at: '2026-10-25T10:00:00.000Z' } };
+    const running = fakePool({ plannerCompaction: vi.fn().mockReturnValue(start) });
+    const app2 = new Hono();
+    app2.route('/api/sessions', sessionsRoute(running));
+
+    const body = (await (await app2.request('/api/sessions/s1/load', { method: 'POST' })).json()) as Record<string, unknown>;
+
+    expect(body.plannerCompaction).toEqual(start);
+    expect(body).not.toHaveProperty('plannerTurnId');
+  });
+
+  it('leaves the compaction out of an adoption when none is running', async () => {
+    const res = await app.request('/api/sessions/s1/load', { method: 'POST' });
+
+    expect(await res.json()).not.toHaveProperty('plannerCompaction');
   });
 
   it('leaves the turn out when no planner turn is running', async () => {

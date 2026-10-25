@@ -1,9 +1,9 @@
-import { blockingFailures, DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, NO_TURN, fromTranscript, holdPrompt, taskLogCommands, taskStartedNotice, type RunnerId } from '@ordewell/core';
+import { blockingFailures, DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, NO_TURN, fromTranscript, holdPrompt, taskLogCommands, taskStartedNotice, type RunnerId, type SerializedPlan } from '@ordewell/core';
 import { bodyMode, chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
 import { applyKey, commit } from './editor';
-import { say, wiped } from './transcript';
+import { endRunningCompactions, hear, say, wiped } from './transcript';
 import { blockedPicker, handoffArrived, showDiff } from './handoff';
 import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, scriptTaskView, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
@@ -12,6 +12,7 @@ import { syncApprovals } from './reducers/approvals';
 import { handlePlanKey } from './reducers/planPane';
 import { announceApprovals, announceCheckpoint, answerCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
 import { newSession, pickRewindTarget, runCommand } from './reducers/commands';
+import { adoptCompaction, followCompaction } from './reducers/compaction';
 import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, restoreForced } from './reducers/turnQueue';
 import { applySettings, foldRun, followSession, planSnapshot, withRun } from './reducers/incoming';
 import { refillPicker, reseedRunnerChoice } from './reducers/pickers';
@@ -57,7 +58,7 @@ export function reduce(state: TuiState, action: Action): Step {
   // A notice normally sets `scroll` to 0, which `holdReadingPlace` leaves
   // alone; one that holds the reader's place grows the content below them
   // exactly as live output does.
-  if (action.type !== 'sessionMessage' && action.type !== 'taskLog' && action.type !== 'notice') return result;
+  if (action.type !== 'sessionMessage' && action.type !== 'compacted' && action.type !== 'taskLog' && action.type !== 'notice') return result;
   return { ...result, state: holdPlanInView(holdReadingPlace(state, result.state)) };
 }
 
@@ -127,6 +128,14 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (stale(state, action.sessionId)) return step(state);
       return step(showPlan(state, action.plan));
 
+    case 'compacted': {
+      if (stale(state, action.sessionId)) return step(state);
+      // The summary and its marker are in the plan's transcript; folding them is
+      // a no-op when the socket delivered them first, and the only copy when it did not.
+      const synced = hear(state, { type: 'plan_generated', plan: action.plan as SerializedPlan, goal: state.goal, runners: [] });
+      return reduceAction(synced, { type: 'planUpdated', plan: action.plan, sessionId: action.sessionId });
+    }
+
     case 'planUpdated': {
       if (stale(state, action.sessionId)) return step(state);
       const settled: TuiState = { ...showPlan(state, action.plan), planner: 'idle' };
@@ -157,6 +166,17 @@ function reduceAction(state: TuiState, action: Action): Step {
     // and settles as any turn that returned its plan.
     case 'turnReconciled': {
       if (stale(state, action.sessionId)) return step(state);
+      if (action.plannerTurnId === undefined && action.plannerCompaction) {
+        // Mid-compaction there is nothing to redraw: the view folds the compaction
+        // in by its id, and its end, when it comes, frees the planner.
+        return step(adoptCompaction(showPlan(state, action.plan), action.plannerCompaction));
+      }
+      if (action.plannerTurnId === undefined && state.planner === 'compacting') {
+        // Its end went with the connection. The plan says whether it committed;
+        // otherwise nothing is known to have happened, so no outcome is claimed.
+        const synced = hear(state, { type: 'plan_generated', plan: action.plan as SerializedPlan, goal: state.goal, runners: [] });
+        return reduceAction(endRunningCompactions(synced, 'unchanged'), { type: 'planUpdated', plan: action.plan, sessionId: action.sessionId });
+      }
       if (action.plannerTurnId !== undefined) {
         // The gate follows the turn actually running: its own end is what
         // releases the queue, a stranger's output is not dropped as a stale one's.
@@ -178,6 +198,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // session to be read back.
     case 'sessionMessage': {
       if (stale(state, action.sessionId)) return step(state);
+      if (action.message.type === 'planner_compaction') return followCompaction(state, action.message);
       const next = followSession(state, action.message);
       const { sessionId } = state;
       const lostTurnEnded = action.message.type === 'planner_turn_ended' && state.planner === 'awaiting'
@@ -332,7 +353,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // A follow that opens again may be the only way a lost reply's turn end
     // arrives: its socket was gone when the daemon broadcast it.
     case 'followRestored':
-      if (stale(state, action.sessionId) || state.planner !== 'awaiting') return step(state);
+      if (stale(state, action.sessionId) || (state.planner !== 'awaiting' && state.planner !== 'compacting')) return step(state);
       return step(state, [{ type: 'reconcileTurn', sessionId: action.sessionId }]);
 
     case 'executionLost': {
@@ -437,8 +458,10 @@ function reduceAction(state: TuiState, action: Action): Step {
         state = restoreForced(state);
       }
       const quiet = plannerInFlight(state) && state.stopRequested;
+      // The daemon's own end for a compaction may have been lost with the call.
+      const settled = state.planner === 'condensing' ? endRunningCompactions(state, quiet || action.code === 'planner_turn_stopped' ? 'stopped' : 'failed') : state;
       const reported = {
-        ...(quiet ? state : reportError(state, action.message)),
+        ...(quiet ? settled : reportError(settled, action.message)),
         planner: 'idle' as const,
         // A start that never reached the daemon has no run to wait for: the
         // spinner must not outlive the failure that answered it.

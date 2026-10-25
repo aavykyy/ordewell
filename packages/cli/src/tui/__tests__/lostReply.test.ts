@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { SurfacePlan } from '@ordewell/core';
+import { fromTranscript, type SurfacePlan } from '@ordewell/core';
 import { DaemonError } from '../../apiClient';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action, type Effect } from '../reducer';
@@ -283,5 +283,78 @@ describe('a turn end that went with the follow socket', () => {
 
     expect(t.state.turnGate.open).toBe('t2');
     expect(t.state.queuedPrompts).toEqual(['and the tests']);
+  });
+});
+
+describe('a compaction the daemon is still running', () => {
+  const running = { type: 'planner_compaction', compaction: { phase: 'started', id: 'c1', origin: 'ordewell', trigger: 'manual', at: '2026-01-02T00:00:00.000Z' } } as const;
+  const condensedEnd = { type: 'planner_compaction', compaction: { phase: 'ended', id: 'c1', origin: 'ordewell', trigger: 'manual', outcome: 'condensed', at: '2026-01-02T00:00:09.000Z' } } as const;
+  const conversation = { sessionId: 's1', conversation: fromTranscript([
+    { role: 'user', content: 'build me a parser', timestamp: '2026-01-02T00:00:00.000Z' },
+    { role: 'assistant', content: 'Which formats?', timestamp: '2026-01-02T00:00:01.000Z' },
+  ], []) };
+  const blocksOf = (state: TuiState) => state.conversation.blocks.filter((b) => b.type === 'compaction');
+
+  it('survives a lost /compact reply: the planner stays busy, the view is not redrawn, and the end releases the queue', async () => {
+    const t = tui(
+      { compactConversation: vi.fn().mockRejectedValue(timedOut()), adoptSession: vi.fn().mockResolvedValue({ plan: planWith(), goal: 'g', plannerCompaction: running }) },
+      { ...conversation, planner: 'condensing', queuedPrompts: ['and the tests'] },
+    );
+    t.send({ type: 'sessionMessage', sessionId: 's1', message: running });
+    const before = t.state.conversation.blocks;
+
+    await t.run({ type: 'compactConversation', sessionId: 's1' });
+
+    expect(t.state.planner).toBe('compacting');
+    expect(blocksOf(t.state)).toEqual([expect.objectContaining({ compactionId: 'c1', status: 'running' })]);
+    // Only the turnLost notice is new: nothing is redrawn.
+    expect(t.state.conversation.blocks.slice(0, before.length)).toEqual(before);
+    expect(t.state.queuedPrompts).toEqual(['and the tests']);
+    expect(types(t.actions)).not.toContain('chatRestored');
+
+    t.send({ type: 'sessionMessage', sessionId: 's1', message: condensedEnd });
+
+    expect(t.sent.filter((e) => e.type === 'sendMessage')).toEqual([{ type: 'sendMessage', sessionId: 's1', message: 'and the tests' }]);
+  });
+
+  it('is shown after a reconnect that missed its start', async () => {
+    const t = tui({ adoptSession: vi.fn().mockResolvedValue({ plan: planWith(), goal: 'g', plannerCompaction: running }) }, { ...conversation, planner: 'awaiting' });
+
+    t.send({ type: 'followRestored', sessionId: 's1' });
+    await t.settle();
+
+    expect(t.state.planner).toBe('compacting');
+    expect(blocksOf(t.state)).toEqual([expect.objectContaining({ compactionId: 'c1', status: 'running' })]);
+  });
+
+  it('settles a compaction whose end went with the socket: reconnecting finds none running, so nothing is claimed and the queue goes out', async () => {
+    const t = tui({ adoptSession: vi.fn().mockResolvedValue({ plan: planWith(), goal: 'g' }) }, { ...conversation, queuedPrompts: ['and the tests'] });
+    t.send({ type: 'sessionMessage', sessionId: 's1', message: running });
+    expect(t.state.planner).toBe('compacting');
+
+    t.send({ type: 'followRestored', sessionId: 's1' });
+    await t.settle();
+
+    expect(t.state.planner).toBe('planning');
+    expect(blocksOf(t.state)).toEqual([]);
+    expect(messagesOf(t.state).map((m) => m.text).join(' ')).not.toMatch(/lost on the way/);
+    expect(t.sent.filter((e) => e.type === 'sendMessage')).toEqual([{ type: 'sendMessage', sessionId: 's1', message: 'and the tests' }]);
+  });
+
+  it('keeps a compaction the daemon finished while the socket was down, with its summary', async () => {
+    const checkpoint = { id: 'c1', keptFrom: 2, trigger: 'manual' as const };
+    const done = { tasks: [], conversationHistory: [
+      { role: 'user', content: 'build me a parser', timestamp: '2026-01-02T00:00:00.000Z' },
+      { role: 'assistant', content: 'Which formats?', timestamp: '2026-01-02T00:00:01.000Z' },
+      { role: 'assistant', content: 'Conversation condensed: the state', timestamp: '2026-01-02T00:00:09.000Z', kind: 'compaction', checkpoint },
+    ] } as unknown as SurfacePlan;
+    const t = tui({ adoptSession: vi.fn().mockResolvedValue({ plan: done, goal: 'g' }) }, conversation);
+    t.send({ type: 'sessionMessage', sessionId: 's1', message: running });
+
+    t.send({ type: 'followRestored', sessionId: 's1' });
+    await t.settle();
+
+    expect(t.state.planner).toBe('idle');
+    expect(blocksOf(t.state)).toEqual([expect.objectContaining({ compactionId: 'c1', status: 'condensed', summary: 'Conversation condensed: the state' })]);
   });
 });

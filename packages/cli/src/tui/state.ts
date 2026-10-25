@@ -12,9 +12,12 @@ export type RunStatus = 'idle' | 'starting' | 'executing';
  * starts inside the turn that landed its plan — and neither may end the other.
  * `awaiting` is a call whose reply was lost in transit: the daemon runs a turn
  * to its end whether or not anyone waits, so the turn is neither failed nor
- * over until the daemon says so.
+ * over until the daemon says so. `compacting` is a compaction this surface did
+ * not ask for — the planner's own, another surface's, or one already running
+ * when the session was adopted: it has no call here to settle it, so the
+ * compaction's end event does (ADR-0017).
  */
-export type PlannerStatus = 'idle' | 'planning' | 'condensing' | 'awaiting';
+export type PlannerStatus = 'idle' | 'planning' | 'condensing' | 'compacting' | 'awaiting';
 
 export interface TaskView {
   /** An attempt of it has started: its chat exists from then on. Absent on a task never run. */

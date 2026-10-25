@@ -421,7 +421,7 @@ export class ApiClient {
    * until the session is adopted there is no orchestrator behind it, so
    * execute/retry/cancel answer `session_not_found`.
    */
-  async adoptSession(sessionId: string, workspace?: string): Promise<Pick<AdoptSessionResponse, 'plan' | 'goal' | 'run' | 'plannerTurnId'>> {
+  async adoptSession(sessionId: string, workspace?: string): Promise<Pick<AdoptSessionResponse, 'plan' | 'goal' | 'run' | 'plannerTurnId' | 'plannerCompaction'>> {
     const qs = workspace ? `?workspace=${encodeURIComponent(workspace)}` : '';
     const res = await this.call<AdoptSessionResponse>('POST', `/api/sessions/${sessionId}/load${qs}`, 'Failed to load session');
     return {
@@ -429,6 +429,7 @@ export class ApiClient {
       goal: res.goal ?? '',
       ...(res.run ? { run: res.run } : {}),
       ...(res.plannerTurnId ? { plannerTurnId: res.plannerTurnId } : {}),
+      ...(res.plannerCompaction ? { plannerCompaction: res.plannerCompaction } : {}),
     };
   }
 

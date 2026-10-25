@@ -205,6 +205,8 @@ describe('ordewell compact', () => {
     expect(stdout).toMatch(/Condensed session-1/);
     expect(stdout).toContain('Goal: a JSON parser. Streaming chosen.');
     expect(stdout).toMatch(/tasks are unchanged/);
+    // The transcript is kept whole; only what the planner is sent is shortened.
+    expect(stdout).toMatch(/full conversation stays in the session/);
   });
 
   it.each([

@@ -503,7 +503,9 @@ the turn it happens in, under the turn's id, and a pruning reports only its
 end. A surface folds the phases into one compaction
 block by id. Never a subagent's, and never a task runner's: a runner's
 compaction is a `compaction` event of its task log. `Session.plannerCompaction()`
-holds the start of the one running, for a surface that joins meanwhile.
+holds the start of the one running, for a surface that joins meanwhile: the
+daemon hands it on in its read and adoption answers (`plannerCompaction`) and
+as a frame when a socket joins.
 *Avoid:* "compaction notice" for it: it is the planner's lifecycle, not a note.
 
 **Model context** (`modelContext()` in `conversationSummary.ts`) — the
