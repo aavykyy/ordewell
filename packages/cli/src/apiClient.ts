@@ -86,7 +86,8 @@ export class DaemonError extends Error {
 /**
  * What a rejected call says about whether the daemon got the request. The one
  * place that decides it, so a caller never re-guesses from an error's wording:
- * - `answered`: the daemon replied with a refusal ({@link DaemonError}).
+ * - `answered`: the daemon replied, with a refusal ({@link DaemonError}) or with
+ *   a body this client could not use ({@link UnreadableResponseError}).
  * - `refused`: nothing was listening, so the request never arrived and may be replayed.
  * - `unknown`: a timeout, reset or hang-up after the request went out; the daemon
  *   may be running it or have finished it, and replaying it could run it twice.
@@ -94,8 +95,37 @@ export class DaemonError extends Error {
 export type Delivery = 'answered' | 'refused' | 'unknown';
 
 export function deliveryOf(err: unknown): Delivery {
-  if (err instanceof DaemonError) return 'answered';
+  if (err instanceof DaemonError || err instanceof UnreadableResponseError) return 'answered';
   return isConnectionRefused(err) ? 'refused' : 'unknown';
+}
+
+/**
+ * A 200 that arrived but whose body is not what its route promises. The daemon
+ * did take the request and answer it, so this is never a lost reply: nothing
+ * about the turn is in doubt, only what this client can show of its answer.
+ */
+export class UnreadableResponseError extends Error {
+  constructor(route: string, readonly why: string) {
+    super(`The server answered ${route}, but its reply could not be used: ${why}.`);
+    this.name = 'UnreadableResponseError';
+  }
+}
+
+/** A request the client gave up on after `timeoutMs`, which `viaEnv` says `ORDEWELL_HTTP_TIMEOUT_MS` set. */
+export class RequestTimeoutError extends Error {
+  readonly code = 'ETIMEDOUT';
+  constructor(readonly timeoutMs: number, readonly viaEnv: boolean) {
+    super('Request timed out');
+    this.name = 'RequestTimeoutError';
+  }
+}
+
+/** The `plan` a planner route answers with, or the reason the body is not one. */
+function planOf<T extends { plan: unknown }>(data: unknown, route: string): T {
+  if (typeof data !== 'object' || data === null) throw new UnreadableResponseError(route, data === null ? 'the body was empty' : 'the body was not JSON');
+  const plan = (data as { plan?: unknown }).plan;
+  if (typeof plan !== 'object' || plan === null) throw new UnreadableResponseError(route, 'it carried no plan');
+  return data as T;
 }
 
 /** A workspace the daemon rejected for lacking a project marker, distinguished from other 400s so the TUI can offer to initialize it instead of just reporting failure. */
@@ -261,7 +291,7 @@ export class ApiClient {
       req.on('error', reject);
       req.on('timeout', () => {
         req.destroy();
-        reject(new Error('Request timed out'));
+        reject(new RequestTimeoutError(hasConfiguredTimeout ? configuredTimeout : DEFAULT_HTTP_TIMEOUT_MS, hasConfiguredTimeout));
       });
       if (body) req.write(JSON.stringify(body));
       req.end();
@@ -274,11 +304,12 @@ export class ApiClient {
     workspace?: string,
     sessionId: string = mintSessionId(),
   ): Promise<PlanResult> {
-    const { plan, models, modelsByRunner, notes } = await this.turn<GeneratePlanResponse>('POST', `/api/plans/${sessionId}/generate`, 'Plan generation failed', {
+    const route = `/api/plans/${sessionId}/generate`;
+    const { plan, models, modelsByRunner, notes } = planOf<GeneratePlanResponse>(await this.turn('POST', route, 'Plan generation failed', {
       goal,
       runners: runners || undefined,
       workspace,
-    });
+    }), route);
     return { sessionId, plan, models, modelsByRunner, ...(notes ? { notes } : {}) };
   }
 
@@ -294,24 +325,24 @@ export class ApiClient {
     workspace?: string,
     allowInit?: boolean,
   ): Promise<PlanResponse['plan']> {
-    const res = await this.turn<PlanResponse>('POST', `/api/plans/${sessionId}/converse/start`, 'Planning failed', {
+    const route = `/api/plans/${sessionId}/converse/start`;
+    return planOf<PlanResponse>(await this.turn('POST', route, 'Planning failed', {
       goal,
       runners: runners || undefined,
       workspace,
       allowInit,
-    });
-    return res.plan;
+    }), route).plan;
   }
 
   async sendConversationMessage(sessionId: string, message: string): Promise<PlanResponse['plan']> {
-    const res = await this.turn<PlanResponse>('POST', `/api/plans/${sessionId}/converse/message`, 'Planner message failed', { message });
-    return res.plan;
+    const route = `/api/plans/${sessionId}/converse/message`;
+    return planOf<PlanResponse>(await this.turn('POST', route, 'Planner message failed', { message }), route).plan;
   }
 
   /** Send now (ADR-0023, F5): stop the planner turn in flight and answer `message` in the turn that replaces it. */
   async forceSendPlannerMessage(sessionId: string, message: string): Promise<PlanResponse['plan']> {
-    const res = await this.turn<PlanResponse>('POST', `/api/plans/${sessionId}/converse/message/now`, 'Send now failed', { message });
-    return res.plan;
+    const route = `/api/plans/${sessionId}/converse/message/now`;
+    return planOf<PlanResponse>(await this.turn('POST', route, 'Send now failed', { message }), route).plan;
   }
 
   getRunners(): Promise<RunnersResponse> {

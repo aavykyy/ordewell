@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import MarkdownContent from './MarkdownContent';
 import TaskHandoff from './TaskHandoff';
 import type {
   CommandBlock, RunnerLoadedBlock,
@@ -88,7 +89,7 @@ export default function ChatMessage({ block, expanded = false }: { block: Messag
     <div className={`chat-msg chat-msg-planner${block.role === 'supervisor' ? ' chat-msg-supervisor' : ''}${block.streaming ? ' streaming' : ''}`}>
       <div className="chat-msg-bubble">
         {block.role === 'supervisor' && <span className="chat-msg-label">Supervisor</span>}
-        <div className="chat-msg-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(block.text.trim()) }} />
+        <MarkdownContent className="chat-msg-content" html={renderMarkdown(block.text.trim())} />
         {block.streaming && <span className="chat-msg-cursor" aria-hidden="true" />}
       </div>
     </div>
