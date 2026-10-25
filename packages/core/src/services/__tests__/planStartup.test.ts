@@ -111,7 +111,7 @@ describe('the run activity while a plan start is admitted', () => {
   });
 
   it('starts a fresh run when Execute follows a Stop that came while the first was still opening', async () => {
-    const gates: Array<ReturnType<typeof deferred>> = [];
+    const gates: Array<ReturnType<typeof deferred<void>>> = [];
     const spawn = vi.fn(async ({ taskId }: Parameters<IRunner['spawn']>[0]) => {
       const gate = deferred();
       gates.push(gate);

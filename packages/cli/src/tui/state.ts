@@ -327,9 +327,9 @@ export interface TaskLogState extends TaskLogFollow {
    */
   queuedIndex: number | null;
   /**
-   * Why the composer's last text was not sent, drawn in the view in place of
-   * its key hints until the next send: the planner chat, where other notices
-   * go, is not on screen.
+   * Why the last key was refused, drawn in the view in place of its key hints
+   * until the next key that is not a scroll: the planner chat, where other
+   * notices go, is not on screen.
    */
   notice?: string;
 }

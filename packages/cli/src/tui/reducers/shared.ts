@@ -203,6 +203,17 @@ export function reportError(state: TuiState, message: string): TuiState {
 }
 
 /**
+ * A notice answers the key that was refused. Any next key that is not just
+ * scrolling dismisses it, so the view's own key hints come back — a script
+ * view has no composer whose next send would clear it.
+ */
+export function clearNotice(state: TuiState): TuiState {
+  return state.taskView?.notice
+    ? { ...state, taskView: { ...state.taskView, notice: undefined } }
+    : state;
+}
+
+/**
  * A planner/execution result carries the session id it was produced for. A
  * turn from a session that `/new` has since replaced must not touch the
  * fresh state, even though its promise/socket callback fires afterwards.

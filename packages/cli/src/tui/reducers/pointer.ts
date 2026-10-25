@@ -45,6 +45,10 @@ export function scrollDelta(key: Key, state: TuiState, pane: Focus): number | nu
 
 export const isWheel = (key: Key): boolean => key.name === 'scrollup' || key.name === 'scrolldown';
 
+/** A key that only moves a viewport, so scrolling never dismisses a task view's notice. */
+export const isScrollKey = (key: Key): boolean =>
+  key.name === 'pageup' || key.name === 'pagedown' || isWheel(key) || key.name === 'wheelignored';
+
 export const isMouseSelect = (key: Key): boolean =>
   key.name === 'mousedown' || key.name === 'mousedrag' || key.name === 'mouseup';
 
