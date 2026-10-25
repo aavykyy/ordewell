@@ -375,3 +375,24 @@ describe('a Gemini planner condensing its context', () => {
     expect(history(session).filter((m) => m.kind === 'compaction')).toHaveLength(1);
   });
 });
+
+describe('a Gemini planner opening a new plan', () => {
+  it('sends its instructions and the goal as one user turn, so no two user turns follow each other', async () => {
+    const provider = new FakeGemini([callsTools(['bash', { command: 'ls src' }]), says('Which cache?'), says('Noted.')]);
+    const bash = vi.fn(async () => out(200));
+    const { session } = plannerSession(provider, fakeFileSystem({ bash }));
+    await session.startPlanning('add a cache', ['claude-code']);
+    await session.continueConversation('the LRU one');
+
+    expect(bash).toHaveBeenCalledTimes(1);
+    expect(provider.requests.map((r) => r.contents.map((c) => c.role))).toEqual([
+      ['user'],
+      ['user', 'model', 'function'],
+      ['user', 'model', 'function', 'model', 'user'],
+    ]);
+    const [opening] = provider.requests[0].contents;
+    expect(opening.parts).toHaveLength(2);
+    expect(opening.parts[0].text).not.toContain('add a cache\n\nCONTEXT');
+    expect(opening.parts[1].text).toContain('add a cache');
+  });
+});

@@ -61,6 +61,11 @@ describe('the context meter', () => {
     expect(contextMeterText(off)).toBe('ctx 61k (6%) · no auto-compact');
     expect(contextMeterTitle(off)).toBe('61,143 of 1,000,000 tokens. Automatic compaction is off in the settings file; /compact still condenses the conversation.');
   });
+
+  it('says no planner model is selected, rather than naming none, when the window is unknown for want of one', () => {
+    const none = { usedTokens: 100, windowTokens: 200_000, autoCompaction: { off: 'unknown_window' as const, model: '' } };
+    expect(contextMeterTitle(none)).toBe('100 of 200,000 tokens. Automatic compaction is off: no planner model is selected; /compact still condenses the conversation.');
+  });
 });
 
 describe('the usage line', () => {

@@ -576,6 +576,59 @@ describe('a message too long for the planner model\'s window by itself', () => {
     expect(pause.reason).toMatch(/^Your message is too long for vendor\/model's window by itself/);
     expect(session.planState!.pendingTurns!.map((t) => t.text)).toEqual([message]);
   });
+
+  it('is sent once on the user\'s Retry whatever the estimate, and lands where the model takes more than its catalog says', async () => {
+    const provider = new FakeProvider([says('Hi.'), says('Reviewed.')]);
+    const { session, catalog } = plannerSession(provider, fakeFileSystem());
+    await session.continueConversation('hello');
+    catalog.windows[MODEL] = provider.requests.at(-1)!.promptTokens * 3;
+    const message = `please review this log:\n${'L'.repeat(provider.requests.at(-1)!.promptTokens * 4 * 4)}`;
+    await session.continueConversation(message);
+    expect(session.planState!.plannerContextPause).toBeDefined();
+    const calls = provider.requests.length;
+
+    await session.retryPlannerCompaction();
+
+    expect(provider.requests).toHaveLength(calls + 1);
+    expect(provider.requests.at(-1)!.messages.at(-1)!.content).toContain(message);
+    expect(session.planState!.plannerContextPause).toBeUndefined();
+    expect(userSaid(session, message)).toHaveLength(1);
+    expect(history(session).at(-1)).toMatchObject({ role: 'assistant', content: 'Reviewed.' });
+  });
+});
+
+describe('a planner call a summary was committed for', () => {
+  beforeEach(() => { createSpy.mockReset(); });
+
+  const WINDOW = 200_000;
+
+  /** A long exchange lands while no window is known; then a message that, with that history condensed away, still fills 95% of the window. */
+  async function overBudgetAfterSummary(provider: FakeProvider) {
+    const env = plannerSession(provider, fakeFileSystem());
+    await env.session.continueConversation('hello');
+    const opening = provider.requests.at(-1)!.promptTokens;
+    await env.session.continueConversation(`here is the old log:\n${'B'.repeat(300_000)}`);
+    env.catalog.windows[MODEL] = WINDOW;
+    env.catalog.maxOutput = 4_096;
+    provider.windows[MODEL] = WINDOW;
+    const message = `review this:\n${'M'.repeat((Math.floor(WINDOW * 0.95) - opening) * 4)}`;
+    const calls = provider.requests.length;
+    await env.session.continueConversation(message);
+    return { ...env, message, calls };
+  }
+
+  it('is held past 90% of the window, though the model would take it, and the planner pauses', async () => {
+    const provider = new FakeProvider([says('Hi.'), says('Read.'), says('Reviewed.')]);
+    const { session, message, calls, compactions } = await overBudgetAfterSummary(provider);
+
+    expect(provider.summaries).toHaveLength(1);
+    expect(provider.requests).toHaveLength(calls);
+    expect(compactions().flatMap((c) => (c.phase === 'ended' ? [c.outcome] : []))).toEqual(['paused']);
+    const pause = session.planState!.plannerContextPause!;
+    expect(pause.reason).toMatch(/^The planner's context is estimated past the 90% of vendor\/model's window it is kept to, even after .*condensing.*Retry compaction/);
+    expect(pause.reason).not.toMatch(/by itself/);
+    expect(session.planState!.pendingTurns!.map((t) => t.text)).toEqual([message]);
+  });
 });
 
 describe('a planner model whose window no catalog states', () => {

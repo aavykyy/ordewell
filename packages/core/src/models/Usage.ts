@@ -433,7 +433,9 @@ export function contextMeterTitle(fill: ContextFill): string {
   if (!off) return counts;
   const why = off.off === 'settings'
     ? 'Automatic compaction is off in the settings file'
-    : `Automatic compaction is off: no catalog Ordewell holds states ${off.model}'s window`;
+    : off.model
+      ? `Automatic compaction is off: no catalog Ordewell holds states ${off.model}'s window`
+      : 'Automatic compaction is off: no planner model is selected';
   return `${counts}. ${why}; /compact still condenses the conversation.`;
 }
 

@@ -136,11 +136,10 @@ function statedLimits(err: unknown): ModelLimits | undefined {
 /**
  * The turns Gemini is sent for `messages`. A tool message's run becomes one
  * `function` turn, as the API wants every call of a turn answered in the next;
- * a user message after another — the note a condensed turn adds after the
- * user's — joins its turn as a part of its own, so condensing never adds a
- * second user turn in a row (the system prompt's turn at the head keeps the
- * shape it always had); a model turn goes back as it streamed, or, swapped in
- * by a reseed, as its text and calls.
+ * a user message after another — the goal after the system prompt's turn, or
+ * the note a condensed turn adds after the user's — joins its turn as a part
+ * of its own, so no two user turns follow each other; a model turn goes back
+ * as it streamed, or, swapped in by a reseed, as its text and calls.
  */
 function toContents(messages: readonly GeminiMessage[]): GeminiTurn[] {
   const contents: GeminiTurn[] = [];
@@ -160,7 +159,7 @@ function toContents(messages: readonly GeminiMessage[]): GeminiTurn[] {
     }
     if (m.role !== 'assistant') {
       const last = contents[contents.length - 1];
-      if (last?.role === 'user' && contents.length > 1) last.parts.push({ text: m.content ?? '' });
+      if (last?.role === 'user') last.parts.push({ text: m.content ?? '' });
       else contents.push({ role: 'user', parts: [{ text: m.content ?? '' }] });
       continue;
     }
@@ -519,7 +518,7 @@ export class GeminiService extends BaseAiService implements IAiService {
       else seed.push({ role: m.role, content: m.content });
     }
     // A seeded history must end on a model turn so the next sendMessage is a
-    // user turn (only relevant on resume; the fresh path keeps its old shape).
+    // user turn of its own (on a fresh start the goal joins the head's turn).
     if ((req.priorHistory?.length ?? 0) > 0 && seed[seed.length - 1].role === 'user') {
       seed.push({ role: 'assistant', content: 'Understood.' });
     }

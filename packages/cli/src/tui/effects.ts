@@ -523,11 +523,13 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       const { plan, goal, run } = adopted;
       dispatch({ type: 'sessionLoaded', sessionId: effect.sessionId, goal });
       dispatch(restoredChat(plan, effect.sessionId));
-      inbound.releaseSnapshot(true);
+      const ended = inbound.releaseSnapshot(true);
       dispatch({ type: 'planUpdated', plan, sessionId: effect.sessionId });
       if (run) dispatch({ type: 'runSnapshot', view: run, sessionId: effect.sessionId });
-      // After the turn-settling `planUpdated`, which would otherwise read the planner as free.
-      if (adopted.plannerTurnId) dispatch({ type: 'turnJoined', turnId: adopted.plannerTurnId, sessionId: effect.sessionId });
+      // After the turn-settling `planUpdated`, which would otherwise read the
+      // planner as free; never a turn whose end was heard while it loaded,
+      // since nothing would come to free it.
+      if (adopted.plannerTurnId && !ended.has(adopted.plannerTurnId)) dispatch({ type: 'turnJoined', turnId: adopted.plannerTurnId, sessionId: effect.sessionId });
       if (adopted.plannerCompaction) dispatch({ type: 'sessionMessage', message: adopted.plannerCompaction, sessionId: effect.sessionId });
       dispatch({ type: 'notice', message: `Loaded "${goal || effect.sessionId}".` });
       return;
