@@ -5,7 +5,8 @@ import * as path from 'path';
 import { startVersionCheck, VERSION_CHECK_URL, type PingFetch, type VersionCheck, type VersionCheckOptions } from '../VersionCheck';
 
 const NOTICE =
-  'Ordewell checks for a new version once a day, sending only its version and a random install ID. '
+  'Ordewell checks for a new version once a day, sending its version and a random install ID that is replaced every 30 days. '
+  + 'Like any server, ordewell.ai sees your IP address. '
   + 'Set ORDEWELL_NO_VERSION_CHECK=1 to turn this off. Details: https://ordewell.ai/docs#version-check';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -66,6 +67,7 @@ describe('VersionCheck', () => {
   function seenNotice(ago?: number) {
     fs.writeFileSync(stateFile(), JSON.stringify({
       installId: '7d5c1c8e-2f8a-4c43-9d0e-1d6f4c2a9b11',
+      installIdAt: new Date(T0 - 2 * DAY).toISOString(),
       noticeShownAt: new Date(T0 - 2 * DAY).toISOString(),
       ...(ago === undefined ? {} : { lastCheckAt: new Date(now - ago).toISOString() }),
     }));
@@ -80,6 +82,7 @@ describe('VersionCheck', () => {
     expect(net.calls).toEqual([]);
     const state = readState();
     expect(state.noticeShownAt).toBe('2026-10-23T09:00:00.000Z');
+    expect(state.installIdAt).toBe('2026-10-23T09:00:00.000Z');
     expect(state.installId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(state.lastCheckAt).toBeUndefined();
   });
@@ -265,7 +268,11 @@ describe('VersionCheck', () => {
       await check.settled();
       expect(notices).toEqual([NOTICE]);
       expect(net.calls).toEqual([]);
-      expect(readState()).toEqual({ installId: expect.any(String), noticeShownAt: '2026-10-23T09:00:00.000Z' });
+      expect(readState()).toEqual({
+        installId: expect.any(String),
+        installIdAt: '2026-10-23T09:00:00.000Z',
+        noticeShownAt: '2026-10-23T09:00:00.000Z',
+      });
     });
 
     it.each([
@@ -288,6 +295,19 @@ describe('VersionCheck', () => {
       expect(net.calls.map((call) => call.url)).toEqual([`${VERSION_CHECK_URL}?v=0.10.12&id=${installId}`]);
     });
 
+    it('dates a new install ID now even when the old file kept only a minting time', async () => {
+      fs.writeFileSync(stateFile(), JSON.stringify({
+        installIdAt: new Date(T0 - 90 * DAY).toISOString(),
+        noticeShownAt: new Date(T0 - 90 * DAY).toISOString(),
+      }));
+      const { check, notices } = start({ fetch: fakeFetch(reply(204)).fetch });
+      await check.settled();
+      expect(notices).toEqual([NOTICE]);
+      const state = readState();
+      expect(state.installId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(state.installIdAt).toBe('2026-10-23T09:00:00.000Z');
+    });
+
     it('is created with its directory', async () => {
       const nested = path.join(stateDir, 'not', 'yet');
       const { notices } = start({ fetch: fakeFetch(reply(204)).fetch, stateDir: nested });
@@ -303,6 +323,52 @@ describe('VersionCheck', () => {
       await start({ fetch: net.fetch }).check.settled();
       expect(net.calls[0].url).toContain(`&id=${installId}`);
       expect(readState().installId).toBe(installId);
+    });
+
+    const OLD_ID = '7d5c1c8e-2f8a-4c43-9d0e-1d6f4c2a9b11';
+
+    function agedState(installIdAt: string | undefined) {
+      fs.writeFileSync(stateFile(), JSON.stringify({
+        installId: OLD_ID,
+        ...(installIdAt === undefined ? {} : { installIdAt }),
+        noticeShownAt: new Date(T0 - 40 * DAY).toISOString(),
+      }));
+    }
+
+    it('keeps an install ID that is one minute short of 30 days', async () => {
+      agedState(new Date(T0 - 30 * DAY + 60_000).toISOString());
+      const net = fakeFetch(reply(204));
+      const { check, notices } = start({ fetch: net.fetch });
+      await check.settled();
+      expect(notices).toEqual([]);
+      expect(readState().installId).toBe(OLD_ID);
+      expect(net.calls.map((call) => call.url)).toEqual([`${VERSION_CHECK_URL}?v=0.10.12&id=${OLD_ID}`]);
+    });
+
+    it('replaces an install ID at 30 days without showing the notice again', async () => {
+      agedState(new Date(T0 - 30 * DAY).toISOString());
+      const net = fakeFetch(reply(204));
+      const { check, notices } = start({ fetch: net.fetch });
+      await check.settled();
+      expect(notices).toEqual([]);
+      const state = readState();
+      expect(state.installId).not.toBe(OLD_ID);
+      expect(state.installIdAt).toBe('2026-10-23T09:00:00.000Z');
+      expect(state.noticeShownAt).toBe(new Date(T0 - 40 * DAY).toISOString());
+      expect(net.calls.map((call) => call.url)).toEqual([`${VERSION_CHECK_URL}?v=0.10.12&id=${state.installId}`]);
+    });
+
+    it.each([
+      ['no recorded age', undefined],
+      ['a timestamp in the future', new Date(T0 + DAY).toISOString()],
+    ])('replaces an install ID with %s, so an unknown age cannot last for good', async (_, installIdAt) => {
+      agedState(installIdAt);
+      const net = fakeFetch(reply(204));
+      const { check, notices } = start({ fetch: net.fetch });
+      await check.settled();
+      expect(notices).toEqual([]);
+      expect(readState().installId).not.toBe(OLD_ID);
+      expect(net.calls).toHaveLength(1);
     });
 
     // POSIX permissions: Windows ignores the chmod.

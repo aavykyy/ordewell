@@ -95,9 +95,10 @@ OpenCode, and git for task isolation. On Windows, run the terminal UI under WSL.
 
 Once a day, Ordewell asks ordewell.ai whether a newer version is out. The request
 carries two things: the version you run and a random install ID, kept in
-`~/.ordewell/version-check.json` and shared by the CLI and the VS Code extension. Nothing else is sent: no
-code, prompts, paths, file names or account details. Like any server, ordewell.ai
-sees the IP address the request comes from.
+`~/.ordewell/version-check.json` and shared by the CLI and the VS Code extension.
+The ID is replaced every 30 days. Nothing else is sent: no code, prompts, paths,
+file names or account details. Like any server, ordewell.ai sees the IP address
+the request comes from.
 
 The first time Ordewell starts on a machine, it shows a notice saying this and
 sends nothing. The first check happens on a later start. If Ordewell cannot write

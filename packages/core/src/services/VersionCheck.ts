@@ -5,20 +5,29 @@ import { globalDataDir } from '../utils/globalDataDir';
 import { writePrivateFile } from '../utils/privateFile';
 
 /**
- * The daily version check (ADR-0048): one ping a day that counts
- * installs and may answer with a newer version.
+ * The daily version check (ADR-0048): one ping a day that counts installs
+ * under an install ID replaced every 30 days, and may answer with a newer
+ * version.
  */
 
 export const VERSION_CHECK_URL = 'https://ordewell.ai/api/v1/ping';
 
 export const VERSION_CHECK_NOTICE =
-  'Ordewell checks for a new version once a day, sending only its version and a random install ID. '
+  'Ordewell checks for a new version once a day, sending its version and a random install ID that is replaced every 30 days. '
+  + 'Like any server, ordewell.ai sees your IP address. '
   + 'Set ORDEWELL_NO_VERSION_CHECK=1 to turn this off. Details: https://ordewell.ai/docs#version-check';
 
 /** Shared by every surface on the machine, so the machine is one install. */
 const STATE_FILE = 'version-check.json';
 const TIMEOUT_MS = 3_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * How long an install ID lives. A month is long enough to count a machine as
+ * one install and short enough that no ID outlives the counts around it: the
+ * dataset keeps three months, and an ID that never changed would join all of
+ * them into one machine's history.
+ */
+const INSTALL_ID_TTL_MS = 30 * DAY_MS;
 /**
  * How often a running process asks whether the day is up. Not a day: the file
  * is shared, so the clock that matters is whichever surface checked last.
@@ -56,6 +65,8 @@ export interface VersionCheck {
 
 interface State {
   installId?: string;
+  /** When {@link State.installId} was minted; absent means its age is unknown. */
+  installIdAt?: string;
   noticeShownAt?: string;
   lastCheckAt?: string;
 }
@@ -64,9 +75,10 @@ function readState(file: string): State {
   try {
     const raw: unknown = JSON.parse(readFileSync(file, 'utf8'));
     if (!raw || typeof raw !== 'object') return {};
-    const { installId, noticeShownAt, lastCheckAt } = raw as Record<string, unknown>;
+    const { installId, installIdAt, noticeShownAt, lastCheckAt } = raw as Record<string, unknown>;
     return {
       ...(typeof installId === 'string' && installId ? { installId } : {}),
+      ...(typeof installIdAt === 'string' && !Number.isNaN(Date.parse(installIdAt)) ? { installIdAt } : {}),
       ...(typeof noticeShownAt === 'string' && !Number.isNaN(Date.parse(noticeShownAt)) ? { noticeShownAt } : {}),
       ...(typeof lastCheckAt === 'string' && !Number.isNaN(Date.parse(lastCheckAt)) ? { lastCheckAt } : {}),
     };
@@ -82,6 +94,22 @@ function writeState(file: string, state: State): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The state with an install ID young enough to send. An ID whose age is unknown,
+ * or whose timestamp is in the future, is replaced: an ID of unknown age could
+ * already be older than the counts it stands for.
+ *
+ * A failed write keeps the old state, and a start that cannot write the state
+ * does not ping either, so a read-only home never sends an aged ID.
+ */
+function rotateInstallId(file: string, state: State, at: number): State {
+  if (!state.installId) return state;
+  const since = state.installIdAt ? at - Date.parse(state.installIdAt) : null;
+  if (since !== null && since >= 0 && since < INSTALL_ID_TTL_MS) return state;
+  const rotated: State = { ...state, installId: randomUUID(), installIdAt: new Date(at).toISOString() };
+  return writeState(file, rotated) ? rotated : state;
 }
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -181,14 +209,20 @@ export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
     inFlight = ping(options.version, state.installId).catch(() => {}).finally(() => { pinging = false; });
   };
 
-  const state = readState(file);
+  const state = rotateInstallId(file, readState(file), now());
   // A notice without an install ID starts over too: no ID means no ping, so
   // keeping the notice would leave the check off for good.
   if (!state.noticeShownAt || !state.installId) {
     // A notice that cannot be recorded would be shown on every start; nothing
     // is ever sent from such a machine, so there is nothing to tell. No
     // `lastCheckAt` either: kept, it could hold the next start's ping back a day.
-    const recorded = writeState(file, { installId: state.installId ?? randomUUID(), noticeShownAt: new Date(now()).toISOString() });
+    const installId = state.installId ?? randomUUID();
+    const recorded = writeState(file, {
+      installId,
+      // A fresh ID starts its 30 days now; a kept one keeps the date it was minted.
+      installIdAt: state.installId && state.installIdAt ? state.installIdAt : new Date(now()).toISOString(),
+      noticeShownAt: new Date(now()).toISOString(),
+    });
     // Nothing is sent from this process, timer included: the off switches are
     // read once at start, so only a later start can honour one the notice
     // just told the user about.

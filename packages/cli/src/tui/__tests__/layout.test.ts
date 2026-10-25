@@ -121,7 +121,8 @@ describe('welcome — plan approval', () => {
 });
 
 describe('welcome — the version check notice (ADR-0048)', () => {
-  const NOTICE = 'Ordewell checks for a new version once a day, sending only its version and a random install ID. '
+  const NOTICE = 'Ordewell checks for a new version once a day, sending its version and a random install ID that is replaced every 30 days. '
+    + 'Like any server, ordewell.ai sees your IP address. '
     + 'Set ORDEWELL_NO_VERSION_CHECK=1 to turn this off. Details: https://ordewell.ai/docs#version-check';
 
   it('shows the one-time notice whole, wrapped to the pane', () => {

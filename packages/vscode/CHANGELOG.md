@@ -46,9 +46,10 @@
 - **A daily version check.** Once a day Ordewell asks ordewell.ai whether a
   newer version is out and shows one line when it is. The request carries the
   version you run and a random install ID, shared with the CLI through
-  `~/.ordewell/version-check.json`; nothing else is sent, though ordewell.ai
-  sees the IP address of any request. The first start shows a notice and sends
-  nothing. Turn it off with VS Code's telemetry setting
+  `~/.ordewell/version-check.json` and replaced every 30 days; nothing else is
+  sent, though ordewell.ai sees the IP address of any request, which the notice
+  says too. The first start shows a notice and sends nothing. Turn it off with
+  VS Code's telemetry setting
   (`telemetry.telemetryLevel`), `ORDEWELL_NO_VERSION_CHECK=1` or
   `DO_NOT_TRACK=1`: off, no notice, no ID and no request.
 - **Real commit messages.** A change task can state a commit message, and the
