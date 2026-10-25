@@ -59,7 +59,7 @@ describe('a card edit against a real Session', () => {
 
   it('holds a settled task read-only while the scheduler waits on a manual task, and the host agrees', async () => {
     const r = rig();
-    r.load([task('t0', 1), task('u1', 2, { type: 'user', dependencies: ['t0'], userSteps: [{ id: 's', text: 'do' }] } as Partial<Task>), task('t2', 3, { dependencies: ['u1'] })]);
+    r.load([task('t0', 1), task('u1', 2, { type: 'user', dependencies: ['t0'], userSteps: [{ order: 1, instruction: 'do', completed: false }] }), task('t2', 3, { dependencies: ['u1'] })]);
     await r.session.execute({ command: 'run_plan' }, { kind: 'user' });
     r.sessions.filter((s) => s.taskId === 't0').at(-1)!.reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(taskOf(r.session, 't0')!.status).toBe('completed'));
