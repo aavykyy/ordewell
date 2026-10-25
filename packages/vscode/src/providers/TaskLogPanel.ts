@@ -154,7 +154,6 @@ export class TaskLogPanel {
         else this.postInit();
         // A reloaded webview holds nothing, so it is sent them whatever was sent before.
         this.lastLimits = NO_LIMITS;
-        this.readServed();
         this.pushAccountLimits();
         return;
       case 'selectAttempt':
@@ -206,13 +205,6 @@ export class TaskLogPanel {
     }
   }
 
-  /** What the saved latest attempt was served by, for a panel that did not hear it live. */
-  private readServed(): void {
-    const latest = this.deps.session.taskLogAttempts(this.taskId).at(-1) ?? 0;
-    this.served = { attempt: latest };
-    if (latest > 0) this.observeServed(latest, this.deps.session.taskLog(this.taskId, latest));
-  }
-
   private selectAttempt(attempt: number): void {
     if (!this.follow.attempts.includes(attempt)) return;
     this.load(attempt);
@@ -233,6 +225,8 @@ export class TaskLogPanel {
     // Session reads and broadcasts share this stack, so the local sequence
     // marks exactly what the synchronous read contains, just as the daemon's.
     const events = attempt > 0 ? this.deps.session.taskLog(this.taskId, attempt) : [];
+    // What served a saved attempt the panel did not hear live comes from this read, never from a second one.
+    this.observeServed(attempt, events);
     this.follow = followTaskLog(this.follow, { type: 'loaded', attempt, events, position: this.position() });
     this.sent = [];
     if (this.ready) this.postInit();

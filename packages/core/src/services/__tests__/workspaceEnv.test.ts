@@ -1,5 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
-import { parseEnvFile, resolveWorkspaceEnv, type WorkspaceEnvDeps } from '../workspaceEnv';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { delimiter, join } from 'node:path';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { parseEnvFile, resolveWorkspaceEnv, workspaceEnvOf, type WorkspaceEnvDeps } from '../workspaceEnv';
 
 const ROOT = '/work/app';
 const WORKTREE = '/work/app/.ordewell/worktrees/run1/1-task';
@@ -113,6 +116,38 @@ it('asks direnv in the matching directory of the checkout, for a task in a multi
   await resolveWorkspaceEnv('/work/app/.ordewell/worktrees/run1/2-task/api/src', d);
 
   expect(d.run.mock.calls[0][2].cwd).toBe('/work/app/api/src');
+});
+
+describe('workspaceEnvOf', () => {
+  let dir: string | undefined;
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  it.skipIf(process.platform === 'win32')('shares one evaluation among the asks made while it runs, and evaluates afresh after it', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'ordewell-direnv-'));
+    const log = join(dir, 'runs');
+    const answer = join(dir, 'answer.json');
+    const direnv = join(dir, 'direnv');
+    writeFileSync(log, '');
+    writeFileSync(direnv, `#!/bin/sh\necho run >> '${log}'\nsleep 0.2\ncat '${answer}'\n`);
+    chmodSync(direnv, 0o755);
+    vi.stubEnv('PATH', `${dir}${delimiter}${process.env.PATH ?? ''}`);
+    vi.stubEnv('ORDEWELL_DIRENV', '');
+    const runs = () => readFileSync(log, 'utf8').split('\n').filter(Boolean).length;
+
+    writeFileSync(answer, JSON.stringify({ CLAUDE_CONFIG_DIR: '/home/me/.claude-a' }));
+    const asked = await Promise.all([workspaceEnvOf(dir), workspaceEnvOf(dir), workspaceEnvOf(`${dir}/`)]);
+    expect(asked).toEqual(Array(3).fill({ CLAUDE_CONFIG_DIR: '/home/me/.claude-a' }));
+    expect(runs()).toBe(1);
+
+    // An edit made since is seen: nothing is kept once the evaluation is over.
+    writeFileSync(answer, JSON.stringify({ CLAUDE_CONFIG_DIR: '/home/me/.claude-b' }));
+    expect(await workspaceEnvOf(dir)).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-b' });
+    expect(runs()).toBe(2);
+  });
 });
 
 describe('parseEnvFile', () => {

@@ -695,6 +695,19 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
         expect(limitsSent(__panels[0]).at(-1)).toEqual([]);
       });
 
+      it('learns what served the saved attempt from the one read that draws it, and reads nothing more when the webview reconnects', () => {
+        const h = harness({ 1: [served('opencode-go/glm-5')] }, { current: [go] });
+        onOpenCode(h, 'openrouter/x/y');
+        h.registry.open('t1');
+        __panels[0].__receive({ type: 'ready' });
+        expect(limitsSent(__panels[0])).toEqual([[go]]);
+        expect(h.session.taskLog).toHaveBeenCalledTimes(1);
+
+        __panels[0].__receive({ type: 'ready' });
+        expect(limitsSent(__panels[0])).toEqual([[go], [go]]);
+        expect(h.session.taskLog).toHaveBeenCalledTimes(1);
+      });
+
       it('forgets what an earlier attempt or an earlier assignment was served by', () => {
         const h = harness({ 1: [served('openrouter/x/y')] }, { current: [go] });
         onOpenCode(h, 'opencode-go/kimi-k2.6');
