@@ -1,6 +1,7 @@
 import { UPDATABLE_FIELDS } from './TaskOps';
 import { subtreeIds } from './PlanTree';
-import { validateTaskEdit } from './TaskEditValidator';
+import { startedEditRefusal, validateTaskEdit } from './TaskEditValidator';
+import { NOT_STARTED } from '../taskRow/status';
 import { liveRunnerRefusal, resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog, type RunnerCatalog } from './TaskAssignment';
 import { clampThinkingEffort } from './ModelAllowlistResolver';
 import { conflictResolverTask } from './Landing';
@@ -23,6 +24,18 @@ const ASSIGNMENT_FIELDS = ['assignedRunner', 'assignedModel', 'taskMode', 'type'
 
 /** The catalogs an edit reads, as the session holds them at the moment of the edit. */
 export type PlanEditCatalog = Pick<SessionCatalog, 'edit' | 'runner' | 'admit'>;
+
+/**
+ * How a surface's direct edit is admitted. The task card offers its editors
+ * only on a task that has not started, so its edit must not land on one the
+ * scheduler claimed while discovery or the skill check was still running.
+ * Other direct callers (the TUI, the API, the runner's own model switch) keep
+ * the wider direct-edit contract and pass nothing.
+ */
+export interface TaskEditOptions {
+  /** Refuse the edit once the task is live or its status has left the unstarted set. */
+  requireUnstarted?: boolean;
+}
 
 export interface PlanEditorDeps {
   store: PlanStore;
@@ -106,9 +119,13 @@ export class PlanEditor {
    * Edits to one task commit in call order: the skill check waits on git, so
    * two quick chip edits (`[a]` then `[a, b]`) could otherwise land the first
    * one last. An empty patch changes nothing and answers whether the task exists.
+   *
+   * `options.requireUnstarted` is the task card's precondition: it is checked
+   * again after the waits, so a task the scheduler claimed meanwhile is left
+   * untouched and the edit is refused.
    */
-  updateTask(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
-    return this.inTaskOrder(taskId, () => this.applyTaskUpdate(taskId, changes));
+  updateTask(taskId: string, changes: Partial<Task>, options?: TaskEditOptions): Promise<LegacyPlanState | null> {
+    return this.inTaskOrder(taskId, () => this.applyTaskUpdate(taskId, changes, options));
   }
 
   /**
@@ -154,18 +171,21 @@ export class PlanEditor {
     return edit;
   }
 
-  private async applyTaskUpdate(taskId: string, patch: Partial<Task>): Promise<LegacyPlanState | null> {
+  private async applyTaskUpdate(taskId: string, patch: Partial<Task>, options: TaskEditOptions = {}): Promise<LegacyPlanState | null> {
     const target = this.store.get(taskId);
     if (!target) return null;
     const changes = directChanges(patch, target);
     if (Object.keys(changes).length === 0) return this.plan();
+    // Asked before discovery too: listing a runner's models spawns its CLI
+    // for an edit that could not land anyway.
+    this.refuseStartedCardEdit(target, options);
     const skills = 'skills' in changes ? await checkTaskSkillsEdit(target, patch.skills, this.taskSkills()) : undefined;
     if (skills?.errors.length) throw new PlanEditError(skills.errors.map((e) => e.message).join(' '));
     const runner = changes.assignedRunner ?? target.assignedRunner;
     // Listing models spawns the runner's own CLI: a move that could not be made anyway is refused first.
     if (changes.assignedRunner) this.refuseLiveRetarget(target);
     const discovered = changes.assignedRunner || (changes.type === 'ai' && target.type !== 'ai') ? await this.discover(runner) : undefined;
-    const landed = this.landedEdit(taskId, changes, discovered);
+    const landed = this.landedEdit(taskId, changes, discovered, options);
     if (!landed) return null;
     const { edit, adjustments } = landed;
     const moved = edit.assignedRunner !== undefined;
@@ -192,9 +212,12 @@ export class PlanEditor {
    * every wait, with what its runner, model, effort and mode resolve to. Null
    * when the task is gone; throws on a refusal.
    */
-  private landedEdit(taskId: string, changes: Partial<Task>, discovered: RunnerCatalog | undefined): { edit: Partial<Task>; adjustments: AssignmentAdjustment[] } | null {
+  private landedEdit(taskId: string, changes: Partial<Task>, discovered: RunnerCatalog | undefined, options: TaskEditOptions): { edit: Partial<Task>; adjustments: AssignmentAdjustment[] } | null {
     const before = this.store.get(taskId);
     if (!before) return null;
+    // Re-read after every wait: the scheduler may have claimed the task while
+    // its runner's catalog or its skills were being checked.
+    this.refuseStartedCardEdit(before, options);
     const check = validateTaskEdit('direct', this.store.planTasks, taskId, changes);
     if (!check.ok) throw new PlanEditError(check.error ?? 'Those changes are not valid');
     const edit: Partial<Task> = { ...changes, ...Object.fromEntries((check.clear ?? []).map((f) => [f, undefined])), ...check.set };
@@ -258,9 +281,9 @@ export class PlanEditor {
    * a dependency list arriving as a plain field patch is rejected by the same
    * rule instead of slipping past it.
    */
-  async setTaskDependencies(taskId: string, dependencies: string[]): Promise<LegacyPlanState | null> {
+  async setTaskDependencies(taskId: string, dependencies: string[], options?: TaskEditOptions): Promise<LegacyPlanState | null> {
     if (!this.plan()) return null;
-    return this.updateTask(taskId, { dependencies });
+    return this.updateTask(taskId, { dependencies }, options);
   }
 
   /**
@@ -271,9 +294,9 @@ export class PlanEditor {
    * of the same runner, or a runner for a manual task, changes nothing and
    * asks discovery nothing.
    */
-  async setTaskRunner(taskId: string, runner: RunnerId): Promise<LegacyPlanState | null> {
+  async setTaskRunner(taskId: string, runner: RunnerId, options?: TaskEditOptions): Promise<LegacyPlanState | null> {
     if (!this.plan()) return null;
-    return this.updateTask(taskId, { assignedRunner: runner });
+    return this.updateTask(taskId, { assignedRunner: runner }, options);
   }
 
   /**
@@ -324,6 +347,18 @@ export class PlanEditor {
 
   private refuseLiveRetarget(task: Task): void {
     if (this.catalog.edit().liveRunner?.(task.id)) throw new PlanEditError(liveRunnerRefusal(task));
+  }
+
+  /**
+   * The card's narrower precondition, not the direct path's: a task whose
+   * runner is live or whose status has left the unstarted set was claimed
+   * while the edit waited, so the edit is refused rather than retargeting,
+   * rewriting or cancelling the attempt it raced.
+   */
+  private refuseStartedCardEdit(task: Task, options: TaskEditOptions): void {
+    if (!options.requireUnstarted) return;
+    if (NOT_STARTED.has(task.status) && !this.catalog.edit().liveRunner?.(task.id)) return;
+    throw new PlanEditError(startedEditRefusal(task));
   }
 
   /**

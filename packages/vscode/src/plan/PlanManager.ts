@@ -4,7 +4,7 @@ import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
   createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, pastGateConfirmation, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
-  taskActionCommand, type ExecutionCommand, type TaskAction,
+  taskActionCommand, type ExecutionCommand, type TaskAction, type TaskEditOptions,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit } from '../shared/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -279,17 +279,21 @@ function settleDirectEdit(deps: PlanManagerDeps): void {
   deps.saveCurrentSession();
 }
 
-function applyTaskEdit(session: Session, taskId: string, edit: TaskEdit): Promise<unknown> {
+function applyTaskEdit(session: Session, taskId: string, edit: TaskEdit, options?: TaskEditOptions): Promise<unknown> {
+  // An idle plan keeps the call it always made, without the card's condition.
+  const update = (changes: Partial<Task>) => options
+    ? session.updateTask(taskId, changes, options)
+    : session.updateTask(taskId, changes);
   switch (edit.kind) {
     // A runner change re-derives the task's model, effort and mode from the
     // new runner's catalog, which only the session can read.
-    case 'runner': return session.setTaskRunner(taskId, edit.runner);
-    case 'model': return session.updateTask(taskId, { assignedModel: edit.assignment });
-    case 'mode': return session.updateTask(taskId, { taskMode: edit.mode });
-    case 'prompt': return session.updateTask(taskId, { prompt: edit.prompt, description: edit.prompt || undefined });
-    case 'dependencies': return session.setTaskDependencies(taskId, edit.dependencies);
-    case 'skills': return session.updateTask(taskId, { skills: edit.skills });
-    case 'ops': return session.updateTask(taskId, { ops: edit.ops });
+    case 'runner': return options ? session.setTaskRunner(taskId, edit.runner, options) : session.setTaskRunner(taskId, edit.runner);
+    case 'model': return update({ assignedModel: edit.assignment });
+    case 'mode': return update({ taskMode: edit.mode });
+    case 'prompt': return update({ prompt: edit.prompt, description: edit.prompt || undefined });
+    case 'dependencies': return options ? session.setTaskDependencies(taskId, edit.dependencies, options) : session.setTaskDependencies(taskId, edit.dependencies);
+    case 'skills': return update({ skills: edit.skills });
+    case 'ops': return update({ ops: edit.ops });
   }
 }
 
@@ -300,8 +304,12 @@ function applyTaskEdit(session: Session, taskId: string, edit: TaskEdit): Promis
  * attempted.
  */
 export async function handleTaskEdit(taskId: string, edit: TaskEdit, deps: PlanManagerDeps): Promise<void> {
+  // A live run means the card offered this only on a task that had not
+  // started; the Session checks that again after its own waits. With no run,
+  // the card keeps the wider direct-edit contract, settled tasks included.
+  const options: TaskEditOptions | undefined = deps.session.isExecuting ? { requireUnstarted: true } : undefined;
   try {
-    await applyTaskEdit(deps.session, taskId, edit);
+    await applyTaskEdit(deps.session, taskId, edit, options);
   } catch (err) {
     void vscode.window.showWarningMessage(err instanceof Error ? err.message : String(err));
   }

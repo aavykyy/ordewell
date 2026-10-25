@@ -1,5 +1,7 @@
 export { isTaskRunning, taskStatusKind, awaitingLabel, approvalLabel, resumeLabel, resumeTime, blockedByLabel, holdLabel, skippedLabel, NOT_STARTED, WAITS_FOR_APPROVAL_LABEL } from './status';
 export type { TaskStatusKind } from './status';
+export { editableWhileRunning } from './editability';
+export type { TaskRunFacts } from './editability';
 export { taskRowActions, markAction, taskActionCommand, opsEditable } from './actions';
 export type { TaskRowAction, TaskRowPlacement, TaskAction } from './actions';
 export { taskRowView, namedRepos, loopRowParts } from './view';

@@ -161,6 +161,7 @@ export { SessionNotFoundError, NoPlanError, AlreadyExecutingError } from './serv
 export { LeaseHost, processLeaseHost, SessionHeldError, describeHeld, describeHolder, LEASE_HEARTBEAT_MS, LEASE_STALE_MS, type LeaseHostKind, type LeaseHostOptions, type SessionHeld, type SessionLease, type SessionLeaseRecord } from './services/sessionLease';
 export { plannerNotReady, plannerNotReadyFor, describePlannerNotReady, PlannerNotReadyError, TERMINAL_UI_COMMANDS, CHAT_COMMANDS, HEADLESS_CLI_COMMANDS, type PlannerNotReady, type PlannerCommandSyntax, type PlannerReadinessConfig } from './services/plannerReadiness';
 export type { SessionDeps, SessionRuntimeSettings, SessionPlanner, SaveSession, ConversationFork, ConversationRewind } from './services/createSession';
+export type { TaskEditOptions } from './services/PlanEditor';
 export { ExecutionCommands, SUPERVISOR_LEVELS } from './services/ExecutionCommands';
 export type { ExecutionCommand, CommandOutcome, CommandPayload, Consent, SupervisorPolicy, LoopGuard, ExecutionHost } from './services/ExecutionCommands';
 export { parseExecutionCommand, type ParsedCommand } from './services/executionCommandShape';
