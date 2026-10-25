@@ -214,7 +214,7 @@ export async function generatePlanWithRepair(
   runners: RunnerId[],
   maxAttempts = 2,
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-  autonomousDefault = true,
+  autonomousDefault = false,
 ): Promise<Task[]> {
   return repairLoop<string, Task[]>({
     first: () => generate(undefined),

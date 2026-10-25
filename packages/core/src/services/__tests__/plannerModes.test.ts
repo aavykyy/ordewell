@@ -13,7 +13,7 @@ describe('planner modes', () => {
   });
 
   it('starts from the defaults before the run\'s isolation is known', () => {
-    expect(plannerModesFrom(true)).toEqual(DEFAULT_PLANNER_MODES);
+    expect(plannerModesFrom(false)).toEqual(DEFAULT_PLANNER_MODES);
   });
 });
 

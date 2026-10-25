@@ -22,7 +22,7 @@ export interface PlannerModes {
 }
 
 export const DEFAULT_PLANNER_MODES: PlannerModes = {
-  autonomousDefault: true,
+  autonomousDefault: false,
   isolatedExecution: false,
 };
 

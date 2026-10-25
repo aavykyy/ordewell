@@ -78,7 +78,7 @@ export interface UserSettings {
    * back to the environment's defaults; `[]` is a deliberate "none of them".
    */
   enabledRunners?: string[];
-  /** Full (true) or Guarded (false), ADR-0001; Full until the user chooses. */
+  /** Full (true) or Guarded (false), ADR-0001; Guarded until the user chooses. */
   autonomousMode?: boolean;
   supervisorLevel?: SupervisorLevel;
   mergeAtGatesAutomatically?: boolean;
@@ -333,11 +333,12 @@ export class SettingsService {
   /**
    * Full or Guarded (ADR-0001), as saved here (ADR-0030). A value set in the
    * environment wins, so a script or CI run can fix its own without touching
-   * the user's file.
+   * the user's file. A fresh install starts Guarded: its first plan runs each
+   * runner's safe mode and asks before risky effects.
    */
   autonomousMode(): boolean {
     const override = this.autonomyOverride();
-    return override ?? this.getAll().autonomousMode ?? true;
+    return override ?? this.getAll().autonomousMode ?? false;
   }
 
   /** Whether `ORDEWELL_AUTONOMOUS_MODE` decides the level, whatever this file says. */

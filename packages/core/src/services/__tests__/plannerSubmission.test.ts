@@ -30,14 +30,15 @@ const discovered: DiscoveredModel[] = [
 
 /** What the harness backend hands back for a reply: its text, classified the way settleReply does, with the modes the session's catalog offers. */
 function replyTurn(text: string, runnerModes?: Record<RunnerId, RunnerModeInfo[]>): ConversationTurn {
-  const reply = classifyPlannerReply(text, { runners: RUNNERS, runnerModes });
+  const reply = classifyPlannerReply(text, { runners: RUNNERS, runnerModes, autonomousDefault: true });
   if (reply.kind === 'plan') return { kind: 'plan', tasks: reply.tasks, text, researchLog: [] };
   if (reply.kind === 'task_ops') return { kind: 'task_ops', ops: reply.ops, text, researchLog: [] };
   return { kind: 'message', text, researchLog: [] };
 }
 
 function validTasks(obj: unknown): Task[] {
-  const result = validatePlanTasks(obj, RUNNERS);
+  // The session fixture plans in Full, so both channels must resolve the level the same way.
+  const result = validatePlanTasks(obj, RUNNERS, undefined, true);
   if (!result.ok) throw new Error(result.errors.map((e) => e.message).join('; '));
   return result.tasks;
 }

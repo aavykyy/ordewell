@@ -7,7 +7,7 @@ export function parsePlanJson(
   raw: string,
   runners: RunnerId[],
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-  autonomousDefault = true,
+  autonomousDefault = false,
 ): Task[] {
   const { matches, fallback, sawUnbalanced } = extractObjectsWithKey(raw, PLAN_ENVELOPE_KEY);
 
@@ -46,7 +46,7 @@ function parsePlanObject(
   raw: string,
   runners: RunnerId[],
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-  autonomousDefault = true,
+  autonomousDefault = false,
 ): Task[] {
   const cleaned = stripTrailingCommas(escapeControlCharsInStrings(json));
 
@@ -82,7 +82,7 @@ export function validatePlanTasks(
   obj: unknown,
   runners: RunnerId[],
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-  autonomousDefault = true,
+  autonomousDefault = false,
 ): PlanTasksResult {
   const rawTasks = isRecord(obj) ? obj.tasks : undefined;
   if (!Array.isArray(rawTasks)) {

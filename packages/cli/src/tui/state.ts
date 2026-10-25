@@ -689,7 +689,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     maxParallel: DEFAULT_MAX_PARALLEL,
     configuredProviders: [],
     allowlist: {},
-    autonomous: true,
+    autonomous: false,
     runSettings: { ...RUN_SETTINGS_DEFAULTS },
     runSettingsKnown: false,
     plannerKnown: false,

@@ -35,8 +35,8 @@ Concretely:
   is deliberate: it is the same rule a planner model switch follows, and the plan
   keeps the model it was planned with.
 - **Two levels, one boolean.** The setting is a boolean (`autonomousMode`,
-  `autonomousDefault`, TUI `autonomous`, default on), saved machine-wide in
-  `settings.json` ([ADR-0030](../supervision/0030-global-run-settings.md));
+  `autonomousDefault`, TUI `autonomous`; Guarded until the user chooses), saved
+  machine-wide in `settings.json` ([ADR-0030](../supervision/0030-global-run-settings.md));
   `ORDEWELL_AUTONOMOUS_MODE` is an override Ordewell never writes.
   **Full** is on: each runner's `autonomous`-tagged mode.
   **Guarded** is off: each runner's `safe`-tagged mode. `/settings` selects them
@@ -297,3 +297,5 @@ writing.
 - 2026-10-21 — a read-only task lands nothing: its worktree is thrown away and its runner is given Ordewell's sealed `run_command` (ADR-0046).
 - 2026-10-21 — read-only selects Ordewell's profile on every built-in runner (ADR-0046); native plan modes and the Claude model pin are removed.
 - 2026-10-22: the TUI and VS Code set the level in `/settings`; the headless CLI keeps `ordewell auto`, aliases included.
+- 2026-10-25 — the level starts Guarded on a fresh install rather than Full; a
+  saved or environment-selected level still decides.
