@@ -17,6 +17,8 @@ export type RunStatus = 'idle' | 'executing';
 export type PlannerStatus = 'idle' | 'planning' | 'condensing' | 'awaiting';
 
 export interface TaskView {
+  /** An attempt of it has started: its chat exists from then on. Absent on a task never run. */
+  attempted?: boolean;
   attemptUsage?: AttemptUsage[];
   id: string;
   order: number;

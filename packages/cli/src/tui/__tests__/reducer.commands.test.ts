@@ -11,7 +11,7 @@ function run(text: string, overrides: Partial<TuiState> = {}) {
 }
 
 const task = (over: Partial<TaskView>): TaskView => ({
-  id: 'task-1', order: 1, title: 'Do the thing', type: 'ai', status: 'pending', dependencies: [], ...over,
+  id: 'task-1', order: 1, title: 'Do the thing', type: 'ai', status: 'pending', dependencies: [], attempted: true, ...over,
 });
 
 const planned: Partial<TuiState> = {

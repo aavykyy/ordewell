@@ -27,7 +27,7 @@ const models: DiscoveredModel[] = [
 function planWithOneTask(goal: string): LegacyPlanState {
   const at = '2026-01-01T00:00:00Z';
   return {
-    tasks: [createTask({ id: 't1', order: 1, title: goal, prompt: goal, assignedRunner: 'claude-code', taskMode: 'default' })],
+    tasks: [createTask({ id: 't1', order: 1, title: goal, prompt: goal, assignedRunner: 'claude-code', taskMode: 'default', attempted: true })],
     generatedAt: at,
     status: 'draft',
     runners: ['claude-code'],
@@ -149,6 +149,10 @@ function fakeSession() {
     planState: null,
     planTasks: [],
     runSnapshot: vi.fn(() => ({ tasks: [], runMerge: null, handoff: null, mergeResult: null })),
+    taskLogAttempts: vi.fn(() => []),
+    taskLog: vi.fn(() => []),
+    invokeTaskCommand: vi.fn(() => ''),
+    outstandingApprovals: vi.fn(() => []),
     isolationView: vi.fn(() => null),
     removeQueuedMessage: vi.fn(),
     reset: vi.fn(),
@@ -513,7 +517,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     await h.host.start();
     __resetPanels();
     (h.session.spies as unknown as { planTasks: unknown[] }).planTasks = [
-      createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'claude-code' }),
+      createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'claude-code', attempted: true }),
     ];
 
     h.chat.messages.fire({ type: 'openTaskLog', taskId: 't1' });

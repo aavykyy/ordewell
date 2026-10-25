@@ -2,7 +2,7 @@ export { isTaskRunning, taskStatusKind, awaitingLabel, approvalLabel, resumeLabe
 export type { TaskStatusKind } from './status';
 export { taskRowActions, markAction, taskActionCommand, opsEditable } from './actions';
 export type { TaskRowAction, TaskRowPlacement, TaskAction } from './actions';
-export { taskRowView, namedRepos, loopRowParts } from './view';
+export { taskRowView, namedRepos, loopRowParts, taskChatAvailable } from './view';
 export type { TaskRowUsage, TaskRowHandoff, TaskRowView, TaskRowLoop, TaskRowSubject, TaskRowIsolation, TaskRowContext, TaskRowKind } from './view';
 export { patchView, savedPatchView, savedPatchViews } from '../models/Handoff';
 export type { PatchView } from '../models/Handoff';

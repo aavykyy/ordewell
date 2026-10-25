@@ -21,7 +21,7 @@ const attemptTwo: TaskLogEvent[] = [
 ];
 
 function harness(attempts: Record<number, TaskLogEvent[]> = { 1: attemptOne }) {
-  const task = createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'claude-code', status: 'in_progress' });
+  const task = createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'claude-code', status: 'in_progress', attempted: true });
   const session = {
     taskLogAttempts: vi.fn(() => Object.keys(attempts).map(Number).sort((a, b) => a - b)),
     taskLog: vi.fn((_taskId: string, attempt: number) => attempts[attempt] ?? []),
@@ -49,6 +49,51 @@ describe('the task-log registry (ADR-0018, V1)', () => {
   beforeEach(() => {
     __resetPanels();
     createWebviewPanel.mockClear();
+  });
+
+  it('opens no chat for a task that never started, whatever its status or mark', () => {
+    const h = harness({});
+    delete h.task.attempted;
+    h.task.status = 'completed';
+    h.registry.open('t1');
+
+    expect(createWebviewPanel).not.toHaveBeenCalled();
+    expect(__panels).toHaveLength(0);
+  });
+
+  it('opens a chat as soon as an attempt started, with no output, usage or saved log yet', () => {
+    const h = harness({});
+    h.task.attemptUsage = undefined;
+    h.registry.open('t1');
+
+    expect(createWebviewPanel).toHaveBeenCalledTimes(1);
+    expect(__panels).toHaveLength(1);
+  });
+
+  it('opens a script task\'s own chat once it started', () => {
+    const h = harness({});
+    Object.assign(h.task, { type: 'script', script: 'echo hi', attempted: true });
+    h.registry.open('t1');
+
+    expect(createWebviewPanel).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes a saved attempt log for the history of a plan written before the mark', () => {
+    const h = harness({ 1: attemptOne });
+    delete h.task.attempted;
+    h.task.status = 'completed';
+    h.registry.open('t1');
+
+    expect(createWebviewPanel).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not take a manual task\'s saved handoff for an attempt chat', () => {
+    const h = harness({ 1: [{ type: 'handoff', handoff: { summary: 'Steps done', findings: [], findingCount: 0 } }] });
+    delete h.task.attempted;
+    Object.assign(h.task, { type: 'user', status: 'completed' });
+    h.registry.open('t1');
+
+    expect(createWebviewPanel).not.toHaveBeenCalled();
   });
 
   it('round-trips full handoffs through init and live patches, keeping each attempt separate', () => {
@@ -152,7 +197,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
   });
 
   it('titles a subtask tab with its dotted reference, not its own order', () => {
-    const subtask = createTask({ id: 's1', order: 1, title: 'Subtask', assignedRunner: 'claude-code', status: 'in_progress' }) as Task;
+    const subtask = createTask({ id: 's1', order: 1, title: 'Subtask', assignedRunner: 'claude-code', status: 'in_progress', attempted: true }) as Task;
     const registry = new TaskLogRegistry({
       extensionUri: vscode.Uri.file('/ext'),
       session: () => harness().session,
@@ -427,8 +472,8 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
 
   it('keeps one tab per task, each drawing only its own task\'s log', () => {
     const tasks: Record<string, Task> = {
-      t1: createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'claude-code', status: 'in_progress' }) as Task,
-      t2: createTask({ id: 't2', order: 2, title: 'Write tests', assignedRunner: 'claude-code', status: 'in_progress' }) as Task,
+      t1: createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'claude-code', status: 'in_progress', attempted: true }) as Task,
+      t2: createTask({ id: 't2', order: 2, title: 'Write tests', assignedRunner: 'claude-code', status: 'in_progress', attempted: true }) as Task,
     };
     const session = harness().session;
     const registry = new TaskLogRegistry({ extensionUri: vscode.Uri.file('/ext'), session: () => session, getTask: (id) => tasks[id], openFile: vi.fn(), log: vi.fn() });
@@ -545,6 +590,18 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
 
     expect(posted(panel)[0]).toMatchObject({ type: 'init', status: { taskId: 't1' } });
     expect(panel.dispose).not.toHaveBeenCalled();
+  });
+
+  it('drops a restored tab whose task never started', () => {
+    const h = harness({});
+    delete h.task.attempted;
+    const panel = createFakeWebviewPanel('ordewellTaskLog', 'Task chat');
+
+    h.registry.restore(panel as unknown as vscode.WebviewPanel, { taskId: 't1' });
+
+    expect(panel.dispose).toHaveBeenCalledTimes(1);
+    h.registry.receive({ type: 'task_log', taskId: 't1', attempt: 1, events: attemptOne });
+    expect(panel.webview.postMessage).not.toHaveBeenCalled();
   });
 
   it('drops a restored tab whose task has left the plan', () => {

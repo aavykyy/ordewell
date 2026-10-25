@@ -454,6 +454,38 @@ describe('texts', () => {
   });
 });
 
+describe('whether a row\'s task has a chat', () => {
+  const chat = (over: Partial<TaskRowSubject>): boolean => taskRowView(subject(over)).chatAvailable;
+  const ledgerEntry = { attempt: 1, runner: 'claude-code', startedAt: '2026-10-01T00:00:00Z', wallTimeMs: 0, totals: {}, byModel: [] };
+
+  it('is absent before any attempt starts, whatever the status says', () => {
+    for (const status of ['pending', 'approved', 'blocked', 'completed', 'failed', 'skipped']) {
+      expect(chat({ status }), status).toBe(false);
+    }
+  });
+
+  it('is there once an attempt has started, and stays after any ending or a return to pending', () => {
+    for (const status of ['in_progress', 'awaiting_user', 'completed', 'failed', 'skipped', 'pending']) {
+      expect(chat({ status, attempted: true }), status).toBe(true);
+    }
+  });
+
+  it('reads the attempt ledger of a plan saved before the flag', () => {
+    expect(chat({ status: 'completed', attemptUsage: [ledgerEntry] })).toBe(true);
+    expect(chat({ status: 'pending', attemptUsage: [] })).toBe(false);
+  });
+
+  it('is a script task\'s own, with no ledger to count', () => {
+    expect(chat({ type: 'script', status: 'in_progress', attempted: true })).toBe(true);
+    expect(chat({ type: 'script', status: 'completed' })).toBe(false);
+  });
+
+  it('is never a manual task\'s, even if a stray mark says otherwise', () => {
+    expect(chat({ type: 'user', status: 'completed', attempted: true })).toBe(false);
+    expect(chat({ type: 'user', status: 'pending', attemptUsage: [ledgerEntry] })).toBe(false);
+  });
+});
+
 describe('the runner a row shows — only an AI task has one', () => {
   it('is the assigned runner of an AI task, an ops task included', () => {
     expect(taskRowView(subject({ assignedRunner: 'codex' })).runner).toBe('codex');
