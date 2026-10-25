@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { ConversationBlocks } from '../chat/components/ChatMessage';
 import { OpenPatchContext } from '../chat/openPatch';
 import { useFollowOutput } from '../chat/followOutput';
-import { contextMeterTitle, hasHiddenDetail } from '@ordewell/core/plan-utils';
+import { contextMeterTitle } from '@ordewell/core/plan-utils';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type PatchedView } from '../../shared/conversationPatch';
 import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../../shared/taskLogProtocol';
 import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
@@ -41,7 +41,6 @@ const STATE_CLASS: Record<TaskLogHeaderView['state']['kind'], string> = {
 export default function TaskLogApp() {
   const [view, setView] = useState<PatchedView>(EMPTY_PATCHED_VIEW);
   const [status, setStatus] = useState<TaskLogStatus | null>(null);
-  const [detailAll, setDetailAll] = useState(false);
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   const [stopArmed, setStopArmed] = useState(false);
@@ -50,7 +49,6 @@ export default function TaskLogApp() {
   const followRef = useFollowOutput<HTMLDivElement>(blocks);
   const header = status?.header;
   const state = header?.state;
-  const hasDetail = useMemo(() => hasHiddenDetail(blocks), [blocks]);
   const commands = header?.commands ?? [];
   const completion = useRunnerCommands(text, setText, commands);
   const canSend = text.trim().length > 0;
@@ -192,12 +190,6 @@ export default function TaskLogApp() {
             </button>
           )}
           <span className="task-log-spacer" />
-          {hasDetail && (
-            <button type="button" className="task-log-detail" aria-pressed={detailAll}
-              onClick={() => setDetailAll((v) => !v)} title="Show or hide the full thinking, command, subagent and handoff report detail">
-              {detailAll ? 'Collapse all' : 'Expand all'}
-            </button>
-          )}
           {status.attempts.length > 1 && (
             <label className="task-log-attempt">
               Attempt
@@ -216,11 +208,11 @@ export default function TaskLogApp() {
         </div>
       )}
 
-      {/* Keyed by attempt so a switched-to attempt opens at its newest output. */}
+      {/* Keyed by attempt so a switched-to attempt opens at its newest output, with nothing of another attempt's open. */}
       <div className="task-log-body" key={status?.attempt} ref={followRef}>
         {blocks.length === 0
           ? <div className="task-log-empty">{working ? 'Working…' : 'No output yet.'}</div>
-          : <ConversationBlocks blocks={blocks} detailAll={detailAll} onShowPlan={noop}
+          : <ConversationBlocks blocks={blocks} onShowPlan={noop}
               onAnswerApproval={(id, decision) => vscode.postMessage({ type: 'answerApproval', id, decision })} />}
       </div>
 

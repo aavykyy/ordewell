@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 import type { SessionMessage } from '@ordewell/core';
 import App from '../App';
-import { api, hostBridge } from './hostBridge';
+import { api, hostBridge, openActivity } from './hostBridge';
 
 const TURN = 'turn-1';
 
@@ -46,6 +46,10 @@ describe('approval card', () => {
 
     // What the host's resolve reaches, broadcast back to every surface.
     host.session({ type: 'approval_settled', id: 'ap-1', granted: true });
+    // Answered, it folds into the activity it belongs to.
+    expect(document.querySelector('.conversation > .approval-card')).toBeNull();
+    expect(document.querySelector('.activity-group-toggle')!.textContent).toBe('Settled an approval request');
+    openActivity();
     const card = document.querySelector('.approval-card')!;
     expect(card.getAttribute('data-status')).toBe('granted');
     expect(card.textContent).toContain('Approved');
@@ -59,6 +63,7 @@ describe('approval card', () => {
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'resolveApproval', id: 'ap-1', granted: false });
 
     host.session({ type: 'approval_settled', id: 'ap-1', granted: false });
+    openActivity();
     const card = document.querySelector('.approval-card')!;
     expect(card.getAttribute('data-status')).toBe('denied');
     expect(card.textContent).toContain('Denied');
@@ -68,6 +73,7 @@ describe('approval card', () => {
     host.session({
       type: 'approval_decided', kind: 'shell_command', subject: 'npm test', scope: 'npm test', granted: true, source: 'remembered',
     });
+    openActivity();
 
     const card = document.querySelector('.approval-card')!;
     expect(card.textContent).toContain('Auto-approved');
@@ -84,6 +90,7 @@ describe('approval card', () => {
     [false, 'no-channel', 'Auto-denied (no approval channel)'],
   ] as const)('renders a subagent web-read decision (%s, %s)', (granted, source, label) => {
     host.session({ type: 'approval_decided', kind: 'web_search', subject: 'tokio', scope: 'web_search:duckduckgo', granted, source });
+    openActivity();
 
     const card = document.querySelector('.approval-card')!;
     expect(card.textContent).toContain(label);

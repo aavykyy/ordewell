@@ -105,7 +105,7 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(document.querySelector('.task-log-title')?.textContent).toBe('Task 2.1 · Parse JSON');
   });
 
-  it('draws a handoff from the attempt log and expands its full report with the shared detail switch', () => {
+  it('draws a handoff from the attempt log and opens its full report with the report\'s own disclosure', () => {
     const report = Array.from({ length: 12 }, (_, i) => `Report line ${i + 1}`).join('\n');
     const view = replayTaskLog([{ type: 'handoff', handoff: {
       summary: 'Check the token boundary.', findingCount: 2,
@@ -133,15 +133,19 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.getByText('docs/result.md (unresolved)')).toBeTruthy();
     expect(document.querySelector('.task-handoff-report')).toHaveTextContent('Report line 8');
     expect(document.querySelector('.task-handoff-report')).not.toHaveTextContent('Report line 9');
-    expect(screen.getByText('+4 lines of the report')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    const more = screen.getByRole('button', { name: '+4 lines of the report' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    expect(more).toHaveAttribute('aria-controls', document.querySelector('.task-handoff-report')!.id);
+    expect(screen.queryByRole('button', { name: /expand all|collapse all/i })).toBeNull();
+    fireEvent.click(more);
     expect(document.querySelector('.task-handoff-report')?.textContent).toBe(report);
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }));
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Show less of the report' }));
     expect(document.querySelector('.task-handoff-report')).not.toHaveTextContent('Report line 9');
     expect(screen.getByText('Done')).toBeTruthy();
   });
 
-  it.each(['script', 'user'])('draws a %s handoff with no findings and no detail toggle for a short report', (kind) => {
+  it.each(['script', 'user'])('draws a %s handoff with no findings and nothing to open for a short report', (kind) => {
     render(<TaskLogApp />);
     const view = replayTaskLog([{ type: 'handoff', handoff: {
       summary: `${kind} finished`, findings: [], findingCount: 0, report: 'Short report',
@@ -150,7 +154,7 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.getByText('Handoff · no findings')).toBeTruthy();
     expect(screen.getByText(`${kind} finished`)).toBeTruthy();
     expect(screen.getByText('Short report')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Expand all' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /of the report|expand all/i })).toBeNull();
   });
 
   it('replaces a live handoff through a patch and drops it when switching attempts', () => {
@@ -240,10 +244,13 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.getByText('/compact keep APIs')).toBeTruthy();
     expect(screen.getByText('done')).toBeTruthy();
     expect(screen.getByText('Native context summary')).toBeTruthy();
+    const groups = () => [...document.querySelectorAll<HTMLButtonElement>('.activity-group-toggle')];
+    expect(groups().map((g) => g.textContent)).toEqual(["Loaded the runner's setup", 'Compacted the context']);
+    groups().forEach((g) => fireEvent.click(g));
     expect(screen.getByText('Context compacted by the runner on its own · 12k → 3k tokens')).toBeTruthy();
     expect(screen.getByText(/Runner loaded 1 skill/)).toBeTruthy();
     expect(screen.queryByText('docs (connected)')).toBeNull();
-    fireEvent.click(screen.getByText('Expand all'));
+    fireEvent.click(screen.getByRole('button', { name: /Runner loaded 1 skill/ }));
     expect(screen.getByText('docs (connected)')).toBeTruthy();
     expect(screen.getByText('/review')).toBeTruthy();
   });
@@ -576,6 +583,8 @@ describe('the task log tab (ADR-0018, V1)', () => {
         request({ id: 'b3', approvalId: 'ap-2', status: 'denied', decidedBy: 'asked', note: 'use notes/' }),
         request({ id: 'b4', approvalId: 'ap-3', status: 'withdrawn' }),
       ]);
+      expect(screen.getByRole('button', { name: 'Settled 3 approval requests' })).toHaveAttribute('aria-expanded', 'false');
+      fireEvent.click(screen.getByRole('button', { name: 'Settled 3 approval requests' }));
       expect(screen.getByText('Approved for this task')).toBeTruthy();
       expect(screen.getByText('Note to the agent: use notes/')).toBeTruthy();
       expect(screen.getByText('Withdrawn')).toBeTruthy();
@@ -628,5 +637,52 @@ describe('a message the runner reads mid-turn (ADR-0023)', () => {
     expect(prompt.compareDocumentPosition(read) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(read.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText('then add tests')).toBeTruthy();
+  });
+});
+
+describe('the runner\'s activity, folded (ADR-0017, X1)', () => {
+  beforeEach(() => {
+    cleanup();
+    api.postMessage.mockClear();
+  });
+
+  const turn = replayTaskLog([
+    { type: 'turn_start', message: 'parse it' },
+    { type: 'thinking', text: 'Look first.' },
+    { type: 'tool_call', id: 'c1', name: 'Bash', args: '{"command":"ls"}' },
+    { type: 'tool_result', id: 'c1', output: 'src', success: true },
+    { type: 'tool_call', id: 'c2', name: 'WebFetch', args: '{"url":"https://example.com"}' },
+    { type: 'tool_result', id: 'c2', output: 'refused', success: false },
+    { type: 'text', text: 'Now the parser.' },
+    { type: 'tool_call', id: 'c3', name: 'Write', args: '{"file_path":"src/parse.ts"}' },
+    { type: 'approval_requested', approvalId: 'ap-1', tool: 'Write', args: '{"file_path":"src/parse.ts"}', allowForTask: false },
+  ]);
+  const top = () => [...document.querySelectorAll('.conversation > *')].map((el) => (el.classList.contains('activity-group')
+    ? el.querySelector('.activity-group-toggle')!.textContent : el.className.split(' ')[0]));
+
+  it('says what each run did between the agent\'s messages, the waiting request outside where it is answered', () => {
+    render(<TaskLogApp />);
+    init({ working: true }, [...turn.blocks]);
+    expect(top()).toEqual(['chat-msg', 'Ran a command, fetched a page (1 failed)', 'chat-msg', 'Making an edit', 'approval-card']);
+    expect(screen.getByRole('button', { name: 'Allow' })).toBeTruthy();
+  });
+
+  it('keeps what was opened as the live patch settles the call, and opens nothing for another attempt', () => {
+    render(<TaskLogApp />);
+    init({ working: true, attempts: [1, 2], attempt: 2 }, [...turn.blocks]);
+    const groups = () => [...document.querySelectorAll<HTMLButtonElement>('.activity-group-toggle')];
+    fireEvent.click(groups()[1]);
+    fireEvent.click(document.querySelector<HTMLButtonElement>('.activity-group-body .cmd-row-header > button')!);
+    expect(document.querySelector('.cmd-row-args')).toBeTruthy();
+
+    const settled = replayTaskLog([{ type: 'tool_result', id: 'c3', output: '@@ -0,0 +1 @@\n+export {}', success: true }], turn);
+    const changed = settled.blocks.filter((b) => !turn.blocks.includes(b));
+    send({ type: 'patch', order: settled.blocks.map((b) => b.id), changed });
+    expect(groups()[1].textContent).toBe('Made an edit');
+    expect(groups()[1]).toHaveAttribute('aria-expanded', 'true');
+    expect(document.querySelector('.activity-group-body .cmd-row-header > button')).toHaveAttribute('aria-expanded', 'true');
+
+    send({ type: 'init', status: status({ attempts: [1, 2], attempt: 1 }), blocks: [...turn.blocks] });
+    expect(groups().map((g) => g.getAttribute('aria-expanded'))).toEqual(['false', 'false']);
   });
 });

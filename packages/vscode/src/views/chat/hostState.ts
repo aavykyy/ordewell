@@ -25,6 +25,11 @@ export interface ModelOption {
 export interface HostState {
   /** The planner conversation, held by the host and patched in here (#53). */
   conversation: PatchedView;
+  /**
+   * Which conversation that is: it moves on when the host replaces one, whose
+   * block ids a new one reuses, so what a reader opened in it stays with it.
+   */
+  conversationEpoch: number;
   plan: SurfacePlan | null;
   isExecuting: boolean;
   isResearchActive: boolean;
@@ -111,6 +116,7 @@ export interface HostState {
 
 export const INITIAL_HOST_STATE: HostState = {
   conversation: EMPTY_PATCHED_VIEW,
+  conversationEpoch: 0,
   plan: null,
   isExecuting: false,
   isResearchActive: false,
@@ -312,10 +318,15 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     }
 
     case 'restoreChat':
-      return resetSession(state, 'restore');
+      return { ...resetSession(state, 'restore'), conversationEpoch: state.conversationEpoch + 1 };
 
+    // A new session or a cleared plan empties the conversation first.
     case 'conversationPatch':
-      return { ...state, conversation: applyConversationPatch(state.conversation, action) };
+      return {
+        ...state,
+        conversation: applyConversationPatch(state.conversation, action),
+        ...(action.order.length === 0 && state.conversation.order.length > 0 ? { conversationEpoch: state.conversationEpoch + 1 } : {}),
+      };
 
     // The stop gate lasts until the host has closed the stopped turn; a new
     // turn is never gated.

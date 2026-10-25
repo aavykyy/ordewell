@@ -2486,16 +2486,26 @@ the same in the TUI and VS Code.
 *Avoid:* keeping a stopped turn's late deltas "until the daemon answers" —
 that was one surface's rule and the two drifted.
 
-**Detail view (detail-all)** — the single expand-all toggle per surface: the
-TUI's ctrl+o and VS Code's header button flip one `detailAll` flag that decides
-whether tool blocks show their arguments and full output, subagent blocks show
-their children and digest, and so on. Collapsed is the default: a row per call
-(`Name(keyArg)`) and one preview line. There are deliberately no per-block
-expanded states (see ADR-0017's rejected options). The TUI's ctrl+L clears the
-conversation but keeps the usage line.
-*Avoid:* "expandable row" per block — one toggle, one place, per surface;
-*Avoid:* claiming the surfaces share the flag's key — ctrl+o is the TUI's
-spelling, not the concept.
+**Detail view (detail-all)** — the TUI's single expand-all toggle: ctrl+o
+flips one `detailAll` flag that decides whether tool blocks show their
+arguments and full output, subagent blocks show their children and digest, and
+so on. Collapsed is the default: a row per call (`Name(keyArg)`) and one
+preview line. The TUI deliberately has no per-block expanded states (see
+ADR-0017's rejected options). The TUI's ctrl+L clears the conversation but
+keeps the usage line.
+*Avoid:* using it for VS Code, which has no expand-all and folds activity
+instead (**Activity group**).
+
+**Activity group** — VS Code's fold of one run of activity between two
+messages (thinking, calls, subagents, setup notices, answered approvals): one
+line that says what the run did, counted from the blocks' own facts
+(`Ran 4 commands, fetched 2 pages (2 failed)`), collapsed by default. Opened,
+it draws its rows as their collapsed previews, and each row opens on its own
+(ADR-0017, X1). A waiting approval, an error, a notice and every message stay
+outside any group. What is open is the webview's state, keyed on block ids.
+*Avoid:* "turn" for it — the prose between a turn's calls splits its activity
+into several groups; *Avoid:* counting what a call ran (a script's commands)
+rather than the call.
 
 **Usage record** (`UsageRecord`) — what one model call consumed, as its
 provider or runner *reported* it: token counts, cached input share, the

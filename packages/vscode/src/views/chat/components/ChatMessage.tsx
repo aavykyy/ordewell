@@ -1,18 +1,21 @@
-import React, { useState } from 'react';
+import React, { useCallback, useId, useMemo, useState } from 'react';
 import MarkdownContent from './MarkdownContent';
 import TaskHandoff from './TaskHandoff';
+import ReportBody from './ReportBody';
 import type {
   CommandBlock, RunnerLoadedBlock,
   ApprovalBlock, ApprovalDecision, DisplayBlock, MessageBlock, PlanBlock, SkillLoadBlock, SubagentBlock, SubagentStatus,
   ThinkingDisplayBlock, ToolBlock, ToolStatus, DiffRow, DiffStat,
 } from '@ordewell/core';
-import { approvalKindText, approvalStatusText, diffRows, diffSummary, formatTokenCount, loadedSkillTokens, markdownHtml, outputLines, outputPreview, planMarkerParts, REPORT_PREVIEW_LINES, wakeUpItems } from '@ordewell/core/plan-utils';
+import { activitySummary, conversationItems } from '../activity';
+import { approvalKindText, approvalStatusText, diffRows, diffSummary, formatTokenCount, loadedSkillTokens, markdownHtml, outputLines, outputPreview, planMarkerParts, wakeUpItems } from '@ordewell/core/plan-utils';
 
 /*
- * The planner conversation (#51 display blocks) as the webview draws it.
- * Whether thinking, command and subagent blocks show their detail is one
- * switch for the whole conversation, like the TUI's ctrl+o — so no block here
- * opens on its own.
+ * The planner conversation (#51 display blocks) as the webview draws it, and
+ * a task's log through the same components. Each run of activity between two
+ * messages folds into one group that says what it did; opening it shows its
+ * rows as previews, and each row opens on its own (ADR-0017, X1). What is open
+ * is this surface's state, keyed on block ids — never the blocks'.
  */
 
 const PREVIEW_LINES = 3;
@@ -30,25 +33,18 @@ export function renderMarkdown(text: string): string {
   return markdownHtml(text).trimEnd();
 }
 
-/**
- * The run update that woke the planner, with each report it carries drawn
- * whole when short and folded when long: the fold says how many lines it
- * leaves out, and the conversation's one detail switch opens it (ADR-0037 R2).
- */
-function RunUpdate({ text, expanded }: { text: string; expanded: boolean }) {
+/** The run update that woke the planner, with each report it carries. */
+function RunUpdate({ text }: { text: string }) {
   return (
     <div className="chat-msg chat-msg-wake-up">
       <span className="chat-msg-label">Run update</span>
       <div className="chat-msg-content">
         {wakeUpItems(text).map((item, i) => {
           if (item.kind === 'line') return <div key={i}>{item.text}</div>;
-          const shown = expanded ? item.lines : item.lines.slice(0, REPORT_PREVIEW_LINES);
-          const hidden = item.lines.length - shown.length;
           return (
             <div key={i} className="chat-report">
               <div className="chat-report-head">Report from task {item.task}</div>
-              <pre className="chat-report-body">{shown.join('\n')}</pre>
-              {hidden > 0 && <span className="cmd-row-more">{moreLines(hidden)} of the report</span>}
+              <ReportBody lines={item.lines} />
             </div>
           );
         })}
@@ -57,7 +53,7 @@ function RunUpdate({ text, expanded }: { text: string; expanded: boolean }) {
   );
 }
 
-export default function ChatMessage({ block, expanded = false }: { block: MessageBlock; expanded?: boolean }) {
+export default function ChatMessage({ block }: { block: MessageBlock }) {
   if (block.role === 'system' || block.role === 'error') {
     return (
       <div className={`chat-msg chat-msg-${block.role}`}>
@@ -67,7 +63,7 @@ export default function ChatMessage({ block, expanded = false }: { block: Messag
   }
   // The run update that woke the supervisor: Ordewell's words to it, shown as they were sent.
   if (block.role === 'wake_up') {
-    if (wakeUpItems(block.text).some((item) => item.kind === 'report')) return <RunUpdate text={block.text} expanded={expanded} />;
+    if (wakeUpItems(block.text).some((item) => item.kind === 'report')) return <RunUpdate text={block.text} />;
     return (
       <div className="chat-msg chat-msg-wake-up">
         <span className="chat-msg-label">Run update</span>
@@ -123,15 +119,59 @@ function SkillLoadNotice({ block }: { block: SkillLoadBlock }) {
   );
 }
 
-export function ThinkingBlock({ block, expanded }: { block: ThinkingDisplayBlock; expanded: boolean }) {
+/** What a row's own disclosure needs: whether it is open, and the switch. Without `onToggle` the row is drawn as it stands. */
+interface RowProps<B> {
+  block: B;
+  expanded: boolean;
+  onToggle?: () => void;
+}
+
+// A click that ends a drag-selection is someone copying the row's text, not
+// asking for its detail.
+function selecting(within: Element): boolean {
+  const selection = window.getSelection();
+  return !!selection && !selection.isCollapsed && !!selection.anchorNode && within.contains(selection.anchorNode);
+}
+
+function Chevron() {
+  return (
+    <svg className="disclosure-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+      <path d="M3.5 2L6.5 5L3.5 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/**
+ * A row's head as the native button that opens it, with `aria-controls` on
+ * the region it opens; or, with no switch, the same head as plain text.
+ */
+function Head({ className, expanded, controls, onToggle, children }: {
+  className: string;
+  expanded: boolean;
+  controls: string;
+  onToggle?: () => void;
+  children: React.ReactNode;
+}) {
+  if (!onToggle) return <div className={className}>{children}</div>;
+  return (
+    <button type="button" className={`${className} disclosure`} aria-expanded={expanded} aria-controls={controls}
+      onClick={(e) => { if (!selecting(e.currentTarget)) onToggle(); }}>
+      <Chevron />
+      {children}
+    </button>
+  );
+}
+
+export function ThinkingBlock({ block, expanded, onToggle }: RowProps<ThinkingDisplayBlock>) {
   const text = block.text.trim();
+  const id = useId();
   return (
     <div className={`activity-think${expanded ? ' expanded' : ''}`}>
-      <div className="activity-think-head">
+      <Head className="activity-think-head" expanded={expanded} controls={id} onToggle={onToggle}>
         <span className="activity-think-label">Thinking{block.streaming ? '…' : ''}</span>
         {!expanded && <span className="activity-think-line">{text.split('\n')[0]}</span>}
-      </div>
-      {expanded && <pre className="activity-think-pre">{text}</pre>}
+      </Head>
+      <div id={id}>{expanded && <pre className="activity-think-pre">{text}</pre>}</div>
     </div>
   );
 }
@@ -189,40 +229,48 @@ function DiffView({ output, diff, expanded }: { output: string; diff: DiffStat; 
   );
 }
 
-export function CommandRow({ block, expanded }: { block: ToolBlock; expanded: boolean }) {
+export function CommandRow({ block, expanded, onToggle }: RowProps<ToolBlock>) {
   const label = outcomeLabel(block);
   const preview = outputPreview(block.output, PREVIEW_LINES);
   const { keyArg } = block.headline;
   const path = PATH_LIKE.test(keyArg);
   const diff = block.diff && block.status === 'ok' ? block.diff : null;
+  const id = useId();
   return (
     <div className={`cmd-row${expanded ? ' expanded' : ''}`} data-status={block.status}>
       <div className="cmd-row-header">
-        <span className="cmd-row-icon">{STATUS_ICON[block.status]}</span>
-        <code className="cmd-row-head">
-          <span className="cmd-row-name">{block.headline.name}(</span>
-          <span className={`cmd-row-arg${path ? ' path' : ''}`} title={path ? keyArg : undefined}><bdi>{keyArg}</bdi></span>
-          <span className="cmd-row-name">)</span>
-        </code>
+        <Head className="cmd-row-toggle" expanded={expanded} controls={id} onToggle={onToggle}>
+          <span className="cmd-row-icon" aria-hidden="true">{STATUS_ICON[block.status]}</span>
+          <code className="cmd-row-head">
+            <span className="cmd-row-name">{block.headline.name}(</span>
+            <span className={`cmd-row-arg${path ? ' path' : ''}`} title={path ? keyArg : undefined}><bdi>{keyArg}</bdi></span>
+            <span className="cmd-row-name">)</span>
+          </code>
+        </Head>
         {block.sealed && <span className="cmd-row-sealed" title="Ran sealed: no network, no home directory, and nothing it wrote reached the workspace">sealed</span>}
         {label && <span className="cmd-row-outcome">{label}</span>}
       </div>
-      {diff ? <DiffView output={block.output} diff={diff} expanded={expanded} /> : expanded ? (
-        <>
-          <pre className="cmd-row-args">{prettyArgs(block.args)}</pre>
-          {block.output && <pre className="cmd-row-output">{outputLines(block.output).join('\n')}</pre>}
-        </>
-      ) : preview.lines.length > 0 && (
-        <>
-          <pre className="cmd-row-preview">{preview.lines.join('\n')}</pre>
-          {preview.hiddenLineCount > 0 && <span className="cmd-row-more">{moreLines(preview.hiddenLineCount)}</span>}
-        </>
-      )}
+      <div id={id} className="cmd-row-body">
+        {diff ? <DiffView output={block.output} diff={diff} expanded={expanded} /> : expanded ? (
+          <>
+            <pre className="cmd-row-args">{prettyArgs(block.args)}</pre>
+            {block.output && <pre className="cmd-row-output">{outputLines(block.output).join('\n')}</pre>}
+          </>
+        ) : preview.lines.length > 0 && (
+          <>
+            <pre className="cmd-row-preview">{preview.lines.join('\n')}</pre>
+            {preview.hiddenLineCount > 0 && <span className="cmd-row-more">{moreLines(preview.hiddenLineCount)}</span>}
+          </>
+        )}
+      </div>
     </div>
   );
 }
 
-function RunnerCommandRow({ block, expanded }: { block: CommandBlock; expanded: boolean }) {
+/** A runner command the user ran (#66): its output folded when long, opened on its own. */
+function RunnerCommandRow({ block }: { block: CommandBlock }) {
+  const [expanded, setExpanded] = useState(false);
+  const id = useId();
   const preview = outputPreview(block.output, PREVIEW_LINES);
   return (
     <div className="cmd-row" data-status={block.status}>
@@ -230,22 +278,31 @@ function RunnerCommandRow({ block, expanded }: { block: CommandBlock; expanded: 
         <code>/{block.name}{block.args ? ` ${block.args}` : ''}</code>
         <span className="cmd-row-outcome">{block.status}</span>
       </div>
-      {block.output && <pre className="cmd-row-output">{expanded ? block.output : preview.lines.join('\n')}</pre>}
-      {!expanded && preview.hiddenLineCount > 0 && <span className="cmd-row-more">{moreLines(preview.hiddenLineCount)}</span>}
+      {block.output && <pre id={id} className="cmd-row-output">{expanded ? block.output : preview.lines.join('\n')}</pre>}
+      {preview.hiddenLineCount > 0 && (
+        <button type="button" className="cmd-row-more report-toggle" aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded((v) => !v)}>
+          {expanded ? 'Show less' : moreLines(preview.hiddenLineCount)}
+        </button>
+      )}
     </div>
   );
 }
 
-function RunnerLoaded({ block, expanded }: { block: RunnerLoadedBlock; expanded: boolean }) {
+function RunnerLoaded({ block, expanded, onToggle }: RowProps<RunnerLoadedBlock>) {
   const count = (kind: RunnerLoadedBlock['commands'][number]['kind']) => block.commands.filter((command) => command.kind === kind).length;
   const counted = (n: number, label: string) => `${n} ${label}${n === 1 ? '' : 's'}`;
+  const id = useId();
   return (
     <div className="runner-loaded chat-msg chat-msg-system">
-      <span>Runner loaded {counted(count('skill'), 'skill')}, {counted(count('command'), 'command')}, {counted(count('builtin'), 'built-in command')}, {counted(block.mcpServers.length, 'MCP server')}</span>
-      {expanded && <div className="runner-loaded-detail">
-        {block.commands.map((command) => <div key={command.name}><code>/{command.name}</code> · {command.kind} {command.argumentHint} · {command.description}</div>)}
-        {block.mcpServers.map((server) => <div key={server.name}>{server.name}{server.status ? ` (${server.status})` : ''}</div>)}
-      </div>}
+      <Head className="runner-loaded-head" expanded={expanded} controls={id} onToggle={onToggle}>
+        <span>Runner loaded {counted(count('skill'), 'skill')}, {counted(count('command'), 'command')}, {counted(count('builtin'), 'built-in command')}, {counted(block.mcpServers.length, 'MCP server')}</span>
+      </Head>
+      <div id={id}>
+        {expanded && <div className="runner-loaded-detail">
+          {block.commands.map((command) => <div key={command.name}><code>/{command.name}</code> · {command.kind} {command.argumentHint} · {command.description}</div>)}
+          {block.mcpServers.map((server) => <div key={server.name}>{server.name}{server.status ? ` (${server.status})` : ''}</div>)}
+        </div>}
+      </div>
     </div>
   );
 }
@@ -257,20 +314,35 @@ const SUBAGENT_STATUS: Record<SubagentStatus, string> = {
   stopped: 'stopped',
 };
 
-export function SubagentCard({ block, expanded }: { block: SubagentBlock; expanded: boolean }) {
+const NOTHING_OPEN: ReadonlySet<string> = new Set();
+
+/**
+ * A subagent: its header and digest, and once opened its steps as their own
+ * previews — opening the agent opens none of them (ADR-0017, X1).
+ */
+export function SubagentCard({ block, expanded, onToggle, open = NOTHING_OPEN, onToggleRow }: RowProps<SubagentBlock> & {
+  open?: ReadonlySet<string>;
+  onToggleRow?: (id: string) => void;
+}) {
+  const id = useId();
   return (
     <div className={`subagent-card${expanded ? ' expanded' : ''}`} data-status={block.status}>
-      <div className="subagent-card-header">
+      <Head className="subagent-card-header" expanded={expanded} controls={id} onToggle={onToggle}>
         <span className="subagent-card-title">Agent</span>
         <span className="subagent-card-brief">{block.brief}</span>
         {block.model && <span className="subagent-card-model">{block.model}</span>}
         <span className="subagent-card-status">{SUBAGENT_STATUS[block.status]}</span>
+      </Head>
+      <div id={id}>
+        {expanded && block.children.length > 0 && (
+          <div className="subagent-card-steps">
+            {block.children.map((child) => (
+              <MemoBlock key={child.id} block={child} expanded={open.has(child.id)} onToggle={onToggleRow} onShowPlan={noop}
+                onResolveApproval={noop} onAnswerApproval={noop} />
+            ))}
+          </div>
+        )}
       </div>
-      {expanded && block.children.length > 0 && (
-        <div className="subagent-card-steps">
-          {block.children.map((child) => <Block key={child.id} block={child} expanded onShowPlan={noop} />)}
-        </div>
-      )}
       {block.digest && <div className="subagent-card-digest">{block.digest}</div>}
     </div>
   );
@@ -354,31 +426,36 @@ export function ApprovalCard({ block, onResolve }: { block: ApprovalBlock; onRes
 }
 
 function Block({
-  block, expanded, onShowPlan, onResolveApproval, onAnswerApproval,
+  block, expanded, open, onToggle, onShowPlan, onResolveApproval, onAnswerApproval,
 }: {
   block: DisplayBlock;
   expanded: boolean;
+  /** What is open among a subagent's steps; only a subagent is given it, so no other block redraws on a toggle. */
+  open?: ReadonlySet<string>;
+  /** Opens or closes the row with this id. */
+  onToggle?: (id: string) => void;
   onShowPlan: () => void;
   onResolveApproval: (id: string, granted: boolean) => void;
   onAnswerApproval: (id: string, decision: ApprovalDecision) => void;
 }) {
+  const toggle = onToggle ? () => onToggle(block.id) : undefined;
   switch (block.type) {
     case 'handoff':
-      return <TaskHandoff handoff={block.handoff} expanded={expanded} />;
+      return <TaskHandoff handoff={block.handoff} />;
     case 'command':
-      return <RunnerCommandRow block={block} expanded={expanded} />;
+      return <RunnerCommandRow block={block} />;
     case 'runner_loaded':
-      return <RunnerLoaded block={block} expanded={expanded} />;
+      return <RunnerLoaded block={block} expanded={expanded} onToggle={toggle} />;
     case 'compaction':
       return <div className="chat-msg chat-msg-system">Context compacted{block.trigger === 'auto' ? ' by the runner on its own' : ''}{block.preTokens !== undefined && block.postTokens !== undefined ? ` · ${formatTokenCount(block.preTokens)} → ${formatTokenCount(block.postTokens)} tokens` : ''}</div>;
     case 'message':
-      return <ChatMessage block={block} expanded={expanded} />;
+      return <ChatMessage block={block} />;
     case 'thinking':
-      return <ThinkingBlock block={block} expanded={expanded} />;
+      return <ThinkingBlock block={block} expanded={expanded} onToggle={toggle} />;
     case 'tool':
-      return <CommandRow block={block} expanded={expanded} />;
+      return <CommandRow block={block} expanded={expanded} onToggle={toggle} />;
     case 'subagent':
-      return <SubagentCard block={block} expanded={expanded} />;
+      return <SubagentCard block={block} expanded={expanded} onToggle={toggle} open={open} onToggleRow={onToggle} />;
     case 'plan':
       return <PlanMarker block={block} onShowPlan={onShowPlan} />;
     case 'skill_load':
@@ -395,22 +472,78 @@ function Block({
 
 const MemoBlock = React.memo(Block);
 
+interface Handlers {
+  onShowPlan: () => void;
+  onResolveApproval: (id: string, granted: boolean) => void;
+  onAnswerApproval: (id: string, decision: ApprovalDecision) => void;
+}
+
+const groupKey = (block: DisplayBlock) => `activity:${block.id}`;
+
+/**
+ * One run of activity as a single line that says what it did. Open, it draws
+ * its rows as their previews; closed, it draws none of them.
+ */
+function ActivityGroup({ blocks, open, onToggleGroup, onToggleRow, handlers }: {
+  blocks: readonly DisplayBlock[];
+  open: ReadonlySet<string>;
+  onToggleGroup: (keys: readonly string[]) => void;
+  onToggleRow: (id: string) => void;
+  handlers: Handlers;
+}) {
+  const id = useId();
+  const summary = activitySummary(blocks);
+  const expanded = blocks.some((b) => open.has(groupKey(b)));
+  return (
+    <div className="activity-group" data-state={summary.running ? 'running' : summary.failed ? 'failed' : 'done'}>
+      <button type="button" className="activity-group-toggle disclosure" aria-expanded={expanded} aria-controls={id}
+        onClick={() => onToggleGroup(blocks.map(groupKey))}>
+        <Chevron />
+        <span className="activity-group-summary">{summary.text}</span>
+      </button>
+      <div id={id} className="activity-group-body" hidden={!expanded}>
+        {expanded && blocks.map((block) => (
+          <MemoBlock key={block.id} block={block} expanded={open.has(block.id)} open={block.type === 'subagent' ? open : undefined}
+            onToggle={onToggleRow} {...handlers} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function ConversationBlocks({
-  blocks, detailAll, onShowPlan, onResolveApproval = noop, onAnswerApproval = noop,
+  blocks, onShowPlan, onResolveApproval = noop, onAnswerApproval = noop,
 }: {
   blocks: readonly DisplayBlock[];
-  detailAll: boolean;
   onShowPlan: () => void;
   onResolveApproval?: (id: string, granted: boolean) => void;
   /** A task runner's request, answered in its task log (ADR-0018, A1). */
   onAnswerApproval?: (id: string, decision: ApprovalDecision) => void;
 }) {
+  const items = useMemo(() => conversationItems(blocks), [blocks]);
+  // Rows by block id, groups by the ids of the blocks they hold: a group stays
+  // open when it grows, when its first block changes kind (a call becoming the
+  // subagent it started), and when it absorbs the next one because a message
+  // between them was taken back. A new conversation remounts this, so nothing
+  // carries over.
+  const [open, setOpen] = useState<ReadonlySet<string>>(NOTHING_OPEN);
+  const onToggleRow = useCallback((id: string) => setOpen((prev) => {
+    const next = new Set(prev);
+    if (!next.delete(id)) next.add(id);
+    return next;
+  }), []);
+  const onToggleGroup = useCallback((keys: readonly string[]) => setOpen((prev) => {
+    const next = new Set(prev);
+    if (keys.some((key) => next.has(key))) keys.forEach((key) => next.delete(key));
+    else next.add(keys[0]);
+    return next;
+  }), []);
+  const handlers = useMemo(() => ({ onShowPlan, onResolveApproval, onAnswerApproval }), [onShowPlan, onResolveApproval, onAnswerApproval]);
   return (
     <div className="conversation">
-      {blocks.map((block) => (
-        <MemoBlock key={block.id} block={block} expanded={detailAll} onShowPlan={onShowPlan}
-          onResolveApproval={onResolveApproval} onAnswerApproval={onAnswerApproval} />
-      ))}
+      {items.map((item) => (item.kind === 'activity'
+        ? <ActivityGroup key={item.key} blocks={item.blocks} open={open} onToggleGroup={onToggleGroup} onToggleRow={onToggleRow} handlers={handlers} />
+        : <MemoBlock key={item.block.id} block={item.block} expanded={false} {...handlers} />))}
     </div>
   );
 }
