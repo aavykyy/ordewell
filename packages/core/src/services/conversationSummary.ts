@@ -38,9 +38,11 @@ export function extractSummary(reply: string): string | null {
  * replayed to the model like any assistant message, so it tells the model
  * what the entry is as well as the user.
  */
-export function condensedNotice(summary: string): string {
+export function condensedNotice(summary: string, trigger: ContextCheckpoint['trigger'] = 'manual'): string {
   return [
-    'Conversation condensed: the summary below stands in for the earlier messages from here on, and the last two exchanges were kept as they were. The full conversation stays in the history. The task list is unchanged.',
+    trigger === 'manual'
+      ? 'Conversation condensed: the summary below stands in for the earlier messages from here on, and the last two exchanges were kept as they were. The full conversation stays in the history. The task list is unchanged.'
+      : 'Conversation condensed automatically to fit the model\'s context: the summary below stands in for the earlier messages from here on, and the most recent exchanges that fit were kept as they were. The full conversation stays in the history. Task and run state are the current plan\'s, not this summary\'s.',
     '',
     summary,
   ].join('\n');

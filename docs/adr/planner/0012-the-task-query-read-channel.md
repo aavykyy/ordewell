@@ -156,9 +156,9 @@ than cached or replayed.
   refused resume), Ordewell's own compaction, a session reset. Nor does a
   context compacted in place: a harness agent's own compaction, which its
   adapter reports for the planner's context and never for a subagent's or
-  another thread's, and a vendor planner's pruning of its history
-  (`IAiService.compactions`). A vendor planner's model switch keeps its
-  message list, so it is none of these.
+  another thread's, and a vendor planner's pruning or condensing of its
+  history, a turn's own rounds included (`IAiService.compactions`). A vendor
+  planner's model switch keeps its message list, so it is none of these.
 
 ## Live output field
 
@@ -305,3 +305,4 @@ ADR-0008's exploration envelope is unchanged.
 - 2026-10-13 — references resolve through the shared `TaskRefs` grammar, which reaches subtasks by their dotted label.
 - 2026-10-18 — an edit's model and mode are checked by the assignment resolver, which every writer calls, rather than by `TaskEditValidator` (T7, M3).
 - 2026-10-23 — T10: the plan and catalog blocks go whole once per live context, then as what changed (M7).
+- 2026-10-25 — T10: a vendor planner condensing its context in the middle of a turn ([ADR-0002](0002-planner-as-conversation-loop.md)) counts as a compaction, so the next turn is sent the whole plan.

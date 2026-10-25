@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
 import {
   Task,
+  ConversationMessage,
   DiscoveredModel,
   ResearchLogEntry,
   ResearchProgress,
@@ -22,14 +23,16 @@ import { generatePlanWithRepair } from './PlanRepair';
 import type { RunnerModeInfo } from './ModeResolver';
 import { ContextCollector } from './ContextCollector';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
-import { IAiService, ConversationRequest, ConversationTurn } from './AiService';
+import { IAiService, ConversationRequest, ConversationTurn, type ContextCondenseRequest } from './AiService';
 import type { TurnBudgets } from './PlannerBudgets';
 import { BaseAiService, ResearchChat, ResearchTurn, ToolResult, ConversationTurnContext } from './BaseAiService';
 import { toOpenAiTools, toOpenAiSubagentTools } from './researchTools';
 import { getProviderMeta, isApiProvider, stripModelPrefix } from './ProviderRegistry';
 import { PLANNER_ESCAPE_HINT } from './plannerReadiness';
-import { ChatHistory, messageChars, type CompactableMessage } from './contextCompaction';
-import { PlannerContextExhaustedError, TokenGauge, callBudget, replyTokens, type ChatBudget, type ModelLimits, type PlannerContextDeps, type PlannerContextStatus } from './plannerContextBudget';
+import { messageChars } from './contextCompaction';
+import { BudgetedChat, condenseConversation, type CallInput, type ChatCompaction, type ContextSummarizer } from './budgetedChat';
+import type { SummaryCall } from './contextSummary';
+import { CONTEXT_BUDGET, TokenGauge, callBudget, replyTokens, type ChatBudget, type ModelLimits, type PlannerContextDeps, type PlannerContextStatus } from './plannerContextBudget';
 import type { UsageRecord } from '../models/Usage';
 
 /** The subset of an OpenAI-compatible `usage` block this service reads. OpenRouter
@@ -44,12 +47,6 @@ interface StreamUsage {
 const KEYLESS_PLACEHOLDER = 'not-needed';
 
 type Message = OpenAI.Chat.Completions.ChatCompletionMessageParam;
-
-/** What one call sends after the history: a user message, or the results of the last call's tools. */
-interface CallInput {
-  kind: 'message' | 'results';
-  messages: Message[];
-}
 
 interface ChatOptions {
   /** Resolved per API call, never captured: a key or endpoint changed mid-conversation must reach the next turn. */
@@ -68,6 +65,7 @@ interface ChatOptions {
   /** One report per API call — the only way a call's usage leaves this chat. */
   onUsage?: (record: UsageRecord) => void;
   budget?: ChatBudget;
+  compaction?: ChatCompaction;
 }
 
 /**
@@ -83,147 +81,62 @@ function isContextOverflow(err: unknown): boolean {
   return code === 'context_length_exceeded' || (typeof message === 'string' && /maximum context length/i.test(message));
 }
 
-function inputChars(input: CallInput): number {
-  return input.messages.reduce((n, m) => n + messageChars(m), 0);
+/**
+ * The one record for an API call, built only from what the provider reported.
+ * OpenRouter's `cost` is in USD (its credits are dollar-pegged); nothing is
+ * estimated. A field the provider left out stays absent. The context the call
+ * leaves is its prompt and its completion: the API's own `total_tokens`, and
+ * the reply the next call's prompt carries.
+ */
+function usageRecord(source: string, model: string, reported: StreamUsage | undefined): UsageRecord | undefined {
+  if (!reported) return undefined;
+  const record: UsageRecord = { source, model };
+  let hasMeasure = false;
+  if (reported.prompt_tokens !== undefined) { record.inputTokens = reported.prompt_tokens; hasMeasure = true; }
+  if (reported.completion_tokens !== undefined) { record.outputTokens = reported.completion_tokens; hasMeasure = true; }
+  if (reported.prompt_tokens_details?.cached_tokens !== undefined) {
+    record.cachedInputTokens = reported.prompt_tokens_details.cached_tokens;
+    hasMeasure = true;
+  }
+  if (reported.cost !== undefined) { record.reportedCost = { amount: reported.cost, currency: 'USD', ...(record.source === 'openrouter' ? { kind: 'billed' } : {}) }; hasMeasure = true; }
+  if (record.inputTokens !== undefined) record.contextTokens = record.inputTokens + (record.outputTokens ?? 0);
+  return hasMeasure ? record : undefined;
 }
 
-class OpenAiResearchChat implements ResearchChat {
-  private readonly history: ChatHistory<Message>;
-  /** What the tool schemas add to every request: they never change within a chat. */
-  private readonly toolsChars: number;
-  /**
-   * The input of a call that could not fit: held out of the history, so a
-   * history too long for the window does not fail every later call, and sent
-   * again whole by {@link resend}, so no tool runs twice.
-   */
-  private held: CallInput | null = null;
-
+class OpenAiResearchChat extends BudgetedChat<Message> {
   constructor(messages: Message[], private readonly opts: ChatOptions) {
-    this.history = new ChatHistory(messages);
-    this.toolsChars = JSON.stringify(opts.tools).length;
+    super(messages, JSON.stringify(opts.tools).length, CONTEXT_BUDGET.defaultMaxOutputTokens, {
+      model: opts.model,
+      source: () => opts.source?.() ?? 'openai',
+      onUsage: opts.onUsage,
+      budget: opts.budget,
+      compaction: opts.compaction,
+    });
   }
 
-  async sendMessage(text: string, signal?: AbortSignal): Promise<ResearchTurn> {
-    this.supersedeHeld();
-    this.answerAbandonedCalls();
-    return this.send({ kind: 'message', messages: [{ role: 'user', content: text }] }, signal);
+  protected userMessage(text: string): Message {
+    return { role: 'user', content: text };
   }
 
-  async sendToolResults(results: ToolResult[], signal?: AbortSignal): Promise<ResearchTurn> {
-    return this.send({ kind: 'results', messages: results.map((r) => ({ role: 'tool', tool_call_id: r.id!, content: r.output })) }, signal);
+  protected resultMessages(results: ToolResult[]): Message[] {
+    return results.map((r) => ({ role: 'tool', tool_call_id: r.id!, content: r.output }));
   }
 
-  holdsInput(): boolean { return this.held !== null; }
-
-  async resend(signal?: AbortSignal): Promise<ResearchTurn> {
-    if (!this.held) throw new Error('No planner input is held to send again.');
-    return this.send(this.held, signal);
+  protected notExecuted(callId: string, _name: string, text: string): Message {
+    return { role: 'tool', tool_call_id: callId, content: text };
   }
 
-  reseed(next: readonly CompactableMessage[]): void {
-    this.history.replace(next as Message[]);
-    this.opts.budget?.onCompacted();
+  protected replayed(messages: ReadonlyArray<Pick<ConversationMessage, 'role' | 'content'>>): Message[] {
+    return messages.map((m) => ({ role: m.role, content: m.content }));
   }
 
-  compactHistory(): number {
-    const { removedChars } = this.history.prune(Infinity);
-    if (removedChars > 0) this.opts.budget?.onCompacted();
-    return removedChars;
+  protected isContextOverflow(err: unknown): boolean {
+    return isContextOverflow(err);
   }
 
-  /**
-   * A new message takes the place of a held one, which the model never heard
-   * and whose turn already failed. Held tool results ran, so they answer their
-   * calls in the history, as a turn before this one, where pruning reaches them.
-   */
-  private supersedeHeld(): void {
-    if (this.held?.kind === 'results') this.history.append(...this.held.messages);
-    this.held = null;
-  }
-
-  /**
-   * A turn that gave up on its tool budget, or was stopped, can end on calls
-   * nothing answered — and the API refuses every later request over a history
-   * like that. They are answered as never run before the next message.
-   */
-  private answerAbandonedCalls(): void {
-    const last = this.history.last();
-    if (last?.role !== 'assistant' || !last.tool_calls?.length) return;
-    this.history.append(...last.tool_calls.map((call): Message => ({ role: 'tool', tool_call_id: call.id, content: 'Not executed: the turn that asked for this ended first.' })));
-  }
-
-  private async send(input: CallInput, signal?: AbortSignal): Promise<ResearchTurn> {
-    this.held = null;
-    const model = this.opts.model();
-    const limits = this.opts.budget?.limits(model);
-    const auto = this.opts.budget?.autoCompaction() ?? false;
-    if (auto) this.fit(input, model, limits);
-    const call = (): Promise<ResearchTurn> => this.callApi(input, model, replyTokens(limits), signal);
-    try {
-      return await call();
-    } catch (err) {
-      if (!isContextOverflow(err)) throw this.committed(input, err);
-      // The estimate was short, or the window unknown: one more pass, sparing
-      // only this turn's newest rounds, and the same input once more.
-      if (!auto || this.prune(Infinity, this.turnStart(input)) === 0) throw this.exhausted(input, model, err);
-      try {
-        return await call();
-      } catch (again) {
-        throw isContextOverflow(again) ? this.exhausted(input, model, again) : this.committed(input, again);
-      }
-    }
-  }
-
-  /**
-   * Bring the history under the window's ceiling before the call, pruning down
-   * to its low-water mark: first older rounds, keeping the newest anywhere;
-   * then, only if that is not enough, the rounds of turns before this one.
-   * Still over the window by a measured estimate without its margin — what is
-   * left is protected — the call is not made: the input is held and the turn
-   * ends on a typed error.
-   */
-  private fit(input: CallInput, model: string, limits: ModelLimits | undefined): void {
-    const budget = callBudget(limits);
-    const gauge = this.opts.budget?.gauge;
-    if (!budget || !gauge) return;
-    const perToken = gauge.charsPerToken(model);
-    const chars = (): number => this.history.chars + inputChars(input) + this.toolsChars;
-    if (chars() / perToken <= budget.ceiling) return;
-    const toLowWater = (): number => chars() - budget.lowWater * perToken;
-    this.prune(toLowWater(), 0);
-    if (chars() / perToken > budget.ceiling) this.prune(toLowWater(), this.turnStart(input));
-    const plain = gauge.plainCharsPerToken(model);
-    if (plain !== undefined && chars() / plain > budget.promptLimit) {
-      this.held = input;
-      throw new PlannerContextExhaustedError(model, false);
-    }
-  }
-
-  private prune(charsToFree: number, protectFrom: number): number {
-    const { removedChars } = this.history.prune(charsToFree, protectFrom);
-    if (removedChars > 0) this.opts.budget?.onCompacted();
-    return removedChars;
-  }
-
-  /** Where the turn this input belongs to starts: a message opens one of its own. */
-  private turnStart(input: CallInput): number {
-    return input.kind === 'message' ? this.history.length : Math.max(0, this.history.lastUserIndex);
-  }
-
-  /** A call that failed for another reason keeps its input, as the history always has. */
-  private committed(input: CallInput, err: unknown): unknown {
-    this.history.append(...input.messages);
-    return err;
-  }
-
-  private exhausted(input: CallInput, model: string, cause: unknown): PlannerContextExhaustedError {
-    this.held = input;
-    return new PlannerContextExhaustedError(model, true, { cause });
-  }
-
-  private async callApi(input: CallInput, model: string, maxTokens: number, signal?: AbortSignal): Promise<ResearchTurn> {
+  protected async callApi(input: CallInput<Message>, model: string, maxTokens: number, signal?: AbortSignal): Promise<ResearchTurn> {
     const messages = [...this.history.view(), ...input.messages];
-    const sentChars = this.history.chars + this.toolsChars + inputChars(input);
+    const sentChars = this.history.chars + this.toolsChars + input.messages.reduce((n, m) => n + messageChars(m), 0);
     // Stream the turn so reasoning surfaces live. A non-streamed completion blocks
     // for the model's entire think time with no signal — the "0 steps / nothing for
     // a long time" symptom on reasoning models. Tool-call deltas are reassembled by
@@ -273,7 +186,7 @@ class OpenAiResearchChat implements ResearchChat {
       }
     }
 
-    const usage = this.usageRecord(model, reported);
+    const usage = usageRecord(this.opts.source?.() ?? 'openai', model, reported);
     if (usage) this.opts.onUsage?.(usage);
     this.opts.budget?.gauge.record(model, sentChars, promptTokens);
 
@@ -292,28 +205,6 @@ class OpenAiResearchChat implements ResearchChat {
       return { name: v.name, args, id: v.id };
     });
     return { text: content, toolCalls, hasToolCalls: toolCalls.length > 0, reasoning: reasoning || undefined, finishReason, promptTokens, segmentId };
-  }
-
-  /**
-   * The one record for this API call, built only from what the provider
-   * reported. OpenRouter's `cost` is in USD (its credits are dollar-pegged);
-   * nothing is estimated. A field the provider left out stays absent. The
-   * context the call leaves is its prompt and its completion: the API's own
-   * `total_tokens`, and the reply the next call's prompt carries.
-   */
-  private usageRecord(model: string, reported: StreamUsage | undefined): UsageRecord | undefined {
-    if (!reported) return undefined;
-    const record: UsageRecord = { source: this.opts.source?.() ?? 'openai', model };
-    let hasMeasure = false;
-    if (reported.prompt_tokens !== undefined) { record.inputTokens = reported.prompt_tokens; hasMeasure = true; }
-    if (reported.completion_tokens !== undefined) { record.outputTokens = reported.completion_tokens; hasMeasure = true; }
-    if (reported.prompt_tokens_details?.cached_tokens !== undefined) {
-      record.cachedInputTokens = reported.prompt_tokens_details.cached_tokens;
-      hasMeasure = true;
-    }
-    if (reported.cost !== undefined) { record.reportedCost = { amount: reported.cost, currency: 'USD', ...(record.source === 'openrouter' ? { kind: 'billed' } : {}) }; hasMeasure = true; }
-    if (record.inputTokens !== undefined) record.contextTokens = record.inputTokens + (record.outputTokens ?? 0);
-    return hasMeasure ? record : undefined;
   }
 }
 
@@ -346,6 +237,45 @@ export class OpenAiService extends BaseAiService implements IAiService {
       gauge: this.gauge,
       onCompacted: () => this.countCompaction(),
     };
+  }
+
+  /**
+   * One call on the planner's own model and credentials that offers no tools:
+   * what a summary of its context is written by. Its usage is reported like
+   * any call's, for the caller to mark as measuring no context.
+   */
+  private readonly summaryCall: SummaryCall = async ({ model, instructions, input, maxOutputTokens, signal }, onUsage) => {
+    const stream = await this.getClient().chat.completions.create({
+      model,
+      messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }],
+      stream: true,
+      max_tokens: maxOutputTokens,
+      stream_options: { include_usage: true },
+    }, signal ? { signal } : undefined);
+    let text = '';
+    let finishReason: string | undefined;
+    let reported: StreamUsage | undefined;
+    for await (const chunk of stream) {
+      if (chunk.usage) reported = chunk.usage as StreamUsage;
+      const fr = chunk.choices[0]?.finish_reason;
+      if (fr) finishReason = fr;
+      // Reasoning is not the summary: only the reply's content is.
+      const content = (chunk.choices[0]?.delta as { content?: string } | undefined)?.content;
+      if (content) text += content;
+    }
+    const usage = usageRecord(this.config.aiProvider, model, reported);
+    if (usage) onUsage(usage);
+    return { text, finishReason };
+  };
+
+  private summarizer(): ContextSummarizer {
+    const model = this.requireModel('orchestratorModel', this.config.orchestratorModel);
+    return { model, limits: this.limitsOf(model), wantedReply: CONTEXT_BUDGET.defaultMaxOutputTokens, charsPerToken: this.gauge.charsPerToken(model), call: this.summaryCall };
+  }
+
+  async condenseContext(request: ContextCondenseRequest): Promise<string> {
+    this.ensureInit();
+    return condenseConversation(this.conversation?.ctx.chat, request, () => this.summarizer());
   }
 
   /** What automatic compaction does for the planner model configured now. */
@@ -481,6 +411,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
     }
 
     let currentProgress = req.onProgress;
+    const host = req.compaction;
     const chat = new OpenAiResearchChat(messages, {
       client: () => this.getClient(),
       model: () => this.requireModel('orchestratorModel', this.config.orchestratorModel),
@@ -490,6 +421,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
       source: () => this.config.aiProvider,
       onUsage: (record) => currentProgress({ type: 'usage', record }),
       budget: this.plannerBudget(),
+      compaction: host && { host, summarize: this.summaryCall, onCompaction: (compaction) => currentProgress({ type: 'compaction', compaction }) },
     });
 
     const ctx: ConversationTurnContext = {

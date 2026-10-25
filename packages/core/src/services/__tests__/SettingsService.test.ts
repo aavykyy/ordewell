@@ -209,9 +209,11 @@ describe('SettingsService', () => {
       try {
         // A directory watcher arms asynchronously, and macOS may report a save
         // written in the same turn as one event naming the directory, which
-        // the watcher ignores. Space the arming saves out until one is heard,
-        // then forget those calls: the counts below are the saves under test.
-        for (let attempt = 0; attempt < 10 && listener.mock.calls.length === 0; attempt++) {
+        // the watcher ignores. Space the arming saves out until one is heard —
+        // for as long as vi.waitFor would wait, since a loaded machine can take
+        // past a second to arm it — then forget those calls: the counts below
+        // are the saves under test.
+        for (let attempt = 0; attempt < 100 && listener.mock.calls.length === 0; attempt++) {
           new SettingsService(tempFile).setEnabledRunners(['opencode']);
           await new Promise((resolve) => setTimeout(resolve, 100));
         }

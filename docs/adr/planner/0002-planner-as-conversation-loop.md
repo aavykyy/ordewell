@@ -25,11 +25,18 @@ We decided to collapse the planner to a single messages loop — "the LLM either
 - **The line can be forked, rewound and condensed** — always as a transcript edit, so it works the same on a vendor API planner and a harness planner (ADR-0009):
   - **Fork** copies the conversation and the task list into a new persisted session, leaving the original untouched.
   - **Rewind is a fork from a point.** It copies the transcript up to just before a chosen user message, with `researchLog` cut at the same point, into a new session the daemon adopts like a fork. The original — file, transcript, live planner context — is untouched. The opening goal is a floor a rewind cannot cross. A checkpoint is not a floor: the copy is a prefix, so a rewind before a checkpoint leaves it behind with what followed. The rewound message's text comes back with the fork, so a surface can offer it for editing and resending. The fork has no live context, so its first message replays the shortened transcript's model context on every backend.
-  - **Compaction** (`/compact`) shortens the model's context, never the history. One hidden planner turn is asked for a summary of the model context. Its reply is appended as a `compaction` entry carrying a checkpoint, `{ id, keptFrom, trigger }`. `keptFrom` is the transcript index where verbatim replay resumes, the second-to-last user message, so the last two exchanges are kept as they were. Then the live context is reset. Every message and the whole `researchLog` stay on disk and on screen, rewind positions do not move, and tasks and run state are not touched.
+  - **Compaction** (`/compact`) shortens the model's context, never the history. A summary of the model context is asked for: an API planner writes it in calls on its own model and credentials that offer no tools (`IAiService.condenseContext`), the same calls an automatic compaction makes (below), and a harness planner in one hidden turn of its agent. The summary is appended as a `compaction` entry carrying a checkpoint, `{ id, keptFrom, trigger }`. `keptFrom` is the transcript index where verbatim replay resumes, the second-to-last user message, so the last two exchanges are kept as they were. Then the live context is reset. Every message and the whole `researchLog` stay on disk and on screen, rewind positions do not move, and tasks and run state are not touched.
     - **One projection.** `modelContext()` is the newest checkpoint's summary, then every entry from its `keptFrom` on, without any other `compaction` entry. It is the only thing replayed or condensed: a reload, a model or provider switch, a fork, a rewind, and a summary turn with no live context. A second compaction therefore condenses the first summary and what followed it, and supersedes it. When nothing new can be saved past the last checkpoint, `/compact` is refused.
     - **Checkpoints only append.** A cut is never behind the previous checkpoint's, nor past an input an open planner turn still holds, since that input lands at its held position and must be replayed. Inserts land at or after the cut, so `keptFrom` never moves. A checkpoint committed in its own save stays valid whether the turn it was made during lands, fails, stops or is abandoned. This is the seam an automatic compaction during a turn commits through.
     - **Read defensively.** A saved checkpoint counts only with an id, a known trigger, and an integer cut no later than its entry and no earlier than the previous checkpoint's. One that fails is passed over, which replays more and hides nothing. A `compaction` entry without a checkpoint is a marker: drawn, never replayed. The exception is a legacy summary standing first, from builds that replaced the transcript; it is read as a checkpoint cutting at index 1, and still plays the goal's part for rewind.
     - **Atomic.** The summary must be wrapped in tags, because a harness planner returns a crashed agent's error as a normal reply. Nothing is written until the summary is in hand, so a failure or a stop is a no-op. Anything else the summary turn emits, task ops included, is discarded.
+  - **Automatic compaction** keeps an API planner's calls inside its model's window without ending its turn. It is on by default; `plannerAutoCompaction: false` in the settings file turns it off, and no settings panel shows it. A harness planner's agent compacts its own context, and a task runner its own: neither is touched. Before every call, between the rounds of a turn and only once the tools a call asked for have returned, the chat budgets the call on the model configured at that moment:
+    - **The budget.** The prompt may fill 90% of the model's known window. An OpenAI-compatible window holds the reply too, so the prompt also stops short of the reply asked for: the smallest of 32,000 tokens, the provider's stated cap and a quarter of the window. Gemini states the input limit apart, `inputTokenLimit`, and the reply has its own, the smaller of 16,384 and `outputTokenLimit`. A call is costed from what the provider measured of the same model's last call, with a margin, or of another model's with a wider one; nothing counts tokens offline. A window the catalogs Ordewell already holds do not state turns automatic compaction off for that model, and the status says why; `/compact` still works.
+    - **Prune first.** Older output of the workspace reads, which can be made again, is cut to a stub, oldest first, down to a low-water mark below the ceiling: first sparing the two newest complete rounds anywhere, then only the current turn's. The output of a command, a web read, a task read, an execution tool or a subagent is never pruned, and neither is a round whose results are still being sent. Pruning alone is reported as a compaction that only ever ends.
+    - **Then summarize the history that landed.** Still over, the live context from before the open turn is condensed by the summary calls into a checkpoint, committed in its own save while the turn holds its inputs, its cut before them. The newest exchanges whose replay fits below the low-water mark beside the turn are kept verbatim; one too large to fit, however recent, is condensed with the rest. The live context becomes the checkpoint's projection, then the turn's own messages as they were, and the same call goes on from there.
+    - **Then summarize the turn's own rounds.** A turn that still fills the window by itself has its older complete rounds condensed in the live context alone: the user's message stays verbatim, then a note with their summary and a list, read off the messages and not asked of the model, of every call they made that changed something or reached out, with what it returned, so none is made again. The newest rounds that fit, and the call whose results are being sent, stay as they were. Nothing of it is written: tool output was never in the transcript.
+    - **What a summary call is.** One call, or a bounded fold of up to eight when what it condenses does not fit one, each part folded into the summary so far, on the planner's own provider, model and credentials, asking for a reply within the provider's cap and a tenth of what a call may carry. It offers no tools and its reply is only read as text, so nothing it says runs a tool or changes the plan. Its spend counts in the usage totals and measures nothing of the live context. A reply is refused, and nothing it would have replaced changes, when it was cut off, holds no complete tagged summary, is too short to stand for what it condensed, has hardly condensed it, ran past the room kept for it or declines; and when the turn was stopped or abandoned, the planner model changed or the live context moved while it was written. The summary is told the current plan outranks anything the conversation said of task state, and every compaction drops the whole-plan certainty (ADR-0012 T10).
+    - **No fit.** Where neither can bring the call under what the model takes at all, the call is not made: its input is held, so sending it again runs no tool a second time, and the turn ends on `PlannerContextExhaustedError`, which says how the summary fared, for recovery to decide on. A provider's refusal of a prompt too long is the backstop: one more pruning pass and one resend of the same input.
   - **The task list rides along as-is.** A rewind keeps tasks the discarded turns created; a fork starts with the tasks the original had. Run state cannot travel to a session with no run: in-progress and checkpointed tasks become pending and planner turn inputs still waiting stay behind (`forkPlanState` is the one place that decides).
   - **Busy rules.** All three are refused while a planner turn is in flight and allowed while a run executes. A message sent while a summary is being written is refused (`ConversationBusyError`, a 409 from the daemon), before the planning abort slot is touched, so a stop still reaches the summary turn.
   - **VS Code** offers `/fork`, `/rewind [n]` and `/compact` (and Command Palette entries) through `Session` directly, since it does not use the daemon. It locks the input during `/compact`. A fork or a rewind is loaded as a saved session, which replaces its single `Session` and stops its run, so it asks first while one executes; a compaction redraws only the transcript in place.
@@ -140,6 +147,32 @@ We decided to collapse the planner to a single messages loop — "the LLM either
 - **A copy of the kept context per checkpoint.** Rejected: the transcript grows
   by a whole copy at each compaction. A cut index into the append-only
   transcript says the same with a few bytes.
+- **Pruning at a fixed prompt size** (100,000 tokens, whatever the model). It
+  was the first automatic compaction. Dropped: it fired too late for a small
+  window and far too early for a large one, read the last call's size rather
+  than the next one's, and stubbed the round the model had just read.
+- **Automatic compaction through the `/compact` turn.** Rejected: that turn
+  offered the planner's tools, and a read it asked for ran; it rode the whole
+  context it was condensing; and it could only run between turns, so a turn
+  that filled the window had to end first.
+- **A summary of the transcript alone.** Rejected: tool output is never in the
+  transcript, so the findings a turn read would be lost; the live context the
+  summary condenses holds them.
+- **The last two exchanges kept, as `/compact` keeps them.** Rejected for
+  automatic compaction: two exchanges can be any size. What is kept is what
+  fits.
+- **Asking the summary to list what the turn did.** Rejected: a model can leave
+  a call out, and a call left out is one the planner may make again. The list
+  is read off the messages.
+- **A checkpoint for a turn's own condensed rounds.** Rejected: its input is
+  not in the transcript until the turn lands, and no cut may pass it; and its
+  tool output never is. The note lives in the live context alone.
+- **A tokenizer for exact counts.** Rejected: one is exact for one provider's
+  models only, and another dependency. The estimate errs high, and the
+  provider's refusal is the backstop.
+- **A separate, cheaper model for summaries.** Rejected: it would need its own
+  credentials and limits, and send the conversation to a model the user did
+  not pick for it.
 
 ## Consequences
 
@@ -152,6 +185,10 @@ We decided to collapse the planner to a single messages loop — "the LLM either
 - The AI services (`OpenAiService`, `GeminiService`) are stateful across
   conversation turns — they maintain the tool-use message history internally,
   not just within one call. This was the largest implementation cost.
+- An API planner's turn can outgrow its model's window and carry on: a summary
+  costs paid calls, which the usage totals count. What it condensed is gone
+  from the model's context for the rest of the turn, though never from the
+  transcript; a model whose window no catalog states gets none of it.
 - The interview's depth rests on the prompt and the skill, not on structure. A
   weak model can still transition too early; the user can say "keep asking".
 - A future reader sees no `queuedMessages`, no `PrdArtifact`, no
@@ -169,3 +206,4 @@ We decided to collapse the planner to a single messages loop — "the LLM either
   compaction (#9, #10).
 - 2026-10-11 — a fork leaves waiting planner turn inputs behind, not a mid-run edit queue ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-25 — compaction keeps the whole transcript and appends a checkpoint that `modelContext()` projects. A rewind reaches past a summary.
+- 2026-10-25 — API planners compact automatically between calls on 90% of the model's known window: pruning first, then a checkpoint of the history that landed, then the turn's own older rounds, by summary calls that offer no tools; `/compact` on an API planner uses the same calls. Before it, a fixed 100,000-token threshold pruned only, Gemini never pruned, and `/compact` offered the planner's tools to its summary turn.

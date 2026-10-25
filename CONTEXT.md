@@ -387,39 +387,64 @@ one — that turn is continued on the user's behalf, and its text stays in the
 reply; *Avoid:* counting a task-ops validation retry (the conversation's own
 `repairLoop`) against this budget — it is a separate, later loop.
 
-**Context compaction** (`contextCompaction.ts`) — comes in two kinds that share
-a name and nothing else: this entry's *reactive/proactive* compaction, which
-Ordewell triggers on its own, and the *user-triggered* **Compaction** below,
-which the user asks for. This one is the recovery for a plan
-emission cut off by the output-token limit (a long research phase, especially
-with subagents, bloats the planner context until the final JSON no longer
-fits). Truncation is detected two ways — the unbalanced-JSON heuristic
-(`PlanParseError.truncated`) and the provider's `finish_reason === 'length'`
-(`ResearchTurn.finishReason`) — and the retry then differs from a normal JSON
-repair: `ResearchChat.compactHistory()` prunes raw tool transcripts in place
-(subagent digests are kept whole — a digest already *is* the compressed
-research thread) before `truncatedPlanReEmitPrompt` asks for a terser
-re-emit. The one-shot fallback prompt is bounded the same way by
-`compactResearchResults`. Compaction also runs proactively
-(`withProactiveCompaction`, wrapped around the chat by both planner loops):
-providers report exact prompt tokens per turn (`ResearchTurn.promptTokens`,
-via `stream_options.include_usage` / Gemini `usageMetadata`), and a turn at or
-past `COMPACTION_LIMITS.proactivePromptTokens` compacts immediately so the
-plan emission is never the first moment context pressure surfaces — the
-reactive repair is the backstop, not the primary path.
+**Context compaction** (`contextCompaction.ts`, `budgetedChat.ts`,
+`contextSummary.ts`) — what an API planner does on its own to keep each call
+inside its model's window, as against the user-triggered **Compaction** below,
+which it shares a summary and a checkpoint with. Before every call of the
+planner's conversation, between the rounds of a turn and once the tools a call
+asked for have returned, the chat budgets the call on the model configured at
+that moment (`plannerContextBudget.ts`): the prompt may fill 90% of the model's
+known window, less, for an OpenAI-compatible window that holds prompt and reply
+together, the reply the call asks for (the smallest of 32,000 tokens, the
+provider's cap and a quarter of the window); Gemini's `inputTokenLimit` is the
+prompt's alone, its reply the smaller of 16,384 and `outputTokenLimit`. The
+cost of a call is an estimate from what the provider measured of the same
+model's last call, with a margin (a wider one for another model's), never a
+count. Over the ceiling, it first prunes older output of the workspace reads to
+stubs, oldest first, down to a low-water mark, sparing the two newest complete
+rounds and never touching a command's, web read's, task read's, execution
+tool's or subagent's output. Still over, the planner conversation's own chat
+condenses: the live context that landed before the open turn becomes a
+**Context checkpoint**, committed mid-turn in its own save with its cut before
+the turn's held inputs, keeping verbatim the newest exchanges whose replay fits;
+then, if the turn fills the window by itself, its older complete rounds are
+condensed in the live context alone into a note after the user's message, with
+the list of the calls they made that changed something or reached out
+(`effectLedger`, read off the messages), so none is made again. Each summary is
+one tool-less call, or a bounded fold of several, on the planner's own
+provider, model and credentials; its spend counts in the *Usage totals* and
+moves no *Context fill* meter, which the condensed context clears. A summary
+cut off, untagged, trivially short, not much shorter than what it condensed,
+past its room or declining is refused, as is one that comes back after a stop, a model
+switch or a change of the live context, and nothing it would have replaced
+changes. A call that still cannot fit is not made: its input is held, so
+sending it again runs no tool twice, and the turn ends on
+`PlannerContextExhaustedError`, which says how the summary fared. A provider's
+refusal of a prompt too long gets one more pruning pass and one resend. Each
+compaction is a **Compaction event** of the turn: a pruning reports only its
+end. A model whose window the catalogs Ordewell holds do not state, or the
+settings file's `plannerAutoCompaction: false` (on when absent; no settings
+panel shows it), turns all of it off; the input is then sent whole, and
+`/compact` still works. A harness planner's agent and every task runner compact
+their own contexts and are never touched. The same pruning also frees context
+before a plan emission the output limit cut off (`ResearchChat.compactHistory()`,
+then `truncatedPlanReEmitPrompt`), and the one-shot fallback prompt is bounded
+by `compactResearchResults`. The one-shot research chat prunes but never
+condenses, and a research subagent's chat is not budgeted.
 *Avoid:* a truncation retry that re-sends the same context — it will be cut
-at the same point again.
+at the same point again; and "the summary's list" for the effect ledger, which
+no summary writes.
 
 **Compaction** (`Session.compactConversation()`) — the user-triggered kind: the
 user decides a planner conversation has grown unwieldy and asks for it to be
-condensed, on a live turn rather than after a cut-off. One hidden planner turn,
-through whichever planner is configured, asks for a summary of the goal,
+condensed, on a live turn rather than after a cut-off. A summary of the goal,
 decisions, constraints, open questions, key file and code findings and where the
-plan stands. The live context is pruned of bulky tool output first
-(`IAiService.pruneContext`, the same pruning **Context compaction** does), or
-the **Model context** is replayed into the turn when no live context matches, so
-a second compaction condenses the first summary and what followed it, never the
-messages that summary already stands for. The summary is then appended to the
+plan stands is asked for: an API planner writes it in tool-less calls on its own
+model (`IAiService.condenseContext`), as **Context compaction** does, and a
+harness planner in one hidden turn of its agent. The live context is condensed,
+or the **Model context** replayed when no live context matches, so a second
+compaction condenses the first summary and what followed it, never the messages
+that summary already stands for. The summary is then appended to the
 transcript as a **Context checkpoint** that keeps the last two user messages and
 their replies verbatim. Nothing is removed: every message and the whole
 `researchLog` stay on disk and on screen, and rewind positions do not move. The
@@ -428,8 +453,9 @@ every backend alike — unless the compaction was abandoned with its plan,
 whose drop already reset it, and a second reset would cut off the turn that
 has the backend since. The summary must arrive inside `<conversation_summary>`
 tags: a harness planner reports a failure as an ordinary reply, and the tags are
-how a dead agent is told apart from a summary. Anything else the turn emits —
-task ops included — is discarded, so the task list is untouched, and nothing is
+how a dead agent is told apart from a summary; an API planner's is also held to
+the checks **Context compaction** holds its own summaries to. Anything else the
+turn emits — task ops included — is discarded, so the task list is untouched, and nothing is
 written until the summary is in hand, so a failed or stopped turn leaves the
 conversation as it was. Only its spend is kept: the planner's *Usage totals*
 count it, condensed or not, but its calls move no *Context fill* meter, which a
@@ -472,7 +498,9 @@ one phase of a planner compaction as surfaces are told it (ADR-0017 C1):
 failed, paused), both under one `id` that a checkpoint the compaction writes
 carries too. `origin` is `ordewell` for Ordewell's own, or `native` for a
 harness planner compacting its own context, which reports only its end, and
-sizes only as it stated them. A surface folds the phases into one compaction
+sizes only as it stated them. An API planner's automatic one is announced in
+the turn it happens in, under the turn's id, and a pruning reports only its
+end. A surface folds the phases into one compaction
 block by id. Never a subagent's, and never a task runner's: a runner's
 compaction is a `compaction` event of its task log. `Session.plannerCompaction()`
 holds the start of the one running, for a surface that joins meanwhile: the

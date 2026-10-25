@@ -465,17 +465,21 @@ describe('PlannerConversation compact', () => {
     expect(ai.continueConversation).not.toHaveBeenCalled();
   });
 
-  it('prunes bulky tool output out of the live context before asking for the summary', async () => {
-    const order: string[] = [];
-    const ai = fakeAi({
-      pruneContext: vi.fn(() => { order.push('prune'); return 10; }),
-      continueConversation: vi.fn(async () => { order.push('turn'); return summaryTurn('s'); }),
-    });
+  it('asks a planner that condenses its own context for the summary, holding no turn of its own: live where the context is, else replayed', async () => {
+    const condenseContext = vi.fn(async () => 'Condensed without a turn.');
+    const ai = fakeAi({ condenseContext, continueConversation: vi.fn() });
     const { conversation } = fakeHost(ai, threeTurnPlan());
 
-    await conversation.compact();
+    const live = await conversation.compact();
+    expect(live.summary).toBe('Condensed without a turn.');
+    expect(condenseContext.mock.calls[0]).toEqual([expect.objectContaining({ replay: undefined })]);
+    expect(ai.continueConversation).not.toHaveBeenCalled();
 
-    expect(order).toEqual(['prune', 'turn']);
+    const fresh = fakeAi({ condenseContext: vi.fn(async () => 'Condensed from the transcript.'), hasActiveConversation: () => false });
+    const { conversation: reopened } = fakeHost(fresh, threeTurnPlan());
+    await reopened.compact();
+    const [request] = vi.mocked(fresh.condenseContext!).mock.calls[0];
+    expect(request.replay?.map((m) => m.content)).toEqual(threeTurnPlan().conversationHistory!.map((m) => m.content));
   });
 
   it('shows the summary turn nothing but liveness, so its prose never lands in the chat', async () => {

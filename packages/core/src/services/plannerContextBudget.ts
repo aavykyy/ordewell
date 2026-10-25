@@ -147,16 +147,32 @@ export class TokenGauge {
 }
 
 /**
+ * How condensing by summary fared before a call was found not to fit:
+ * `not_tried` — nothing could be condensed, or this chat condenses nothing;
+ * `condensed` — a summary stands in, and still the call does not fit;
+ * `failed` — no summary could be had, and what it would have replaced stays.
+ */
+export type ContextSummaryAttempt = 'not_tried' | 'condensed' | 'failed';
+
+/**
  * The planner's next call cannot fit its model's window: pruning what may be
- * pruned left too much, or the provider refused the call as too long after
- * one more pass. What the call was to send is held by the chat, so sending
- * it again runs no tool a second time.
+ * pruned and condensing what may be condensed left too much, or the provider
+ * refused the call as too long after one more pass. What the call was to send
+ * is held by the chat, so sending it again (`ResearchChat.resend`) runs no
+ * tool a second time — the decision a recovery reads, by `summary`, before
+ * pausing the planner or trying again.
  */
 export class PlannerContextExhaustedError extends Error {
-  constructor(readonly model: string, readonly refusedByProvider: boolean, options?: { cause?: unknown }) {
-    super(`The planner's context no longer fits ${model}'s window, even after pruning older file reads. `
-      + 'Use /compact to condense the conversation, or switch the planner to a model with a larger window.', options);
+  readonly summary: ContextSummaryAttempt;
+
+  constructor(readonly model: string, readonly refusedByProvider: boolean, options?: { cause?: unknown; summary?: ContextSummaryAttempt }) {
+    const summary = options?.summary ?? 'not_tried';
+    super(`The planner's context no longer fits ${model}'s window, even after ${summary === 'condensed' ? 'pruning older file reads and condensing the conversation' : 'pruning older file reads'}. `
+      + (summary === 'condensed'
+        ? 'Switch the planner to a model with a larger window, or narrow the request.'
+        : 'Use /compact to condense the conversation, or switch the planner to a model with a larger window.'), options);
     this.name = 'PlannerContextExhaustedError';
+    this.summary = summary;
   }
 }
 
