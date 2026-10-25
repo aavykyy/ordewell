@@ -181,13 +181,28 @@ describe('webview messages reach the session through one entry point each', () =
     it.each([
       ['resumeNow', { command: 'retry_task', task: 't1', from: 'session' }],
       ['cancelResume', { command: 'cancel_resume', task: 't1' }],
-      ['markComplete', { command: 'mark_complete', task: 't1' }],
-      ['markIncomplete', { command: 'mark_not_done', task: 't1' }],
       ['forceStart', { command: 'force_start', task: 't1' }],
     ] as const)('%s reaches the command seam as the user', async (command, expected) => {
       const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
       await h.route({ type: 'sendSystemCommand', command, taskId: 't1' });
 
+      expect(execute).toHaveBeenCalledWith(expected, { kind: 'user' });
+    });
+
+    it.each([
+      ['markComplete', 'Mark complete', { command: 'mark_complete', task: 't1', confirmed: true, seen: 'pending' }],
+      ['markIncomplete', 'Mark not done', { command: 'mark_not_done', task: 't1', confirmed: true, seen: 'pending' }],
+    ] as const)('%s reaches the command seam as the user only once the modal is answered %s', async (command, yes, expected) => {
+      const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
+      showWarningMessage.mockClear();
+      showWarningMessage.mockResolvedValueOnce(undefined);
+      await h.route({ type: 'sendSystemCommand', command, taskId: 't1' });
+      expect(execute).not.toHaveBeenCalled();
+
+      showWarningMessage.mockResolvedValueOnce(yes);
+      await h.route({ type: 'sendSystemCommand', command, taskId: 't1' });
+
+      expect(showWarningMessage).toHaveBeenLastCalledWith(expect.stringContaining('?'), { modal: true }, yes);
       expect(execute).toHaveBeenCalledWith(expected, { kind: 'user' });
     });
 

@@ -880,7 +880,7 @@ describe('Session isolation actions on a landed run', () => {
     const { session, spawn } = await landed();
 
     await session.discardRun();
-    await session.execute({ command: 'mark_not_done', task: 't1' }, { kind: 'user' });
+    await session.execute({ command: 'mark_not_done', task: 't1', confirmed: true }, { kind: 'user' });
     await session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
 
     expect(spawn.mock.calls.at(-1)![0].cwd).toBe('/fake-worktrees/run2/1-t1');

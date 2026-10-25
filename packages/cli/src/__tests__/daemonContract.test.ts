@@ -15,6 +15,7 @@ import {
   type IConfig,
   type IRunner,
   type LegacyPlanState,
+  type TaskStatus,
 } from '@ordewell/core';
 import { FakeRunnerSession } from '@ordewell/core/testing';
 import { createApp } from '../../../web/server/app';
@@ -149,7 +150,7 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
       expect(pool.hasSession('session-saved')).toBe(false);
 
-      await expect(client.execute('session-saved', { command: 'mark_complete', task: 't1' })).resolves.toEqual({ ok: true, message: 'Marked task #1 "Add the limiter" complete.' });
+      await expect(client.execute('session-saved', { command: 'mark_complete', task: 't1', confirmed: true })).resolves.toEqual({ ok: true, message: 'Marked task #1 "Add the limiter" complete.' });
 
       expect(pool.hasSession('session-saved')).toBe(true);
     });
@@ -360,15 +361,16 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
     }
 
     const running = async (sessionId: string) => { await client.executePlan(sessionId); await vi.waitFor(() => expect(spawned).toHaveLength(1)); };
+    const confirmed = (effect: Effect, seen: TaskStatus): Effect => (effect.type === 'taskAction' ? { ...effect, confirmed: { seen } } : effect);
     const task = (sessionId: string, action: 'complete' | 'uncomplete' | 'skip' | 'retry' | 'cancel' | 'force-start'): Effect => ({ type: 'taskAction', sessionId, taskId: 't1', action });
 
     const controls: Control[] = [
-      { name: 'Mark complete', cli: (id) => handleMarkComplete(['--session-id', id, '1'], client), effect: (id) => task(id, 'complete'), line: 'You marked task #1 "Add the limiter" complete.' },
+      { name: 'Mark complete', cli: (id) => handleMarkComplete(['--session-id', id, '--workspace', workspace, '1'], client, async () => true), effect: (id) => confirmed(task(id, 'complete'), 'pending'), line: 'You marked task #1 "Add the limiter" complete.' },
       {
         name: 'Mark not done',
-        before: async (id) => { await client.execute(id, { command: 'mark_complete', task: 't1' }); },
-        cli: (id) => handleUncomplete(['--session-id', id, '1'], client),
-        effect: (id) => task(id, 'uncomplete'),
+        before: async (id) => { await client.execute(id, { command: 'mark_complete', task: 't1', confirmed: true }); },
+        cli: (id) => handleUncomplete(['--session-id', id, '--workspace', workspace, '1'], client, async () => true),
+        effect: (id) => confirmed(task(id, 'uncomplete'), 'completed'),
         line: 'You marked task #1 "Add the limiter" not done.',
       },
       { name: 'Skip', cli: (id) => handleSkip(['--session-id', id, '1'], client), effect: (id) => task(id, 'skip'), line: 'You skipped task #1 "Add the limiter".' },

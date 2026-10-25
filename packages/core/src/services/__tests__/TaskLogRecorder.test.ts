@@ -407,7 +407,9 @@ describe('a session’s task logs', () => {
     session.loadPlan(plan(), 'Goal', '/repo');
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     sessions[0].emitOutput('working…');
-    session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
+    await session.execute({ command: 'stop_run' }, { kind: 'user' });
+    await vi.waitFor(() => expect(session.activity.running).toBe(false));
+    void session.execute({ command: 'mark_complete', task: 't1', confirmed: true }, { kind: 'user' });
 
     await vi.waitFor(() => expect(sent.some((m) => m.type === 'status_update' && m.tasks[0]?.status === 'completed')).toBe(true));
     expect(taskLogs(sent)).toEqual([]);

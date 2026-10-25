@@ -20,6 +20,8 @@ const handlers = {
 const isolated = { branch: 'ordewell/t1', worktree: '/wt/t1', repos: ['.'] };
 const buttons = (): string[] =>
   Array.from(document.querySelectorAll('.task-actions button')).map((b) => b.textContent ?? '');
+const marks = (): string[] =>
+  Array.from(document.querySelectorAll('.task-mark-btn')).map((b) => b.textContent ?? '');
 const badge = (): Element | null => document.querySelector('.task-status-badge');
 
 describe('a task card, pinned before its rules move to core', () => {
@@ -102,7 +104,8 @@ describe('a task card, pinned before its rules move to core', () => {
     expect(buttons()).toEqual(['Skip']);
     unmount();
     render(<TaskCard task={makeTask({ status: 'skipped' })} models={[]} isExecuting expanded onExpandedChange={noop} {...handlers} />);
-    expect(buttons()).toEqual(['Mark Complete']);
+    expect(buttons()).toEqual([]);
+    expect(marks()).toEqual(['Mark complete']);
   });
 
   it('counts approvals beyond one', () => {
@@ -243,15 +246,31 @@ describe('a task card, pinned before its rules move to core', () => {
     ['blocked', 'ai', ['Skip', 'Start']],
     ['pending', 'ai', ['Start']],
     ['approved', 'ai', ['Start']],
-    ['awaiting_user', 'ai', ['Skip', 'Mark Complete']],
-    ['completed', 'ai', ['Mark Not Done']],
+    ['awaiting_user', 'ai', ['Skip']],
+    ['completed', 'ai', []],
     ['failed', 'ai', ['Skip']],
-    ['pending', 'user', ['Mark Complete']],
-    ['blocked', 'user', ['Skip', 'Mark Complete']],
-    ['completed', 'user', ['Mark Complete', 'Mark Not Done']],
+    ['pending', 'user', []],
+    ['blocked', 'user', ['Skip']],
+    ['completed', 'user', []],
   ] as const)('a running plan offers a %s %s task %j', (status, type, offered) => {
     render(<TaskCard task={makeTask({ status, type })} models={[]} isExecuting expanded onExpandedChange={noop} {...handlers} />);
     expect(buttons()).toEqual(offered);
+  });
+
+  // The one place a card marks a task: last in the expanded details, never among the action buttons.
+  it.each([
+    ['in_progress', 'ai', []],
+    ['blocked', 'ai', ['Mark complete']],
+    ['pending', 'ai', ['Mark complete']],
+    ['awaiting_user', 'ai', ['Mark complete']],
+    ['failed', 'ai', ['Mark complete']],
+    ['skipped', 'ai', ['Mark complete']],
+    ['completed', 'ai', ['Mark not done']],
+    ['pending', 'user', ['Mark complete']],
+    ['completed', 'user', ['Mark not done']],
+  ] as const)('a %s %s task marks itself with %j', (status, type, offered) => {
+    render(<TaskCard task={makeTask({ status, type })} models={[]} isExecuting expanded onExpandedChange={noop} {...handlers} />);
+    expect(marks()).toEqual(offered);
   });
 
   it.each([
@@ -276,17 +295,47 @@ describe('a subtask card, pinned before its rules move to core', () => {
   };
 
   it.each([
-    ['in_progress', 'ai', ['Cancel', 'Mark Complete']],
+    ['in_progress', 'ai', ['Cancel']],
     ['pending', 'ai', ['Force Start', 'Skip']],
     ['approved', 'ai', ['Force Start', 'Skip']],
     ['pending', 'user', ['Skip']],
-    ['awaiting_user', 'ai', ['Verify / Mark Complete']],
-    ['completed', 'ai', ['Mark Not Done']],
+    ['awaiting_user', 'ai', []],
+    ['completed', 'ai', []],
     ['blocked', 'ai', []],
     ['failed', 'ai', ['Skip']],
   ] as const)('a running plan offers a %s %s subtask %j', (status, type, offered) => {
     open(makeTask({ id: 's1', status, type }));
     expect(buttons()).toEqual(offered);
+  });
+
+  it.each([
+    ['in_progress', 'ai', []],
+    ['pending', 'ai', ['Mark complete']],
+    ['awaiting_user', 'ai', ['Mark complete']],
+    ['failed', 'ai', ['Mark complete']],
+    ['completed', 'ai', ['Mark not done']],
+    ['pending', 'user', ['Mark complete']],
+  ] as const)('a %s %s subtask marks itself with %j, at the bottom of its details only', (status, type, offered) => {
+    const { container } = render(<SubTaskCard task={makeTask({ id: 's1', status, type })} parentTask={parent} models={[]} isExecuting {...handlers} />);
+    expect(marks()).toEqual([]);
+    fireEvent.click(document.querySelector('.subtask-card-header')!);
+    expect(marks()).toEqual(offered);
+    const body = container.querySelector('.subtask-card-body') as HTMLElement;
+    for (const button of document.querySelectorAll('.task-mark-btn')) expect(body.lastElementChild?.contains(button)).toBe(true);
+  });
+
+  it('never changes completion from a subtask\'s status circle', () => {
+    const onMarkComplete = vi.fn();
+    const onMarkIncomplete = vi.fn();
+    render(<SubTaskCard task={makeTask({ id: 's1', status: 'pending' })} parentTask={parent} models={[]} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />);
+    const check = document.querySelector('.task-check') as HTMLElement;
+
+    fireEvent.click(check);
+    fireEvent.keyDown(check, { key: 'Enter' });
+
+    expect(onMarkComplete).not.toHaveBeenCalled();
+    expect(onMarkIncomplete).not.toHaveBeenCalled();
+    expect(check.className).not.toContain('clickable');
   });
 
   it.each([

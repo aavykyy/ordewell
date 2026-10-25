@@ -1,6 +1,6 @@
 export { isTaskRunning, taskStatusKind, awaitingLabel, approvalLabel, resumeLabel, resumeTime, blockedByLabel, holdLabel, skippedLabel, NOT_STARTED, WAITS_FOR_APPROVAL_LABEL } from './status';
 export type { TaskStatusKind } from './status';
-export { taskRowActions, markAction, taskActionCommand, opsEditable } from './actions';
+export { taskRowActions, markAction, taskActionCommand, overrideNeedsConfirmation, confirmedOverride, opsEditable } from './actions';
 export type { TaskRowAction, TaskRowPlacement, TaskAction } from './actions';
 export { taskRowView, namedRepos, loopRowParts, taskChatAvailable } from './view';
 export type { TaskRowUsage, TaskRowHandoff, TaskRowView, TaskRowLoop, TaskRowSubject, TaskRowIsolation, TaskRowContext, TaskRowKind } from './view';
@@ -8,8 +8,8 @@ export { patchView, savedPatchView, savedPatchViews } from '../models/Handoff';
 export type { PatchView } from '../models/Handoff';
 export { taskLogHeaderView, taskLogCommands, logContinues, logResumes } from './logHeader';
 export type { TaskLogHeaderTask, TaskLogHeaderView, TaskLogHeaderKind, TaskLogHeaderUsage } from './logHeader';
-export { titledRefs, dependentsNotice, loopLeaveNotice, pastGateConfirmation, newTaskFields, noExecutorRefusal } from './texts';
-export type { NewTaskFields } from './texts';
+export { titledRefs, dependentsNotice, loopLeaveNotice, pastGateConfirmation, manualOverrideConfirmation, manualOverrideStopFirst, newTaskFields, noExecutorRefusal } from './texts';
+export type { NewTaskFields, OverrideDirection } from './texts';
 export { assignedRunnerOf, assignmentIssue, assignmentIssueText } from '../services/AssignmentScope';
 export type { AssignmentScope, AssignmentIssue } from '../services/AssignmentScope';
 export { loopCheckState, loopCheckLabel, loopBodyRound, loopBodyLabel } from './loop';

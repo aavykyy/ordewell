@@ -5,7 +5,7 @@ import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import TaskHandoff, { HandoffPeek } from './TaskHandoff';
 import { pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope, RunTask } from '@ordewell/core';
-import { AssignmentFlag, IsolationBadges, StatusBadge, TaskActions, TaskCheck, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
+import { AssignmentFlag, IsolationBadges, StatusBadge, TaskActions, TaskCheck, TaskMarkControl, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
 import { checkLabel } from '../checkLabel';
 
@@ -102,7 +102,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
     <div className="task-with-controls subtask-with-controls">
       <div className={`subtask-card ${expanded ? 'expanded' : ''}`}>
         <div className="subtask-card-header" onClick={() => setExpanded(!expanded)}>
-          <TaskCheck row={row} taskId={task.id} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
+          <TaskCheck row={row} />
           <span className="subtask-order">{row.orderLabel}.</span>
           <span className={`task-type-badge small ${task.type}`}>
             {task.type === 'ai' ? 'AI' : 'Manual'}
@@ -221,9 +221,12 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
             {/* A usage-limit pause holds the run, which then reads as not executing. */}
             {(isExecuting || pausedOnLimit(task)) && (
               <TaskActions taskId={task.id} actions={row.actions}
-                labels={row.status === 'awaiting' ? { ...ACTION_LABELS, complete: 'Verify / Mark Complete' } : ACTION_LABELS}
-                handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart, complete: onMarkComplete, uncomplete: onMarkIncomplete }} />
+                labels={ACTION_LABELS}
+                handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart }} />
             )}
+
+            <TaskMarkControl taskId={task.id} row={row} runActive={!!isExecuting}
+              onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
           </div>
         )}
       </div>

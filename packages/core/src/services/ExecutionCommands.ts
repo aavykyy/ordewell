@@ -9,6 +9,7 @@ import { continuability } from './continuation';
 import type { GuardTarget, GuardTrip } from './LoopGuards';
 import { STOPPED_BEFORE_START, type StartAdmission } from './TaskOrchestrator';
 import { waitOf, type StartWait } from './readiness';
+import { manualOverrideConfirmation, manualOverrideStopFirst, type OverrideDirection } from '../taskRow/texts';
 
 /** One call at the command seam, as every route words it (ADR-0029). Task references are resolved here. */
 export type ExecutionCommand =
@@ -32,10 +33,16 @@ export type ExecutionCommand =
   | { command: 'skip_task'; task: string; reason?: string }
   /** The user's force start: past a failed dependency or a merge gate, queued behind dependencies still under way (ADR-0035). */
   | { command: 'force_start'; task: string }
-  /** The user vouches for the task's work, which lands as a passed verdict's would; never anyone else (ADR-0029). */
-  | { command: 'mark_complete'; task: string }
-  /** The user takes a completion back: the task is not started again, and held until it is retried or started. */
-  | { command: 'mark_not_done'; task: string }
+  /**
+   * The user vouches for the task's work, which lands as a passed verdict's
+   * would; never anyone else (ADR-0029). An AI or script task is refused while
+   * a run could advance it, and otherwise needs `confirmed`: the user's yes to
+   * {@link manualOverrideConfirmation}, which a call cannot imply. `seen` is
+   * the status the user was asked about: one that moved on since is refused.
+   */
+  | { command: 'mark_complete'; task: string; confirmed?: boolean; seen?: TaskStatus }
+  /** The user takes a completion back: the task is not started again, and held until it is retried or started. Confirmed as Mark complete is. */
+  | { command: 'mark_not_done'; task: string; confirmed?: boolean; seen?: TaskStatus }
   /** Stop a structured task's running turn, keeping its session: it then waits for the user's message. */
   | { command: 'interrupt_task'; task: string }
   /** Force send a message queued behind the running turn (ADR-0023, F1); `id` is the one `message_task` answered with. */
@@ -162,6 +169,8 @@ export interface ExecutionHost {
   hasLiveWork(): boolean;
   /** Something will start without being asked again: a start admitted and not yet claimed, or a scheduled resume. */
   startsPending(): boolean;
+  /** Something could move a task on without being asked: a start, an attempt in any phase, the scheduler or a usage-limit hold. */
+  advancesOnItsOwn(): boolean;
   /** Admit a start that waits before it claims; see {@link StartAdmission}. */
   admitStart(): StartAdmission;
   /** The task's attempt is live: starting, running or landing. */
@@ -310,6 +319,8 @@ const NO_PLAN_FOR_SCRIPT = 'There is no plan yet, so there is nowhere to add a s
 
 const SCRIPT_UNDER_HELD_PLAN = 'Your submit_plan in this reply replaces the plan as the reply ends, and would leave out a script task added now. Put the script task in the plan you submit, or call run_script once that plan has landed.';
 
+const OVERRIDE_LANDING = 'Another manual override is landing: wait for it to finish, then start or override again.';
+
 const NEVER_ALLOWS = 'answer_approval never allows. A runner asks because its mode did not cover the request, and allowing it would widen the mode the plan gave the task. Deny it with a note saying what to do instead, or escalate it to the user.';
 
 /** An act that ran and stopped short: refused, with what it did for the surface to show. */
@@ -365,6 +376,12 @@ export class ExecutionCommands {
    * them out, or a no on the card would come after a yes it never gave.
    */
   private readonly carded = new Set<string>();
+  /**
+   * The AI or script tasks whose manual override is landing. One lands at a
+   * time, and nothing starts meanwhile: a run requested under it would race
+   * the work it is landing, which was judged against a plan with no run.
+   */
+  private readonly overriding = new Set<string>();
 
   constructor(private readonly deps: ExecutionCommandsDeps) {
     this.host = deps.host;
@@ -420,6 +437,8 @@ export class ExecutionCommands {
     const first = this.prepare(command, actor, located);
     if ('refusal' in first) return this.refuse(command, actor, located, first.refusal);
     if ('nothing' in first) return { ok: true, message: first.nothing };
+    // After the call's own refusals, which name the task an override is landing.
+    if (this.overriding.size > 0 && STARTS.has(command.command)) return this.refuse(command, actor, located, OVERRIDE_LANDING);
     const tripped = this.tripped(command, actor, located);
     if (tripped) return tripped;
 
@@ -815,8 +834,8 @@ export class ExecutionCommands {
       case 'merge_all': return this.prepareMergeAll(actor);
       case 'skip_task': return this.prepareSkip(located!, actor, command.reason);
       case 'force_start': return this.prepareForceStart(located!);
-      case 'mark_complete': return this.prepareMarkComplete(located!);
-      case 'mark_not_done': return this.prepareMarkNotDone(located!);
+      case 'mark_complete': return this.prepareMarkComplete(located!, command);
+      case 'mark_not_done': return this.prepareMarkNotDone(located!, command);
       case 'interrupt_task': return this.prepareInterrupt(located!);
       case 'force_send_queued': return this.prepareQueued(located!, command.id, 'force');
       case 'remove_queued': return this.prepareQueued(located!, command.id, 'remove');
@@ -999,26 +1018,73 @@ export class ExecutionCommands {
     return `${capitalize(describe(located))} is being marked complete: its work is landing.`;
   }
 
-  private prepareMarkComplete(located: Located): Prepared {
+  /**
+   * Why an AI or script task is not the user's to override now, or null
+   * (ADR-0029). Read here in the core, so a stale click, the CLI and the API
+   * meet the same refusal; a manual task is the user's own sign-off and waits
+   * for no run. Checked before anything about the task itself: a completed
+   * task is held to it too.
+   */
+  private overrideBusy(located: Located, direction: OverrideDirection): string | null {
+    if (located.task.type === 'user') return null;
+    if (this.host.advancesOnItsOwn()) return manualOverrideStopFirst(direction, describe(located));
+    return this.overriding.size > 0 ? OVERRIDE_LANDING : null;
+  }
+
+  /**
+   * Whether the user's yes to this override is on the call, and about the task
+   * as it is: a task that moved on since they were asked is another question.
+   */
+  private overrideUnconfirmed(located: Located, command: Extract<ExecutionCommand, { command: 'mark_complete' | 'mark_not_done' }>): string | null {
+    const { task } = located;
+    if (task.type === 'user') return null;
+    const label = describe(located);
+    if (command.seen !== undefined && command.seen !== task.status) {
+      return `${capitalize(label)} has changed since you were asked: it ${statusWords(task)}. Nothing was changed; look at it again before deciding.`;
+    }
+    if (command.confirmed === true) return null;
+    return `${manualOverrideConfirmation(command.command === 'mark_complete' ? 'complete' : 'uncomplete', label)} Nothing was changed: it needs the user's explicit yes, so ask them and send the command again with "confirmed": true.`;
+  }
+
+  /** The act of an override: the one landing while it awaits, so a start or a second override sees it. */
+  private async overriddenBy(located: Located, act: () => Promise<void>): Promise<void> {
+    if (located.task.type === 'user') return act();
+    this.overriding.add(located.task.id);
+    try {
+      await act();
+    } finally {
+      this.overriding.delete(located.task.id);
+    }
+  }
+
+  private prepareMarkComplete(located: Located, command: Extract<ExecutionCommand, { command: 'mark_complete' }>): Prepared {
     const { task } = located;
     const label = describe(located);
+    const busy = this.overrideBusy(located, 'complete');
+    if (busy) return { refusal: busy };
     if (task.status === 'completed') return { refusal: `${capitalize(label)} has already completed.` };
     if (this.completingRefusal(located)) return { refusal: `${capitalize(label)} is already being marked complete: its work is landing.` };
+    const unconfirmed = this.overrideUnconfirmed(located, command);
+    if (unconfirmed) return { refusal: unconfirmed };
     return {
       act: async () => {
-        await this.host.markComplete(task.id);
+        await this.overriddenBy(located, () => this.host.markComplete(task.id));
         // A landing that conflicts leaves the task for the user to resolve, and its row says so.
         return { message: this.located(task.id)?.task.status === 'completed' ? `Marked ${label} complete.` : `Marked ${label} complete, but its work could not land yet: its row says why.` };
       },
     };
   }
 
-  private prepareMarkNotDone(located: Located): Prepared {
+  private prepareMarkNotDone(located: Located, command: Extract<ExecutionCommand, { command: 'mark_not_done' }>): Prepared {
     const label = describe(located);
+    const busy = this.overrideBusy(located, 'uncomplete');
+    if (busy) return { refusal: busy };
     if (located.task.status !== 'completed') return { refusal: `${capitalize(label)} has not completed, so there is nothing to mark not done.` };
+    const unconfirmed = this.overrideUnconfirmed(located, command);
+    if (unconfirmed) return { refusal: unconfirmed };
     return {
       act: async () => {
-        await this.host.markNotDone(located.task.id);
+        await this.overriddenBy(located, () => this.host.markNotDone(located.task.id));
         return { message: `Marked ${label} not done: it waits until you retry or start it.` };
       },
     };

@@ -261,7 +261,6 @@ describe('execution', () => {
 
 describe('task control', () => {
   const cases: [string, Effect][] = [
-    ['/complete task-a', { type: 'taskAction', sessionId: 'session-1', taskId: 'task-a', action: 'complete' }],
     ['/skip task-a', { type: 'taskAction', sessionId: 'session-1', taskId: 'task-a', action: 'skip' }],
     ['/retry task-a', { type: 'taskAction', sessionId: 'session-1', taskId: 'task-a', action: 'retry', watch: true }],
     ['/cancel task-a', { type: 'taskAction', sessionId: 'session-1', taskId: 'task-a', action: 'cancel' }],

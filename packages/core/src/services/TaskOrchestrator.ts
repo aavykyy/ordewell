@@ -660,6 +660,18 @@ export class TaskOrchestrator {
     };
   }
 
+  /**
+   * Whether anything could still move a task on without being asked: a start
+   * on its way, an attempt in any phase (starting, running, integrating), a
+   * scheduler driving the plan, a usage-limit hold or a scheduled resume. What
+   * a manual override of an AI or script task must not race (ADR-0029). A run
+   * that ended on a failure is not here: nothing advances until a retry or
+   * skip, so overriding the failed task is the way out.
+   */
+  get advancesOnItsOwn(): boolean {
+    return this.startsPending || this.attempts.size > 0 || this.isScheduling || this.runState.kind === 'held';
+  }
+
   /** A start admitted now that nothing has to count as live work: one that claims before it awaits, or follows on from one that did. */
   private admittedNow(): Admitted {
     const generation = this.stopGeneration;
