@@ -426,15 +426,16 @@ describe('PlannerConversation compact', () => {
     expect(state.plan!.conversationHistory!.at(-1)!.content).toContain('kept');
   });
 
-  it('announces the condensed conversation, summary included, and drops the live context', async () => {
+  it('announces the condensed conversation through the transcript and its own lifecycle, and drops the live context', async () => {
     const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(summaryTurn('the state')) });
-    const { conversation, host } = fakeHost(ai, threeTurnPlan());
+    const { conversation, host, state } = fakeHost(ai, threeTurnPlan());
 
     await conversation.compact();
 
-    expect(host.broadcast).toHaveBeenCalledWith(expect.objectContaining({ type: 'planner_message', content: expect.stringContaining('the state') }));
-    expect(vi.mocked(host.broadcast).mock.calls[0][0]).toMatchObject({ content: expect.stringMatching(/condensed/i) });
+    expect(host.broadcast).not.toHaveBeenCalled();
     expect(host.broadcastPlan).toHaveBeenCalled();
+    expect(state.plan!.conversationHistory!.at(-1)).toMatchObject({ kind: 'compaction', content: expect.stringMatching(/condensed[\s\S]*the state/i) });
+    expect(vi.mocked(host.onProgress).mock.calls.map(([p]) => p.compaction?.phase)).toEqual(['started', 'ended']);
     expect(ai.reset).toHaveBeenCalled();
   });
 
@@ -489,8 +490,7 @@ describe('PlannerConversation compact', () => {
 
     await conversation.compact();
 
-    expect(host.onProgress).toHaveBeenCalledTimes(1);
-    expect(host.onProgress).toHaveBeenCalledWith({ type: 'liveness' });
+    expect(vi.mocked(host.onProgress).mock.calls.map(([p]) => p.type)).toEqual(['compaction', 'liveness', 'compaction']);
   });
 });
 
@@ -512,6 +512,7 @@ describe('PlannerConversation compact failure', () => {
     expect(state.plan!.conversationHistory).toEqual(before);
     expect(state.persists).toBe(0);
     expect(host.broadcast).not.toHaveBeenCalled();
+    expect(vi.mocked(host.onProgress).mock.calls.at(-1)?.[0].compaction).toMatchObject({ phase: 'ended', outcome: 'failed' });
     expect(conversation.isTurnInFlight).toBe(false);
   });
 

@@ -1,4 +1,4 @@
-import type { ResearchStepOutcome, SkillLoadNotice, SubagentOutcome } from '../models/Task';
+import type { PlannerCompaction, PlannerCompactionOutcome, ResearchStepOutcome, SkillLoadNotice, SubagentOutcome } from '../models/Task';
 import type { StoredHandoff } from '../models/Handoff';
 import type { ContextFill, ModelUsage, UsageTotals } from '../models/Usage';
 import type { ApprovalKind } from '../interfaces/IApproval';
@@ -179,13 +179,31 @@ export interface CommandBlock {
   output: string;
 }
 
-/** The runner compacted its own context: asked to (`/compact`) or on its own. */
+/** How a planner compaction stands: `running` until its end is heard. */
+export type CompactionStatus = 'running' | PlannerCompactionOutcome;
+
+/**
+ * A context compaction: asked for (`/compact`) or done on its own. In a task's
+ * log it is the runner's, done when drawn, and carries none of the planner's
+ * fields. In the planner conversation it is one compaction's lifecycle,
+ * matched by `compactionId` (ADR-0017): a quiet line while it runs and after,
+ * its summary there to open, never shown whole.
+ */
 export interface CompactionBlock {
   type: 'compaction';
   id: string;
   trigger: 'manual' | 'auto';
+  /** Only as a backend reported them. */
   preTokens?: number;
   postTokens?: number;
+  /** The planner's compaction: its event id, which a checkpoint written by it shares. */
+  compactionId?: string;
+  /** `native`: a harness planner compacted its own context; `ordewell`: Ordewell condensed or pruned what it replays. */
+  origin?: PlannerCompaction['origin'];
+  status?: CompactionStatus;
+  /** What a condensed compaction's checkpoint says, for a surface to show on request. */
+  summary?: string;
+  turnId?: string;
 }
 
 /**

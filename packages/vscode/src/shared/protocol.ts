@@ -91,7 +91,7 @@ export interface ConversationPatch {
   order: readonly string[];
   changed: readonly DisplayBlock[];
   /**
-   * The view was replaced (a reset, a reload, a compaction): ids are numbered
+   * The view was replaced (a reset, a reload): ids are numbered
    * afresh, so one the webview kept may name a different block now.
    */
   replaced?: true;
@@ -252,7 +252,6 @@ export type HostToWebview =
    * arrives as a `conversationPatch`.
    */
   | { type: 'restoreChat' }
-  | { type: 'conversationBusy'; busy: boolean }
   /**
    * Every installed runner's account limits as the host's monitor last read
    * them, sent on each change and on ready. Live account data: it outlives a

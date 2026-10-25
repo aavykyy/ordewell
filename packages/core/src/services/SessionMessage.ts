@@ -1,4 +1,4 @@
-import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, PendingPlanTurn, ReplyRun, ResearchStep, RunnerId, RunSettings, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
+import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, PendingPlanTurn, PlannerCompaction, ReplyRun, ResearchStep, RunnerId, RunSettings, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
 import type { SessionBilling, AttemptUsage, ContextFill, ModelUsage, PlanUsage, UsageTotals } from '../models/Usage';
 import type { ExecutionRecord } from '../models/Execution';
 import type { TaskLoop } from '../models/Loop';
@@ -291,6 +291,15 @@ export type SessionMessage =
    * planner; `usage` is its own share, already counted in `planner_usage`.
    */
   | { type: 'subagent_finished'; turnId?: string; subagentId: string; outcome: SubagentOutcome; digest: string; usage?: UsageTotals }
+  /**
+   * One phase of a planner compaction (see {@link PlannerCompaction}); never a
+   * subagent's, nor a task runner's. A surface folds both phases into one
+   * block by `compaction.id`, and a repeat of either changes nothing. A
+   * condensed one's summary arrives in the transcript, its checkpoint carrying
+   * the same id. `turnId`: the turn it happened in; absent for a `/compact`,
+   * which is no user turn. A fact, not a turn's stream: a stop never cuts it off.
+   */
+  | { type: 'planner_compaction'; compaction: PlannerCompaction; turnId?: string }
   | { type: 'status_update'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; activity?: RunActivity }
   | { type: 'review_needed'; tasks: SerializedTask[] }
   | { type: 'review_approved' }

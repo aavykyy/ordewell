@@ -167,6 +167,7 @@ export function reduceRun(view: RunView, input: RunInput): RunView {
     case 'planner_text_retracted':
     case 'planner_usage':
     case 'planner_liveness':
+    case 'planner_compaction':
     case 'subagent_started':
     case 'subagent_finished':
     case 'research_step':

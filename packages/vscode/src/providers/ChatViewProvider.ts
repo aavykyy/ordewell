@@ -103,18 +103,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.conversation.reload(saved);
   }
 
-  /**
-   * Redraw only the conversation, after a compaction edited it. Unlike
-   * `restoreChat` this leaves the plan, task output and isolation state alone,
-   * because a compaction is allowed while a run is executing.
-   */
-  replaceConversation(saved: SavedConversation): void {
-    this.conversation.reload(saved);
-  }
-  /** Lock the input while core is refusing planner messages (a compaction in flight). */
-  setConversationBusy(busy: boolean): void {
-    this.postMessage({ type: 'conversationBusy', busy });
-  }
 
   planApproved(): void { this.setState('approved'); }
 

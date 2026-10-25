@@ -15,6 +15,8 @@ import { surfaceStep } from '../conversation/records';
 import { planUsage } from '../models/Usage';
 import type { LegacyPlanState, ResearchProgress } from '../models/Task';
 
+type PlannerCompactionMessage = Extract<SessionMessage, { type: 'planner_compaction' }>;
+
 export interface SessionEventRelayDeps {
   broadcast: SessionBroadcaster;
   /** Where isolation notices go, for a host whose notifications are not seen by the user. */
@@ -66,6 +68,8 @@ export class SessionEventRelay {
   private statusOwed = false;
   /** The planner's requests announced and not yet settled, as they were announced: a surface joining now is owed them. */
   private readonly announced = new Map<string, Extract<SessionMessage, { type: 'approval_request' }>>();
+  /** The planner compaction started and not yet ended, as it was announced: a surface joining now is owed it too. */
+  private compacting: PlannerCompactionMessage | undefined;
 
   constructor(deps: SessionEventRelayDeps) {
     this.broadcast = deps.broadcast;
@@ -174,6 +178,11 @@ export class SessionEventRelay {
     return [...this.announced.values()];
   }
 
+  /** The planner compaction running now, as its start was announced; undefined when none is. */
+  currentCompaction(): PlannerCompactionMessage | undefined {
+    return this.compacting;
+  }
+
   executionComplete(plan: LegacyPlanState | null): void {
     if (!plan) return;
     this.broadcast({ type: 'execution_complete', summary: executionSummary(this.store.allTasks) });
@@ -238,6 +247,15 @@ export class SessionEventRelay {
         if (!progress.record) return;
         this.usage.record(progress.record);
         this.broadcast(this.usage.message(turnId));
+        return;
+      }
+      case 'compaction': {
+        const { compaction } = progress;
+        if (!compaction) return;
+        const message: PlannerCompactionMessage = { type: 'planner_compaction', compaction, ...(turnId ? { turnId } : {}) };
+        if (compaction.phase === 'started') this.compacting = message;
+        else if (this.compacting?.compaction.id === compaction.id) this.compacting = undefined;
+        this.broadcast(message);
         return;
       }
       case 'interrupted':

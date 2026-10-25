@@ -62,7 +62,7 @@ function makeSession(workspace: string): Session {
 describe('fork, rewind and compact through the VS Code conversation module', () => {
   let workspace: string;
   let current: Session;
-  let chat: { showError: ReturnType<typeof vi.fn>; replaceConversation: ReturnType<typeof vi.fn>; setConversationBusy: ReturnType<typeof vi.fn> };
+  let chat: { showError: ReturnType<typeof vi.fn> };
   let persistState: ReturnType<typeof vi.fn>;
 
   const deps = (): ConversationDeps => ({
@@ -78,7 +78,7 @@ describe('fork, rewind and compact through the VS Code conversation module', () 
 
   beforeEach(() => {
     workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-vscode-flow-'));
-    chat = { showError: vi.fn(), replaceConversation: vi.fn(), setConversationBusy: vi.fn() };
+    chat = { showError: vi.fn() };
     persistState = vi.fn();
     for (const fn of [executeCommand, withProgress, showWarningMessage]) fn.mockReset();
     withProgress.mockImplementation(async (_o: unknown, task: (p: unknown, t: unknown) => Promise<unknown>) =>
@@ -120,7 +120,7 @@ describe('fork, rewind and compact through the VS Code conversation module', () 
     const condensed = saved(rewoundId).conversationHistory!;
     expect(condensed.slice(0, -1).map((m) => m.content)).toEqual(contents(originalBefore).slice(0, 6));
     expect(condensed.at(-1)).toMatchObject({ kind: 'compaction', content: expect.stringContaining(SUMMARY) });
-    expect(chat.replaceConversation.mock.lastCall![0].conversationHistory.at(-1)).toMatchObject({ kind: 'compaction' });
+    expect(persistState).toHaveBeenCalled();
 
     await rewindConversation(deps(), '0');
     expect(chat.showError).toHaveBeenCalledWith(expect.stringMatching(/Could not rewind.*goal/));
@@ -138,6 +138,6 @@ describe('fork, rewind and compact through the VS Code conversation module', () 
     await compactConversation(deps());
 
     expect(chat.showError).toHaveBeenCalledTimes(3);
-    expect(chat.replaceConversation).not.toHaveBeenCalled();
+    expect(persistState).not.toHaveBeenCalled();
   });
 });

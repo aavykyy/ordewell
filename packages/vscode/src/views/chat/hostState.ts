@@ -33,7 +33,6 @@ export interface HostState {
   plan: SurfacePlan | null;
   isExecuting: boolean;
   isResearchActive: boolean;
-  conversationBusy: boolean;
   error: string;
   models: DiscoveredModel[];
   modelsByRunner: Partial<Record<string, DiscoveredModel[]>>;
@@ -128,7 +127,6 @@ export const INITIAL_HOST_STATE: HostState = {
   plan: null,
   isExecuting: false,
   isResearchActive: false,
-  conversationBusy: false,
   error: '',
   models: [],
   modelsByRunner: {},
@@ -331,8 +329,9 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     case 'restoreChat':
       return { ...resetSession(state, 'restore'), conversationEpoch: state.conversationEpoch + 1 };
 
-    // A new session or a cleared plan empties the conversation first; a
-    // compaction replaces it with blocks renumbered from the start.
+    // A new session or a cleared plan empties the conversation first; a reload
+    // replaces it with blocks renumbered from the start. A compaction does
+    // neither: it folds in where it happened (ADR-0017).
     case 'conversationPatch':
       return {
         ...state,
@@ -349,9 +348,6 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     case 'plannerTurnAlive':
       if (!state.turnLost || state.stopped) return state;
       return { ...state, isResearchActive: true, turnLost: false };
-
-    case 'conversationBusy':
-      return { ...state, conversationBusy: !!action.busy };
 
     case 'showError':
       if (state.sessionCleared) return state;

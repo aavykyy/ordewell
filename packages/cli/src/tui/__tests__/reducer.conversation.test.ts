@@ -307,7 +307,7 @@ describe('/compact', () => {
     expect(run('/compact', { ...planned, status: 'executing' }).effects).toEqual([{ type: 'compactConversation', sessionId: 'session-1' }]);
   });
 
-  it('shows the summary entry as a system note, not a spoken turn', () => {
+  it('shows the summary entry as a compaction, not a spoken turn', () => {
     const history = [
       { role: 'assistant' as const, content: 'Conversation condensed: …\n\nGoal: a parser', timestamp: '2026-01-02T00:00:00Z', kind: 'compaction' as const },
       { role: 'user' as const, content: 'add CSV', timestamp: '2026-01-02T00:00:01Z' },
@@ -315,8 +315,8 @@ describe('/compact', () => {
 
     const { state } = reduce(initialState(planned), { type: 'chatRestored', history, sessionId: 'session-1' });
 
-    expect(messagesOf(state).map((m) => [m.role, m.text])).toEqual([
-      ['system', 'Conversation condensed: …\n\nGoal: a parser'],
+    expect(state.conversation.blocks.map((b) => (b.type === 'message' ? [b.role, b.text] : b.type === 'compaction' ? ['compaction', b.summary] : [b.type]))).toEqual([
+      ['compaction', 'Conversation condensed: …\n\nGoal: a parser'],
       ['user', 'add CSV'],
     ]);
   });

@@ -1,8 +1,9 @@
 import type { ReplyRun, ResearchStep } from '../models/Task';
-import type { SerializedPendingTurn, SessionMessage } from '../services/SessionMessage';
+import type { SerializedConversationMessage, SerializedPendingTurn, SessionMessage } from '../services/SessionMessage';
 import { isMeasured } from '../models/Usage';
-import type { DisplayBlock, MessageBlock, MessageRole, PlanBlock, ToolBlock } from './blocks';
-import { pendingTool, planMarker, settledMessage, settledTool, skillLoadBlock, toolFromStep, userMessage } from './records';
+import { isCheckpoint } from '../services/conversationSummary';
+import type { CompactionBlock, DisplayBlock, MessageBlock, MessageRole, PlanBlock, ToolBlock } from './blocks';
+import { compactionBlock, pendingTool, planMarker, settledMessage, settledTool, skillLoadBlock, toolFromStep, userMessage } from './records';
 import {
   append, appendOutput, closeOpenBlocks, findLastIndex, laneBlocks, laneOf, laneAppend, laneReplace, replaceAt, sealLane, sealed, setUsageLine,
   think, updateSubagent, type BlockList,
@@ -306,13 +307,58 @@ function endTurn(view: ConversationView, { turnId, outcome }: Message<'planner_t
   return closeOpenBlocks(next, outcome === 'stopped' ? 'stopped' : outcome === 'error' ? 'failed' : null);
 }
 
-// The summary is announced as a planner message before the transcript it now
-// heads arrives; the transcript records it as a notice, and so does the view.
-function markCompaction(view: ConversationView, summary: string): ConversationView {
+function compactionAt(view: ConversationView, compactionId: string): number {
+  return findLastIndex(view.blocks, (b) => b.type === 'compaction' && b.compactionId === compactionId);
+}
+
+/**
+ * One phase of a planner compaction, folded by its id so a surface that hears
+ * a phase twice, or the transcript first, still draws one block. Once ended it
+ * stays as it ended: a late or repeated phase never reopens it, and one that
+ * had nothing to do leaves nothing behind. Only an end that changed something
+ * draws a block the view never saw start: a harness planner reports nothing else.
+ */
+function followCompaction(view: ConversationView, { compaction, turnId }: Message<'planner_compaction'>): ConversationView {
+  const i = compactionAt(view, compaction.id);
+  const at = view.blocks[i];
+  const known = at?.type === 'compaction' ? at : undefined;
+  if (compaction.phase === 'started') {
+    if (known) return view;
+    return append(view, (id) => compactionBlock(id, { compactionId: compaction.id, origin: compaction.origin, trigger: compaction.trigger, status: 'running', turnId }));
+  }
+  const { outcome, preTokens, postTokens } = compaction;
+  if (known && known.status !== 'running') return view;
+  if (outcome === 'unchanged') return known ? { ...view, blocks: view.blocks.filter((_, n) => n !== i) } : view;
+  // One that changed nothing is news only to a view that saw it start.
+  if (!known && (outcome === 'stopped' || outcome === 'failed')) return view;
+  const ended = (id: string) => compactionBlock(id, {
+    compactionId: compaction.id, origin: compaction.origin, trigger: compaction.trigger, status: outcome, preTokens, postTokens, turnId: known?.turnId ?? turnId,
+  });
+  return known ? { ...view, blocks: replaceAt(view.blocks, i, ended(known.id)) } : append(view, ended);
+}
+
+/**
+ * A compaction entry in the transcript: the checkpoint its compaction wrote,
+ * matched by id, now has the summary to show. An entry without one is from a
+ * daemon that announced the summary as a turnless planner message first; that
+ * message becomes the block.
+ */
+function markCompaction(view: ConversationView, entry: SerializedConversationMessage): ConversationView {
+  const { content: summary } = entry;
+  const checkpoint = isCheckpoint(entry.checkpoint) ? entry.checkpoint : undefined;
+  if (checkpoint) {
+    const i = compactionAt(view, checkpoint.id);
+    const known = view.blocks[i];
+    if (known?.type !== 'compaction') {
+      return append(view, (id) => compactionBlock(id, { compactionId: checkpoint.id, origin: 'ordewell', trigger: checkpoint.trigger, status: 'condensed', summary }));
+    }
+    if (known.status === 'condensed' && known.summary === summary) return view;
+    return { ...view, blocks: replaceAt(view.blocks, i, { ...known, status: 'condensed', summary } satisfies CompactionBlock) };
+  }
+  const settled = (id: string) => compactionBlock(id, { origin: 'ordewell', trigger: 'manual', status: 'condensed', summary });
   const i = findLastIndex(view.blocks, (b) => b.type === 'message' && b.role === 'planner' && b.turnId === undefined && b.text === summary);
   const announced = view.blocks[i];
-  if (announced?.type === 'message') return { ...view, blocks: replaceAt(view.blocks, i, { ...announced, role: 'system' }) };
-  return append(view, (id) => settledMessage(id, 'system', summary));
+  return announced ? { ...view, blocks: replaceAt(view.blocks, i, settled(announced.id)) } : append(view, settled);
 }
 
 function syncTranscript(view: ConversationView, { plan, turnId }: Message<'plan_generated'>): ConversationView {
@@ -330,7 +376,7 @@ function syncTranscript(view: ConversationView, { plan, turnId }: Message<'plan_
     if (isNew && entry.kind === 'plan_generated') next = markPlan(next, entry.content, i === committed ? turnId : undefined);
     if (isNew && entry.kind === 'system') next = append(next, (id) => settledMessage(id, 'system', entry.content));
     if (isNew && entry.kind === 'error') next = append(next, (id) => settledMessage(id, 'error', entry.content));
-    if (isNew && entry.kind === 'compaction') next = markCompaction(next, entry.content);
+    if (isNew && entry.kind === 'compaction') next = markCompaction(next, entry);
     if (latest === undefined || entry.timestamp > latest) latest = entry.timestamp;
   }
   return next === view && latest === view.transcriptAt ? view : { ...next, transcriptAt: latest };
@@ -399,6 +445,8 @@ export function reduceConversation(view: ConversationView, input: ConversationIn
       return append(view, (id) => settledMessage(id, 'system', input.text));
     case 'planner_usage':
       return reportUsage(view, input);
+    case 'planner_compaction':
+      return followCompaction(view, input);
     default:
       return view;
   }

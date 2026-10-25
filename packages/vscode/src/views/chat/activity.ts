@@ -23,8 +23,10 @@ function isActivity(block: DisplayBlock): boolean {
     case 'tool':
     case 'subagent':
     case 'runner_loaded':
-    case 'compaction':
       return true;
+    // A runner's, in its task's log; the planner's stands on its own line, as a plan marker does.
+    case 'compaction':
+      return block.origin === undefined;
     case 'skill_load':
       return block.invokedBy === 'planner';
     case 'approval':

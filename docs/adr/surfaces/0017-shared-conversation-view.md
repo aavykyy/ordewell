@@ -104,7 +104,7 @@ own presentation; it never re-derives the conversation from raw messages.
   digest. The TUI keeps one detail toggle, ctrl+o, that shows every block's
   arguments, full output, subagent children and digests at once. VS Code folds
   each run of activity between two messages — thinking, calls, subagents,
-  setup notices, compaction notices, answered approvals — into one line that
+  setup notices, a runner's compaction notices, answered approvals — into one line that
   says what it did (`Ran 4 commands, fetched 2 pages (2 failed)`), counted
   from the blocks' own facts: a call by its kind and how it ended, and never
   as run when it was refused, denied or not executed (`1 command denied`,
@@ -125,9 +125,35 @@ own presentation; it never re-derives the conversation from raw messages.
   once, in its head, with no arguments block repeating it. What is open
   is surface state, keyed on block ids that stay stable for as long as the
   block exists — a run by the ids of the blocks it holds — never stored in
-  core, and dropped when the conversation is replaced (a new session, a
-  reload, a compaction, whose blocks are numbered afresh) or another attempt
-  is shown.
+  core, and dropped when the conversation is replaced (a new session or a
+  reload, whose blocks are numbered afresh) or another attempt is shown. A
+  compaction replaces nothing (C1), so what was open stays open.
+- **A compaction is one quiet block where it happened (C1).** The planner's
+  compaction reaches a surface as `planner_compaction`, one phase at a time
+  under one stable id. Ordewell's own announces `started`, then `ended` with
+  its outcome (condensed, pruned, unchanged, stopped, failed or paused), and
+  the checkpoint a condensed one writes carries the same id (ADR-0002). A
+  harness planner's native compaction is reported only as `ended`, with the
+  sizes it stated, because that is all its protocol says: no start, summary or
+  size is invented, and a subagent's never reaches the planner's view. The
+  view folds both phases and the transcript entry into one `compaction` block
+  by that id, so a phase heard twice, or the transcript first, draws one
+  block; an end that changed nothing draws nothing in a view that never saw it
+  start, one that had nothing to do takes its block back, and a turn cut short
+  closes one still running. While it runs a surface says so (`Compacting
+  context…`) where it says a turn is working, and the planner is held as in a
+  turn: Stop stops it and a message waits for it. Once over it is a quiet line
+  of its own, outside any fold (`Context compacted`, with sizes only when both
+  were reported), worded once in core (`compactionText`); its summary opens
+  from it and is never shown whole, and no notification announces a routine
+  success. The transcript keeps every message (ADR-0002), so nothing is
+  rebuilt: the draft, the scroll position, task output and what was open stay.
+  A reload draws the same block from the transcript, a legacy summary first as
+  before. A native or pruning compaction is display-only: never written, so it
+  never touches what the planner replays. A surface that joins while one runs
+  is owed its start, which `Session.plannerCompaction()` holds until its end,
+  as announced approvals are held. The TUI draws the block from the transcript
+  it redraws once `/compact` answers.
 
 ### Queued prompts
 
@@ -227,3 +253,4 @@ the same word.)
 - 2026-10-25 — VS Code folds each run of activity into one summarised line, opened a level at a time, in place of its expand-all button; the TUI keeps ctrl+o (X1). A long turn's rows buried the prose between them, and showing everything was the only way to see one row in full.
 - 2026-10-25 — a script task's log is drawn whole, unfolded; a summary never counts a call that did not run as run and keeps a denied approval; a failed line is coloured; a compaction drops what was open (X1). Found in review: a failing script's output was hidden behind one closed line, and a denied command read `Ran a command`.
 - 2026-10-25 — a denial is counted once, on the call it stopped when that call is in the line, and a script row draws its command once (X1). Found in review: a runner's denied command read `Ran a command (1 failed)` beside its denied approval, and a planner's denial was counted twice.
+- 2026-10-25 — a planner compaction is one quiet block folded in by id where it happened, with its start and end announced, Stop and queued messages as in a turn, and nothing rebuilt (C1). Before it, `/compact` rebuilt the whole VS Code conversation, collapsing what was open, behind a progress notification and a success popup, and a harness planner's own compaction was not shown at all.

@@ -16,6 +16,7 @@ function timeline(view: ConversationView): string[] {
     if (b.type === 'message') return [`${b.role}: ${b.text}`];
     if (b.type === 'tool') return [`tool: ${b.headline.name}`];
     if (b.type === 'plan') return [`plan: ${b.status}`];
+    if (b.type === 'compaction') return [`compaction: ${b.summary}`];
     return [];
   });
 }
@@ -146,7 +147,7 @@ describe('a compaction over replies that kept runs', () => {
   it('opens on the summary with the kept runs among the kept research, and none of the condensed research', () => {
     const view = reloaded([summary, keptUser, keptSaid], [...oldResearch, ...keptResearch]);
     expect(timeline(view)).toEqual([
-      'system: Summary of everything so far.',
+      'compaction: Summary of everything so far.',
       'user: what does it say?',
       'planner: I will read it.',
       'tool: Read',

@@ -584,9 +584,22 @@ export class CliAgentAiService implements IAiService {
           backgroundAgents++;
           return;
 
-        case 'compaction':
+        // Adapters drop a subagent's or another thread's, so this is the
+        // planner's own. Native compaction reports only that it is done, and
+        // its sizes when it gives them: nothing here invents a start (ADR-0017).
+        case 'compaction': {
           this.compacted++;
+          const { trigger, preTokens, postTokens } = event;
+          onProgress({
+            type: 'compaction',
+            compaction: {
+              phase: 'ended', id: uuidv4(), origin: 'native', trigger, outcome: 'condensed', at: new Date().toISOString(),
+              ...(preTokens !== undefined ? { preTokens } : {}),
+              ...(postTokens !== undefined ? { postTokens } : {}),
+            },
+          });
           return;
+        }
 
         case 'permission_request': {
           // Announced so the user can see the planner reached for something it

@@ -46,7 +46,8 @@ export function condensedNotice(summary: string): string {
   ].join('\n');
 }
 
-function isCheckpoint(value: unknown): value is ContextCheckpoint {
+/** A saved or received checkpoint as it must be to be trusted: anything else is read as a plain marker. */
+export function isCheckpoint(value: unknown): value is ContextCheckpoint {
   if (!value || typeof value !== 'object') return false;
   const { id, keptFrom, trigger } = value as Record<string, unknown>;
   return typeof id === 'string' && id !== '' && Number.isInteger(keptFrom) && (trigger === 'manual' || trigger === 'auto');

@@ -2,8 +2,9 @@ import type { ResearchLogEntry, ResearchStep, SkillLoadNotice, SubagentLogEntry 
 import type { SerializedConversationMessage, SerializedPendingTurn } from '../services/SessionMessage';
 import { isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
 import type { DisplayBlock, MessageRole } from './blocks';
-import { planMarker, settledMessage, skillLoadBlock, skillLoadNotice, subagentBlock, toolFromStep, usageBlock, userMessage } from './records';
+import { compactionBlock, planMarker, settledMessage, skillLoadBlock, skillLoadNotice, subagentBlock, toolFromStep, usageBlock, userMessage } from './records';
 import type { ConversationView } from './reduce';
+import { isCheckpoint } from '../services/conversationSummary';
 
 /** One top-level block before it has an id, and where it falls in time. */
 interface Placed {
@@ -24,13 +25,19 @@ function fromEntry(entry: SerializedConversationMessage, loaded: readonly SkillL
     const { skill } = entry;
     return (id) => skillLoadBlock(id(), skillLoadNotice(skill));
   }
+  if (entry.kind === 'compaction') {
+    const checkpoint = isCheckpoint(entry.checkpoint) ? entry.checkpoint : undefined;
+    return (id) => compactionBlock(id(), {
+      compactionId: checkpoint?.id, origin: 'ordewell', trigger: checkpoint?.trigger ?? 'manual', status: 'condensed', summary: entry.content,
+    });
+  }
   if (entry.role === 'user' && !entry.kind) return (id) => userMessage(id(), entry.content, loaded.map(skillLoadNotice), { forced: entry.forced });
   return (id) => settledMessage(id(), roleOf(entry), entry.content);
 }
 
 function roleOf(entry: SerializedConversationMessage): MessageRole {
   switch (entry.kind) {
-    case 'system': case 'compaction': case 'execution': return 'system';
+    case 'system': case 'execution': return 'system';
     case 'wake_up': return 'wake_up';
     case 'supervisor': return 'supervisor';
     case 'error': return 'error';
@@ -120,7 +127,7 @@ function research(log: readonly ResearchLogEntry[]): Placed[] {
 /**
  * The view a saved session reopens with: what its transcript and research log
  * kept, in the order it happened — messages, each reply run by run where it
- * began, notices and the compaction summary, plan markers, tool calls with
+ * began, notices and each compaction's block, plan markers, tool calls with
  * each subagent's calls nested under it, and the token line. Reasoning and
  * streamed text that never settled were never saved, so a reload has none.
  *

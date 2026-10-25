@@ -4,6 +4,8 @@ import type { ConversationTurn, IAiService } from '../AiService';
 import type { SessionMessage } from '../SessionMessage';
 import { ConversationBusyError, ConversationEditError } from '../PlannerConversation';
 import { makeSession, testWorkspace, saves } from './sessionTestKit';
+import { fromTranscript } from '../../conversation/transcript';
+import { reduceConversation } from '../../conversation/reduce';
 
 const GOAL = 'build me a parser';
 
@@ -93,8 +95,8 @@ describe('Session.compactConversation', () => {
     const saved = saves(session).mock.calls.at(-1)![0];
     expect(saved.conversationHistory).toHaveLength(7);
     expect(saved.tasks.map((t) => t.id)).toEqual(['t1', 't2']);
-    const notice = broadcast.mock.calls.map(([m]) => m).find((m) => m.type === 'planner_message');
-    expect(notice).toMatchObject({ type: 'planner_message', content: expect.stringContaining(SUMMARY_TEXT) });
+    // The summary reaches a surface in the transcript, under the compaction's own id — never as something the planner said.
+    expect(broadcast.mock.calls.map(([m]) => m).find((m) => m.type === 'planner_message')).toBeUndefined();
     const planEvent = broadcast.mock.calls.map(([m]) => m).filter((m) => m.type === 'plan_generated').at(-1);
     expect(planEvent?.type === 'plan_generated' && planEvent.plan.conversationHistory).toHaveLength(7);
   });
@@ -256,7 +258,8 @@ describe('Session.compactConversation', () => {
 
     expect(session.planState!.conversationHistory).toEqual(plannedDialogue().conversationHistory);
     expect(saves(session)).not.toHaveBeenCalled();
-    expect(broadcast).not.toHaveBeenCalled();
+    expect(broadcast.mock.calls.map(([m]) => (m.type === 'planner_compaction' ? `${m.compaction.phase}:${m.compaction.phase === 'ended' ? m.compaction.outcome : ''}` : m.type))).toEqual(['started:', 'ended:failed']);
+    expect(session.plannerCompaction()).toBeUndefined();
   });
 
   it('leaves the transcript alone when the turn is stopped', async () => {
@@ -383,5 +386,95 @@ describe('Session.compactConversation', () => {
 
     expect(session.rewindTargets().map((t) => [t.index, t.preview])).toEqual([[2, 'add streaming'], [4, 'and keep it dependency-free']]);
     expect(() => session.rewindConversation(0)).toThrow(/goal/);
+  });
+});
+
+describe('Session.compactConversation — what surfaces are told', () => {
+  const lifecycle = (sent: SessionMessage[]) => sent.flatMap((m) => (m.type === 'planner_compaction' ? [m.compaction] : []));
+
+  it('announces the start and the end under one id, which the checkpoint it wrote carries, and folds into one quiet block', async () => {
+    const { planner, state } = apiStylePlanner();
+    const sent: SessionMessage[] = [];
+    const session = sessionWith(planner, (m) => sent.push(m));
+    state.context = ['live'];
+    const before = fromTranscript(session.planState!.conversationHistory, []);
+
+    await session.compactConversation();
+
+    const [started, ended] = lifecycle(sent);
+    expect(started).toMatchObject({ phase: 'started', origin: 'ordewell', trigger: 'manual' });
+    expect(ended).toMatchObject({ phase: 'ended', id: started.id, origin: 'ordewell', trigger: 'manual', outcome: 'condensed' });
+    expect(ended).not.toHaveProperty('preTokens');
+    expect(session.planState!.conversationHistory!.at(-1)!.checkpoint!.id).toBe(started.id);
+    expect(sent.findIndex((m) => m.type === 'planner_compaction' && m.compaction.phase === 'ended'))
+      .toBeGreaterThan(sent.findIndex((m) => m.type === 'plan_generated'));
+
+    const live = sent.reduce(reduceConversation, before);
+    expect(live.blocks.slice(0, before.blocks.length)).toEqual(before.blocks);
+    expect(live.blocks.slice(before.blocks.length)).toEqual([
+      expect.objectContaining({ type: 'compaction', compactionId: started.id, status: 'condensed', summary: expect.stringContaining(SUMMARY_TEXT) }),
+    ]);
+    // A reload draws what the live view drew.
+    const reloaded = fromTranscript(session.planState!.conversationHistory, []);
+    expect(reloaded.blocks.map(({ id: _id, ...b }) => b)).toEqual(live.blocks.map(({ id: _id, ...b }) => b));
+  });
+
+  it('holds the compaction in flight for a surface that joins, and lets it go once it ends stopped', async () => {
+    const calls: { finish: (turn: ConversationTurn) => void }[] = [];
+    const planner: PlannerFake = {
+      hasActiveConversation: () => true,
+      continueConversation: vi.fn(() => new Promise<ConversationTurn>((resolve) => { calls.push({ finish: resolve }); })),
+      startConversation: vi.fn(),
+      reset: vi.fn(),
+    };
+    const sent: SessionMessage[] = [];
+    const session = sessionWith(planner, (m) => sent.push(m));
+
+    const compaction = session.compactConversation();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const [started] = lifecycle(sent);
+    expect(session.plannerCompaction()).toEqual({ type: 'planner_compaction', compaction: started });
+
+    session.abortPlannerTurn();
+    calls[0].finish(summary('half done'));
+    await expect(compaction).rejects.toThrow(/stopped/i);
+
+    expect(lifecycle(sent).at(-1)).toMatchObject({ phase: 'ended', id: started.id, outcome: 'stopped' });
+    expect(session.plannerCompaction()).toBeUndefined();
+    expect(session.planState!.conversationHistory).toEqual(plannedDialogue().conversationHistory);
+  });
+
+  it('passes a harness planner\'s own compaction on, tagged with its turn, and writes nothing of it to the transcript', async () => {
+    const { planner, state } = apiStylePlanner();
+    planner.continueConversation = async (message, onProgress) => {
+      state.context!.push(message);
+      onProgress({ type: 'compaction', compaction: { phase: 'ended', id: 'native-1', origin: 'native', trigger: 'auto', outcome: 'condensed', at: '2026-01-01T00:01:00Z', preTokens: 150_000 } });
+      return reply('carrying on');
+    };
+    const sent: SessionMessage[] = [];
+    const session = sessionWith(planner, (m) => sent.push(m));
+    state.context = ['live'];
+
+    await session.continueConversation('and CSV');
+
+    const opened = sent.find((m): m is Extract<SessionMessage, { type: 'planner_turn_started' }> => m.type === 'planner_turn_started');
+    expect(sent.filter((m) => m.type === 'planner_compaction')).toEqual([
+      { type: 'planner_compaction', turnId: opened?.turnId, compaction: expect.objectContaining({ id: 'native-1', origin: 'native', preTokens: 150_000 }) },
+    ]);
+    expect(session.planState!.conversationHistory!.some((m) => m.kind === 'compaction')).toBe(false);
+    expect(session.plannerCompaction()).toBeUndefined();
+  });
+
+  it('announces nothing for a conversation too short to condense', async () => {
+    const { planner } = apiStylePlanner();
+    const sent: SessionMessage[] = [];
+    const session = makeSession({ aiService: planner, broadcast: (m) => sent.push(m) });
+    const plan = plannedDialogue();
+    plan.conversationHistory = plan.conversationHistory!.slice(0, 2);
+    session.loadPlan(plan, GOAL, testWorkspace, { persist: false });
+
+    await expect(session.compactConversation()).rejects.toThrow(/too short/);
+
+    expect(lifecycle(sent)).toEqual([]);
   });
 });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { ApprovalKind } from '../../interfaces/IApproval';
 import type { ApprovalSource } from '../../services/ApprovalPolicy';
-import { approvalKindText, approvalStatusText, handoffFindingsText, handoffPeekParts, planMarkerParts } from '../labels';
+import { approvalKindText, approvalStatusText, compactionText, handoffFindingsText, handoffPeekParts, planMarkerParts } from '../labels';
 
 describe('what a conversation block says', () => {
   it.each([
@@ -81,5 +81,25 @@ describe('what a conversation block says', () => {
     expect(handoffPeekParts({ summary: '\n\n  Keep it scoped.  \nMore context.', findingCount: 0, severity: null }))
       .toEqual(['no findings', 'Keep it scoped.']);
     expect(handoffPeekParts({ summary: '\n \n', findingCount: 0, severity: null })).toEqual(['no findings']);
+  });
+});
+
+describe('what a compaction says', () => {
+  const planner = { type: 'compaction', id: 'b1', trigger: 'manual', origin: 'ordewell' } as const;
+
+  it('reads as a status while it runs, and quietly once it is over', () => {
+    expect(compactionText({ ...planner, status: 'running' })).toBe('Compacting context…');
+    expect(compactionText({ ...planner, status: 'condensed' })).toBe('Context compacted');
+    expect(compactionText({ ...planner, trigger: 'auto', status: 'condensed' })).toBe('Context compacted automatically');
+    expect(compactionText({ ...planner, status: 'stopped' })).toBe('Compaction stopped · nothing changed');
+    expect(compactionText({ ...planner, status: 'failed' })).toBe('Compaction failed · nothing changed');
+  });
+
+  it('says the sizes only when both were reported, and names who compacted', () => {
+    expect(compactionText({ ...planner, origin: 'native', trigger: 'auto', status: 'condensed', preTokens: 150_000, postTokens: 9_000 }))
+      .toBe('The planner compacted its context on its own · 150k → 9k tokens');
+    expect(compactionText({ ...planner, origin: 'native', status: 'condensed', preTokens: 150_000 })).toBe('The planner compacted its context');
+    expect(compactionText({ type: 'compaction', id: 'b2', trigger: 'auto' })).toBe('Context compacted by the runner on its own');
+    expect(compactionText({ type: 'compaction', id: 'b2', trigger: 'manual', preTokens: 2_000, postTokens: 900 })).toBe('Context compacted · 2k → 900 tokens');
   });
 });

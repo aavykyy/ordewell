@@ -8,7 +8,7 @@ import type { PlannerTurnOutcome, SessionBroadcaster, SessionNotice } from './Se
 import { TurnStream } from './replyStream';
 import type { ForkedDialogue } from './conversationFork';
 import { compactionCut, condensedNotice, contextFloor, extractSummary, modelContext, summaryRequest } from './conversationSummary';
-import type { ContextCheckpoint, ConversationMessage, LegacyPlanState, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
+import type { ContextCheckpoint, ConversationMessage, LegacyPlanState, PlannerCompactionOutcome, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
 import { flattenTasksWithParents, isUserMessage } from '../models/Task';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
@@ -788,19 +788,27 @@ export class PlannerConversation {
     // would share the summary turn's live context, which the compaction resets
     // as it lands, and its message would be condensed away or left dangling.
     const { turn, release } = this.claim({ refuseAs: 'condense the conversation' }, signal);
+    // Surfaces see it run and end under the id its checkpoint will carry (ADR-0017).
+    const compaction = { id: uuidv4(), origin: 'ordewell', trigger: 'manual' } as const;
+    this.host.onProgress({ type: 'compaction', compaction: { phase: 'started', ...compaction, at: new Date().toISOString() } });
+    let outcome: PlannerCompactionOutcome = 'failed';
     try {
       const summary = await this.summarize(turn.signal);
       if (this.host.plan() !== plan || compactionCut(this.transcript) !== cut) throw new ConversationEditError('The conversation changed while it was being condensed: nothing was condensed.');
-      this.commitCheckpoint(condensedNotice(summary), cut, 'manual');
+      this.commitCheckpoint(condensedNotice(summary), cut, 'manual', compaction.id);
+      outcome = 'condensed';
       return { summary, keptMessages: modelContext(this.transcript).length - 1 };
     } catch (err) {
-      throw interrupted(turn, err);
+      const surfaced = interrupted(turn, err);
+      if (surfaced instanceof PlannerTurnStoppedError || surfaced instanceof PlannerTurnDiscardedError) outcome = 'stopped';
+      throw surfaced;
     } finally {
       // Success and failure alike: the live context either holds the
       // conversation this replaced or a summary exchange nobody kept. An
       // abandoned compaction's context was dropped by whatever abandoned it,
       // and a reset now would cut off the turn that has the backend since.
       if (!turn.abandoned) this.dropContext();
+      this.host.onProgress({ type: 'compaction', compaction: { phase: 'ended', ...compaction, outcome, at: new Date().toISOString() } });
       release();
     }
   }
@@ -812,20 +820,17 @@ export class PlannerConversation {
    * checkpoint's, nor past an input the open turn holds: that lands at its
    * held position, at or after the cut, and is replayed (ADR-0002).
    */
-  private commitCheckpoint(content: string, keptFrom: number, trigger: ContextCheckpoint['trigger']): void {
+  private commitCheckpoint(content: string, keptFrom: number, trigger: ContextCheckpoint['trigger'], id: string): void {
     const held = this.openTurn?.writes.entries.map(({ at }) => at) ?? [];
     if (keptFrom < contextFloor(this.transcript) || keptFrom > Math.min(this.transcript.length, ...held)) {
       throw new Error(`A compaction cannot cut the conversation at ${keptFrom}: that is behind its last summary or past an input not yet answered.`);
     }
     const timestamp = new Date().toISOString();
-    const entry: ConversationMessage = { role: 'assistant', content, timestamp, kind: 'compaction', checkpoint: { id: uuidv4(), keptFrom, trigger } };
+    const entry: ConversationMessage = { role: 'assistant', content, timestamp, kind: 'compaction', checkpoint: { id, keptFrom, trigger } };
     this.host.mutate(() => {
       this.appendEntries([entry]);
       return true;
-    }, () => {
-      this.host.broadcast({ type: 'planner_message', content, timestamp });
-      this.host.broadcastPlan();
-    });
+    }, () => this.host.broadcastPlan());
   }
 
   private async summarize(signal: AbortSignal): Promise<string> {

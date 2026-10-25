@@ -82,7 +82,7 @@ describe('activity disclosures in the planner chat (ADR-0017, X1)', () => {
     expect(group().getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('opens nothing in a compacted conversation, though its rebuilt blocks reuse the old ids', () => {
+  it('opens nothing in a conversation rebuilt in place, though its blocks reuse the old ids', () => {
     const saved = (goal: string, path: string) => ({
       conversationHistory: [{ role: 'user' as const, content: goal, timestamp: '2026-01-01T00:00:00.000Z' }],
       researchLog: [{ id: 's', tool: 'read_file' as const, args: JSON.stringify({ path }), result: `${path} body`, timestamp: '2026-01-01T00:00:01.000Z', success: true, outcome: 'success' as const }],
@@ -93,9 +93,10 @@ describe('activity disclosures in the planner chat (ADR-0017, X1)', () => {
     fireEvent.click(row('.cmd-row'));
     expect(document.querySelector('.cmd-row-output')!.textContent).toBe('a.ts body');
 
-    // What `/compact` hands the chat: the same conversation, summarised and renumbered.
-    host.provider.replaceConversation(saved('Summary of the conversation so far', 'b.ts'));
-    expect(document.querySelector('.chat-msg-user')!.textContent).toBe('Summary of the conversation so far');
+    // A reload the host makes without a restore: another conversation, numbered afresh. (A compaction no
+    // longer rebuilds anything: it folds in where it happened, so what was open stays open.)
+    host.provider.conversation.reload(saved('Another conversation', 'b.ts'));
+    expect(document.querySelector('.chat-msg-user')!.textContent).toBe('Another conversation');
     expect(group().getAttribute('aria-expanded')).toBe('false');
     expect(document.querySelector('.cmd-row')).toBeNull();
   });

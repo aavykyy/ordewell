@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
-import { CHAT_COMMANDS, describePlannerNotReady, PlannerNotReadyError, type Session } from '@ordewell/core';
+import { CHAT_COMMANDS, describePlannerNotReady, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type Session } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 
 export interface ConversationDeps {
   session: Pick<Session, 'sessionId' | 'isExecuting' | 'planState' | 'forkConversation' | 'rewindTargets' | 'rewindConversation' | 'compactConversation'>;
-  chatProvider: Pick<ChatViewProvider, 'showError' | 'replaceConversation' | 'setConversationBusy'>;
+  chatProvider: Pick<ChatViewProvider, 'showError'>;
   setCurrentPlan: PlanSetter;
   persistState: () => void;
   isGeneratingPlan: () => boolean;
@@ -56,17 +56,6 @@ export async function forkConversation(deps: ConversationDeps): Promise<void> {
 }
 
 /**
- * A compaction leaves the tasks alone, so the webview only needs its transcript
- * redrawn — `restoreChat` would also wipe the task output and isolation state
- * of a run that is still going.
- */
-function showConversation(plan: NonNullable<Session['planState']>, deps: ConversationDeps): void {
-  deps.setCurrentPlan(plan);
-  deps.chatProvider.replaceConversation(plan);
-  deps.persistState();
-}
-
-/**
  * A rewind is a fork from just before the chosen message, so it switches
  * sessions the way `/fork` does — and asks first for the same reason.
  */
@@ -106,38 +95,27 @@ export async function rewindConversation(deps: ConversationDeps, arg?: string): 
 }
 
 /**
- * The summary comes back as the transcript's first entry, so redrawing it is
- * what shows the user what the planner will carry forward. A failed or
- * cancelled turn changes nothing in core, hence nothing to undo here.
+ * The session's own events draw it where it happens (ADR-0017): a status
+ * while it runs, which the composer's Stop stops like a turn, and a quiet
+ * marker after, the summary there to open. So nothing here redraws or pops up
+ * on success, and a stop needs no word either: the marker says it. A failed
+ * or stopped turn changes nothing in core, hence nothing to undo here.
  */
 export async function compactConversation(deps: ConversationDeps): Promise<void> {
   if (plannerIsAnswering(deps)) return;
-  const abort = new AbortController();
-  // The webview would let a message through that core refuses mid-compaction.
-  deps.chatProvider.setConversationBusy(true);
   try {
-    const { keptMessages } = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: 'Condensing the conversation…', cancellable: true },
-      (_progress, token) => {
-        token.onCancellationRequested(() => abort.abort());
-        return deps.session.compactConversation(abort.signal);
-      },
-    );
+    await deps.session.compactConversation();
     const plan = deps.session.planState;
-    if (plan) showConversation(plan, deps);
-    void vscode.window.showInformationMessage(
-      `Condensed the conversation. The last ${keptMessages} messages were kept as they were; the tasks are unchanged.`,
-    );
+    if (!plan) return;
+    deps.setCurrentPlan(plan);
+    deps.persistState();
   } catch (err) {
-    if (abort.signal.aborted) {
-      void vscode.window.showInformationMessage('Condensing cancelled: nothing was changed.');
-    } else if (err instanceof PlannerNotReadyError) {
+    if (err instanceof PlannerTurnStoppedError || err instanceof PlannerTurnDiscardedError) return;
+    if (err instanceof PlannerNotReadyError) {
       // The refusal ends in its own full stop, and its commands are the core's spelling, not the chat's.
       deps.chatProvider.showError(`Could not condense the conversation: ${describePlannerNotReady(err.reason, CHAT_COMMANDS)} Nothing was changed.`);
     } else {
       deps.chatProvider.showError(`Could not condense the conversation: ${message(err)}: nothing was changed.`);
     }
-  } finally {
-    deps.chatProvider.setConversationBusy(false);
   }
 }

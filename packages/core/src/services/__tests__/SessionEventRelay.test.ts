@@ -211,3 +211,22 @@ describe('SessionEventRelay', () => {
     expect(sent).toEqual([]);
   });
 });
+
+describe('SessionEventRelay — the planner compaction in flight', () => {
+  it('holds a compaction from its start to its own end, with its turn, and lets no other end clear it', () => {
+    const { relay, sent } = setup();
+    const at = '2026-01-01T00:00:00Z';
+
+    relay.progress({ type: 'compaction', turnId: 'turn-1', compaction: { phase: 'started', id: 'a1', origin: 'ordewell', trigger: 'auto', at } });
+    const started = sent.at(-1);
+    expect(started).toEqual({ type: 'planner_compaction', turnId: 'turn-1', compaction: { phase: 'started', id: 'a1', origin: 'ordewell', trigger: 'auto', at } });
+    expect(relay.currentCompaction()).toEqual(started);
+
+    relay.progress({ type: 'compaction', turnId: 'turn-1', compaction: { phase: 'ended', id: 'n1', origin: 'native', trigger: 'auto', outcome: 'condensed', at } });
+    expect(relay.currentCompaction()).toEqual(started);
+
+    relay.progress({ type: 'compaction', turnId: 'turn-1', compaction: { phase: 'ended', id: 'a1', origin: 'ordewell', trigger: 'auto', outcome: 'pruned', at } });
+    expect(relay.currentCompaction()).toBeUndefined();
+    expect(sent.map((m) => m.type === 'planner_compaction' && m.compaction.id)).toEqual(['a1', 'n1', 'a1']);
+  });
+});

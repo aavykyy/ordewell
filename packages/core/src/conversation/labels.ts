@@ -2,7 +2,8 @@ import type { FindingSeverity } from '../models/Handoff';
 import { severityLabel } from '../models/Handoff';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from '../services/ApprovalPolicy';
-import type { ApprovalBlock, PlanBlock } from './blocks';
+import type { ApprovalBlock, CompactionBlock, CompactionStatus, PlanBlock } from './blocks';
+import { formatTokenCount } from '../models/Usage';
 
 /*
  * The words a conversation block is made of (#51): an approval's kind and
@@ -99,4 +100,30 @@ export function handoffPeekParts(handoff: HandoffPeekSubject): string[] {
   const commit = handoff.commit ? [`Commit: ${handoff.commit.subject.trim()}`] : [];
   const summary = firstNonBlankLine(handoff.summary);
   return [handoffFindingsText(handoff.findingCount), ...severity, ...(handoff.patch ? [handoff.patch.peek] : []), ...commit, ...(summary ? [summary] : [])];
+}
+
+// What a compaction that is not plainly done says instead (ADR-0017): each
+// one changed nothing, or only what the model is sent.
+const COMPACTION_STATUS_TEXT: Partial<Record<CompactionStatus, string>> = {
+  running: 'Compacting context…',
+  stopped: 'Compaction stopped · nothing changed',
+  failed: 'Compaction failed · nothing changed',
+  paused: 'Context does not fit · the planner is paused',
+  pruned: 'Older tool output trimmed from context',
+  unchanged: 'Context unchanged',
+};
+
+function compactedBy({ origin, trigger }: CompactionBlock): string {
+  if (origin === 'native') return trigger === 'auto' ? 'The planner compacted its context on its own' : 'The planner compacted its context';
+  if (origin === 'ordewell') return trigger === 'auto' ? 'Context compacted automatically' : 'Context compacted';
+  return trigger === 'auto' ? 'Context compacted by the runner on its own' : 'Context compacted';
+}
+
+/** A compaction's one line: how it stands, who compacted, and its sizes when a backend reported both. */
+export function compactionText(block: CompactionBlock): string {
+  const status = block.status ? COMPACTION_STATUS_TEXT[block.status] : undefined;
+  if (status) return status;
+  const { preTokens, postTokens } = block;
+  const sizes = preTokens !== undefined && postTokens !== undefined ? ` · ${formatTokenCount(preTokens)} → ${formatTokenCount(postTokens)} tokens` : '';
+  return `${compactedBy(block)}${sizes}`;
 }

@@ -1122,6 +1122,14 @@ export class Session {
     return this.events.announcedApprovals();
   }
 
+  /**
+   * The planner compaction in flight, as its start was announced, for a
+   * surface that joins or reconnects while it runs; undefined when none is.
+   */
+  plannerCompaction(): Extract<SessionMessage, { type: 'planner_compaction' }> | undefined {
+    return this.events.currentCompaction();
+  }
+
   /** Scopes the user granted this session — surfaced so a UI can show what is already allowed. */
   approvedScopes(): string[] {
     return this.approvalPolicy.grantedScopes();

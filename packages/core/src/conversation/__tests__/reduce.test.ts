@@ -337,11 +337,83 @@ describe('reduceConversation', () => {
   });
 
   describe('compaction', () => {
-    it('shows the summary a compaction announced as a system note, as the transcript records it', () => {
+    const SUMMARY = 'Conversation condensed.\n\nGoal: add persistence with SQLite.';
+    const history = [
+      { role: 'user' as const, content: 'go ahead', timestamp: '2026-09-27T10:07:00.000Z' },
+      { role: 'assistant' as const, content: 'Plan generated with 1 task.', timestamp: '2026-09-27T10:07:09.000Z', kind: 'plan_generated' as const },
+    ];
+    const checkpointed = planSnapshot([
+      ...history,
+      { role: 'assistant', content: SUMMARY, timestamp: '2026-09-27T11:00:05.000Z', kind: 'compaction', checkpoint: { id: 'c1', keptFrom: 0, trigger: 'manual' } },
+    ], 1);
+    const started: ConversationInput = { type: 'planner_compaction', compaction: { phase: 'started', id: 'c1', origin: 'ordewell', trigger: 'manual', at: '2026-09-27T11:00:00.000Z' } };
+    const ended = (outcome: 'condensed' | 'stopped' | 'failed' | 'unchanged'): ConversationInput => ({
+      type: 'planner_compaction', compaction: { phase: 'ended', id: 'c1', origin: 'ordewell', trigger: 'manual', outcome, at: '2026-09-27T11:00:06.000Z' },
+    });
+
+    it('folds a /compact into one quiet block, running and then condensed, its summary taken from the checkpoint with its id', () => {
+      const before = play(preambledPlan);
+      const running = play([started], before);
+      const done = play([ended('condensed'), checkpointed], running);
+
+      expect(unkeyed(running.blocks).slice(2)).toEqual([
+        { type: 'compaction', compactionId: 'c1', origin: 'ordewell', trigger: 'manual', status: 'running' },
+      ]);
+      expect(unkeyed(done.blocks).slice(2)).toEqual([
+        { type: 'compaction', compactionId: 'c1', origin: 'ordewell', trigger: 'manual', status: 'condensed', summary: SUMMARY },
+      ]);
+      expect(done.blocks[2].id).toBe(running.blocks[2].id);
+      expect(done.blocks.slice(0, 2)).toEqual(before.blocks);
+    });
+
+    it('changes nothing for a repeated start, end or transcript, and folds a transcript that came first into the same block', () => {
+      const done = play([started, ended('condensed'), checkpointed], play(preambledPlan));
+
+      expect(play([started, ended('condensed'), checkpointed, ended('condensed')], done)).toBe(done);
+      const transcriptFirst = play([checkpointed, ended('condensed'), started], play(preambledPlan));
+      expect(unkeyed(transcriptFirst.blocks).slice(2)).toEqual(unkeyed(done.blocks).slice(2));
+    });
+
+    it('says a stopped or failed compaction changed nothing, and takes back one that had nothing to do', () => {
+      const before = play(preambledPlan);
+
+      expect(unkeyed(play([started, ended('stopped')], before).blocks).slice(2)).toEqual([
+        { type: 'compaction', compactionId: 'c1', origin: 'ordewell', trigger: 'manual', status: 'stopped' },
+      ]);
+      expect(unkeyed(play([started, ended('failed')], before).blocks).slice(2).map((b) => b.type === 'compaction' && b.status)).toEqual(['failed']);
+      expect(play([started, ended('unchanged')], before).blocks).toEqual(before.blocks);
+      // A view that never saw it start — its conversation was replaced meanwhile — has nothing to report on.
+      expect(play([ended('stopped'), ended('failed')], before)).toBe(before);
+    });
+
+    it('shows a native compaction from its end alone, with only the sizes the planner reported', () => {
+      const view = play([
+        { type: 'planner_turn_started', turnId: 't9', prompt: 'keep going' },
+        { type: 'planner_compaction', turnId: 't9', compaction: { phase: 'ended', id: 'n1', origin: 'native', trigger: 'auto', outcome: 'condensed', at: '2026-09-27T11:00:00.000Z', preTokens: 180_000, postTokens: 22_000 } },
+        { type: 'planner_compaction', turnId: 't9', compaction: { phase: 'ended', id: 'n2', origin: 'native', trigger: 'auto', outcome: 'condensed', at: '2026-09-27T11:05:00.000Z' } },
+      ]);
+
+      expect(unkeyed(view.blocks).slice(1)).toEqual([
+        { type: 'compaction', compactionId: 'n1', origin: 'native', trigger: 'auto', status: 'condensed', preTokens: 180_000, postTokens: 22_000, turnId: 't9' },
+        { type: 'compaction', compactionId: 'n2', origin: 'native', trigger: 'auto', status: 'condensed', turnId: 't9' },
+      ]);
+    });
+
+    it('closes a compaction still running when its turn is cut short', () => {
+      const view = play([
+        { type: 'planner_turn_started', turnId: 't9', prompt: 'keep going' },
+        { type: 'planner_compaction', turnId: 't9', compaction: { phase: 'started', id: 'a1', origin: 'ordewell', trigger: 'auto', at: '2026-09-27T11:00:00.000Z' } },
+        { type: 'planner_turn_ended', turnId: 't9', outcome: 'stopped' },
+      ]);
+
+      expect(view.blocks.map((b) => b.type === 'compaction' && b.status)).toEqual([false, 'stopped']);
+    });
+
+    it('shows the summary a compaction without a checkpoint announced as the same quiet block, in the message\'s place', () => {
       const before = play(preambledPlan);
 
       expect(unkeyed(play(compaction, before).blocks).slice(2)).toEqual([
-        { type: 'message', role: 'system', text: 'Conversation condensed.\n\nGoal: add persistence with SQLite.', streaming: false },
+        { type: 'compaction', origin: 'ordewell', trigger: 'manual', status: 'condensed', summary: SUMMARY },
       ]);
     });
   });
