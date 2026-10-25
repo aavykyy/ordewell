@@ -5,6 +5,18 @@ import { handleTaskEdit, type PlanManagerDeps } from '../PlanManager';
 
 const showWarningMessage = vscode.window.showWarningMessage as unknown as ReturnType<typeof vi.fn>;
 
+const IDLE = { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false };
+
+/** A host over a Session that holds `t1` in `status` with the run facts given. */
+function hostOf(session: Record<string, unknown>, status: string, plan: { status: string; tasks: unknown[] }) {
+  const chatProvider = { showPlan: vi.fn() };
+  const d = {
+    session: { isExecuting: false, planTasks: [{ id: 't1', status }, { id: 't2', status: 'pending' }], ...session },
+    chatProvider, getCurrentPlan: () => plan, setCurrentPlan: vi.fn(), persistState: vi.fn(), saveCurrentSession: vi.fn(),
+  } as unknown as PlanManagerDeps;
+  return { d, chatProvider };
+}
+
 // The card's own model picker sends the edit; a live runner's model is the
 // runner's (#106), so the session refuses it and the card must say why.
 describe('a task card model edit the session refuses', () => {
@@ -13,11 +25,8 @@ describe('a task card model edit the session refuses', () => {
   it('shows the session\'s reason and re-shows the plan as it stands', async () => {
     const reason = '"Build" has a live runner, so its model and effort cannot change now: stop the task first, or use the runner\'s own /model';
     const plan = { status: 'running', tasks: [] };
-    const session = { activity: { starting: false, running: false, scheduled: false, resumable: false }, updateTask: vi.fn().mockRejectedValue(new PlanEditError(reason)), planState: plan };
-    const chatProvider = { showPlan: vi.fn() };
-    const d = {
-      session, chatProvider, getCurrentPlan: () => plan, setCurrentPlan: vi.fn(), persistState: vi.fn(), saveCurrentSession: vi.fn(),
-    } as unknown as PlanManagerDeps;
+    const session = { activity: IDLE, updateTask: vi.fn().mockRejectedValue(new PlanEditError(reason)), planState: plan };
+    const { d, chatProvider } = hostOf(session, 'completed', plan);
 
     await handleTaskEdit('t1', { kind: 'model', assignment: { modelId: 'haiku', modelLabel: 'Haiku' } }, d);
 
@@ -44,11 +53,8 @@ describe('a card edit while the plan runs', () => {
     ['skills', { kind: 'skills' as const, skills: ['tdd'] }, 'updateTask', ['t1', { skills: ['tdd'] }, { requireUnstarted: true }]],
     ['ops', { kind: 'ops' as const, ops: true }, 'updateTask', ['t1', { ops: true }, { requireUnstarted: true }]],
   ])('guards a %s edit', async (_kind, edit, method, expected) => {
-    const session = { isExecuting: true, activity: { starting: false, running: true, scheduled: true, resumable: false }, updateTask: vi.fn(), setTaskRunner: vi.fn(), setTaskDependencies: vi.fn(), planState: plan };
-    const chatProvider = { showPlan: vi.fn() };
-    const d = {
-      session, chatProvider, getCurrentPlan: () => plan, setCurrentPlan: vi.fn(), persistState: vi.fn(), saveCurrentSession: vi.fn(),
-    } as unknown as PlanManagerDeps;
+    const session = { isExecuting: true, activity: { ...IDLE, running: true, scheduled: true, advancesOnItsOwn: true }, updateTask: vi.fn(), setTaskRunner: vi.fn(), setTaskDependencies: vi.fn(), planState: plan };
+    const { d, chatProvider } = hostOf(session, 'pending', plan);
 
     await handleTaskEdit('t1', edit, d);
 
@@ -58,27 +64,46 @@ describe('a card edit while the plan runs', () => {
 
   // Nothing is live while the scheduler waits on a manual task, a gate or a
   // hold, or while a start is opening the run, yet the next claim can land on
-  // the task mid-edit: the card already holds back its editors then.
+  // the task mid-edit: the card holds back its editors then, on the same fact.
   it.each([
-    ['scheduled', { starting: false, running: false, scheduled: true, resumable: false }],
-    ['starting', { starting: true, running: false, scheduled: false, resumable: false }],
-    ['resumable', { starting: false, running: false, scheduled: false, resumable: true }],
-  ])('guards an edit while the run is %s with nothing live', async (_name, activity) => {
-    const session = { isExecuting: false, activity, updateTask: vi.fn(), planState: plan };
-    const d = {
-      session, chatProvider: { showPlan: vi.fn() }, getCurrentPlan: () => plan, setCurrentPlan: vi.fn(), persistState: vi.fn(), saveCurrentSession: vi.fn(),
-    } as unknown as PlanManagerDeps;
+    ['scheduled', { ...IDLE, scheduled: true, advancesOnItsOwn: true }],
+    ['starting', { ...IDLE, starting: true, advancesOnItsOwn: true }],
+    ['held on a usage limit', { ...IDLE, resumable: true, advancesOnItsOwn: true }],
+  ])('guards an edit while the run is %s with nothing live, a settled task included', async (_name, activity) => {
+    const session = { activity, updateTask: vi.fn(), planState: plan };
+    const { d } = hostOf(session, 'completed', plan);
 
-    await handleTaskEdit('t2', { kind: 'skills', skills: ['cache'] }, d);
+    await handleTaskEdit('t1', { kind: 'skills', skills: ['cache'] }, d);
 
-    expect(session.updateTask).toHaveBeenCalledWith('t2', { skills: ['cache'] }, { requireUnstarted: true });
+    expect(session.updateTask).toHaveBeenCalledWith('t1', { skills: ['cache'] }, { requireUnstarted: true });
   });
 
-  it('leaves the wider direct edit alone when no run is live', async () => {
-    const session = { isExecuting: false, activity: { starting: false, running: false, scheduled: false, resumable: false }, updateTask: vi.fn(), planState: plan };
-    const d = {
-      session, chatProvider: { showPlan: vi.fn() }, getCurrentPlan: () => plan, setCurrentPlan: vi.fn(), persistState: vi.fn(), saveCurrentSession: vi.fn(),
-    } as unknown as PlanManagerDeps;
+  // Nothing advances after a failed run until a retry or skip, and the card
+  // offers the failed task's editors so it can be fixed and retried: the host
+  // must not refuse what the card offers.
+  it('leaves the failed task of a run that ended on it the direct edit', async () => {
+    const session = { activity: { ...IDLE, resumable: true }, updateTask: vi.fn(), planState: plan };
+    const { d } = hostOf(session, 'failed', plan);
+
+    await handleTaskEdit('t1', { kind: 'prompt', prompt: 'fixed' }, d);
+
+    expect(session.updateTask).toHaveBeenCalledWith('t1', { prompt: 'fixed', description: 'fixed' });
+  });
+
+  // The edit awaits discovery or a skills check, and a start can claim the
+  // task meanwhile; deciding at call time from the run alone leaves it open.
+  it.each(['pending', 'approved', 'blocked'])('guards an edit to a %s task even when the plan is idle', async (status) => {
+    const session = { activity: IDLE, updateTask: vi.fn(), planState: plan };
+    const { d } = hostOf(session, status, plan);
+
+    await handleTaskEdit('t1', { kind: 'skills', skills: ['cache'] }, d);
+
+    expect(session.updateTask).toHaveBeenCalledWith('t1', { skills: ['cache'] }, { requireUnstarted: true });
+  });
+
+  it('leaves the wider direct edit alone for a settled task when no run is live', async () => {
+    const session = { activity: IDLE, updateTask: vi.fn(), planState: plan };
+    const { d } = hostOf(session, 'completed', plan);
 
     await handleTaskEdit('t1', { kind: 'prompt', prompt: 'Later' }, d);
 

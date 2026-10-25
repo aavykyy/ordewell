@@ -343,8 +343,10 @@ and completion evidence.
   swaps the chat pane to the task view: a distinct accent colour, a state
   header, a `→ Task N` composer label whose `/` is the runner's (R1), and Esc
   to return. In VS Code each task
-  has an editor tab opened on demand ("Open log"); it never opens
-  automatically, reopening focuses it, and closing it never affects the task.
+  that has started an attempt has an editor tab opened on demand ("Open
+  chat"); a task never run has no chat, and the control is absent. It never
+  opens automatically, reopening focuses it, and closing it never affects the
+  task.
   The card keeps its one-line peek and gains a waiting badge.
 - **No tmux, no `script` (W2).** A session is a plain child process speaking
   a protocol and needs neither. Runner execution also works on native Windows
@@ -494,3 +496,4 @@ transport is retained for take-over.
 - 2026-10-22: the turn that reported `task_complete` closes itself within the interrupt grace before its report is published, so the tool reply reaches the runner; a turn still open at the grace has its report published then and is stopped.
 - 2026-10-24 — U1: the three ways a limit arrives — an exit mid-turn, a failed turn, a refused start — are one pause, owned by `LimitPauses`; a refused start now settles as a verdict does.
 - 2026-10-24 — U1: a pause also holds a run that ended on a failure, which it goes back to once released; the hold is an event of the run's state (`nextRunState`).
+- 2026-10-25 — the VS Code task-log control reads "Open chat" and appears once an attempt has started.
