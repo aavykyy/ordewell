@@ -5293,6 +5293,26 @@ body.vscode-high-contrast-light .pending-message {
   font-style: italic;
 }
 
+.account-limit:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, var(--accent));
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+/* Hidden until its row is focused or tapped, yet still the row's description:
+   then it takes a line of its own, so a narrow view wraps it rather than clip. */
+.account-limit-details {
+  display: none;
+}
+
+.account-limit:focus + .account-limit-details {
+  display: flex;
+  flex-direction: column;
+  flex-basis: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* ---- Task log tab (ADR-0018, V1) ---- */
 /* The on-demand editor tab a structured task opens. It reuses the chat's
    ConversationBlocks classes above; these are only what a task adds: the

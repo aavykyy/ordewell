@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
+import { join } from 'path';
 import { accountLimitsText } from '../../../models/AccountLimits';
 import { AccountLimitMonitor } from '../../AccountLimitMonitor';
 import { claudeAccountLimitCollector } from '../claudeAccountLimits';
@@ -51,7 +52,7 @@ interface Script {
   refuse?: string;
 }
 
-const spawned: { proc: FakeAgentProcess; args: string[]; cwd: string }[] = [];
+const spawned: { proc: FakeAgentProcess; args: string[]; cwd: string; env: NodeJS.ProcessEnv }[] = [];
 afterEach(() => { spawned.length = 0; });
 
 function fakeClaude(script: Script | (() => Script)) {
@@ -75,7 +76,7 @@ function fakeClaude(script: Script | (() => Script)) {
   const spawn: SpawnFn = (command, args, options) => {
     const child = fake.spawn(command, args, options);
     const proc = fake.processes.at(-1)!;
-    spawned.push({ proc, args, cwd: options.cwd });
+    spawned.push({ proc, args, cwd: options.cwd, env: options.env });
     const answers = typeof script === 'function' ? script() : script;
     current.set(proc, answers);
     if (answers.refuse) {
@@ -331,6 +332,23 @@ describe('Claude Code account limits through the monitor', () => {
     await vi.waitFor(() => expect(monitor.snapshots()[0].status).toBe('stale'), { timeout: 15_000 });
     expect(accountLimitsText(monitor.snapshots()[0])).toBe('Claude Code 5h 37% used · Weekly 44% used · Fable Weekly 0% used (stale)');
     monitor.dispose();
+  });
+
+  it('reads the account the workspace\'s own environment chooses, as the planner and its tasks run under', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'ordewell-claude-workspace-'));
+    try {
+      mkdirSync(join(workspace, '.ordewell'));
+      writeFileSync(join(workspace, '.ordewell', 'env'), 'CLAUDE_CONFIG_DIR=/accounts/work-claude\n');
+      const c = claudeAccountLimitCollector({ isInstalled: async () => true, timeoutMs: 2000, deps: fakeClaude({}), workspaceRoot: () => workspace });
+
+      expect((await read(c)).kind).toBe('limits');
+      expect(spawned[0].env.CLAUDE_CONFIG_DIR).toBe('/accounts/work-claude');
+      // Still an empty directory of its own, not the workspace: no project settings or CLAUDE.md.
+      expect(spawned[0].cwd.startsWith(tmpdir())).toBe(true);
+      expect(spawned[0].cwd.startsWith(workspace)).toBe(false);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   it('scopes what it read to the Claude config directory the probe inherits', () => {

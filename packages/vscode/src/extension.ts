@@ -47,6 +47,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const runnerInstallation = new RunnerInstallation(runnerRegistry);
     const codexServer = runnerRegistry.getManifest('codex')?.modelDiscovery.appServer;
+    const fsAdapter = new VsCodeFileSystem();
 
     activeHost = createExtension({
       context,
@@ -60,7 +61,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         { spawn: nodeSpawn, fetch: globalThis.fetch },
         { cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(), env: process.env },
       ),
-      fsAdapter: new VsCodeFileSystem(),
+      fsAdapter,
       notifications: new VsCodeNotification(),
       // Tasks run on the structured transport (ADR-0018) as plain child processes.
       runner: new StructuredRunner(),
@@ -71,13 +72,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       sessionFactory: createSession,
       // Codex's account is read over the same app-server its model discovery
       // uses (ADR-0004); Claude Code's on a control-only process of its own.
+      // Both under the planner's workspace, whose environment picks the account.
       accountLimits: new AccountLimitMonitor({
         collectors: [
-          claudeAccountLimitCollector({ isInstalled: () => runnerInstallation.isInstalled('claude-code') }),
+          claudeAccountLimitCollector({
+            isInstalled: () => runnerInstallation.isInstalled('claude-code'),
+            workspaceRoot: () => fsAdapter.getWorkspaceRoot(),
+          }),
           codexAccountLimitCollector({
             command: codexServer?.command,
             args: codexServer?.args,
             isInstalled: () => runnerInstallation.isInstalled('codex'),
+            workspaceRoot: () => fsAdapter.getWorkspaceRoot(),
           }),
         ],
       }),

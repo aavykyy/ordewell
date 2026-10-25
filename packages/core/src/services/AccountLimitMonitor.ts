@@ -63,6 +63,8 @@ interface Entry {
   /** Asked for again while one was in flight: one follow-up, however many asks, at the sooner pace asked. */
   owed: Pace | null;
   failures: number;
+  /** Reads in a row that found the account changing under them. */
+  changes: number;
   lastStartedAt: number | null;
   timer?: ReturnType<typeof setTimeout>;
   dueAt?: number;
@@ -98,6 +100,7 @@ export class AccountLimitMonitor {
       generation: 0,
       owed: null,
       failures: 0,
+      changes: 0,
       lastStartedAt: null,
     }));
     this.published = this.collect();
@@ -191,6 +194,7 @@ export class AccountLimitMonitor {
     entry.inFlight = undefined;
     entry.owed = null;
     entry.failures = 0;
+    entry.changes = 0;
     entry.lastStartedAt = null;
     this.forget(entry);
   }
@@ -246,6 +250,7 @@ export class AccountLimitMonitor {
   }
 
   private apply(entry: Entry, reading: AccountLimitReading): void {
+    if (reading.kind !== 'account_changed') entry.changes = 0;
     switch (reading.kind) {
       case 'limits': {
         entry.owner = reading.owner;
@@ -275,8 +280,14 @@ export class AccountLimitMonitor {
         return;
       case 'account_changed':
         this.forget(entry);
-        entry.owed = 'soon';
-        entry.lastStartedAt = null;
+        // One change reads the new account at once; a run of them would respawn the probe back to back, so it backs off like failures.
+        if (entry.changes++ === 0) {
+          entry.owed = 'soon';
+          entry.lastStartedAt = null;
+        } else {
+          entry.failures++;
+          entry.owed = 'later';
+        }
         return;
       default:
         entry.failures = 0;

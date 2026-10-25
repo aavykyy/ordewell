@@ -198,6 +198,41 @@ describe('the account-limit monitor', () => {
     expect(codex.calls).toHaveLength(3);
   });
 
+  it('backs off like a failure when the account keeps changing during reads, instead of reading back to back', async () => {
+    const codex = fakeCollector();
+    const m = start(codex.collector);
+    m.refresh();
+    codex.last().answer({ kind: 'account_changed' });
+    await settle();
+    // The first change reads the new account at once.
+    expect(codex.calls).toHaveLength(2);
+
+    codex.last().answer({ kind: 'account_changed' });
+    await settle();
+    expect(codex.calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(119_000);
+    expect(codex.calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(codex.calls).toHaveLength(3);
+
+    codex.last().answer({ kind: 'account_changed' });
+    await settle();
+    await vi.advanceTimersByTimeAsync(239_000);
+    expect(codex.calls).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(codex.calls).toHaveLength(4);
+
+    // A read that settles ends the run: the next change reads at once again.
+    codex.last().answer(limits(7, 'bob'));
+    await settle();
+    await vi.advanceTimersByTimeAsync(10_000);
+    m.refresh();
+    codex.last().answer({ kind: 'account_changed' });
+    await settle();
+    expect(codex.calls).toHaveLength(6);
+    expect(m.snapshots()[0]).toMatchObject({ status: 'unknown', buckets: [] });
+  });
+
   it('tells signed out, unsupported and not installed apart, none of them with limits', async () => {
     for (const kind of ['signed_out', 'unsupported', 'not_installed'] as const) {
       const codex = fakeCollector();

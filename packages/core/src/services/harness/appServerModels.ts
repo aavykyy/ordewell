@@ -66,10 +66,10 @@ export async function openAppServer(command: string, args: string[], launch: App
   const runner = new RunnerProcess({
     spawn: nodeSpawn,
     fetch: globalThis.fetch,
-    // Neither caller has a workspace: discovery asks for the catalog before
-    // one is chosen, and the account monitor reads the account, not a
-    // project, so neither may pay a direnv round trip (or inherit a project's
-    // variables) before a spawn that has a deadline.
+    // The cwd is no workspace: discovery asks for the catalog before one is
+    // chosen, so it pays no direnv round trip before a spawn with a deadline.
+    // The account monitor passes the workspace's environment itself, since
+    // that can choose whose account is read.
     workspaceEnv: async () => ({}),
     ...launch.deps,
   });
