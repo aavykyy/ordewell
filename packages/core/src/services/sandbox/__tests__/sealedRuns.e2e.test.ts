@@ -190,6 +190,9 @@ describe('sealed runs', async () => {
       });
     });
 
+    // The bomb spends the user's process budget, which every sealed run on the
+    // host is charged against, so another file's sealed run beside it fails
+    // to fork: test:sandbox runs its files one at a time.
     it('stops a fork bomb at its process limit, and leaves none of it behind', async () => {
       const marker = `ordewell_bomb_${process.pid}`;
       const result = await sealed(`echo "group=$$"; ${marker}() { ${marker} | ${marker} & }; ${marker}; sleep 2; echo survived`);
