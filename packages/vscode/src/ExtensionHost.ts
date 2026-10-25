@@ -331,7 +331,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     services.chatProvider.setPlanDockHeight(services.context.globalState.get<number>(PLAN_DOCK_HEIGHT_KEY));
     sendRunSettings();
     sendSkills();
-    accountLimits.refresh();
+    accountLimits.surfaceConnected();
     // Activation-time discovery can catch a runner CLI cold (server spawn,
     // catalog fetch, auth store still loading) and cache a degraded model
     // list. Re-discover in the background whenever a webview (re)connects

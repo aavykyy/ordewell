@@ -114,7 +114,7 @@ describe('the account-limit monitor', () => {
   it('folds activity hints into the next poll rather than reading on each one, and backs off on failure', async () => {
     const codex = fakeCollector();
     const m = start(codex.collector);
-    m.refresh();
+    m.setForeground(true);
     codex.last().answer(limits(10));
     await settle();
 
@@ -245,7 +245,7 @@ describe('the account-limit monitor', () => {
   it('backs off like a failure when the account keeps changing during reads, instead of reading back to back', async () => {
     const codex = fakeCollector();
     const m = start(codex.collector);
-    m.refresh();
+    m.setForeground(true);
     codex.last().answer({ kind: 'account_changed' });
     await settle();
     // The first change reads the new account at once.
@@ -331,6 +331,69 @@ describe('the account-limit monitor', () => {
 
     m.setForeground(true);
     expect(codex.calls).toHaveLength(3);
+  });
+
+  it('reads for a surface that connects only what was not read, or is not being read, within the minute', async () => {
+    const codex = fakeCollector();
+    const m = start(codex.collector);
+    m.setForeground(true);
+    m.surfaceConnected();
+    codex.last().answer(limits(1));
+    await settle();
+    await vi.advanceTimersByTimeAsync(59_000);
+    m.surfaceConnected();
+    expect(codex.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(codex.calls).toHaveLength(2);
+    codex.last().answer(limits(2));
+    await settle();
+
+    m.setForeground(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    m.surfaceConnected();
+    expect(codex.calls).toHaveLength(3);
+  });
+
+  it('holds activity hints while in the background, for the read coming back to the foreground makes', async () => {
+    const codex = fakeCollector();
+    const m = start(codex.collector);
+    m.refresh();
+    codex.last().answer(limits(1));
+    await settle();
+
+    for (let i = 0; i < 60; i++) {
+      m.invalidate();
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(codex.calls).toHaveLength(1);
+
+    m.setForeground(true);
+    expect(codex.calls).toHaveLength(2);
+  });
+
+  it('keeps its minute, its spacing and a service\'s wait when the wall clock is set back', async () => {
+    const codex = fakeCollector();
+    const m = start(codex.collector);
+    m.setForeground(true);
+    vi.setSystemTime(T0.getTime() - 24 * 3_600_000);
+    codex.last().answer(limits(1));
+    await settle();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(codex.calls).toHaveLength(2);
+    vi.setSystemTime(Date.now() - 24 * 3_600_000);
+    codex.last().answer(limits(2));
+    await settle();
+    m.refresh();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(codex.calls).toHaveLength(3);
+
+    codex.last().answer({ kind: 'failed', owner: 'alice', retryAfterMs: 5 * 60_000 });
+    await settle();
+    vi.setSystemTime(Date.now() - 24 * 3_600_000);
+    m.refresh();
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+    expect(codex.calls).toHaveLength(4);
   });
 
   it('backs off after failures, up to a bound, and returns to the minute once a read succeeds', async () => {
@@ -440,6 +503,32 @@ describe('the account-limit monitor', () => {
 
     expect(codex.calls).toHaveLength(1);
     expect(published).toHaveLength(count);
+  });
+
+  it('keeps every other listener, the polling and the reset watch going when one listener throws', async () => {
+    const codex = fakeCollector();
+    const m = start(codex.collector);
+    let throws = true;
+    m.subscribe(() => {
+      if (!throws) return;
+      throws = false;
+      throw new Error('a surface failed to draw');
+    });
+    const later: (readonly AccountLimitSnapshot[])[] = [];
+    m.subscribe((snapshots) => later.push(snapshots));
+    m.setForeground(true);
+    const reset = new Date(T0.getTime() + 90_000).toISOString();
+    codex.last().answer({ kind: 'limits', owner: 'alice', buckets: [bucket(10, reset)] });
+    await settle();
+
+    expect(later.at(-1)?.[0].status).toBe('fresh');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(codex.calls).toHaveLength(2);
+    codex.last().answer({ kind: 'limits', owner: 'alice', buckets: [bucket(11, reset)] });
+    await settle();
+    expect(later.at(-1)?.[0]).toMatchObject({ status: 'fresh', buckets: [bucket(11, reset)] });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(m.snapshots()[0].status).toBe('stale');
   });
 
   it('hands out frozen snapshots a listener cannot change', async () => {

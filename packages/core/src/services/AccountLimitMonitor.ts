@@ -134,9 +134,25 @@ export class AccountLimitMonitor {
   }
 
   /**
+   * A surface connected. It is drawn what is known, so only an account that
+   * is not being read and was not read within the poll interval is read again:
+   * a webview made ready just after a focused start does not read twice.
+   */
+  surfaceConnected(): void {
+    if (this.disposed) return;
+    this.each(undefined, (entry) => {
+      this.fenceScopeChange(entry);
+      const since = this.lastStart(entry);
+      if (entry.inFlight || (since !== null && this.now() - since < POLL_MS)) return;
+      this.request(entry, 'soon');
+    });
+  }
+
+  /**
    * Something spent from the account — a model call, a task's turn — so a
    * read would show more. Folded into the next poll, or the backoff after a
-   * failure, so a busy planner does not read the account on every call.
+   * failure, so a busy planner does not read the account on every call; in
+   * the background, where nothing polls, into the read coming back makes.
    */
   invalidate(harness?: string): void {
     this.each(harness, (entry) => this.request(entry, 'later'));
@@ -179,11 +195,22 @@ export class AccountLimitMonitor {
       if (entry.owed !== 'soon') entry.owed = pace;
       return;
     }
-    if (entry.lastStartedAt === null) {
+    if (pace === 'later' && !this.foreground) return;
+    const since = this.lastStart(entry);
+    if (since === null) {
       this.schedule(entry, this.now());
       return;
     }
-    this.schedule(entry, entry.lastStartedAt + (pace === 'soon' ? MIN_SPACING_MS : this.interval(entry)));
+    this.schedule(entry, since + (pace === 'soon' ? MIN_SPACING_MS : this.interval(entry)));
+  }
+
+  /**
+   * When the last read started, never later than now: a wall clock set back
+   * since would put it ahead, and every wait measured from it would grow by
+   * the step, focus and refresh included.
+   */
+  private lastStart(entry: Entry): number | null {
+    return entry.lastStartedAt === null ? null : Math.min(entry.lastStartedAt, this.now());
   }
 
   /** How long after one read the next poll comes: a minute, longer for an account with nothing to show, backed off after failures. */
@@ -209,7 +236,8 @@ export class AccountLimitMonitor {
   }
 
   private schedule(entry: Entry, requested: number): void {
-    const at = Math.max(requested, entry.notBefore ?? requested);
+    // The service's wait is held to its cap from now, for the same reason as {@link lastStart}.
+    const at = Math.max(requested, entry.notBefore === null ? requested : Math.min(entry.notBefore, this.now() + MAX_BACKOFF_MS));
     if (entry.timer && entry.dueAt !== undefined && entry.dueAt <= at) return;
     this.clearTimer(entry);
     const delay = at - this.now();
@@ -254,8 +282,11 @@ export class AccountLimitMonitor {
       clearTimeout(deadline);
       if (this.disposed || generation !== entry.generation) return;
       entry.inFlight = undefined;
-      this.apply(entry, reading);
-      this.next(entry);
+      try {
+        this.apply(entry, reading);
+      } finally {
+        this.next(entry);
+      }
     });
   }
 
@@ -319,8 +350,9 @@ export class AccountLimitMonitor {
       this.request(entry, owed);
       return;
     }
-    if (!this.foreground || entry.lastStartedAt === null) return;
-    this.schedule(entry, entry.lastStartedAt + this.interval(entry));
+    const since = this.lastStart(entry);
+    if (!this.foreground || since === null) return;
+    this.schedule(entry, since + this.interval(entry));
   }
 
   /** At the earliest future reset the share shown belongs to a window that is over: stale until read again. */
@@ -363,7 +395,10 @@ export class AccountLimitMonitor {
     entry.snapshot = freeze(snapshot);
     if (JSON.stringify(before) === JSON.stringify(entry.snapshot)) return;
     this.published = this.collect();
-    for (const listener of [...this.listeners]) listener(this.published);
+    for (const listener of [...this.listeners]) {
+      // One surface failing to draw is that surface's: the others still hear, and the read that called this still schedules the next.
+      try { listener(this.published); } catch { /* the listener's own */ }
+    }
   }
 
   private collect(): readonly AccountLimitSnapshot[] {

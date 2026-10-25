@@ -90,9 +90,24 @@ export async function resolveWorkspaceEnv(cwd: string, overrides: Partial<Worksp
   return result;
 }
 
-/** Just the variables, for a spawn path that has nowhere to report the rest. */
+const evaluating = new Map<string, Promise<Record<string, string>>>();
+
+/**
+ * Just the variables, for a spawn path that has nowhere to report the rest.
+ * Asks for one directory made while its evaluation runs share it — the
+ * account-limit collectors ask together on every poll, and an `.envrc` can
+ * be costly to evaluate — but nothing is kept once it is over, so the next
+ * ask evaluates afresh and sees any edit.
+ */
 export async function workspaceEnvOf(cwd: string): Promise<Record<string, string>> {
-  return (await resolveWorkspaceEnv(cwd)).env;
+  const key = path.resolve(cwd);
+  let running = evaluating.get(key);
+  if (!running) {
+    running = resolveWorkspaceEnv(cwd).then((result) => result.env).finally(() => evaluating.delete(key));
+    evaluating.set(key, running);
+  }
+  // Each asker gets its own copy to build its spawn's environment on.
+  return { ...(await running) };
 }
 
 /**

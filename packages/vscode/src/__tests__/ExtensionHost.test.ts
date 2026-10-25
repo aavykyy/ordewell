@@ -853,21 +853,23 @@ describe('the host\'s one account-limit monitor', () => {
 
   it('asks again when the webview connects, the configuration changes and the window regains focus, and folds model calls into the next poll', async () => {
     const refresh = vi.spyOn(monitor, 'refresh');
+    const connected = vi.spyOn(monitor, 'surfaceConnected');
     const invalidate = vi.spyOn(monitor, 'invalidate');
     const foreground = vi.spyOn(monitor, 'setForeground');
     await h.host.start();
     refresh.mockClear();
 
     h.chat.messages.fire({ type: 'ready' });
-    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(connected).toHaveBeenCalledTimes(1);
+    expect(refresh).not.toHaveBeenCalled();
     for (const listener of h.config.listeners) listener();
-    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(refresh).toHaveBeenCalledTimes(1);
     h.sessionDeps.current?.broadcast({ type: 'planner_usage', turnId: 't', totals: { inputTokens: 1 } });
     expect(invalidate).toHaveBeenLastCalledWith();
     Object.assign(h.session.spies, { planTasks: [createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'codex' })] });
     h.sessionDeps.current?.broadcast({ type: 'task_log', taskId: 't1', attempt: 1, events: [{ type: 'turn_end', reason: 'completed' }] });
     expect(invalidate).toHaveBeenLastCalledWith('codex');
-    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(refresh).toHaveBeenCalledTimes(1);
 
     h.vscodeApi.focus(false);
     expect(foreground).toHaveBeenLastCalledWith(false);

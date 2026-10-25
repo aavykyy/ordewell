@@ -2591,9 +2591,11 @@ OpenCode's own store and sent only to OpenCode's fixed quota addresses
 tasks do, so the account a workspace chooses (its own `CODEX_HOME`,
 `CLAUDE_CONFIG_DIR` or OpenCode data directory) is the one read. One monitor per host owns every installed
 runner's — enabled for tasks or not — and decides when each collector reads:
-before the planner's first call, on a surface connecting, on focus and on a
-configuration change, about once a minute while the window has focus, and
-again when a reported window resets; never two reads of one account at once.
+before the planner's first call, on a surface connecting when its last read
+is over a minute old, on focus and on a configuration change, about once a
+minute while the window has focus, and again when a reported window resets;
+never two reads of one account at once. Model calls and task turns are folded
+into the next poll, so without focus they read nothing.
 A full read replaces what was known, every bucket and window; a sparse update
 only asks for another read. A failure keeps the last read, marked `stale`,
 only when the same account was seen signed in; an account or auth-scope change
