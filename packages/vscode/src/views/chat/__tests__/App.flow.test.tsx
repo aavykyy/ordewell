@@ -135,7 +135,7 @@ describe('chat plan flow', () => {
       turnStarted(), call('bash', args, 'tc-1'),
       done({ tool: 'bash', args: JSON.stringify(args), result: 'Command refused: writes belong to the runners.', success: false, outcome: 'refused', toolCallId: 'tc-1' }),
     );
-    expect(document.querySelector('.activity-group-toggle')!.textContent).toBe('Ran a command (1 denied)');
+    expect(document.querySelector('.activity-group-toggle')!.textContent).toBe('1 command denied');
     openActivity();
 
     const row = document.querySelector('.cmd-row')!;

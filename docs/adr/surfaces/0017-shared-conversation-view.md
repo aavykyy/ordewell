@@ -104,18 +104,26 @@ own presentation; it never re-derives the conversation from raw messages.
   digest. The TUI keeps one detail toggle, ctrl+o, that shows every block's
   arguments, full output, subagent children and digests at once. VS Code folds
   each run of activity between two messages — thinking, calls, subagents,
-  setup notices, answered approvals — into one line that says what it did
-  (`Ran 4 commands, fetched 2 pages (2 failed)`), counted from the blocks'
-  own facts: a call by its kind and how it ended, a subagent once, never its
-  steps, a `load_skill` call and its notice once, an answered approval only
-  when no call stands beside it, and work still running as running. Opening
-  the line draws its rows as the TUI's collapsed previews; each row, each of
-  a subagent's steps and each long report opens on its own. A waiting
-  approval, an error, a notice, the skills a user's own message loaded and
-  every message stay outside any fold. What is open is surface state, keyed
-  on block ids that stay stable for as long as the block exists — a run by the
-  ids of the blocks it holds — never stored in core, and dropped when the
-  conversation is replaced or another attempt is shown.
+  setup notices, compaction notices, answered approvals — into one line that
+  says what it did (`Ran 4 commands, fetched 2 pages (2 failed)`), counted
+  from the blocks' own facts: a call by its kind and how it ended, and never
+  as run when it was refused, denied or not executed (`1 command denied`,
+  `Ran a command (1 more not run)`); an Ordewell tool the same whichever
+  planner called it; a subagent once, never its steps; a `load_skill` call
+  and its notice once; a granted approval only when no call stands beside it,
+  a denied one always; and work still running as running. A line with a
+  failure, denial or interruption in it is coloured as one. Opening the line
+  draws its rows as the TUI's collapsed previews; each row, each of a
+  subagent's steps and each long report opens on its own. A waiting approval,
+  an error, other notices, the skills a user's own message loaded and every
+  message stay outside any fold. A script task's log folds nothing and opens
+  nothing: it is commands, their output and their exits (ADR-0035), with no
+  prose for a fold to keep in view, so each row is drawn whole. What is open
+  is surface state, keyed on block ids that stay stable for as long as the
+  block exists — a run by the ids of the blocks it holds — never stored in
+  core, and dropped when the conversation is replaced (a new session, a
+  reload, a compaction, whose blocks are numbered afresh) or another attempt
+  is shown.
 
 ### Queued prompts
 
@@ -213,3 +221,4 @@ the same word.)
 - 2026-10-19 — a turn whose calls did not stream has their tokens taken once from its result (U1). A session billing fact is kept with the source that stated it, so a planner switched before its first cost is not shown as the old one's subscription.
 - 2026-10-19 — the Tasks total names a runner as reporting no cost only once an attempt of it has ended having reported usage (U1). Claude Code states a cost only at a turn's end, so a first Claude Code task read as `claude-code reports no cost` for as long as its turn ran.
 - 2026-10-25 — VS Code folds each run of activity into one summarised line, opened a level at a time, in place of its expand-all button; the TUI keeps ctrl+o (X1). A long turn's rows buried the prose between them, and showing everything was the only way to see one row in full.
+- 2026-10-25 — a script task's log is drawn whole, unfolded; a summary never counts a call that did not run as run and keeps a denied approval; a failed line is coloured; a compaction drops what was open (X1). Found in review: a failing script's output was hidden behind one closed line, and a denied command read `Ran a command`.

@@ -794,6 +794,22 @@ body {
   animation: cmd-row-pulse 1.4s ease-in-out infinite;
 }
 
+/* A run with something in it failed, denied or cut short reads as an
+   exception while folded, as the row it hides does (.cmd-row-outcome). */
+.activity-group[data-state='failed'] .activity-group-toggle,
+.activity-group[data-state='failed'] .activity-group-toggle > .disclosure-chevron {
+  color: var(--orange);
+}
+
+/* The fixed orange is tuned for ordinary themes; a high-contrast one names
+   its own warning colour. */
+body.vscode-high-contrast .activity-group[data-state='failed'] .activity-group-toggle,
+body.vscode-high-contrast .activity-group[data-state='failed'] .activity-group-toggle > .disclosure-chevron,
+body.vscode-high-contrast-light .activity-group[data-state='failed'] .activity-group-toggle,
+body.vscode-high-contrast-light .activity-group[data-state='failed'] .activity-group-toggle > .disclosure-chevron {
+  color: var(--vscode-editorWarning-foreground, var(--text-primary));
+}
+
 /* The rows hang off the line that summarised them, a step in. */
 .activity-group-body {
   margin: 1px 0 4px 4px;
@@ -823,6 +839,15 @@ body {
 .cmd-row-toggle,
 .runner-loaded-head.disclosure {
   flex: 1;
+}
+
+/* A row drawn whole with nothing to open (a script task's log) keeps the
+   head a button would have: its glyph beside the command, not above it. */
+.cmd-row-toggle:not(.disclosure) {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
 }
 
 .activity-think-head.disclosure {

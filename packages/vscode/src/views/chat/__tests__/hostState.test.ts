@@ -190,6 +190,12 @@ describe('conversationEpoch: which conversation the blocks belong to', () => {
     expect(emptied.conversationEpoch).toBe(shown.conversationEpoch + 1);
   });
 
+  it('moves on when the host replaces the conversation with blocks that reuse its ids', () => {
+    const shown = reduceHost(INITIAL_HOST_STATE, patch(['b1']));
+    const compacted = reduceHost(shown, msg({ type: 'conversationPatch', order: ['b1'], changed: [{ ...block, text: 'summary' }], replaced: true }));
+    expect(compacted.conversationEpoch).toBe(shown.conversationEpoch + 1);
+  });
+
   it('stays put while the same conversation is patched, or an empty one stays empty', () => {
     const shown = reduceHost(INITIAL_HOST_STATE, patch(['b1']));
     expect(reduceHost(shown, patch(['b1'])).conversationEpoch).toBe(shown.conversationEpoch);

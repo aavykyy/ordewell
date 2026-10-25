@@ -245,6 +245,22 @@ export const TASK_LOG_PENDING = [
 ];
 
 /**
+ * A script task's log (ADR-0035) mid-run: a step that passed, one that failed
+ * with more output than a preview holds, and one still printing. It runs no
+ * model, so nothing in it folds.
+ */
+export const SCRIPT_TASK_LOG = [
+  { type: 'script_run', argv: ['npm', 'ci'] },
+  { type: 'script_output', text: 'added 412 packages in 9s\n' },
+  { type: 'script_exit', code: 0, signal: null, durationMs: 9100 },
+  { type: 'script_run', argv: ['npm', 'test'] },
+  { type: 'script_output', text: ' RUN  v2.1.9\n ✓ src/parse/tokens.test.ts (12 tests)\n ✓ src/parse/errors.test.ts (4 tests)\n × src/parse/index.test.ts > parses a nested array\n   → expected [ 1, [ 2 ] ] to deeply equal [ 1, [ 2, 3 ] ]\n Tests  1 failed | 16 passed (17)\n' },
+  { type: 'script_exit', code: 1, signal: null, durationMs: 4200 },
+  { type: 'script_run', argv: ['npm', 'run', 'lint'] },
+  { type: 'script_output', text: 'eslint src --max-warnings 0\n' },
+];
+
+/**
  * A task's log (ADR-0018, V1) mid-turn, for its folded activity (ADR-0017,
  * X1): a run of thinking and calls, one failed; a subagent with its own steps;
  * the agent's words between; and a write still waiting on the user.

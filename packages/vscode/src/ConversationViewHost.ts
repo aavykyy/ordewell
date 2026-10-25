@@ -151,13 +151,17 @@ export class ConversationViewHost {
   }
 
   flush(): void {
+    this.send(false);
+  }
+
+  private send(replaced: boolean): void {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
     const patch = diffConversation(this.sent, this.view.blocks);
     this.sent = this.view.blocks;
-    if (patch) this.post(patch);
+    if (patch) this.post(replaced ? { ...patch, replaced } : patch);
   }
 
   // A turn still open belongs to the view being replaced; stopping it keeps
@@ -167,7 +171,7 @@ export class ConversationViewHost {
     if (this.held.length > 0) this.showHeld(EMPTY_HOLD);
     this.stop();
     this.view = view;
-    this.flush();
+    this.send(true);
   }
 
   private showHeld(held: PromptHold): void {

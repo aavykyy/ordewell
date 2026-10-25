@@ -24,7 +24,9 @@
  *   - the task log (/tasklog) stacks its pending messages the same way, one in
  *     each state, Send now on all but the forced one, × only on the queued one
  *   - the task log folds a runner's activity the same way, a waiting request
- *     left outside where it is answered, and an attempt switch opens nothing
+ *     left outside where it is answered, a run with a failure in it coloured
+ *     apart, and an attempt switch opens nothing
+ *   - a script task's log folds nothing: each step's whole output and exit
  *   - a plan's task cards carry their own fill, distinct from the plan behind
  *     them, with the expanded card and its subtasks each a step apart
  *
@@ -40,7 +42,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { chromium } from './load-playwright.mjs';
 import { createDriver } from './host-driver.mjs';
-import { MAIN_SCENARIO, RELOAD_FIXTURE, RELOAD_PLAN, TASK_CARDS_PLAN, TASK_LOG_ACTIVITY, TASK_LOG_PENDING } from './scenarios.mjs';
+import { MAIN_SCENARIO, RELOAD_FIXTURE, RELOAD_PLAN, SCRIPT_TASK_LOG, TASK_CARDS_PLAN, TASK_LOG_ACTIVITY, TASK_LOG_PENDING } from './scenarios.mjs';
 import { EMPTY_TASK_LOG_FOLLOW, replayTaskLog, taskLogHeaderView } from '../../packages/core/dist/plan-utils.mjs';
 
 function arg(name, fallback) {
@@ -68,12 +70,12 @@ const browser = await chromium.launch(executablePath ? { executablePath } : {});
  * core's one header view, as TaskLogPanel builds it, so the tab draws what a
  * live task's would.
  */
-function taskLogStatus(view, { awaitingApproval = 0, attempts = [1], attempt = 1 } = {}) {
+function taskLogStatus(view, { awaitingApproval = 0, attempts = [1], attempt = 1, script = false } = {}) {
   const follow = { ...EMPTY_TASK_LOG_FOLLOW, view, attempts, attempt };
   return {
     taskId: 't2', order: 2, title: 'Add a JSON parser', runner: 'claude-code',
     header: taskLogHeaderView({ status: 'in_progress', resumeAt: null, continuable: false, attemptUsage: [] }, follow, awaitingApproval, attempt),
-    queued: view.queued, attempts, attempt,
+    queued: view.queued, attempts, attempt, ...(script ? { script } : {}),
   };
 }
 
@@ -336,6 +338,9 @@ async function taskLogActivity(width, theme) {
     `tasklog-activity ${label}: each run says what it did (${summaries.join(' | ')})`);
   check(await page.locator('.conversation > .approval-card.pending .approval-card-allow').count() === 1, `tasklog-activity ${label}: the waiting write stays outside, answerable`);
   check(await page.locator('.cmd-row, .subagent-card, .activity-think').count() === 0, `tasklog-activity ${label}: collapsed runs draw none of their rows`);
+  const colours = await page.locator('.activity-group-summary').evaluateAll((els) => els.map((el) => getComputedStyle(el).color));
+  check(await page.locator('.activity-group').first().getAttribute('data-state') === 'failed' && colours[0] !== colours[1],
+    `tasklog-activity ${label}: the run with a failure in it reads apart from one without (${colours.join(' vs ')})`);
   await checkContrast(page, `tasklog-activity ${label}`, ['.activity-group-summary']);
   await page.screenshot({ path: path.join(OUT, `tasklog-activity-collapsed-${width}-${theme}.png`) });
 
@@ -355,6 +360,34 @@ async function taskLogActivity(width, theme) {
   await send(page, { type: 'init', blocks: view.blocks, status: status(1) });
   const after = await groups.evaluateAll((els) => els.map((el) => el.getAttribute('aria-expanded')));
   check(after.every((v) => v === 'false'), `tasklog-activity ${label}: another attempt opens with nothing open (${after.join(',')})`);
+  await page.close();
+}
+
+/**
+ * A script task's log (ADR-0035): each step as run, its whole output and its
+ * exit in view, with nothing folded and nothing to open.
+ */
+async function scriptTaskLog(width, theme) {
+  const label = `${width}/${theme}`;
+  const page = await browser.newPage({ viewport: { width, height: 900 } });
+  await page.goto(`${BASE}/tasklog?theme=${theme}`);
+  await page.waitForFunction(() => window.__posted.some((m) => m.type === 'ready'));
+  const view = replayTaskLog(SCRIPT_TASK_LOG);
+  await send(page, { type: 'init', blocks: view.blocks, status: taskLogStatus(view, { script: true }) });
+  check(await page.locator('.activity-group').count() === 0, `tasklog-script ${label}: nothing folds`);
+  const heads = await page.locator('.conversation > .cmd-row .cmd-row-head').allTextContents();
+  check(JSON.stringify(heads) === JSON.stringify(['Run(npm ci)', 'Run(npm test)', 'Run(npm run lint)']), `tasklog-script ${label}: every step in view (${heads.join(' | ')})`);
+  const besides = await page.locator('.conversation > .cmd-row').evaluateAll((rows) => rows.every((row) => {
+    const icon = row.querySelector('.cmd-row-icon').getBoundingClientRect();
+    const head = row.querySelector('.cmd-row-head').getBoundingClientRect();
+    return Math.abs(icon.top - head.top) < icon.height && icon.right <= head.left;
+  }));
+  check(besides, `tasklog-script ${label}: each step's glyph sits beside its command`);
+  const failing = await page.locator('.conversation > .cmd-row').nth(1).innerText();
+  check(failing.includes('Tests  1 failed') && failing.includes('exited 1 after'), `tasklog-script ${label}: the failing step's whole output and exit in view`);
+  check(await page.locator('.conversation [aria-expanded]').count() === 0, `tasklog-script ${label}: nothing to open`);
+  await checkContrast(page, `tasklog-script ${label}`, ['.cmd-row-head', '.cmd-row-outcome', '.cmd-row-output']);
+  await page.screenshot({ path: path.join(OUT, `tasklog-script-${width}-${theme}.png`), fullPage: true });
   await page.close();
 }
 
@@ -543,6 +576,11 @@ for (const combo of COMBOS) {
 for (const combo of COMBOS) {
   console.log(`\n== task log activity, ${combo.width}px, ${combo.theme} theme ==`);
   await taskLogActivity(combo.width, combo.theme);
+}
+
+for (const combo of COMBOS) {
+  console.log(`\n== script task log, ${combo.width}px, ${combo.theme} theme ==`);
+  await scriptTaskLog(combo.width, combo.theme);
 }
 
 for (const combo of COMBOS) {

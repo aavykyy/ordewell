@@ -544,6 +544,32 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(document.querySelector('.task-log-readonly')?.textContent).toContain('takes no messages');
   });
 
+  it('keeps every step of a script task\'s log in view, its whole output and exit with it, folding nothing (ADR-0035)', () => {
+    const tail = Array.from({ length: 6 }, (_, i) => `test ${i + 1} failed`).join('\n');
+    const run = replayTaskLog([
+      { type: 'script_run', argv: ['npm', 'ci'] },
+      { type: 'script_output', text: 'added 12 packages\n' },
+      { type: 'script_exit', code: 0, signal: null, durationMs: 2000 },
+      { type: 'script_run', argv: ['npm', 'test'] },
+      { type: 'script_output', text: `${tail}\n` },
+      { type: 'script_exit', code: 1, signal: null, durationMs: 3000 },
+      { type: 'script_run', argv: ['npm', 'run', 'lint'] },
+      { type: 'script_output', text: 'linting src/\n' },
+    ]);
+    render(<TaskLogApp />);
+    init({ script: true, working: true, planStatus: 'in_progress' }, [...run.blocks]);
+
+    expect(document.querySelector('.activity-group')).toBeNull();
+    const rows = [...document.querySelectorAll('.conversation > .cmd-row')];
+    expect(rows.map((row) => row.querySelector('.cmd-row-head')?.textContent)).toEqual(['Run(npm ci)', 'Run(npm test)', 'Run(npm run lint)']);
+    expect(rows[1]).toHaveTextContent('test 6 failed');
+    expect(rows[1]).toHaveTextContent('exited 1 after 3 s');
+    expect(rows[2]).toHaveTextContent('linting src/');
+    // Output only: nothing in it opens or closes.
+    expect(document.querySelector('.conversation [aria-expanded]')).toBeNull();
+    expect(document.querySelector('.task-log-readonly')?.textContent).toContain('Its output is above.');
+  });
+
   describe('a runner\'s tool request (ADR-0018, A1)', () => {
     const request = (overrides: Partial<Extract<DisplayBlock, { type: 'approval' }>> = {}): DisplayBlock => ({
       type: 'approval', id: 'b2', approvalId: 'ap-1', kind: 'runner_tool', subject: 'Bash(npm test)', scope: 'Bash', status: 'pending', allowForTask: true,
@@ -583,8 +609,8 @@ describe('the task log tab (ADR-0018, V1)', () => {
         request({ id: 'b3', approvalId: 'ap-2', status: 'denied', decidedBy: 'asked', note: 'use notes/' }),
         request({ id: 'b4', approvalId: 'ap-3', status: 'withdrawn' }),
       ]);
-      expect(screen.getByRole('button', { name: 'Settled 3 approval requests' })).toHaveAttribute('aria-expanded', 'false');
-      fireEvent.click(screen.getByRole('button', { name: 'Settled 3 approval requests' }));
+      expect(screen.getByRole('button', { name: 'Settled 3 approval requests (1 denied)' })).toHaveAttribute('aria-expanded', 'false');
+      fireEvent.click(screen.getByRole('button', { name: 'Settled 3 approval requests (1 denied)' }));
       expect(screen.getByText('Approved for this task')).toBeTruthy();
       expect(screen.getByText('Note to the agent: use notes/')).toBeTruthy();
       expect(screen.getByText('Withdrawn')).toBeTruthy();

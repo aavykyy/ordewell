@@ -512,9 +512,15 @@ function ActivityGroup({ blocks, open, onToggleGroup, onToggleRow, handlers }: {
 }
 
 export function ConversationBlocks({
-  blocks, onShowPlan, onResolveApproval = noop, onAnswerApproval = noop,
+  blocks, asRun = false, onShowPlan, onResolveApproval = noop, onAnswerApproval = noop,
 }: {
   blocks: readonly DisplayBlock[];
+  /**
+   * Every block drawn whole, with nothing to open: a script task's log, which
+   * is its commands, their output and their exits (ADR-0035) and has no prose
+   * for a fold to keep in view.
+   */
+  asRun?: boolean;
   onShowPlan: () => void;
   onResolveApproval?: (id: string, granted: boolean) => void;
   /** A task runner's request, answered in its task log (ADR-0018, A1). */
@@ -539,6 +545,13 @@ export function ConversationBlocks({
     return next;
   }), []);
   const handlers = useMemo(() => ({ onShowPlan, onResolveApproval, onAnswerApproval }), [onShowPlan, onResolveApproval, onAnswerApproval]);
+  if (asRun) {
+    return (
+      <div className="conversation">
+        {blocks.map((block) => <MemoBlock key={block.id} block={block} expanded {...handlers} />)}
+      </div>
+    );
+  }
   return (
     <div className="conversation">
       {items.map((item) => (item.kind === 'activity'

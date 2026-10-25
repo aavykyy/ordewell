@@ -212,7 +212,7 @@ export default function TaskLogApp() {
       <div className="task-log-body" key={status?.attempt} ref={followRef}>
         {blocks.length === 0
           ? <div className="task-log-empty">{working ? 'Working…' : 'No output yet.'}</div>
-          : <ConversationBlocks blocks={blocks} onShowPlan={noop}
+          : <ConversationBlocks blocks={blocks} asRun={script} onShowPlan={noop}
               onAnswerApproval={(id, decision) => vscode.postMessage({ type: 'answerApproval', id, decision })} />}
       </div>
 

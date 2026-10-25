@@ -50,9 +50,22 @@ describe('activitySummary', () => {
 
   it('tells a failure, a denial and an interruption apart', () => {
     const summary = activitySummary([tool('bash', 'error'), tool('bash', 'denied'), tool('bash', 'interrupted'), tool('bash')]);
-    expect(summary.text).toBe('Ran 4 commands (1 failed, 1 denied, 1 interrupted)');
+    expect(summary.text).toBe('Ran 3 commands (1 failed, 1 interrupted, 1 more denied)');
     expect(summary.failed).toBe(true);
     expect(activitySummary([tool('bash')]).failed).toBe(false);
+  });
+
+  it('never claims a call that was refused, denied or not executed ran', () => {
+    const notRun = (over: Partial<ToolBlock> = {}) => tool('bash', 'interrupted', { outcome: 'not_executed', ...over });
+    expect(text([tool('bash', 'denied', { outcome: 'denied' })])).toBe('1 command denied');
+    expect(text([tool('bash', 'denied', { outcome: 'refused' }), tool('bash', 'denied', { outcome: 'denied' })])).toBe('2 commands denied');
+    expect(text([notRun()])).toBe('1 command not run');
+    expect(text([notRun(), tool('bash', 'denied')])).toBe('2 commands not run (1 denied)');
+    expect(text([tool('bash'), notRun()])).toBe('Ran a command (1 more not run)');
+    expect(text([tool('web_search', 'denied')])).toBe('1 web search denied');
+    expect(text([tool('grep', 'denied'), tool('grep', 'denied')])).toBe('2 code searches denied');
+    expect(text([tool('bash', 'denied'), tool('bash', 'pending')])).toBe('Running a command (1 more denied)');
+    expect(activitySummary([notRun()]).failed).toBe(true);
   });
 
   it('counts repeated searches as times, and code searches apart from the web', () => {
@@ -88,9 +101,18 @@ describe('activitySummary', () => {
     expect(text([{ type: 'compaction', id: id(), trigger: 'auto' }])).toBe('Compacted the context');
   });
 
-  it('does not count an answered approval beside the call it was about', () => {
+  it('does not count a granted approval beside the call it was about', () => {
     expect(text([tool('bash'), approval('granted')])).toBe('Ran a command');
-    expect(text([approval('denied')])).toBe('Settled an approval request');
+    expect(text([approval('granted')])).toBe('Settled an approval request');
+    expect(activitySummary([approval('granted')]).failed).toBe(false);
+  });
+
+  it('keeps a denied approval in view, beside a call or alone', () => {
+    expect(text([tool('bash', 'pending'), approval('denied')])).toBe('Running a command, settled an approval request (1 denied)');
+    expect(text([tool('bash', 'error'), approval('granted'), approval('denied')])).toBe('Ran a command (1 failed), settled an approval request (1 denied)');
+    expect(text([approval('denied')])).toBe('Settled an approval request (1 denied)');
+    expect(text([approval('granted'), approval('denied')])).toBe('Settled 2 approval requests (1 denied)');
+    expect(activitySummary([approval('denied')]).failed).toBe(true);
   });
 
   it('counts a skill the planner loaded once, from its call and its notice together', () => {
@@ -105,6 +127,13 @@ describe('activitySummary', () => {
 
   it('checks the task tools as one kind', () => {
     expect(text([tool('task_query'), tool('task_output'), tool('task_diff')])).toBe('Checked tasks 3 times');
+  });
+
+  it('counts an Ordewell tool the same whichever planner calls it', () => {
+    expect(text([agentTool('mcp__ordewell__task_query'), agentTool('mcp__ordewell__task_output'), agentTool('ordewell_task_diff')]))
+      .toBe('Checked tasks 3 times');
+    expect(text([agentTool('mcp__ordewell__task_query', 'pending')])).toBe('Checking tasks');
+    expect(text([agentTool('mcp__github__task_query')])).toBe('Used an MCP tool');
   });
 });
 

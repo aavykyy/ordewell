@@ -90,6 +90,11 @@ export interface ConversationPatch {
   type: 'conversationPatch';
   order: readonly string[];
   changed: readonly DisplayBlock[];
+  /**
+   * The view was replaced (a reset, a reload, a compaction): ids are numbered
+   * afresh, so one the webview kept may name a different block now.
+   */
+  replaced?: true;
 }
 
 export type WebviewToHost =
