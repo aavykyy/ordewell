@@ -635,6 +635,16 @@ describe("the Settings panel's Run block", () => {
     expect(lastPush()).toEqual([true, { ...RUN_SETTINGS_DEFAULTS, wakeUpReadBudget: 20 }, 2]);
   });
 
+  it('keeps a manually configured read budget when another run setting is saved', async () => {
+    h.settings.updateRunSettings({ wakeUpReadBudget: 30 });
+
+    h.chat.messages.fire({ type: 'changeSettings', change: { run: { supervisorLevel: 'off' } } });
+
+    await vi.waitFor(() => expect(h.settings.updateRunSettings).toHaveBeenCalledWith({ supervisorLevel: 'off' }));
+    expect(h.settings.getRunSettings().wakeUpReadBudget).toBe(30);
+    expect(lastPush()).toEqual([true, { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', wakeUpReadBudget: 30 }, 2]);
+  });
+
   it.each([
     [{ supervisorLevel: 'act' as const }, /ops tasks included/],
     [{ autorun: true }, /without review/],
