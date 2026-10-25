@@ -261,6 +261,19 @@ export const SCRIPT_TASK_LOG = [
 ];
 
 /**
+ * A runner's command the user denied (ADR-0017, X1): its result comes back
+ * failed, but it never ran, and the denial is told once, on the call.
+ */
+export const TASK_LOG_DENIED = [
+  { type: 'turn_start', message: 'Clean the build' },
+  { type: 'tool_call', id: 'd1', name: 'Bash', args: '{"command":"rm -rf dist"}' },
+  { type: 'approval_requested', approvalId: 'ap-d1', tool: 'Bash', args: '{"command":"rm -rf dist"}', allowForTask: true, toolCallId: 'd1' },
+  { type: 'approval_decided', approvalId: 'ap-d1', decision: 'deny', note: 'keep dist for now' },
+  { type: 'tool_result', id: 'd1', output: 'The user denied this call: keep dist for now', success: false },
+  { type: 'text', text: 'Leaving dist in place.' },
+];
+
+/**
  * A task's log (ADR-0018, V1) mid-turn, for its folded activity (ADR-0017,
  * X1): a run of thinking and calls, one failed; a subagent with its own steps;
  * the agent's words between; and a write still waiting on the user.

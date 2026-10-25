@@ -2501,7 +2501,8 @@ messages (thinking, calls, subagents, setup and compaction notices, answered
 approvals): one line that says what the run did, counted from the blocks' own
 facts (`Ran 4 commands, fetched 2 pages (2 failed)`), collapsed by default. A
 call that was refused, denied or not executed is never counted as run
-(`1 command denied`). Opened, it draws its rows as their collapsed previews,
+(`1 command denied`), and a denial beside the call it stopped is told once,
+on the call. Opened, it draws its rows as their collapsed previews,
 and each row opens on its own (ADR-0017, X1). A waiting approval, an error,
 other notices and every message stay outside any group, and a script task's
 log has none: its rows are drawn whole. What is open is the webview's state,

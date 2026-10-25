@@ -13,8 +13,8 @@ const agentTool = (label: string, status: ToolStatus = 'ok', over: Partial<ToolB
 const subagent = (over: Partial<SubagentBlock> = {}): SubagentBlock => ({
   type: 'subagent', id: id(), subagentId: id(), brief: 'look', status: 'done', children: [], digest: '', ...over,
 });
-const approval = (status: ApprovalBlock['status']): ApprovalBlock => ({
-  type: 'approval', id: id(), approvalId: id(), kind: 'shell_command', subject: 'npm test', scope: 'npm', status,
+const approval = (status: ApprovalBlock['status'], over: Partial<ApprovalBlock> = {}): ApprovalBlock => ({
+  type: 'approval', id: id(), approvalId: id(), kind: 'shell_command', subject: 'npm test', scope: 'npm', status, ...over,
 });
 const skill = (name: string, invokedBy: 'user' | 'planner' = 'planner'): DisplayBlock => ({
   type: 'skill_load', id: id(), invokedBy, name, source: 'workspace', path: `.ordewell/skills/${name}/SKILL.md`,
@@ -109,10 +109,32 @@ describe('activitySummary', () => {
 
   it('keeps a denied approval in view, beside a call or alone', () => {
     expect(text([tool('bash', 'pending'), approval('denied')])).toBe('Running a command, settled an approval request (1 denied)');
-    expect(text([tool('bash', 'error'), approval('granted'), approval('denied')])).toBe('Ran a command (1 failed), settled an approval request (1 denied)');
+    expect(text([tool('bash', 'error'), approval('granted'), approval('denied', { kind: 'url_fetch' })])).toBe('Ran a command (1 failed), settled an approval request (1 denied)');
     expect(text([approval('denied')])).toBe('Settled an approval request (1 denied)');
     expect(text([approval('granted'), approval('denied')])).toBe('Settled 2 approval requests (1 denied)');
     expect(activitySummary([approval('denied')]).failed).toBe(true);
+  });
+
+  it('counts a runner call its approval denied as denied, and the denial once, on the call', () => {
+    // A runner's denied call still settles as a failed result, but it never ran.
+    const denied = { toolCallId: 't3' };
+    expect(text([
+      approval('denied', { kind: 'runner_tool', ...denied }), tool('bash', 'error', { outcome: 'failure', ...denied }),
+    ])).toBe('1 command denied');
+    expect(text([
+      tool('bash', 'ok', { toolCallId: 't1' }), approval('granted', { kind: 'runner_tool', toolCallId: 't1' }),
+      approval('denied', { kind: 'runner_tool', ...denied }), tool('bash', 'error', { outcome: 'failure', ...denied }),
+    ])).toBe('Ran a command (1 more denied)');
+    // Its call elsewhere, such as inside a subagent: the denial is still shown.
+    expect(text([tool('bash', 'error', { toolCallId: 't9' }), approval('denied', { kind: 'runner_tool', ...denied })]))
+      .toBe('Ran a command (1 failed), settled an approval request (1 denied)');
+  });
+
+  it('counts a planner call the user denied once, on the call', () => {
+    expect(text([approval('denied'), tool('bash', 'denied', { outcome: 'denied' })])).toBe('1 command denied');
+    expect(text([tool('bash'), approval('denied'), tool('bash', 'denied', { outcome: 'denied' }), approval('denied', { kind: 'url_fetch' })]))
+      .toBe('Ran a command (1 more denied), settled an approval request (1 denied)');
+    expect(activitySummary([approval('denied'), tool('bash', 'denied', { outcome: 'denied' })]).failed).toBe(true);
   });
 
   it('counts a skill the planner loaded once, from its call and its notice together', () => {

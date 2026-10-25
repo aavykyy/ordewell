@@ -26,7 +26,9 @@
  *   - the task log folds a runner's activity the same way, a waiting request
  *     left outside where it is answered, a run with a failure in it coloured
  *     apart, and an attempt switch opens nothing
- *   - a script task's log folds nothing: each step's whole output and exit
+ *   - a runner's command the user denied reads as denied, counted once
+ *   - a script task's log folds nothing: each step's whole output and exit,
+ *     its command once, in its head
  *   - a plan's task cards carry their own fill, distinct from the plan behind
  *     them, with the expanded card and its subtasks each a step apart
  *
@@ -42,7 +44,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { chromium } from './load-playwright.mjs';
 import { createDriver } from './host-driver.mjs';
-import { MAIN_SCENARIO, RELOAD_FIXTURE, RELOAD_PLAN, SCRIPT_TASK_LOG, TASK_CARDS_PLAN, TASK_LOG_ACTIVITY, TASK_LOG_PENDING } from './scenarios.mjs';
+import { MAIN_SCENARIO, RELOAD_FIXTURE, RELOAD_PLAN, SCRIPT_TASK_LOG, TASK_CARDS_PLAN, TASK_LOG_ACTIVITY, TASK_LOG_DENIED, TASK_LOG_PENDING } from './scenarios.mjs';
 import { EMPTY_TASK_LOG_FOLLOW, replayTaskLog, taskLogHeaderView } from '../../packages/core/dist/plan-utils.mjs';
 
 function arg(name, fallback) {
@@ -360,6 +362,16 @@ async function taskLogActivity(width, theme) {
   await send(page, { type: 'init', blocks: view.blocks, status: status(1) });
   const after = await groups.evaluateAll((els) => els.map((el) => el.getAttribute('aria-expanded')));
   check(after.every((v) => v === 'false'), `tasklog-activity ${label}: another attempt opens with nothing open (${after.join(',')})`);
+
+  const denied = replayTaskLog(TASK_LOG_DENIED);
+  await send(page, { type: 'init', blocks: denied.blocks, status: taskLogStatus(denied) });
+  const deniedSummaries = await groups.allInnerTexts();
+  check(JSON.stringify(deniedSummaries) === JSON.stringify(['1 command denied']),
+    `tasklog-activity ${label}: a denied command is told once, as denied (${deniedSummaries.join(' | ')})`);
+  await groups.first().click();
+  check(await page.locator('.activity-group-body .approval-card.denied').count() === 1, `tasklog-activity ${label}: the denial stays in its run, open`);
+  await settle(page);
+  await page.screenshot({ path: path.join(OUT, `tasklog-denied-${width}-${theme}.png`), fullPage: true });
   await page.close();
 }
 
@@ -386,6 +398,7 @@ async function scriptTaskLog(width, theme) {
   const failing = await page.locator('.conversation > .cmd-row').nth(1).innerText();
   check(failing.includes('Tests  1 failed') && failing.includes('exited 1 after'), `tasklog-script ${label}: the failing step's whole output and exit in view`);
   check(await page.locator('.conversation [aria-expanded]').count() === 0, `tasklog-script ${label}: nothing to open`);
+  check(await page.locator('.conversation .cmd-row-args').count() === 0, `tasklog-script ${label}: each command once, in its head, with no arguments block`);
   await checkContrast(page, `tasklog-script ${label}`, ['.cmd-row-head', '.cmd-row-outcome', '.cmd-row-output']);
   await page.screenshot({ path: path.join(OUT, `tasklog-script-${width}-${theme}.png`), fullPage: true });
   await page.close();
