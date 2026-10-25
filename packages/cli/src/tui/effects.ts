@@ -526,6 +526,8 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       inbound.releaseSnapshot(true);
       dispatch({ type: 'planUpdated', plan, sessionId: effect.sessionId });
       if (run) dispatch({ type: 'runSnapshot', view: run, sessionId: effect.sessionId });
+      // After the turn-settling `planUpdated`, which would otherwise read the planner as free.
+      if (adopted.plannerCompaction) dispatch({ type: 'sessionMessage', message: adopted.plannerCompaction, sessionId: effect.sessionId });
       dispatch({ type: 'notice', message: `Loaded "${goal || effect.sessionId}".` });
       return;
     }
@@ -565,31 +567,39 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       return;
     }
 
-    // The redrawn transcript opens with the summary entry, which is what the
-    // user gets to read — no separate notice to repeat it. The daemon also
-    // broadcast that summary; `redrawn` keeps a late socket copy of it from
-    // landing as a second, spoken turn.
     case 'cancelPlannerResend': {
       const { cancelled } = await api.cancelPlannerResend(effect.sessionId);
       dispatch({ type: 'notice', message: cancelled ? 'Resend cancelled: what waits goes with your next message.' : "Nothing waits on the planner's usage limit to be sent at a reset." });
       await refreshPlan(deps, effect.sessionId);
       return;
     }
+    // The compaction folds into the conversation on screen as its events
+    // arrive (ADR-0017), so the answer only has to carry what a lost frame
+    // would have: the plan, whose transcript holds the summary. Nothing is
+    // redrawn, which would drop the reader's place.
     case 'compactConversation': {
+      const inbound = inboundFor(deps.api, deps.dispatch, effect.sessionId);
+      const stream = api.streamPlanning(effect.sessionId, inbound.planning());
       let plan: unknown;
-      const sentAt = Date.now();
+      let lost: string | null = null;
       try {
-        ({ plan } = await api.compactConversation(effect.sessionId));
-      } catch (err) {
-        if (deliveryOf(err) !== 'unknown') throw err;
-        await settleLostReply(deps, effect.sessionId, { opening: false, reason: describeLoss(err, Date.now() - sentAt) });
+        await Promise.all([stream.ready, follow(deps, effect.sessionId)]);
+        const sentAt = Date.now();
+        try {
+          ({ plan } = await api.compactConversation(effect.sessionId));
+        } catch (err) {
+          if (deliveryOf(err) !== 'unknown') throw err;
+          lost = describeLoss(err, Date.now() - sentAt);
+        }
+      } finally {
+        inbound.flush();
+        stream.close();
+      }
+      if (lost !== null) {
+        await settleLostReply(deps, effect.sessionId, { opening: false, reason: lost });
         return;
       }
-      const inbound = inboundFor(deps.api, deps.dispatch, effect.sessionId);
-      dispatch(restoredChat(plan, effect.sessionId));
-      const summary = compactionSummary(plan);
-      if (summary) inbound.redrawn(summary.content, summary.timestamp);
-      dispatch({ type: 'planUpdated', plan, sessionId: effect.sessionId });
+      dispatch({ type: 'compacted', plan, sessionId: effect.sessionId });
       return;
     }
 
@@ -975,8 +985,11 @@ async function settleLostReply(deps: EffectDeps, sessionId: string, how: { openi
  */
 async function readBackSession(deps: EffectDeps, sessionId: string, how: { opening: boolean; turnEnded: boolean; reason?: string }): Promise<void> {
   try {
-    const { plan, plannerTurnId } = await deps.api.adoptSession(sessionId, deps.workspace);
-    deps.dispatch({ type: 'turnReconciled', plan, plannerTurnId, chat: restoredChat(plan, sessionId), sessionId, ...(how.reason ? { reason: how.reason } : {}) });
+    const { plan, plannerTurnId, plannerCompaction } = await deps.api.adoptSession(sessionId, deps.workspace);
+    deps.dispatch({
+      type: 'turnReconciled', plan, plannerTurnId, ...(plannerCompaction ? { plannerCompaction } : {}),
+      chat: restoredChat(plan, sessionId), sessionId, ...(how.reason ? { reason: how.reason } : {}),
+    });
   } catch (err) {
     if (err instanceof DaemonError && err.code === 'session_not_found' && how.opening) {
       unfollow(deps, sessionId);
@@ -1024,13 +1037,6 @@ function turnReplies(plan: unknown): Array<Pick<SerializedConversationMessage, '
     }
   }
   return replies;
-}
-
-/** The summary a compaction just appended, if this plan came from one: the transcript keeps every earlier one too. */
-function compactionSummary(plan: unknown): { content: string; timestamp?: string } | null {
-  const history = (plan as Pick<SurfacePlan, 'conversationHistory'> | null)?.conversationHistory ?? [];
-  const entry = [...history].reverse().find((message) => message.kind === 'compaction');
-  return entry ? { content: entry.content, ...(entry.timestamp ? { timestamp: entry.timestamp } : {}) } : null;
 }
 
 async function refreshPlan(deps: EffectDeps, sessionId: string): Promise<void> {

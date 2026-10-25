@@ -46,7 +46,7 @@ type ConversationMessage = Partial<StreamStamp> & Extract<
       | 'planner_message' | 'planner_turn_started' | 'planner_turn_ended' | 'planner_text_delta' | 'planner_thinking_delta'
       | 'planner_skill_loaded'
       | 'planner_text_retracted' | 'plan_token' | 'plan_generated' | 'research_step' | 'research_step_done'
-      | 'subagent_started' | 'subagent_finished' | 'planner_usage' | 'planner_liveness'
+      | 'subagent_started' | 'subagent_finished' | 'planner_usage' | 'planner_liveness' | 'planner_compaction'
       | 'approval_request' | 'approval_settled' | 'approval_decided'
       | 'execution_action';
   }
@@ -59,7 +59,7 @@ const CONVERSATION_TYPES: ReadonlySet<string> = new Set<ConversationMessage['typ
   'planner_message', 'planner_turn_started', 'planner_turn_ended', 'planner_text_delta', 'planner_thinking_delta',
   'planner_skill_loaded',
   'planner_text_retracted', 'plan_token', 'plan_generated', 'research_step', 'research_step_done',
-  'subagent_started', 'subagent_finished', 'planner_usage', 'planner_liveness',
+  'subagent_started', 'subagent_finished', 'planner_usage', 'planner_liveness', 'planner_compaction',
   'approval_request', 'approval_settled', 'approval_decided',
   'execution_action',
 ]);
@@ -253,12 +253,6 @@ export interface SessionInbound {
    * segment it streamed under.
    */
   backfill(content: string, timestamp?: string, runs?: ReplyRun[]): void;
-  /**
-   * A redrawn transcript now holds this entry (a compaction's summary), so a
-   * socket copy arriving afterwards is the broadcast the redraw already
-   * covers — not a new turn.
-   */
-  redrawn(content: string, timestamp?: string): void;
   /** A burst held for batching goes out now, in order. */
   flush(): void;
   /**
@@ -449,11 +443,6 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
       // is this same reply, so the next matching copy is swallowed.
       if (timestamp) pending.add(replyKey(content, timestamp));
     },
-    redrawn: (content, timestamp) => {
-      shown.add(replyKey(content, timestamp));
-      shownTexts.add(content);
-      pending.add(replyKey(content, timestamp));
-    },
     flush,
     holdSnapshot: () => {
       holdingSnapshot = true;
@@ -553,11 +542,6 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
     // variant fails to compile here until someone decides what a run's watcher
     // does with it.
     case 'task_output':
-      return;
-
-    // The TUI draws a planner compaction from the transcript it redraws once
-    // `/compact` answers; a native one is the planner's own and stays unshown here.
-    case 'planner_compaction':
       return;
 
     // Its asker already has the words, from the merge request itself. Whether

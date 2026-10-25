@@ -1,5 +1,5 @@
 import {
-  approvalKindText, approvalStatusText, diffRows, diffSummary, formatTokenCount, handoffFindingsText, handoffReferenceText, loadedSkillTokens, outputPreview, planMarkerParts, savedPatchViews, severityLabel, usageText, wakeUpItems, worstSeverity, REPORT_PREVIEW_LINES,
+  approvalKindText, approvalStatusText, compactionText, diffRows, diffSummary, handoffFindingsText, handoffReferenceText, loadedSkillTokens, outputPreview, planMarkerParts, savedPatchViews, severityLabel, usageText, wakeUpItems, worstSeverity, REPORT_PREVIEW_LINES,
   type DiffRow, type DiffStat,
   type ApprovalBlock, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
   type CommandBlock, type CommandStatus, type CompactionBlock, type RunnerLoadedBlock,
@@ -589,12 +589,17 @@ function runnerCommandLines(block: CommandBlock, cols: number, detailAll: boolea
   return [head, ...underHeader([...shown.map(style.grey), ...more])];
 }
 
-function compactionLine(block: CompactionBlock, cols: number): string {
-  const sizes = block.preTokens !== undefined && block.postTokens !== undefined
-    ? ` · ${formatTokenCount(block.preTokens)} → ${formatTokenCount(block.postTokens)} tokens`
-    : '';
-  const text = block.trigger === 'auto' && !sizes ? '≡ Context compacted by the runner on its own' : `≡ Context compacted${sizes}`;
-  return style.grey(truncate(text, cols));
+/**
+ * One quiet line (ADR-0017), worded by core so every surface says the same.
+ * A planner's condensed compaction keeps its summary behind full detail: it is
+ * model-written, so it is painted as text and wrapped, never read as styling.
+ */
+function compactionLines(block: CompactionBlock, cols: number, detailAll: boolean): string[] {
+  const hint = block.summary && !detailAll ? ' (ctrl+o for the summary)' : '';
+  const head = style.grey(truncate(`≡ ${compactionText(block)}${hint}`, cols));
+  if (!block.summary || !detailAll) return [head];
+  const room = Math.max(1, cols - OUTPUT_INDENT.length);
+  return [head, ...underHeader(block.summary.trim().split('\n').flatMap((line) => wrap(sanitize(line), room)).map(style.grey))];
 }
 
 /** One line unless the pane shows detail: what a user's own setup brought into the task is there to look up, not to read every time. */
@@ -751,7 +756,7 @@ function blockLines(block: DisplayBlock, cols: number, detailAll: boolean): stri
     case 'command':
       return runnerCommandLines(block, cols, detailAll);
     case 'compaction':
-      return [compactionLine(block, cols)];
+      return compactionLines(block, cols, detailAll);
     case 'runner_loaded':
       return runnerLoadedLines(block, cols, detailAll);
     case 'handoff':

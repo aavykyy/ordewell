@@ -212,6 +212,8 @@ export interface RunnersResponse {
   orchestratorModel: string;
 }
 
+type PlannerCompactionMessage = Extract<SessionMessage, { type: 'planner_compaction' }>;
+
 /** Sessions: a saved one comes off its file, a live one from the pool's store. */
 export interface SessionResponse {
   meta: SessionMeta;
@@ -222,6 +224,8 @@ export interface SessionResponse {
    * file has no run to speak of, and a surface does not rebuild one from it.
    */
   run?: RunView;
+  /** The planner compaction running now, as {@link AdoptSessionResponse.plannerCompaction}. */
+  plannerCompaction?: PlannerCompactionMessage;
 }
 
 export interface AdoptSessionResponse extends OkResponse {
@@ -234,6 +238,13 @@ export interface AdoptSessionResponse extends OkResponse {
    * is, which is what lets a surface that lost a turn end settle it.
    */
   plannerTurnId?: string;
+  /**
+   * The planner compaction running when the session was adopted, as its start
+   * was announced (ADR-0017). It has no turn of its own, so `plannerTurnId`
+   * cannot tell a surface that joins mid-compaction the planner is busy; this
+   * can, and the id is the one its end will carry. Absent when none is.
+   */
+  plannerCompaction?: PlannerCompactionMessage;
 }
 
 export interface TaskLogAttemptsResponse {

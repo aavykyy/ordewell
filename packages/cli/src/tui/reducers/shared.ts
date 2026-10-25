@@ -110,11 +110,18 @@ export type Action =
    * The session as the daemon holds it after a lost reply, with the conversation
    * to redraw from it. `plannerTurnId` is the turn the daemon is running now, if
    * one is: the gate's turn is over only when the daemon names a different one
-   * or none at all.
+   * or none at all. `plannerCompaction` is the compaction it is running, which
+   * has no turn: the planner is busy with it, not lost.
    */
-  | { type: 'turnReconciled'; plan: unknown; plannerTurnId?: string; chat: ChatRestored; sessionId: string; reason?: string }
+  | { type: 'turnReconciled'; plan: unknown; plannerTurnId?: string; plannerCompaction?: Extract<SessionMessage, { type: 'planner_compaction' }>; chat: ChatRestored; sessionId: string; reason?: string }
   /** A planner turn's call returned its plan: the one action that ends the turn. */
   | { type: 'planUpdated'; plan: unknown; sessionId?: string }
+  /**
+   * `/compact` answered with the plan it left. The conversation is not redrawn:
+   * the transcript's new entries fold into the view that is on screen, so a
+   * summary whose frames were lost still lands, then the turn ends as any does.
+   */
+  | { type: 'compacted'; plan: unknown; sessionId: string }
   /** The plan as the daemon holds it after a request that is not a planner turn; a turn out stays out. */
   | { type: 'planRefreshed'; plan: unknown; sessionId: string }
   /** A saved session is now the one on screen; nothing of the last session's turn carries over. */

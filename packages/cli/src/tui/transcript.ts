@@ -40,6 +40,25 @@ export function cutTurn(state: TuiState): TuiState {
 }
 
 /**
+ * A compaction still running on screen ends as `outcome`, for a call that died
+ * before the daemon's own end reached this surface. The daemon's end, when it
+ * does arrive, finds the block settled and changes nothing. `unchanged` is for
+ * a surface that cannot tell how it ended: the block goes rather than claim
+ * an outcome nobody saw.
+ */
+export function endRunningCompactions(state: TuiState, outcome: 'stopped' | 'failed' | 'unchanged'): TuiState {
+  let next = state;
+  for (const block of state.conversation.blocks) {
+    if (block.type !== 'compaction' || block.status !== 'running' || !block.compactionId) continue;
+    next = hear(next, {
+      type: 'planner_compaction',
+      compaction: { phase: 'ended', id: block.compactionId, origin: block.origin ?? 'ordewell', trigger: block.trigger, outcome, at: new Date().toISOString() },
+    });
+  }
+  return next;
+}
+
+/**
  * The pane wiped with the session's bookkeeping kept: ids stay unique, the
  * transcript markers already shown are not shown again by the next plan, and
  * the token line counts the session, not the screen.

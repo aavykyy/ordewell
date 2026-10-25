@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import { mkdtempSync, mkdirSync, rmSync } from 'fs';
@@ -138,5 +138,50 @@ describe('the session socket', () => {
     expect(snapshot.seq).toBeGreaterThan(0);
     expect(again.seq).toBe(snapshot.seq);
     expect(next).toMatchObject({ stream: snapshot.stream, seq: snapshot.seq! + 1 });
+  });
+
+  // A compaction has no turn, so a surface that joins or reconnects while one
+  // runs would otherwise show a planner that is simply silent. The replay is
+  // the start as it was announced, the same message the live frame carried.
+  it('replays the planner compaction in flight to a client that joins during it, after the snapshot', async () => {
+    const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
+    pool.adoptSavedSession(meta.id, workspace);
+    const started = { type: 'planner_compaction', compaction: { phase: 'started', id: 'c1', origin: 'ordewell', trigger: 'manual', at: '2026-10-25T10:00:00.000Z' } } as const;
+    vi.spyOn(pool, 'plannerCompaction').mockReturnValue(started);
+
+    const frames = await firstFrames(port, meta.id, 3);
+
+    expect(frames.map((f) => (f as { type: string }).type)).toEqual(['connected', 'run_snapshot', 'planner_compaction']);
+    expect(frames[2]).toEqual(started);
+  });
+
+  // The lifecycle rides the existing stream: both phases arrive numbered in
+  // order, carrying the id a surface folds them into one block by.
+  it('streams a compaction\'s start and end to a joined client in order, under one id', async () => {
+    const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
+    pool.adoptSavedSession(meta.id, workspace);
+    const socket = joinSocket(port, meta.id);
+    await socket.until(2);
+    const frames = socket.until(4);
+    const broadcast = (pool as unknown as { broadcast(id: string, m: unknown): void }).broadcast.bind(pool);
+    broadcast(meta.id, { type: 'planner_compaction', compaction: { phase: 'started', id: 'c1', origin: 'ordewell', trigger: 'auto', at: '2026-10-25T10:00:00.000Z' } });
+    broadcast(meta.id, { type: 'planner_compaction', compaction: { phase: 'ended', id: 'c1', origin: 'ordewell', trigger: 'auto', outcome: 'condensed', at: '2026-10-25T10:00:05.000Z' } });
+    const [, , first, second] = await frames as [unknown, unknown, SessionFrame, SessionFrame];
+    socket.close();
+
+    expect([first, second].map((f) => f.type === 'planner_compaction' && [f.compaction.phase, f.compaction.id])).toEqual([['started', 'c1'], ['ended', 'c1']]);
+    expect(second.seq).toBe(first.seq! + 1);
+  });
+
+  it('sends no compaction frame when none is running', async () => {
+    const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
+    pool.adoptSavedSession(meta.id, workspace);
+    const socket = joinSocket(port, meta.id);
+    await socket.until(2);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const frames = await socket.until(2);
+    socket.close();
+
+    expect(frames).toHaveLength(2);
   });
 });

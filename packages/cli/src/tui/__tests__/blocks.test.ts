@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { MessageBlock, ToolBlock } from '@ordewell/core';
+import type { DisplayBlock, MessageBlock, ToolBlock } from '@ordewell/core';
 import { stripAnsi, style } from '../ansi';
 import { conversationLines } from '../blocks';
 
@@ -105,6 +105,44 @@ describe('a task\'s runner commands in its log (#66)', () => {
   it('marks a compaction, with the context before and after it', () => {
     expect(plainRows([{ type: 'compaction', id: 'b1', trigger: 'manual', preTokens: 24939, postTokens: 3615 }])).toEqual(['≡ Context compacted · 25k → 3.6k tokens']);
     expect(plainRows([{ type: 'compaction', id: 'b1', trigger: 'auto' }])).toEqual(['≡ Context compacted by the runner on its own']);
+  });
+
+  describe('a planner compaction', () => {
+    const planner = (over: Partial<Extract<DisplayBlock, { type: 'compaction' }>>): DisplayBlock =>
+      ({ type: 'compaction', id: 'b1', trigger: 'manual', origin: 'ordewell', compactionId: 'c1', ...over });
+    const detailRows = (block: DisplayBlock, cols = 60) => conversationLines([block], cols, true).map(stripAnsi).filter((row) => row !== '');
+
+    it('says it is running, and how each end left the conversation', () => {
+      expect(plainRows([planner({ status: 'running' })])).toEqual(['≡ Compacting context…']);
+      expect(plainRows([planner({ status: 'stopped' })])).toEqual(['≡ Compaction stopped · nothing changed']);
+      expect(plainRows([planner({ status: 'failed' })])).toEqual(['≡ Compaction failed · nothing changed']);
+      expect(plainRows([planner({ status: 'paused' })])).toEqual(['≡ Context does not fit · the planner is paused']);
+      expect(plainRows([planner({ status: 'pruned', trigger: 'auto' })])).toEqual(['≡ Older tool output trimmed from context']);
+    });
+
+    it('keeps a condensed one to a single quiet line that says where the summary is', () => {
+      expect(plainRows([planner({ status: 'condensed', summary: 'Conversation condensed: the state' })])).toEqual(['≡ Context compacted (ctrl+o for the summary)']);
+    });
+
+    it('opens the summary under the line in full detail, wrapped to the pane', () => {
+      const rowsOpen = detailRows(planner({ status: 'condensed', summary: 'Conversation condensed: the state of the parser work so far, in some detail' }), 30);
+
+      expect(rowsOpen[0]).toBe('≡ Context compacted');
+      expect(rowsOpen.length).toBeGreaterThan(2);
+      expect(rowsOpen.slice(1).join(' ').replace(/[⎿\s]+/g, ' ')).toContain('the state of the parser work so far');
+      for (const row of rowsOpen) expect(row.length).toBeLessThanOrEqual(30);
+    });
+
+    it('draws a native one by its own wording, with sizes only as the harness reported them', () => {
+      expect(plainRows([planner({ origin: 'native', trigger: 'auto', status: 'condensed' })])).toEqual(['≡ The planner compacted its context on its own']);
+      expect(plainRows([planner({ origin: 'native', status: 'condensed', preTokens: 24939, postTokens: 3615 })])).toEqual(['≡ The planner compacted its context · 25k → 3.6k tokens']);
+    });
+
+    it('paints a summary a model wrote as plain text: control sequences in it never reach the terminal', () => {
+      const rowsOpen = conversationLines([planner({ status: 'condensed', summary: 'ok\x1b[2Jgone' })], 60, true);
+
+      expect(rowsOpen.join('')).not.toContain('\x1b[2J');
+    });
   });
 
   it('says how much of a huge output it leaves out instead of reading all of it', () => {
