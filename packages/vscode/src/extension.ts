@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { spawn as nodeSpawn } from 'child_process';
-import { AccountLimitMonitor, claudeAccountLimitCollector, codexAccountLimitCollector, createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider, processLeaseHost } from '@ordewell/core';
+import { AccountLimitMonitor, claudeAccountLimitCollector, codexAccountLimitCollector, openCodeGoAccountLimitCollector, createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider, processLeaseHost } from '@ordewell/core';
 import { ChatViewProvider } from './providers/ChatViewProvider';
 import { VsCodeConfig, moveAutonomyFromVsCodeSetting, moveEnabledRunnersFromVsCodeSetting } from './adapters/VsCodeConfig';
 import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
@@ -71,8 +71,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       chatProvider: new ChatViewProvider(context.extensionUri),
       sessionFactory: createSession,
       // Codex's account is read over the same app-server its model discovery
-      // uses (ADR-0004); Claude Code's on a control-only process of its own.
-      // Both under the planner's workspace, whose environment picks the account.
+      // uses (ADR-0004); Claude Code's on a control-only process of its own;
+      // OpenCode Go's from OpenCode's selected login, with no process at all
+      // (ADR-0051). All under the planner's workspace, whose environment picks
+      // the account.
       accountLimits: new AccountLimitMonitor({
         collectors: [
           claudeAccountLimitCollector({
@@ -83,6 +85,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             command: codexServer?.command,
             args: codexServer?.args,
             isInstalled: () => runnerInstallation.isInstalled('codex'),
+            workspaceRoot: () => fsAdapter.getWorkspaceRoot(),
+          }),
+          openCodeGoAccountLimitCollector({
+            isInstalled: () => runnerInstallation.isInstalled('opencode'),
             workspaceRoot: () => fsAdapter.getWorkspaceRoot(),
           }),
         ],

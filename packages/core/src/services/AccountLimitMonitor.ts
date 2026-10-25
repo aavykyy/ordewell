@@ -4,8 +4,11 @@ import type { AccountLimitBucket, AccountLimitSnapshot } from '../models/Account
 export type AccountLimitReading =
   /** A full read: it replaces every bucket and window known before. `followUp` asks for one more, coalesced. */
   | { kind: 'limits'; owner: string; plan?: string; buckets: AccountLimitBucket[]; followUp?: boolean }
-  /** A transient failure; `owner` when the account was still seen signed in before it failed. */
-  | { kind: 'failed'; owner?: string }
+  /**
+   * A transient failure; `owner` when the account was still seen signed in
+   * before it failed, `retryAfterMs` when the service said how long to wait.
+   */
+  | { kind: 'failed'; owner?: string; retryAfterMs?: number }
   /** The account changed while it was being read: what was read may be the old one's. */
   | { kind: 'account_changed' }
   | { kind: 'signed_out' | 'unsupported' | 'not_installed' };
@@ -19,6 +22,8 @@ export interface AccountLimitCollector {
   /** The runner id the snapshot is filed under, and what a task's assignment is matched against. */
   readonly harness: string;
   readonly label: string;
+  /** The one model provider its limits meter, when the runner serves others too (`AccountLimitSnapshot.provider`). */
+  readonly provider?: string;
   /** The effective auth and config the reads see; a change clears what was read under the old one. */
   scope(): string;
   /** Must settle on its own deadline; `signal` aborts it early, and its result is then ignored. */
@@ -63,6 +68,8 @@ interface Entry {
   /** Asked for again while one was in flight: one follow-up, however many asks, at the sooner pace asked. */
   owed: Pace | null;
   failures: number;
+  /** No read starts before this, however it is asked for: the service asked for the wait. */
+  notBefore: number | null;
   /** Reads in a row that found the account changing under them. */
   changes: number;
   lastStartedAt: number | null;
@@ -100,6 +107,7 @@ export class AccountLimitMonitor {
       generation: 0,
       owed: null,
       failures: 0,
+      notBefore: null,
       changes: 0,
       lastStartedAt: null,
     }));
@@ -194,12 +202,14 @@ export class AccountLimitMonitor {
     entry.inFlight = undefined;
     entry.owed = null;
     entry.failures = 0;
+    entry.notBefore = null;
     entry.changes = 0;
     entry.lastStartedAt = null;
     this.forget(entry);
   }
 
-  private schedule(entry: Entry, at: number): void {
+  private schedule(entry: Entry, requested: number): void {
+    const at = Math.max(requested, entry.notBefore ?? requested);
     if (entry.timer && entry.dueAt !== undefined && entry.dueAt <= at) return;
     this.clearTimer(entry);
     const delay = at - this.now();
@@ -251,6 +261,9 @@ export class AccountLimitMonitor {
 
   private apply(entry: Entry, reading: AccountLimitReading): void {
     if (reading.kind !== 'account_changed') entry.changes = 0;
+    entry.notBefore = reading.kind === 'failed' && reading.retryAfterMs !== undefined && reading.retryAfterMs > 0
+      ? this.now() + Math.min(reading.retryAfterMs, MAX_BACKOFF_MS)
+      : null;
     switch (reading.kind) {
       case 'limits': {
         entry.owner = reading.owner;
@@ -261,6 +274,7 @@ export class AccountLimitMonitor {
         this.show(entry, {
           harness: entry.collector.harness,
           label: entry.collector.label,
+          ...(entry.collector.provider ? { provider: entry.collector.provider } : {}),
           // Codex can report a window whose reset has already gone by; its share is then the old window's.
           status: passed ? 'stale' : 'fresh',
           ...(reading.plan ? { plan: reading.plan } : {}),
@@ -358,7 +372,7 @@ export class AccountLimitMonitor {
 }
 
 function blank(collector: AccountLimitCollector, status: AccountLimitSnapshot['status']): AccountLimitSnapshot {
-  return freeze({ harness: collector.harness, label: collector.label, status, buckets: [], readAt: null });
+  return freeze({ harness: collector.harness, label: collector.label, ...(collector.provider ? { provider: collector.provider } : {}), status, buckets: [], readAt: null });
 }
 
 /** Deeply frozen: one snapshot object is handed to every listener, so none may change it under the others. */

@@ -81,4 +81,35 @@ describe('account-limit wording', () => {
     expect(accountLimitsOf([codex(), claude], 'opencode')).toEqual([]);
     expect(accountLimitsOf([codex(), claude], undefined)).toEqual([]);
   });
+
+  it('gives a task an account that meters one provider only while that provider serves it', () => {
+    const go = codex({ harness: 'opencode', label: 'OpenCode Go', provider: 'opencode-go' });
+
+    expect(accountLimitsOf([go], 'opencode', 'opencode-go/kimi-k2.6')).toEqual([go]);
+    // Zen's pay-as-you-go `opencode` provider and a third party are not metered by Go.
+    expect(accountLimitsOf([go], 'opencode', 'opencode/kimi-k2.6')).toEqual([]);
+    expect(accountLimitsOf([go], 'opencode', 'openrouter/opencode-go/x')).toEqual([]);
+    expect(accountLimitsOf([go], 'opencode', 'opencode-go')).toEqual([]);
+    // No model known is no binding known.
+    expect(accountLimitsOf([go], 'opencode', undefined)).toEqual([]);
+    // An account that meters every model its runner serves ignores the model.
+    expect(accountLimitsOf([codex()], 'codex', undefined)).toEqual([codex()]);
+  });
+
+  it('words a plan-month window Monthly without a length of its own, and keeps three windows apart', () => {
+    const monthly = window({ slot: 'tertiary', period: 'month', usedPercent: 2.9, resetsAt: '2026-03-20T10:00:00.000Z' });
+    const go = codex({
+      harness: 'opencode', label: 'OpenCode Go', plan: 'go',
+      buckets: [{ id: 'go', windows: [
+        window({ usedPercent: 1, durationMinutes: 300 }),
+        window({ slot: 'secondary', usedPercent: 5.8, durationMinutes: 10080 }),
+        monthly,
+      ] }],
+    });
+
+    expect(accountLimitWindowLabel(monthly)).toBe('Monthly');
+    expect(accountLimitWindowLabel(window({ slot: 'tertiary' }))).toBe('Tertiary');
+    expect(accountLimitsText(go)).toBe('OpenCode Go 5h 1% used · Weekly 6% used · Monthly 3% used');
+    expect(accountLimitsTitle(go, (at) => at.toISOString().slice(0, 10))).toContain('OpenCode Go Monthly: 2.9% used, resets 2026-03-20');
+  });
 });

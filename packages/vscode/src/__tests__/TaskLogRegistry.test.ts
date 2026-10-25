@@ -651,6 +651,70 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
       expect(limitsSent(panel)).toEqual([[claude]]);
     });
 
+    describe('of an account that meters one provider', () => {
+      const go: AccountLimitSnapshot = { ...snapshot('opencode', 'OpenCode Go', 7), provider: 'opencode-go' };
+      const served = (model: string, subagentId?: string): TaskLogEvent => ({ type: 'usage', record: { source: 'opencode', model, inputTokens: 1, ...(subagentId ? { subagentId } : {}) } });
+      const onOpenCode = (h: ReturnType<typeof harness>, modelId: string) => {
+        h.task.assignedRunner = 'opencode';
+        h.task.assignedModel = { modelId, modelLabel: modelId };
+      };
+
+      it('shows Go only to a task assigned a Go model, never to one on Zen or a third party', () => {
+        for (const [modelId, shown] of [['opencode-go/kimi-k2.6', [go]], ['opencode/kimi-k2.6', []], ['openrouter/moonshot/kimi', []]] as const) {
+          __resetPanels();
+          const h = harness(undefined, { current: [go] });
+          onOpenCode(h, modelId);
+          h.registry.open('t1');
+          __panels[0].__receive({ type: 'ready' });
+          expect(limitsSent(__panels[0]).at(-1) ?? []).toEqual(shown);
+        }
+      });
+
+      it('shows none to a task with no model named: no provider known is no binding', () => {
+        const h = harness(undefined, { current: [go] });
+        h.task.assignedRunner = 'opencode';
+        h.registry.open('t1');
+        __panels[0].__receive({ type: 'ready' });
+
+        expect(limitsSent(__panels[0])).toEqual([]);
+      });
+
+      it('follows the provider the latest attempt is served by, as its own usage says, not a subagent\'s', () => {
+        const h = harness({ 1: [{ type: 'turn_start', message: 'go' }, served('openrouter/x/y')] }, { current: [go] });
+        onOpenCode(h, 'opencode-go/kimi-k2.6');
+        h.registry.open('t1');
+        __panels[0].__receive({ type: 'ready' });
+        // The saved attempt says it ran on another provider than planned.
+        expect(limitsSent(__panels[0])).toEqual([]);
+
+        h.registry.receive({ type: 'task_log', taskId: 't1', attempt: 1, events: [served('opencode-go/glm-5')] });
+        expect(limitsSent(__panels[0]).at(-1)).toEqual([go]);
+        h.registry.receive({ type: 'task_log', taskId: 't1', attempt: 1, events: [served('openrouter/x/y', 'sub-1')] });
+        expect(limitsSent(__panels[0]).at(-1)).toEqual([go]);
+        h.registry.receive({ type: 'task_log', taskId: 't1', attempt: 1, events: [served('opencode/zen-model')] });
+        expect(limitsSent(__panels[0]).at(-1)).toEqual([]);
+      });
+
+      it('forgets what an earlier attempt or an earlier assignment was served by', () => {
+        const h = harness({ 1: [served('openrouter/x/y')] }, { current: [go] });
+        onOpenCode(h, 'opencode-go/kimi-k2.6');
+        h.registry.open('t1');
+        __panels[0].__receive({ type: 'ready' });
+        expect(limitsSent(__panels[0])).toEqual([]);
+
+        // A new attempt starts on its assignment until its own usage says otherwise.
+        h.registry.receive({ type: 'task_log', taskId: 't1', attempt: 2, events: [{ type: 'turn_start', message: 'again' }] });
+        expect(limitsSent(__panels[0]).at(-1)).toEqual([go]);
+        h.registry.receive({ type: 'task_log', taskId: 't1', attempt: 2, events: [served('openrouter/x/y')] });
+        expect(limitsSent(__panels[0]).at(-1)).toEqual([]);
+
+        // A reassigned model is a new binding: the old attempt's provider no longer speaks for it.
+        h.task.assignedModel = { modelId: 'opencode-go/glm-5', modelLabel: 'glm-5' };
+        h.registry.receive({ type: 'task_updated', taskId: 't1', changes: { assignedModel: h.task.assignedModel } });
+        expect(limitsSent(__panels[0]).at(-1)).toEqual([go]);
+      });
+    });
+
     it('keeps showing the live limits while an earlier attempt is on screen', () => {
       const h = harness({ 1: attemptOne, 2: attemptTwo }, { current: [claude] });
       h.registry.open('t1');

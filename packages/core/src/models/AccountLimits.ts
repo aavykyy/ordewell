@@ -8,12 +8,14 @@
 
 /** One reported window: what share of it is used, how long it is, and when it resets. */
 export interface AccountLimitWindow {
-  /** Which of the two windows a bucket reports this is; only a label when the duration is unknown. */
-  slot: 'primary' | 'secondary';
+  /** Which of a bucket's windows this is, in the order reported; only a label when the length is unknown. */
+  slot: 'primary' | 'secondary' | 'tertiary';
   /** The percentage used, as the runner reports it; null when it reported none, which is not 0. */
   usedPercent: number | null;
-  /** The window's own length; null when unreported. */
+  /** The window's own length; null when unreported, or when it is a plan month, which has no one length. */
   durationMinutes: number | null;
+  /** A window the runner names a month: it runs to its reported reset, however many days that is. */
+  period?: 'month';
   /** ISO time the window resets; null when unreported. */
   resetsAt: string | null;
 }
@@ -40,6 +42,12 @@ export interface AccountLimitSnapshot {
   /** Its display name: `Codex`. */
   label: string;
   status: AccountLimitStatus;
+  /**
+   * The one model provider these limits meter, for a runner that serves
+   * others too: OpenCode's Go plan meters `opencode-go/…` models and nothing
+   * else it runs. Absent when they meter whatever the runner serves.
+   */
+  provider?: string;
   /** The account's plan, as the runner names it. */
   plan?: string;
   buckets: readonly AccountLimitBucket[];
@@ -53,18 +61,27 @@ export function hasAccountLimits(snapshot: AccountLimitSnapshot): boolean {
     && snapshot.buckets.some((bucket) => bucket.windows.some((window) => window.usedPercent !== null));
 }
 
-/** The limits a task's footer draws: its own runner's account, nobody else's. */
-export function accountLimitsOf(snapshots: readonly AccountLimitSnapshot[], runner: string | undefined): AccountLimitSnapshot[] {
-  return runner ? snapshots.filter((snapshot) => snapshot.harness === runner) : [];
+/**
+ * The limits a task's footer draws: its own runner's account, nobody else's,
+ * and of an account that meters one provider only while the task's `model`
+ * (`provider/model`) is that provider's. No model known is no provider known.
+ */
+export function accountLimitsOf(snapshots: readonly AccountLimitSnapshot[], runner: string | undefined, model?: string): AccountLimitSnapshot[] {
+  if (!runner) return [];
+  return snapshots.filter((snapshot) => snapshot.harness === runner
+    && (snapshot.provider === undefined || (model?.startsWith(`${snapshot.provider}/`) ?? false)));
 }
 
 const WEEK = 7 * 24 * 60;
 const DAY = 24 * 60;
 
-/** `5h`, `Weekly`, `Daily`, `3d`, `90m` from the window's own length; `Primary`/`Secondary` when it reported none. */
+const SLOT_LABELS: Record<AccountLimitWindow['slot'], string> = { primary: 'Primary', secondary: 'Secondary', tertiary: 'Tertiary' };
+
+/** `5h`, `Weekly`, `Daily`, `3d`, `90m` from the window's own length, `Monthly` for a plan month; `Primary`/`Secondary` when it reported neither. */
 export function accountLimitWindowLabel(window: AccountLimitWindow): string {
+  if (window.period === 'month') return 'Monthly';
   const minutes = window.durationMinutes;
-  if (minutes === null) return window.slot === 'primary' ? 'Primary' : 'Secondary';
+  if (minutes === null) return SLOT_LABELS[window.slot];
   if (minutes === WEEK) return 'Weekly';
   if (minutes === DAY) return 'Daily';
   if (minutes % WEEK === 0) return `${minutes / WEEK}w`;

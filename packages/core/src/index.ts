@@ -118,6 +118,8 @@ export { codexAccountLimitCollector } from './services/harness/codexAccountLimit
 export type { CodexAccountLimitOptions } from './services/harness/codexAccountLimits';
 export { claudeAccountLimitCollector } from './services/harness/claudeAccountLimits';
 export type { ClaudeAccountLimitOptions } from './services/harness/claudeAccountLimits';
+export { openCodeGoAccountLimitCollector } from './services/harness/openCodeGoLimits';
+export type { OpenCodeGoAccountLimitOptions } from './services/harness/openCodeGoLimits';
 export { defaultEnabledRunners, detectInstalledPlanner, findInstalledPlanner, installedPlannerAnswered, installedPlannerDetected, recordInstalledPlanner, recordedInstalledPlanner, resetInstalledPlanner } from './services/InstalledPlanner';
 export { ModelCatalog } from './services/ModelCatalog';
 export type { CatalogModel } from './services/ModelCatalog';

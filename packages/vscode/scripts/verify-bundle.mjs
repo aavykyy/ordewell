@@ -15,8 +15,11 @@ const BUNDLE = join(ROOT, 'dist', 'extension.js');
 const HOST_PROVIDED = new Set(['vscode']);
 
 // Optional deps behind a try/catch, absent by design. node-fetch only reaches
-// `encoding` for non-UTF-8 charsets and swallows the failure.
-const OPTIONAL = new Set(['encoding']);
+// `encoding` for non-UTF-8 charsets and swallows the failure. `node:sqlite` is
+// in the extension host's Node only from 22.5 (VS Code 1.90 runs Node 20): the
+// OpenCode Go login reader requires it inside its own worker, and a host
+// without it reads OpenCode's v2 logins as unsupported (ADR-0051).
+const OPTIONAL = new Set(['encoding', 'node:sqlite']);
 
 const source = readFileSync(BUNDLE, 'utf8');
 const builtins = new Set(builtinModules);
