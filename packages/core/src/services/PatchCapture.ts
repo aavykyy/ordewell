@@ -95,7 +95,8 @@ const PINNED = [
   'core.fsmonitor=false', 'core.splitIndex=false', 'core.untrackedCache=false',
   // A case-only rename is then two paths, which the fold check refuses, rather than nothing at all.
   'core.ignoreCase=false',
-  // Any write bumps ctime, which userspace cannot set back, so a same-size edit with its mtime restored is still seen.
+  // A write bumps ctime, which userspace cannot set back, but git compares it by
+  // second: a same-size edit inside the cached second is left to the racy rehash.
   'core.trustctime=true', 'core.checkStat=default',
   'core.quotePath=true', 'gc.auto=0', 'maintenance.auto=false',
   'diff.relative=false', 'diff.noprefix=false', 'diff.mnemonicPrefix=false',
@@ -136,7 +137,11 @@ function stageScript(stem: string, linked: readonly string[]): string {
   return [
     prelude(stem),
     'mkdir -p "$O.d/objects"',
-    'if [ -f "$G/index" ]; then cp "$G/index" "$GIT_INDEX_FILE"; else git read-tree HEAD; fi',
+    // The copy keeps the index's own mtime: git calls an entry racily clean while
+    // the index is no newer than the file, and only then rehashes a same-size
+    // rewrite its stat cache cannot tell apart. A copy made now would look newer
+    // than every entry, and git add would keep the base blob.
+    'if [ -f "$G/index" ]; then cp "$G/index" "$GIT_INDEX_FILE" && touch -r "$G/index" "$GIT_INDEX_FILE"; else git read-tree HEAD; fi',
     'set -- .',
     ...(linked.length ? [`for p in ${linked.map(shellQuoted).join(' ')}; do git check-ignore -q -- "$p" || set -- "$@" ":(exclude,literal)$p"; done`] : []),
     'git add -A -- "$@"',
