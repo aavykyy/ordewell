@@ -14,7 +14,7 @@ We decided to collapse the planner to a single messages loop — "the LLM either
 
 ## Key properties
 
-- **One persisted dialogue.** `conversationHistory: { role, content, timestamp, kind? }[]` on `LegacyPlanState` is the single source of truth for both UI redisplay and model context. Tool-call results are NOT stored here — they live in the AI service's tool-use history; `researchLog` is the persisted tool trace for the UI.
+- **One persisted dialogue.** `conversationHistory: { role, content, timestamp, kind? }[]` on `LegacyPlanState` is the single source of truth for both UI redisplay and model context. Surfaces draw all of it. The model is given its projection, `modelContext()`: everything, until a compaction makes a checkpoint (below). Tool-call results are NOT stored here — they live in the AI service's tool-use history; `researchLog` is the persisted tool trace for the UI.
 - **Two operations.** `Session.startPlanning(goal, runners)` kicks off research and the first planner message; `Session.continueConversation(userMessage)` handles every reply after it. The host routes with one branch: the user replied → `continueConversation(text)`.
 - **The model decides transitions, with no tokens and no quotas.** The planner reads the conversation and decides when to move from questions to an outline to the commit. There is no `<<ORDEWELL_QUESTION>>` tag, no `READY_FOR_PRD` sentinel and no status field. The base workflow tells it to ask before planning when the goal is vague or a decision materially changes the outcome (storage, library, scope, API shape), and that a clear goal needs no questions. A deeper interview is a skill the user invokes (`/grilling`, `packages/core/skills/grilling/`), substituted into the planner's message: one question at a time with a recommended answer, exploring the codebase instead of asking when it can, until shared understanding.
 - **The final commit is auto-detected JSON.** When the planner decides the user has confirmed the outline, its next response IS the `{tasks:[...]}` JSON. The system runs `extractJsonObject` on every planner response; if it parses as a plan, the plan is loaded; otherwise it is rendered as a chat message.
@@ -24,8 +24,12 @@ We decided to collapse the planner to a single messages loop — "the LLM either
 - **Silent degradations are made visible, not machined away.** An empty planner reply (a budget model after tool use) gets a nudge and then a visible "(The planner returned an empty response …)" message rather than a blank bubble. A hallucinated tool (`create_task`, `create_file`) is answered by restating the planner's role — read-only research, agents execute later — and the commit channel, raw JSON in the reply. The plan format's id example reads "unique-task-id (any short unique string)", because a `uuid-string` example made a model call a nonexistent uuid tool.
 - **The line can be forked, rewound and condensed** — always as a transcript edit, so it works the same on a vendor API planner and a harness planner (ADR-0009):
   - **Fork** copies the conversation and the task list into a new persisted session, leaving the original untouched.
-  - **Rewind is a fork from a point.** It copies the transcript up to just before a chosen user message, with `researchLog` cut at the same point, into a new session the daemon adopts like a fork. The original — file, transcript, live planner context — is untouched. The opening goal and a compaction summary are floors a rewind cannot cross. The rewound message's text comes back with the fork, so a surface can offer it for editing and resending. The fork has no live context, so its first message replays the shortened transcript on every backend.
-  - **Compaction** (`/compact`) asks one hidden planner turn for a summary; the transcript becomes a `compaction` entry holding it plus the last two user messages and their replies verbatim, and the live context is reset. The summary must be wrapped in tags, because a harness planner returns a crashed agent's error as a normal reply; nothing is written until the summary is in hand, so a failure or a stop is a no-op. Anything else the summary turn emits, task ops included, is discarded.
+  - **Rewind is a fork from a point.** It copies the transcript up to just before a chosen user message, with `researchLog` cut at the same point, into a new session the daemon adopts like a fork. The original — file, transcript, live planner context — is untouched. The opening goal is a floor a rewind cannot cross. A checkpoint is not a floor: the copy is a prefix, so a rewind before a checkpoint leaves it behind with what followed. The rewound message's text comes back with the fork, so a surface can offer it for editing and resending. The fork has no live context, so its first message replays the shortened transcript's model context on every backend.
+  - **Compaction** (`/compact`) shortens the model's context, never the history. One hidden planner turn is asked for a summary of the model context. Its reply is appended as a `compaction` entry carrying a checkpoint, `{ id, keptFrom, trigger }`. `keptFrom` is the transcript index where verbatim replay resumes, the second-to-last user message, so the last two exchanges are kept as they were. Then the live context is reset. Every message and the whole `researchLog` stay on disk and on screen, rewind positions do not move, and tasks and run state are not touched.
+    - **One projection.** `modelContext()` is the newest checkpoint's summary, then every entry from its `keptFrom` on, without any other `compaction` entry. It is the only thing replayed or condensed: a reload, a model or provider switch, a fork, a rewind, and a summary turn with no live context. A second compaction therefore condenses the first summary and what followed it, and supersedes it. When nothing new can be saved past the last checkpoint, `/compact` is refused.
+    - **Checkpoints only append.** A cut is never behind the previous checkpoint's, nor past an input an open planner turn still holds, since that input lands at its held position and must be replayed. Inserts land at or after the cut, so `keptFrom` never moves. A checkpoint committed in its own save stays valid whether the turn it was made during lands, fails, stops or is abandoned. This is the seam an automatic compaction during a turn commits through.
+    - **Read defensively.** A saved checkpoint counts only with an id, a known trigger, and an integer cut no later than its entry and no earlier than the previous checkpoint's. One that fails is passed over, which replays more and hides nothing. A `compaction` entry without a checkpoint is a marker: drawn, never replayed. The exception is a legacy summary standing first, from builds that replaced the transcript; it is read as a checkpoint cutting at index 1, and still plays the goal's part for rewind.
+    - **Atomic.** The summary must be wrapped in tags, because a harness planner returns a crashed agent's error as a normal reply. Nothing is written until the summary is in hand, so a failure or a stop is a no-op. Anything else the summary turn emits, task ops included, is discarded.
   - **The task list rides along as-is.** A rewind keeps tasks the discarded turns created; a fork starts with the tasks the original had. Run state cannot travel to a session with no run: in-progress and checkpointed tasks become pending and planner turn inputs still waiting stay behind (`forkPlanState` is the one place that decides).
   - **Busy rules.** All three are refused while a planner turn is in flight and allowed while a run executes. A message sent while a summary is being written is refused (`ConversationBusyError`, a 409 from the daemon), before the planning abort slot is touched, so a stop still reaches the summary turn.
   - **VS Code** offers `/fork`, `/rewind [n]` and `/compact` (and Command Palette entries) through `Session` directly, since it does not use the daemon. It locks the input during `/compact`. A fork or a rewind is loaded as a saved session, which replaces its single `Session` and stops its run, so it asks first while one executes; a compaction redraws only the transcript in place.
@@ -121,8 +125,21 @@ We decided to collapse the planner to a single messages loop — "the LLM either
   transcript holds no tool output to prune, so what makes it long is the
   dialogue itself, and only a model can say which of it still matters.
 - **Compaction through a harness agent's native `/compact`.** Rejected: only
-  some harnesses have it, it leaves Ordewell's persisted transcript at full
-  length, and the two would drift.
+  some harnesses have it, and it shrinks that agent's own memory, not the
+  context Ordewell replays after a reload or a fork, so the two would drift. A
+  harness planner's own automatic compaction stays under the harness's control.
+- **Compaction that replaces the transcript** with the summary and the last two
+  exchanges. It was the first compaction. Dropped because it destroyed what it
+  condensed. The originals left disk, a reload hid the research from before the
+  cut though `researchLog` still held it, rewind positions shifted, and nothing
+  before the summary could be rewound to.
+- **Keep every message and replay all of it after the summary.** Rejected: the
+  condensed messages would be sent to the model beside their own summary, and a
+  second compaction would summarise them again. Placing the summary first
+  instead shifts every rewind position and makes the goal a rewind target.
+- **A copy of the kept context per checkpoint.** Rejected: the transcript grows
+  by a whole copy at each compaction. A cut index into the append-only
+  transcript says the same with a few bytes.
 
 ## Consequences
 
@@ -151,3 +168,4 @@ We decided to collapse the planner to a single messages loop — "the LLM either
 - 2026-09-25 — fork, rewind (first in place, then as a fork from a point) and
   compaction (#9, #10).
 - 2026-10-11 — a fork leaves waiting planner turn inputs behind, not a mid-run edit queue ([ADR-0029](../supervision/0029-the-supervisor.md)).
+- 2026-10-25 — compaction keeps the whole transcript and appends a checkpoint that `modelContext()` projects. A rewind reaches past a summary.

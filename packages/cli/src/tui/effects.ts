@@ -1026,10 +1026,10 @@ function turnReplies(plan: unknown): Array<Pick<SerializedConversationMessage, '
   return replies;
 }
 
-/** The summary a compaction just made the transcript's first entry, if this plan came from one. */
+/** The summary a compaction just appended, if this plan came from one: the transcript keeps every earlier one too. */
 function compactionSummary(plan: unknown): { content: string; timestamp?: string } | null {
   const history = (plan as Pick<SurfacePlan, 'conversationHistory'> | null)?.conversationHistory ?? [];
-  const entry = history.find((message) => message.kind === 'compaction');
+  const entry = [...history].reverse().find((message) => message.kind === 'compaction');
   return entry ? { content: entry.content, ...(entry.timestamp ? { timestamp: entry.timestamp } : {}) } : null;
 }
 

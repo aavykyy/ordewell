@@ -411,7 +411,7 @@ describe.skipIf(!hasGit)('isolated execution over a folder of three repositories
 
     await session.compactConversation();
 
-    expect(session.planState!.conversationHistory![0].kind).toBe('compaction');
+    expect(session.planState!.conversationHistory!.at(-1)!.kind).toBe('compaction');
     expect(session.planState!.isolation).toEqual(record);
     expect(gitState(env.roots)).toEqual(before);
 

@@ -83,16 +83,6 @@ describe('PlannerConversation transcript', () => {
     expect(conversation.transcript[2]).toEqual({ role: 'user', content: 'JSON and YAML', timestamp: '2026-01-01T00:00:02Z' });
     expect(conversation.transcript[3]).toMatchObject({ role: 'assistant', content: 'noted', kind: 'system' });
   });
-
-  it('replace swaps the whole transcript without aliasing the caller\'s array', () => {
-    const { conversation } = fakeHost(fakeAi());
-    const summary = [{ role: 'assistant' as const, content: 'summary', timestamp: '2026-01-02T00:00:00Z' }];
-
-    conversation.replace(summary);
-    summary.push({ role: 'assistant', content: 'later', timestamp: '2026-01-02T00:00:01Z' });
-
-    expect(conversation.transcript).toEqual([{ role: 'assistant', content: 'summary', timestamp: '2026-01-02T00:00:00Z' }]);
-  });
 });
 
 describe('what a planner turn writes', () => {
@@ -393,18 +383,18 @@ const summaryTurn = (summary: string, extra = ''): ConversationTurn => ({
 });
 
 describe('PlannerConversation compact', () => {
-  it('replaces the transcript with a compaction entry and the last two exchanges verbatim, persisting once', async () => {
+  it('appends a checkpoint keeping the last two exchanges verbatim, the transcript whole, persisting once', async () => {
     const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(summaryTurn('Goal: a JSON parser. Streaming chosen.')) });
     const { conversation, state } = fakeHost(ai, threeTurnPlan());
 
     const result = await conversation.compact();
 
-    const [entry, ...tail] = state.plan!.conversationHistory!;
-    expect(entry).toMatchObject({ role: 'assistant', kind: 'compaction' });
+    const history = state.plan!.conversationHistory!;
+    expect(history.slice(0, -1)).toEqual(threeTurnPlan().conversationHistory);
+    const entry = history.at(-1)!;
+    expect(entry).toMatchObject({ role: 'assistant', kind: 'compaction', checkpoint: { keptFrom: 2, trigger: 'manual', id: expect.any(String) } });
     expect(entry.content).toContain('Goal: a JSON parser. Streaming chosen.');
-    expect(tail.map((m) => m.content)).toEqual(['JSON only', 'Streaming or not?', 'Streaming', 'Plan generated with 2 tasks.']);
-    expect(tail[3].kind).toBe('plan_generated');
-    expect(result.summary).toBe('Goal: a JSON parser. Streaming chosen.');
+    expect(result).toEqual({ summary: 'Goal: a JSON parser. Streaming chosen.', keptMessages: 4 });
     expect(state.persists).toBe(1);
   });
 
@@ -433,7 +423,7 @@ describe('PlannerConversation compact', () => {
     expect(checks.rules).not.toHaveBeenCalled();
     expect(host.adoptTasks).not.toHaveBeenCalled();
     expect(state.plan!.researchLog!.map((e) => e.id)).toEqual(['up-1', 'up-2', 'up-3']);
-    expect(state.plan!.conversationHistory![0].content).toContain('kept');
+    expect(state.plan!.conversationHistory!.at(-1)!.content).toContain('kept');
   });
 
   it('announces the condensed conversation, summary included, and drops the live context', async () => {
@@ -635,18 +625,19 @@ describe('PlannerConversation after a compaction', () => {
     return fixture;
   }
 
-  it('offers only user messages after the compaction entry as rewind targets', async () => {
+  it('offers every user message but the goal as a rewind target, at the position it had before', async () => {
     const { conversation } = await compacted();
 
-    expect(conversation.rewindTargets().map((t) => [t.index, t.preview])).toEqual([[1, 'JSON only'], [3, 'Streaming'], [5, 'Add CSV']]);
+    expect(conversation.rewindTargets().map((t) => [t.index, t.preview])).toEqual([[2, 'JSON only'], [4, 'Streaming'], [7, 'Add CSV']]);
   });
 
-  it('cannot rewind across the entry', async () => {
+  it('rewinds across the entry, leaving the summary behind with what came after it', async () => {
     const { conversation, state } = await compacted();
 
-    expect(() => conversation.cloneBefore(0)).toThrow(ConversationEditError);
-    expect(conversation.cloneBefore(1).dialogue.conversationHistory.map((m) => m.kind)).toEqual(['compaction']);
-    expect(state.plan!.conversationHistory).toHaveLength(7);
+    expect(() => conversation.cloneBefore(0)).toThrow(/goal/);
+    expect(conversation.cloneBefore(4).dialogue.conversationHistory.map((m) => m.content)).toEqual(['build me a parser', 'Which file formats?', 'JSON only', 'Streaming or not?']);
+    expect(conversation.cloneBefore(7).dialogue.conversationHistory.at(-1)).toMatchObject({ kind: 'compaction' });
+    expect(state.plan!.conversationHistory).toHaveLength(9);
   });
 
   it('cannot be compacted again until enough has been said since', async () => {
@@ -656,22 +647,30 @@ describe('PlannerConversation after a compaction', () => {
     await expect(conversation.compact()).rejects.toThrow(/too short/i);
   });
 
-  it('keeps the skill loads of the exchanges it keeps, and drops those of the ones it condensed', async () => {
-    const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(summaryTurn('s')) });
+  it('replays the skill loads of the exchanges it keeps, and not those of the ones it condensed', async () => {
+    let live = true;
+    const ai = fakeAi({
+      hasActiveConversation: () => live,
+      reset: vi.fn(() => { live = false; }),
+      continueConversation: vi.fn().mockResolvedValue(summaryTurn('s')),
+      startConversation: vi.fn(async () => { live = true; return { kind: 'message' as const, text: 'ok', researchLog: [] }; }),
+    });
     const { conversation } = fakeHost(ai, threeTurnPlanWithLoads());
 
     const { keptMessages } = await conversation.compact();
+    await conversation.reply('Add CSV');
 
     expect(keptMessages).toBe(6);
-    expect(conversation.clone().conversationHistory.map((m) => m.kind ?? m.content)).toEqual([
-      'compaction', 'JSON only', 'skill_load', 'Streaming or not?', 'Streaming', 'skill_load', 'plan_generated',
-    ]);
+    const replayed = vi.mocked(ai.startConversation).mock.calls[0][0].priorHistory!;
+    expect(replayed.map((m) => m.kind ?? m.content.split('\n').at(-1))).toEqual(['compaction', 'JSON only', 'Streaming or not?', 'Streaming', 'plan_generated']);
+    // The goal's load went with the exchanges condensed; the two kept ride with their messages.
+    expect(replayed.filter((m) => m.content.includes('GRILL BODY'))).toHaveLength(2);
   });
 
   it('is copied whole by a fork', async () => {
-    const { conversation } = await compacted();
+    const { conversation, state } = await compacted();
 
-    expect(conversation.clone().conversationHistory[0]).toMatchObject({ kind: 'compaction' });
+    expect(conversation.clone().conversationHistory).toEqual(state.plan!.conversationHistory);
   });
 });
 

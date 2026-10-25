@@ -210,10 +210,11 @@ The live model context — a vendor service's message list, a harness planner's
 process and native session id — is disposable: dropping it makes the next turn
 replay from the transcript (it is dropped before every replay, so a harness
 planner never resumes its own memory on top of the replayed one), and
-`reset()` drops it with the briefing when the plan scope ends. Transcript edits are whole-array
-operations (`append`, `replace`), so compacting a conversation is a
-transcript edit plus a `reset`; forking and rewinding copy it instead
-(`clone`, `cloneBefore`) and leave it as it was. It owns the **Planner turn**
+`reset()` drops it with the briefing when the plan scope ends. What is replayed
+is the transcript's **Model context**, never the whole of it. A compaction
+appends a **Context checkpoint** and drops the live context; forking and
+rewinding copy the transcript instead (`clone`, `cloneBefore`) and leave it as
+it was. It owns the **Planner turn**
 too, so no surface keeps its own abort controller or busy flag, and a turn that
 settles after its plan was swapped out never writes into the new one.
 *Avoid:* "chat" or "thread" for the module — the conversation is the thing; the
@@ -416,11 +417,14 @@ through whichever planner is configured, asks for a summary of the goal,
 decisions, constraints, open questions, key file and code findings and where the
 plan stands. The live context is pruned of bulky tool output first
 (`IAiService.pruneContext`, the same pruning **Context compaction** does), or
-the whole transcript is replayed into the turn when no live context matches. The
-transcript then becomes a `compaction` entry — the summary, visible, always
-first — followed by the last two user messages and their replies verbatim, and
-the live context is reset so the next message replays from that shorter record
-on every backend alike — unless the compaction was abandoned with its plan,
+the **Model context** is replayed into the turn when no live context matches, so
+a second compaction condenses the first summary and what followed it, never the
+messages that summary already stands for. The summary is then appended to the
+transcript as a **Context checkpoint** that keeps the last two user messages and
+their replies verbatim. Nothing is removed: every message and the whole
+`researchLog` stay on disk and on screen, and rewind positions do not move. The
+live context is reset so the next message replays the shorter model context on
+every backend alike — unless the compaction was abandoned with its plan,
 whose drop already reset it, and a second reset would cut off the turn that
 has the backend since. The summary must arrive inside `<conversation_summary>`
 tags: a harness planner reports a failure as an ordinary reply, and the tags are
@@ -430,18 +434,49 @@ written until the summary is in hand, so a failed or stopped turn leaves the
 conversation as it was. Only its spend is kept: the planner's *Usage totals*
 count it, condensed or not, but its calls move no *Context fill* meter, which a
 condensed conversation clears. Refused while a planner turn is in flight and when the
-conversation has two user messages or fewer; a message sent while it runs is
-refused in turn (`ConversationBusyError`, 409 from the daemon), since the reply
-would share the live context the compaction resets. **Rewind** stops at the summary
-(its entry plays the part the goal did) and **Fork** copies the compacted
-transcript. Only the planner conversation compacts, never a runner. TUI and
+model context holds two user messages or fewer past its last checkpoint, so an
+immediate second `/compact` saves nothing and is refused. A message sent while
+it runs is refused in turn (`ConversationBusyError`, 409 from the daemon), since
+the reply would share the live context the compaction resets. **Rewind** reaches
+past a checkpoint, and **Fork** copies the transcript with its checkpoints.
+Only the planner conversation compacts, never a runner. TUI and
 VS Code `/compact` (VS Code also "Ordewell: Compact Conversation", cancellable
 from its progress notification, with the chat input locked while it runs); CLI
 `ordewell compact`; the daemon route is
 `POST /api/plans/:id/conversation/compact`. It announces itself with a
 `planner_message` carrying the summary.
-*Avoid:* "summarize" for the operation — the result replaces the transcript; and
+*Avoid:* "summarize" for the operation, since the summary is only the means; and
 "clear", which loses what was decided.
+
+**Context checkpoint** (`ConversationMessage.checkpoint`: `{ id, keptFrom,
+trigger }`) — a `compaction` entry in `conversationHistory` that a summary
+became. `keptFrom` is the transcript index where verbatim replay resumes, at or
+before the entry itself. The summary stands for everything before that index.
+The `id` stays the same across saves, forks and the wire. A checkpoint is only
+appended, and its cut never passes an input a planner turn still holds, so
+later inserts land at or after it. A checkpoint committed in its own save stays
+valid whatever happens to the turn it was made during. A saved checkpoint is
+checked as it is read: an id, a known trigger, and an integer cut no later than
+the entry and no earlier than the previous checkpoint's. One that fails is
+passed over, so more is replayed and nothing is hidden. A `compaction` entry
+without a checkpoint is a marker: drawn but never replayed. The one exception
+is a legacy summary standing first in the transcript, written by builds whose
+compaction replaced what it condensed. It is read as a checkpoint cutting at
+index 1, and reloads drawn first without the research older than its first kept
+message, since those turns are gone.
+*Avoid:* "snapshot": a checkpoint copies no transcript.
+
+**Model context** (`modelContext()` in `conversationSummary.ts`) — the
+projection of `conversationHistory` the planner model is given: the newest
+**Context checkpoint**'s summary, then every entry from its `keptFrom` on,
+without any other `compaction` entry (summaries it superseded, markers). With
+no checkpoint it is the whole transcript. A pure function of the transcript it
+is given, so every replay reads it: a reload, a planner model or provider
+switch, a fork's or rewind's first message, and a summary turn with no live
+context. A rewind's prefix carries only the checkpoints made before its cut, so
+it never replays a later summary.
+*Avoid:* "the transcript" for what is replayed: surfaces draw the transcript,
+and the model is given its projection.
 
 **conversationHistory** — the planner dialogue persisted on the plan state:
 `{ role: 'user' | 'assistant', content, timestamp, kind?, runs? }[]`. The single source of
@@ -451,12 +486,12 @@ truth for UI redisplay. A planner reply's entry keeps its **Reply runs** beside
 compaction, a fork, a rewind and PRD capture read. An entry saved without runs
 reloads as one message. Tool-call results are NOT stored here — they live in
 the AI service's in-memory tool-use history; `researchLog` remains the
-persisted tool trace. A reloaded session resumes by replaying this transcript
-into a fresh model context; the tool history is gone. Written only by
-**PlannerConversation**: conversation turns, mid-run ones included, and a
-**Compaction**, which replaces it with
-a summary and its last two exchanges. A **Rewind** never writes it: the
-shortened copy goes to a new session. Every
+persisted tool trace. A reloaded session resumes by replaying this transcript's
+**Model context** into a fresh model context; the tool history is gone. Written
+only by **PlannerConversation**, and only appended to, or inserted into at a
+held turn's position: conversation turns, mid-run ones included, and a
+**Compaction**, which appends a **Context checkpoint** and removes nothing. A
+**Rewind** never writes it: the shortened copy goes to a new session. Every
 write is persisted and broadcast through Session's `mutatePlan` ritual.
 
 **Rewind** (`Session.rewindConversation(index)`) — fork the conversation from
@@ -468,14 +503,16 @@ file, its transcript and its live planner context are untouched, so nothing
 said is lost and the user can go back. `index` is the message's position in
 `conversationHistory`, and `rewindTargets()` lists the candidates with a
 one-line preview — every user message except the opening goal, since a
-conversation without its goal is a new session (after a **Compaction**, the
-summary entry stands where the goal did). The task list rides along as it is
+conversation without its goal is a new session. A **Compaction** moves no
+position and is no floor: a rewind before a checkpoint leaves it behind with
+everything after the cut. Only a legacy summary standing first plays the goal's
+part, since what it replaced is gone. The task list rides along as it is
 now, including tasks created after that message: a rewind moves where the
 conversation resumes, not what the plan is (ADR-0002).
 The rewound message's full text comes back with the fork (`rewoundMessage`) so
 a surface can offer it for resending or editing. The fork has no native
-planner session, so its first message replays the shortened transcript on
-every backend alike. The daemon adopts it at once (see **Adopt**) and answers
+planner session, so its first message replays the **Model context** of the
+shortened transcript on every backend alike. The daemon adopts it at once (see **Adopt**) and answers
 `{ sessionId, goal, plan, rewoundMessage }`. Refused while a planner turn is in
 flight (`ConversationBusyError`, 409), because the copy would hold a message
 without its reply; allowed while the original executes, since the fork carries
@@ -493,7 +530,7 @@ waiting (`pendingTurns`) and any other per-run record stay behind. What travels 
 `forkPlanState`, which lists fields rather than spreading the plan, so a field
 added to the plan later stays behind until someone decides it should travel.
 The daemon adopts the fork immediately (see **Adopt**); its first message
-replays the copied transcript. A **Rewind** is a fork made from an earlier
+replays the copied transcript's **Model context**. A **Rewind** is a fork made from an earlier
 point in the conversation. Refused mid-turn like a rewind; allowed while the
 original executes. TUI `/fork` switches to the fork; `ordewell fork` makes
 it the current session; VS Code `/fork` ("Ordewell: Fork Conversation") loads

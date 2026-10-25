@@ -513,8 +513,8 @@ export interface ConversationMessage {
    * Timeline marker: 'plan_generated' records the point in the dialogue where
    * the plan was committed (the UI anchors the plan card there on restore);
    * 'system' is a host-injected notice; 'compaction' is the summary a
-   * user-triggered compaction left in place of the earlier messages — always
-   * the transcript's first entry. 'skill_load' is a skill loaded into the
+   * compaction appended, which stands in for the earlier messages in the
+   * planner's context while the transcript keeps them (see `checkpoint`). 'skill_load' is a skill loaded into the
    * conversation, its snapshot in `skill`; one the user invoked follows the
    * message that named it. 'execution' is a call at the command seam
    * (ADR-0029), its record in `execution`. 'wake_up' is the digest a wake-up
@@ -535,11 +535,32 @@ export interface ConversationMessage {
   /** A user's message that was force sent, stopping the turn before it (ADR-0023). */
   forced?: true;
   /**
+   * Set on a 'compaction' entry that is a checkpoint of the planner's context
+   * (ADR-0002). A 'compaction' entry without one is a legacy summary when it
+   * stands first — it replaced what it condensed — and a marker drawn but
+   * never replayed anywhere else.
+   */
+  checkpoint?: ContextCheckpoint;
+  /**
    * What a reply showed, run by run, where each began (ADR-0017 A1). Beside
    * `content`, which stays the reply as the planner is told it. Absent on
    * entries saved before runs were kept, which reload as one message.
    */
   runs?: ReplyRun[];
+}
+
+/**
+ * Where a compaction cut the planner's context (ADR-0002): its summary stands
+ * for every transcript entry before `keptFrom`, and the entries from there on
+ * replay verbatim. Entries are only appended, or inserted at a held turn's
+ * position, which no checkpoint's cut passes, so the index never moves.
+ */
+export interface ContextCheckpoint {
+  /** Stable across saves, forks and the wire, so a surface can tell this checkpoint from another with the same text. */
+  id: string;
+  /** An index into the whole transcript, at or before the checkpoint entry itself. */
+  keptFrom: number;
+  trigger: 'manual' | 'auto';
 }
 
 /**

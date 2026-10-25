@@ -1723,8 +1723,9 @@ export class Session {
 
   /**
    * Condense the conversation on the user's say-so: a hidden planner turn
-   * summarises it, and the summary replaces everything but the last two
-   * exchanges. Conversation only — the tasks, and any run
+   * summarises it, and the summary stands in for everything but the last two
+   * exchanges in the planner's context, the transcript keeping every message.
+   * Conversation only — the tasks, and any run
    * executing them, are untouched. Atomic: a failed or stopped turn changes
    * nothing.
    */
@@ -1734,7 +1735,7 @@ export class Session {
     if (opening) await opening;
     const compaction = await this.conversation.compact(signal);
     // The backend's live context is gone: the next prompt replays the
-    // condensed transcript, so the size of the last call before it says
+    // condensed context, so the size of the last call before it says
     // nothing of how full that prompt is. It is a reset with no size stated,
     // like a runner's compaction that reports none.
     const usage = this.usage.snapshot();

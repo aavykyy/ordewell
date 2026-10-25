@@ -1,4 +1,4 @@
-import { isUserMessage, type ConversationMessage } from '../models/Task';
+import { isUserMessage, type ContextCheckpoint, type ConversationMessage } from '../models/Task';
 
 /**
  * User messages a compaction keeps verbatim, with the replies that follow
@@ -34,25 +34,70 @@ export function extractSummary(reply: string): string | null {
 }
 
 /**
- * What the transcript's first entry — and the notice sent with it — says. It
- * is replayed to the model like any assistant message, so it tells the model
+ * What a compaction entry — and the notice sent with it — says. It is
+ * replayed to the model like any assistant message, so it tells the model
  * what the entry is as well as the user.
  */
 export function condensedNotice(summary: string): string {
   return [
-    'Conversation condensed: the earlier messages were replaced by the summary below, and the last two exchanges were kept as they were. The task list is unchanged.',
+    'Conversation condensed: the summary below stands in for the earlier messages from here on, and the last two exchanges were kept as they were. The full conversation stays in the history. The task list is unchanged.',
     '',
     summary,
   ].join('\n');
 }
 
+function isCheckpoint(value: unknown): value is ContextCheckpoint {
+  if (!value || typeof value !== 'object') return false;
+  const { id, keptFrom, trigger } = value as Record<string, unknown>;
+  return typeof id === 'string' && id !== '' && Number.isInteger(keptFrom) && (trigger === 'manual' || trigger === 'auto');
+}
+
 /**
- * The part of the transcript a compaction keeps as it is — from the
- * second-to-last user message on, replies included — or null when there is
- * nothing before it worth condensing.
+ * The newest compaction entry that is a checkpoint, and where the context it
+ * heads resumes verbatim. Read from whatever was saved, so each one is checked
+ * against where it stands: its cut at or before itself and no earlier than
+ * the one before it. One that fails is passed over, replaying more than it
+ * would have — never hiding what it claimed to summarise.
  */
-export function keptTail(transcript: readonly ConversationMessage[]): ConversationMessage[] | null {
-  const userAt = transcript.flatMap((m, i) => (isUserMessage(m) ? [i] : []));
+function newestCheckpoint(transcript: readonly ConversationMessage[]): { at: number; keptFrom: number } | null {
+  let newest: { at: number; keptFrom: number } | null = null;
+  for (const [at, entry] of transcript.entries()) {
+    if (entry.kind !== 'compaction') continue;
+    // A legacy compaction replaced what it condensed, so only it ever stood first.
+    if (at === 0) newest = { at, keptFrom: 1 };
+    else if (isCheckpoint(entry.checkpoint) && entry.checkpoint.keptFrom >= (newest?.keptFrom ?? 0) && entry.checkpoint.keptFrom <= at) {
+      newest = { at, keptFrom: entry.checkpoint.keptFrom };
+    }
+  }
+  return newest;
+}
+
+/**
+ * The transcript as the planner's context holds it: the newest checkpoint's
+ * summary, then every entry from its cut on, without other compaction
+ * entries — the summaries it superseded and markers that were never
+ * checkpoints. The whole transcript stays what surfaces draw and forks
+ * copy; this alone is replayed or condensed.
+ */
+export function modelContext(transcript: readonly ConversationMessage[]): ConversationMessage[] {
+  const checkpoint = newestCheckpoint(transcript);
+  const verbatim = (checkpoint ? transcript.slice(checkpoint.keptFrom) : transcript).filter((m) => m.kind !== 'compaction');
+  return checkpoint ? [transcript[checkpoint.at], ...verbatim] : verbatim;
+}
+
+/** Where the planner's context resumes verbatim: no new checkpoint may cut before it. */
+export function contextFloor(transcript: readonly ConversationMessage[]): number {
+  return newestCheckpoint(transcript)?.keptFrom ?? 0;
+}
+
+/**
+ * Where a compaction would cut the transcript, as an index into it — the
+ * second-to-last user message the planner's context holds verbatim — or null
+ * when the context holds nothing before it worth condensing.
+ */
+export function compactionCut(transcript: readonly ConversationMessage[]): number | null {
+  const floor = contextFloor(transcript);
+  const userAt = transcript.flatMap((m, i) => (i >= floor && isUserMessage(m) ? [i] : []));
   if (userAt.length <= KEPT_USER_MESSAGES) return null;
-  return transcript.slice(userAt[userAt.length - KEPT_USER_MESSAGES]);
+  return userAt[userAt.length - KEPT_USER_MESSAGES];
 }

@@ -165,7 +165,7 @@ describe('Session.forkConversation', () => {
     expect(raw).not.toContain(persisted.isolation!.run.tasks.first.workspace);
   });
 
-  it('carries the condensed transcript when forked after a compaction, and the fork rewinds no further than its summary', async () => {
+  it('carries the whole transcript and its summary when forked after a compaction, and the fork rewinds past the summary', async () => {
     const summaryTurn: ConversationTurn = { kind: 'message', text: '<conversation_summary>A parser; task 5 renamed.</conversation_summary>', researchLog: [] };
     const session = makeSession({
       aiService: { hasActiveConversation: () => true, continueConversation: vi.fn().mockResolvedValue(summaryTurn) },
@@ -184,11 +184,11 @@ describe('Session.forkConversation', () => {
 
     const forked = sessionStore.loadSession(fork.sessionId, workspace)!.plan;
     expect(forked.conversationHistory).toEqual(session.planState!.conversationHistory);
-    expect(forked.conversationHistory![0]).toMatchObject({ kind: 'compaction', content: expect.stringContaining('task 5 renamed') });
+    expect(forked.conversationHistory!.at(-1)).toMatchObject({ kind: 'compaction', content: expect.stringContaining('task 5 renamed') });
     const adopted = makeSession();
     adopted.loadPlan(forked, GOAL, workspace, { sessionId: fork.sessionId, persist: false });
-    expect(adopted.rewindTargets().map((t) => t.preview)).toEqual(['rename task 5', 'and add CSV']);
-    expect(() => adopted.rewindConversation(0)).toThrow(/condensed/);
+    expect(adopted.rewindTargets().map((t) => [t.index, t.preview])).toEqual([[2, 'rename task 5'], [4, 'and add CSV']]);
+    expect(() => adopted.rewindConversation(0)).toThrow(/goal/);
   });
 
   it('forks again from either side', () => {
