@@ -864,6 +864,61 @@ describe('TUI end to end', () => {
     expect(h.screen()).not.toBe(afterChat);
   });
 
+  it('routes a raw wheel report by the pointer row when a narrow terminal stacks the plan under the chat', async () => {
+    const h = harness(30);
+    await vi.waitFor(() => expect(h.screen()).toContain('deepseek/deepseek-v4-flash'));
+    h.output.columns = 60;
+    h.output.emit('resize');
+    for (let i = 0; i < 40; i++) h.app.dispatch({ type: 'notice', message: `line ${i}` });
+    h.app.dispatch({
+      type: 'planUpdated',
+      plan: {
+        pendingTasks: Array.from({ length: 30 }, (_, i) => ({
+          id: `t${i}`, order: i + 1, title: `Task ${i}`, type: 'ai', status: 'pending', dependencies: [],
+        })),
+      },
+    });
+    await settle();
+    const screen = h.screen().split('\n');
+    const header = screen.findIndex((line) => line.startsWith('Plan 0/30')) + 1;
+    expect(header, 'the plan header is painted under the transcript').toBeGreaterThan(3);
+    expect(screen.some((line) => line.includes('│'))).toBe(false);
+
+    // the same column, a row in the transcript and a row in the plan
+    h.type('\x1b[<64;10;2M');
+    await vi.waitFor(() => expect(h.app.getState().scroll).toBe(3));
+    expect(h.app.getState().planScroll ?? 0).toBe(0);
+
+    h.type(`\x1b[<65;10;${header + 2}M`);
+    await vi.waitFor(() => expect(h.app.getState().planScroll).toBe(3));
+    expect(h.app.getState().scroll).toBe(3);
+  });
+
+  it('copies one pane only from a drag that runs from the stacked transcript into the plan', async () => {
+    const h = harness(30);
+    h.type('Build the login flow');
+    h.type('\r');
+    await vi.waitFor(() => expect(h.screen()).toContain('Add the login route'));
+    h.output.columns = 60;
+    h.output.emit('resize');
+    await vi.waitFor(() => expect(h.screen().split('\n').some((line) => line.startsWith('Plan 0/'))).toBe(true));
+
+    const screen = h.screen().split('\n');
+    const replyRow = screen.findIndex((line) => line.includes('Plan drafted')) + 1;
+    const taskRow = screen.findIndex((line) => line.includes('Add the login route')) + 1;
+    expect(replyRow).toBeGreaterThan(0);
+    expect(taskRow).toBeGreaterThan(replyRow);
+
+    h.type(`\x1b[<0;3;${replyRow}M`);
+    h.type(`\x1b[<32;40;${taskRow}M`);
+    h.type(`\x1b[<0;40;${taskRow}m`);
+
+    await vi.waitFor(() => expect(h.clipboard).toHaveLength(1));
+    expect(h.clipboard[0]).toContain('Plan drafted');
+    expect(h.clipboard[0]).not.toContain('Add the login route');
+    expect(h.app.getState().selection).toBeNull();
+  });
+
   it('the wheel still reaches the pane behind an overlay, and stops reaching it once the overlay closes', async () => {
     const h = harness();
     // Wait out the startup refresh: its completion notice resets `scroll` via

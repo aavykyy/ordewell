@@ -2938,9 +2938,12 @@ per-task model check). A second copy of the loop would be a second answer to
 "can this runner spawn this id".
 *Avoid:* reading `modelsByRunner` at a call site.
 
-**Pane geometry** (`tui/geometry.ts`) — the one owner of how wide the panes are:
-`planPaneWidth`, `chatPaneWidth`, `paneTextRoom`, `taskEditorRoom`,
-`chatEditorRoom`. Both the reducer and the renderer ask it. They used to each
+**Pane geometry** (`tui/geometry.ts`) — the one owner of how wide the panes are
+and how the body is divided: `bodyMode` (`chat`, `side` or `stacked`),
+`planPaneWidth`, `chatPaneWidth`, `stackRows`, `paneTextRoom`, `taskEditorRoom`,
+`chatEditorRoom`. The plan sits beside the chat from 70 columns and under it,
+at the full width, below that; with no plan the chat has the body to itself.
+Both the reducer and the renderer ask it. They used to each
 carry a copy and the copies drifted — the reducer wrapped an expanded task's
 prompt at the terminal width while the renderer wrapped it inside the plan pane,
 so `up` moved the caret to a position computed for a line twice as wide as the
@@ -2949,6 +2952,8 @@ one on screen.
 
 **Pane layout** (`tui/layout.ts`) — the same idea one level up: the one owner of
 what each pane's content *is*, and therefore how far it scrolls. `bodyRows`,
+`bodyPanes` (each pane's measured rectangle on screen — what the renderer
+paints into and the pointer, the page keys and the selection are clipped to),
 `chatLayout`/`chatScrollMax`, `planLayout`/`planScrollExtent`, `helpLayout`.
 `render.ts` paints, fits and joins what comes back; the reducer imports only the
 bounds, and clamps every offset where it is written. The bug that produced this

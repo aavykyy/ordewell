@@ -560,8 +560,10 @@ describe('plan pane run hints', () => {
     expect(text({ tasks, status: 'executing', runMerge: mergePaused })).toContain('Plan 1/3 · paused · /handoff merge');
   });
 
-  it('falls back to the status row where a narrow terminal has no plan pane', () => {
-    expect(text({ cols: 60, tasks: waiting })).toContain('1 task waits for you');
+  it('carries the hint in the stacked plan\'s title where a narrow terminal puts the plan under the chat', () => {
+    const out = text({ cols: 60, tasks: waiting });
+    expect(out).toContain('Plan 1/3 · 1 task waits for you');
+    expect(out.match(/1 task waits for you/g)).toHaveLength(1);
   });
 });
 

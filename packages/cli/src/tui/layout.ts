@@ -1,9 +1,9 @@
 import { firstGrapheme, nextBoundary, pad, previousBoundary, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
 import { cursorInLines, type CursorPosition } from './editor';
 import { assignmentFlagText, checkpointCardLines, conversationLines, tokenLine } from './blocks';
-import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
+import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
-import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
 import { SUPERVISOR_LEVEL_LABEL, type DiscoveredModel, type HeldEditMark } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
@@ -521,9 +521,90 @@ function taskUsageFooter(state: TuiState, tv: NonNullable<TuiState['taskView']>,
   return logHeader(state, tv).usage.map((row) => style.grey(truncate(row.text, cols)));
 }
 
+/**
+ * Where the body's panes are, measured: the one answer the renderer and every
+ * reducer take their sizes from, so a pane is never painted at one height and
+ * scrolled at another.
+ *
+ * Side by side the panes share the body's rows. Stacked they share its columns,
+ * and the rows are divided by what each pane has to say — which is why this
+ * lives with the content layouts rather than in `geometry.ts`, whose widths need
+ * no content. `plan` is `null` only while there is no plan; a stacked plan that
+ * the body has no room for is a rect of zero rows.
+ */
+export interface BodyPanes {
+  mode: BodyMode;
+  chat: PaneRect;
+  plan: PaneRect | null;
+}
+
+/** Transcript rows below the task view's pinned header that keep a stacked chat worth looking at. */
+const STACKED_CHAT_BODY_MIN = 2;
+/** The plan's header, the line under it, and one task row. */
+const STACKED_PLAN_MIN = 3;
+const UNBOUNDED = Number.MAX_SAFE_INTEGER;
+
+export function bodyPanes(state: TuiState): BodyPanes {
+  const mode = bodyMode(state);
+  const rows = bodyRows(state);
+  const chatCols = chatPaneWidth(state);
+  if (mode === 'chat') return { mode, chat: { row: 1, col: 1, rows, cols: chatCols }, plan: null };
+
+  const planCols = planPaneWidth(state);
+  if (mode === 'side') {
+    return { mode, chat: { row: 1, col: 1, rows, cols: chatCols }, plan: { row: 1, col: chatCols + 2, rows, cols: planCols } };
+  }
+
+  // Measured with no row limit, so the answer is what each pane would fill, not
+  // what it was last handed.
+  const chat = chatLayout(state, UNBOUNDED, chatCols);
+  const split = stackRows(rows, {
+    chat: chat.header.length + chat.lines.length + chat.footer.length,
+    chatMin: chat.header.length + STACKED_CHAT_BODY_MIN,
+    plan: planLayout(state, UNBOUNDED, planCols).lines.length,
+    planMin: STACKED_PLAN_MIN,
+  }, state.focus);
+  return {
+    mode,
+    chat: { row: 1, col: 1, rows: split.chat, cols: chatCols },
+    plan: { row: 1 + split.chat, col: 1, rows: split.plan, cols: planCols },
+  };
+}
+
+/** The pane a screen row falls in, or `null` for the chrome under the body. Only a stacked body is split by row. */
+export function stackedPaneAtRow(panes: BodyPanes, row: number): Focus | null {
+  if (panes.mode !== 'stacked' || !panes.plan) return null;
+  if (row >= panes.chat.row && row < panes.chat.row + panes.chat.rows) return 'chat';
+  return row >= panes.plan.row && row < panes.plan.row + panes.plan.rows ? 'plan' : null;
+}
+
+/**
+ * The screen cells a selection pinned to `pane` may cover, inclusive and
+ * 1-based. Side by side the panes share rows, so columns alone keep a copy from
+ * splicing them; stacked they share columns, so rows do — a drag out of the
+ * transcript stops at its last row instead of picking up the plan's first.
+ * Beside the chat (or alone) a pane's rows run the whole frame, composer included.
+ * With no plan to pin to, a `'plan'` gets the chat's area rather than an empty one.
+ */
+export interface SelectionArea {
+  firstRow: number;
+  lastRow: number;
+  firstCol: number;
+  lastCol: number;
+}
+
+export function selectionArea(state: TuiState, pane: Focus, panes: BodyPanes = bodyPanes(state)): SelectionArea {
+  const rect = pane === 'plan' && panes.plan ? panes.plan : panes.chat;
+  if (panes.mode === 'stacked') {
+    return { firstRow: rect.row, lastRow: Math.max(rect.row, rect.row + rect.rows - 1), firstCol: rect.col, lastCol: rect.col + rect.cols - 1 };
+  }
+  return { firstRow: 1, lastRow: state.rows, firstCol: rect.col, lastCol: rect.col + rect.cols - 1 };
+}
+
 /** How far back the chat pane can be scrolled at the size it is about to be painted. */
 export function chatScrollMax(state: TuiState): number {
-  return chatLayout(state, bodyRows(state), chatPaneWidth(state)).maxScroll;
+  const { chat } = bodyPanes(state);
+  return chatLayout(state, chat.rows, chat.cols).maxScroll;
 }
 
 // ── Welcome ──────────────────────────────────────────────────────────────────
@@ -858,12 +939,15 @@ const clampOffset = (layout: PlanLayout, offset: number): number =>
  * that takes: one that is already visible stays put, one above lands on the
  * first body line, one below on the last. A span taller than the body cannot be
  * both, so its first line wins. Reaching the first row shows the spacer under
- * the header again rather than stopping one line short of it.
+ * the header again rather than stopping one line short of it, when the body is
+ * tall enough to hold both.
  */
 export function revealOffset(layout: PlanLayout, offset: number, span: LineSpan): number {
   const at = clampOffset(layout, offset);
   const bodyHeight = layout.rows - 1;
-  const first = span.start <= (layout.rowSpans[0]?.start ?? layout.anchor.start) ? 0 : span.start - 1;
+  // The spacer under the header comes back with the first row only if the row
+  // still fits under it — a one-line body would otherwise show nothing but the spacer.
+  const first = span.start <= (layout.rowSpans[0]?.start ?? layout.anchor.start) && span.end <= bodyHeight ? 0 : span.start - 1;
   if (span.start < 1 + at || span.end - span.start + 1 > bodyHeight) return clampOffset(layout, first);
   if (span.end > at + layout.rows - 1) return clampOffset(layout, span.end - layout.rows + 1);
   return at;
@@ -918,13 +1002,13 @@ export function rowNearestView(layout: PlanLayout, offset: number, row: number):
 
 /** The plan pane's geometry at the size it is about to be painted. */
 export function planScrollExtent(state: TuiState): PlanLayout {
-  const cols = planPaneWidth(state);
-  // A pane too narrow to show has nothing to scroll; measuring it anyway would
-  // wrap every title to a column and invent an offset the user can never see.
-  if (cols === 0) {
+  const { plan } = bodyPanes(state);
+  // A pane with no room has nothing to scroll; measuring it anyway would
+  // invent an offset the user can never see.
+  if (!plan || plan.rows === 0) {
     return { lines: [], rowSpans: [], anchor: { start: 0, end: 0 }, rows: 0, maxScroll: 0 };
   }
-  return planLayout(state, bodyRows(state), cols);
+  return planLayout(state, plan.rows, plan.cols);
 }
 
 /** The discovered catalog per runner, rebuilt from the models each was tagged with, so an allowlist is read as the planner reads it. */

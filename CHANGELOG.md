@@ -10,6 +10,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- **The TUI keeps the plan on screen below 70 columns.** It moves under the
+  transcript, at the full width and above the composer, instead of
+  disappearing; the transcript and the plan share the body by what each has to
+  show. Scrolling, the page keys, the wheel and a mouse selection follow the
+  pane they are over, and a copy never picks up the other pane's text.
 - **A read-only task can hand off its prototype as a patch.** It calls
   `save_patch` and Ordewell keeps everything it changed in its worktree as one
   file with its attempt, named in its handoff. A change task that depends on it

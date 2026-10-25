@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { initialState, reduce, type Step } from '../reducer';
 import { render } from '../render';
 import { chatEditorRoom, chatPaneWidth, planPaneWidth, taskEditorRoom } from '../geometry';
+import { bodyPanes, bodyRows } from '../layout';
 import { cursorPosition } from '../editor';
 import { width } from '../ansi';
 import type { TaskView, TuiState } from '../state';
@@ -45,8 +46,15 @@ describe('pane geometry', () => {
     expect(taskEditorRoom(state)).toBeLessThan(state.cols - 4);
   });
 
-  it('gives the task editor one column when the plan pane is too narrow to show', () => {
+  it('wraps the task editor at the full width less the indent when the plan is stacked', () => {
     const state = taskState({ cols: 20 });
+
+    expect(planPaneWidth(state)).toBe(20);
+    expect(taskEditorRoom(state)).toBe(16);
+  });
+
+  it('gives the task editor one column while there is no plan to hold it', () => {
+    const state = taskState({ cols: 20, tasks: [] });
 
     expect(planPaneWidth(state)).toBe(0);
     expect(taskEditorRoom(state)).toBe(1);
@@ -58,7 +66,7 @@ describe('pane geometry', () => {
     expect(chatPaneWidth(state)).toBe(state.cols - planPaneWidth(state) - 1);
   });
 
-  it('gives the chat the whole terminal when the plan pane is suppressed', () => {
+  it('gives the chat the whole terminal when the plan is stacked under it', () => {
     const state = taskState({ cols: 20 });
 
     expect(chatPaneWidth(state)).toBe(20);
@@ -135,5 +143,36 @@ describe('task editor caret, through the rendered frame', () => {
 
     expect(frame).toHaveLength(expanded.rows);
     expect(Math.max(...frame.map(width))).toBeLessThanOrEqual(expanded.cols);
+  });
+});
+
+describe('the body at the side-by-side cutoff', () => {
+  const at = (cols: number, over: Partial<TuiState> = {}): TuiState => taskState({ cols, rows: 30, ...over });
+
+  it('stays side by side at 70 columns, with the plan beside the chat', () => {
+    const state = at(70);
+    const panes = bodyPanes(state);
+
+    expect(panes.mode).toBe('side');
+    expect(panes.chat).toEqual({ row: 1, col: 1, rows: bodyRows(state), cols: 37 });
+    expect(panes.plan).toEqual({ row: 1, col: 39, rows: bodyRows(state), cols: 32 });
+  });
+
+  it('stacks the plan under the chat at 69 columns, both at the full width', () => {
+    const state = at(69);
+    const { mode, chat, plan } = bodyPanes(state);
+
+    expect(mode).toBe('stacked');
+    expect(chat).toMatchObject({ row: 1, col: 1, cols: 69 });
+    expect(plan).toMatchObject({ col: 1, cols: 69 });
+    expect(plan!.row).toBe(chat.rows + 1);
+    expect(chat.rows + plan!.rows).toBe(bodyRows(state));
+  });
+
+  it('keeps the chat alone, whatever the width, while there is no plan', () => {
+    for (const cols of [20, 69, 70, 120]) {
+      const state = at(cols, { tasks: [] });
+      expect(bodyPanes(state)).toEqual({ mode: 'chat', chat: { row: 1, col: 1, rows: bodyRows(state), cols }, plan: null });
+    }
   });
 });
