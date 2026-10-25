@@ -4,7 +4,7 @@ import {
   type PlannerModelRecall,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
-import { DaemonError, WorkspaceInitNeededError, deliveryOf, type ApiClient, type SessionFollow } from '../apiClient';
+import { DaemonError, RequestTimeoutError, UnreadableResponseError, WorkspaceInitNeededError, deliveryOf, type ApiClient, type SessionFollow } from '../apiClient';
 import { normalizeCatalog } from '../catalog';
 import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
@@ -576,11 +576,12 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     }
     case 'compactConversation': {
       let plan: unknown;
+      const sentAt = Date.now();
       try {
         ({ plan } = await api.compactConversation(effect.sessionId));
       } catch (err) {
         if (deliveryOf(err) !== 'unknown') throw err;
-        await settleLostReply(deps, effect.sessionId, { opening: false });
+        await settleLostReply(deps, effect.sessionId, { opening: false, reason: describeLoss(err, Date.now() - sentAt) });
         return;
       }
       const inbound = inboundFor(deps.api, deps.dispatch, effect.sessionId);
@@ -891,30 +892,68 @@ function unfollow(deps: EffectDeps, sessionId: string): void {
 async function converse(deps: EffectDeps, sessionId: string, call: () => Promise<unknown>, opening = false): Promise<void> {
   const inbound = inboundFor(deps.api, deps.dispatch, sessionId);
   const stream = deps.api.streamPlanning(sessionId, inbound.planning());
-  let sent = false;
-  let lost = false;
+  let lost: string | null = null;
+  // A reply that arrived but could not be used or shown. The daemon took the
+  // turn and answered it, so it is its own error, not a loss: the session stays.
+  let unusable: { err: unknown; shown: boolean } | null = null;
 
   try {
     await Promise.all([stream.ready, follow(deps, sessionId)]);
-    sent = true;
-    const plan = await call();
-    inbound.flush();
-    // Speak the turn before `planUpdated` settles it: the settle is also what
-    // drains the next queued prompt, so the reply would otherwise land after
-    // the prompt that queue sent, in the wrong order. The socket usually
-    // delivered the same words; the backfill is dropped when it did.
-    for (const reply of turnReplies(plan)) inbound.backfill(reply.content, reply.timestamp, reply.runs);
-    deps.dispatch({ type: 'planUpdated', plan, sessionId });
-  } catch (err) {
-    // Only a failure of the call itself can leave the turn running: one before
-    // it went out, or one the daemon answered, is the turn's own end.
-    if (!sent || deliveryOf(err) !== 'unknown') throw err;
-    lost = true;
+    const sentAt = Date.now();
+    let plan: unknown;
+    try {
+      plan = await call();
+    } catch (err) {
+      // Only a failure of the call itself can leave the turn running: one
+      // before it went out, or one the daemon answered, is the turn's own end.
+      if (err instanceof UnreadableResponseError) unusable = { err, shown: false };
+      else if (deliveryOf(err) === 'unknown') lost = describeLoss(err, Date.now() - sentAt);
+      else throw err;
+    }
+    if (lost === null && unusable === null) {
+      try {
+        inbound.flush();
+        // Speak the turn before `planUpdated` settles it: the settle is also what
+        // drains the next queued prompt, so the reply would otherwise land after
+        // the prompt that queue sent, in the wrong order. The socket usually
+        // delivered the same words; the backfill is dropped when it did.
+        for (const reply of turnReplies(plan)) inbound.backfill(reply.content, reply.timestamp, reply.runs);
+        deps.dispatch({ type: 'planUpdated', plan, sessionId });
+      } catch (err) {
+        unusable = { err, shown: true };
+      }
+    }
   } finally {
     inbound.flush();
     stream.close();
   }
-  if (lost) await settleLostReply(deps, sessionId, { opening });
+  if (unusable) {
+    const { err, shown } = unusable;
+    deps.dispatch({ ...failedFrom(shown ? new Error(`The planner's reply arrived but could not be shown: ${explain(err)}`) : err), turn: true });
+  } else if (lost !== null) {
+    await settleLostReply(deps, sessionId, { opening, reason: lost });
+  }
+}
+
+/**
+ * Why a request that went out got no answer, in a few words and without the
+ * request: the error's name or code, how long it waited and, for a timeout, the
+ * bound it hit. What the user needs to tell a configured bound from a reset.
+ */
+function describeLoss(err: unknown, elapsedMs: number): string {
+  const waited = `after ${formatElapsed(elapsedMs)}`;
+  if (err instanceof RequestTimeoutError) {
+    const bound = `${formatElapsed(err.timeoutMs)}${err.viaEnv ? ' from ORDEWELL_HTTP_TIMEOUT_MS' : ''}`;
+    return `timed out ${waited}, limit ${bound}`;
+  }
+  const code = (err as { code?: unknown } | null)?.code;
+  const message = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, ' ').slice(0, 80);
+  const named = typeof code === 'string' && !message.includes(code) ? `${code}: ${message}` : message;
+  return `${named} ${waited}`;
+}
+
+function formatElapsed(ms: number): string {
+  return ms < 10_000 ? `${Math.round(ms)} ms` : `${Math.round(ms / 1000)} s`;
 }
 
 /**
@@ -923,9 +962,9 @@ async function converse(deps: EffectDeps, sessionId: string, call: () => Promise
  * the queue stay as they are, nothing is sent again, and the session is read
  * back to show what the daemon holds. Cleared only when the daemon holds none.
  */
-async function settleLostReply(deps: EffectDeps, sessionId: string, how: { opening: boolean }): Promise<void> {
-  deps.dispatch({ type: 'turnLost', sessionId });
-  await readBackSession(deps, sessionId, { ...how, turnEnded: false });
+async function settleLostReply(deps: EffectDeps, sessionId: string, how: { opening: boolean; reason: string }): Promise<void> {
+  deps.dispatch({ type: 'turnLost', sessionId, reason: how.reason });
+  await readBackSession(deps, sessionId, { opening: how.opening, turnEnded: false, reason: how.reason });
 }
 
 /**
@@ -933,10 +972,10 @@ async function settleLostReply(deps: EffectDeps, sessionId: string, how: { openi
  * disturbing it. `turnEnded` is whether the stream has already said the turn is
  * over: only then is a failure to read back one that ends it.
  */
-async function readBackSession(deps: EffectDeps, sessionId: string, how: { opening: boolean; turnEnded: boolean }): Promise<void> {
+async function readBackSession(deps: EffectDeps, sessionId: string, how: { opening: boolean; turnEnded: boolean; reason?: string }): Promise<void> {
   try {
     const { plan, plannerTurnId } = await deps.api.adoptSession(sessionId, deps.workspace);
-    deps.dispatch({ type: 'turnReconciled', plan, plannerTurnId, chat: restoredChat(plan, sessionId), sessionId });
+    deps.dispatch({ type: 'turnReconciled', plan, plannerTurnId, chat: restoredChat(plan, sessionId), sessionId, ...(how.reason ? { reason: how.reason } : {}) });
   } catch (err) {
     if (err instanceof DaemonError && err.code === 'session_not_found' && how.opening) {
       unfollow(deps, sessionId);

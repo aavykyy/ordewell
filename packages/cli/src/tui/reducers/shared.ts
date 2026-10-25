@@ -104,14 +104,14 @@ export type Action =
    * the daemon may still be running the turn or have finished it, so it is
    * neither a failure nor an end.
    */
-  | { type: 'turnLost'; sessionId: string }
+  | { type: 'turnLost'; sessionId: string; /** Why the request failed, short and without the request: shown beside the warning. */ reason?: string }
   /**
    * The session as the daemon holds it after a lost reply, with the conversation
    * to redraw from it. `plannerTurnId` is the turn the daemon is running now, if
    * one is: the gate's turn is over only when the daemon names a different one
    * or none at all.
    */
-  | { type: 'turnReconciled'; plan: unknown; plannerTurnId?: string; chat: ChatRestored; sessionId: string }
+  | { type: 'turnReconciled'; plan: unknown; plannerTurnId?: string; chat: ChatRestored; sessionId: string; reason?: string }
   /** A planner turn's call returned its plan: the one action that ends the turn. */
   | { type: 'planUpdated'; plan: unknown; sessionId?: string }
   /** The plan as the daemon holds it after a request that is not a planner turn; a turn out stays out. */

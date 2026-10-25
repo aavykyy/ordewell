@@ -25,6 +25,11 @@ export { initialState } from './state';
 export { resolveTaskId } from './reducers/taskEdits';
 export type { Action, Effect, Step, TaskAction } from './reducers/shared';
 
+/** The cause a lost-reply line carries, when the effect knew one. */
+function because(reason: string | undefined): string {
+  return reason ? ` (${reason})` : '';
+}
+
 /**
  * Live output never moves a reader who scrolled back: the offset counts lines
  * from the tail, so lines arriving below would otherwise slide what they are
@@ -142,7 +147,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'turnLost': {
       if (stale(state, action.sessionId) || !plannerInFlight(state)) return step(state);
       const awaiting: TuiState = { ...state, planner: 'awaiting', forceSendPending: null };
-      return step(say(awaiting, 'system', 'The reply was lost on the way: the planner may still be running this turn or may have finished it. Showing what the server holds.'));
+      return step(say(awaiting, 'system', `The reply was lost on the way${because(action.reason)}: the planner may still be running this turn or may have finished it. Showing what the server holds.`));
     }
 
     // The daemon's own word on the session. A turn it still runs is live, and
@@ -161,7 +166,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       const redrawn = reduceAction({ ...state, turnGate: NO_TURN }, action.chat).state;
       const settled = reduceAction(redrawn, { type: 'planUpdated', plan: action.plan, sessionId: action.sessionId });
       // The redraw replaced the line `turnLost` spoke, and with it the reason a message may be missing.
-      return { ...settled, state: say(settled.state, 'system', 'The reply to your last message was lost on the way; this is what the server holds.') };
+      return { ...settled, state: say(settled.state, 'system', `The reply to your last message was lost on the way${because(action.reason)}; this is what the server holds.`) };
     }
 
     // A message never ends a turn: `planUpdated` does (see `converse`), so a
