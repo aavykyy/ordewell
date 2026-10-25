@@ -106,6 +106,15 @@ describe('planner activity while a turn is open', () => {
     expect(state()).toEqual(ACTIVE);
   });
 
+  it('the working row is pinned outside the scrolling conversation', () => {
+    host.session(wakeUpStarted, thought);
+
+    const row = document.querySelector('.chat-msg-working');
+    expect(row).not.toBeNull();
+    expect(row!.closest('.message-list')).toBeNull();
+    expect(document.querySelectorAll('.chat-msg-spinner')).toHaveLength(1);
+  });
+
   it('control: a webview resync mid-turn re-announces the open turn', () => {
     host.session(wakeUpStarted, readCall, readDone);
     host.provider.conversation.resync();
@@ -231,6 +240,22 @@ describe('planner activity across the watchdog threshold', () => {
     host.session(readDone, nextCall);
 
     expect(state()).toEqual(ACTIVE);
+  });
+
+  it('control: untagged liveness after the watchdog fired leaves the input free', () => {
+    host.session(wakeUpStarted, readCall);
+    wait(125_000);
+    host.session(liveness, liveness);
+
+    expect(state()).toEqual(IDLE);
+  });
+
+  it('control: the restored turn ending clears the indicator again', () => {
+    host.session(wakeUpStarted, readCall);
+    wait(125_000);
+    host.session(readDone, nextCall, turnEnded);
+
+    expect(state()).toEqual(IDLE);
   });
 
   it('control: the turn ending after the watchdog fired stays idle through late liveness', () => {

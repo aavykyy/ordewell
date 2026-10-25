@@ -91,6 +91,12 @@ export interface HostState {
   dockHeight: number | undefined;
   /** The user stopped the turn: plan updates are dropped until the host closes it. */
   stopped: boolean;
+  /**
+   * The watchdog unlocked the input on a turn the host never closed. The host
+   * saying that turn is still producing (`plannerTurnAlive`) locks it again;
+   * any word from the host on the turn, or the user's own, ends the wait.
+   */
+  turnLost: boolean;
   /** The user started a new session: errors from the old one's turn are dropped. */
   sessionCleared: boolean;
   /** Every installed runner's account limits: live account data, kept across a session reset. */
@@ -134,6 +140,7 @@ export const INITIAL_HOST_STATE: HostState = {
   dockExpanded: false,
   dockHeight: undefined,
   stopped: false,
+  turnLost: false,
   sessionCleared: false,
   accountLimits: [],
 };
@@ -151,7 +158,7 @@ export type HostAction =
   | { type: 'turnStopped' }
   | { type: 'turnRequested' }
   | { type: 'patchPlan'; plan: Updatable<SurfacePlan | null> }
-  | { type: 'patchResearchActive'; active: boolean }
+  | { type: 'turnLost' }
   | { type: 'patchError'; error: string }
   | { type: 'patchReady'; ready: boolean }
   | { type: 'patchRunners'; runners: Updatable<RunnerId[]> }
@@ -187,6 +194,7 @@ export function resetSession(state: HostState, kind: SessionResetKind): HostStat
   };
   if (kind === 'empty') return next;
   next.isResearchActive = false;
+  next.turnLost = false;
   next.isExecuting = false;
   next.held = EMPTY_HOLD;
   next.stopped = kind === 'new';
@@ -204,16 +212,16 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       return resetSession(state, action.kind);
 
     case 'turnStopped':
-      return { ...state, stopped: true, isResearchActive: false };
+      return { ...state, stopped: true, isResearchActive: false, turnLost: false };
 
     case 'turnRequested':
-      return { ...state, stopped: false, sessionCleared: false, error: '', isResearchActive: true };
+      return { ...state, stopped: false, sessionCleared: false, error: '', isResearchActive: true, turnLost: false };
 
     case 'patchPlan':
       return { ...state, plan: resolve(action.plan, state.plan) };
 
-    case 'patchResearchActive':
-      return { ...state, isResearchActive: action.active };
+    case 'turnLost':
+      return { ...state, isResearchActive: false, turnLost: true };
 
     case 'patchError':
       return { ...state, error: action.error };
@@ -288,14 +296,18 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     // The stop gate lasts until the host has closed the stopped turn; a new
     // turn is never gated.
     case 'plannerTurn':
-      return { ...state, stopped: false, isResearchActive: action.active };
+      return { ...state, stopped: false, isResearchActive: action.active, turnLost: false };
+
+    case 'plannerTurnAlive':
+      if (!state.turnLost || state.stopped) return state;
+      return { ...state, isResearchActive: true, turnLost: false };
 
     case 'conversationBusy':
       return { ...state, conversationBusy: !!action.busy };
 
     case 'showError':
       if (state.sessionCleared) return state;
-      return { ...state, error: action.error, isResearchActive: false };
+      return { ...state, error: action.error, isResearchActive: false, turnLost: false };
 
     case 'taskOutput':
       return { ...state, taskOutput: appendTaskOutput(state.taskOutput, action.taskId, action.text ?? '') };
