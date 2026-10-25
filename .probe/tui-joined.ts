@@ -1,0 +1,14 @@
+import { initialState, reduce, type Action } from '../packages/cli/src/tui/reducer';
+const fold = (state: ReturnType<typeof initialState>, action: Action) => reduce(state, action).state;
+const joined = (message: { type: 'planner_compaction'; compaction: any }, sessionId = 's2'): Action => ({ type: 'sessionMessage', sessionId, message });
+let s = initialState({ sessionId: 's2', rows: 30, cols: 100 });
+s = fold(s, { type: 'sessionLoaded', sessionId: 's2', goal: 'g' });
+s = fold(s, { type: 'planUpdated', plan: { tasks: [] }, sessionId: 's2' });
+s = fold(s, { type: 'turnJoined', turnId: 't1', sessionId: 's2' });
+const start = { type: 'planner_compaction' as const, compaction: { phase: 'started' as const, id: 'c1', origin: 'ordewell' as const, trigger: 'auto' as const, at: 'x' } };
+const end = { type: 'planner_compaction' as const, compaction: { phase: 'ended' as const, id: 'c1', origin: 'ordewell' as const, trigger: 'auto' as const, outcome: 'condensed' as const, at: 'y' } };
+s = fold(s, joined(start));
+s = fold(s, joined(end));
+console.log('after compaction:', s.planner, s.turnGate);
+s = fold(s, { type: 'sessionMessage', sessionId: 's2', message: { type: 'planner_turn_ended', turnId: 't1', outcome: 'message' } });
+console.log('after turn end:', s.planner, s.turnGate);
