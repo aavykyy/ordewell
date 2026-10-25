@@ -70,7 +70,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // (`task-1`), so nothing of the last one's — a merge gate, a checkpoint, its
     // tasks — may carry over into this.
     case 'sessionStarted':
-      return step(withRun({ ...state, sessionId: action.sessionId, goal: action.goal, taskView: null }, EMPTY_RUN));
+      return step(withRun({ ...state, sessionId: action.sessionId, goal: action.goal, taskView: null, status: 'idle' }, EMPTY_RUN));
 
     // A loaded session is a different one: the turn the old one had out, the
     // prompts held behind it and a stop armed against it are not this one's.
@@ -82,6 +82,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         sessionId: action.sessionId,
         goal: action.goal,
         taskView: null,
+        status: 'idle',
         planner: 'idle',
         turnGate: NO_TURN,
         pendingApprovals: [],
@@ -104,6 +105,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         sessionId: null,
         goal: '',
         taskView: null,
+        status: 'idle',
         turnGate: NO_TURN,
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
@@ -248,9 +250,11 @@ function reduceAction(state: TuiState, action: Action): Step {
         tasks: action.tasks,
         ...(action.runMerge !== undefined ? { runMerge: action.runMerge } : {}),
         ...(action.usage !== undefined ? { usage: action.usage } : {}),
+        ...(action.activity !== undefined ? { activity: action.activity } : {}),
       });
-      // The indicator follows the tasks, not the stream: once none is running
-      // the run is over, whatever the daemon's scheduler still holds armed.
+      // The indicator follows the run's own activity first, then the tasks:
+      // beginning a run is "starting" until it claims, and once none is
+      // running the run is over, whatever the scheduler still holds armed.
       const status = runStatus(next, next.tasks);
       return step({ ...next, status });
     }
@@ -321,7 +325,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // without sending this notice again until a reconnect opens.
     case 'followLost': {
       if (stale(state, action.sessionId)) return step(state);
-      if (state.status === 'executing') return reduceAction(state, { type: 'executionLost', sessionId: action.sessionId });
+      if (state.status === 'executing' || state.status === 'starting') return reduceAction(state, { type: 'executionLost', sessionId: action.sessionId });
       return step(say(state, 'system', 'Lost the connection to the daemon; reconnecting to follow this session.'));
     }
 
@@ -417,7 +421,12 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'failed': {
       // A failed call may have been the task view's log read; the view falls
       // back to whatever the live stream sent rather than waiting forever.
-      if (!action.turn) return step(say(taskLogAbandoned(state), 'error', action.message));
+      if (!action.turn) {
+        const abandoned = say(taskLogAbandoned(state), 'error', action.message);
+        // A whole-plan start answered nothing but this failure: no run is on
+        // its way, so the start indicator must not outlive it.
+        return step(state.status === 'starting' ? { ...abandoned, status: 'idle' } : abandoned);
+      }
       // A force send stopped the turn in flight; the forced turn is already on
       // its way, so the stop is not news and the prompts held behind it keep
       // their order rather than draining into the turn replacing it. Only the
@@ -428,7 +437,13 @@ function reduceAction(state: TuiState, action: Action): Step {
         state = restoreForced(state);
       }
       const quiet = plannerInFlight(state) && state.stopRequested;
-      const reported = { ...(quiet ? state : say(state, 'error', action.message)), planner: 'idle' as const };
+      const reported = {
+        ...(quiet ? state : say(state, 'error', action.message)),
+        planner: 'idle' as const,
+        // A start that never reached the daemon has no run to wait for: the
+        // spinner must not outlive the failure that answered it.
+        status: state.status === 'starting' ? 'idle' as const : state.status,
+      };
       // A planner turn dying IS a turn ending — the queue would otherwise wait
       // on a next one that never comes.
       if (!plannerInFlight(state)) return step(reported);
@@ -520,6 +535,12 @@ function plannerResendOf(plan: unknown): TuiState['plannerResend'] {
 }
 
 function runStatus(state: TuiState, tasks: TaskView[]): RunStatus {
+  // The run's own authoritative word first: an admitted start that has not
+  // claimed is "starting", never "executing", and a claimed one is running
+  // even if the first status tick has not caught up yet.
+  const activity = state.run.activity;
+  if (activity?.starting) return 'starting';
+  if (activity?.running) return 'executing';
   if (tasks.some(isTaskRunning)) return 'executing';
   // A task waiting on the user is not executing, but the run is not over
   // either — the indicator says it waits rather than going idle. A run paused

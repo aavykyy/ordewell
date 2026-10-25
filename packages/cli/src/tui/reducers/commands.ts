@@ -9,7 +9,7 @@ import { say } from '../transcript';
 import { picker, pickerItemsFor } from './pickers';
 import { plannerStepper } from './plannerStepper';
 import { openStepper } from './stepper';
-import { taskActionEffect } from './planPane';
+import { startPlan, taskActionEffect } from './planPane';
 import { answerCheckpoint, continueTaskStep, openTaskView } from './taskView';
 import {
   addTask, confirmForceStartPastGate, openTaskDepsPicker, taskCommand, taskOpsCommand, taskEffortCommand, taskModeCommand, taskModelCommand, taskRunnerCommand, taskSkillsCommand,
@@ -34,10 +34,10 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
       return step(state, [{ type: 'refresh', announce: true }]);
 
     case 'run':
-      return withSession(state, (sessionId) => step(state, [{ type: 'execute', sessionId }]));
+      return withSession(state, (sessionId) => startPlan(state, sessionId));
     case 'approve':
       return withSession(state, (sessionId) =>
-        step({ ...state, planApproved: true }, [{ type: 'execute', sessionId }]),
+        startPlan({ ...state, planApproved: true }, sessionId),
       );
     case 'stop':
       // A planner turn first, as Esc does: a turn sent mid-run is the newer

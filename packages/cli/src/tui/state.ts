@@ -4,7 +4,7 @@ import { emptyEditor, type EditorState } from './editor';
 import type { SaveSettingsEffect } from './reducers/settings';
 import type { StepperState } from './reducers/stepper';
 
-export type RunStatus = 'idle' | 'executing';
+export type RunStatus = 'idle' | 'starting' | 'executing';
 
 /**
  * This surface's own planner call: a turn, a /compact, or none. Apart from

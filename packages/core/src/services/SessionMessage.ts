@@ -287,7 +287,7 @@ export type SessionMessage =
    * planner; `usage` is its own share, already counted in `planner_usage`.
    */
   | { type: 'subagent_finished'; turnId?: string; subagentId: string; outcome: SubagentOutcome; digest: string; usage?: UsageTotals }
-  | { type: 'status_update'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage }
+  | { type: 'status_update'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; activity?: RunActivity }
   | { type: 'review_needed'; tasks: SerializedTask[] }
   | { type: 'review_approved' }
   | { type: 'checkpoint'; taskId: string; taskTitle: string; summary: string }
@@ -380,6 +380,26 @@ export type RunTaskStatus = Partial<Pick<
 export type RunTask = Omit<SerializedTask, 'subtasks'> & RunTaskStatus & { subtasks: RunTask[] };
 
 /**
+ * What the scheduler is doing with the plan, independent of any one task:
+ * the authoritative word a surface shows a start by, and a guard reads before
+ * acting on the plan. Kept apart from a task's status so a start that has not
+ * claimed anything yet is never drawn as work in progress.
+ */
+export interface RunActivity {
+  /** A start is admitted and has not claimed a task: work is on its way. */
+  starting: boolean;
+  /** At least one attempt is live. */
+  running: boolean;
+  /** The scheduler is driving the plan: ready tasks start as slots free. */
+  scheduled: boolean;
+  /** A run with nothing starting that something still resumes by itself (a usage limit's reset, a retry). */
+  resumable: boolean;
+}
+
+/** A run with nothing at work and nothing on its way. */
+export const IDLE_ACTIVITY: RunActivity = { starting: false, running: false, scheduled: false, resumable: false };
+
+/**
  * A session's run as every surface draws it (the [run view](../../../../CONTEXT.md)):
  * folded from {@link SessionMessage}s and plan snapshots by `reduceRun`, or
  * taken whole from `Session.runSnapshot()` by a surface that joins late.
@@ -394,6 +414,8 @@ export interface RunView {
   mergeResult: IsolationMergeResult | null;
   /** The edit the open planner turn holds, as it would leave the plan; absent when it holds none. */
   heldEdit?: HeldEdit;
+  /** What the scheduler is doing with the plan, as {@link RunActivity}. */
+  activity?: RunActivity;
 }
 
 export type RunInput = SessionMessage | PlanSnapshot;

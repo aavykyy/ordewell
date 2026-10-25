@@ -551,6 +551,12 @@ describe('plan pane run hints', () => {
     expect(text({ tasks: waiting, ...taskChat })).toContain('Plan 1/3 · 1 task waits for you');
   });
 
+  it('says a start is starting in the plan title and the status row', () => {
+    const out = text({ tasks, status: 'starting' });
+    expect(out).toContain('Plan 1/3 · starting…');
+    expect(out).toContain('Starting the plan…');
+  });
+
   it('carries the Merge all pause in its title, in either chat', () => {
     expect(text({ cols: 140, tasks, status: 'executing', runMerge: mergePaused })).toContain('paused for Merge all: /handoff merge');
     expect(text({ cols: 140, tasks, status: 'executing', runMerge: mergePaused, ...taskChat })).toContain('paused for Merge all: /handoff merge');

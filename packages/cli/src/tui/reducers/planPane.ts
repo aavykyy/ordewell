@@ -33,6 +33,19 @@ export function taskActionEffect(state: TuiState, sessionId: string, taskId: str
     : { type: 'taskAction', sessionId, taskId, action };
 }
 
+/**
+ * The whole-plan start, shown as starting at once: the daemon opens the run
+ * asynchronously, and until its first task claims there is nothing yet to call
+ * executing. A second press while that is under way is the same start.
+ */
+export function startPlan(state: TuiState, sessionId: string): Step {
+  if (state.status === 'starting') return step(state);
+  // A run already under way takes Execute as its join: nothing is starting, so
+  // the indicator stays executing and the call goes through as before.
+  if (state.status === 'executing') return step(state, [{ type: 'execute', sessionId }]);
+  return step({ ...state, status: 'starting' }, [{ type: 'execute', sessionId }]);
+}
+
 export function handlePlanKey(state: TuiState, key: Key): Step {
   // While a task's prompt editor is open, every key edits its draft instead of
   // moving the list cursor — otherwise up/down would collapse it out from
@@ -94,7 +107,7 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
 
   // `E` is the plan pane's equivalent of /run: it starts the whole plan, not
   // the selected task, hence the uppercase.
-  if (key.char === 'E') return step(state, [{ type: 'execute', sessionId: state.sessionId }]);
+  if (key.char === 'E') return startPlan(state, state.sessionId);
 
   // The run's explicit stop, matching /stop and the uppercase of `E`.
   if (key.char === 'S') return step(state, [{ type: 'stopExecution', sessionId: state.sessionId }]);

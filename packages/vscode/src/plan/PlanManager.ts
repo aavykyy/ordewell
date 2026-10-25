@@ -194,36 +194,46 @@ export async function executeUserCommand(session: Pick<Session, 'execute'>, comm
   if (!outcome.ok) throw new Error(outcome.message);
 }
 
-export async function handleApprovePlan(deps: PlanManagerDeps): Promise<void> {
+export async function handleApprovePlan(deps: PlanManagerDeps, requestId?: number): Promise<void> {
   deps.log('=== handleApprovePlan START ===');
-  // A run under way keeps going: Execute then approves what waits for approval, and the session says how many (#95).
-  if (deps.session.isExecuting) {
-    try {
-      await executeUserCommand(deps.session, { command: 'run_plan' });
-    } catch (err) {
-      vscode.window.showErrorMessage(`Could not approve the waiting tasks: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    return;
-  }
-  const plan = deps.getCurrentPlan();
-  // The run_plan below is the approval, and the Session records it and readies
-  // the tasks; rewriting their statuses here would approve a manual task the
-  // run has not reached. Only a plan the Session does not hold yet is loaded.
-  if (!deps.session.planState) deps.session.loadPlan(plan, deps.getCurrentGoal(), deps.fsAdapter.getWorkspaceRoot());
-  deps.chatProvider.planApproved();
-  saveState(plan, deps.fsAdapter.getWorkspaceRoot(), deps.session.sessionId);
-  deps.saveCurrentSession();
+  // The session this Execute was asked of: a load or a new session meanwhile
+  // must not make its late answer speak for the one now on screen.
+  const session = deps.session;
   try {
-    deps.log('Running the plan through the command seam...');
-    await executeUserCommand(deps.session, { command: 'run_plan' });
-    // Cleared only once the seam accepts it: a refused Execute replaced no run,
-    // and the Session still holds every mark and the handoff.
-    deps.chatProvider.clearIsolationHandoff();
-    deps.log(`run_plan returned. isRunning=${deps.session.isExecuting}, status=${deps.session.status}`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    deps.log(`Orchestrator start failed: ${msg}`);
-    vscode.window.showErrorMessage(`Failed to start execution: ${msg}`);
+    // A run under way keeps going: Execute then approves what waits for approval, and the session says how many (#95).
+    if (session.isExecuting) {
+      try {
+        await executeUserCommand(session, { command: 'run_plan' });
+      } catch (err) {
+        vscode.window.showErrorMessage(`Could not approve the waiting tasks: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+    const plan = deps.getCurrentPlan();
+    // The run_plan below is the approval, and the Session records it and readies
+    // the tasks; rewriting their statuses here would approve a manual task the
+    // run has not reached. Only a plan the Session does not hold yet is loaded.
+    if (!session.planState) session.loadPlan(plan, deps.getCurrentGoal(), deps.fsAdapter.getWorkspaceRoot());
+    deps.chatProvider.planApproved();
+    saveState(plan, deps.fsAdapter.getWorkspaceRoot(), session.sessionId);
+    deps.saveCurrentSession();
+    try {
+      deps.log('Running the plan through the command seam...');
+      await executeUserCommand(session, { command: 'run_plan' });
+      // Cleared only once the seam accepts it: a refused Execute replaced no run,
+      // and the Session still holds every mark and the handoff.
+      deps.chatProvider.clearIsolationHandoff();
+      deps.log(`run_plan returned. isRunning=${session.isExecuting}, status=${session.status}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      deps.log(`Orchestrator start failed: ${msg}`);
+      vscode.window.showErrorMessage(`Failed to start execution: ${msg}`);
+    }
+  } finally {
+    // The click showed "Starting…" before this ever answered: settle it on the
+    // run's own state, refusal and immediate finish included, so no spinner
+    // outlives the start it was drawn for.
+    deps.chatProvider.showRunActivity(session.activity, requestId);
   }
   deps.log('=== handleApprovePlan END ===');
 }
@@ -480,6 +490,7 @@ export async function handleSystemCommand(
   command: string,
   taskId: string,
   deps: PlanManagerDeps,
+  requestId?: number,
 ): Promise<void> {
   try {
     switch (command) {
@@ -510,7 +521,7 @@ export async function handleSystemCommand(
         break;
       }
       case 'executePlan':
-        await handleApprovePlan(deps);
+        await handleApprovePlan(deps, requestId);
         break;
       case 'stopExecution':
         // The seam answers a stop with nothing running, and nothing about to start, as an ok no-op; a refusal is a stop that could not be kept.
@@ -569,11 +580,15 @@ export function handleSessionMessage(
     case 'execution_complete': {
       const plan = deps.getCurrentPlan();
       deps.chatProvider.showPlan(plan);
+      deps.chatProvider.showRunActivity(deps.session.activity);
       deps.persistState();
       break;
     }
     case 'execution_stopped': {
       deps.chatProvider.showPlan(deps.getCurrentPlan(), 'draft');
+      // A Stop can come from another surface while this webview still shows a
+      // starting plan: the run's own word clears it.
+      deps.chatProvider.showRunActivity(deps.session.activity);
       deps.persistState();
       break;
     }

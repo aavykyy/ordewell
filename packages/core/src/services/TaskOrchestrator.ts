@@ -35,7 +35,7 @@ import { capConflictFiles } from './conflictFiles';
 import { resolveWorkspaceEnv, type WorkspaceEnv } from './workspaceEnv';
 import { continuability, sessionOwner } from './continuation';
 import { quotedList } from '../utils/quotedList';
-import type { RunMergeView } from './SessionMessage';
+import type { RunMergeView, RunActivity } from './SessionMessage';
 import { ScriptRunner } from './ScriptRunner';
 import type { StoredHandoff } from '../models/Handoff';
 import { userTaskHandoff } from '../models/DerivedHandoff';
@@ -625,6 +625,11 @@ export class TaskOrchestrator {
         if (!held) return;
         held = false;
         this.admissions--;
+        // The window a surface drew as "starting" is over. A claimed start has
+        // an attempt and is announced by its tick; one let go with nothing live
+        // (declined, cancelled, refused after asking) otherwise leaves the
+        // last status update saying work is still on its way.
+        if (this.admissions === 0 && this.attempts.size === 0) this.emit('onTaskChanged');
       },
     };
   }
@@ -637,6 +642,22 @@ export class TaskOrchestrator {
    */
   get startsPending(): boolean {
     return this.admissions > 0 || this.queuedStarts.size > 0 || this.store.allTasks.some(waitsForReset);
+  }
+
+  /**
+   * The plan's activity as one word for every surface: a start on its way,
+   * work running, a scheduler driving the plan, or a run that resumes by
+   * itself. `starting` is the async window between a start being admitted and
+   * its first claim — the window a surface must not draw as execution and a
+   * manual override must not race.
+   */
+  get activity(): RunActivity {
+    return {
+      starting: this.admissions > 0 && this.attempts.size === 0,
+      running: this.attempts.size > 0,
+      scheduled: this.isScheduling,
+      resumable: this.awaitsResume,
+    };
   }
 
   /** A start admitted now that nothing has to count as live work: one that claims before it awaits, or follows on from one that did. */

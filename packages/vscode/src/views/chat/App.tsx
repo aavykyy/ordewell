@@ -71,7 +71,7 @@ export default function App() {
     conversation, plan, isExecuting, isResearchActive, conversationBusy, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, modelAllowlist, runners, held, unsent, modesByRunner, runnerNotice, modelConfig,
     modelOptions, configuredProviders, planner, plannerKnown, runnersKnown, isReady, modelDiscoveryErrors,
-    skills, taskSkills, checkpoint, taskOutput, run, dockExpanded, dockHeight, settingsRequest,
+    skills, taskSkills, checkpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
   const setIsResearchActive = useCallback((v: boolean) => dispatch({ type: 'patchResearchActive', active: v }), []);
@@ -96,6 +96,9 @@ export default function App() {
   const runSettingsRef = useRef<HTMLElement>(null);
   const helpTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const processingRef = useRef(false);
+  /** A start is with the host; a second click is the same start, not another. */
+  const startPendingRef = useRef(false);
+  const nextStartRequest = useRef(0);
   const lastActivityRef = useRef(Date.now());
   const planRef = useRef(plan);
   planRef.current = plan;
@@ -105,6 +108,13 @@ export default function App() {
   useEffect(() => {
     processingRef.current = isResearchActive || isExecuting;
   }, [isResearchActive, isExecuting]);
+
+  // What the plan's start control shows: a click's own request, or the run's
+  // authoritative admission, until the first attempt makes it a run.
+  const isStarting = !isExecuting && (starting || activity.starting);
+  useEffect(() => {
+    startPendingRef.current = isStarting;
+  }, [isStarting]);
 
   // The working line is drawn below the conversation blocks, and the stack of
   // queued prompts above the composer takes height from the list: each must
@@ -342,13 +352,20 @@ export default function App() {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'forceStart', taskId });
   }, []);
 
-  const handleExecutePlan = useCallback(() => {
-    vscode.postMessage({ type: 'sendSystemCommand', command: 'executePlan' });
+  const requestStart = useCallback(() => {
+    // Shown before the host is even asked, and only once: two clicks while
+    // the first is still with the host are one start.
+    if (startPendingRef.current) return;
+    const requestId = nextStartRequest.current + 1;
+    nextStartRequest.current = requestId;
+    startPendingRef.current = true;
+    dispatch({ type: 'startRequested', requestId });
+    vscode.postMessage({ type: 'sendSystemCommand', command: 'executePlan', requestId });
   }, []);
 
-  const handleApproveAll = useCallback(() => {
-    vscode.postMessage({ type: 'sendSystemCommand', command: 'executePlan' });
-  }, []);
+  const handleExecutePlan = requestStart;
+
+  const handleApproveAll = requestStart;
 
   const handleStopExecution = useCallback(() => {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'stopExecution' });
@@ -509,6 +526,7 @@ export default function App() {
   const getPlaceholder = (): string => {
     if (isResearchActive) return 'Queue a message for when the planner is done...';
     if (isExecuting) return 'AI is working...';
+    if (isStarting) return 'Starting the plan...';
     if (plan && plan.tasks.length > 0) return 'Modify the plan...';
     if (blocks.some((b) => b.type === 'message' && b.role === 'planner')) return 'Reply to the planner...';
     return 'Describe what you want to build...';
@@ -693,6 +711,7 @@ export default function App() {
               modelsByRunner={modelsByRunner}
               modesByRunner={modesByRunner}
               isExecuting={isExecuting}
+              isStarting={isStarting}
               taskOutput={taskOutput}
               runnerLabels={runnerLabelMap}
               runners={runnerList}
