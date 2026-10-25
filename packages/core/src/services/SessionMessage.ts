@@ -398,10 +398,19 @@ export interface RunActivity {
   scheduled: boolean;
   /** A run with nothing starting that something still resumes by itself (a usage limit's reset, a retry). */
   resumable: boolean;
+  /**
+   * Something could still move a task on without being asked: a start on its
+   * way, a queued start behind its dependencies, an attempt in any phase, a
+   * scheduler driving the plan, or a usage-limit hold. The same fact core
+   * refuses a manual override on (ADR-0029), so a surface never asks a
+   * question the seam would then refuse. A run that ended on a failure is not
+   * here: overriding the failed task is the way out.
+   */
+  advancesOnItsOwn: boolean;
 }
 
 /** A run with nothing at work and nothing on its way. */
-export const IDLE_ACTIVITY: RunActivity = { starting: false, running: false, scheduled: false, resumable: false };
+export const IDLE_ACTIVITY: RunActivity = { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false };
 
 /**
  * A session's run as every surface draws it (the [run view](../../../../CONTEXT.md)):

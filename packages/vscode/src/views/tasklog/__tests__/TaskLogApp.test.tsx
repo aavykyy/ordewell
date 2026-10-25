@@ -527,6 +527,16 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.queryByLabelText('Send')).toBeNull();
   });
 
+  it('draws a script task\'s log as output only, with no composer or queue (ADR-0035)', () => {
+    render(<TaskLogApp />);
+    init({ script: true, working: true, planStatus: 'in_progress' });
+
+    expect(document.querySelector('.task-log-composer')).toBeNull();
+    expect(screen.queryByPlaceholderText(/Message the task/)).toBeNull();
+    expect(screen.queryByLabelText('Send')).toBeNull();
+    expect(document.querySelector('.task-log-readonly')?.textContent).toContain('takes no messages');
+  });
+
   describe('a runner\'s tool request (ADR-0018, A1)', () => {
     const request = (overrides: Partial<Extract<DisplayBlock, { type: 'approval' }>> = {}): DisplayBlock => ({
       type: 'approval', id: 'b2', approvalId: 'ap-1', kind: 'runner_tool', subject: 'Bash(npm test)', scope: 'Bash', status: 'pending', allowForTask: true,

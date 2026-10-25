@@ -27,9 +27,9 @@ export const PLAN_KEYS = {
   expand: { keys: '→', meaning: "reveal a task's subtasks, then edit its prompt, or show a script task's body", group: 'Navigation', hint: '→ expand' },
   log: {
     keys: 'enter',
-    meaning: "open the task's chat and message its runner or, at a checkpoint, answer it",
+    meaning: "open the task's log: its output for a script task, or the chat with its runner (and, at a checkpoint, its answer)",
     group: 'Navigation',
-    hint: (task) => (task?.status === 'awaiting_user' && task.awaitingReason === 'checkpoint' ? 'enter answer' : 'enter chat'),
+    hint: (task) => (task?.type === 'script' ? 'enter output' : task?.status === 'awaiting_user' && task.awaitingReason === 'checkpoint' ? 'enter answer' : 'enter chat'),
   },
   back: { keys: 'esc', meaning: "collapse the task, or leave a task's chat for the plan", group: 'Navigation' },
 

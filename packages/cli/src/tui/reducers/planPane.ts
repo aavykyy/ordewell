@@ -38,8 +38,9 @@ export function taskActionEffect(state: TuiState, sessionId: string, taskId: str
 /**
  * Mark complete or Mark not done on `task`, asked first (ADR-0029). An AI or
  * script task's override is explained in the core's words and the daemon gets
- * the user's yes on the command; it is not asked at all while the run is
- * starting, running or scheduled, since the daemon would refuse it. A manual
+ * the user's yes on the command; it is not asked at all while the run could
+ * still advance the task — starting, running, scheduled, a queued force start
+ * or a usage-limit hold — since the daemon would refuse it. A manual
  * task's is the user's own sign-off: asked on a shortcut, which is one
  * accidental key away, and sent as typed from a slash command. The status the
  * user was asked about travels with the yes, so a task that moved on while the
@@ -50,7 +51,7 @@ export function confirmMark(state: TuiState, task: TaskView, direction: Override
   if (!state.sessionId) return fail(state, 'No active plan.');
   if (!needsYes && !shortcut) return step(state, [taskActionEffect(state, state.sessionId, task.id, direction)]);
   const activity = state.run.activity;
-  if (needsYes && (activity?.starting || activity?.running || activity?.scheduled)) {
+  if (needsYes && activity?.advancesOnItsOwn) {
     return fail(state, manualOverrideStopFirst(direction, `task ${titledRefFor(state, task)}`));
   }
   const label = `task ${titledRefFor(state, task)}`;

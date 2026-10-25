@@ -2201,8 +2201,9 @@ export class Session {
   get startsPending(): boolean { return this.orchestrator.startsPending; }
 
   /**
-   * What the run is doing — starting, running, scheduled, resumable — for a
-   * surface or a guard that must tell a start on its way from real execution.
+   * What the run is doing — starting, running, scheduled, resumable, and
+   * whether it advances on its own — for a surface or a guard that must tell a
+   * start on its way from real execution.
    * See {@link TaskOrchestrator.activity}.
    */
   get activity(): RunActivity { return this.orchestrator.activity; }

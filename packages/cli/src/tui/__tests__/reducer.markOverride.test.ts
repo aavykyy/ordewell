@@ -24,7 +24,7 @@ function pane(tasks: TaskView[], over: Partial<TuiState> = {}): TuiState {
   return initialState({ sessionId: 's1', focus: 'plan', selectedTask: 0, tasks, ...over });
 }
 
-const running = { starting: false, running: true, scheduled: false, resumable: false };
+const running = { starting: false, running: true, scheduled: false, resumable: false, advancesOnItsOwn: true };
 
 describe('m, and /complete and /uncomplete, on an AI or script task', () => {
   it('asks in the core\'s words and sends nothing on the keystroke', () => {
@@ -78,6 +78,8 @@ describe('m, and /complete and /uncomplete, on an AI or script task', () => {
     ['starting', { ...running, running: false, starting: true }],
     ['running', running],
     ['scheduled', { ...running, running: false, scheduled: true }],
+    ['holding a queued force start', { ...running, running: false, advancesOnItsOwn: true }],
+    ['waiting out a usage limit', { ...running, running: false, resumable: true }],
   ])('does not ask while the run is %s: it says to Stop the run first', (_name, activity) => {
     const state = pane([task()], { run: { ...EMPTY_RUN, activity } });
 

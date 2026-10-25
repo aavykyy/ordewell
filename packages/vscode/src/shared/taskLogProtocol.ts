@@ -31,6 +31,8 @@ export interface TaskLogStatus {
   orderLabel?: string;
   title: string;
   runner: string;
+  /** A script task (ADR-0035) runs no model: its log is output only, with no composer or queue. */
+  script?: boolean;
   /** The state, resume time, continuation, usage and runner commands, worded once in core (ADR-0018, V1). */
   header: TaskLogHeaderView;
   /** Messages the runner has not read yet, oldest first. */

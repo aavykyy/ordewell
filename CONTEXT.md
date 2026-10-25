@@ -2655,14 +2655,15 @@ setting; a Guarded session can have an Act supervisor. *Avoid:* "mandate" until
 
 **Run settings** — the machine-wide user settings that say how a run is
 started, watched and merged: **Supervisor level**, **Auto-merge at gates**,
-**Autorun**, the supervisor's retry limit and the wake-up read budget
-(ADR-0030). Saved in
-`settings.json` beside the Planned-with trailer, which is not a panel value; changed only by the user through `/settings` (or the headless
-commands behind it) or `PATCH /api/settings`, never by the
-planner. A change applies at once to the session it is made in; another
-session's run under way keeps its values until it ends. A run's own copy is
-`runSettings` on the plan, which only **Run supervision** writes; the plan
-stores no other copy.
+**Autorun**, the supervisor's retry limit (ADR-0030) and the wake-up read
+budget (`wakeUpReadBudget`). The budget has no row in the UI: it is set only by
+`ordewell supervisor reads <n>` or in `settings.json`, never by `/settings`.
+All of them are saved in `settings.json` beside the Planned-with trailer, which
+is not a panel value; the rows `/settings` shows are changed only by the user
+there, a headless command, or `PATCH /api/settings`, never by the planner. A
+change applies at once to the session it is made in; another session's run
+under way keeps its values until it ends. A run's own copy is `runSettings` on
+the plan, which only **Run supervision** writes; the plan stores no other copy.
 *Avoid:* "autonomy" or "autonomy settings" for them — *autonomy* is the
 Full/Guarded level only, shown on its own Setup row; *Avoid:* "plan settings"
 (they stopped being per plan).

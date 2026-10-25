@@ -3,7 +3,7 @@ import { cursorInLines, type CursorPosition } from './editor';
 import { assignmentFlagText, checkpointCardLines, conversationLines, tokenLine } from './blocks';
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
-import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, scriptTaskView, selectedPlanRow, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
 import { SUPERVISOR_LEVEL_LABEL, type DiscoveredModel, type HeldEditMark } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
@@ -65,7 +65,8 @@ export interface ComposerView {
  */
 export function composerView(state: TuiState): ComposerView | null {
   const active = state.focus === 'chat' && !state.overlay;
-  if (!active) return null;
+  // A script's log is output only (ADR-0035): there is no composer to draw.
+  if (!active || scriptTaskView(state)) return null;
 
   const { text, cursor } = state.editor;
   const room = chatEditorRoomFor(state, true);
@@ -130,12 +131,13 @@ export function footerHints(state: TuiState): string[] {
   // A task's composer queues its text behind the running step; ctrl-s is the
   // other way to send it, named while there is text it would send.
   const tv = state.taskView;
-  const taskSends = !!tv && tv.view.working && !!state.editor.text.trim() && !continuesTask(findTask(state.tasks, tv.taskId));
+  const script = scriptTaskView(state);
+  const taskSends = !!tv && !script && tv.view.working && !!state.editor.text.trim() && !continuesTask(findTask(state.tasks, tv.taskId));
   const sendNowHint = planning || taskSends ? 'ctrl-s send now' : null;
   const stopRunnerHint = runnerStoppable(state) ? 'ctrl-x stop runner' : null;
   // The same choices the card lists, kept in reach while the question scrolls
   // away. A tool request waiting ahead answers first, and its card says how.
-  const checkpointHints = tv && waitingCheckpoint(findTask(state.tasks, tv.taskId)) && !waitingApproval(tv)
+  const checkpointHints = tv && !script && waitingCheckpoint(findTask(state.tasks, tv.taskId)) && !waitingApproval(tv)
     ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject']
     : [];
 
@@ -303,13 +305,16 @@ function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>,
     header.resumes ? inRow(header.resumes) : '',
   ].filter(Boolean);
   const approval = waitingApproval(tv);
-  const hint = approval
-    ? ['ctrl-y allow', ...(approval.allowForTask ? ['ctrl-t allow for task'] : []), 'ctrl-g deny (composer text is the note)']
-    : waitingCheckpoint(task)
-      ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject', 'ctrl-x stop runner']
-      : header.resumes
-        ? ['ctrl-x don\'t resume']
-        : [...(runnerStoppable(state) ? ['ctrl-x stop runner'] : []), 'ctrl-r remove queued', 'ctrl-s send now'];
+  // A script's log is read-only output (ADR-0035): no runner, queue or send keys.
+  const hint = scriptTaskView(state)
+    ? ['read-only output', 'esc back']
+    : approval
+      ? ['ctrl-y allow', ...(approval.allowForTask ? ['ctrl-t allow for task'] : []), 'ctrl-g deny (composer text is the note)']
+      : waitingCheckpoint(task)
+        ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject', 'ctrl-x stop runner']
+        : header.resumes
+          ? ['ctrl-x don\'t resume']
+          : [...(runnerStoppable(state) ? ['ctrl-x stop runner'] : []), 'ctrl-r remove queued', 'ctrl-s send now'];
   if (approval && waitingCheckpoint(task)) hint.push('then the checkpoint');
   const index = tv.attempts.indexOf(tv.attempt);
   if (tv.attempts.length > 1) hint.push(`alt←/→ attempt ${index >= 0 ? index + 1 : 1}/${tv.attempts.length}`);
@@ -346,6 +351,8 @@ export const SPINNER_CYCLE = 40;
 export function runnerStoppable(state: TuiState): boolean {
   const tv = state.taskView;
   if (!tv || !chatActivity(state)?.busy) return false;
+  // A script runs no model: there is no turn to interrupt (ADR-0035).
+  if (scriptTaskView(state)) return false;
   const task = findTask(state.tasks, tv.taskId);
   return !task?.awaitingApproval && !waitingApproval(tv);
 }

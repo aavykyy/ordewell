@@ -216,6 +216,7 @@ export class TaskLogPanel {
       orderLabel: this.deps.orderLabel?.(this.taskId),
       title: task?.title ?? '',
       runner: (task && assignedRunnerOf(task)) ?? '',
+      script: task?.type === 'script',
       header: taskLogHeaderView({
         status: task?.status ?? '',
         ...(task?.awaitingReason ? { awaitingReason: task.awaitingReason } : {}),

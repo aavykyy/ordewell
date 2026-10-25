@@ -68,7 +68,7 @@ describe('the run activity while a plan start is admitted', () => {
 
     const started = session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    expect(session.activity).toEqual({ starting: true, running: false, scheduled: true, resumable: false });
+    expect(session.activity).toEqual({ starting: true, running: false, scheduled: true, resumable: false, advancesOnItsOwn: true });
 
     held.release();
     expect(await started).toMatchObject({ ok: true });
@@ -107,7 +107,7 @@ describe('the run activity while a plan start is admitted', () => {
     expect(outcome.ok).toBe(false);
     expect(outcome.ok ? '' : outcome.message).toMatch(/stopped before it could start/i);
     expect(held.spawn).not.toHaveBeenCalled();
-    expect(session.activity).toEqual({ starting: false, running: false, scheduled: false, resumable: false });
+    expect(session.activity).toEqual({ starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false });
   });
 
   it('settles the start window when an admitted start is let go without claiming', () => {
@@ -135,6 +135,6 @@ describe('the run activity while a plan start is admitted', () => {
     const outcome = await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(outcome.ok).toBe(false);
-    expect(session.activity).toEqual({ starting: false, running: false, scheduled: false, resumable: false });
+    expect(session.activity).toEqual({ starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false });
   });
 });

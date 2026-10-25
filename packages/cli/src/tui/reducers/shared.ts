@@ -189,7 +189,18 @@ export function step(state: TuiState, effects: Effect[] = []): Step {
   return { state, effects };
 }
 
-export const fail = (state: TuiState, message: string): Step => step(say(state, 'error', message));
+export const fail = (state: TuiState, message: string): Step => step(reportError(state, message));
+
+/**
+ * A local error, where the user can see it. The chat pane draws a task's own
+ * log while one is open, so the planner transcript would swallow it: the view's
+ * notice row is the one place that is on screen.
+ */
+export function reportError(state: TuiState, message: string): TuiState {
+  return state.taskView
+    ? { ...state, taskView: { ...state.taskView, notice: message } }
+    : say(state, 'error', message);
+}
 
 /**
  * A planner/execution result carries the session id it was produced for. A

@@ -95,6 +95,8 @@ export default function TaskLogApp() {
   // one paused on a usage limit is resumed by it.
   const continues = header?.continuable === true;
   const resumes = header?.resumable === true;
+  // A script task runs no model (ADR-0035): its log is output only.
+  const script = status?.script === true;
 
   const send = (): void => {
     const value = text.trim();
@@ -165,7 +167,7 @@ export default function TaskLogApp() {
 
   // One button, as in the planner's composer: Stop only while a turn is live
   // and nothing is typed, so typing a message always turns it back into Send.
-  const stops = working && !canSend;
+  const stops = !script && working && !canSend;
   const sendLabel = resumes ? 'Resume' : continues ? 'Continue' : 'Send';
 
   return (
@@ -230,29 +232,35 @@ export default function TaskLogApp() {
 
       {stopArmed && <div className="stop-hint" role="status">Press Esc again to stop</div>}
 
-      <PendingMessages messages={pending} />
+      {!script && <PendingMessages messages={pending} />}
 
-      <div className="task-log-composer">
-        {completion.palette}
-        <textarea className="task-log-input" value={text} rows={2}
-          placeholder={`${resumes ? 'The limit has reset? A message to resume it with…' : continues ? 'Continue the task in its saved session…' : 'Message the task…'} (Enter to send, Shift+Enter for a new line)`}
-          onChange={(e) => completion.change(e.target.value)} onKeyDown={onComposerKeyDown} />
-        <button type="button" className={`send-btn${stops ? ' processing' : ''}`}
-          disabled={!stops && !canSend}
-          title={stops ? 'Interrupt (Esc Esc)' : canSendNow ? QUEUE_TITLE : `${sendLabel} (Enter)`} aria-label={stops ? 'Interrupt' : sendLabel}
-          onClick={stops ? () => vscode.postMessage({ type: 'interruptTask' }) : send}>
-          {stops ? (
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-              <rect x="0" y="0" width="12" height="12" rx="2" />
-            </svg>
-          ) : (
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M2 8L14 2L8 14L6.5 9.5L2 8Z" fill="currentColor" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-            </svg>
-          )}
-        </button>
-        {canSendNow && <SendKeyHint />}
-      </div>
+      {script ? (
+        <div className="task-log-readonly" role="note">
+          This script task runs no model, so it takes no messages. Its output is above.
+        </div>
+      ) : (
+        <div className="task-log-composer">
+          {completion.palette}
+          <textarea className="task-log-input" value={text} rows={2}
+            placeholder={`${resumes ? 'The limit has reset? A message to resume it with…' : continues ? 'Continue the task in its saved session…' : 'Message the task…'} (Enter to send, Shift+Enter for a new line)`}
+            onChange={(e) => completion.change(e.target.value)} onKeyDown={onComposerKeyDown} />
+          <button type="button" className={`send-btn${stops ? ' processing' : ''}`}
+            disabled={!stops && !canSend}
+            title={stops ? 'Interrupt (Esc Esc)' : canSendNow ? QUEUE_TITLE : `${sendLabel} (Enter)`} aria-label={stops ? 'Interrupt' : sendLabel}
+            onClick={stops ? () => vscode.postMessage({ type: 'interruptTask' }) : send}>
+            {stops ? (
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+                <rect x="0" y="0" width="12" height="12" rx="2" />
+              </svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M2 8L14 2L8 14L6.5 9.5L2 8Z" fill="currentColor" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+              </svg>
+            )}
+          </button>
+          {canSendNow && <SendKeyHint />}
+        </div>
+      )}
     </div>
     </OpenPatchContext.Provider>
   );

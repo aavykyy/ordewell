@@ -52,15 +52,15 @@ describe('reduceRun', () => {
   });
 
   it('carries the run activity a status update says, from an idle run to a start on its way', () => {
-    expect(EMPTY_RUN.activity).toEqual({ starting: false, running: false, scheduled: false, resumable: false });
+    expect(EMPTY_RUN.activity).toEqual({ starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false });
 
     const view = play([{
       type: 'status_update',
       tasks: [],
-      activity: { starting: true, running: false, scheduled: true, resumable: false },
+      activity: { starting: true, running: false, scheduled: true, resumable: false, advancesOnItsOwn: true },
     }]);
 
-    expect(view.activity).toEqual({ starting: true, running: false, scheduled: true, resumable: false });
+    expect(view.activity).toEqual({ starting: true, running: false, scheduled: true, resumable: false, advancesOnItsOwn: true });
   });
 
   describe('task messages', () => {

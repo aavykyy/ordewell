@@ -493,8 +493,10 @@ export async function markTaskByHand(direction: OverrideDirection, taskId: strin
     return;
   }
   const label = `task ${titledTaskRefOf(tasks, taskId) ?? taskId}`;
-  const { starting, running, scheduled } = session.activity;
-  if (starting || running || scheduled) {
+  // The seam's own guard, not a narrower reading of it: a queued force start or
+  // a usage-limit hold refuses an override too, though nothing is starting,
+  // running or scheduled (ADR-0029).
+  if (session.activity.advancesOnItsOwn) {
     showRefusal(new Error(manualOverrideStopFirst(direction, label)));
     return;
   }

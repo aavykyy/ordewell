@@ -712,6 +712,7 @@ export default function App() {
               modesByRunner={modesByRunner}
               isExecuting={isExecuting}
               isStarting={isStarting}
+              runActive={starting || activity.advancesOnItsOwn}
               taskOutput={taskOutput}
               runnerLabels={runnerLabelMap}
               runners={runnerList}

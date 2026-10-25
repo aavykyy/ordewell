@@ -120,7 +120,7 @@ describe('an override of an AI or script task', () => {
     plan: { phase: 'planning', pendingTasks: [{ id: 't1', order: 1, title: 'Parse JSON', description: 'd', type, status, dependencies: [], subtasks: [] }], executionLog: [] },
   });
 
-  async function overrideDaemon(status: string, type = 'ai', hits: string[] = []) {
+  async function overrideDaemon(status: string, type = 'ai', hits: string[] = [], activity?: Record<string, boolean>) {
     return startServer((req, res) => {
       const chunks: Buffer[] = [];
       req.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -128,7 +128,9 @@ describe('an override of an AI or script task', () => {
         const sent = Buffer.concat(chunks).toString('utf8');
         hits.push(`${req.method} ${req.url?.split('?')[0]} ${sent}`.trim());
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(req.method === 'GET' ? plan(status, type) : { ok: true, message: 'Marked it.' }));
+        res.end(JSON.stringify(req.method === 'GET'
+          ? { ...plan(status, type), ...(activity ? { run: { tasks: [], runMerge: null, handoff: null, mergeResult: null, activity } } : {}) }
+          : { ok: true, message: 'Marked it.' }));
       });
     });
   }
@@ -157,6 +159,23 @@ describe('an override of an AI or script task', () => {
 
     expect(asked[0]).toContain('The work it did stays where it is');
     expect(posts(hits)).toEqual(['POST /api/plans/session-1/execute-command {"command":"mark_not_done","task":"1","confirmed":true,"seen":"completed"}']);
+    srv.close();
+  });
+
+  it('does not ask while a queued start or a usage-limit hold could still move the task on', async () => {
+    const hits: string[] = [];
+    const srv = await overrideDaemon('pending', 'ai', hits, {
+      starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: true,
+    });
+    const ask = vi.fn(async () => true);
+    const { handleMarkComplete } = await import('../mark-complete');
+
+    const { stderr, exitCode } = await capture(() => handleMarkComplete(['--session-id', 'session-1', '1'], new ApiClient(srv.port), ask));
+
+    expect(ask).not.toHaveBeenCalled();
+    expect(posts(hits)).toEqual([]);
+    expect(stderr).toContain('Stop the run first');
+    expect(exitCode).toBe(1);
     srv.close();
   });
 

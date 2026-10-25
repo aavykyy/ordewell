@@ -211,6 +211,29 @@ describe('while a run could advance the task', () => {
     expect((await env.run(confirmed('t1'))).message).toContain('Stop the run first');
   });
 
+  it('says a queued force start still advances on its own, though nothing is starting', async () => {
+    const env = setup();
+    env.load([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
+    await env.run({ command: 'force_start', task: 't2' });
+
+    expect(env.session.activity).toMatchObject({ starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: true });
+    const outcome = await env.run(confirmed('t1'));
+    expect(outcome).toMatchObject({ ok: false, outcome: 'refused' });
+    expect(outcome.message).toContain('Stop the run first');
+  });
+
+  it('lets an ended-on-failure run be overridden: it no longer advances on its own', async () => {
+    const env = setup();
+    env.load([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
+    await env.run({ command: 'run_plan' });
+    env.latest('t1').reportComplete({ status: 'failed', summary: 'nope' });
+    await vi.waitFor(() => expect(env.status('t1')).toBe('failed'));
+    await vi.waitFor(() => expect(env.session.activity.running).toBe(false));
+
+    expect(env.session.activity).toMatchObject({ advancesOnItsOwn: false });
+    expect(await env.run(confirmed('t1'))).toMatchObject({ ok: true });
+  });
+
   it('refuses a task paused on a usage limit that will resume on its own, until the run is stopped', async () => {
     vi.useFakeTimers({ now: new Date('2026-10-11T17:00:00Z') });
     try {
@@ -220,6 +243,7 @@ describe('while a run could advance the task', () => {
       hitLimit(env.latest('t1'));
       await until(() => !!taskOf(env.session, 't1')!.resumeAt);
 
+      expect(env.session.activity).toMatchObject({ resumable: true, advancesOnItsOwn: true });
       const outcome = await env.run(confirmed('t1'));
       expect(outcome).toMatchObject({ ok: false, outcome: 'refused' });
       expect(outcome.message).toContain('Stop the run first');

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { replayTaskLog, type AttemptUsage, type RunnerCommand, type TaskLogEvent } from '@ordewell/core';
+import { EMPTY_RUN, replayTaskLog, type AttemptUsage, type RunnerCommand, type TaskLogEvent } from '@ordewell/core';
 import { stripAnsi, width } from '../ansi';
 import { chatPaneWidth } from '../geometry';
 import { inboundFor } from '../inbound';
@@ -153,6 +153,62 @@ describe('opening and closing the task view', () => {
   it('a new session drops the task view', () => {
     const { state } = reduce(opened(), { type: 'sessionCleared' });
     expect(state.taskView).toBeNull();
+  });
+});
+
+describe('a refusal while a task view is open', () => {
+  const second = task({ id: 't2', order: 2, title: 'Second task', status: 'pending', attempted: undefined });
+  const viewing = (over: Partial<TuiState> = {}): TuiState =>
+    initialState({ sessionId: 's1', focus: 'plan', selectedTask: 1, tasks: [task(), second], taskView: loaded(), ...over });
+
+  it('shows a refused open in the view\'s notice row, not only the hidden transcript', () => {
+    const { state, effects } = reduce(viewing(), { type: 'key', key: key('enter') });
+
+    expect(state.taskView?.taskId).toBe('t1');
+    expect(effects).toEqual([]);
+    expect(state.taskView?.notice).toContain('hasn’t started');
+    expect(plain(state)).toContain('hasn’t started');
+  });
+
+  it('shows a refused mark in the view\'s notice row too', () => {
+    const done = task({ status: 'completed' });
+    const activity = { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: true };
+    const before = viewing({ tasks: [done, second], selectedTask: 0, run: { ...EMPTY_RUN, activity } });
+
+    const { state, effects } = reduce(before, { type: 'key', key: key('char', 'm') });
+
+    expect(state.overlay).toBeNull();
+    expect(effects).toEqual([]);
+    expect(state.taskView?.notice).toContain('Stop the run first');
+    expect(plain(state)).toContain('cannot be mark');
+  });
+});
+
+describe('a script task\'s view', () => {
+  const script = task({ type: 'script', status: 'in_progress', assignedRunner: undefined });
+  const scriptOpened = (): TuiState => initialState({
+    sessionId: 's1', focus: 'chat', tasks: [script],
+    taskView: loaded({ view: { ...replayTaskLog([]), working: true } }),
+  });
+
+  it('is output only: no runner, queue or send hints and no composer', () => {
+    const frame = plain(scriptOpened());
+
+    expect(frame).not.toContain('ctrl-x stop runner');
+    expect(frame).not.toContain('ctrl-r remove queued');
+    expect(frame).not.toContain('ctrl-s send now');
+    expect(frame).toContain('takes no messages');
+    expect(frame).toContain('read-only output');
+  });
+
+  it('takes no typed message and sends nothing', () => {
+    const before = scriptOpened();
+
+    const typed = reduce(before, { type: 'key', key: key('char', 'h') });
+
+    expect(typed.state.editor.text).toBe('');
+    expect(reduce(before, { type: 'key', key: key('enter') }).effects).toEqual([]);
+    expect(reduce(before, { type: 'key', key: key('ctrl-s') }).effects).toEqual([]);
   });
 });
 
