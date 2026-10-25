@@ -37,7 +37,7 @@ import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type User
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
-import { surfacePlan, type HeldEdit, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
+import { surfacePlan, type HeldEdit, type RunActivity, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
 import { SubagentRuns } from './SubagentRuns';
@@ -537,6 +537,8 @@ export class Session {
   private saveRefusedFor: string | null = null;
   /** User controls in flight; see {@link withSave}. */
   private controlsInFlight = 0;
+  /** A whole-plan start opening; a second Execute joins it rather than resetting the run under it. */
+  private runOpening: Promise<void> | null = null;
   private unsubObserver: (() => void) | null;
   private readonly hostSessionId?: string;
   private currentSessionId: string;
@@ -1898,13 +1900,21 @@ export class Session {
     return this.plan;
   }
 
-  private async runWholePlan(origin: RunOrigin): Promise<void> {
+  private runWholePlan(origin: RunOrigin): Promise<void> {
+    // Before the first await: two Executes can arrive while the run is still
+    // opening, and the second must join the one under way rather than load the
+    // plan over it and spawn its tasks a second time.
+    if (this.runOpening) return this.runOpening;
     const plan = this.idlePlan();
-    await this.withSave(async () => {
+    const opening = this.withSave(async () => {
       // Approved first: the scheduler reads the record at each start.
       this.record.approvePlan();
       plan.status = 'approved';
       await this.orchestrator.beginRun(origin);
+    });
+    this.runOpening = opening;
+    return opening.finally(() => {
+      if (this.runOpening === opening) this.runOpening = null;
     });
   }
 
@@ -2176,6 +2186,13 @@ export class Session {
 
   /** Something will start without being asked again; see {@link TaskOrchestrator.startsPending}. */
   get startsPending(): boolean { return this.orchestrator.startsPending; }
+
+  /**
+   * What the run is doing — starting, running, scheduled, resumable — for a
+   * surface or a guard that must tell a start on its way from real execution.
+   * See {@link TaskOrchestrator.activity}.
+   */
+  get activity(): RunActivity { return this.orchestrator.activity; }
 
   /**
    * Run a user control and save what it changed before any surface hears of

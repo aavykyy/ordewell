@@ -83,7 +83,7 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       await sendHeldPromptNow(msg.index, deps);
       return;
     case 'sendSystemCommand':
-      await handleSystemCommand(msg.command, msg.taskId ?? '', deps);
+      await handleSystemCommand(msg.command, msg.taskId ?? '', deps, msg.requestId);
       return;
     case 'editTask':
       await handleTaskEdit(msg.taskId, msg.edit, deps);

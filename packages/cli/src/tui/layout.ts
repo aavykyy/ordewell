@@ -365,6 +365,7 @@ export interface ChatActivity {
 export function chatActivity(state: TuiState): ChatActivity | null {
   const tv = state.taskView;
   if (!tv) {
+    if (state.status === 'starting') return { label: 'Starting the plan…', busy: true };
     if (!plannerInFlight(state)) return null;
     const label = state.planner === 'condensing' ? 'Condensing…' : state.planner === 'awaiting' ? 'Waiting for the planner…' : 'Planning…';
     return { label, busy: true };
@@ -384,6 +385,7 @@ export function chatActivity(state: TuiState): ChatActivity | null {
  * plan pane's title takes the longest one that fits its width.
  */
 export function runHints(state: TuiState): string[] {
+  if (state.status === 'starting') return ['starting…', 'starting'];
   const waiting = state.tasks.filter((t) => t.status === 'awaiting_user').length;
   if (waiting > 0) return [waiting === 1 ? '1 task waits for you' : `${waiting} tasks wait for you`, `${waiting} waiting`];
   // As plain as a task that waits on the user: the run waits on a merge (ADR-0020).

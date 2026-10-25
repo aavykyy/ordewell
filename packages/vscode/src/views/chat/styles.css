@@ -3744,6 +3744,26 @@ body.vscode-high-contrast-light .task-card.expanded {
   background: var(--red-subtle);
 }
 
+/* A start is on its way: the spinner says so, and a disabled button refuses a second one. */
+.plan-action-btn.starting {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.plan-action-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--border-subtle);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: chat-spin 0.6s linear infinite;
+  flex-shrink: 0;
+}
+
 /* The colour of the waiting card's badge, so the button reads as its answer. */
 .plan-action-btn.approve {
   color: var(--orange);

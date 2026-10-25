@@ -25,7 +25,7 @@ function setup(holds: ReadonlyMap<string, string> = new Map()) {
     broadcast: (m) => sent.push(m),
     onNotice: (n) => notices.push(n),
     store,
-    orchestrator: { getIdleSince: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], holdReason: (id) => holds.get(id) ?? null, runMergeView: () => null },
+    orchestrator: { getIdleSince: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], holdReason: (id) => holds.get(id) ?? null, runMergeView: () => null, activity: { starting: false, running: false, scheduled: false, resumable: false } },
     runs: { taskIsolation: () => null },
     usage,
   });

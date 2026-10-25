@@ -1,5 +1,5 @@
 import type { GlobalRunSettings,
-  AiProvider, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunView, SurfacePlan,
+  AiProvider, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
   TaskModelAssignment,
 } from '@ordewell/core';
 
@@ -103,7 +103,7 @@ export type WebviewToHost =
       /** The user typed it, so the conversation shows it as theirs; a button's message is not echoed. */
       typed?: boolean;
     }
-  | { type: 'sendSystemCommand'; command: SystemCommand; taskId?: string }
+  | { type: 'sendSystemCommand'; command: SystemCommand; taskId?: string; requestId?: number }
   | { type: 'editTask'; taskId: string; edit: TaskEdit }
   /** Asks the host to remove a task; the host confirms first, naming what depends on it. */
   | { type: 'removeTask'; taskId: string }
@@ -200,6 +200,13 @@ export type HostToWebview =
    * same message.
    */
   | { type: 'runView'; view: RunView }
+  /**
+   * What the scheduler is doing after an Execute settled: the authoritative
+   * word that ends the webview's own "Starting…" and starts the run's real
+   * state. `requestId` is the Execute that asked, so a reply that outlives the
+   * session it belonged to is dropped.
+   */
+  | { type: 'runActivity'; activity: RunActivity; requestId?: number }
   | { type: 'taskOutput'; taskId: string; text: string }
   /** The queued prompts the host is holding for the next planner turn, oldest first. */
   | { type: 'heldPrompts'; prompts: PromptHold }

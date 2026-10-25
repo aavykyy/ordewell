@@ -7,7 +7,7 @@
 export { canMergeTasks, canSplitTask, canSetDependencies, dependencyCandidates, dependentsOf } from './services/TaskOps';
 export type { TaskRef } from './services/TaskOps';
 export { summarizeToolCall } from './services/researchStepSummary';
-export { truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH } from './services/SessionMessage';
+export { truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, IDLE_ACTIVITY } from './services/SessionMessage';
 export { capConflictFiles } from './services/conflictFiles';
 export { describeMergeResult, mergeOutcome, blockNotice, blockNotices, repairedLanded, repairedNotice } from './services/mergeResultNotice';
 export { handoffBaseLine, handoffBranchName, isRepoGroup, repoBaseLine, repoResultLines } from './services/mergeWording';
