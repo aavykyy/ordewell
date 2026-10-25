@@ -2571,7 +2571,10 @@ table in Ordewell; *Avoid:* "the last prompt" for what it counts.
 windows (Codex's five-hour and weekly, say), read from the runner's account
 protocol, never from usage records: Codex's over a short-lived `app-server`
 (`account/read` with `refreshToken: false`, then `account/rateLimits/read`),
-which opens no thread and no turn. One monitor per host owns every installed
+which opens no thread and no turn; Claude Code's over the `initialize` and
+`get_usage` control requests, on a short-lived process of its own that keeps
+the CLI's login but loads no settings, hooks, plugins, tools or MCP servers
+and is never sent a message. One monitor per host owns every installed
 runner's — enabled for tasks or not — and decides when each collector reads:
 before the planner's first call, on a surface connecting, on focus and on a
 configuration change, about once a minute while the window has focus, and

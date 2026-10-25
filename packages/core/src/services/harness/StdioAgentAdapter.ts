@@ -86,12 +86,21 @@ export abstract class StdioAgentAdapter extends ProcessLifecycle implements Agen
 
   async start(opts: AgentStartOptions): Promise<void> {
     this.role = opts.kind;
-    await this.startProcess(opts.cwd, (workspace) => {
-      const spec = this.spawnSpec(opts, workspace);
-      return { command: spec.command, args: spec.args, env: () => spec.env ?? {}, ...(spec.envDrop ? { envDrop: spec.envDrop } : {}) };
+    await this.launch(opts.cwd, (workspace) => this.spawnSpec(opts, workspace), () => this.handshake(opts));
+  }
+
+  /**
+   * Spawn `spec`, read its protocol, then run `handshake`. {@link start} is a
+   * planner's or a task's launch; a launch that is neither — a query that
+   * never opens a turn — comes through here with its own command line.
+   */
+  protected async launch(cwd: string, spec: (workspace: Record<string, string>) => SpawnSpec, handshake: () => Promise<void>): Promise<void> {
+    await this.startProcess(cwd, (workspace) => {
+      const { command, args, env, envDrop } = spec(workspace);
+      return { command, args, env: () => env ?? {}, ...(envDrop ? { envDrop } : {}) };
     }, () => {
       this.readProtocol();
-      return this.handshake(opts);
+      return handshake();
     });
   }
 

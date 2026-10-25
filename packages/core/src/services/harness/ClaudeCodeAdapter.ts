@@ -177,6 +177,28 @@ const ASYNC_LAUNCH_MARKER = 'Async agent launched successfully';
  */
 const FOLLOW_ON_TURN_GRACE_MS = 5000;
 
+/**
+ * An account query's launch ({@link ClaudeCodeAdapter.openAccountQuery}): the
+ * protocol and nothing else. `--safe-mode` keeps the login — `--bare` would
+ * never read OAuth, whose plan the limits belong to — while it, the empty
+ * setting sources and the hooks switch stop any user, repository or plugin
+ * setup from running; no tools, no MCP server, and no session written to disk.
+ */
+const ACCOUNT_QUERY_ARGS = [
+  '-p',
+  '--input-format=stream-json',
+  '--output-format=stream-json',
+  '--verbose',
+  '--safe-mode',
+  '--setting-sources=',
+  '--settings={"disableAllHooks":true}',
+  '--strict-mcp-config',
+  '--mcp-config={"mcpServers":{}}',
+  '--tools=',
+  '--permission-mode=default',
+  '--no-session-persistence',
+];
+
 const INITIALIZE_TIMEOUT_MS = 10_000;
 const MCP_STATUS_POLL_MS = 100;
 
@@ -266,6 +288,16 @@ interface ControlResponse {
    */
   response?: { account?: { subscriptionType?: string; apiKeySource?: string }; mcpServers?: { name?: string; status?: string }[]; models?: ClaudeModel[]; commands?: ClaudeCommand[] };
 }
+
+/**
+ * What one control request came to: its answer's payload as the CLI sent it,
+ * the CLI's refusal in its own words, or no answer in time — with the
+ * process's stderr tail when it ended instead.
+ */
+export type ClaudeControlAnswer =
+  | { kind: 'answered'; response: unknown }
+  | { kind: 'refused'; error: string }
+  | { kind: 'silent'; lastWords?: string };
 
 interface ClaudeLine {
   type: string;
@@ -749,8 +781,32 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     return true;
   }
 
+  /**
+   * Launch the process as an account query rather than a planner or a task,
+   * from `cwd`, and ask it who is signed in (`initialize`). Then
+   * {@link queryUsage} asks what the plan's limits stand at. Both go on the
+   * control channel and no user message is ever written, so no model is
+   * called and no turn opens. The caller ends input and disposes.
+   */
+  async openAccountQuery(cwd: string, timeoutMs: number): Promise<ClaudeControlAnswer> {
+    await this.launch(cwd, () => ({ command: 'claude', args: ACCOUNT_QUERY_ARGS }), async () => {});
+    return this.controlAnswer(await this.control({ subtype: 'initialize' }, timeoutMs));
+  }
+
+  /** The plan's limits, on a process {@link openAccountQuery} opened. */
+  async queryUsage(timeoutMs: number): Promise<ClaudeControlAnswer> {
+    return this.controlAnswer(await this.control({ subtype: 'get_usage', skip_behaviors: true }, timeoutMs));
+  }
+
+  private controlAnswer(response: ControlResponse | null): ClaudeControlAnswer {
+    if (response?.subtype === 'success') return { kind: 'answered', response: response.response };
+    if (response) return { kind: 'refused', error: response.error ?? '' };
+    const lastWords = this.exited ? this.runner.withStderrTail('').trim() : '';
+    return { kind: 'silent', ...(lastWords ? { lastWords } : {}) };
+  }
+
   /** Send a control request and wait for its answer; null when none came in time or the process ended. */
-  private control(request: { subtype: string }, timeoutMs: number): Promise<ControlResponse | null> {
+  private control(request: { subtype: string; [field: string]: unknown }, timeoutMs: number): Promise<ControlResponse | null> {
     if (!this.process) return Promise.resolve(null);
     this.controlCount += 1;
     const requestId = `ordewell-${request.subtype}-${this.controlCount}`;

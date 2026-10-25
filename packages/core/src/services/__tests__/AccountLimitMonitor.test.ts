@@ -306,6 +306,21 @@ describe('the account-limit monitor', () => {
     expect(codex.calls).toHaveLength(2);
   });
 
+  it('keeps a read fresh until a reset further off than a timer can wait, then marks it stale', async () => {
+    const codex = fakeCollector();
+    const m = start(codex.collector);
+    m.refresh();
+    const days = 40;
+    const reset = new Date(T0.getTime() + days * 24 * 3_600_000).toISOString();
+    codex.last().answer({ kind: 'limits', owner: 'alice', buckets: [bucket(10, reset)] });
+    await settle();
+
+    await vi.advanceTimersByTimeAsync((days - 1) * 24 * 3_600_000);
+    expect(m.snapshots()[0].status).toBe('fresh');
+    await vi.advanceTimersByTimeAsync(24 * 3_600_000);
+    expect(m.snapshots()[0].status).toBe('stale');
+  });
+
   it('calls a read stale when it reports a window whose reset has already gone by', async () => {
     const codex = fakeCollector();
     const m = start(codex.collector);
