@@ -1,5 +1,5 @@
 import { blockingFailures, DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, NO_TURN, fromTranscript, holdPrompt, taskLogCommands, taskStartedNotice, type RunnerId } from '@ordewell/core';
-import { chatEditorRoomFor } from './geometry';
+import { bodyMode, chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
 import { applyKey, commit } from './editor';
@@ -17,7 +17,7 @@ import { applySettings, foldRun, followSession, planSnapshot, withRun } from './
 import { refillPicker, reseedRunnerChoice } from './reducers/pickers';
 import { refreshStepper } from './reducers/stepper';
 import {
-  handleMouseSelect, isMouseSelect, isWheel, scrollChat, scrollDelta, scrollPointed, settlePlan, toggleDetail,
+  handleMouseSelect, isMouseSelect, isWheel, scrollChat, scrollDelta, scrollPointed, settlePanes, settlePlan, toggleDetail,
 } from './reducers/pointer';
 import { clamp, clampSelection, stale, step, type Action, type Effect, type Step } from './reducers/shared';
 
@@ -37,10 +37,20 @@ function holdReadingPlace(before: TuiState, after: TuiState): TuiState {
   return grown > 0 ? { ...after, scroll: clamp(after.scroll + grown, chatScrollMax(after)) } : after;
 }
 
+/**
+ * Stacked, the plan's height follows what the transcript has to say, so a reply
+ * landing in the chat can take rows from the plan — and a selection that was
+ * just inside its viewport falls off the end. A viewport the user has not
+ * positioned (`null`) follows the selection by itself and needs nothing.
+ */
+function holdPlanInView(after: TuiState): TuiState {
+  return after.planScroll === null || bodyMode(after) !== 'stacked' ? after : settlePlan(after);
+}
+
 export function reduce(state: TuiState, action: Action): Step {
   const result = reduceAction(state, action);
   if (action.type !== 'sessionMessage' && action.type !== 'taskLog') return result;
-  return { ...result, state: holdReadingPlace(state, result.state) };
+  return { ...result, state: holdPlanInView(holdReadingPlace(state, result.state)) };
 }
 
 function reduceAction(state: TuiState, action: Action): Step {
@@ -441,7 +451,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       // span anchored where the plan pane used to begin would end up straddling
       // the new one, which is exactly the splice pinning a pane prevents.
       const resized = { ...state, rows: action.rows, cols: action.cols, selection: null };
-      return step(settlePlan({ ...resized, scroll: clamp(resized.scroll, chatScrollMax(resized)) }));
+      return step(settlePanes(resized));
     }
 
     // Whether there is anything to animate is the app loop's call (it owns the
@@ -571,7 +581,7 @@ function handleKey(state: TuiState, key: Key): Step {
   if (key.name === 'tab') {
     // The pane is hidden while the plan is empty, so there is nothing to focus.
     if (state.focus === 'chat' && state.tasks.length === 0) return step(state);
-    return step({ ...state, focus: state.focus === 'chat' ? 'plan' : 'chat' });
+    return step(settlePanes({ ...state, focus: state.focus === 'chat' ? 'plan' : 'chat' }));
   }
   if (state.focus === 'plan') return handlePlanKey(state, key);
 
@@ -594,7 +604,7 @@ function handleKey(state: TuiState, key: Key): Step {
   // Page keys and the wheel scroll the transcript. Up/down always go to the
   // editor: single-line drafts get history recall, multi-line drafts get cursor
   // movement between wrapped lines.
-  const scroll = scrollDelta(key, state);
+  const scroll = scrollDelta(key, state, 'chat');
   if (scroll !== null) return scrollChat(state, scroll);
 
   const multilineEditor = state.editor.text.includes('\n');

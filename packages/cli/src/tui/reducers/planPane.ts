@@ -60,7 +60,7 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
 
   // pageup/pagedown only — a wheel notch is routed by the pointer well above
   // this, and never reaches the focused pane's handler.
-  const scroll = scrollDelta(key, state);
+  const scroll = scrollDelta(key, state, 'plan');
   if (scroll !== null) return scrollPlan(state, scroll, true);
 
   // Before the row guard: with no tasks there is no row, and this is the way in.
@@ -130,7 +130,7 @@ function handleTaskEditKey(state: TuiState, task: TaskView, editor: EditorState,
   if (key.name === 'escape') return step(settlePlan({ ...state, expandedTaskId: null, taskEditor: null }));
   // The page keys still scroll the pane rather than move through the text,
   // same as when nothing is expanded.
-  const scroll = scrollDelta(key, state);
+  const scroll = scrollDelta(key, state, 'plan');
   if (scroll !== null) return scrollPlan(state, scroll, true);
   return step(settlePlan({ ...state, taskEditor: applyKey(editor, key, taskEditorRoom(state)) }));
 }
