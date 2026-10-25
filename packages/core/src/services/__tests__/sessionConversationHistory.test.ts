@@ -128,11 +128,12 @@ describe('preserved planner history across compaction', () => {
 
     const plan = saved();
     const view = fromTranscript(plan.conversationHistory, plan.researchLog);
-    const drawn = view.blocks.map((b) => (b.type === 'message' ? `${b.role}: ${b.text.split('\n').at(-1)}` : b.type === 'tool' ? `tool: ${b.headline.keyArg}` : b.type));
+    const drawn = view.blocks.map((b) => (b.type === 'message' ? `${b.role}: ${b.text.split('\n').at(-1)}` : b.type === 'tool' ? `tool: ${b.headline.keyArg}`
+      : b.type === 'compaction' ? `compaction: ${b.summary?.split('\n').at(-1)}` : b.type));
     expect(drawn).toEqual([
       `user: ${GOAL}`, 'plan', 'user: U1 use a pull reader', 'tool: EARLY.md', 'planner: A1 noted',
       'user: U2 add streaming', 'planner: A2 added #2', 'user: U3 no dependencies', 'tool: LATE.md', 'planner: A3 noted',
-      'system: S1',
+      'compaction: S1',
     ]);
 
     const { planner, state } = apiStylePlanner();
@@ -303,7 +304,7 @@ describe('preserved planner history across compaction', () => {
   it('reads a legacy compaction as before: drawn first without the research it condensed, replayed as the context\'s start', async () => {
     const plan = legacyDialogue();
     const view = fromTranscript(plan.conversationHistory, plan.researchLog);
-    expect(view.blocks.map((b) => (b.type === 'message' ? b.text.split('\n').at(-1) : b.type === 'tool' ? b.headline.keyArg : b.type))).toEqual([
+    expect(view.blocks.map((b) => (b.type === 'message' ? b.text.split('\n').at(-1) : b.type === 'tool' ? b.headline.keyArg : b.type === 'compaction' ? b.summary?.split('\n').at(-1) : b.type))).toEqual([
       'S0', 'U2 add streaming', 'A2 added #2', 'U3 no dependencies', 'LATE.md', 'A3 noted',
     ]);
 
@@ -344,7 +345,7 @@ describe('preserved planner history across compaction', () => {
   ])('replays every message past a saved compaction entry with %s, and shows it all', async (_case, marker) => {
     const plan = withSavedMarker(marker);
     const view = fromTranscript(plan.conversationHistory, plan.researchLog);
-    expect(view.blocks.filter((b) => b.type === 'message').map((b) => b.type === 'message' && b.text.split('\n').at(-1))).toEqual([
+    expect(view.blocks.flatMap((b) => (b.type === 'message' ? [b.text] : b.type === 'compaction' ? [b.summary ?? ''] : [])).map((text) => text.split('\n').at(-1))).toEqual([
       GOAL, 'U1 use a pull reader', 'A1 noted', 'U2 add streaming', 'A2 added #2', 'U3 no dependencies', 'A3 noted', 'SX', 'U4 add CSV', 'A4 added',
     ]);
 

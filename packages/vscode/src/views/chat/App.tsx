@@ -17,8 +17,8 @@ import HandoffCard from './components/HandoffCard';
 import CheckpointPanel from './components/CheckpointPanel';
 import RunSettingsBlock from './components/RunSettingsBlock';
 import type { TaskDraft } from './components/NewTaskCard';
-import type { GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId } from '@ordewell/core';
-import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
+import type { CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId } from '@ordewell/core';
+import { compactionText, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 import { planSummaryLabel, nextDock } from './planDock';
 import { OpenPatchContext } from './openPatch';
 import { useFollowOutput } from './followOutput';
@@ -67,7 +67,7 @@ const DETECTING = 'Detecting coding agents…';
 export default function App() {
   const [host, dispatch] = useReducer(reduceHost, INITIAL_HOST_STATE);
   const {
-    conversation, plan, isExecuting, isResearchActive, conversationBusy, error, models, modelsByRunner,
+    conversation, plan, isExecuting, isResearchActive, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, modelAllowlist, runners, held, unsent, modesByRunner, runnerNotice, modelConfig,
     modelOptions, configuredProviders, planner, plannerKnown, runnersKnown, isReady, modelDiscoveryErrors,
     skills, taskSkills, checkpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest, accountLimits,
@@ -79,6 +79,17 @@ export default function App() {
   const setDockHeight = useCallback((v: number | undefined) => dispatch({ type: 'patchDockHeight', height: v }), []);
   const setDockExpanded = useCallback((v: Updatable<boolean>) => dispatch({ type: 'patchDockExpanded', expanded: v }), []);
   const blocks = useMemo(() => patchedBlocks(conversation), [conversation]);
+  // The planner compacting holds the conversation as a turn does: Stop stops
+  // it, a message waits for it, and the draft stays. Read from the blocks, so
+  // a webview that reconnects mid-compaction knows it from what it is sent.
+  const compaction = useMemo(() => [...blocks].reverse().find((b): b is CompactionBlock => b.type === 'compaction' && b.origin !== undefined), [blocks]);
+  const compacting = compaction?.status === 'running';
+  const plannerBusy = isResearchActive || compacting;
+  // Told as news only for a compaction this view saw run: one restored with
+  // the transcript is history, already drawn where it happened.
+  const seenRunning = useRef(new Set<string>());
+  if (compaction && compacting) seenRunning.current.add(compaction.id);
+  const compactionNews = compaction && seenRunning.current.has(compaction.id) ? compactionText(compaction) : '';
   /** A first Esc during a planner turn: one more within `STOP_ARM_MS` stops it. */
   const [stopArmed, setStopArmed] = useState(false);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
@@ -115,7 +126,7 @@ export default function App() {
   // The pinned working line and the stack of queued prompts above the
   // composer take height from the list: each must be followed too, or the
   // newest output ends up past the fold.
-  const followRef = useFollowOutput<HTMLDivElement>(blocks, held, isResearchActive);
+  const followRef = useFollowOutput<HTMLDivElement>(blocks, held, plannerBusy);
   const messageListCallbackRef = useCallback((el: HTMLDivElement | null) => {
     messageListRef.current = el;
     followRef(el);
@@ -206,7 +217,7 @@ export default function App() {
       return;
     }
 
-    if (isResearchActive) {
+    if (plannerBusy) {
       vscode.postMessage({ type: 'holdPrompt', text });
       return;
     }
@@ -218,7 +229,7 @@ export default function App() {
     // moment to start it, and a second send in between would race the first.
     dispatch({ type: 'turnRequested' });
     vscode.postMessage({ type: 'sendMessage', text, runners, typed: true });
-  }, [runners, handleNewSession, showNewSessionConfirm, isResearchActive]);
+  }, [runners, handleNewSession, showNewSessionConfirm, plannerBusy]);
 
   const handleToggleRunner = useCallback((runnerId: RunnerId) => {
     setRunners((prev) => {
@@ -417,13 +428,13 @@ export default function App() {
   // the host's either way — the hold never applies to commands — but a skill
   // invocation (`/name …`) is a planner prompt, so Send now stops the turn.
   const handleSendNow = useCallback((text: string) => {
-    if (!isResearchActive || isBuiltinSlashCommand(text)) {
+    if (!plannerBusy || isBuiltinSlashCommand(text)) {
       handleSend(text);
       return;
     }
     setStopArmed(false);
     vscode.postMessage({ type: 'sendMessageNow', text });
-  }, [isResearchActive, handleSend]);
+  }, [plannerBusy, handleSend]);
 
   // Prompts held for the next planner turn. Only the newest carries the ×:
   // unsend always takes the newest, as Esc does, so it never promises another.
@@ -449,7 +460,7 @@ export default function App() {
       setExpandedTaskId(null);
       return true;
     }
-    if (!isResearchActive) return false;
+    if (!plannerBusy) return false;
     if (held.length > 0) {
       setStopArmed(false);
       handleUnsend();
@@ -460,7 +471,7 @@ export default function App() {
       setStopArmed(true);
     }
     return true;
-  }, [expandedTaskId, isResearchActive, held, stopArmed, handleUnsend, stopTurn]);
+  }, [expandedTaskId, plannerBusy, held, stopArmed, handleUnsend, stopTurn]);
 
   // Esc closes an open card first, wherever focus is. Inner handlers (card
   // editors, pickers, the input) mark theirs with preventDefault, so one Esc
@@ -480,13 +491,13 @@ export default function App() {
   // lapses on its own, and never outlives the turn it was aimed at.
   useEffect(() => {
     if (!stopArmed) return;
-    if (!isResearchActive) {
+    if (!plannerBusy) {
       setStopArmed(false);
       return;
     }
     const timer = setTimeout(() => setStopArmed(false), STOP_ARM_MS);
     return () => clearTimeout(timer);
-  }, [stopArmed, isResearchActive]);
+  }, [stopArmed, plannerBusy]);
 
   const handleApproveCheckpoint = useCallback(() => {
     if (!checkpoint) return;
@@ -520,6 +531,7 @@ export default function App() {
   }, [handleIsolationAction]);
 
   const getPlaceholder = (): string => {
+    if (compacting) return 'Queue a message for when the context is compacted...';
     if (isResearchActive) return 'Queue a message for when the planner is done...';
     if (isExecuting) return 'AI is working...';
     if (isStarting) return 'Starting the plan...';
@@ -974,9 +986,18 @@ export default function App() {
           a turn can go minutes with nothing new to show, its thinking block
           still marked streaming while the model writes a tool call's input,
           and a reader scrolled back up would not see a row in the list. */}
-      {isResearchActive && (
+      {isResearchActive && !compacting && (
         <div className="chat-msg-working" role="status">
           <span className="chat-msg-spinner" aria-hidden="true" /> Working&hellip;
+        </div>
+      )}
+
+      {/* Pinned for the same reason while the planner compacts, and kept as
+          the one live region that tells its start and its end. */}
+      {compaction && (
+        <div className={compacting ? 'chat-msg-working' : 'visually-hidden'} role="status">
+          {compacting && <span className="chat-msg-spinner" aria-hidden="true" />}
+          {compactionNews}
         </div>
       )}
 
@@ -991,10 +1012,9 @@ export default function App() {
         onSendNow={handleSendNow}
         onStop={stopTurn}
         onEscape={handleEscape}
-        disabled={conversationBusy}
-        disabledReason={conversationBusy ? 'Compacting the conversation...' : undefined}
+        disabled={false}
         placeholder={getPlaceholder()}
-        isTurnRunning={isResearchActive}
+        isTurnRunning={plannerBusy}
         unsent={unsent}
         skills={skills}
       />

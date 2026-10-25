@@ -440,11 +440,11 @@ it runs is refused in turn (`ConversationBusyError`, 409 from the daemon), since
 the reply would share the live context the compaction resets. **Rewind** reaches
 past a checkpoint, and **Fork** copies the transcript with its checkpoints.
 Only the planner conversation compacts, never a runner. TUI and
-VS Code `/compact` (VS Code also "Ordewell: Compact Conversation", cancellable
-from its progress notification, with the chat input locked while it runs); CLI
+VS Code `/compact` (VS Code also "Ordewell: Compact Conversation"; its
+composer's Stop stops it, and a message typed meanwhile waits for it); CLI
 `ordewell compact`; the daemon route is
-`POST /api/plans/:id/conversation/compact`. It announces itself with a
-`planner_message` carrying the summary.
+`POST /api/plans/:id/conversation/compact`. Surfaces learn of it through its
+**Compaction event**s, and read its summary in the checkpoint it appends.
 *Avoid:* "summarize" for the operation, since the summary is only the means; and
 "clear", which loses what was decided.
 
@@ -465,6 +465,18 @@ compaction replaced what it condensed. It is read as a checkpoint cutting at
 index 1, and reloads drawn first without the research older than its first kept
 message, since those turns are gone.
 *Avoid:* "snapshot": a checkpoint copies no transcript.
+
+**Compaction event** (`planner_compaction`, carrying a `PlannerCompaction`) —
+one phase of a planner compaction as surfaces are told it (ADR-0017 C1):
+`started`, then `ended` with an outcome (condensed, pruned, unchanged, stopped,
+failed, paused), both under one `id` that a checkpoint the compaction writes
+carries too. `origin` is `ordewell` for Ordewell's own, or `native` for a
+harness planner compacting its own context, which reports only its end, and
+sizes only as it stated them. A surface folds the phases into one compaction
+block by id. Never a subagent's, and never a task runner's: a runner's
+compaction is a `compaction` event of its task log. `Session.plannerCompaction()`
+holds the start of the one running, for a surface that joins meanwhile.
+*Avoid:* "compaction notice" for it: it is the planner's lifecycle, not a note.
 
 **Model context** (`modelContext()` in `conversationSummary.ts`) — the
 projection of `conversationHistory` the planner model is given: the newest

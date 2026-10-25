@@ -8,8 +8,8 @@ import { api, hostBridge, post } from './hostBridge';
 /**
  * Adversarial sweep of the composer's single button against every combination
  * its two inputs can take: a planner turn live or not, a run executing or not,
- * text empty / typed / whitespace, a held prompt, a slash command, the input
- * disabled by a compaction. The button owns the turn and never the run.
+ * text empty / typed / whitespace, a held prompt, a slash command, the planner
+ * compacting. The button owns the planner and never the run.
  */
 const plan = {
   tasks: [{ id: 't1', order: 1, title: 'Only task', description: '', type: 'ai' as const, status: 'pending' as const, dependencies: [], subtasks: [], assignedRunner: 'claude-code', taskMode: 'build' }],
@@ -131,19 +131,20 @@ describe('the composer button over every planner/run combination', () => {
     expect(stops()).toEqual([]);
   });
 
-  it('is fully inert while a compaction disables the composer, run or no run', () => {
-    post({ type: 'conversationBusy', busy: true });
-
-    expect(sendBtn().disabled).toBe(true);
-    fireEvent.click(sendBtn());
-    press('Enter');
-    expect(api.postMessage).not.toHaveBeenCalled();
-
+  it('stops the planner compacting, never the run, and Esc Esc does too', () => {
+    const compacting: SessionMessage = { type: 'planner_compaction', compaction: { phase: 'started', id: 'c1', origin: 'ordewell', trigger: 'manual', at: '2026-01-01T00:00:00Z' } };
     post({ type: 'planUpdated', plan: running });
+    host.session(compacting);
+
+    expect(isStopSquare()).toBe(true);
     fireEvent.click(sendBtn());
-    press('Enter');
-    expect(api.postMessage).not.toHaveBeenCalled();
-    expect(stops()).toEqual([]);
+    expect(stops()).toEqual([{ type: 'stopResearch' }]);
+
+    api.postMessage.mockClear();
+    host.session(compacting);
+    press('Escape');
+    press('Escape');
+    expect(stops()).toEqual([{ type: 'stopResearch' }]);
   });
 
   it('leaves the second stop click a no-op: the square is gone at once', () => {

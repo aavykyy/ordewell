@@ -3,12 +3,12 @@ import MarkdownContent from './MarkdownContent';
 import TaskHandoff from './TaskHandoff';
 import ReportBody from './ReportBody';
 import type {
-  CommandBlock, RunnerLoadedBlock,
+  CommandBlock, CompactionBlock, RunnerLoadedBlock,
   ApprovalBlock, ApprovalDecision, DisplayBlock, MessageBlock, PlanBlock, SkillLoadBlock, SubagentBlock, SubagentStatus,
   ThinkingDisplayBlock, ToolBlock, ToolStatus, DiffRow, DiffStat,
 } from '@ordewell/core';
 import { activitySummary, conversationItems } from '../activity';
-import { approvalKindText, approvalStatusText, diffRows, diffSummary, formatTokenCount, loadedSkillTokens, markdownHtml, outputLines, outputPreview, planMarkerParts, wakeUpItems } from '@ordewell/core/plan-utils';
+import { approvalKindText, approvalStatusText, compactionText, diffRows, diffSummary, loadedSkillTokens, markdownHtml, outputLines, outputPreview, planMarkerParts, wakeUpItems } from '@ordewell/core/plan-utils';
 
 /*
  * The planner conversation (#51 display blocks) as the webview draws it, and
@@ -310,6 +310,24 @@ function RunnerLoaded({ block, expanded, onToggle }: RowProps<RunnerLoadedBlock>
   );
 }
 
+/**
+ * The planner's compaction (ADR-0017): one quiet line while it runs and after,
+ * where it happened. A condensed one's summary opens from it, never shown whole.
+ */
+function CompactionRow({ block, expanded, onToggle }: RowProps<CompactionBlock>) {
+  const id = useId();
+  const toggle = block.summary ? onToggle : undefined;
+  return (
+    <div className="compaction-row chat-msg chat-msg-system" data-status={block.status}>
+      <Head className="compaction-row-head" expanded={expanded} controls={id} onToggle={toggle}>
+        {block.status === 'running' && <span className="chat-msg-spinner" aria-hidden="true" />}
+        <span>{compactionText(block)}</span>
+      </Head>
+      {toggle && <div id={id}>{expanded && <div className="compaction-row-summary">{block.summary}</div>}</div>}
+    </div>
+  );
+}
+
 const SUBAGENT_STATUS: Record<SubagentStatus, string> = {
   running: 'running…',
   done: 'done',
@@ -450,7 +468,9 @@ function Block({
     case 'runner_loaded':
       return <RunnerLoaded block={block} expanded={expanded} onToggle={toggle} />;
     case 'compaction':
-      return <div className="chat-msg chat-msg-system">Context compacted{block.trigger === 'auto' ? ' by the runner on its own' : ''}{block.preTokens !== undefined && block.postTokens !== undefined ? ` · ${formatTokenCount(block.preTokens)} → ${formatTokenCount(block.postTokens)} tokens` : ''}</div>;
+      return block.origin
+        ? <CompactionRow block={block} expanded={expanded} onToggle={toggle} />
+        : <div className="chat-msg chat-msg-system">{compactionText(block)}</div>;
     case 'message':
       return <ChatMessage block={block} />;
     case 'thinking':
@@ -562,7 +582,9 @@ export function ConversationBlocks({
     <div className="conversation">
       {items.map((item) => (item.kind === 'activity'
         ? <ActivityGroup key={item.key} blocks={item.blocks} open={open} onToggleGroup={onToggleGroup} onToggleRow={onToggleRow} handlers={handlers} />
-        : <MemoBlock key={item.block.id} block={item.block} expanded={false} {...handlers} />))}
+        : item.block.type === 'compaction'
+          ? <MemoBlock key={item.block.id} block={item.block} expanded={open.has(item.block.id)} onToggle={onToggleRow} {...handlers} />
+          : <MemoBlock key={item.block.id} block={item.block} expanded={false} {...handlers} />))}
     </div>
   );
 }

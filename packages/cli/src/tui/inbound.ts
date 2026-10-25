@@ -555,6 +555,11 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
     case 'task_output':
       return;
 
+    // The TUI draws a planner compaction from the transcript it redraws once
+    // `/compact` answers; a native one is the planner's own and stays unshown here.
+    case 'planner_compaction':
+      return;
+
     // Its asker already has the words, from the merge request itself. Whether
     // the merge ended the run is the Session's to say, in `run_closed`.
     case 'isolation_merge':

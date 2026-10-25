@@ -1,6 +1,6 @@
 import type { ResearchStep, ResearchStepOutcome, SkillLoadNotice } from '../models/Task';
 import type { UsageLine } from '../models/Usage';
-import type { MessageBlock, MessageRole, PlanMarkerStatus, SkillLoadBlock, SubagentBlock, ToolBlock, ToolStatus, UsageBlock } from './blocks';
+import type { CompactionBlock, MessageBlock, MessageRole, PlanMarkerStatus, SkillLoadBlock, SubagentBlock, ToolBlock, ToolStatus, UsageBlock } from './blocks';
 import { diffStat, outputLines, toolHeadline } from './format';
 import { isFileEditTool } from '../services/harness/agentTools';
 import { ranSealed, withoutSealedMark } from '../services/researchStepSummary';
@@ -68,6 +68,20 @@ export function subagentBlock(id: string, { toolCallId, model, usage, turnId, ..
     ...(toolCallId ? { toolCallId } : {}),
     ...(model ? { model } : {}),
     ...(usage ? { usage } : {}),
+    ...(turnId ? { turnId } : {}),
+  };
+}
+
+/** A planner compaction's block, with only the fields it has: what was not reported stays absent. */
+export function compactionBlock(id: string, { trigger, compactionId, origin, status, summary, preTokens, postTokens, turnId }: Omit<CompactionBlock, 'type' | 'id'>): CompactionBlock {
+  return {
+    type: 'compaction', id, trigger,
+    ...(compactionId ? { compactionId } : {}),
+    ...(origin ? { origin } : {}),
+    ...(status ? { status } : {}),
+    ...(summary ? { summary } : {}),
+    ...(preTokens !== undefined ? { preTokens } : {}),
+    ...(postTokens !== undefined ? { postTokens } : {}),
     ...(turnId ? { turnId } : {}),
   };
 }

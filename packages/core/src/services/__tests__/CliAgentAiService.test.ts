@@ -2749,6 +2749,44 @@ describe('CliAgentAiService — compactions of the planner\'s own context', () =
     expect(svc.compactions()).toBe(1);
   });
 
+  it('reports Claude Code\'s own compact boundary as an ended compaction with the sizes it gave, and never a subagent\'s', async () => {
+    const boundary = (extra: Record<string, unknown>) => line({ type: 'system', subtype: 'compact_boundary', session_id: 'sess-c', compact_metadata: { trigger: 'auto', pre_tokens: 150_000, post_tokens: 9_000 }, ...extra });
+    const turn = [
+      line({ type: 'system', subtype: 'init', session_id: 'sess-c', cwd: '/repo', permissionMode: 'plan' }),
+      boundary({ parent_tool_use_id: 'toolu_agent' }),
+      boundary({}),
+      line({ type: 'assistant', session_id: 'sess-c', message: { id: 'msg_c', role: 'assistant', content: [{ type: 'text', text: 'Carrying on.' }] } }),
+      line({ type: 'result', subtype: 'success', session_id: 'sess-c', is_error: false, result: 'Carrying on.' }),
+    ].join('');
+    const { svc } = service('claude-code', [claudeSays('Which cache?'), turn]);
+    const progress: ResearchProgress[] = [];
+
+    await svc.startConversation(request());
+    await svc.continueConversation('Redis, please.', (p) => progress.push(p));
+
+    const compactions = progress.filter((p) => p.type === 'compaction').map((p) => p.compaction);
+    expect(compactions).toEqual([{
+      phase: 'ended', id: expect.any(String), origin: 'native', trigger: 'auto', outcome: 'condensed', at: expect.any(String), preTokens: 150_000, postTokens: 9_000,
+    }]);
+  });
+
+  it('reports a Codex compaction from its completion alone, with no start and no size it never gave', async () => {
+    const turn = [
+      line({ jsonrpc: '2.0', method: 'turn/started', params: { threadId: 'thr-codex-1', turnId: 'turn-1' } }),
+      line({ jsonrpc: '2.0', method: 'item/completed', params: { threadId: 'thr-codex-1', turnId: 'turn-1', completedAtMs: 1, item: { id: 'item_mine', type: 'contextCompaction' } } }),
+      line({ jsonrpc: '2.0', method: 'item/completed', params: { threadId: 'thr-codex-1', turnId: 'turn-1', completedAtMs: 2, item: { id: 'item_m1', type: 'agentMessage', text: 'Carrying on.' } } }),
+      line({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: 'thr-codex-1', turn: { id: 'turn-1', status: 'completed', items: [] } } }),
+    ].join('');
+    const { svc } = service('codex', [...codexHandshake(), turn]);
+    const progress: ResearchProgress[] = [];
+
+    await svc.startConversation({ ...request({ runners: ['codex'] }), onProgress: (p) => progress.push(p) });
+
+    expect(progress.filter((p) => p.type === 'compaction').map((p) => p.compaction)).toEqual([
+      { phase: 'ended', id: expect.any(String), origin: 'native', trigger: 'auto', outcome: 'condensed', at: expect.any(String) },
+    ]);
+  });
+
   it('counts a Codex context compaction on its own thread, and not on another', async () => {
     const compaction = (threadId: string, id: string) => line({ jsonrpc: '2.0', method: 'item/completed', params: { threadId, turnId: 'turn-1', completedAtMs: 1, item: { id, type: 'contextCompaction' } } });
     const turn = [

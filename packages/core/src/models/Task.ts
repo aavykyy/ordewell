@@ -420,10 +420,11 @@ export interface ResearchProgress {
   // backend call that sends it has streamed.
   // 'usage' reports one model call (`record`). 'subagent_started' carries
   // `brief` and `model`; 'subagent_finished' carries `outcome`, `digest` and
-  // `usage`.
+  // `usage`. 'compaction' is one phase of the planner's own compaction
+  // (`compaction`); a subagent's never is one.
   type:
     | 'thinking' | 'tool_call' | 'tool_result' | 'plan_token' | 'interrupted' | 'liveness'
-    | 'text_delta' | 'text_retracted' | 'usage' | 'subagent_started' | 'subagent_finished';
+    | 'text_delta' | 'text_retracted' | 'usage' | 'subagent_started' | 'subagent_finished' | 'compaction';
   /** Minted by whoever runs the turn and passed through untouched; absent outside a turn. */
   turnId?: string;
   /** One continuous run of model text — text before a tool call is its own segment. */
@@ -448,6 +449,7 @@ export interface ResearchProgress {
   outcome?: SubagentOutcome;
   digest?: string;
   usage?: UsageTotals;
+  compaction?: PlannerCompaction;
 }
 
 export interface ThinkingBlock {
@@ -565,6 +567,35 @@ export interface ContextCheckpoint {
   keptFrom: number;
   trigger: 'manual' | 'auto';
 }
+
+/**
+ * How a planner compaction ended. `condensed`: a summary stands in for the
+ * older context (a checkpoint was written, or a harness planner reported its
+ * own compaction done). `pruned`: older recoverable tool output was dropped
+ * from the live context alone. `unchanged`: nothing needed doing. `paused`:
+ * the context could not be brought to fit, so the planner waits.
+ */
+export type PlannerCompactionOutcome = 'condensed' | 'pruned' | 'unchanged' | 'stopped' | 'failed' | 'paused';
+
+/**
+ * One planner compaction's lifecycle as it was observed (ADR-0017): both
+ * phases share `id`, which is the checkpoint's id when one is written. Only
+ * Ordewell's own compaction announces a start; a harness planner's native one
+ * is reported when it is over, and nothing invents the start it never sent.
+ * Sizes are only ever what a backend reported.
+ */
+export type PlannerCompaction =
+  | { phase: 'started'; id: string; origin: 'ordewell'; trigger: ContextCheckpoint['trigger']; at: string }
+  | {
+      phase: 'ended';
+      id: string;
+      origin: 'ordewell' | 'native';
+      trigger: ContextCheckpoint['trigger'];
+      outcome: PlannerCompactionOutcome;
+      at: string;
+      preTokens?: number;
+      postTokens?: number;
+    };
 
 /**
  * One run of a planner reply's text: the segment it streamed under, its

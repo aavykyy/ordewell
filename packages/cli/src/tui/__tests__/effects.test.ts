@@ -1784,9 +1784,8 @@ describe('conversation compact effect', () => {
 
     let state: TuiState = initialState({ sessionId: 'session-1' });
     for (const action of h.actions) ({ state } = reduce(state, action));
-    const messages = messagesOf(state);
-    expect(messages.filter((m) => m.role === 'planner')).toHaveLength(0);
-    expect(messages.filter((m) => m.role === 'system' && m.text === 'Conversation condensed: …')).toHaveLength(1);
+    expect(messagesOf(state).filter((m) => m.role === 'planner')).toHaveLength(0);
+    expect(state.conversation.blocks.filter((b) => b.type === 'compaction' && b.summary === 'Conversation condensed: …')).toHaveLength(1);
   });
 
   it('keeps the late copy of the newest summary out once the transcript holds an earlier one too', async () => {
@@ -1815,9 +1814,8 @@ describe('conversation compact effect', () => {
 
     let state: TuiState = initialState({ sessionId: 'session-1' });
     for (const action of h.actions) ({ state } = reduce(state, action));
-    const messages = messagesOf(state);
-    expect(messages.filter((m) => m.role === 'planner')).toHaveLength(0);
-    expect(messages.filter((m) => m.text === 'Conversation condensed: second')).toHaveLength(1);
+    expect(messagesOf(state).filter((m) => m.role === 'planner')).toHaveLength(0);
+    expect(state.conversation.blocks.filter((b) => b.type === 'compaction' && b.summary === 'Conversation condensed: second')).toHaveLength(1);
   });
 });
 

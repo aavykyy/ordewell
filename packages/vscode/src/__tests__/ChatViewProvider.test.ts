@@ -62,7 +62,7 @@ describe('ChatViewProvider after its webview is disposed', () => {
     executeCommand.mockClear();
 
     dispose();
-    provider.setConversationBusy(true);
+    provider.showError('late');
     provider.reveal();
 
     expect(posted).toEqual([]);
@@ -189,18 +189,18 @@ describe('ChatViewProvider conversation reloads', () => {
     ]);
   });
 
-  it('redraws the conversation after a compaction — a restoreChat would also wipe a running task\'s output', () => {
+  it('folds a compaction into the conversation it was made in: a patch of the new block, never a replacement or a restore', () => {
     const { provider, posted } = providerWithCapture();
-    provider.replaceConversation({ conversationHistory: history, researchLog });
+    provider.restoreChat({ conversationHistory: history, researchLog });
+    posted.length = 0;
 
-    expect(posted.some((m) => m.type === 'restoreChat')).toBe(false);
-    expect(posted.at(-1)).toMatchObject({ type: 'conversationPatch', replaced: true });
-  });
+    provider.conversation.receive({ type: 'planner_compaction', compaction: { phase: 'started', id: 'c1', origin: 'ordewell', trigger: 'manual', at: '2026-01-01T00:00:00Z' } });
+    provider.conversation.flush();
 
-  it('tells the webview when to lock and free the input', () => {
-    const { provider, posted } = providerWithCapture();
-    provider.setConversationBusy(true);
-    provider.setConversationBusy(false);
-    expect(posted).toEqual([{ type: 'conversationBusy', busy: true }, { type: 'conversationBusy', busy: false }]);
+    expect(posted).toEqual([{
+      type: 'conversationPatch',
+      order: ['b1', 'b2', 'b3', 'b4'],
+      changed: [expect.objectContaining({ type: 'compaction', compactionId: 'c1', status: 'running' })],
+    }]);
   });
 });

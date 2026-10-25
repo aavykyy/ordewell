@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as vscode from 'vscode';
-import { ConversationEditError, PlannerNotReadyError } from '@ordewell/core';
+import { ConversationEditError, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError } from '@ordewell/core';
 import { forkConversation, rewindConversation, compactConversation, type ConversationDeps } from '../conversation';
 
 const showQuickPick = vscode.window.showQuickPick as unknown as ReturnType<typeof vi.fn>;
@@ -30,8 +30,6 @@ function setup(overrides: { generating?: boolean; executing?: boolean } = {}) {
   };
   const chatProvider = {
     showError: vi.fn(),
-    replaceConversation: vi.fn(),
-    setConversationBusy: vi.fn(),
   };
   const setCurrentPlan = vi.fn();
   const persistState = vi.fn();
@@ -102,12 +100,11 @@ describe('rewind', () => {
 
   it('forks from just before the picked message, switches to the fork, and says the original is kept', async () => {
     showQuickPick.mockImplementation(async (items: { index: number }[]) => items.find((i) => i.index === 2));
-    const { deps, session, chatProvider } = setup();
+    const { deps, session } = setup();
     await rewindConversation(deps);
 
     expect(session.rewindConversation).toHaveBeenCalledWith(2);
     expect(executeCommand).toHaveBeenCalledWith('ordewell.loadSessionById', 'sess-rewound');
-    expect(chatProvider.replaceConversation).not.toHaveBeenCalled();
     const notice = showInformationMessage.mock.calls[0][0] as string;
     expect(notice).toContain('sess-original');
     expect(notice).toContain('sess-rewound');
@@ -178,55 +175,29 @@ describe('rewind', () => {
 });
 
 describe('compact', () => {
-  type Token = { onCancellationRequested: (cb: () => void) => void };
-  let pressCancel: () => void;
-
-  beforeEach(() => {
-    pressCancel = () => undefined;
-    withProgress.mockImplementation(async (_opts: unknown, task: (p: unknown, t: Token) => Promise<unknown>) =>
-      task({}, { onCancellationRequested: (cb) => { pressCancel = cb; } }));
-  });
-
-  it('runs cancellably under a progress notification, blocking the webview input meanwhile', async () => {
-    const { deps, session, chatProvider } = setup();
-    let busyDuringRun: unknown;
-    session.compactConversation.mockImplementation((async () => {
-      busyDuringRun = chatProvider.setConversationBusy.mock.calls.at(-1)?.[0];
-      return { summary: 's', keptMessages: 4 };
-    }) as never);
+  // The session's own events draw it: a status while it runs, a quiet marker after (ADR-0017).
+  it('runs with no notification and no popup, and persists what it condensed', async () => {
+    const { deps, session, setCurrentPlan, persistState } = setup();
     await compactConversation(deps);
 
-    expect(withProgress.mock.calls[0][0]).toMatchObject({ cancellable: true });
-    expect(busyDuringRun).toBe(true);
-    expect(chatProvider.setConversationBusy.mock.calls.map((c) => c[0])).toEqual([true, false]);
-  });
-
-  it('redraws the transcript with the summary entry and persists it', async () => {
-    const { deps, session, chatProvider, setCurrentPlan, persistState } = setup();
-    const summarised = [{ role: 'assistant', content: 'Conversation condensed…\n\nthe summary', timestamp: 't', kind: 'compaction' }];
-    session.planState = { status: 'draft', tasks: [], conversationHistory: summarised } as never;
-    await compactConversation(deps);
-
+    expect(session.compactConversation).toHaveBeenCalledTimes(1);
+    expect(withProgress).not.toHaveBeenCalled();
+    expect(showInformationMessage).not.toHaveBeenCalled();
     expect(setCurrentPlan).toHaveBeenCalledWith(session.planState);
-    expect(chatProvider.replaceConversation).toHaveBeenCalledWith(session.planState);
     expect(persistState).toHaveBeenCalledTimes(1);
-    expect(showInformationMessage.mock.calls[0][0]).toContain('4');
   });
 
-  it('wires the progress cancel button to the abort signal, and changes nothing when cancelled', async () => {
+  it.each([
+    ['stopped', new PlannerTurnStoppedError()],
+    ['dropped with its plan', new PlannerTurnDiscardedError()],
+  ])('says nothing more when %s: nothing changed, and the marker says so', async (_case, err) => {
     const { deps, session, chatProvider, persistState } = setup();
-    session.compactConversation.mockImplementation((async (signal: AbortSignal) => {
-      pressCancel();
-      expect(signal.aborted).toBe(true);
-      throw new Error('aborted');
-    }) as never);
+    session.compactConversation.mockRejectedValue(err);
     await compactConversation(deps);
 
-    expect(chatProvider.replaceConversation).not.toHaveBeenCalled();
-    expect(persistState).not.toHaveBeenCalled();
     expect(chatProvider.showError).not.toHaveBeenCalled();
-    expect(showInformationMessage.mock.calls[0][0]).toMatch(/cancel.*nothing (was )?changed/i);
-    expect(chatProvider.setConversationBusy).toHaveBeenLastCalledWith(false);
+    expect(showInformationMessage).not.toHaveBeenCalled();
+    expect(persistState).not.toHaveBeenCalled();
   });
 
   it('says nothing changed when the planner turn fails', async () => {
@@ -235,9 +206,7 @@ describe('compact', () => {
     await compactConversation(deps);
 
     expect(chatProvider.showError).toHaveBeenCalledWith(expect.stringMatching(/rate limited.*nothing was changed/i));
-    expect(chatProvider.replaceConversation).not.toHaveBeenCalled();
     expect(persistState).not.toHaveBeenCalled();
-    expect(chatProvider.setConversationBusy).toHaveBeenLastCalledWith(false);
   });
 
   it('words a planner the session refused with the chat\'s own commands', async () => {

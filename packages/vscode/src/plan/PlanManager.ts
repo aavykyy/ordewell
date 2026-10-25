@@ -675,6 +675,7 @@ export function handleSessionMessage(
     case 'planner_turn_ended':
     case 'planner_text_retracted':
     case 'planner_usage':
+    case 'planner_compaction':
     case 'subagent_started':
     case 'subagent_finished':
     case 'approval_settled':

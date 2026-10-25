@@ -161,6 +161,11 @@ function closeSubagent(block: SubagentBlock, cut: SubagentStatus | null): Subage
  * subagents say so.
  */
 export function closeOpenBlocks<V extends BlockList>(view: V, cut: SubagentStatus | null): V {
-  const blocks = view.blocks.map((b) => (b.type === 'subagent' ? closeSubagent(b, cut) : closeBlock(b, cut !== null)));
+  const blocks = view.blocks.map((b) => {
+    if (b.type === 'subagent') return closeSubagent(b, cut);
+    // A compaction's end is its own to report; a turn cut short reports it for the one still running.
+    if (b.type === 'compaction') return b.status === 'running' && (cut === 'stopped' || cut === 'failed') ? { ...b, status: cut } : b;
+    return closeBlock(b, cut !== null);
+  });
   return blocks.every((b, i) => b === view.blocks[i]) ? view : { ...view, blocks };
 }

@@ -97,12 +97,34 @@ describe('fromTranscript', () => {
       step('rs-new', '2026-09-27T11:00:04.000Z', { tool: 'read_file', args: '{"path":"vitest.config.ts"}', result: 'export default {}' }),
     ];
 
-    expect(unkeyed(fromTranscript(history, log).blocks).map((b) => (b.type === 'message' ? `${b.role}: ${b.text}` : b.type === 'tool' ? `tool: ${b.headline.keyArg}` : b.type))).toEqual([
-      'system: Conversation condensed.\n\nGoal: ship it.',
+    expect(unkeyed(fromTranscript(history, log).blocks).map((b) => (b.type === 'message' ? `${b.role}: ${b.text}` : b.type === 'tool' ? `tool: ${b.headline.keyArg}` : b.type === 'compaction' ? `compaction: ${b.summary}` : b.type))).toEqual([
+      'compaction: Conversation condensed.\n\nGoal: ship it.',
       'user: and tests?',
       'tool: vitest.config.ts',
       'planner: Vitest, colocated.',
     ]);
+  });
+
+  it('keeps every message and research step of a checkpointed compaction, which stands where it was made as the block the live view drew', () => {
+    const summary = 'Conversation condensed.\n\nGoal: ship it.';
+    const history: ConversationMessage[] = [
+      { role: 'user', content: 'ship it', timestamp: '2026-09-27T10:00:00.000Z' },
+      { role: 'assistant', content: 'On it.', timestamp: '2026-09-27T10:00:09.000Z' },
+      { role: 'user', content: 'and tests?', timestamp: '2026-09-27T11:00:00.000Z' },
+      { role: 'assistant', content: 'Vitest, colocated.', timestamp: '2026-09-27T11:00:09.000Z' },
+      { role: 'assistant', content: summary, timestamp: '2026-09-27T12:00:00.000Z', kind: 'compaction', checkpoint: { id: 'c1', keptFrom: 2, trigger: 'manual' } },
+    ];
+    const log: ResearchLogEntry[] = [step('rs-old', '2026-09-27T10:00:03.000Z', { tool: 'read_file', args: '{"path":"old.ts"}', result: 'old' })];
+
+    const reloaded = fromTranscript(history, log);
+
+    expect(unkeyed(reloaded.blocks).map((b) => (b.type === 'message' ? `${b.role}: ${b.text}` : b.type === 'tool' ? `tool: ${b.headline.keyArg}` : b.type))).toEqual([
+      'user: ship it', 'tool: old.ts', 'planner: On it.', 'user: and tests?', 'planner: Vitest, colocated.', 'compaction',
+    ]);
+    expect(unkeyed(reloaded.blocks).at(-1)).toEqual({ type: 'compaction', compactionId: 'c1', origin: 'ordewell', trigger: 'manual', status: 'condensed', summary });
+    // The live end of the same compaction folds into the reloaded block, not beside it.
+    const lateEnd = reduceConversation(reloaded, { type: 'planner_compaction', compaction: { phase: 'ended', id: 'c1', origin: 'ordewell', trigger: 'manual', outcome: 'condensed', at: '2026-09-27T12:00:01.000Z' } });
+    expect(lateEnd).toBe(reloaded);
   });
 
   it('adopts replayed pending inputs once when their batched turn starts and lands', () => {
@@ -242,7 +264,7 @@ describe('fromTranscript', () => {
     const blocks = unkeyed(fromTranscript(history, []).blocks);
 
     expect(blocks).toEqual([
-      { type: 'message', role: 'system', text: 'Conversation condensed.', streaming: false },
+      { type: 'compaction', origin: 'ordewell', trigger: 'manual', status: 'condensed', summary: 'Conversation condensed.' },
       { type: 'message', role: 'user', text: '/grilling and tests?', streaming: false, skills: ['grilling'] },
       { type: 'skill_load', invokedBy: 'user', name: 'grilling', source: 'global', path: '~/.ordewell/skills/grilling/SKILL.md' },
       { type: 'message', role: 'planner', text: 'Vitest.', streaming: false },
