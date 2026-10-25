@@ -11,7 +11,7 @@ import type { ToolOutcome } from '../interfaces/IFileSystem';
 import { guardedLookup, resolveAll, type ResolveAll } from './egressGuard';
 import { DuckDuckGoSearchProvider } from './DuckDuckGoSearchProvider';
 import { WebResponseCache } from './WebResponseCache';
-import type { WebRead, WebReadDecision, WebReadPolicy } from './webReadPolicy';
+import type { DecideOptions, DecisionRecord, WebRead, WebReadDecision, WebReadPolicy } from './webReadPolicy';
 
 /**
  * The concrete `fetch`/`web_search` implementation, in core so the web server
@@ -157,8 +157,12 @@ export class HttpWebFetcher implements IWebFetcher {
     return this.policy.decide(read, this.decideOptions);
   }
 
-  private get decideOptions(): { prompting: boolean } {
+  private get decideOptions(): DecideOptions {
     return { prompting: this.prompting };
+  }
+
+  private optionsOf(record: DecisionRecord | undefined): DecideOptions {
+    return record ? { ...this.decideOptions, record } : this.decideOptions;
   }
 
   forSubagent(): IWebFetcher {
@@ -197,16 +201,18 @@ export class HttpWebFetcher implements IWebFetcher {
     return this.policy.remaining?.();
   }
 
-  async fetch(url: string, { signal }: WebReadOptions = {}): Promise<ToolOutcome> {
+  async fetch(url: string, opts: WebReadOptions = {}): Promise<ToolOutcome> {
+    const { signal, record } = opts;
     if (signal?.aborted) return cancelled('Fetch');
-    const decision = await this.policy.decide({ kind: 'fetch', url }, this.decideOptions);
+    const decision = await this.policy.decide({ kind: 'fetch', url }, this.optionsOf(record));
     if (!decision.allowed) return { success: false, output: decision.reason, truncated: false };
     // Decided while the caller may have gone: nothing leaves for a read nobody waits on.
     if (signal?.aborted) return cancelled('Fetch');
-    return this.get(url, 'Fetch', signal);
+    return this.get(url, 'Fetch', opts);
   }
 
-  async search(query: string, { signal }: WebReadOptions = {}): Promise<ToolOutcome> {
+  async search(query: string, opts: WebReadOptions = {}): Promise<ToolOutcome> {
+    const { signal, record } = opts;
     if (signal?.aborted) return cancelled('Web search');
     const provider = this.searchProvider;
 
@@ -216,7 +222,7 @@ export class HttpWebFetcher implements IWebFetcher {
     // already knows.
     if (provider.coolingDown()) return { success: false, output: SEARCH_COOLDOWN_OUTPUT, truncated: false };
 
-    const decision = await this.policy.decide({ kind: 'search', query, provider: provider.id }, this.decideOptions);
+    const decision = await this.policy.decide({ kind: 'search', query, provider: provider.id }, this.optionsOf(record));
     if (!decision.allowed) return { success: false, output: decision.reason, truncated: false };
     if (signal?.aborted) return cancelled('Web search');
 
@@ -227,7 +233,7 @@ export class HttpWebFetcher implements IWebFetcher {
     const cached = this.cache.getSearch(cacheKey);
     if (cached) return formatHits(cached);
 
-    const outcome = await provider.search(query, (url) => this.getSearchPage(url, signal));
+    const outcome = await provider.search(query, (url) => this.getSearchPage(url, opts));
     switch (outcome.kind) {
       case 'hits':
         this.cache.setSearch(cacheKey, outcome.hits);
@@ -245,11 +251,11 @@ export class HttpWebFetcher implements IWebFetcher {
     }
   }
 
-  private async get(url: string, label: string, signal: AbortSignal | undefined): Promise<ToolOutcome> {
+  private async get(url: string, label: string, opts: WebReadOptions): Promise<ToolOutcome> {
     const cached = this.cache.getFetch(url);
     if (cached) return this.render(label, cached.body, cached.isHtml, false);
 
-    const page = await this.request(url, signal);
+    const page = await this.request(url, opts);
     if (!page.ok) return { success: false, output: `${label} failed: ${page.error}`, truncated: false };
     // Keyed by the URL asked for, so a body another origin answered would reach
     // later sessions that were never decided for that origin.
@@ -272,21 +278,21 @@ export class HttpWebFetcher implements IWebFetcher {
     return { success: true, output: text, truncated: false };
   }
 
-  private async getSearchPage(url: string, signal: AbortSignal | undefined): Promise<SearchPage> {
-    const page = await this.request(url, signal);
+  private async getSearchPage(url: string, opts: WebReadOptions): Promise<SearchPage> {
+    const page = await this.request(url, opts);
     return page.ok
       ? { ok: true, status: page.status, body: page.body }
       : { ok: false, status: page.status, error: page.error };
   }
 
-  private async request(url: string, signal: AbortSignal | undefined): Promise<FetchedPage> {
+  private async request(url: string, { signal, record }: WebReadOptions): Promise<FetchedPage> {
     let current = new URL(url);
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       if (signal?.aborted) return { ok: false, error: CANCELLED };
       const result = await this.hop(current, signal);
       if (!('redirect' in result)) return result;
       // Decided outside the hop's timer: in Guarded it may wait on a person.
-      const refused = await this.refuseRedirect(current, result.redirect);
+      const refused = await this.refuseRedirect(current, result.redirect, record);
       if (refused) return { ok: false, status: result.status, error: refused };
       current = result.redirect;
     }
@@ -299,11 +305,11 @@ export class HttpWebFetcher implements IWebFetcher {
    * the same decision; otherwise a redirect would carry the fetch past an
    * exclusion, a Guarded grant or the budget.
    */
-  private async refuseRedirect(from: URL, to: URL): Promise<string | undefined> {
+  private async refuseRedirect(from: URL, to: URL, record: DecisionRecord | undefined): Promise<string | undefined> {
     if (to.protocol !== 'https:' && to.protocol !== 'http:') return 'redirect to a non-HTTP scheme';
     if (from.protocol === 'https:' && to.protocol === 'http:') return 'redirect from https to plain http';
     if (to.origin === from.origin) return undefined;
-    const decision = await this.policy.decide({ kind: 'fetch', url: to.href }, this.decideOptions);
+    const decision = await this.policy.decide({ kind: 'fetch', url: to.href }, this.optionsOf(record));
     // The new URL is left out: the policy's reason already names what it may.
     return decision.allowed ? undefined : `the page redirected to another origin, which was refused. ${decision.reason}`;
   }

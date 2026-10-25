@@ -229,7 +229,8 @@ what guards it has to hold without one:
   redirect hop included — against `plannerWebReadBudget`
   (`ORDEWELL_WEB_READ_BUDGET`), and a new turn starts a new count. A read is
   counted before its approval resolves, so reads raised in parallel cannot
-  all pass at once, and given back if it does not happen. Past the budget,
+  all pass at once, and given back if it is then refused; one its caller
+  cancels after it was allowed keeps its count. Past the budget,
   reads are refused with a message the planner can report. A budget of 0
   turns web reads off. A read-only task's attempt counts its own reads
   against the same setting, apart from every planner turn and every other
@@ -475,3 +476,4 @@ filed as its own issue.
 
 - 2026-10-21 — read-only tasks withhold native web tools because they have no task web-policy channel (ADR-0046).
 - 2026-10-25 — read-only tasks read through Ordewell's `fetch` and `web_search` under this policy, never prompting, each attempt with a budget of its own (ADR-0046).
+- 2026-10-25 — a read its caller cancels after it was allowed keeps its count; only a refused one is given back.

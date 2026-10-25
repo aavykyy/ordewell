@@ -12,6 +12,8 @@ import { HttpWebFetcher } from '../HttpWebFetcher';
 import { ApprovalPolicy, effectiveApprovalMode } from '../ApprovalPolicy';
 import type { IFileSystem, TaskShell } from '../../interfaces/IFileSystem';
 import { WebResponseCache } from '../WebResponseCache';
+import { TaskWebReader } from '../taskWebReads';
+import type { IWebFetcher } from '../../interfaces/IWebFetcher';
 import type { WebResponse, WebTransport } from '../HttpWebFetcher';
 import type { AgentEvent, AgentStartOptions, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
@@ -141,12 +143,37 @@ describe('a read-only task reads the web through Ordewell (ADR-0046)', () => {
 
     expect(result.isError).toBe(false);
     expect(text(result)).toContain('https://hono.dev/docs');
-    expect(text(result)).toMatch(/Allowed by the session's web-read policy without asking anyone; 4 web reads left in this attempt\.\]$/);
-    // The session's decision record names the task that read, as a planner's names the planner.
-    expect(env.broadcast).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'approval_decided', kind: 'web_search', subject: 'opencode oauth', granted: true, source: 'mode',
-      detail: expect.stringContaining('Read-only task "Research r1" wants to search the web'),
-    }));
+    expect(text(result)).toMatch(/\[Allowed by the session's web-read policy without asking anyone \(web_search:duckduckgo by the approval mode\); 4 web reads left in this attempt\.\]$/);
+  });
+
+  it('keeps its decisions out of the planner\'s conversation: each one is the call\'s result, an allowed read naming what allowed it', async () => {
+    const env = rig({ webReadBudget: 1, approvalPreApproved: ['https://docs.example.com/*', '!https://internal.example.com/*'] });
+    env.load([readOnly('r1', 1)]);
+    const client = await env.start('r1');
+
+    const allowed = await client.callTool({ name: 'fetch', arguments: { url: 'https://docs.example.com/oauth' } });
+    const excluded = await client.callTool({ name: 'fetch', arguments: { url: 'https://internal.example.com/' } });
+    const overBudget = await client.callTool({ name: 'web_search', arguments: { query: 'opencode oauth' } });
+
+    expect(text(allowed)).toMatch(/\[Allowed by the session's web-read policy without asking anyone \(https:\/\/docs\.example\.com\/\* by the planner allowlist\); 0 web reads left in this attempt\.\]$/);
+    expect(text(excluded)).toMatch(/is excluded by the planner allowlist/);
+    expect(text(overBudget)).toMatch(/this task attempt has used its web-read budget/);
+    expect(env.broadcast).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'approval_decided' }));
+  });
+
+  it('names a cross-origin redirect hop\'s decision in the same read\'s result', async () => {
+    const env = rig({ approvalPreApproved: ['https://mirror.example.org/*'] });
+    env.transport.mockImplementation(async (url) => (url === 'https://docs.example.com/moved'
+      ? { ok: false, status: 302, headers: { get: (name) => (name === 'location' ? 'https://mirror.example.org/guide' : null) }, body: null, text: async () => '' }
+      : page(`<p>Docs at ${url}</p>`)));
+    env.load([readOnly('r1', 1)]);
+    const client = await env.start('r1');
+
+    const result = await client.callTool({ name: 'fetch', arguments: { url: 'https://docs.example.com/moved' } });
+
+    expect(text(result)).toContain('Docs at https://mirror.example.org/guide');
+    expect(text(result)).toMatch(/\(https:\/\/docs\.example\.com\/\* by the approval mode; https:\/\/mirror\.example\.org\/\* by the planner allowlist\); 38 web reads left in this attempt\.\]$/);
+    expect(env.broadcast).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'approval_decided' }));
   });
 
   it('keeps a change task\'s tools as they were: no fetch or web_search on its token', async () => {
@@ -385,5 +412,24 @@ describe('a task attempt\'s web-read budget and the planner\'s (ADR-0046, ADR-00
     expect((await planner.fetch('https://docs.example.com/p3')).success).toBe(true);
     expect((await attemptA.fetch('https://docs.example.com/a3')).success).toBe(false);
     expect(transport).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('TaskWebReader', () => {
+  it('hands nothing to a runner whose attempt ended while a read was in flight, even one its transport still answered', async () => {
+    let answer: (outcome: { success: true; output: string; truncated: false }) => void = () => undefined;
+    const fetcher: IWebFetcher = {
+      decide: async () => ({ allowed: true }),
+      // A transport that ignores the abort and answers anyway.
+      fetch: () => new Promise((resolve) => { answer = resolve; }),
+      remaining: () => 39,
+    };
+    const reader = new TaskWebReader(fetcher);
+
+    const read = reader.fetch('https://docs.example.com/slow', new AbortController().signal);
+    reader.end();
+    answer({ success: true, output: 'Docs body', truncated: false });
+
+    expect(await read).toEqual({ text: 'This task attempt has ended, so nothing was read.', isError: true });
   });
 });
