@@ -120,6 +120,63 @@ describe.skipIf(process.platform === 'win32')('applyPatch', () => {
     rmSync(scratch, { recursive: true, force: true });
   });
 
+  // Capture stages in a copy of the worktree's index, and git rehashes only an
+  // entry it calls racily clean: one whose cached mtime is no earlier than the
+  // index's own. A copy made now is newer than every entry, so a same-size
+  // rewrite whose stat the cache cannot tell apart keeps the base blob and
+  // silently falls out of the patch.
+  it('carries a same-size rewrite captured a second after the edit', async () => {
+    const explorer = join(repo, '.ordewell', 'worktrees', 'same-size');
+    git(repo, 'worktree', 'add', '-q', '-b', 'same-size', explorer, base);
+    const asset = join(explorer, 'assets.bin');
+    const indexPath = join(git(explorer, 'rev-parse', '--absolute-git-dir').trim(), 'index');
+    const secondOf = (path: string) => Math.floor(statSync(path).mtimeMs / 1000);
+    const cachedSecond = () => Number(/mtime: (\d+)/.exec(git(explorer, 'ls-files', '--debug', 'assets.bin'))![1]);
+
+    // A refresh and a rewrite that straddle a second leave the cache a second
+    // behind. Start again in the next second rather than sleep until one fits:
+    // only the refresh and the 2 KiB rewrite are inside the window.
+    let missed = '';
+    let ready = false;
+    for (let attempt = 1; attempt <= 8 && !ready; attempt += 1) {
+      while (Date.now() % 1000 > 50) await new Promise((resolve) => setTimeout(resolve, 5));
+      writeFileSync(asset, binaryA);
+      git(explorer, 'update-index', '--refresh');
+      writeFileSync(asset, binaryB);
+      const [cached, file, index] = [cachedSecond(), secondOf(asset), secondOf(indexPath)];
+      ready = cached === file && index === cached;
+      missed = `attempt ${attempt}: cached ${cached}, file ${file}, index ${index}`;
+    }
+    // Explicit, not a skip: without a same-second cache there is no defect here to test.
+    expect(ready, `the index cache and the rewrite never shared a second (${missed})`).toBe(true);
+    // The worktree's own index is racily clean and sees the rewrite; only the
+    // capture's fresh copy of it is not.
+    expect(statSync(asset).size).toBe(binaryA.length);
+    expect(git(explorer, 'diff-files', '--name-only')).toContain('assets.bin');
+
+    writeFileSync(join(explorer, 'src', 'greet.ts'), lines('export function greet() {', '  return "hello, from the cached second";', '}', '', 'export const tail = 1;'));
+
+    // Capture after that second: the copy of the index now looks newer than the
+    // entry, so git trusts the stat the rewrite left behind.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+
+    const captured = await capturePatch(plainShell(explorer, scratch));
+
+    expect(captured.kind).toBe('saved');
+    if (captured.kind !== 'saved') return;
+    expect(captured.patch.toString('latin1')).toContain('diff --git a/assets.bin b/assets.bin');
+    expect(captured.stats).toMatchObject({ files: 2, binary: 1 });
+
+    git(explorer, 'add', '-A');
+    const expectedTree = git(explorer, 'write-tree').trim();
+    const dir = builder(base);
+    const result = await applyPatch(invoker, dir, captured.patch, patchArtifact(captured.stats, { path: '.ordewell/sessions/s/tasks/t/3.patch', attempt: 1 }));
+
+    expect(result).toEqual({ kind: 'applied', sameBase: true, head: base, files: 2 });
+    expect(git(dir, 'write-tree').trim()).toBe(expectedTree);
+    expect(readFileSync(join(dir, 'assets.bin')).equals(binaryB)).toBe(true);
+  });
+
   it('gives the explorer\'s tree, mode for mode, at the base it was taken against', async () => {
     const dir = builder(base);
 
