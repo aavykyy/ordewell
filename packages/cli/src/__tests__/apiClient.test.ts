@@ -583,4 +583,21 @@ describe('deliveryOf', () => {
   it.each(['Request timed out', 'socket hang up', 'read ECONNRESET', 'write EPIPE'])('reads "%s" as an unknown outcome', (message) => {
     expect(deliveryOf(new Error(message))).toBe('unknown');
   });
+
+  // The response arrived, so the request was delivered even though its body
+  // could not be used. Calling that unknown is what made the TUI read the
+  // session back as if the daemon might still be running the turn.
+  it('reads a 200 whose body cannot be used as an answer, not as a lost request', async () => {
+    const server = await startCustomServer((_req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end('null');
+    });
+    try {
+      const err = await new ApiClient(server.port).startConversation('s1', 'goal').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(deliveryOf(err)).not.toBe('unknown');
+    } finally {
+      server.close();
+    }
+  });
 });
