@@ -90,6 +90,7 @@ function discoveredToCatalog(m: DiscoveredModel): CatalogModel {
     description: '',
     pricing: { prompt: '?', completion: '?' },
     contextLength: m.contextWindow ?? 0,
+    ...(m.maxOutputTokens !== undefined ? { maxOutputTokens: m.maxOutputTokens } : {}),
   };
 }
 

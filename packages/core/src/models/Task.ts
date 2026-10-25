@@ -492,9 +492,12 @@ export interface DiscoveredModel {
   /**
    * The model's context window when the runner or catalog reports it (#49).
    * Read by the planner-model lookup so context fill can be shown; absent when
-   * unknown rather than defaulted to zero.
+   * unknown rather than defaulted to zero. Gemini's is its `inputTokenLimit`:
+   * the prompt alone, the reply limited by `maxOutputTokens` apart from it.
    */
   contextWindow?: number;
+  /** The longest reply the catalog says the model is served with, when it says. */
+  maxOutputTokens?: number;
 }
 
 export type PlanStatus = 'draft' | 'approved' | 'rejected' | 'running' | 'completed';

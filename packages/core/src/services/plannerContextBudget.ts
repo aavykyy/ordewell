@@ -15,6 +15,11 @@
 export interface ModelLimits {
   /** The whole window: the prompt and the reply together, as an OpenAI-compatible catalog states it. */
   contextWindow?: number;
+  /**
+   * The longest prompt alone, the reply having a limit of its own, as Gemini
+   * states its `inputTokenLimit`. Budgeted on in place of `contextWindow`.
+   */
+  inputTokenLimit?: number;
   /** The longest reply the provider serves for the model. */
   maxOutputTokens?: number;
 }
@@ -52,38 +57,53 @@ export const CONTEXT_BUDGET = {
 
 /** One call's budget on a model whose window is known. */
 export interface CallBudget {
+  /** The window budgeted on: the whole window, or the prompt's alone where the provider states that. */
   contextWindow: number;
   /** The reply the call asks for. */
   maxOutputTokens: number;
   /** Prompt tokens a call may carry: 90% of the window, and never into the reply's share. */
   ceiling: number;
+  /** The most the prompt can hold at all: past it, a call is refused rather than sent. */
+  promptLimit: number;
   /** Where pruning stops once it has started. */
   lowWater: number;
 }
 
 /**
- * The reply a call asks for: the provider's cap when it states a lower one,
- * and on a known window no more than its share of it. An OpenAI-compatible
- * window holds prompt and reply together, so asking for more than is left
- * fails the call or, on some servers, cuts the prompt.
+ * The reply a call asks for: `wanted`, or the provider's cap when it states a
+ * lower one, and on a known whole window no more than its share of it. An
+ * OpenAI-compatible window holds prompt and reply together, so asking for more
+ * than is left fails the call or, on some servers, cuts the prompt. A limit on
+ * the prompt alone leaves the reply its own.
  */
-export function replyTokens(limits: ModelLimits | undefined): number {
+export function replyTokens(limits: ModelLimits | undefined, wanted = CONTEXT_BUDGET.defaultMaxOutputTokens): number {
   const cap = positive(limits?.maxOutputTokens);
   const window = positive(limits?.contextWindow);
   return Math.min(
-    CONTEXT_BUDGET.defaultMaxOutputTokens,
+    wanted,
     cap ?? Infinity,
-    window !== undefined ? Math.floor(window * CONTEXT_BUDGET.maxOutputShare) : Infinity,
+    window !== undefined && positive(limits?.inputTokenLimit) === undefined ? Math.floor(window * CONTEXT_BUDGET.maxOutputShare) : Infinity,
   );
 }
 
 /** Undefined when the window is unknown: then nothing is budgeted, and nothing pruned ahead of a call. */
-export function callBudget(limits: ModelLimits | undefined): CallBudget | undefined {
-  const contextWindow = positive(limits?.contextWindow);
+export function callBudget(limits: ModelLimits | undefined, wanted?: number): CallBudget | undefined {
+  const maxOutputTokens = replyTokens(limits, wanted);
+  const inputLimit = positive(limits?.inputTokenLimit);
+  const contextWindow = inputLimit ?? positive(limits?.contextWindow);
   if (contextWindow === undefined) return undefined;
-  const maxOutputTokens = replyTokens(limits);
-  const ceiling = Math.floor(Math.min(contextWindow * CONTEXT_BUDGET.fillShare, contextWindow - maxOutputTokens));
-  return { contextWindow, maxOutputTokens, ceiling, lowWater: Math.floor(ceiling * CONTEXT_BUDGET.lowWaterShare) };
+  const promptLimit = inputLimit ?? contextWindow - maxOutputTokens;
+  const ceiling = Math.floor(Math.min(contextWindow * CONTEXT_BUDGET.fillShare, promptLimit));
+  return { contextWindow, maxOutputTokens, ceiling, promptLimit, lowWater: Math.floor(ceiling * CONTEXT_BUDGET.lowWaterShare) };
+}
+
+/** How a planner's chat budgets each call. A subagent's chat has none. */
+export interface ChatBudget {
+  limits(model: string): ModelLimits | undefined;
+  autoCompaction(): boolean;
+  gauge: TokenGauge;
+  /** The model's context changed under what earlier turns were sent (ADR-0012 T10). */
+  onCompacted(): void;
 }
 
 /** What automatic compaction does for the planner's model now, for a surface to state. */

@@ -414,6 +414,21 @@ describe('ModelResolver.maxOutputTokensFor', () => {
     expect(resolver.maxOutputTokensFor('openrouter', 'vendor/uncapped')).toBeUndefined();
     expect(resolver.maxOutputTokensFor('openrouter', 'vendor/unlisted')).toBeUndefined();
   });
+
+  it('keeps the outputTokenLimit Gemini\'s own models endpoint states, and none it did not state', async () => {
+    const fetchImpl = fakeFetch([
+      ['/v1beta/models', { models: [
+        { name: 'models/gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', supportedGenerationMethods: ['generateContent'], inputTokenLimit: 1048576, outputTokenLimit: 65536 },
+        { name: 'models/gemini-unsized', displayName: 'Unsized', supportedGenerationMethods: ['generateContent'] },
+      ] }],
+    ]);
+    const resolver = new ModelResolver(fakeRegistry({}), configWith({ geminiKey: 'gem-key', openrouterKey: '' }), { fetchImpl });
+    await resolver.pickerOptions();
+
+    expect(resolver.maxOutputTokensFor('google', 'gemini-2.5-pro')).toBe(65536);
+    expect(resolver.maxOutputTokensFor('google', 'gemini-unsized')).toBeUndefined();
+    expect(resolver.contextWindowFor('google', 'gemini-unsized')).toBeUndefined();
+  });
 });
 
 describe('ModelResolver.warmPickerOptions', () => {
