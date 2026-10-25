@@ -75,6 +75,11 @@ function charsOf(messages: readonly CompactableMessage[]): number {
   return messages.reduce((n, m) => n + messageChars(m), 0);
 }
 
+/** What lines add to a note, each on its own line. */
+function linesChars(lines: readonly string[]): number {
+  return lines.reduce((n, line) => n + line.length + 1, 0);
+}
+
 /** What one stage of condensing would do, decided before any call is made. */
 interface LandedPlan {
   /** The live context that landed before the turn, which the summary condenses. */
@@ -97,6 +102,13 @@ interface Fitting {
   perToken: number;
   /** Without the margin, from a measurement or a refusal; undefined while there is neither, when a guess alone never holds a call. */
   plain: number | undefined;
+  /**
+   * What a call that was condensed for is held on: the plain ratio, or with
+   * none, the estimate the condensing was planned on — summaries were paid
+   * for to make room, and a call that estimate says still cannot fit is not
+   * sent to be refused. Undefined on the user's Retry, which sends once.
+   */
+  condensedBasis: number | undefined;
 }
 
 /**
@@ -135,7 +147,7 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
     private readonly wantedReply: number,
     private readonly chat: BudgetedChatOptions,
   ) {
-    this.history = new ChatHistory(seed);
+    this.history = new ChatHistory(seed, (m) => this.messageSize(m));
   }
 
   protected abstract userMessage(text: string): M;
@@ -148,6 +160,10 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
   protected abstract isContextOverflow(err: unknown): boolean;
   /** The window a refusal as too long states, in the provider's terms; undefined when it states none. */
   protected abstract statedLimits(err: unknown): ModelLimits | undefined;
+  /** What a message adds to a request as this provider sends it. */
+  protected messageSize(m: M): number {
+    return messageChars(m);
+  }
   /** Make the call, and on success add its input and the reply to the history. */
   protected abstract callApi(input: CallInput<M>, model: string, maxTokens: number, signal?: AbortSignal): Promise<ResearchTurn>;
 
@@ -335,7 +351,7 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
     if (!budget || !gauge) return undefined;
     const perToken = gauge.charsPerToken(model);
     const plain = gauge.plainCharsPerToken(model);
-    return { limits, budget: this.belowRefused(model, budget, plain ?? perToken), perToken, plain };
+    return { limits, budget: this.belowRefused(model, budget, plain ?? perToken), perToken, plain, condensedBasis: plain ?? (explicit ? undefined : perToken) };
   }
 
   /**
@@ -353,7 +369,7 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
   }
 
   private charsWith(input: CallInput<M>): number {
-    return this.history.chars + charsOf(input.messages) + this.toolsChars;
+    return this.history.chars + this.history.charsOf(input.messages) + this.toolsChars;
   }
 
   /**
@@ -361,11 +377,12 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
    * low water — older rounds, keeping the newest anywhere; then, if that is not
    * enough, the rounds of turns before this one — and where even that leaves
    * the call over, condense by summary. Still over the window by a measured
-   * estimate without its margin, the call is not made: the input is held and
-   * the turn ends on a typed error.
+   * estimate without its margin — or, once a summary was committed for it, by
+   * the estimate it was condensed on — the call is not made: the input is
+   * held and the turn ends on a typed error.
    */
   private async fit(input: CallInput<M>, model: string, fitting: Fitting, signal?: AbortSignal): Promise<ContextSummaryAttempt> {
-    const { budget, perToken, plain } = fitting;
+    const { budget, perToken } = fitting;
     const over = (): boolean => this.charsWith(input) / perToken > budget.ceiling;
     if (!over()) return 'not_tried';
     const toLowWater = (): number => this.charsWith(input) - budget.lowWater * perToken;
@@ -375,9 +392,10 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
     let summary: ContextSummaryAttempt = 'not_tried';
     let cause: unknown;
     if (over()) ({ summary, cause } = await this.condense(input, model, fitting, signal));
-    if (plain !== undefined && this.charsWith(input) / plain > budget.promptLimit) {
+    const basis = summary === 'condensed' ? fitting.condensedBasis : fitting.plain;
+    if (basis !== undefined && this.charsWith(input) / basis > budget.promptLimit) {
       this.held = input;
-      const tooLong = this.tooLong(input, budget.promptLimit * plain);
+      const tooLong = this.tooLong(input, budget.promptLimit * basis);
       throw new PlannerContextExhaustedError(model, false, { cause, summary, done: this.turnLedger(), ...(tooLong ? { tooLong } : {}) });
     }
     return summary;
@@ -386,9 +404,9 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
   /** What no compaction can shorten that is by itself past `limit` characters: the instructions and tools, or with them the input. */
   private tooLong(input: CallInput<M>, limit: number): 'instructions' | 'message' | 'results' | undefined {
     const head = this.history.view()[0];
-    const fixed = (head ? messageChars(head) : 0) + this.toolsChars;
+    const fixed = (head ? this.history.sizeOf(head) : 0) + this.toolsChars;
     if (fixed > limit) return 'instructions';
-    return fixed + charsOf(input.messages) > limit ? input.kind : undefined;
+    return fixed + this.history.charsOf(input.messages) > limit ? input.kind : undefined;
   }
 
   /**
@@ -400,7 +418,7 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
    * its start — `paused` when the call still cannot be made.
    */
   private async condense(input: CallInput<M>, model: string, fitting: Fitting, signal?: AbortSignal): Promise<{ summary: ContextSummaryAttempt; cause?: unknown }> {
-    const { limits, budget, perToken, plain } = fitting;
+    const { limits, budget, perToken } = fitting;
     const compaction = this.chat.compaction;
     const turn = this.turn;
     if (!compaction || !turn || compaction.host.turnId() !== turn.id) return { summary: 'not_tried' };
@@ -443,7 +461,8 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
         const plan = this.planTurn(input, room, allowance);
         return plan ? this.condenseTurn(plan, summarize) : false;
       });
-      const fits = plain === undefined || this.charsWith(input) / plain <= budget.promptLimit;
+      const basis = condensed ? fitting.condensedBasis : fitting.plain;
+      const fits = basis === undefined || this.charsWith(input) / basis <= budget.promptLimit;
       outcome = !fits ? 'paused' : condensed ? 'condensed' : cause ? 'failed' : 'unchanged';
     } finally {
       if (outcome === 'stopped' && condensed) outcome = 'condensed';
@@ -463,7 +482,7 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
   private planLanded(input: CallInput<M>, room: number, allowance: number): LandedPlan | null {
     const turn = this.turn!;
     const live = this.history.view().slice(1, turn.at);
-    const liveChars = charsOf(live);
+    const liveChars = this.history.charsOf(live);
     if (liveChars <= allowance * 2) return null;
     const landed = this.chat.compaction!.host.landed();
     if (!landed) return null;
@@ -501,7 +520,10 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
    * The open turn's older rounds, condensed into a note after the user's
    * message, with the newest rounds that fit under low water kept as they
    * are, and the call whose results are being sent always among them. A round
-   * is never split from the results that answer it.
+   * is never split from the results that answer it. The note lists every
+   * call the condensed rounds made that changed something, in full, so the
+   * room is counted with that list: a round kept whole takes its lines out
+   * of it.
    */
   private planTurn(input: CallInput<M>, room: number, allowance: number): TurnPlan | null {
     const at = this.turn!.at;
@@ -509,20 +531,25 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
     const starts: number[] = [];
     for (let i = at + 1; i < view.length; i++) if (view[i].role !== 'tool') starts.push(i);
     if (starts.length === 0) return null;
-    const unitChars = (u: number): number => charsOf(view.slice(starts[u], starts[u + 1] ?? view.length));
+    const unit = (u: number): readonly M[] => view.slice(starts[u], starts[u + 1] ?? view.length);
+    const unitChars = (u: number): number => this.history.charsOf(unit(u));
+    const unitListed = (u: number): number => linesChars(effectLedger(unit(u)));
     const pending = input.kind === 'results' ? 1 : 0;
-    const besides = charsOf(view.slice(0, at + 1)) + allowance + charsOf(input.messages) + this.toolsChars;
+    const besides = this.history.charsOf(view.slice(0, at + 1)) + allowance + linesChars(this.done) + this.history.charsOf(input.messages) + this.toolsChars;
     let keep = starts.length - pending;
     let keptChars = 0;
+    let listed = 0;
     for (let u = keep; u < starts.length; u++) keptChars += unitChars(u);
-    while (keep > 0 && besides + keptChars + unitChars(keep - 1) <= room) {
+    for (let u = 0; u < keep; u++) listed += unitListed(u);
+    while (keep > 0 && besides + keptChars + unitChars(keep - 1) + listed - unitListed(keep - 1) <= room) {
       keptChars += unitChars(keep - 1);
+      listed -= unitListed(keep - 1);
       keep--;
     }
     if (keep === 0) return null;
     const cut = starts[keep] ?? view.length;
     const condensed = view.slice(at + 1, cut);
-    if (charsOf(condensed) <= allowance * 2) return null;
+    if (this.history.charsOf(condensed) <= allowance * 2) return null;
     return { condensed, cut };
   }
 

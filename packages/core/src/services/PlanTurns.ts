@@ -436,7 +436,8 @@ export class PlanTurns {
    */
   stopQueued(): boolean {
     const plan = this.host.plan();
-    if (plan && this.paused() && !this.running && !this.host.conversationBusy()) return this.dropPause(plan);
+    // Paused, nothing but a Retry (`running`) carries the turn on: a /compact the user runs meanwhile is stopped with it, and the pause ends.
+    if (plan && this.paused() && !this.running) return this.dropPause(plan);
     if (!plan || (!this.detecting && !this.running && !this.host.conversationBusy())) return false;
     const live = this.running?.ids;
     const waiting = (plan.pendingTurns ?? []).filter((t) => !live?.has(t.id));

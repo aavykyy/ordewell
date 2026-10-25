@@ -1152,7 +1152,8 @@ export class PlannerConversation {
     const recovery = userTurn.recovery;
     const carried = recovery && !recovery.live ? recovery.pause.done ?? [] : [];
     const listed = [...carried, ...err.done];
-    const action = err.tooLong === 'message' || err.tooLong === 'instructions'
+    // What is too long by itself takes a larger window: a Retry on this model compacts what is beside it and pauses again.
+    const action = err.tooLong !== undefined
       ? `The planner is paused: switch it to a model with a larger window, then Retry compaction, or stop it to drop the ${err.tooLong === 'message' ? 'message' : 'turn'}.`
       : 'The planner is paused: Retry compaction condenses its context and carries the turn on, or stop it to drop the turn.';
     const pause = this.host.contextPaused({

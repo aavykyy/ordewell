@@ -136,8 +136,11 @@ function statedLimits(err: unknown): ModelLimits | undefined {
 /**
  * The turns Gemini is sent for `messages`. A tool message's run becomes one
  * `function` turn, as the API wants every call of a turn answered in the next;
- * a model turn goes back as it streamed, or, swapped in by a reseed, as its
- * text and calls.
+ * a user message after another — the note a condensed turn adds after the
+ * user's — joins its turn as a part of its own, so condensing never adds a
+ * second user turn in a row (the system prompt's turn at the head keeps the
+ * shape it always had); a model turn goes back as it streamed, or, swapped in
+ * by a reseed, as its text and calls.
  */
 function toContents(messages: readonly GeminiMessage[]): GeminiTurn[] {
   const contents: GeminiTurn[] = [];
@@ -156,7 +159,9 @@ function toContents(messages: readonly GeminiMessage[]): GeminiTurn[] {
       continue;
     }
     if (m.role !== 'assistant') {
-      contents.push({ role: 'user', parts: [{ text: m.content ?? '' }] });
+      const last = contents[contents.length - 1];
+      if (last?.role === 'user' && contents.length > 1) last.parts.push({ text: m.content ?? '' });
+      else contents.push({ role: 'user', parts: [{ text: m.content ?? '' }] });
       continue;
     }
     for (const call of m.tool_calls ?? []) names.set(call.id, call.function.name);
@@ -244,6 +249,15 @@ class GeminiResearchChat extends BudgetedChat<GeminiMessage> {
     return turns;
   }
 
+  /**
+   * A model turn goes back as it streamed — the thoughts kept for their
+   * signatures, and the signatures — so that, not its text and calls, is
+   * what it adds to a prompt.
+   */
+  protected messageSize(m: GeminiMessage): number {
+    return m.turn ? messageChars({ role: m.role }) + JSON.stringify(m.turn.parts).length : messageChars(m);
+  }
+
   protected isContextOverflow(err: unknown): boolean {
     return isContextOverflow(err);
   }
@@ -254,7 +268,7 @@ class GeminiResearchChat extends BudgetedChat<GeminiMessage> {
 
   protected async callApi(input: CallInput<GeminiMessage>, model: string, maxOutputTokens: number, signal?: AbortSignal): Promise<ResearchTurn> {
     const contents = toContents([...this.history.view(), ...input.messages]);
-    const sentChars = this.history.chars + this.toolsChars + input.messages.reduce((n, m) => n + messageChars(m), 0);
+    const sentChars = this.history.chars + this.toolsChars + this.history.charsOf(input.messages);
     // The SDK's request options carry the signal onto the HTTP call, which is
     // the only way a Stop (or a reset) ends a stream already under way.
     const result = await this.opts.client(model).generateContentStream({

@@ -138,11 +138,12 @@ export class TokenGauge {
   }
 
   /**
-   * The same, without the margin: what refusing a call outright is judged on.
-   * Undefined until some call was measured — a guess alone never refuses one.
+   * The model's own measurement, without the margin: what refusing a call
+   * outright is judged on. Undefined until a call of this model was measured
+   * or refused — a guess, or another tokenizer's ratio, never refuses one.
    */
   plainCharsPerToken(model: string): number | undefined {
-    return this.measured.get(model) ?? this.last;
+    return this.measured.get(model);
   }
 
   /**
@@ -152,7 +153,8 @@ export class TokenGauge {
    */
   refused(model: string, chars: number, tokens: number): void {
     if (chars <= 0 || tokens <= 0) return;
-    const bound = chars / tokens;
+    // Past what any tokenizer gives, the bound says nothing: taken as it is, a model never measured would be estimated as sparse as that.
+    const bound = Math.min(chars / tokens, CONTEXT_BUDGET.maxCharsPerToken);
     const own = this.measured.get(model);
     if (own === undefined || bound < own) this.measured.set(model, bound);
   }

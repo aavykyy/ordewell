@@ -9,7 +9,7 @@ import { enableRunner } from './commands/enabledRunners';
 import { handleSlashCommand, type SlashDeps } from './commands/SlashParser';
 import { confirmRisks } from './commands/runSettings';
 import { handleApprovePlan, handleSessionMessage, handleStartPlanning, type PlanManagerDeps } from './plan/PlanManager';
-import { routeWebviewMessage, type WebviewRouterDeps } from './plan/webviewRouter';
+import { routeWebviewMessage, sendNextHeldPrompt, type WebviewRouterDeps } from './plan/webviewRouter';
 import { saveCurrentSession, restoreState, persistState, type PersistenceDeps } from './state/StatePersistence';
 import { ModelDiscovery, sendModelConfig } from './ModelDiscovery';
 import { PlannerSelection } from './PlannerSelection';
@@ -235,6 +235,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     handleStartPlanning: (text) => handleStartPlanning(text, managerDeps, state.pendingRunners),
     sendRunnerAndModels: () => discovery.refresh(),
     runApiKeyWizard: (provider) => discovery.runApiKeyWizard(provider),
+    sendNextHeldPrompt: () => sendNextHeldPrompt(routerDeps),
   };
 
   const routerDeps: WebviewRouterDeps = {

@@ -406,6 +406,56 @@ describe('an API planner turn that fills the window by itself', () => {
   });
 });
 
+describe('a turn whose condensed rounds made many calls that changed something', () => {
+  beforeEach(() => { createSpy.mockReset(); });
+
+  /** Long enough that each listed call is a long line of the note. */
+  const FLAGS = Array.from({ length: 20 }, (_, i) => `--define=FEATURE_${i}=on`).join(' ');
+
+  /** One reply asking for `n` commands at once. */
+  const callsCommands = (round: number, n: number) => () => [{
+    choices: [{
+      delta: { tool_calls: Array.from({ length: n }, (_, i) => ({ index: i, id: `bash_${round}_${i}`, function: { name: 'bash', arguments: JSON.stringify({ command: `make step${round} part${i} ${FLAGS}` }) } })) },
+      finish_reason: 'tool_calls',
+    }],
+  }];
+
+  it('holds the call it condensed for on a model nothing has measured when its estimate still says it cannot fit, rather than sending it to be refused', async () => {
+    const rounds = 10;
+    const perRound = 8;
+    const provider = new FakeProvider([
+      says('Hi.'),
+      ...Array.from({ length: rounds }, (_, r) => callsCommands(r, perRound)),
+      says('All steps done.'),
+    ]);
+    const bash = vi.fn(async (_command: string) => out(1_500, 's'));
+    const { session, catalog, config } = plannerSession(provider, fakeFileSystem({ bash }));
+    await session.continueConversation('hello');
+    const window = provider.requests.at(-1)!.promptTokens * 2;
+    catalog.windows['vendor/model'] = 1_000_000;
+    catalog.windows['vendor/small'] = window;
+    provider.windows['vendor/small'] = window;
+    catalog.maxOutput = 4_096;
+    const switchAt = provider.requests.length + 6;
+    createSpy.mockImplementation((req: SentRequest) => {
+      // The user picks a smaller model, never called yet, six rounds into the turn.
+      if (provider.requests.length === switchAt) (config as { orchestratorModel: string }).orchestratorModel = 'vendor/small';
+      return provider.create(req);
+    });
+    await session.continueConversation('run all the steps');
+
+    expect(provider.refusals).toBe(0);
+    for (const req of provider.requests.filter((r) => r.model === 'vendor/small')) expect(req.promptTokens + req.max_tokens).toBeLessThanOrEqual(window);
+    const pause = session.planState!.plannerContextPause!;
+    expect(pause.reason).toMatch(/even after pruning older file reads and condensing the conversation/);
+    // Every command ran once, and the pause lists what ran for a recovery to carry.
+    const commands = bash.mock.calls.map(([command]) => command);
+    expect(new Set(commands).size).toBe(commands.length);
+    expect(pause.done!.length).toBeGreaterThan(0);
+    expect(pause.done!.every((line) => line.startsWith('- bash('))).toBe(true);
+  });
+});
+
 describe('a summary that cannot stand in for what it condensed', () => {
   beforeEach(() => { createSpy.mockReset(); });
 
@@ -474,6 +524,27 @@ describe('a planner turn stopped while its context is condensed', () => {
   });
 });
 
+describe('a planner turn abandoned while its context is condensed', () => {
+  beforeEach(() => { createSpy.mockReset(); });
+
+  it('ends the compaction it announced, before the turn\'s end, so no surface joining later is told it still runs', async () => {
+    const during: { summary?: () => void } = {};
+    const provider = new FakeProvider(twoBuilds(), [() => { during.summary?.(); return says(tagged(SUMMARY))(); }]);
+    const { session, events } = await afterOneBuild(provider);
+    // A new plan is adopted while the summary is being written: the turn is let go, its stream muted.
+    during.summary = () => session.loadPlan({ ...createEmptyPlan(), conversationHistory: [] }, 'another goal', testWorkspace, { persist: false });
+
+    await session.continueConversation('run the tests').catch(() => {});
+
+    const turnId = events.flatMap((m) => (m.type === 'planner_turn_started' ? [m.turnId] : [])).at(-1);
+    const told = events.flatMap((m) => (m.type === 'planner_compaction' && m.turnId === turnId ? [m.compaction.phase === 'ended' ? m.compaction.outcome : 'started']
+      : m.type === 'planner_turn_ended' && m.turnId === turnId ? ['turn ended'] : []));
+    expect(told).toEqual(['started', 'stopped', 'turn ended']);
+    expect(session.plannerCompaction()).toBeUndefined();
+    expect(history(session).some((m) => m.kind === 'compaction')).toBe(false);
+  });
+});
+
 describe('the summary of a context too long for one summary call', () => {
   beforeEach(() => { createSpy.mockReset(); });
 
@@ -520,6 +591,8 @@ describe('the summary of a context too long for one summary call', () => {
     // The window is smaller than the planner's own instructions: no summary of the conversation could make room.
     expect(session.planState!.plannerContextPause!.reason).toMatch(/^vendor\/small's window is too small for the planner's own instructions and tools/);
     expect(provider.summaries).toHaveLength(0);
+    // vendor/small was never measured, so another model's ratio could not hold the call: the provider's refusal of it measured the model.
+    expect(provider.refusals).toBe(1);
     expect(history(session).some((m) => m.kind === 'compaction')).toBe(false);
     expect(compactions().at(-1)).toMatchObject({ phase: 'ended', outcome: 'paused' });
   });

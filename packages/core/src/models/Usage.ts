@@ -218,6 +218,13 @@ export function isMeasured(totals: UsageTotals): boolean {
 export interface ContextFill {
   usedTokens: number;
   windowTokens?: number;
+  /**
+   * Why an API planner's automatic compaction (ADR-0002) is not running for
+   * its model, as it stood when the meter was sent: the settings file turns it
+   * off, or no catalog states the model's window. Absent while it runs, and on
+   * a harness planner, whose agent compacts its own context.
+   */
+  autoCompaction?: { off: 'settings' } | { off: 'unknown_window'; model: string };
 }
 
 /** What the usage line draws of a ledger — live from its broadcast, or reloaded from the saved one. */
@@ -409,19 +416,25 @@ export function formatCost(currency: string, amount: number): string {
   return currency.toLowerCase() === 'usd' ? `$${value}` : `${value} ${currency.toUpperCase()}`;
 }
 
-/** `ctx 61k (6%)`, `ctx 61k` while the window is unknown, nothing before a call was measured. */
+/** `ctx 61k (6%)`, `ctx 61k` while the window is unknown, nothing before a call was measured; `· no auto-compact` when automatic compaction is not running. */
 export function contextMeterText(fill: ContextFill | undefined): string | null {
   if (!fill) return null;
   const used = `ctx ${formatTokenCount(fill.usedTokens)}`;
-  if (!fill.windowTokens) return used;
-  const share = fill.usedTokens / fill.windowTokens * 100;
-  return `${used} (${share < 1 ? '<1' : Math.round(share)}%)`;
+  const share = fill.windowTokens ? fill.usedTokens / fill.windowTokens * 100 : undefined;
+  const meter = share === undefined ? used : `${used} (${share < 1 ? '<1' : Math.round(share)}%)`;
+  return fill.autoCompaction ? `${meter} · no auto-compact` : meter;
 }
 
-/** Exact counts for the meter's hover. */
+/** Exact counts for the meter's hover, and why automatic compaction is not running, where it is not. */
 export function contextMeterTitle(fill: ContextFill): string {
   const used = fill.usedTokens.toLocaleString('en-US');
-  return fill.windowTokens ? `${used} of ${fill.windowTokens.toLocaleString('en-US')} tokens` : `${used} tokens`;
+  const counts = fill.windowTokens ? `${used} of ${fill.windowTokens.toLocaleString('en-US')} tokens` : `${used} tokens`;
+  const off = fill.autoCompaction;
+  if (!off) return counts;
+  const why = off.off === 'settings'
+    ? 'Automatic compaction is off in the settings file'
+    : `Automatic compaction is off: no catalog Ordewell holds states ${off.model}'s window`;
+  return `${counts}. ${why}; /compact still condenses the conversation.`;
 }
 
 /** USD first, then the others by code, so a sum reads the same whichever attempt reported first. */

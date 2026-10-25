@@ -446,6 +446,28 @@ describe('the model turns a Gemini planner sends back', () => {
   });
 });
 
+describe('a thinking Gemini model\'s turns, sent back with their signatures', () => {
+  /** A call that reasoned first: its thought and the signature it rides on go back with the turn, as long as they are. */
+  const thinksThenReads = (i: number): Reply => () => [
+    { candidates: [{ content: { role: 'model', parts: [{ text: `Weighing f${i}.ts: ${'t'.repeat(3_000)}`, thought: true, thoughtSignature: 's'.repeat(6_000) }] } }] },
+    { candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'read_file', args: { path: `f${i}.ts` } }, thoughtSignature: 'g'.repeat(6_000) }] }, finishReason: 'STOP' }] },
+  ];
+
+  it('count toward the prompt they are sent in, so a call that cannot fit is held rather than refused', async () => {
+    const limit = 60_000;
+    const provider = serve({ 'small-model': limit }, [...Array.from({ length: 30 }, (_, i) => thinksThenReads(i)), says('All read.')]);
+    const svc = service(config({ orchestratorModel: 'gemini:small-model' }), { 'small-model': { contextWindow: limit, maxOutputTokens: 8_192 } });
+
+    // Reads too small to prune: only the turns' own reasoning fills the limit.
+    await expect(start(svc, fakeFileSystem({ readFile: async () => file(1_000) }))).rejects.toBeInstanceOf(PlannerContextExhaustedError);
+
+    expect(provider.refusals).toBe(0);
+    for (const req of provider.requests) expect(req.promptTokens).toBeLessThanOrEqual(limit);
+    // Each turn went back whole, signatures and all.
+    expect(provider.requests.at(-1)!.contents.filter((c) => c.parts.some((p) => p.thoughtSignature === 's'.repeat(6_000))).length).toBeGreaterThan(1);
+  });
+});
+
 describe('a session\'s Gemini planner', () => {
   it('budgets on the input and output limits the session\'s catalogs hold for the model', async () => {
     const provider = serve({}, [callsTools(['read_file', { path: 'a.ts' }]), says('Read.'), callsTools(['read_file', { path: 'b.ts' }]), says('Read.'), says('Noted.')]);

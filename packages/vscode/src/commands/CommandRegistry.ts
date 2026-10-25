@@ -37,6 +37,8 @@ export interface CommandDeps {
   runApiKeyWizard: (preselected?: ApiProvider) => Promise<void>;
   persistState: () => void;
   saveCurrentSession: () => void;
+  /** Release the oldest prompt held while the planner was busy, once it no longer is. */
+  sendNextHeldPrompt: () => void;
   log: (msg: string) => void;
 }
 
@@ -362,7 +364,8 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.forkConversation', () => forkConversation(deps)),
     vscode.commands.registerCommand('ordewell.rewindConversation', (arg?: string) => rewindConversation(deps, arg)),
-    vscode.commands.registerCommand('ordewell.compactConversation', () => compactConversation(deps)),
+    // A compaction is a planner turn, and prompts typed while it ran were held behind it.
+    vscode.commands.registerCommand('ordewell.compactConversation', () => compactConversation(deps).finally(() => deps.sendNextHeldPrompt())),
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.clearPlan', async () => {

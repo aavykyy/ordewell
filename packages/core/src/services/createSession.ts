@@ -360,7 +360,7 @@ export function createSession(deps: SessionDeps): Session {
     taskLog: { attempts: (taskId) => session.taskLogAttempts(taskId), events: (taskId, attempt) => session.taskLog(taskId, attempt), patch: (taskId, attempt) => readTaskPatch(session.taskLogLocation, taskId, attempt) },
     sessionHeld: () => session.heldElsewhere(),
   });
-  const usage = new PlannerUsageLedger(windows);
+  const usage = new PlannerUsageLedger(windows, () => aiService().plannerContextStatus?.());
   const events = new SessionEventRelay({
     broadcast: deps.broadcast, onNotice: deps.onNotice, store, orchestrator, runs: orchestrator.runs, usage,
     awaitingApproval: (taskId) => runnerApprovals.waiting(taskId),

@@ -82,8 +82,11 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
     case 'sendHeldPromptNow':
       await sendHeldPromptNow(msg.index, deps);
       return;
+    // A Retry compaction is a planner turn the chat did not send, so nothing
+    // else releases what was typed while it ran.
     case 'sendSystemCommand':
       await handleSystemCommand(msg.command, msg.taskId ?? '', deps, msg.requestId);
+      sendNextHeldPrompt(deps);
       return;
     case 'editTask':
       await handleTaskEdit(msg.taskId, msg.edit, deps);
@@ -220,9 +223,12 @@ async function sendHeldPromptNow(index: number, deps: WebviewRouterDeps): Promis
  * The turn is over once its handler has returned — its abort cleared, its
  * plan applied — so the oldest queued prompt goes now. A handler that returns
  * mid-turn (a slash command) sends nothing: the turn still generating drains
- * the queue when it ends.
+ * the queue when it ends. The one place a held prompt is released, whoever ran
+ * the turn: the Command Palette's compaction calls it too. Released twice for
+ * one turn, as `/compact` is, the second finds the planner busy with the
+ * first prompt's turn and sends nothing.
  */
-function sendNextHeldPrompt(deps: WebviewRouterDeps): void {
+export function sendNextHeldPrompt(deps: WebviewRouterDeps): void {
   if (deps.isGeneratingPlan()) return;
   const next = deps.chatProvider.conversation.nextPrompt();
   if (next !== undefined) sendChat(next, true, undefined, deps).catch((err: unknown) => reportFailure('sendMessage', err, deps));

@@ -7,6 +7,7 @@ import {
 } from '../models/Usage';
 import type { SessionMessage } from './SessionMessage';
 import { ContextWindowFill, SessionWindows } from './ContextWindowFill';
+import type { PlannerContextStatus } from './plannerContextBudget';
 
 /** The `planner_usage` member of the session broadcast union. */
 export type PlannerUsageMessage = Extract<SessionMessage, { type: 'planner_usage' }>;
@@ -24,8 +25,15 @@ export class PlannerUsageLedger {
   private usage: PlannerUsage = { totals: {} };
   private windows: ContextWindowFill;
 
-  /** `sessionWindows` serves the window of a planner model whose backend reports none. */
-  constructor(private readonly sessionWindows: SessionWindows = new SessionWindows()) {
+  /**
+   * `sessionWindows` serves the window of a planner model whose backend
+   * reports none; `contextStatus`, what an API planner's automatic compaction
+   * does for its model now — undefined on a harness planner.
+   */
+  constructor(
+    private readonly sessionWindows: SessionWindows = new SessionWindows(),
+    private readonly contextStatus: () => PlannerContextStatus | undefined = () => undefined,
+  ) {
     this.windows = new ContextWindowFill(sessionWindows);
   }
 
@@ -59,6 +67,12 @@ export class PlannerUsageLedger {
 
   /** The broadcast message for the totals as they stand now. */
   message(turnId?: string): PlannerUsageMessage {
-    return { type: 'planner_usage', ...(turnId ? { turnId } : {}), ...usageLine(this.usage) };
+    const line = usageLine(this.usage);
+    const status = line.contextFill ? this.contextStatus() : undefined;
+    // Said beside the meter, the one place every surface already shows the planner's context: no setting to read, nothing that pops up.
+    const off = status?.auto === 'off' ? { off: 'settings' as const }
+      : status?.auto === 'unknown_window' ? { off: 'unknown_window' as const, model: status.model } : undefined;
+    const contextFill = line.contextFill && off ? { ...line.contextFill, autoCompaction: off } : line.contextFill;
+    return { type: 'planner_usage', ...(turnId ? { turnId } : {}), ...line, ...(contextFill ? { contextFill } : {}) };
   }
 }

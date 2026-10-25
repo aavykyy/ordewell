@@ -15,9 +15,11 @@ export type RunStatus = 'idle' | 'starting' | 'executing';
  * over until the daemon says so. `compacting` is a compaction this surface did
  * not ask for — the planner's own, another surface's, or one already running
  * when the session was adopted: it has no call here to settle it, so the
- * compaction's end event does (ADR-0017).
+ * compaction's end event does (ADR-0017). `joined` is a turn the daemon was
+ * running when the session was adopted: no call here will return its plan, so
+ * the turn's own end on the stream settles it.
  */
-export type PlannerStatus = 'idle' | 'planning' | 'condensing' | 'compacting' | 'awaiting';
+export type PlannerStatus = 'idle' | 'planning' | 'condensing' | 'compacting' | 'awaiting' | 'joined';
 
 export interface TaskView {
   /** An attempt of it has started: its chat exists from then on. Absent on a task never run. */
