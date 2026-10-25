@@ -459,6 +459,20 @@ describe('ApiClient — adopting a saved session', () => {
     expect((await new ApiClient(server.port).adoptSession('s1')).plannerTurnId).toBe('t1');
   });
 
+  it('hands on the planner compaction the session is running, which no turn names', async () => {
+    const started = { type: 'planner_compaction', compaction: { phase: 'started', id: 'c1', origin: 'ordewell', trigger: 'auto', at: '2026-01-02T00:00:00.000Z' } };
+    const server = await startCustomServer((_req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ ok: true, plan: {}, goal: '', plannerCompaction: started }));
+    });
+    servers.push(server);
+
+    const adopted = await new ApiClient(server.port).adoptSession('s1');
+
+    expect(adopted.plannerCompaction).toEqual(started);
+    expect(adopted).not.toHaveProperty('plannerTurnId');
+  });
+
   it('omits the workspace when none is given', async () => {
     let url = '';
     const server = await startCustomServer((req, res) => {

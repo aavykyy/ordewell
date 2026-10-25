@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
-import { DAEMON_SUBPROTOCOL, type RunSnapshotFrame } from '@ordewell/core';
+import { DAEMON_SUBPROTOCOL, type RunSnapshotFrame, type SessionFrame } from '@ordewell/core';
 import { OrchestratorPool } from '../pool/orchestratorPool';
 
 export function createWsHandler(pool: OrchestratorPool) {
@@ -34,6 +34,12 @@ export function createWsHandler(pool: OrchestratorPool) {
         type: 'run_snapshot', sessionId, view, approvals: pool.announcedApprovals(sessionId), ...pool.streamPosition(sessionId),
       } satisfies RunSnapshotFrame));
     }
+    // A compaction has no turn id to adopt, so a client joining mid-way would
+    // not know the planner is busy. Unstamped: the client's fold is idempotent
+    // by the compaction's id, and a stamp would let it count this as the
+    // broadcast it already holds.
+    const compaction = pool.plannerCompaction(sessionId);
+    if (compaction) ws.send(JSON.stringify(compaction satisfies SessionFrame));
     pool.subscribe(sessionId, ws);
   });
 

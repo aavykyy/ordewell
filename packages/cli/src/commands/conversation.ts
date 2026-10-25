@@ -43,9 +43,10 @@ export async function handleFork(subArgs: string[], injectedApi?: ApiClient): Pr
 }
 
 /**
- * Condense the conversation into a summary, keeping the last two exchanges. The
- * summary is printed because the user should see what the planner will carry
- * forward, not take it on trust.
+ * Condense what the planner is sent into a summary plus the last two exchanges.
+ * The session keeps the whole conversation (ADR-0002); the summary is printed
+ * because the user should see what the planner will carry forward, not take it
+ * on trust.
  */
 export async function handleCompact(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   const { api, sessionId } = await adopted(subArgs, injectedApi);
@@ -55,7 +56,7 @@ export async function handleCompact(subArgs: string[], injectedApi?: ApiClient):
   } catch (err) {
     fail(`Failed to condense: ${headlessPlannerRefusal(err) ?? (err as Error).message}`, ...[lostReplyHint(err, sessionId)].filter((hint) => hint !== null));
   }
-  console.log(`Condensed ${sessionId}. The last two exchanges were kept as they were; the tasks are unchanged.\n`);
+  console.log(`Condensed ${sessionId}. The planner now works from this summary and the last two exchanges; the full conversation stays in the session and the tasks are unchanged.\n`);
   console.log(result.summary);
 }
 

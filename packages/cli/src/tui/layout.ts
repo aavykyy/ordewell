@@ -374,7 +374,7 @@ export function chatActivity(state: TuiState): ChatActivity | null {
   if (!tv) {
     if (state.status === 'starting') return { label: 'Starting the plan…', busy: true };
     if (!plannerInFlight(state)) return null;
-    const label = state.planner === 'condensing' ? 'Condensing…' : state.planner === 'awaiting' ? 'Waiting for the planner…' : 'Planning…';
+    const label = state.planner === 'condensing' ? 'Condensing…' : state.planner === 'compacting' ? 'Compacting…' : state.planner === 'awaiting' ? 'Waiting for the planner…' : 'Planning…';
     return { label, busy: true };
   }
   const own = findTask(state.tasks, tv.taskId);

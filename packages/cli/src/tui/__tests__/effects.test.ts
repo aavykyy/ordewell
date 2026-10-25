@@ -2,10 +2,11 @@ import { describe, it, expect, vi, type Mock, type Mocked } from 'vitest';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action } from '../reducer';
 import type { Effect } from '../reducer';
-import type { SessionMessage } from '@ordewell/core';
+import { fromTranscript, type SessionMessage } from '@ordewell/core';
 import { DaemonError } from '../../apiClient';
 import type { TuiState } from '../state';
 import { chatOf, messagesOf } from './chat';
+import { emptyEditor } from '../editor';
 
 function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {}) {
   const actions: Action[] = [];
@@ -1204,6 +1205,22 @@ describe('catalogs and sessions', () => {
     expect(h.api.adoptSession).toHaveBeenCalledWith('s9', '/ws');
   });
 
+  // The daemon says the planner is compacting; the transcript the chat is
+  // drawn from cannot, so the load ends with the compaction folded in and the
+  // planner busy until its end arrives.
+  it('loading a session that is mid-compaction shows it running and holds the planner until its end', async () => {
+    const started = { type: 'planner_compaction', compaction: { phase: 'started', id: 'c1', origin: 'ordewell', trigger: 'auto', at: '2026-01-02T00:00:00.000Z' } } as const;
+    const h = harness({ adoptSession: vi.fn().mockResolvedValue({ plan: { tasks: [] }, goal: 'g', plannerCompaction: started }) });
+    await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
+
+    let state = h.actions.reduce((s, a) => reduce(s, a).state, initialState({ sessionId: 's9' }));
+    expect(state.planner).toBe('compacting');
+    expect(state.conversation.blocks.filter((b) => b.type === 'compaction')).toEqual([expect.objectContaining({ compactionId: 'c1', status: 'running' })]);
+
+    state = reduce(state, { type: 'sessionMessage', sessionId: 's9', message: { ...started, compaction: { phase: 'ended', id: 'c1', origin: 'ordewell', trigger: 'auto', outcome: 'condensed', at: '2026-01-02T00:00:05.000Z' } } }).state;
+    expect(state.planner).toBe('idle');
+  });
+
   it('loading a session restores its plan and goal', async () => {
     const h = harness();
     await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
@@ -1728,94 +1745,200 @@ describe('conversation fork and rewind effects', () => {
 });
 
 describe('conversation compact effect', () => {
-  const condensed = [
-    { role: 'assistant' as const, content: 'Conversation condensed: …', timestamp: '2026-01-02T00:00:00Z', kind: 'compaction' as const },
-    { role: 'user' as const, content: 'add CSV', timestamp: '2026-01-02T00:00:01Z' },
+  const checkpoint = { id: 'c1', keptFrom: 2, trigger: 'manual' as const };
+  const before = [
+    { role: 'user' as const, content: 'build me a parser', timestamp: '2026-01-02T00:00:00.000Z' },
+    { role: 'assistant' as const, content: 'Which formats?', timestamp: '2026-01-02T00:00:01.000Z' },
+    { role: 'user' as const, content: 'add CSV', timestamp: '2026-01-02T00:00:02.000Z' },
+    { role: 'assistant' as const, content: 'CSV it is.', timestamp: '2026-01-02T00:00:03.000Z' },
   ];
+  const summary = { role: 'assistant' as const, content: 'Conversation condensed: the state', timestamp: '2026-01-02T00:00:04.000Z', kind: 'compaction' as const, checkpoint };
+  const plan = { tasks: [{ id: 't1' }], conversationHistory: [...before, summary] };
+  const startedAt = '2026-01-02T00:00:03.500Z';
+  const started = (id = 'c1') => ({ type: 'planner_compaction', compaction: { phase: 'started', id, origin: 'ordewell', trigger: 'manual', at: startedAt } });
+  const ended = (outcome: string, id = 'c1') => ({ type: 'planner_compaction', compaction: { phase: 'ended', id, origin: 'ordewell', trigger: 'manual', outcome, at: '2026-01-02T00:00:04.000Z' } });
+  const generated = { type: 'plan_generated', plan, goal: 'g', runners: [] };
 
-  it('condenses, then redraws the transcript and plan from what the daemon kept', async () => {
-    const plan = { tasks: [{ id: 't1' }], conversationHistory: condensed };
-    const h = harness({ compactConversation: vi.fn().mockResolvedValue({ plan, summary: 'the state', keptMessages: 4 }) });
+  /** The TUI as /compact finds it: a session read back, scrolled up, with half a thought in the box. */
+  const session = (over: Partial<TuiState> = {}): TuiState => initialState({
+    sessionId: 'session-1',
+    planner: 'condensing',
+    conversation: fromTranscript(before, []),
+    scroll: 7,
+    editor: { ...emptyEditor(), text: 'half a thought', cursor: 14 },
+    ...over,
+  });
+
+  /** A harness whose planning and standing-follow sockets the test drives from inside the REST call. */
+  function sockets(call: (emit: (e: unknown) => void, both: (e: unknown) => void) => Promise<unknown>) {
+    let planning: (e: unknown) => void = () => {};
+    let standing: (e: unknown) => void = () => {};
+    const h = harness({
+      streamPlanning: vi.fn().mockImplementation((_id: string, cb: (e: unknown) => void) => {
+        planning = cb;
+        return { close: vi.fn() };
+      }),
+      followSession: vi.fn().mockImplementation((_id: string, cb: (e: unknown) => void) => {
+        standing = cb;
+        return { ready: Promise.resolve(true), ended: new Promise(() => {}), close: vi.fn() };
+      }),
+      compactConversation: vi.fn().mockImplementation(() => call((e) => planning(e), (e) => { planning(e); standing(e); })),
+    });
+    return { h, planning: (e: unknown) => planning(e), standing: (e: unknown) => standing(e) };
+  }
+
+  const play = (from: TuiState, actions: Action[]): TuiState => actions.reduce((state, action) => reduce(state, action).state, from);
+  const compactionsOf = (state: TuiState) => state.conversation.blocks.filter((b) => b.type === 'compaction');
+
+  it('folds the condensed block in where it happened: nothing is redrawn, so scroll, draft and earlier blocks stay', async () => {
+    const { h } = sockets(async (emit) => {
+      emit(started());
+      emit(generated);
+      emit(ended('condensed'));
+      return { plan, summary: 'the state', keptMessages: 4 };
+    });
+    const start = session();
+
+    await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
+    const state = play(start, h.actions);
+
+    expect(h.api.compactConversation).toHaveBeenCalledWith('session-1');
+    expect(types(h.actions)).not.toContain('chatRestored');
+    expect(state.conversation.blocks.slice(0, 4)).toEqual(start.conversation.blocks);
+    expect(compactionsOf(state)).toEqual([expect.objectContaining({ compactionId: 'c1', status: 'condensed', summary: 'Conversation condensed: the state', origin: 'ordewell', trigger: 'manual' })]);
+    // Held in place: a redraw would have reset it to the tail (0).
+    expect(state.scroll).toBeGreaterThanOrEqual(7);
+    expect(state.editor.text).toBe('half a thought');
+    expect(state.planner).toBe('idle');
+  });
+
+  it('shows the compaction running while the planner works, then settles it', async () => {
+    let midway: Action[] = [];
+    const { h } = sockets(async (emit) => {
+      emit(started());
+      midway = [...h.actions];
+      emit(generated);
+      emit(ended('condensed'));
+      return { plan, summary: 'the state', keptMessages: 4 };
+    });
+    const start = session();
 
     await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
 
-    expect(h.api.compactConversation).toHaveBeenCalledWith('session-1');
-    expect(h.actions).toEqual([
-      { type: 'chatRestored', history: condensed, sessionId: 'session-1' },
-      { type: 'planUpdated', plan, sessionId: 'session-1' },
+    expect(compactionsOf(play(start, midway))).toEqual([expect.objectContaining({ compactionId: 'c1', status: 'running' })]);
+    expect(play(start, midway).planner).toBe('condensing');
+  });
+
+  it('draws the one block when the daemon answered but both frames were lost', async () => {
+    const { h } = sockets(async () => ({ plan, summary: 'the state', keptMessages: 4 }));
+    const start = session();
+
+    await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
+    const state = play(start, h.actions);
+
+    expect(compactionsOf(state)).toEqual([expect.objectContaining({ compactionId: 'c1', status: 'condensed', summary: 'Conversation condensed: the state' })]);
+    expect(state.scroll).toBeGreaterThanOrEqual(7);
+    expect(state.planner).toBe('idle');
+  });
+
+  it('draws one block however many subscriptions carry the frames, and ignores a late repeat', async () => {
+    let stamp = 0;
+    const stamped = (e: object) => ({ ...e, stream: 'daemon', seq: ++stamp });
+    const lateEnd = stamped(ended('condensed'));
+    const { h, standing } = sockets(async (_emit, both) => {
+      both(stamped(started()));
+      both(stamped(generated));
+      both(lateEnd);
+      return { plan, summary: 'the state', keptMessages: 4 };
+    });
+    const start = session();
+
+    await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
+    standing(lateEnd);
+    standing(ended('failed'));
+    const state = play(start, h.actions);
+
+    expect(compactionsOf(state)).toEqual([expect.objectContaining({ status: 'condensed' })]);
+  });
+
+  it('keeps every checkpoint as its own block', async () => {
+    const second = { ...summary, content: 'Conversation condensed: later', timestamp: '2026-01-02T00:00:09.000Z', checkpoint: { id: 'c2', keptFrom: 4, trigger: 'manual' as const } };
+    const later = { tasks: [], conversationHistory: [...before, summary, { role: 'user' as const, content: 'and JSON', timestamp: '2026-01-02T00:00:05.000Z' }, { role: 'assistant' as const, content: 'JSON too.', timestamp: '2026-01-02T00:00:06.000Z' }, second] };
+    const { h } = sockets(async (emit) => {
+      emit(started('c2'));
+      emit({ ...generated, plan: later });
+      emit(ended('condensed', 'c2'));
+      return { plan: later, summary: 'later', keptMessages: 2 };
+    });
+    // The first compaction is already on screen, as a session that lived through it has it.
+    const start = session({ conversation: fromTranscript([...before, summary], []) });
+
+    await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
+    const state = play(start, h.actions);
+
+    expect(compactionsOf(state).map((b) => [b.compactionId, b.summary])).toEqual([
+      ['c1', 'Conversation condensed: the state'],
+      ['c2', 'Conversation condensed: later'],
     ]);
   });
 
-  it('reports a refusal, and a busy planner goes back to idle', async () => {
+  it('reports a refusal, and the planner goes back to idle with nothing drawn', async () => {
     const h = harness({ compactConversation: vi.fn().mockRejectedValue(new DaemonError('The conversation is too short to condense.', 400)) });
-    let state: TuiState = initialState({ sessionId: 'session-1', planner: 'condensing' });
+    const start = session();
 
     await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
-    for (const action of h.actions) state = reduce(state, action).state;
+    const state = play(start, h.actions);
 
     expect(types(h.actions)).toEqual(['failed']);
     expect(messageOf(h.actions, 'failed')).toMatch(/too short/);
     expect(state.planner).toBe('idle');
+    expect(compactionsOf(state)).toEqual([]);
+    expect(state.editor.text).toBe('half a thought');
+  });
+
+  it('ends the running block as failed when the call fails and the daemon\'s end frame never came', async () => {
+    const { h } = sockets(async (emit) => {
+      emit(started());
+      throw new DaemonError('rate limited', 500);
+    });
+    const start = session();
+
+    await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
+    const state = play(start, h.actions);
+
+    expect(compactionsOf(state)).toEqual([expect.objectContaining({ compactionId: 'c1', status: 'failed' })]);
     expect(state.planner).toBe('idle');
   });
 
-  it('keeps the daemon\'s late copy of the summary from landing as a spoken turn too', async () => {
-    const plan = { tasks: [], conversationHistory: condensed };
-    let onExecution: (event: unknown) => void = () => {};
-    let finishExecution: () => void = () => {};
-    const h = harness({
-      compactConversation: vi.fn().mockResolvedValue({ plan, summary: 'the state', keptMessages: 4 }),
-      streamExecution: vi.fn().mockImplementation((_id: string, cb: (event: unknown) => void, onReady?: (error?: Error) => void) => {
-        onExecution = cb;
-        onReady?.();
-        return new Promise<void>((resolve) => { finishExecution = resolve; });
-      }),
+  it('ends the running block as stopped when the user stopped it', async () => {
+    const { h } = sockets(async (emit) => {
+      emit(started());
+      throw new DaemonError('The planner turn was stopped.', 409, 'planner_turn_stopped');
     });
+    const start = session({ stopRequested: true });
 
-    // A run is executing, so the session socket is live while the compaction
-    // runs — and the daemon broadcasts the summary on it before answering.
-    const running = runEffect({ type: 'execute', sessionId: 'session-1' }, h.deps);
     await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
-    onExecution({
-      type: 'planner_message', content: 'Conversation condensed: …', timestamp: '2026-01-02T00:00:00Z',
-    });
-    finishExecution();
-    await running;
+    const state = play(start, h.actions);
 
-    let state: TuiState = initialState({ sessionId: 'session-1' });
-    for (const action of h.actions) ({ state } = reduce(state, action));
-    expect(messagesOf(state).filter((m) => m.role === 'planner')).toHaveLength(0);
-    expect(state.conversation.blocks.filter((b) => b.type === 'compaction' && b.summary === 'Conversation condensed: …')).toHaveLength(1);
+    expect(compactionsOf(state)).toEqual([expect.objectContaining({ status: 'stopped' })]);
+    expect(state.planner).toBe('idle');
   });
 
-  it('keeps the late copy of the newest summary out once the transcript holds an earlier one too', async () => {
-    const twice = [
-      { role: 'user' as const, content: 'build me a parser', timestamp: '2026-01-01T00:00:00Z' },
-      { role: 'assistant' as const, content: 'Conversation condensed: first', timestamp: '2026-01-01T00:01:00Z', kind: 'compaction' as const },
-      { role: 'user' as const, content: 'add CSV', timestamp: '2026-01-01T00:02:00Z' },
-      { role: 'assistant' as const, content: 'Conversation condensed: second', timestamp: '2026-01-02T00:00:00Z', kind: 'compaction' as const },
-    ];
-    let onExecution: (event: unknown) => void = () => {};
-    let finishExecution: () => void = () => {};
-    const h = harness({
-      compactConversation: vi.fn().mockResolvedValue({ plan: { tasks: [], conversationHistory: twice }, summary: 'second', keptMessages: 2 }),
-      streamExecution: vi.fn().mockImplementation((_id: string, cb: (event: unknown) => void, onReady?: (error?: Error) => void) => {
-        onExecution = cb;
-        onReady?.();
-        return new Promise<void>((resolve) => { finishExecution = resolve; });
-      }),
+  it('holds a message typed meanwhile and sends it after the compaction, never into it', async () => {
+    const { h } = sockets(async (emit) => {
+      emit(started());
+      emit(generated);
+      emit(ended('condensed'));
+      return { plan, summary: 'the state', keptMessages: 4 };
     });
+    const start = reduce(session(), { type: 'key', key: { name: 'enter' } }).state;
 
-    const running = runEffect({ type: 'execute', sessionId: 'session-1' }, h.deps);
+    expect(start.queuedPrompts).not.toBe(initialState().queuedPrompts);
+    expect(start.editor.text).toBe('');
     await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
-    onExecution({ type: 'planner_message', content: 'Conversation condensed: second', timestamp: '2026-01-02T00:00:00Z' });
-    finishExecution();
-    await running;
+    const settled = reduce(play(start, h.actions.slice(0, -1)), h.actions.at(-1)!);
 
-    let state: TuiState = initialState({ sessionId: 'session-1' });
-    for (const action of h.actions) ({ state } = reduce(state, action));
-    expect(messagesOf(state).filter((m) => m.role === 'planner')).toHaveLength(0);
-    expect(state.conversation.blocks.filter((b) => b.type === 'compaction' && b.summary === 'Conversation condensed: second')).toHaveLength(1);
+    expect(settled.effects).toEqual([{ type: 'sendMessage', sessionId: 'session-1', message: 'half a thought' }]);
   });
 });
 

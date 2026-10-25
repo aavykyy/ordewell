@@ -152,8 +152,20 @@ own presentation; it never re-derives the conversation from raw messages.
   before. A native or pruning compaction is display-only: never written, so it
   never touches what the planner replays. A surface that joins while one runs
   is owed its start, which `Session.plannerCompaction()` holds until its end,
-  as announced approvals are held. The TUI draws the block from the transcript
-  it redraws once `/compact` answers.
+  as announced approvals are held. The daemon hands it on three ways, all the
+  start as announced: beside `plannerTurnId` in the answers to a session's
+  read and adoption, and as the frame after the run snapshot when a socket
+  joins, unstamped so the fold, idempotent by id, never counts it as a
+  broadcast it already holds. The TUI folds the events as the view does, with
+  no redraw: its status is `compacting` for one it did not ask for (its end
+  frees the planner and sends what was typed meanwhile) and `condensing` for
+  its own `/compact`, which the call's answer settles, carrying the plan whose
+  transcript holds the summary should a frame have been lost. A call that
+  fails closes the block it left running. Reconnecting during one, or reading
+  a lost reply back, adopts the running one without a redraw; when the daemon
+  holds none and the transcript has no checkpoint for it, the block goes, since
+  nothing is known to have happened. In the terminal the line is quiet and
+  its summary opens with the detail key (ctrl+o).
 
 ### Queued prompts
 
@@ -254,3 +266,4 @@ the same word.)
 - 2026-10-25 — a script task's log is drawn whole, unfolded; a summary never counts a call that did not run as run and keeps a denied approval; a failed line is coloured; a compaction drops what was open (X1). Found in review: a failing script's output was hidden behind one closed line, and a denied command read `Ran a command`.
 - 2026-10-25 — a denial is counted once, on the call it stopped when that call is in the line, and a script row draws its command once (X1). Found in review: a runner's denied command read `Ran a command (1 failed)` beside its denied approval, and a planner's denial was counted twice.
 - 2026-10-25 — a planner compaction is one quiet block folded in by id where it happened, with its start and end announced, Stop and queued messages as in a turn, and nothing rebuilt (C1). Before it, `/compact` rebuilt the whole VS Code conversation, collapsing what was open, behind a progress notification and a success popup, and a harness planner's own compaction was not shown at all.
+- 2026-10-25 — the daemon carries a running planner compaction in its read, adoption and socket-join answers, and the TUI folds the lifecycle without a redraw, holding the planner and its queue until the end (C1). Before it, `/compact` redrew the TUI conversation and reset its scroll, a surface that joined mid-compaction saw a silent planner, and a lost reply was read back as a lost turn.
