@@ -57,8 +57,11 @@ const git = (cwd: string, ...args: string[]) => {
 describe('a patch saved from a read-only task', async () => {
   const availability = await resolvePlannerSandbox();
   const reason = !availability.available ? availability.notice : !availability.sealed.available ? availability.sealed.notice : undefined;
+  // Named in the title, so a CI log shows which workspace mount the run exercised.
+  const overlayMode = availability.available && availability.sealed.available
+    && (availability.sealed.profile({ workspace: tmpdir() }).throwaway?.length ?? 0) > 0;
   const title = !reason && availability.available
-    ? `sealed on this host (${availability.backend.name})`
+    ? `sealed on this host (${availability.backend.name}, ${overlayMode ? 'throwaway overlay' : 'read-only workspace'})`
     : `${REQUIRE_SANDBOX ? 'required' : 'skipped'}: ${(reason ?? '').split('\n')[0]}`;
 
   describe.skipIf(reason !== undefined && !REQUIRE_SANDBOX)(title, () => {
