@@ -1,4 +1,4 @@
-import type { DisplayBlock, ToolBlock } from '@ordewell/core';
+import type { ApprovalBlock, DisplayBlock, ToolBlock } from '@ordewell/core';
 import { isFileEditTool } from '@ordewell/core/plan-utils';
 
 /*
@@ -163,10 +163,13 @@ interface Tally {
   endings: Partial<Record<Ending, number>>;
 }
 
-function sightings(block: DisplayBlock): Array<{ kind: KindName; ending: Ending; count: number }> {
+function sightings(block: DisplayBlock, deniedCalls: ReadonlySet<string>): Array<{ kind: KindName; ending: Ending; count: number }> {
   switch (block.type) {
-    case 'tool':
-      return [{ kind: toolKind(block), ending: toolEnding(block), count: filesRead(block) }];
+    case 'tool': {
+      // A runner's call its approval denied still settles as a failed result, but it never ran.
+      const ending = block.toolCallId && deniedCalls.has(block.toolCallId) ? 'denied' : toolEnding(block);
+      return [{ kind: toolKind(block), ending, count: filesRead(block) }];
+    }
     case 'subagent':
       return [{ kind: 'agent', ending: block.status === 'done' ? 'ok' : block.status, count: 1 }];
     case 'skill_load':
@@ -194,6 +197,46 @@ function pairSkillLoads(blocks: readonly DisplayBlock[], tallies: Map<KindName, 
   const calls = blocks.filter((b) => b.type === 'tool' && b.status === 'ok' && toolKind(b) === 'skill').length;
   tally.endings.ok = Math.max(notices, calls);
   if (tally.endings.ok === 0) delete tally.endings.ok;
+}
+
+// The calls a planner's request can be about. A runner's request names its call instead.
+const APPROVAL_CALLS: Record<ApprovalBlock['kind'], readonly KindName[]> = {
+  shell_command: ['command'],
+  url_fetch: ['fetch'],
+  web_search: ['web'],
+  external_path: ['read', 'list', 'code'],
+  mcp_tool: ['mcp', 'tool'],
+  mcp_server: ['mcp', 'tool'],
+  runner_tool: [],
+  task_start: [],
+};
+
+/**
+ * A denial is one act, so a denied approval beside the call it stopped is told
+ * on the call alone: a runner's by the call its request names, which settles
+ * as a failed result though it never ran, and a planner's by a call of its
+ * kind that was denied. A denial with no such call beside it stays.
+ */
+function pairDenials(blocks: readonly DisplayBlock[]): { deniedCalls: Set<string>; onCall: Set<DisplayBlock> } {
+  const calls = new Set(blocks.flatMap((b) => (b.type === 'tool' && b.toolCallId ? [b.toolCallId] : [])));
+  const deniedCalls = new Set<string>();
+  const onCall = new Set<DisplayBlock>();
+  const denials = blocks.filter((b): b is ApprovalBlock => b.type === 'approval' && b.status === 'denied');
+  for (const denial of denials) {
+    if (denial.toolCallId && calls.has(denial.toolCallId)) {
+      deniedCalls.add(denial.toolCallId);
+      onCall.add(denial);
+    }
+  }
+  const unclaimed = blocks.filter((b): b is ToolBlock => b.type === 'tool' && toolEnding(b) === 'denied');
+  for (const denial of denials) {
+    if (denial.toolCallId) continue;
+    const i = unclaimed.findIndex((call) => APPROVAL_CALLS[denial.kind].includes(toolKind(call)));
+    if (i < 0) continue;
+    unclaimed.splice(i, 1);
+    onCall.add(denial);
+  }
+  return { deniedCalls, onCall };
 }
 
 const TROUBLE: readonly Ending[] = ['failed', 'denied', 'not run', 'interrupted', 'stopped'];
@@ -247,12 +290,14 @@ export interface ActivitySummary {
  * kind and how it ended, never by what a script inside it may have done, and
  * never as run when it was not; a subagent counts once, its steps not at all;
  * a granted approval is counted only when there is no call beside it to count
- * instead, and a denied one always.
+ * instead, and a denied one only when the call it stopped is not beside it.
  */
 export function activitySummary(blocks: readonly DisplayBlock[]): ActivitySummary {
+  const { deniedCalls, onCall } = pairDenials(blocks);
   const tallies = new Map<KindName, Tally>();
   for (const block of blocks) {
-    for (const { kind, ending, count } of sightings(block)) {
+    if (onCall.has(block)) continue;
+    for (const { kind, ending, count } of sightings(block, deniedCalls)) {
       const tally = tallies.get(kind) ?? { kind, endings: {} };
       tally.endings[ending] = (tally.endings[ending] ?? 0) + count;
       tallies.set(kind, tally);

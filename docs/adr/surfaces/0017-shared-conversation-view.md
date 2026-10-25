@@ -111,14 +111,18 @@ own presentation; it never re-derives the conversation from raw messages.
   `Ran a command (1 more not run)`); an Ordewell tool the same whichever
   planner called it; a subagent once, never its steps; a `load_skill` call
   and its notice once; a granted approval only when no call stands beside it,
-  a denied one always; and work still running as running. A line with a
+  and a denial once: on the call it stopped when that call stands beside it
+  (a runner's call its denied request names reads `1 command denied`, though
+  its result came back failed), and as the approval otherwise; and work still
+  running as running. A line with a
   failure, denial or interruption in it is coloured as one. Opening the line
   draws its rows as the TUI's collapsed previews; each row, each of a
   subagent's steps and each long report opens on its own. A waiting approval,
   an error, other notices, the skills a user's own message loaded and every
   message stay outside any fold. A script task's log folds nothing and opens
   nothing: it is commands, their output and their exits (ADR-0035), with no
-  prose for a fold to keep in view, so each row is drawn whole. What is open
+  prose for a fold to keep in view, so each row is drawn whole, its command
+  once, in its head, with no arguments block repeating it. What is open
   is surface state, keyed on block ids that stay stable for as long as the
   block exists — a run by the ids of the blocks it holds — never stored in
   core, and dropped when the conversation is replaced (a new session, a
@@ -222,3 +226,4 @@ the same word.)
 - 2026-10-19 — the Tasks total names a runner as reporting no cost only once an attempt of it has ended having reported usage (U1). Claude Code states a cost only at a turn's end, so a first Claude Code task read as `claude-code reports no cost` for as long as its turn ran.
 - 2026-10-25 — VS Code folds each run of activity into one summarised line, opened a level at a time, in place of its expand-all button; the TUI keeps ctrl+o (X1). A long turn's rows buried the prose between them, and showing everything was the only way to see one row in full.
 - 2026-10-25 — a script task's log is drawn whole, unfolded; a summary never counts a call that did not run as run and keeps a denied approval; a failed line is coloured; a compaction drops what was open (X1). Found in review: a failing script's output was hidden behind one closed line, and a denied command read `Ran a command`.
+- 2026-10-25 — a denial is counted once, on the call it stopped when that call is in the line, and a script row draws its command once (X1). Found in review: a runner's denied command read `Ran a command (1 failed)` beside its denied approval, and a planner's denial was counted twice.

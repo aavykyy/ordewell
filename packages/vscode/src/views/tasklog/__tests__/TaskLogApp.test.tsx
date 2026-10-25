@@ -565,6 +565,9 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(rows[1]).toHaveTextContent('test 6 failed');
     expect(rows[1]).toHaveTextContent('exited 1 after 3 s');
     expect(rows[2]).toHaveTextContent('linting src/');
+    // Each command once, in its head: no arguments block repeats it.
+    expect(document.querySelector('.conversation .cmd-row-args')).toBeNull();
+    expect(rows[1]).not.toHaveTextContent('"command"');
     // Output only: nothing in it opens or closes.
     expect(document.querySelector('.conversation [aria-expanded]')).toBeNull();
     expect(document.querySelector('.task-log-readonly')?.textContent).toContain('Its output is above.');
@@ -691,6 +694,24 @@ describe('the runner\'s activity, folded (ADR-0017, X1)', () => {
     init({ working: true }, [...turn.blocks]);
     expect(top()).toEqual(['chat-msg', 'Ran a command, fetched a page (1 failed)', 'chat-msg', 'Making an edit', 'approval-card']);
     expect(screen.getByRole('button', { name: 'Allow' })).toBeTruthy();
+  });
+
+  it('tells a call the user denied once, as denied, though its result came back failed', () => {
+    const denied = replayTaskLog([
+      { type: 'turn_start', message: 'clean up' },
+      { type: 'tool_call', id: 't3', name: 'Bash', args: '{"command":"rm -rf dist"}' },
+      { type: 'approval_requested', approvalId: 'ap-3', tool: 'Bash', args: '{"command":"rm -rf dist"}', allowForTask: false, toolCallId: 't3' },
+      { type: 'approval_decided', approvalId: 'ap-3', decision: 'deny' },
+      { type: 'tool_result', id: 't3', output: 'The user denied this call', success: false },
+    ]);
+    render(<TaskLogApp />);
+    init({ working: true }, [...denied.blocks]);
+    expect(top()).toEqual(['chat-msg', '1 command denied']);
+    expect(document.querySelector('.activity-group')).toHaveAttribute('data-state', 'failed');
+    fireEvent.click(document.querySelector<HTMLButtonElement>('.activity-group-toggle')!);
+    // Both rows stay in the group, for what was asked and what was answered.
+    expect(document.querySelector('.activity-group-body .cmd-row')).toBeTruthy();
+    expect(document.querySelector('.activity-group-body .approval-card')).toHaveAttribute('data-status', 'denied');
   });
 
   it('keeps what was opened as the live patch settles the call, and opens nothing for another attempt', () => {

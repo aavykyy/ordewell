@@ -229,7 +229,10 @@ function DiffView({ output, diff, expanded }: { output: string; diff: DiffStat; 
   );
 }
 
-export function CommandRow({ block, expanded, onToggle }: RowProps<ToolBlock>) {
+export function CommandRow({ block, expanded, onToggle, args = true }: RowProps<ToolBlock> & {
+  /** Its arguments drawn when open; a script's step has none its head does not already say. */
+  args?: boolean;
+}) {
   const label = outcomeLabel(block);
   const preview = outputPreview(block.output, PREVIEW_LINES);
   const { keyArg } = block.headline;
@@ -253,7 +256,7 @@ export function CommandRow({ block, expanded, onToggle }: RowProps<ToolBlock>) {
       <div id={id} className="cmd-row-body">
         {diff ? <DiffView output={block.output} diff={diff} expanded={expanded} /> : expanded ? (
           <>
-            <pre className="cmd-row-args">{prettyArgs(block.args)}</pre>
+            {args && <pre className="cmd-row-args">{prettyArgs(block.args)}</pre>}
             {block.output && <pre className="cmd-row-output">{outputLines(block.output).join('\n')}</pre>}
           </>
         ) : preview.lines.length > 0 && (
@@ -471,6 +474,7 @@ function Block({
 }
 
 const MemoBlock = React.memo(Block);
+const MemoCommandRow = React.memo(CommandRow);
 
 interface Handlers {
   onShowPlan: () => void;
@@ -548,7 +552,9 @@ export function ConversationBlocks({
   if (asRun) {
     return (
       <div className="conversation">
-        {blocks.map((block) => <MemoBlock key={block.id} block={block} expanded {...handlers} />)}
+        {blocks.map((block) => (block.type === 'tool'
+          ? <MemoCommandRow key={block.id} block={block} expanded args={false} />
+          : <MemoBlock key={block.id} block={block} expanded {...handlers} />))}
       </div>
     );
   }
