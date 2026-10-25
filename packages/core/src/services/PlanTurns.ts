@@ -1,5 +1,5 @@
-import type { LegacyPlanState, PendingPlanTurn, PlanTurnSource, RunnerId, SkillLoad, TurnAuthority } from '../models/Task';
-import { ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError } from './PlannerConversation';
+import type { LegacyPlanState, PendingPlanTurn, PlannerContextPause, PlanTurnSource, RunnerId, SkillLoad, TurnAuthority } from '../models/Task';
+import { ConversationBusyError, ConversationEditError, PlannerContextPausedError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError } from './PlannerConversation';
 import { PlannerResend, type PlannerLimit } from './PlannerResend';
 import type { TurnFailure } from './runnerExit';
 import type { SkillInvocation } from './skillInvocation';
@@ -36,6 +36,8 @@ export interface TurnPrompt extends SkillInvocation {
   authority?: TurnAuthority;
   /** The message was force sent: the turn replaces the one it stopped. */
   forced?: true;
+  /** The turn is the user's Retry compaction of a planner paused on its context, on the inputs the pause kept. */
+  recovery?: PlannerContextPause;
 }
 
 export interface PlanTurnsHost {
@@ -94,7 +96,11 @@ interface Running {
   ids: ReadonlySet<string>;
   /** A force send stopped it. */
   forceStopped?: true;
+  /** It retries a pause on the planner's context, which stays saved until the turn lands or is stopped. */
+  recovery?: true;
 }
+
+type Outcome = { ok: true; plan: LegacyPlanState } | { ok: false; err: unknown };
 
 /** One planner message for a batch: the inputs in the order they came, each with the skills it loaded. */
 export function turnPrompt(batch: readonly PendingPlanTurn[]): TurnPrompt {
@@ -170,6 +176,68 @@ export class PlanTurns {
   /** A turn ended on the planner's usage limit: arm the wait for its inputs. Saved with the failure the turn records. */
   usageLimit(said: TurnFailure): PlannerLimit {
     return this.resend.limited(said);
+  }
+
+  /**
+   * A turn ended with the planner paused on its context (ADR-0002): the pause
+   * is armed on the inputs it took, which stay pending, and no turn opens
+   * until the user's Retry compaction or Stop. Saved with the failure the turn
+   * records.
+   */
+  contextPaused(details: Pick<PlannerContextPause, 'model' | 'reason' | 'done' | 'doneTruncated'>): PlannerContextPause {
+    const pause: PlannerContextPause = { ...details, at: new Date().toISOString(), inputs: [...(this.running?.ids ?? [])] };
+    const plan = this.host.plan();
+    if (plan) plan.plannerContextPause = pause;
+    return pause;
+  }
+
+  /**
+   * The conversation's opening paused on the planner's context: its goal
+   * waits with the pause, ahead of what was sent behind it, whose senders are
+   * answered now as any sent during a pause are.
+   */
+  waitOnPause(input: PlanTurnInput): void {
+    const plan = this.host.plan();
+    const pause = plan?.plannerContextPause;
+    if (!plan || !pause) return;
+    const goal = this.pending(input, false);
+    plan.pendingTurns = [goal, ...(plan.pendingTurns ?? [])];
+    pause.inputs = [goal.id, ...pause.inputs];
+    this.host.persist();
+    for (const t of plan.pendingTurns) if (t.source === 'user') this.settle(t.id, (w) => w.resolve(plan));
+  }
+
+  /** Whether the planner is paused on its context. */
+  private paused(): boolean {
+    return this.host.plan()?.plannerContextPause !== undefined;
+  }
+
+  /**
+   * The user's Retry compaction: the turn the planner paused on opens again,
+   * on the inputs the pause kept and no others — what arrived since waits for
+   * the turn after it, so none of it reaches a summary. Settles with the plan
+   * that turn lands, or that it paused again on; rejects as a stopped or
+   * failed turn does, the pause kept but for a stop.
+   */
+  async retryCompaction(signal?: AbortSignal): Promise<LegacyPlanState> {
+    const plan = this.host.plan();
+    const pause = plan?.plannerContextPause;
+    if (!plan || !pause) throw new ConversationEditError('The planner is not paused on its context: there is nothing to retry.');
+    if (this.running || this.detecting || this.host.conversationBusy()) throw new ConversationBusyError('retry compaction');
+    const detecting = this.host.plannerDetecting();
+    if (detecting) await detecting;
+    if (this.host.plan() !== plan || plan.plannerContextPause !== pause) throw new PlannerTurnDiscardedError();
+    if (this.running || this.host.conversationBusy()) throw new ConversationBusyError('retry compaction');
+    this.host.assertPlannerReady();
+    const kept = new Set(pause.inputs);
+    const batch = (plan.pendingTurns ?? []).filter((t) => kept.has(t.id));
+    if (batch.length === 0) throw new ConversationEditError('What the paused turn was answering no longer waits: stop the planner to clear the pause.');
+    this.restored = false;
+    this.quiet = false;
+    const outcome = await this.run(plan, batch, { recovery: pause, signal });
+    if (outcome.ok) return outcome.plan;
+    if (outcome.err instanceof PlannerContextPausedError) return plan;
+    throw outcome.err;
   }
 
   /** Keep what waits on the planner's usage limit from being sent at the reset; see {@link PlannerResend.cancel}. */
@@ -272,7 +340,7 @@ export class PlanTurns {
     this.host.persist();
     // Its sender is answered now, not hours from now at the reset: the message
     // is saved, and the turn that sends it is nobody's call to wait on.
-    if (input.source === 'user' && this.resend.holds()) {
+    if (input.source === 'user' && (this.resend.holds() || this.paused())) {
       this.pump();
       return Promise.resolve(plan);
     }
@@ -305,7 +373,7 @@ export class PlanTurns {
    * the plan, what still waits, and the planner in use at that moment.
    */
   pump(): void {
-    if (this.restored || this.running || this.detecting || this.resend.holds()) return;
+    if (this.restored || this.running || this.detecting || this.resend.holds() || this.paused()) return;
     const plan = this.host.plan();
     if (!plan || this.host.conversationBusy()) return;
     const batch = this.liveBatch(plan);
@@ -368,6 +436,7 @@ export class PlanTurns {
    */
   stopQueued(): boolean {
     const plan = this.host.plan();
+    if (plan && this.paused() && !this.running && !this.host.conversationBusy()) return this.dropPause(plan);
     if (!plan || (!this.detecting && !this.running && !this.host.conversationBusy())) return false;
     const live = this.running?.ids;
     const waiting = (plan.pendingTurns ?? []).filter((t) => !live?.has(t.id));
@@ -376,6 +445,22 @@ export class PlanTurns {
     if (stopped.length === 0) return false;
     this.take(plan, new Set(stopped.map((t) => t.id)));
     this.host.persist();
+    for (const t of stopped) this.settle(t.id, (w) => w.reject(new PlannerTurnStoppedError()));
+    return true;
+  }
+
+  /**
+   * The user's Stop of a planner paused on its context: the paused turn ends
+   * as a stopped one would — the user's inputs waiting dropped, each caller
+   * told — and the pause goes with it. Wake-ups stay undelivered, as behind
+   * any stopped turn, for the next input to carry.
+   */
+  private dropPause(plan: LegacyPlanState): boolean {
+    const stopped = (plan.pendingTurns ?? []).filter((t) => t.source === 'user');
+    if (stopped.length < (plan.pendingTurns ?? []).length) this.quiet = true;
+    this.take(plan, new Set(stopped.map((t) => t.id)));
+    delete plan.plannerContextPause;
+    this.host.announce();
     for (const t of stopped) this.settle(t.id, (w) => w.reject(new PlannerTurnStoppedError()));
     return true;
   }
@@ -428,20 +513,24 @@ export class PlanTurns {
     return wakeUps.some((t) => t.report !== undefined) ? this.host.mayReport() : this.host.mayWake();
   }
 
-  private async run(plan: LegacyPlanState, batch: readonly PendingPlanTurn[]): Promise<void> {
+  private async run(plan: LegacyPlanState, batch: readonly PendingPlanTurn[], opts: { recovery?: PlannerContextPause; signal?: AbortSignal } = {}): Promise<Outcome> {
     const ids = new Set(batch.map((t) => t.id));
-    const running: Running = { release: this.host.holdStarts(), ids };
+    const running: Running = { release: this.host.holdStarts(), ids, ...(opts.recovery ? { recovery: true } : {}) };
     this.running = running;
     const timeout = setTimeout(() => {
       running.release();
       this.host.resumeStarts().catch((err: unknown) => this.host.notice(`New tasks could not start: ${reasonOf(err)}`));
     }, this.holdTimeoutMs);
-    const signals = batch.flatMap((t) => this.waiters.get(t.id)?.signal ?? []);
-    let outcome: { ok: true; plan: LegacyPlanState } | { ok: false; err: unknown };
+    const signals = [...batch.flatMap((t) => this.waiters.get(t.id)?.signal ?? []), ...(opts.signal ? [opts.signal] : [])];
+    let outcome: Outcome;
     try {
       this.host.turnStarting?.(batch);
-      const landed = await this.host.run(turnPrompt(batch), {
-        taken: () => this.take(plan, ids),
+      const landed = await this.host.run({ ...turnPrompt(batch), ...(opts.recovery ? { recovery: opts.recovery } : {}) }, {
+        taken: () => {
+          this.take(plan, ids);
+          // The retry landed: the pause goes in the save that carries its answer.
+          if (running.recovery && plan.plannerContextPause === opts.recovery) delete plan.plannerContextPause;
+        },
         signal: signals.length > 0 ? AbortSignal.any(signals) : undefined,
       });
       outcome = { ok: true, plan: landed };
@@ -450,23 +539,32 @@ export class PlanTurns {
     }
     clearTimeout(timeout);
     // Abandoned: the hold is gone and every waiter has heard.
-    if (this.running !== running) return;
+    if (this.running !== running) return outcome;
     const forceStopped = !outcome.ok && running.forceStopped === true;
     const limited = !outcome.ok && outcome.err instanceof PlannerUsageLimitError;
+    const paused = !outcome.ok && outcome.err instanceof PlannerContextPausedError;
+    const stopped = !outcome.ok && (isInterruption(outcome.err) || forceStopped);
+    // A retry that failed for another reason leaves the planner paused as it was, on the same inputs.
+    const kept = limited || paused || (running.recovery === true && !outcome.ok && !stopped);
     if (outcome.ok) this.resend.landed();
     try {
       // A turn that landed nothing still had its say; the user's inputs go
       // with it. A failure, or a force send, leaves the wake-ups undelivered,
-      // and a usage limit leaves everything, to be sent again.
-      const dropped = limited
+      // and a usage limit or a pause on the planner's context leaves
+      // everything, to be sent again.
+      const dropped = kept
         ? new Set<string>()
         : outcome.ok || (isInterruption(outcome.err) && !forceStopped)
           ? ids
           : new Set(batch.filter((t) => t.source === 'user').map((t) => t.id));
       const took = this.take(plan, dropped);
+      // A stopped retry was the user's answer to the pause.
+      const unpaused = running.recovery === true && stopped && plan.plannerContextPause === opts.recovery;
+      if (unpaused) delete plan.plannerContextPause;
       // Its wake-ups wait behind the forced inputs, each of which takes a turn alone first.
       if (forceStopped) plan.pendingTurns = [...(plan.pendingTurns ?? []).filter((t) => t.forced), ...(plan.pendingTurns ?? []).filter((t) => !t.forced)];
-      if (took || forceStopped) this.host.persist();
+      if (unpaused) this.host.announce();
+      else if (took || forceStopped) this.host.persist();
       running.release();
       await this.host.resumeStarts();
     } catch (err) {
@@ -477,18 +575,19 @@ export class PlanTurns {
       const ended = outcome;
       const waiting = new Set((plan.pendingTurns ?? []).map((t) => t.id));
       for (const t of batch) {
-        // A user's message waiting on the limit is answered now: its turn is hours off, and the failure is in the transcript.
-        if (limited && t.source === 'user') {
+        // A user's message waiting on the limit or the pause is answered now: its turn is the user's to retry, and the failure is in the transcript.
+        if ((limited || paused) && t.source === 'user') {
           this.settle(t.id, (w) => w.resolve(plan));
           continue;
         }
         // Kept wake-ups are heard of from the turn that delivers them: the supervisor counts on it.
-        if ((forceStopped || limited) && waiting.has(t.id)) continue;
+        if ((forceStopped || kept) && waiting.has(t.id)) continue;
         const delivered = this.settle(t.id, (w) => (ended.ok ? w.resolve(ended.plan) : w.reject(ended.err)));
-        if (!delivered && !ended.ok && !isInterruption(ended.err) && t.source === 'user') this.host.notice(replayFailed(t, ended.err));
+        if (!delivered && !ended.ok && !isInterruption(ended.err) && !running.recovery && t.source === 'user') this.host.notice(replayFailed(t, ended.err));
       }
       this.pump();
     }
+    return outcome;
   }
 
   /** Drop these inputs from the plan's list; true when any were still there. */

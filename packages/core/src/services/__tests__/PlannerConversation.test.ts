@@ -64,6 +64,7 @@ function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan())
     planChanges: checks.planChanges,
     notice: vi.fn(),
     usageLimit: vi.fn((said: TurnFailure) => ({ text: said.message, resendAt: null })),
+    contextPaused: vi.fn((details) => ({ ...details, at: new Date().toISOString(), inputs: [] })),
     adoptTasks: vi.fn((tasks) => tasks.length),
     capturePrd: vi.fn(),
     turnAborted: vi.fn(),

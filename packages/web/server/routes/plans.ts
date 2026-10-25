@@ -384,6 +384,19 @@ export function plansRoute(pool: OrchestratorPool) {
     }
   });
 
+  // Retry compaction of a planner paused on its context (ADR-0002): the
+  // paused turn opens again on the inputs it kept, and this answers once it
+  // has landed — or paused again, which the plan's pause says. A stop of the
+  // planner ends it, as it ends any turn.
+  router.post('/:sessionId/conversation/compact/retry', async (c) => {
+    try {
+      const plan = await pool.session(c.req.param('sessionId')).retryPlannerCompaction();
+      return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
+    } catch (err) {
+      return failure(c, err, 'retry compaction');
+    }
+  });
+
   router.get('/:sessionId/prd', (c) => {
     const plan = pool.getPlan(c.req.param('sessionId'));
     if (!plan?.prdMarkdown) return refuse(c, 404, 'No PRD found');

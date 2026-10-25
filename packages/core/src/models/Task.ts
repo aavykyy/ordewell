@@ -714,6 +714,31 @@ export interface PlannerResendState {
   at?: string;
 }
 
+/**
+ * The planner paused on its context (ADR-0002): an API planner's call could
+ * not be brought inside its model's window, so the turn ended with nothing
+ * landed and the planner waits for the user's Retry compaction. What it
+ * keeps is bounded: the inputs stay in `pendingTurns`, and only the calls
+ * that changed something are listed, never the live context itself.
+ */
+export interface PlannerContextPause {
+  /** The model the call did not fit. */
+  model: string;
+  at: string;
+  /** What the user is told: why it paused, and what Retry compaction does. */
+  reason: string;
+  /** The pending inputs the paused turn took: a retry answers these, and what arrived since waits for the turn after it. */
+  inputs: string[];
+  /**
+   * The calls the paused turn made that changed something or reached out,
+   * each with the head of what it returned (`effectLedger`): what a retry
+   * that cannot continue the live context tells the planner not to make again.
+   */
+  done?: string[];
+  /** More such calls ran than `done` keeps: a retry without the live context could not tell the planner all of them. */
+  doneTruncated?: true;
+}
+
 export interface LegacyPlanState {
   /** Research profiles the planner approved as they landed: lifting one withdraws its approval (ADR-0037 R4). */
   researchApprovals?: string[];
@@ -747,6 +772,8 @@ export interface LegacyPlanState {
   contextWindows?: ReportedWindow[];
   /** The planner hit its usage limit and the inputs its turn took wait to be sent again; absent otherwise. */
   plannerResend?: PlannerResendState;
+  /** The planner's context could not fit its model's window: its turn's inputs wait for Retry compaction; absent otherwise. */
+  plannerContextPause?: PlannerContextPause;
   /**
    * The tasks the user approved to run: every task when they executed the
    * plan, and each one they started or retried themselves since. A command

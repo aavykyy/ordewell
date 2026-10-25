@@ -5,6 +5,7 @@ import GetStarted from './components/GetStarted';
 import { orNames } from './runnerNames';
 import ChatInput from './components/ChatInput';
 import PlannerResendBar from './components/PlannerResendBar';
+import PlannerPauseBar from './components/PlannerPauseBar';
 import DockResizeHandle from './components/DockResizeHandle';
 import { ConversationBlocks } from './components/ChatMessage';
 import { reduceHost, INITIAL_HOST_STATE, type HostState } from './hostState';
@@ -346,6 +347,10 @@ export default function App() {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'cancelPlannerResend' });
     pushSystem('Resend cancelled: what waits goes with your next message.');
   }, [pushSystem]);
+
+  const handleRetryCompaction = useCallback(() => {
+    vscode.postMessage({ type: 'sendSystemCommand', command: 'retryPlannerCompaction' });
+  }, []);
 
   const handleCancelResume = useCallback((taskId: string) => {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'cancelResume', taskId });
@@ -1004,6 +1009,8 @@ export default function App() {
       {stopArmed && <div className="stop-hint" role="status">Press Esc again to stop</div>}
 
       <PlannerResendBar resend={plan?.plannerResend} onCancel={handleCancelResend} />
+
+      <PlannerPauseBar pause={plan?.plannerContextPause} busy={plannerBusy} onRetry={handleRetryCompaction} onStop={stopTurn} />
 
       <PendingMessages messages={pending} />
 

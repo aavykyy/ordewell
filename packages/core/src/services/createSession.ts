@@ -13,7 +13,7 @@ import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
 import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome } from './plannerTools';
 import { sharedMcpServer, type OrdewellMcpServer, type PlannerToolHandler } from './mcp';
-import { ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
+import { ConversationEditError, PlannerContextPausedError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
 import { PlanTurns, type PlanTurnInput } from './PlanTurns';
 import { RunSupervision, runOrigin } from './RunSupervision';
@@ -710,6 +710,7 @@ export class Session {
         queueMicrotask(() => this.turns.pump());
       },
       usageLimit: (said) => this.turns.usageLimit(said),
+      contextPaused: (details) => this.turns.contextPaused(details),
     });
 
     this.turns = new PlanTurns({
@@ -732,8 +733,9 @@ export class Session {
         if (this.orchestrator.isRunning || this.orchestrator.startsPending) await this.withSave(() => this.orchestrator.tick());
       },
       run: async (prompt, { taken, signal }) => {
-        const reply = (turnSignal: AbortSignal | undefined, wakeUp?: WakeUpTurn) =>
-          this.conversation.reply(prompt, { signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, forced: prompt.forced, ...(wakeUp ? { wakeUp } : {}) });
+        const reply = (turnSignal: AbortSignal | undefined, wakeUp?: WakeUpTurn) => this.conversation.reply(prompt, {
+          signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, forced: prompt.forced, ...(wakeUp ? { wakeUp } : {}), ...(prompt.recovery ? { recovery: prompt.recovery } : {}),
+        });
         // Wake-ups that ride with a user's message are context for the user's turn.
         const { landed, effects } = await this.openTurn(() => (prompt.source === 'supervisor'
           ? this.supervision.wakeUp(reply, signal, prompt.authority)
@@ -1658,6 +1660,10 @@ export class Session {
       if (this.orchestrator.startsPending) await this.withSave(() => this.orchestrator.tick());
       return landed;
     } catch (err) {
+      if (err instanceof PlannerContextPausedError && this.plan) {
+        this.turns.waitOnPause({ source: 'user', ...this.resolveSkillInvocation(goal) });
+        return this.plan;
+      }
       if (!(err instanceof PlannerUsageLimitError) || !this.plan) throw err;
       this.turns.waitOnLimit({ source: 'user', ...this.resolveSkillInvocation(goal) });
       return this.plan;
@@ -2021,6 +2027,23 @@ export class Session {
 
   private async resumeTask(taskId: string, message: string, origin: RunOrigin): Promise<void> {
     await this.withSave(() => this.orchestrator.continueTask(taskId, message, origin));
+  }
+
+  /**
+   * The user's Retry compaction of a planner paused on its context (ADR-0002):
+   * the paused turn opens again on the inputs it kept. On the live context it
+   * condenses what it can, then sends the held input once; with the live
+   * context gone — a reload, another provider — it starts again from the
+   * transcript, told which of its calls already ran. Refused, the pause kept,
+   * when neither can be done without risking an effect twice. Settles with
+   * the plan the turn lands, or paused again on; a Stop ends the pause.
+   */
+  async retryPlannerCompaction(signal?: AbortSignal): Promise<LegacyPlanState> {
+    const pause = this.plan?.plannerContextPause;
+    if (!pause) throw new ConversationEditError('The planner is not paused on its context: there is nothing to retry.');
+    const retry = this.conversation.retryPlan(pause);
+    if ('refused' in retry) throw new ConversationEditError(retry.refused);
+    return this.turns.retryCompaction(signal);
   }
 
   /**

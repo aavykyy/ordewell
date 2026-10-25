@@ -114,6 +114,7 @@ function conversationHost(ai: IAiService, planState: LegacyPlanState | null = di
     planChanges: checks.planChanges,
     notice: vi.fn(),
     usageLimit: vi.fn((said) => ({ text: said.message, resendAt: null })),
+    contextPaused: vi.fn((details) => ({ ...details, at: new Date().toISOString(), inputs: [] })),
     adoptTasks: vi.fn((tasks) => tasks.length),
     capturePrd: vi.fn(),
     turnAborted: vi.fn(),

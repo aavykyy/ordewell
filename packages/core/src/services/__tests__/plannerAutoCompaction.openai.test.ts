@@ -6,7 +6,6 @@ import { fakeConfig, fakeFileSystem } from '../../testing';
 import { createEmptyPlan } from '../../models/Task';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { modelContext } from '../conversationSummary';
-import { PlannerContextExhaustedError } from '../plannerContextBudget';
 import { SUMMARY_LIMITS } from '../contextSummary';
 
 const createSpy = vi.hoisted(() => vi.fn());
@@ -422,15 +421,16 @@ describe('a summary that cannot stand in for what it condensed', () => {
     const { session, catalog, bash, compactions } = await afterOneBuild(provider);
     const before = structuredClone(history(session));
 
-    await expect(session.continueConversation('run the tests')).rejects.toMatchObject({ name: 'PlannerContextExhaustedError', summary: 'failed' });
+    await session.continueConversation('run the tests');
+    expect(session.planState!.plannerContextPause!.reason).toMatch(/no summary could be had/);
     expect(history(session).slice(0, before.length)).toEqual(before);
     expect(history(session).some((m) => m.kind === 'compaction')).toBe(false);
     expect(compactions().map((c) => (c.phase === 'ended' ? c.outcome : c.phase))).toEqual(['started', 'paused']);
     expect(bash).toHaveBeenCalledTimes(2);
 
-    // A model with room takes the held results once.
+    // A model with room takes the held results once, on the user's retry.
     catalog.windows['vendor/model'] = 1_000_000;
-    await session.continueConversation('go on');
+    await session.retryPlannerCompaction();
     const next = provider.requests.at(-1)!;
     expect(pairsValid(next.messages)).toBe(true);
     expect(toolOutputs(next).map((m) => m.tool_call_id)).toEqual(['bash_0', 'bash_1']);
@@ -443,7 +443,8 @@ describe('a summary that cannot stand in for what it condensed', () => {
     const { session, config } = await afterOneBuild(provider);
     during.summary = () => { (config as { orchestratorModel: string }).orchestratorModel = 'vendor/other'; };
 
-    await expect(session.continueConversation('run the tests')).rejects.toBeInstanceOf(PlannerContextExhaustedError);
+    await session.continueConversation('run the tests');
+    expect(session.planState!.plannerContextPause).toBeDefined();
     expect(provider.summaries.map((r) => r.model)).toEqual(['vendor/model']);
     expect(history(session).some((m) => m.kind === 'compaction')).toBe(false);
   });
@@ -515,7 +516,9 @@ describe('the summary of a context too long for one summary call', () => {
     const provider = new FakeProvider(builds());
     const { session, compactions } = await bigThenSmall(provider, () => 6_000);
 
-    await expect(session.continueConversation('build final')).rejects.toMatchObject({ name: 'PlannerContextExhaustedError', summary: 'failed' });
+    await session.continueConversation('build final');
+    // The window is smaller than the planner's own instructions: no summary of the conversation could make room.
+    expect(session.planState!.plannerContextPause!.reason).toMatch(/^vendor\/small's window is too small for the planner's own instructions and tools/);
     expect(provider.summaries).toHaveLength(0);
     expect(history(session).some((m) => m.kind === 'compaction')).toBe(false);
     expect(compactions().at(-1)).toMatchObject({ phase: 'ended', outcome: 'paused' });

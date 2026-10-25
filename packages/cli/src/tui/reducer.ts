@@ -540,6 +540,7 @@ function showPlan(state: TuiState, plan: unknown): TuiState {
   const next: TuiState = {
     ...folded,
     plannerResend: plannerResendOf(plan),
+    plannerPause: plannerPauseOf(plan),
     expandedTaskId,
     taskEditor: expandedTaskId !== null ? state.taskEditor : null,
   };
@@ -555,6 +556,12 @@ function plannerResendOf(plan: unknown): TuiState['plannerResend'] {
   const saved = (plan as { plannerResend?: { runner?: unknown; at?: unknown } } | null | undefined)?.plannerResend;
   if (typeof saved?.at !== 'string') return null;
   return { ...(typeof saved.runner === 'string' ? { runner: saved.runner } : {}), at: saved.at };
+}
+
+/** What the plan says of a planner paused on its context: why is in the transcript, so only the model is kept. */
+function plannerPauseOf(plan: unknown): TuiState['plannerPause'] {
+  const saved = (plan as { plannerContextPause?: { model?: unknown } } | null | undefined)?.plannerContextPause;
+  return saved ? { model: typeof saved.model === 'string' ? saved.model : 'the planner model' } : null;
 }
 
 function runStatus(state: TuiState, tasks: TaskView[]): RunStatus {

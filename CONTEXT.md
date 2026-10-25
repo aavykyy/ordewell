@@ -417,15 +417,17 @@ moves no *Context fill* meter, which the condensed context clears. A summary
 cut off, untagged, trivially short, not much shorter than what it condensed,
 past its room or declining is refused, as is one that comes back after a stop, a model
 switch or a change of the live context, and nothing it would have replaced
-changes. A call that still cannot fit is not made: its input is held, so
-sending it again runs no tool twice, and the turn ends on
-`PlannerContextExhaustedError`, which says how the summary fared. A provider's
-refusal of a prompt too long gets one more pruning pass and one resend. Each
-compaction is a **Compaction event** of the turn: a pruning reports only its
-end. A model whose window the catalogs Ordewell holds do not state, or the
+changes. A provider's refusal of a prompt too long, known by its own signal
+and nothing broader, is answered once per call: the window it states and the
+size it refused bound the chat's later calls on the model, one more
+compaction is made against them, and the same input is sent once more only if
+it got smaller. A call that still cannot fit is not made: its input is held, so
+no tool runs twice and no result is sent twice, and the planner pauses (see
+**Planner context pause**). Each compaction is a **Compaction event** of the
+turn: a pruning reports only its end. A model whose window the catalogs Ordewell holds do not state, or the
 settings file's `plannerAutoCompaction: false` (on when absent; no settings
-panel shows it), turns all of it off; the input is then sent whole, and
-`/compact` still works. A harness planner's agent and every task runner compact
+panel shows it), turns all of it off; the input is then sent whole, a refusal
+pauses the planner at once, and `/compact` still works. A harness planner's agent and every task runner compact
 their own contexts and are never touched. The same pruning also frees context
 before a plan emission the output limit cut off (`ResearchChat.compactHistory()`,
 then `truncatedPlanReEmitPrompt`), and the one-shot fallback prompt is bounded
@@ -434,6 +436,24 @@ condenses, and a research subagent's chat is not budgeted.
 *Avoid:* a truncation retry that re-sends the same context — it will be cut
 at the same point again; and "the summary's list" for the effect ledger, which
 no summary writes.
+
+**Planner context pause** (the plan's `plannerContextPause`; ADR-0002) — what
+follows an API planner's call that no compaction could fit, a resend refused
+again, or a summary that could not be had. The turn lands nothing and shows as a
+failure; its inputs stay in `pendingTurns`, and the pause saves the model, the
+reason, those inputs and at most 40 lines of the calls the turn made that
+changed something, read off the messages (`effectLedger`). Only the planner
+waits: tasks run on, and the supervisor's wake-ups and the user's messages sent
+meanwhile wait behind it. **Retry compaction** (`Session.retryPlannerCompaction()`;
+TUI `/compact retry`, CLI `ordewell compact retry`, VS Code's bar above the
+composer) opens the paused turn again on those inputs alone. On the live context
+it condenses with the user's consent and sends the held input once; with that
+context gone, after a reload or a switch of provider, it starts the turn again
+from the **Model context**, told the listed calls so none is made again. A
+retry that fits nothing pauses again. **Stop** ends the pause and drops its user
+inputs.
+*Avoid:* "error" for it: nothing is lost and the user chooses what follows;
+"resend", which is the usage limit's (**Planner resend**).
 
 **Compaction** (`Session.compactConversation()`) — the user-triggered kind: the
 user decides a planner conversation has grown unwieldy and asks for it to be

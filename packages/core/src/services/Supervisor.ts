@@ -3,7 +3,7 @@ import type { TurnAuthority } from '../models/Task';
 import { createWakePolicy, REPORT_LEAD, type RunEvent, type WakeBatch, type WakePolicy, type WakePolicySnapshot } from './WakePolicy';
 import { classifyRunnerStop } from './runnerExit';
 import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
-import { PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlanChange, type WakeUpTurn } from './PlannerConversation';
+import { PlannerContextPausedError, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlanChange, type WakeUpTurn } from './PlannerConversation';
 
 /** How long the first attention event waits for others to join its wake-up. */
 export const WAKE_DEBOUNCE_MS = 5_000;
@@ -331,6 +331,10 @@ export class Supervisor {
       if (err.resendAt === null) this.giveUp(`the planner hit its usage limit and ${err.held ?? 'did not say when it resets'}`);
       return;
     }
+    // Nor is a planner paused on its context: its wake-ups wait with the
+    // pause for the user's Retry compaction, and a restart would drop the
+    // input the retry sends.
+    if (err instanceof PlannerContextPausedError) return;
     const reason = err instanceof Error ? err.message : String(err);
     // A backend that throws its limit rather than saying it gives no reset to read.
     // A turn that said its failure was classified as it settled, by the runner's

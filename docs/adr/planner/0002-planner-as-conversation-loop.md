@@ -36,10 +36,12 @@ We decided to collapse the planner to a single messages loop — "the LLM either
     - **Then summarize the history that landed.** Still over, the live context from before the open turn is condensed by the summary calls into a checkpoint, committed in its own save while the turn holds its inputs, its cut before them. The newest exchanges whose replay fits below the low-water mark beside the turn are kept verbatim; one too large to fit, however recent, is condensed with the rest. The live context becomes the checkpoint's projection, then the turn's own messages as they were, and the same call goes on from there.
     - **Then summarize the turn's own rounds.** A turn that still fills the window by itself has its older complete rounds condensed in the live context alone: the user's message stays verbatim, then a note with their summary and a list, read off the messages and not asked of the model, of every call they made that changed something or reached out, with what it returned, so none is made again. The newest rounds that fit, and the call whose results are being sent, stay as they were. Nothing of it is written: tool output was never in the transcript.
     - **What a summary call is.** One call, or a bounded fold of up to eight when what it condenses does not fit one, each part folded into the summary so far, on the planner's own provider, model and credentials, asking for a reply within the provider's cap and a tenth of what a call may carry. It offers no tools and its reply is only read as text, so nothing it says runs a tool or changes the plan. Its spend counts in the usage totals and measures nothing of the live context. A reply is refused, and nothing it would have replaced changes, when it was cut off, holds no complete tagged summary, is too short to stand for what it condensed, has hardly condensed it, ran past the room kept for it or declines; and when the turn was stopped or abandoned, the planner model changed or the live context moved while it was written. The summary is told the current plan outranks anything the conversation said of task state, and every compaction drops the whole-plan certainty (ADR-0012 T10).
-    - **No fit.** Where neither can bring the call under what the model takes at all, the call is not made: its input is held, so sending it again runs no tool a second time, and the turn ends on `PlannerContextExhaustedError`, which says how the summary fared, for recovery to decide on. A provider's refusal of a prompt too long is the backstop: one more pruning pass and one resend of the same input.
+    - **A refusal as too long.** It is recognised by the provider's own signal and nothing broader: OpenAI's `context_length_exceeded` or its "maximum context length" wording, Gemini's "input token count exceeds the maximum" wording. Any other 400, a rate limit, a refused key, a dropped connection and a reply the output limit cut off are other failures, never retried here; the cut-off stays on the reply's repair path. A refusal is answered once per call. The window it states, and the size of the prompt it refused, bound every later call of that chat on the model. One more compaction is made below the refused prompt, then the same input is sent once more; one that could not be made smaller is not sent again. A window no catalog states turns this off too: the refusal pauses the planner at once.
+    - **No fit: the planner pauses.** Where no compaction can bring the call under what the model takes, the resend is refused again, or no summary can be had, the call is not made. Its input is held, so no tool runs again and no result is sent twice. The turn lands nothing; a failure line in the transcript says why, never claiming an estimate is a count. Its inputs stay in `pendingTurns`, and `plannerContextPause` on the plan records the pause: the model, the reason, the inputs, and the calls the turn made that changed something or reached out, read off the messages (`effectLedger`), at most 40. Nothing else of the live context is saved. Only the planner pauses: tasks run, start and finish on their own evidence, and the supervisor's wake-ups wait with the pause without counting as its failures. A message sent meanwhile is saved, answered at once, and waits for the turn after.
+    - **Retry compaction** is the user's, and compacts whatever the settings file says. The paused turn opens again on the inputs the pause kept, never on ones that arrived since, so none of those reaches a summary. While the live context still holds the input and a window is known, from a catalog or the refusal's statement, it is condensed and the held input sent once: one attempt, and refused again it pauses again. Otherwise (a reload, another provider, a model whose window no one stated) the turn starts again from the model context, told the calls the pause listed so none is made again. It is refused, the pause kept, when that list was cut short. A Stop ends the pause and drops the paused turn's user inputs, as a stopped turn's are; a stop during the retry does the same, and nothing late from it commits. The terminal UI has `/compact retry`, the CLI `ordewell compact retry`, VS Code a bar above the composer, and the daemon `POST /api/plans/:id/conversation/compact/retry`.
   - **The task list rides along as-is.** A rewind keeps tasks the discarded turns created; a fork starts with the tasks the original had. Run state cannot travel to a session with no run: in-progress and checkpointed tasks become pending and planner turn inputs still waiting stay behind (`forkPlanState` is the one place that decides).
   - **Busy rules.** All three are refused while a planner turn is in flight and allowed while a run executes. A message sent while a summary is being written is refused (`ConversationBusyError`, a 409 from the daemon), before the planning abort slot is touched, so a stop still reaches the summary turn.
-  - **VS Code** offers `/fork`, `/rewind [n]` and `/compact` (and Command Palette entries) through `Session` directly, since it does not use the daemon. It locks the input during `/compact`. A fork or a rewind is loaded as a saved session, which replaces its single `Session` and stops its run, so it asks first while one executes; a compaction redraws only the transcript in place.
+  - **VS Code** offers `/fork`, `/rewind [n]` and `/compact` (and Command Palette entries) through `Session` directly, since it does not use the daemon. While `/compact` runs it shows a status that the composer's Stop stops, and a message typed meanwhile waits for it; the compaction folds into the conversation as one marker and nothing is redrawn (ADR-0017 C1). A fork or a rewind is loaded as a saved session, which replaces its single `Session` and stops its run, so it asks first while one executes.
 - **Old sessions were wiped.** No migration from the artifact shape; the saved-sessions store was cleared on the first run of the loop.
 
 ## Considered options
@@ -173,6 +175,24 @@ We decided to collapse the planner to a single messages loop — "the LLM either
 - **A separate, cheaper model for summaries.** Rejected: it would need its own
   credentials and limits, and send the conversation to a model the user did
   not pick for it.
+- **Failing the turn when a call cannot fit.** It was the first behaviour: the
+  user's message was dropped with the turn, and the next message was sent over
+  the same full context.
+- **Retrying a refused call until it fits.** Rejected: every attempt is paid,
+  and a provider that keeps refusing would be asked forever. One compaction and
+  one resend, then the user decides.
+- **Cutting the newest input to make it fit.** Rejected: a user's message or the
+  results the planner just read, silently shortened, is a planner answering
+  something it was not asked.
+- **A new message lifting the pause.** Rejected: it would go over the same full
+  context. For a window no catalog states, only the user's Retry consents to a
+  compaction at all.
+- **Saving the live context so a reload resumes it exactly.** Rejected: a second,
+  unbounded copy of the session's tool output on disk. The inputs are saved
+  already, and a bounded list of the calls that changed something is enough to
+  keep a restarted turn from repeating them.
+- **Pausing the run with the planner.** Rejected: a task's verdict comes from its
+  own evidence, which needs no planner.
 
 ## Consequences
 
@@ -189,6 +209,9 @@ We decided to collapse the planner to a single messages loop — "the LLM either
   costs paid calls, which the usage totals count. What it condensed is gone
   from the model's context for the rest of the turn, though never from the
   transcript; a model whose window no catalog states gets none of it.
+- A planner that cannot fit waits for the user, however long: its turn's inputs
+  and the supervisor's wake-ups wait with it, while the run goes on. A retry
+  after a reload starts the turn again and repeats its reads, never its effects.
 - The interview's depth rests on the prompt and the skill, not on structure. A
   weak model can still transition too early; the user can say "keep asking".
 - A future reader sees no `queuedMessages`, no `PrdArtifact`, no
@@ -207,3 +230,4 @@ We decided to collapse the planner to a single messages loop — "the LLM either
 - 2026-10-11 — a fork leaves waiting planner turn inputs behind, not a mid-run edit queue ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-25 — compaction keeps the whole transcript and appends a checkpoint that `modelContext()` projects. A rewind reaches past a summary.
 - 2026-10-25 — API planners compact automatically between calls on 90% of the model's known window: pruning first, then a checkpoint of the history that landed, then the turn's own older rounds, by summary calls that offer no tools; `/compact` on an API planner uses the same calls. Before it, a fixed 100,000-token threshold pruned only, Gemini never pruned, and `/compact` offered the planner's tools to its summary turn.
+- 2026-10-25 — a refusal as too long bounds the chat, compacts once more and resends once; a call that still cannot fit pauses the planner, saved with its inputs and a bounded list of the calls that changed something, until the user's Retry compaction or Stop. Before it, the turn failed and dropped its message.

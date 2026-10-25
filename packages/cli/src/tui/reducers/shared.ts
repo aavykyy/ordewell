@@ -36,6 +36,7 @@ export type Effect =
   | { type: 'rewindConversation'; sessionId: string; index: number }
   | { type: 'compactConversation'; sessionId: string }
   | { type: 'cancelPlannerResend'; sessionId: string }
+  | { type: 'retryPlannerCompaction'; sessionId: string }
   | { type: 'isolationReviewDiff'; sessionId: string }
   /** `branch` is only for the words the result is reported in; `repaired` likewise (ADR-0015). */
   | { type: 'isolationMerge'; sessionId: string; branch: string; group?: boolean; repaired?: LandedTaskView[] }

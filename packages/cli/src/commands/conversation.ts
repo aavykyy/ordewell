@@ -49,6 +49,9 @@ export async function handleFork(subArgs: string[], injectedApi?: ApiClient): Pr
  * on trust.
  */
 export async function handleCompact(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
+  const action = positionals(subArgs)[0];
+  if (action !== undefined && action !== 'retry') fail('Usage: ordewell compact [retry] [--session-id <id>] [--workspace /path]');
+  if (action === 'retry') return retryCompaction(subArgs, injectedApi);
   const { api, sessionId } = await adopted(subArgs, injectedApi);
   let result;
   try {
@@ -58,6 +61,24 @@ export async function handleCompact(subArgs: string[], injectedApi?: ApiClient):
   }
   console.log(`Condensed ${sessionId}. The planner now works from this summary and the last two exchanges; the full conversation stays in the session and the tasks are unchanged.\n`);
   console.log(result.summary);
+}
+
+/**
+ * Retry compaction of a planner paused on its context, as the TUI's
+ * `/compact retry` does: the paused turn opens again on what it kept. Exits
+ * non-zero when it paused again, with why.
+ */
+async function retryCompaction(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
+  const { api, sessionId } = await adopted(subArgs, injectedApi);
+  let plan: unknown;
+  try {
+    plan = await api.retryPlannerCompaction(sessionId);
+  } catch (err) {
+    fail(`Failed to retry compaction: ${headlessPlannerRefusal(err) ?? (err as Error).message}`, ...[lostReplyHint(err, sessionId)].filter((hint) => hint !== null));
+  }
+  const pause = (plan as { plannerContextPause?: { reason?: unknown } } | null)?.plannerContextPause;
+  if (pause) fail(typeof pause.reason === 'string' ? pause.reason : 'The planner paused again on its context.');
+  console.log(`The planner carried the paused turn on in ${sessionId}.`);
 }
 
 /**

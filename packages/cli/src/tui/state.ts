@@ -483,6 +483,8 @@ export interface TuiState {
   runMerge: RunMergeView | null;
   /** A planner turn that hit the planner's usage limit goes again at this time (read off the plan); null when none waits. */
   plannerResend: { runner?: string; at: string } | null;
+  /** The planner paused on its context, waiting for `/compact retry` or `/stop` (read off the plan); null when it is not. */
+  plannerPause: { model: string } | null;
   overlay: Overlay | null;
   /**
    * Approval prompts not yet shown. The planner blocks on each one, so they are
@@ -720,6 +722,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     handoff: null,
     runMerge: null,
     plannerResend: null,
+    plannerPause: null,
     overlay: null,
     pendingApprovals: [],
     queuedPrompts: EMPTY_HOLD,

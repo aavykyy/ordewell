@@ -544,6 +544,14 @@ export async function handleSystemCommand(
       case 'cancelPlannerResend':
         deps.session.cancelPlannerResend();
         break;
+      // A planner turn: it streams to the chat as any does, and fails as one.
+      case 'retryPlannerCompaction':
+        try {
+          await deps.session.retryPlannerCompaction();
+        } catch (err) {
+          reportPlannerError(err, deps);
+        }
+        break;
       // Skip lands nothing, so it is never a mark: only Mark complete vouches for work.
       case 'cancel':
       case 'cancelResume':

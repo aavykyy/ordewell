@@ -5088,6 +5088,21 @@ body.vscode-high-contrast-light .task-card.expanded {
   font-size: 12px;
 }
 
+/* A narrow panel wraps the actions under the words rather than squeezing them. */
+.planner-pause {
+  flex-wrap: wrap;
+}
+
+.planner-pause .planner-resend-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.planner-pause-actions {
+  display: flex;
+  gap: 6px;
+}
+
 /* The stack and the composer read as one block. */
 .pending-messages + .chat-input,
 .pending-messages + .task-log-composer {

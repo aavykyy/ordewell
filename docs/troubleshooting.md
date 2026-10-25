@@ -205,25 +205,39 @@ when the limit resets, or hit it again right after a resend, or you moved the
 planner to another runner, nothing is resent on its own: send a message once
 the limit has reset.
 
-## The planner's context no longer fits its model
+## The planner is paused on its context
 
 A turn of an API planner (OpenAI, OpenRouter, an OpenAI-compatible server,
-Gemini) ends on **The planner's context no longer fits … window**.
+Gemini) ends with **The planner is paused**, and the chat offers **Retry
+compaction**.
 
 Before every call, such a planner keeps its prompt inside 90% of the model's
 window: it trims older file reads first, then condenses the conversation into a
 summary written by the same model, which shows as **Context compacted
-automatically** in the chat. It ends the turn only when even that leaves the
-call too large, or the summary could not be written; what the call was to send
-is kept, so no command runs twice
-([ADR-0002](adr/planner/0002-planner-as-conversation-loop.md)). Switch the
-planner to a model with a larger window, or narrow the request, and send again.
+automatically** in the chat. When the provider still refuses a call as too long,
+it compacts once more against what the refusal showed and sends the same call
+once more. It pauses only when that leaves the call too large, the summary
+could not be written, or your message is too long by itself
+([ADR-0002](adr/planner/0002-planner-as-conversation-loop.md)). Only the planner
+pauses: running tasks carry on and finish. What the call was to send is kept,
+and so is your message, so no command runs twice and nothing is cut to fit.
+
+- **Retry compaction** condenses again and carries the turn on. Switch the
+  planner to a model with a larger window first if the same one paused twice.
+  In the terminal UI it is `/compact retry`, from the shell
+  `ordewell compact retry`, and in VS Code the button above the composer.
+- **Stop** drops the paused turn and its message; send a shorter one.
+
+Messages you send while it is paused wait behind it. After a reload the turn
+starts again from the conversation, and the planner is told which of its
+commands already ran.
 
 This needs the model's window: a model whose catalog states none gets no
-automatic compaction, and `/compact` still condenses on request. To turn it off,
-set `"plannerAutoCompaction": false` in the global `settings.json`
-(`~/.ordewell/settings.json`). A harness planner (Claude Code, Codex, OpenCode)
-compacts its own context, and is not affected.
+automatic compaction. A refusal pauses it at once, and Retry compaction uses the
+window the provider's refusal states. `/compact` still condenses on request. To
+turn automatic compaction off, set `"plannerAutoCompaction": false` in the
+global `settings.json` (`~/.ordewell/settings.json`). A harness planner (Claude
+Code, Codex, OpenCode) compacts its own context, and is not affected.
 
 ## A task waits for your approval
 

@@ -44,8 +44,9 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
       // thing the user started, and the run outlives it for a second /stop.
       // Stopping a turn brings the queue behind it back into the editor, the
       // way the Esc route does.
+      // A planner paused on its context is planner work the user may stop too.
       return withSession(state, (sessionId) =>
-        plannerInFlight(state)
+        plannerInFlight(state) || state.plannerPause
           ? stopPlanning(state, sessionId)
           : step(state, [{ type: 'stopExecution', sessionId }]),
       );
@@ -79,6 +80,10 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
         ? withSession(state, (sessionId) => step(state, [{ type: 'cancelPlannerResend', sessionId }]))
         : step(say(state, 'system', "A planner turn that hits the planner's usage limit is sent again at the reset: /resend cancel keeps it for your next message instead."));
     case 'compact':
+      if (args[0] === 'retry') {
+        // The daemon says why it refuses, nothing paused included: not pre-judged here.
+        return withIdlePlanner(state, (sessionId) => step({ ...state, planner: 'planning' }, [{ type: 'retryPlannerCompaction', sessionId }]));
+      }
       return withIdlePlanner(state, (sessionId) =>
         step({ ...state, planner: 'condensing' }, [{ type: 'compactConversation', sessionId }]),
       );

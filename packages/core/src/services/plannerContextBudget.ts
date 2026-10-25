@@ -144,6 +144,18 @@ export class TokenGauge {
   plainCharsPerToken(model: string): number | undefined {
     return this.measured.get(model) ?? this.last;
   }
+
+  /**
+   * The provider refused `chars` as more than `tokens`: fewer characters than
+   * that go to a token on `model`, whatever an earlier call measured. A later
+   * measurement of the same model replaces it.
+   */
+  refused(model: string, chars: number, tokens: number): void {
+    if (chars <= 0 || tokens <= 0) return;
+    const bound = chars / tokens;
+    const own = this.measured.get(model);
+    if (own === undefined || bound < own) this.measured.set(model, bound);
+  }
 }
 
 /**
@@ -154,26 +166,60 @@ export class TokenGauge {
  */
 export type ContextSummaryAttempt = 'not_tried' | 'condensed' | 'failed';
 
+/** What a chat that could not fit a call knows of why, beyond how its summary fared. */
+export interface ContextExhaustion {
+  cause?: unknown;
+  summary?: ContextSummaryAttempt;
+  /** Why nothing was compacted on its own: the settings file turns it off, or no catalog states the model's window. */
+  untried?: 'off' | 'unknown_window';
+  /**
+   * What alone is past what the model takes, so no compaction can make room:
+   * the planner's own instructions and tools; or with them, the call's input —
+   * the user's message, or what the last call's tools returned.
+   */
+  tooLong?: 'instructions' | 'message' | 'results';
+  /** The calls the turn made that changed something or reached out (`effectLedger`), for a recovery that cannot continue the live context. */
+  done?: readonly string[];
+}
+
 /**
  * The planner's next call cannot fit its model's window: pruning what may be
  * pruned and condensing what may be condensed left too much, or the provider
- * refused the call as too long after one more pass. What the call was to send
- * is held by the chat, so sending it again (`ResearchChat.resend`) runs no
- * tool a second time — the decision a recovery reads, by `summary`, before
- * pausing the planner or trying again.
+ * refused the call as too long after one more compaction and resend. What the
+ * call was to send is held by the chat, so sending it again
+ * (`ResearchChat.retry`) runs no tool a second time — what the planner
+ * conversation pauses the planner on (ADR-0002).
  */
 export class PlannerContextExhaustedError extends Error {
   readonly summary: ContextSummaryAttempt;
+  readonly untried?: 'off' | 'unknown_window';
+  readonly tooLong?: 'instructions' | 'message' | 'results';
+  readonly done: readonly string[];
 
-  constructor(readonly model: string, readonly refusedByProvider: boolean, options?: { cause?: unknown; summary?: ContextSummaryAttempt }) {
-    const summary = options?.summary ?? 'not_tried';
-    super(`The planner's context no longer fits ${model}'s window, even after ${summary === 'condensed' ? 'pruning older file reads and condensing the conversation' : 'pruning older file reads'}. `
-      + (summary === 'condensed'
-        ? 'Switch the planner to a model with a larger window, or narrow the request.'
-        : 'Use /compact to condense the conversation, or switch the planner to a model with a larger window.'), options);
+  constructor(readonly model: string, readonly refusedByProvider: boolean, options: ContextExhaustion = {}) {
+    const summary = options.summary ?? 'not_tried';
+    super(exhaustionText(model, refusedByProvider, { ...options, summary }), { cause: options.cause });
     this.name = 'PlannerContextExhaustedError';
     this.summary = summary;
+    if (options.untried) this.untried = options.untried;
+    if (options.tooLong) this.tooLong = options.tooLong;
+    this.done = options.done ?? [];
   }
+}
+
+/** Why the call could not be made, in what was tried, worded as estimates where they are. */
+function exhaustionText(model: string, refused: boolean, { summary, untried, tooLong }: ContextExhaustion): string {
+  if (tooLong === 'instructions') return `${model}'s window is too small for the planner's own instructions and tools, before any of the conversation.`;
+  if (tooLong === 'message') return `Your message is too long for ${model}'s window by itself, so it was not sent; nothing was cut from it.`;
+  if (tooLong === 'results') return `What the planner's last tool calls returned is too long for ${model}'s window by itself, so it was not sent.`;
+  if (untried === 'unknown_window') return `${model} refused the planner's call as too long for its window, which no catalog Ordewell holds states, so nothing was condensed on its own.`;
+  if (untried === 'off') return `${model} refused the planner's call as too long for its window, and automatic compaction is off in the settings file.`;
+  const tried = summary === 'condensed'
+    ? 'pruning older file reads and condensing the conversation'
+    : summary === 'failed' ? 'pruning older file reads, and no summary could be had to condense the rest' : 'pruning older file reads';
+  return refused
+    ? `${model} refused the planner's call as too long for its window, even after ${tried}.`
+    : `The planner's context is estimated not to fit ${model}'s window, even after ${tried}.`;
 }
 
 function positive(n: number | undefined): number | undefined {

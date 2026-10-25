@@ -22,6 +22,7 @@ Planning:
   ordewell sessions list|load|delete            Manage named sessions
   ordewell fork                   Continue in a copy of the conversation and its tasks
   ordewell compact                Condense what the planner is sent into a summary (history and tasks are kept)
+  ordewell compact retry          Retry compaction of a planner paused on its context, and carry its turn on
   ordewell rewind [<n>]           Fork the conversation from before message <n> (no <n>: list them)
   ordewell resend cancel          Keep a planner turn waiting on its usage limit from going at the reset
   ordewell handoff [action]       Review, merge, discard or clean up an isolated run

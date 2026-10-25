@@ -465,6 +465,16 @@ export class ApiClient {
     return this.turn('POST', `/api/plans/${sessionId}/conversation/compact`, 'Compaction failed');
   }
 
+  /**
+   * Retry compaction of a planner paused on its context: the paused turn
+   * opens again, so this takes as long as a reply. The plan answered carries
+   * the pause again when the retry paused too.
+   */
+  async retryPlannerCompaction(sessionId: string): Promise<PlanResponse['plan']> {
+    const route = `/api/plans/${sessionId}/conversation/compact/retry`;
+    return planOf<PlanResponse>(await this.turn('POST', route, 'Retry compaction failed'), route).plan;
+  }
+
   /** The ancestors a task waits on at its merge gate (ADR-0020); empty when nothing gates it. */
   async getMergeGate(sessionId: string, taskId: string): Promise<MergeGateEntry[]> {
     const res = await this.call<MergeGateResponse>('GET', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/merge-gate`, 'Could not read the merge gate');

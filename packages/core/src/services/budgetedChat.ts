@@ -6,7 +6,7 @@ import type { ResearchChat, ResearchTurn, ToolResult } from './BaseAiService';
 import { ChatHistory, historyProblem, messageChars, type CompactableMessage } from './contextCompaction';
 import { condensedNotice } from './conversationSummary';
 import { condense, effectLedger, summaryLimits, turnProgressNote, ContextSummaryError, type SummaryCall, type SummaryLimits, type SummarySubject } from './contextSummary';
-import { PlannerContextExhaustedError, callBudget, replyTokens, type CallBudget, type ChatBudget, type ContextSummaryAttempt, type ModelLimits } from './plannerContextBudget';
+import { CONTEXT_BUDGET, PlannerContextExhaustedError, callBudget, replyTokens, type CallBudget, type ChatBudget, type ContextExhaustion, type ContextSummaryAttempt, type ModelLimits } from './plannerContextBudget';
 
 /** What one call sends after the history: a user message, or the results of the last call's tools. */
 export interface CallInput<M> {
@@ -90,6 +90,15 @@ interface TurnPlan {
   cut: number;
 }
 
+/** How one call is fitted: the budget on the model's known window, and the estimate of its characters to a token. */
+interface Fitting {
+  limits: ModelLimits | undefined;
+  budget: CallBudget;
+  perToken: number;
+  /** Without the margin, from a measurement or a refusal; undefined while there is neither, when a guess alone never holds a call. */
+  plain: number | undefined;
+}
+
 /**
  * An API planner's chat: its message list, and each call budgeted on its
  * model's known window before it is made (`plannerContextBudget`). Older
@@ -113,6 +122,10 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
   private turn: { id: string; at: number } | null = null;
   /** The calls the open turn made that its condensed rounds no longer show, carried from one condensing to the next. */
   private done: string[] = [];
+  /** Windows the provider stated, per model, in refusing a call as too long: its own word on them. */
+  private readonly stated = new Map<string, ModelLimits>();
+  /** The smallest prompt, in characters, the provider refused per model: whatever its window says, it takes less. */
+  private readonly refusedAt = new Map<string, number>();
 
   protected constructor(
     seed: readonly M[],
@@ -131,8 +144,10 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
   protected abstract notExecuted(callId: string, name: string, text: string): M;
   /** Transcript entries as this provider's chat is seeded with them on a replay. */
   protected abstract replayed(messages: ReadonlyArray<Pick<ConversationMessage, 'role' | 'content'>>): M[];
-  /** The provider refused the call as too long for the model's window. */
+  /** The provider refused the call as too long for the model's window: its own signal for that, and nothing broader. */
   protected abstract isContextOverflow(err: unknown): boolean;
+  /** The window a refusal as too long states, in the provider's terms; undefined when it states none. */
+  protected abstract statedLimits(err: unknown): ModelLimits | undefined;
   /** Make the call, and on success add its input and the reply to the history. */
   protected abstract callApi(input: CallInput<M>, model: string, maxTokens: number, signal?: AbortSignal): Promise<ResearchTurn>;
 
@@ -159,10 +174,32 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
 
   /** Sent again in a later turn, the input carries on the turn it was held in: that turn's messages are still what it answers. */
   async resend(signal?: AbortSignal): Promise<ResearchTurn> {
+    return this.sendHeld(signal, false);
+  }
+
+  /**
+   * Whether {@link retry} can send the held input: it is held, and the
+   * model's window is known — from a catalog, or from what the provider
+   * stated in refusing the call — so a compaction knows how far to go.
+   */
+  retryable(): boolean {
+    return this.held !== null && callBudget(this.limitsFor(this.chat.model(), true), this.wantedReply) !== undefined;
+  }
+
+  /**
+   * The user's Retry compaction (ADR-0002): condense what can be condensed,
+   * with their consent whatever the settings file says, then send the held
+   * input once. Nothing else is retried: refused again, it is held again.
+   */
+  async retry(signal?: AbortSignal): Promise<ResearchTurn> {
+    return this.sendHeld(signal, true);
+  }
+
+  private async sendHeld(signal: AbortSignal | undefined, explicit: boolean): Promise<ResearchTurn> {
     if (!this.held) throw new Error('No planner input is held to send again.');
     const open = this.chat.compaction?.host.turnId();
     if (this.turn && open !== undefined) this.turn = { id: open, at: this.turn.at };
-    return this.send(this.held, signal);
+    return this.send(this.held, signal, explicit);
   }
 
   /** A history swapped in from outside says nothing of where the open turn's messages are, so nothing of it is condensed until the next turn. */
@@ -213,36 +250,106 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
     this.done = [];
   }
 
-  private async send(input: CallInput<M>, signal?: AbortSignal): Promise<ResearchTurn> {
+  /**
+   * Make the call, fitted first where a budget is known. A refusal as too
+   * long, classified narrowly by the provider's own signal, is answered once:
+   * one more compaction below the prompt it refused, then the same input once
+   * more. An explicit retry is that one attempt. Any other failure keeps its
+   * input in the history and is never retried here.
+   */
+  private async send(input: CallInput<M>, signal: AbortSignal | undefined, explicit = false): Promise<ResearchTurn> {
     this.held = null;
     const model = this.chat.model();
-    const limits = this.chat.budget?.limits(model);
-    const auto = this.chat.budget?.autoCompaction() ?? false;
+    const auto = explicit || (this.chat.budget?.autoCompaction() ?? false);
     let summary: ContextSummaryAttempt = 'not_tried';
-    if (auto) {
+    const fitted = async (): Promise<void> => {
+      const fitting = auto ? this.fitting(model, explicit) : undefined;
+      if (!fitting) return;
       try {
-        summary = await this.fit(input, model, limits, signal);
+        const attempt = await this.fit(input, model, fitting, signal);
+        if (attempt !== 'not_tried') summary = attempt;
       } catch (err) {
         if (err instanceof PlannerContextExhaustedError) throw err;
         throw this.committed(input, err);
       }
-    }
-    const call = (): Promise<ResearchTurn> => this.callApi(input, model, replyTokens(limits, this.wantedReply), signal);
+    };
+    await fitted();
+    // A window the provider stated sizes the reply whether or not anything is compacted on it.
+    let maxTokens = replyTokens(this.limitsFor(model, true), this.wantedReply);
+    const call = (): Promise<ResearchTurn> => this.callApi(input, model, maxTokens, signal);
     try {
       return await call();
     } catch (err) {
       if (!this.isContextOverflow(err)) throw this.committed(input, err);
-      // The estimate was short, or the window unknown: one more pass, sparing
-      // only this turn's newest rounds, and the same input once more.
-      const freed = auto ? this.prune(Infinity, this.turnStart(input)) : 0;
-      this.announcePruned(freed);
-      if (freed === 0) throw this.exhausted(input, model, err, summary);
+      const refused = this.charsWith(input);
+      this.learnRefusal(model, err, refused, maxTokens);
+      const budgeted = this.chat.budget !== undefined;
+      const untried = explicit || !budgeted ? undefined : !auto ? 'off' : this.fitting(model, false) === undefined ? 'unknown_window' : undefined;
+      if (explicit || !budgeted || untried) throw this.exhausted(input, model, err, { summary, ...(untried ? { untried } : {}) });
+      // Fitted below the prompt refused: one the compaction could not make smaller is not sent again.
+      await fitted();
+      maxTokens = replyTokens(this.limitsFor(model, true), this.wantedReply);
       try {
         return await call();
       } catch (again) {
-        throw this.isContextOverflow(again) ? this.exhausted(input, model, again, summary) : this.committed(input, again);
+        if (!this.isContextOverflow(again)) throw this.committed(input, again);
+        this.learnRefusal(model, again, this.charsWith(input), maxTokens);
+        throw this.exhausted(input, model, again, { summary });
       }
     }
+  }
+
+  /**
+   * What a refusal teaches about the model: the window, where the provider
+   * stated it, and that the prompt it refused ran to more tokens than fit —
+   * so its characters went to tokens more densely than any estimate said.
+   */
+  private learnRefusal(model: string, err: unknown, chars: number, maxTokens: number): void {
+    const stated = this.statedLimits(err);
+    if (stated) this.stated.set(model, stated);
+    this.refusedAt.set(model, Math.min(this.refusedAt.get(model) ?? Infinity, chars));
+    const limits = this.limitsFor(model, true);
+    const window = stated?.inputTokenLimit ?? stated?.contextWindow;
+    const tokens = stated?.inputTokenLimit ?? (window !== undefined ? window - maxTokens : callBudget(limits, this.wantedReply)?.promptLimit);
+    if (tokens !== undefined) this.chat.budget?.gauge.refused(model, chars, tokens);
+  }
+
+  /**
+   * The model's limits as a call is budgeted on them: the catalog's, with the
+   * window a provider stated in refusing a call in its place. A window no
+   * catalog states is compacted against only by an explicit retry —
+   * automatic compaction stays off for it — though it always sizes the reply.
+   */
+  private limitsFor(model: string, explicit: boolean): ModelLimits | undefined {
+    const catalog = this.chat.budget?.limits(model);
+    const stated = this.stated.get(model);
+    if (!stated || (!explicit && callBudget(catalog, this.wantedReply) === undefined)) return catalog;
+    return { ...catalog, ...stated };
+  }
+
+  /** How a call on `model` is fitted now; undefined where no window is known, or nothing budgets this chat. */
+  private fitting(model: string, explicit: boolean): Fitting | undefined {
+    const gauge = this.chat.budget?.gauge;
+    const limits = this.limitsFor(model, explicit);
+    const budget = callBudget(limits, this.wantedReply);
+    if (!budget || !gauge) return undefined;
+    const perToken = gauge.charsPerToken(model);
+    const plain = gauge.plainCharsPerToken(model);
+    return { limits, budget: this.belowRefused(model, budget, plain ?? perToken), perToken, plain };
+  }
+
+  /**
+   * A prompt the provider refused bounds every later one on the same model,
+   * whatever window it states or a catalog does: the budget stays below it,
+   * at the same share of it as of a known window, so the turn's next calls
+   * are compacted before they are sent rather than refused one by one.
+   */
+  private belowRefused(model: string, budget: CallBudget, perToken: number): CallBudget {
+    const refused = this.refusedAt.get(model);
+    if (refused === undefined) return budget;
+    const promptLimit = Math.min(budget.promptLimit, Math.floor(refused / perToken) - 1);
+    const ceiling = Math.min(budget.ceiling, Math.floor(promptLimit * CONTEXT_BUDGET.fillShare));
+    return { ...budget, promptLimit, ceiling, lowWater: Math.floor(ceiling * CONTEXT_BUDGET.lowWaterShare) };
   }
 
   private charsWith(input: CallInput<M>): number {
@@ -257,11 +364,8 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
    * estimate without its margin, the call is not made: the input is held and
    * the turn ends on a typed error.
    */
-  private async fit(input: CallInput<M>, model: string, limits: ModelLimits | undefined, signal?: AbortSignal): Promise<ContextSummaryAttempt> {
-    const budget = callBudget(limits, this.wantedReply);
-    const gauge = this.chat.budget?.gauge;
-    if (!budget || !gauge) return 'not_tried';
-    const perToken = gauge.charsPerToken(model);
+  private async fit(input: CallInput<M>, model: string, fitting: Fitting, signal?: AbortSignal): Promise<ContextSummaryAttempt> {
+    const { budget, perToken, plain } = fitting;
     const over = (): boolean => this.charsWith(input) / perToken > budget.ceiling;
     if (!over()) return 'not_tried';
     const toLowWater = (): number => this.charsWith(input) - budget.lowWater * perToken;
@@ -270,13 +374,21 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
     this.announcePruned(freed);
     let summary: ContextSummaryAttempt = 'not_tried';
     let cause: unknown;
-    if (over()) ({ summary, cause } = await this.condense(input, model, limits, budget, perToken, signal));
-    const plain = gauge.plainCharsPerToken(model);
+    if (over()) ({ summary, cause } = await this.condense(input, model, fitting, signal));
     if (plain !== undefined && this.charsWith(input) / plain > budget.promptLimit) {
       this.held = input;
-      throw new PlannerContextExhaustedError(model, false, { cause, summary });
+      const tooLong = this.tooLong(input, budget.promptLimit * plain);
+      throw new PlannerContextExhaustedError(model, false, { cause, summary, done: this.turnLedger(), ...(tooLong ? { tooLong } : {}) });
     }
     return summary;
+  }
+
+  /** What no compaction can shorten that is by itself past `limit` characters: the instructions and tools, or with them the input. */
+  private tooLong(input: CallInput<M>, limit: number): 'instructions' | 'message' | 'results' | undefined {
+    const head = this.history.view()[0];
+    const fixed = (head ? messageChars(head) : 0) + this.toolsChars;
+    if (fixed > limit) return 'instructions';
+    return fixed + charsOf(input.messages) > limit ? input.kind : undefined;
   }
 
   /**
@@ -287,9 +399,8 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
    * announced for both, under the checkpoint's id, and its end always follows
    * its start — `paused` when the call still cannot be made.
    */
-  private async condense(
-    input: CallInput<M>, model: string, limits: ModelLimits | undefined, budget: CallBudget, perToken: number, signal?: AbortSignal,
-  ): Promise<{ summary: ContextSummaryAttempt; cause?: unknown }> {
+  private async condense(input: CallInput<M>, model: string, fitting: Fitting, signal?: AbortSignal): Promise<{ summary: ContextSummaryAttempt; cause?: unknown }> {
+    const { limits, budget, perToken, plain } = fitting;
     const compaction = this.chat.compaction;
     const turn = this.turn;
     if (!compaction || !turn || compaction.host.turnId() !== turn.id) return { summary: 'not_tried' };
@@ -332,7 +443,6 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
         const plan = this.planTurn(input, room, allowance);
         return plan ? this.condenseTurn(plan, summarize) : false;
       });
-      const plain = this.chat.budget?.gauge.plainCharsPerToken(model);
       const fits = plain === undefined || this.charsWith(input) / plain <= budget.promptLimit;
       outcome = !fits ? 'paused' : condensed ? 'condensed' : cause ? 'failed' : 'unchanged';
     } finally {
@@ -458,9 +568,20 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
     return err;
   }
 
-  private exhausted(input: CallInput<M>, model: string, cause: unknown, summary: ContextSummaryAttempt): PlannerContextExhaustedError {
+  private exhausted(input: CallInput<M>, model: string, cause: unknown, details: Omit<ContextExhaustion, 'cause' | 'done'>): PlannerContextExhaustedError {
     this.held = input;
-    return new PlannerContextExhaustedError(model, true, { cause, summary });
+    return new PlannerContextExhaustedError(model, true, { ...details, cause, done: this.turnLedger() });
+  }
+
+  /**
+   * The calls the open turn made that changed something or reached out,
+   * held results included: what a recovery that cannot send the held input
+   * tells the planner it already did.
+   */
+  private turnLedger(): string[] {
+    const from = this.turn?.at ?? Math.max(0, this.history.lastUserIndex);
+    const results = this.held?.kind === 'results' ? this.held.messages : [];
+    return [...this.done, ...effectLedger([...this.history.view().slice(from), ...results])];
   }
 }
 

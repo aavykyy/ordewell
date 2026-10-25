@@ -495,7 +495,7 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   // The usage rows are the session's (or the opened task's), not lines of the
   // transcript: they keep the pane's bottom rows while everything above them
   // scrolls — unless the pane is a single row, which belongs to the conversation.
-  const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, cols) : [...plannerResendRow(state, cols), ...tokenRow(blocks, cols)];
+  const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, cols) : [...plannerPauseRow(state, cols), ...plannerResendRow(state, cols), ...tokenRow(blocks, cols)];
   // The per-model rows are the expendable part: they yield to the transcript
   // so a short pane never trades its last conversation row for a breakdown.
   const footer = usage.slice(0, Math.max(1, rows - taskHeader.length - 1));
@@ -512,6 +512,13 @@ function plannerResendRow(state: TuiState, cols: number): string[] {
   if (!plannerResend || !at || Number.isNaN(at.getTime())) return [];
   const whose = plannerResend.runner ? `${plannerResend.runner}'s` : "the planner's";
   return [style.yellow(truncate(`⏸ Resending at ${resumeTime(at)}, once ${whose} usage limit resets · /resend cancel keeps it for your next message`, cols))];
+}
+
+/** The planner paused on its context, pinned beside the usage rows; not while a turn runs, which a retry is. */
+function plannerPauseRow(state: TuiState, cols: number): string[] {
+  const { plannerPause } = state;
+  if (!plannerPause || plannerInFlight(state)) return [];
+  return [style.yellow(truncate(`⏸ Planner paused: its context does not fit ${plannerPause.model}'s window · /compact retry condenses it and carries on · /stop drops the turn`, cols))];
 }
 
 const tokenRow = (blocks: readonly DisplayBlock[], cols: number): string[] => {
