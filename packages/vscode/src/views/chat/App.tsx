@@ -19,12 +19,10 @@ import type { TaskDraft } from './components/NewTaskCard';
 import type { GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId } from '@ordewell/core';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 import { planSummaryLabel, nextDock } from './planDock';
-import { DetailContext } from './detail';
 import { OpenPatchContext } from './openPatch';
 import { useFollowOutput } from './followOutput';
 import { isBuiltinSlashCommand, slashHelp } from '../../commands/slashCommands';
 import type { HostToWebview, SettingsChange, WebviewToHost } from '../../shared/protocol';
-import { hasHiddenDetail } from '@ordewell/core/plan-utils';
 import { patchedBlocks } from '../../shared/conversationPatch';
 
 declare function acquireVsCodeApi(): {
@@ -81,8 +79,6 @@ export default function App() {
   const setDockHeight = useCallback((v: number | undefined) => dispatch({ type: 'patchDockHeight', height: v }), []);
   const setDockExpanded = useCallback((v: Updatable<boolean>) => dispatch({ type: 'patchDockExpanded', expanded: v }), []);
   const blocks = useMemo(() => patchedBlocks(conversation), [conversation]);
-  const [detailAll, setDetailAll] = useState(false);
-  const detail = useMemo(() => ({ detailAll, setDetailAll }), [detailAll]);
   /** A first Esc during a planner turn: one more within `STOP_ARM_MS` stops it. */
   const [stopArmed, setStopArmed] = useState(false);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
@@ -638,7 +634,6 @@ export default function App() {
   const streaming = blocks.some((b) => (b.type === 'message' || b.type === 'thinking') && b.streaming);
   /** The one usage block, drawn pinned below the conversation rather than scrolling in it. */
   const usageBlock = useMemo(() => blocks.find((b) => b.type === 'usage'), [blocks]);
-  const hasDetail = useMemo(() => hasHiddenDetail(blocks), [blocks]);
 
   /**
    * The plan, mounted once. Not a timeline entry: it is the live control surface
@@ -783,7 +778,6 @@ export default function App() {
 
   return (
     <OpenPatchContext.Provider value={handleOpenPatch}>
-    <DetailContext.Provider value={detail}>
     <div className="chat-container">
       <div className="setup-panel">
         <button
@@ -911,20 +905,6 @@ export default function App() {
         </div>
       </div>
 
-      {hasDetail && (
-        <div className="chat-header">
-          <button
-            type="button"
-            className="detail-toggle"
-            aria-pressed={detailAll}
-            onClick={() => setDetailAll((v) => !v)}
-            title="Show or hide the full thinking, command and subagent detail for the whole conversation"
-          >
-            {detailAll ? 'Collapse all' : 'Expand all'}
-          </button>
-        </div>
-      )}
-
       {slashOutput && (
         <div className="slash-output">{slashOutput}</div>
       )}
@@ -977,8 +957,8 @@ export default function App() {
         )}
 
         <ConversationBlocks
+          key={host.conversationEpoch}
           blocks={blocks}
-          detailAll={detailAll}
           onShowPlan={handleShowPlan}
           onResolveApproval={handleResolveApproval}
         />
@@ -1013,7 +993,6 @@ export default function App() {
         skills={skills}
       />
     </div>
-    </DetailContext.Provider>
     </OpenPatchContext.Provider>
   );
 }

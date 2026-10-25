@@ -244,6 +244,32 @@ export const TASK_LOG_PENDING = [
   { type: 'message_queued', messageId: 'm3', text: 'stop — the schema is in docs/schema.json', forced: true },
 ];
 
+/**
+ * A task's log (ADR-0018, V1) mid-turn, for its folded activity (ADR-0017,
+ * X1): a run of thinking and calls, one failed; a subagent with its own steps;
+ * the agent's words between; and a write still waiting on the user.
+ */
+export const TASK_LOG_ACTIVITY = [
+  { type: 'turn_start', message: 'Add a JSON parser' },
+  { type: 'thinking', text: 'Find the existing parser, then check the spec it has to follow.\nThe tests will say which edge cases matter.' },
+  { type: 'tool_call', id: 'c1', name: 'Bash', args: '{"command":"git ls-files src | grep -i parse"}' },
+  { type: 'tool_result', id: 'c1', output: 'src/parse/index.ts\nsrc/parse/tokens.ts\nsrc/parse/errors.ts\nsrc/parse/__tests__/index.test.ts\nsrc/parse/__tests__/tokens.test.ts', success: true },
+  { type: 'tool_call', id: 'c2', name: 'Read', args: '{"file_path":"/home/dev/app/.ordewell/worktrees/3c3de77a/2-add-a-json-parser/src/parse/index.ts"}' },
+  { type: 'tool_result', id: 'c2', output: 'export function parse(text: string) {\n  return JSON.parse(text);\n}', success: true },
+  { type: 'tool_call', id: 'c3', name: 'WebFetch', args: '{"url":"https://www.rfc-editor.org/rfc/rfc8259"}' },
+  { type: 'tool_result', id: 'c3', output: 'Request failed: 403 Forbidden', success: false },
+  { type: 'tool_call', id: 'c4', name: 'Task', args: '{"description":"Survey error handling","prompt":"How do the parsers report errors?"}' },
+  { type: 'subagent_started', subagentId: 'c4', brief: 'Survey error handling', model: 'claude-haiku-5-5' },
+  { type: 'tool_call', id: 'c5', name: 'Grep', args: '{"pattern":"throw new ParseError","path":"src"}', subagentId: 'c4' },
+  { type: 'tool_result', id: 'c5', output: 'src/parse/errors.ts:4\nsrc/parse/tokens.ts:31\nsrc/parse/tokens.ts:58', success: true, subagentId: 'c4' },
+  { type: 'tool_call', id: 'c6', name: 'Read', args: '{"file_path":"src/parse/errors.ts"}', subagentId: 'c4' },
+  { type: 'tool_result', id: 'c6', output: 'export class ParseError extends Error {\n  constructor(readonly at: number, message: string) { super(message); }\n}', success: true, subagentId: 'c4' },
+  { type: 'subagent_finished', subagentId: 'c4', outcome: 'done', digest: 'Every parser throws ParseError with the offset it stopped at.' },
+  { type: 'text', text: 'The parser is a thin wrapper today. I will add a streaming tokenizer that throws `ParseError` with offsets.' },
+  { type: 'tool_call', id: 'c7', name: 'Write', args: '{"file_path":"src/parse/stream.ts","content":"export {}"}' },
+  { type: 'approval_requested', approvalId: 'ap-1', tool: 'Write', args: '{"file_path":"src/parse/stream.ts","content":"export {}"}', allowForTask: true },
+];
+
 const sub = (id, order, title, status) => ({
   id, order, title, description: title, type: 'ai', status, dependencies: [], subtasks: [], assignedRunner: 'claude-code', taskMode: 'acceptEdits', prompt: `${title}.`,
 });

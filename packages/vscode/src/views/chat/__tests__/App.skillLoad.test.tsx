@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { render, fireEvent, act } from '@testing-library/react';
 import type { ConversationMessage, SessionMessage, SkillLoadNotice } from '@ordewell/core';
 import App from '../App';
-import { api, hostBridge, post, rowKinds } from './hostBridge';
+import { api, hostBridge, openActivity, post, rowKinds } from './hostBridge';
 
 const TURN = 'turn-1';
 const grilling: SkillLoadNotice = { invokedBy: 'user', name: 'grilling', source: 'global', path: '~/.ordewell/skills/grilling/SKILL.md' };
@@ -47,12 +47,16 @@ describe('a message that loads a skill', () => {
   it('shows planner attribution live and on reload, without marking a user token', () => {
     const skill: SkillLoadNotice = { ...grilling, invokedBy: 'planner' };
     host.session(turnStarted('/grilling goal'), { type: 'planner_skill_loaded', turnId: TURN, skill });
+    // The planner's load is part of its turn's activity, not an answer to the user's message.
+    expect(document.querySelector('.activity-group-toggle')!.textContent).toBe('Loaded a skill');
+    openActivity();
     expect(notices()).toEqual(['● grilling skill loaded by planner · ~/.ordewell/skills/grilling/SKILL.md']);
     expect(marked()).toEqual([]);
     act(() => host.provider.conversation.reload({ conversationHistory: [
       { role: 'user', content: '/grilling goal', timestamp: 't1' },
       { role: 'assistant', content: 'grilling skill loaded by planner', timestamp: 't2', kind: 'skill_load', skill: { ...skill, content: 'HIDDEN BODY' } },
     ] }));
+    openActivity();
     expect(notices()).toEqual(['● grilling skill loaded by planner · ~/.ordewell/skills/grilling/SKILL.md']);
     expect(marked()).toEqual([]);
     expect(document.body.textContent).not.toContain('HIDDEN BODY');

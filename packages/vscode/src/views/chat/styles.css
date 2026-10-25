@@ -654,7 +654,7 @@ body {
   display: block;
   margin-left: 27px;
   font-size: 10px;
-  color: var(--text-muted);
+  color: var(--text-hint);
 }
 
 .subagent-card {
@@ -689,7 +689,7 @@ body {
 .subagent-card-brief {
   flex: 1;
   min-width: 0;
-  color: var(--text-secondary);
+  color: var(--text-hint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -719,6 +719,161 @@ body {
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ---- Activity disclosures (ADR-0017, X1) ----
+   Each run of activity between two messages is one quiet line saying what it
+   did; opening it shows its rows as previews, and each row opens on its own.
+   Every switch is a native button, so the theme's focus ring, Enter and Space
+   come with it; the chevron is the only mark that it opens. */
+.disclosure {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 1px 4px;
+  margin: 0 -4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  /* A header is still text a reader may want to copy: a click that ends a
+     selection does not toggle (ChatMessage's `selecting`). */
+  user-select: text;
+}
+
+.disclosure:hover {
+  background: var(--bg-card-row-hover);
+}
+
+.disclosure:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.disclosure-chevron {
+  flex-shrink: 0;
+  align-self: center;
+  color: var(--text-muted);
+  transition: transform var(--transition-fast);
+}
+
+.disclosure[aria-expanded='true'] > .disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+.disclosure:hover > .disclosure-chevron {
+  color: var(--text-primary);
+}
+
+.activity-group {
+  margin: 1px 14px;
+  font-size: 11px;
+}
+
+.activity-group-toggle {
+  width: calc(100% + 8px);
+  color: var(--text-secondary);
+}
+
+.activity-group-toggle:hover {
+  color: var(--text-primary);
+}
+
+.activity-group-summary {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.activity-group[data-state='running'] .activity-group-toggle > .disclosure-chevron {
+  color: var(--accent);
+  animation: cmd-row-pulse 1.4s ease-in-out infinite;
+}
+
+/* The rows hang off the line that summarised them, a step in. */
+.activity-group-body {
+  margin: 1px 0 4px 4px;
+  padding-left: 9px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.activity-group-body > .activity-think,
+.activity-group-body > .cmd-row,
+.activity-group-body > .subagent-card,
+.activity-group-body > .approval-card {
+  margin: 3px 0;
+}
+
+/* Notices inside a group read as rows, not as centred lines between messages. */
+.activity-group-body > .chat-msg-system {
+  align-items: stretch;
+  padding: 2px 0;
+}
+
+.activity-group-body > .chat-msg-system > .chat-msg-content,
+.activity-group-body > .chat-msg-system {
+  text-align: left;
+}
+
+.activity-think-head.disclosure,
+.cmd-row-toggle,
+.runner-loaded-head.disclosure {
+  flex: 1;
+}
+
+.activity-think-head.disclosure {
+  width: calc(100% + 8px);
+}
+
+.subagent-card-header.disclosure {
+  width: calc(100% + 8px);
+}
+
+.runner-loaded-head.disclosure {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* What a row opens lines up under its head, past the chevron. */
+.cmd-row-body,
+.activity-think-pre {
+  margin-left: 16px;
+}
+
+/* A report's fold opens it; quiet until pointed at. */
+.report-toggle {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 10px;
+  color: var(--text-hint);
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-report .report-toggle {
+  margin-left: 0;
+}
+
+.report-toggle:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.report-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+body.vscode-high-contrast .disclosure:hover,
+body.vscode-high-contrast-light .disclosure:hover {
+  border-color: var(--vscode-contrastActiveBorder, var(--accent));
+  border-style: dashed;
 }
 
 .plan-revision-chip:disabled {
@@ -4887,39 +5042,6 @@ body.vscode-high-contrast-light .task-card.expanded {
   color: var(--red);
 }
 
-/* ---- Chat header: the one expansion control (#53) ----
-   Detail is one switch for the whole conversation, so it lives in the header
-   rather than on each block. */
-.chat-header {
-  display: flex;
-  justify-content: flex-end;
-  flex-shrink: 0;
-  padding: 2px 10px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.detail-toggle {
-  padding: 2px 8px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-muted);
-  font-family: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.detail-toggle:hover {
-  color: var(--accent);
-  background: var(--bg-hover);
-}
-
-.detail-toggle[aria-pressed='true'] {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-}
-
 /* ---- Pending messages ----
    Typed during a turn and not yet read: a compact stack above the composer in
    the user bubble's shape, tinted and dashed because it has not gone yet.
@@ -5815,4 +5937,15 @@ body.vscode-high-contrast-light .pending-message {
 
 .task-handoff-commit-body {
   white-space: pre-wrap;
+}
+
+/* The activity disclosures' chevrons hold still for a reader who asked for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  .disclosure-chevron {
+    transition: none;
+  }
+
+  .activity-group[data-state='running'] .activity-group-toggle > .disclosure-chevron {
+    animation: none;
+  }
 }
