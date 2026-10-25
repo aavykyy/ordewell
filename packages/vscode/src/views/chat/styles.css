@@ -438,7 +438,7 @@ body {
   word-break: break-word;
 }
 
-/* ---- ChatMessage: inline working indicator ---- */
+/* ---- Planner working indicator: spinner, and the row pinned above the composer ---- */
 
 .chat-msg-spinner {
   display: inline-block;
@@ -458,7 +458,8 @@ body {
 }
 
 .chat-msg-working {
-  padding: 6px 14px;
+  flex-shrink: 0;
+  padding: 4px 14px;
   font-size: 12px;
   color: var(--text-muted);
   display: flex;

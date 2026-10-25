@@ -79,6 +79,52 @@ describe('ConversationViewHost', () => {
     expect(screen.posts).toEqual([{ type: 'plannerLiveness' }]);
   });
 
+  describe('plannerTurnAlive', () => {
+    const alive = () => screen.posts.filter((m) => m.type === 'plannerTurnAlive').length;
+    const readStep: SessionMessage = { type: 'research_step', tool: 'read_file', args: '{"path":"a.ts"}', turnId: TURN };
+
+    it('says the open turn is still out once per flush of its own events', () => {
+      host.receive(started);
+      host.receive(delta('a'));
+      host.receive({ type: 'planner_thinking_delta', turnId: TURN, text: 'hm' });
+      vi.runAllTimers();
+      host.receive(readStep);
+      vi.runAllTimers();
+
+      expect(alive()).toBe(2);
+    });
+
+    it('is not sent for the turn opening, nor for liveness, which names no turn', () => {
+      host.receive(started);
+      host.receive({ type: 'planner_liveness' });
+      vi.runAllTimers();
+
+      expect(alive()).toBe(0);
+    });
+
+    it('is not sent for events of another turn, or once the turn is closed', () => {
+      host.receive(started);
+      host.receive({ ...readStep, turnId: 'old' } as SessionMessage);
+      vi.runAllTimers();
+      host.receive(delta('last'));
+      host.receive({ type: 'planner_turn_ended', turnId: TURN, outcome: 'message' });
+      host.receive(readStep);
+      vi.runAllTimers();
+
+      expect(alive()).toBe(0);
+    });
+
+    it('is not sent for what a stopped turn still streams', () => {
+      host.receive(started);
+      host.stop();
+      host.receive(delta('late'));
+      host.receive(readStep);
+      vi.runAllTimers();
+
+      expect(alive()).toBe(0);
+    });
+  });
+
   it('shows the user\'s prompt at once, and the turn that answers it adopts that line', () => {
     host.note('user', 'add a parser');
     host.receive(started);

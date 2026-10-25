@@ -75,7 +75,6 @@ export default function App() {
     skills, taskSkills, checkpoint, taskOutput, run, dockExpanded, dockHeight, settingsRequest, accountLimits,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
-  const setIsResearchActive = useCallback((v: boolean) => dispatch({ type: 'patchResearchActive', active: v }), []);
   const setError = useCallback((v: string) => dispatch({ type: 'patchError', error: v }), []);
   const setIsReady = useCallback((v: boolean) => dispatch({ type: 'patchReady', ready: v }), []);
   const setRunners = useCallback((v: Updatable<RunnerId[]>) => dispatch({ type: 'patchRunners', runners: v }), []);
@@ -107,9 +106,9 @@ export default function App() {
     processingRef.current = isResearchActive || isExecuting;
   }, [isResearchActive, isExecuting]);
 
-  // The working line is drawn below the conversation blocks, and the stack of
-  // queued prompts above the composer takes height from the list: each must
-  // be followed too, or the newest output ends up past the fold.
+  // The pinned working line and the stack of queued prompts above the
+  // composer take height from the list: each must be followed too, or the
+  // newest output ends up past the fold.
   const followRef = useFollowOutput<HTMLDivElement>(blocks, held, isResearchActive);
   const messageListCallbackRef = useCallback((el: HTMLDivElement | null) => {
     messageListRef.current = el;
@@ -165,7 +164,7 @@ export default function App() {
     lastActivityRef.current = Date.now();
     const timer = setInterval(() => {
       if (Date.now() - lastActivityRef.current < WATCHDOG_MS) return;
-      setIsResearchActive(false);
+      dispatch({ type: 'turnLost' });
       pushSystem('The planner stopped responding, so the input was re-enabled. Your last message may not have been processed: try sending it again.');
     }, 5_000);
     return () => clearInterval(timer);
@@ -618,7 +617,6 @@ export default function App() {
   );
 
   const hasContent = blocks.length > 0 || isResearchActive || isExecuting || !!error;
-  const streaming = blocks.some((b) => (b.type === 'message' || b.type === 'thinking') && b.streaming);
   /** The one usage block, drawn pinned below the conversation rather than scrolling in it. */
   const usageBlock = useMemo(() => blocks.find((b) => b.type === 'usage'), [blocks]);
   const hasDetail = useMemo(() => hasHiddenDetail(blocks), [blocks]);
@@ -964,12 +962,6 @@ export default function App() {
           onShowPlan={handleShowPlan}
           onResolveApproval={handleResolveApproval}
         />
-
-        {isResearchActive && !streaming && (
-          <div className="chat-msg-working">
-            <span className="chat-msg-spinner" /> Working&hellip;
-          </div>
-        )}
       </div>
 
       {renderPlanDock()}
@@ -977,6 +969,16 @@ export default function App() {
       {usageBlock && <UsageLine block={usageBlock} />}
       {/* Not inside the usage line: limits are known before the planner's first call, and with a planner that reports none. */}
       <AccountLimitRows limits={accountLimits} />
+
+      {/* Pinned rather than the list's last row, and drawn for the whole turn:
+          a turn can go minutes with nothing new to show, its thinking block
+          still marked streaming while the model writes a tool call's input,
+          and a reader scrolled back up would not see a row in the list. */}
+      {isResearchActive && (
+        <div className="chat-msg-working" role="status">
+          <span className="chat-msg-spinner" aria-hidden="true" /> Working&hellip;
+        </div>
+      )}
 
       {stopArmed && <div className="stop-hint" role="status">Press Esc again to stop</div>}
 

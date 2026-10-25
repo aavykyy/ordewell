@@ -34,6 +34,8 @@ export class ConversationViewHost {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private gate: TurnGate = NO_TURN;
   private held: PromptHold = EMPTY_HOLD;
+  /** The open turn produced output since the last flush; see `plannerTurnAlive`. */
+  private alive = false;
 
   constructor(private readonly post: (msg: HostToWebview) => void) {}
 
@@ -48,7 +50,14 @@ export class ConversationViewHost {
     }
     const wasOpen = this.gate.open;
     this.update(followTurn(this.view, this.gate, msg));
-    if (this.gate.open !== wasOpen) this.announceTurn();
+    if (this.gate.open !== wasOpen) {
+      this.announceTurn();
+    } else if (wasOpen !== null && 'turnId' in msg && msg.turnId === wasOpen) {
+      // Only an event tagged with the turn the gate holds open: untagged or
+      // late traffic of an ended or stopped one must never re-lock the input.
+      this.alive = true;
+      this.timer ??= setTimeout(() => this.flush(), FLUSH_MS);
+    }
   }
 
   note(role: LocalEntry['role'], text: string): void {
@@ -158,6 +167,8 @@ export class ConversationViewHost {
     const patch = diffConversation(this.sent, this.view.blocks);
     this.sent = this.view.blocks;
     if (patch) this.post(patch);
+    if (this.alive && this.gate.open !== null) this.post({ type: 'plannerTurnAlive' });
+    this.alive = false;
   }
 
   // A turn still open belongs to the view being replaced; stopping it keeps

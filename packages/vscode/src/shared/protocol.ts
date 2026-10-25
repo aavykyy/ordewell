@@ -191,6 +191,12 @@ export type HostToWebview =
   | { type: 'plannerTurn'; active: boolean }
   /** The planner is working without producing anything visible; keeps the webview's watchdog quiet. */
   | { type: 'plannerLiveness' }
+  /**
+   * The open turn itself produced something: an event carrying its turn id.
+   * Unlike liveness, which names no turn, this says the turn is still out, so
+   * a webview whose watchdog gave up on it locks the composer again.
+   */
+  | { type: 'plannerTurnAlive' }
   | { type: 'planUpdated'; plan: SurfacePlan }
   /**
    * The run as the host folded every session event: each task's plan fields and
