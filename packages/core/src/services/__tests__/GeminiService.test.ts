@@ -367,7 +367,7 @@ describe('Gemini turn budgets', () => {
     left = 39;
     await service.continueConversation('in-process', () => {});
 
-    expect(requests.map((r) => sentTurn(r).parts[0].text)).toEqual([
+    expect(requests.map((r) => sentTurn(r).parts.at(-1)?.text)).toEqual([
       'add a cache\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 40.',
       'in-process\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 39.',
     ]);

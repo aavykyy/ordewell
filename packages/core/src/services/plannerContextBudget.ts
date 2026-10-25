@@ -219,8 +219,10 @@ function exhaustionText(model: string, refused: boolean, { summary, untried, too
   const tried = summary === 'condensed'
     ? 'pruning older file reads and condensing the conversation'
     : summary === 'failed' ? 'pruning older file reads, and no summary could be had to condense the rest' : 'pruning older file reads';
-  return refused
-    ? `${model} refused the planner's call as too long for its window, even after ${tried}.`
+  if (refused) return `${model} refused the planner's call as too long for its window, even after ${tried}.`;
+  // A condensed call is held past the share of the window it was condensed for, which may be short of the window itself.
+  return summary === 'condensed'
+    ? `The planner's context is estimated past the ${Math.round(CONTEXT_BUDGET.fillShare * 100)}% of ${model}'s window it is kept to, even after ${tried}.`
     : `The planner's context is estimated not to fit ${model}'s window, even after ${tried}.`;
 }
 

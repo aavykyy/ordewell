@@ -105,6 +105,29 @@ describe('loading a session while the daemon runs a planner turn', () => {
     return fold(initialState({ rows: 30, cols: 100 }), actions).state;
   }
 
+  it('leaves the planner free when that turn\'s end reached the socket while the load was answered', async () => {
+    const actions: Action[] = [];
+    let onEvent: ((event: SessionMessage) => void) | undefined;
+    const api: Partial<OrdewellApi> = {
+      followSession: (_id, handler) => {
+        onEvent = handler as (event: SessionMessage) => void;
+        return { ready: Promise.resolve(true), ended: new Promise(() => {}), close: () => {} };
+      },
+      adoptSession: vi.fn().mockImplementation(async () => {
+        onEvent!({ type: 'planner_turn_ended', turnId: 't1', outcome: 'message' });
+        return { plan: { tasks: [] }, goal: 'g', plannerTurnId: 't1' };
+      }),
+    };
+    await runEffect({ type: 'loadSession', sessionId: 's2' }, deps(api, actions));
+    const { state } = fold(initialState({ rows: 30, cols: 100 }), actions);
+
+    expect(plannerInFlight(state)).toBe(false);
+    expect(state.planner).toBe('idle');
+    expect(state.turnGate.open).toBeNull();
+    const sent = reduce(typed(state, 'and a README'), { type: 'key', key: { name: 'enter' } });
+    expect(sent.effects.filter((e) => e.type === 'sendMessage')).toEqual([{ type: 'sendMessage', sessionId: 's2', message: 'and a README' }]);
+  });
+
   it('keeps the planner busy through a compaction inside that turn, until the turn itself ends', async () => {
     const during = fold(await loaded(), [heard(compaction('started')), heard(compaction('ended'))]).state;
 

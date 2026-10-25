@@ -102,13 +102,8 @@ interface Fitting {
   perToken: number;
   /** Without the margin, from a measurement or a refusal; undefined while there is neither, when a guess alone never holds a call. */
   plain: number | undefined;
-  /**
-   * What a call that was condensed for is held on: the plain ratio, or with
-   * none, the estimate the condensing was planned on — summaries were paid
-   * for to make room, and a call that estimate says still cannot fit is not
-   * sent to be refused. Undefined on the user's Retry, which sends once.
-   */
-  condensedBasis: number | undefined;
+  /** The user's Retry, which sends once whatever the estimate. */
+  explicit: boolean;
 }
 
 /**
@@ -351,7 +346,24 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
     if (!budget || !gauge) return undefined;
     const perToken = gauge.charsPerToken(model);
     const plain = gauge.plainCharsPerToken(model);
-    return { limits, budget: this.belowRefused(model, budget, plain ?? perToken), perToken, plain, condensedBasis: plain ?? (explicit ? undefined : perToken) };
+    return { limits, budget: this.belowRefused(model, budget, plain ?? perToken), perToken, plain, explicit };
+  }
+
+  /**
+   * Past how many characters a fitted call is held rather than sent, and the
+   * characters to a token that is judged on; undefined where nothing holds
+   * it, as on the user's Retry. A call a summary was committed for is held
+   * to the ceiling it was condensed for, on the model's own measurement or,
+   * with none, the estimate the condensing was planned on: summaries were
+   * paid for to bring it under the budget, and one still past it is not sent
+   * on the chance the model takes it. Any other call is held only past what
+   * the model takes, and only on a measurement.
+   */
+  private holdLimit(fitting: Fitting, condensed: boolean): { chars: number; basis: number } | undefined {
+    const { budget, perToken, plain, explicit } = fitting;
+    if (explicit) return undefined;
+    if (condensed) return { chars: budget.ceiling * (plain ?? perToken), basis: plain ?? perToken };
+    return plain === undefined ? undefined : { chars: budget.promptLimit * plain, basis: plain };
   }
 
   /**
@@ -376,10 +388,9 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
    * Bring the call under its model's ceiling before it is made. Prune down to
    * low water — older rounds, keeping the newest anywhere; then, if that is not
    * enough, the rounds of turns before this one — and where even that leaves
-   * the call over, condense by summary. Still over the window by a measured
-   * estimate without its margin — or, once a summary was committed for it, by
-   * the estimate it was condensed on — the call is not made: the input is
-   * held and the turn ends on a typed error.
+   * the call over, condense by summary. Still past what {@link holdLimit}
+   * allows, the call is not made: the input is held and the turn ends on a
+   * typed error.
    */
   private async fit(input: CallInput<M>, model: string, fitting: Fitting, signal?: AbortSignal): Promise<ContextSummaryAttempt> {
     const { budget, perToken } = fitting;
@@ -392,10 +403,11 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
     let summary: ContextSummaryAttempt = 'not_tried';
     let cause: unknown;
     if (over()) ({ summary, cause } = await this.condense(input, model, fitting, signal));
-    const basis = summary === 'condensed' ? fitting.condensedBasis : fitting.plain;
-    if (basis !== undefined && this.charsWith(input) / basis > budget.promptLimit) {
+    const hold = this.holdLimit(fitting, summary === 'condensed');
+    if (hold && this.charsWith(input) > hold.chars) {
       this.held = input;
-      const tooLong = this.tooLong(input, budget.promptLimit * basis);
+      // What a Retry cannot send either: past what the model takes, not past the budget.
+      const tooLong = this.tooLong(input, budget.promptLimit * hold.basis);
       throw new PlannerContextExhaustedError(model, false, { cause, summary, done: this.turnLedger(), ...(tooLong ? { tooLong } : {}) });
     }
     return summary;
@@ -461,8 +473,8 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
         const plan = this.planTurn(input, room, allowance);
         return plan ? this.condenseTurn(plan, summarize) : false;
       });
-      const basis = condensed ? fitting.condensedBasis : fitting.plain;
-      const fits = basis === undefined || this.charsWith(input) / basis <= budget.promptLimit;
+      const hold = this.holdLimit(fitting, condensed);
+      const fits = !hold || this.charsWith(input) <= hold.chars;
       outcome = !fits ? 'paused' : condensed ? 'condensed' : cause ? 'failed' : 'unchanged';
     } finally {
       if (outcome === 'stopped' && condensed) outcome = 'condensed';

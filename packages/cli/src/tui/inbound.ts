@@ -262,8 +262,13 @@ export interface SessionInbound {
    * dropped — a request answered elsewhere meanwhile among them.
    */
   holdSnapshot(): void;
-  /** Delivers the snapshot held and what came after it, in order (when `deliver`), then hands them out as they come again. */
-  releaseSnapshot(deliver: boolean): void;
+  /**
+   * Delivers the snapshot held and what came after it, in order (when
+   * `deliver`), then hands them out as they come again. Answers the planner
+   * turns whose end was among them: a load told such a turn is live heard it
+   * end before it could join it.
+   */
+  releaseSnapshot(deliver: boolean): ReadonlySet<string>;
 }
 
 const inbounds = new WeakMap<object, Map<string, SessionInbound>>();
@@ -316,6 +321,7 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
   let holdingSnapshot = false;
   let heldSnapshot: RunSnapshotFrame | null = null;
   let heldAfter: (() => void)[] = [];
+  let heldEnds = new Set<string>();
 
   const flush = (): void => {
     if (timer !== null) {
@@ -406,6 +412,7 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
       return;
     }
     if (holdingSnapshot) {
+      if (event.type === 'planner_turn_ended') heldEnds.add(event.turnId);
       heldAfter.push(() => receive(kind, id, event));
       return;
     }
@@ -448,16 +455,20 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
       holdingSnapshot = true;
       heldSnapshot = null;
       heldAfter = [];
+      heldEnds = new Set();
     },
     releaseSnapshot: (deliver) => {
       holdingSnapshot = false;
       const snapshot = heldSnapshot;
       const after = heldAfter;
+      const ended = heldEnds;
       heldSnapshot = null;
       heldAfter = [];
-      if (!deliver) return;
+      heldEnds = new Set();
+      if (!deliver) return ended;
       if (snapshot) deliverSnapshot(snapshot);
       for (const next of after) next();
+      return ended;
     },
   };
 }

@@ -216,13 +216,15 @@ window: it trims older file reads first, then condenses the conversation into a
 summary written by the same model, which shows as **Context compacted
 automatically** in the chat. When the provider still refuses a call as too long,
 it compacts once more against what the refusal showed and sends the same call
-once more. It pauses only when that leaves the call too large, the summary
-could not be written, or your message is too long by itself
+once more. It pauses only when that leaves the call too large (once a summary
+was written, past those 90%), the summary could not be written, or your message
+is too long by itself
 ([ADR-0002](adr/planner/0002-planner-as-conversation-loop.md)). Only the planner
 pauses: running tasks carry on and finish. What the call was to send is kept,
 and so is your message, so no command runs twice and nothing is cut to fit.
 
-- **Retry compaction** condenses again and carries the turn on. Switch the
+- **Retry compaction** condenses again and sends the call once, whatever the
+  estimate, carrying the turn on. Switch the
   planner to a model with a larger window first if the same one paused twice.
   In the terminal UI it is `/compact retry`, from the shell
   `ordewell compact retry`, and in VS Code the button above the composer.

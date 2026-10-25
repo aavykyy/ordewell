@@ -153,7 +153,7 @@ describe('a Gemini planner keeps every function response it sent', () => {
     expect(turn.kind).toBe('message');
     expect(reads).toEqual(['a.ts', 'b.ts']);
     const retry = provider.requests[2];
-    expect(retry.contents.map((c) => c.role)).toEqual(['user', 'user', 'model', 'function', 'user']);
+    expect(retry.contents.map((c) => c.role)).toEqual(['user', 'model', 'function', 'user']);
     expect(functionResponses(retry).map((r) => [r.name, r.response.output.length])).toEqual([['read_file', 2_000], ['read_file', 2_000]]);
     expect(retry.contents.at(-1)?.parts[0].text).toMatch(/^try again/);
   });
@@ -173,7 +173,7 @@ describe('a stopped Gemini planner turn', () => {
     await svc.continueConversation('go on', () => {});
 
     const next = provider.requests[2];
-    expect(next.contents.map((c) => c.role)).toEqual(['user', 'user', 'model', 'function', 'user']);
+    expect(next.contents.map((c) => c.role)).toEqual(['user', 'model', 'function', 'user']);
     expect(functionResponses(next)).toHaveLength(1);
     expect(functionResponses(next)[0].response.output).toHaveLength(49_000);
   });
@@ -196,7 +196,7 @@ describe('a stopped Gemini planner turn', () => {
     await svc.continueConversation('never mind', () => {});
 
     const next = provider.requests[1];
-    expect(next.contents.map((c) => c.role)).toEqual(['user', 'user', 'model', 'function', 'user']);
+    expect(next.contents.map((c) => c.role)).toEqual(['user', 'model', 'function', 'user']);
     expect(bash).not.toHaveBeenCalled();
     expect(functionResponses(next).map((r) => [r.name, r.response.output])).toEqual([
       ['read_file', 'x'.repeat(100)],
@@ -414,8 +414,7 @@ describe('what a Gemini planner never prunes, and what it does when that cannot 
     await svc.continueConversation('next', () => {});
 
     expect(provider.requests.at(-1)!.contents).toEqual([
-      { role: 'user', parts: [{ text: 'system prompt' }] },
-      { role: 'user', parts: [{ text: 'Summary of the conversation so far.' }] },
+      { role: 'user', parts: [{ text: 'system prompt' }, { text: 'Summary of the conversation so far.' }] },
       { role: 'model', parts: [{ text: 'Reading.' }, { functionCall: { name: 'read_file', args: { path: 'a.ts' } } }] },
       { role: 'function', parts: [{ functionResponse: { name: 'read_file', response: { output: 'kept' } } }] },
       { role: 'model', parts: [{ text: 'Read.' }] },
@@ -439,7 +438,7 @@ describe('the model turns a Gemini planner sends back', () => {
 
     await start(service(config()));
 
-    expect(provider.requests[1].contents[2]).toEqual({
+    expect(provider.requests[1].contents[1]).toEqual({
       role: 'model',
       parts: [{ text: 'Reading it.' }, { functionCall: { name: 'read_file', args: { path: 'a.ts' } }, thoughtSignature: 'sig-1' }],
     });
