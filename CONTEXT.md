@@ -2497,12 +2497,15 @@ keeps the usage line.
 instead (**Activity group**).
 
 **Activity group** — VS Code's fold of one run of activity between two
-messages (thinking, calls, subagents, setup notices, answered approvals): one
-line that says what the run did, counted from the blocks' own facts
-(`Ran 4 commands, fetched 2 pages (2 failed)`), collapsed by default. Opened,
-it draws its rows as their collapsed previews, and each row opens on its own
-(ADR-0017, X1). A waiting approval, an error, a notice and every message stay
-outside any group. What is open is the webview's state, keyed on block ids.
+messages (thinking, calls, subagents, setup and compaction notices, answered
+approvals): one line that says what the run did, counted from the blocks' own
+facts (`Ran 4 commands, fetched 2 pages (2 failed)`), collapsed by default. A
+call that was refused, denied or not executed is never counted as run
+(`1 command denied`). Opened, it draws its rows as their collapsed previews,
+and each row opens on its own (ADR-0017, X1). A waiting approval, an error,
+other notices and every message stay outside any group, and a script task's
+log has none: its rows are drawn whole. What is open is the webview's state,
+keyed on block ids.
 *Avoid:* "turn" for it — the prose between a turn's calls splits its activity
 into several groups; *Avoid:* counting what a call ran (a script's commands)
 rather than the call.

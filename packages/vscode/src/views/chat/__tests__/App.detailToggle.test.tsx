@@ -81,4 +81,22 @@ describe('activity disclosures in the planner chat (ADR-0017, X1)', () => {
     expect(group().textContent).toBe('Read a file');
     expect(group().getAttribute('aria-expanded')).toBe('false');
   });
+
+  it('opens nothing in a compacted conversation, though its rebuilt blocks reuse the old ids', () => {
+    const saved = (goal: string, path: string) => ({
+      conversationHistory: [{ role: 'user' as const, content: goal, timestamp: '2026-01-01T00:00:00.000Z' }],
+      researchLog: [{ id: 's', tool: 'read_file' as const, args: JSON.stringify({ path }), result: `${path} body`, timestamp: '2026-01-01T00:00:01.000Z', success: true, outcome: 'success' as const }],
+      plannerUsage: { totals: {} },
+    });
+    host.provider.restoreChat(saved('the goal', 'a.ts'));
+    fireEvent.click(group());
+    fireEvent.click(row('.cmd-row'));
+    expect(document.querySelector('.cmd-row-output')!.textContent).toBe('a.ts body');
+
+    // What `/compact` hands the chat: the same conversation, summarised and renumbered.
+    host.provider.replaceConversation(saved('Summary of the conversation so far', 'b.ts'));
+    expect(document.querySelector('.chat-msg-user')!.textContent).toBe('Summary of the conversation so far');
+    expect(group().getAttribute('aria-expanded')).toBe('false');
+    expect(document.querySelector('.cmd-row')).toBeNull();
+  });
 });

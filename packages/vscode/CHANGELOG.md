@@ -67,8 +67,11 @@
   calls, subagents and setup notices between two messages is one line that
   says what it did, such as "Ran 4 commands, fetched 2 pages (2 failed)", and
   opens to its rows. Each row, each step of a subagent and each long report
-  opens on its own. Requests waiting for an answer, errors and every message
-  stay in view. The Expand all and Collapse all buttons are gone.
+  opens on its own. A line with something failed or denied in it is coloured
+  as a failure, and a call that never ran is never counted as run. Requests
+  waiting for an answer, errors and every message stay in view, and a script
+  task's log folds nothing: each command shows its whole output and exit. The
+  Expand all and Collapse all buttons are gone.
 - **Merge and Split are planner requests, not task-card buttons.** Ask the
   planner in chat to merge or split tasks; the task cards no longer carry the
   controls, their selection banner or their inline error.

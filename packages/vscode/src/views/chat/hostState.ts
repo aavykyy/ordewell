@@ -320,12 +320,14 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     case 'restoreChat':
       return { ...resetSession(state, 'restore'), conversationEpoch: state.conversationEpoch + 1 };
 
-    // A new session or a cleared plan empties the conversation first.
+    // A new session or a cleared plan empties the conversation first; a
+    // compaction replaces it with blocks renumbered from the start.
     case 'conversationPatch':
       return {
         ...state,
         conversation: applyConversationPatch(state.conversation, action),
-        ...(action.order.length === 0 && state.conversation.order.length > 0 ? { conversationEpoch: state.conversationEpoch + 1 } : {}),
+        ...((action.order.length === 0 && state.conversation.order.length > 0) || action.replaced
+          ? { conversationEpoch: state.conversationEpoch + 1 } : {}),
       };
 
     // The stop gate lasts until the host has closed the stopped turn; a new
