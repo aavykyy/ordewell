@@ -37,6 +37,8 @@ import { defaultExecFile, type GitInvoker } from './gitExec';
 import { augmentedPath } from '../utils/shellPath';
 import type { ApplyPatchArgs, McpToolReply } from './mcp/tools';
 import { TaskControlError } from './TaskControlError';
+import { TaskWebReader } from './taskWebReads';
+import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { OrchestratorObserver, StartAdmission } from './TaskOrchestrator';
 
 /** Where a start stands against the user's Stop (ADR-0029): no longer current once one comes. */
@@ -117,6 +119,8 @@ interface TaskAttempt extends EndedAttempt {
   readonly script: boolean;
   /** A read-only attempt's `run_command` (ADR-0046), ended with the attempt. */
   shell: TaskShell | null;
+  /** A read-only attempt's `fetch` and `web_search` (ADR-0046), ended with the attempt. */
+  web: TaskWebReader | null;
   /** The patch it last saved (ADR-0050), which its handoff names. */
   patch: HandoffPatch | null;
 }
@@ -249,6 +253,12 @@ export interface AttemptsDeps {
   lastLoggedAttempt: (taskId: string) => number;
   /** A read-only attempt's shell (ADR-0046); absent, its runner is given no `run_command`. */
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
+  /**
+   * The session's web fetcher for one read-only attempt, by its task's title
+   * (ADR-0046, `IWebFetcher.forTask`), asked once per attempt so each has its
+   * own web-read budget. Absent, its `fetch` and `web_search` are not available.
+   */
+  taskWebFetcher?: (task: string) => IWebFetcher | undefined;
   /**
    * Keep a read-only attempt's saved patch beside its log, in place of one it
    * kept before, and say where, relative to the workspace root (ADR-0050).
@@ -409,6 +419,7 @@ export class Attempts {
       planScope: this.planScope,
       script,
       shell: null,
+      web: null,
       patch: null,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
@@ -444,6 +455,7 @@ export class Attempts {
       store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined, nativeSessionId ?? undefined);
       this.deps.output.detach(taskId);
       attempt.shell?.end();
+      attempt.web?.end();
     }
     if (attempt && session) this.saveNativeSession(taskId, nativeSessionId, attempt.runner);
     if (stopsRunner(reason)) {
@@ -793,8 +805,10 @@ export class Attempts {
       // cannot plant one for the runner's own git to load (ADR-0046).
       const worktrees = writable ? Object.values(runs.openRecord(task.id)?.repos ?? {}).map((r) => r.worktree) : [];
       attempt.shell = this.deps.taskShell?.({ cwd, ...(writable ? { writable } : {}), ...(worktrees.length ? { worktrees } : {}) }) ?? null;
+      const fetcher = this.deps.taskWebFetcher?.(task.title);
+      attempt.web = fetcher ? new TaskWebReader(fetcher) : null;
     }
-    const shell = attempt.shell;
+    const { shell, web } = attempt;
     return this.deps.runner.spawn({
       taskId: task.id,
       runner: attempt.runner,
@@ -818,6 +832,7 @@ export class Attempts {
       checkHandoff: (completion) => checkHandoff(completion, task.id, store.planTasks),
       readTask: (args) => readTask(args, task.id, store.planTasks, this.deps.taskLog),
       ...(shell ? { savePatch: (signal: AbortSignal) => this.savePatch(task, attempt, signal) } : {}),
+      ...(web ? { webReads: web } : {}),
       applyPatch: (args) => this.applyPatch(task, attempt, args),
       workspaceRoot: this.deps.workspaceRoot(),
       onNotice: (message) => this.host.tell('warn', `Task "${task.title}": ${message}`),
@@ -969,6 +984,7 @@ export class Attempts {
     const { store } = this.deps;
     session?.kill();
     attempt.shell?.end();
+    attempt.web?.end();
     if (this.live.has(task.id) || this.host.completing(task.id) || store.get(task.id)?.status !== 'in_progress') return;
     if (attempt.kind.kind === 'repair') store.markAwaitingUser(task.id, 'conflict');
     else store.markPending(task.id);

@@ -257,6 +257,12 @@ describe('read-only guidance (ADR-0031, ADR-0046)', () => {
     }
   });
 
+  it('says a read-only task reads the web through Ordewell fetch and web_search, without anyone asked', () => {
+    for (const p of [conversation(false), oneShot(LONE_REPO)]) {
+      expect(p).toMatch(/It reads the web only through Ordewell fetch and web_search, which the session's web-read settings decide without asking anyone, within a web-read budget of its own; a read those settings would only allow after asking is refused, and the task reports the gap\./);
+    }
+  });
+
   it('says a sealed run has no worktree to write where the run does not isolate', () => {
     expect(conversation(false)).toMatch(/throwaway worktree, where the run isolates/);
   });

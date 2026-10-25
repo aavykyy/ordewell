@@ -27,7 +27,7 @@ text markers have no role.
 
 | token | bound to | tools |
 |---|---|---|
-| **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, findings?, artifacts?, report?, reason?})`, `checkpoint({question})`, `read_task({task, attempt?, include_report?})`, and for a change task `apply_patch({task, attempt?})`, which merges a saved patch into its worktree ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)); a read-only task's also `run_command({command})`, its only shell ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)), and `save_patch({})`, which keeps what that shell changed as a patch ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)) |
+| **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, findings?, artifacts?, report?, reason?})`, `checkpoint({question})`, `read_task({task, attempt?, include_report?})`, and for a change task `apply_patch({task, attempt?})`, which merges a saved patch into its worktree ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)); a read-only task's also `run_command({command})`, its only shell ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)), `save_patch({})`, which keeps what that shell changed as a patch ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)), and `fetch({url})` and `web_search({query})`, its only web reads, decided by the web-read policy without asking anyone ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md), [ADR-0027](../planner-envelope/0027-web-reads-in-the-planner-envelope.md)) |
 | **Planner token** | one session's planner conversation | `list_runners()`, `list_models({runner})`, `submit_plan({tasks})`, `edit_plan({ops})`, `task_query({...})`, `task_output({task, attempt?, kinds?, ...})`, `task_diff({task, repo?, path?, ...})`, `load_skill({name})` (a model-invocable planner skill's instructions; [ADR-0024](../planner/0024-unified-skills.md)) |
 
 #37's runner-facing tools (`board_post`, `report`, …) join the task side later,
@@ -46,7 +46,10 @@ on the same mechanism.
   `VerdictEngine` already tracks (`generations`, `bumpGeneration`). It is
   revoked when the attempt ends — verdict, retry, cancel, stop or process exit
   — so a late call from an earlier attempt is refused, the same rule that
-  makes a stale `onOutput` callback a no-op today.
+  makes a stale `onOutput` callback a no-op today. Revoking it aborts the
+  calls it has in flight, and so does the caller's own cancellation: each
+  request is served on its own, so the server finds the call a
+  `notifications/cancelled` names among the token's calls in flight.
 - **A planner token is one planner conversation (A3).** Issued when the
   harness planner is spawned, revoked when that process is disposed
   (`Session.reset()`, a new session, a respawn). A respawned planner gets a
@@ -313,3 +316,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-24 — S4 holds for the runner's whole life: OpenCode 2.1.4 evicted an idle planner's services after an hour and rebuilt them with Ordewell's tools inside code mode, out of the planner's reach.
 - 2026-10-24 — a read-only task's token serves `save_patch` (ADR-0050).
 - 2026-10-24 — a change task's token serves `apply_patch` (ADR-0050).
+- 2026-10-25 — a read-only task's token serves `fetch` and `web_search` (ADR-0046); a caller's cancellation aborts the token's call it names.
