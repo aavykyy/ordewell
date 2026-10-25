@@ -1,105 +1,107 @@
 import { describe, it, expect } from 'vitest';
-import { compactToolMessages, compactResearchResults, withProactiveCompaction, COMPACTION_LIMITS, type CompactableMessage } from '../contextCompaction';
-import type { ResearchChat, ResearchTurn } from '../BaseAiService';
+import { ChatHistory, COMPACTION_LIMITS, compactResearchResults, messageChars, type CompactableMessage } from '../contextCompaction';
 
 const big = (label: string, chars = 5000) => `${label}: ${'x'.repeat(chars)}`;
 
+const round = (calls: Array<[id: string, name: string]>, outputs: string[]): CompactableMessage[] => [
+  { role: 'assistant', content: null, tool_calls: calls.map(([id, name]) => ({ id, function: { name, arguments: '{}' } })) },
+  ...calls.map(([id], i) => ({ role: 'tool', tool_call_id: id, content: outputs[i] })),
+];
+
+/** One old round of every kind of output, then the two newest rounds. */
 function history(): CompactableMessage[] {
   return [
     { role: 'system', content: 'You are a planner.' },
-    {
-      role: 'assistant',
-      content: null,
-      tool_calls: [
-        { id: 'c1', function: { name: 'read_file' } },
-        { id: 'c2', function: { name: 'spawn_research_agent' } },
-        { id: 'c3', function: { name: 'grep' } },
-      ],
-    },
-    { role: 'tool', tool_call_id: 'c1', content: big('raw file') },
-    { role: 'tool', tool_call_id: 'c2', content: big('digest') },
-    { role: 'tool', tool_call_id: 'c3', content: 'short grep hit' },
+    { role: 'user', content: 'map the cache' },
+    ...round(
+      [['c1', 'read_file'], ['c2', 'spawn_research_agent'], ['c3', 'grep'], ['c4', 'bash'], ['c5', 'run_task'], ['c6', 'fetch']],
+      [big('raw file'), big('digest'), 'short grep hit', big('build log'), big('task started'), big('web page')],
+    ),
+    ...round([['c7', 'read_file']], [big('newer file')]),
+    ...round([['c8', 'glob']], [big('newest listing')]),
     { role: 'assistant', content: 'Findings so far…' },
   ];
 }
 
-describe('compactToolMessages', () => {
-  it('prunes bulky raw tool outputs but keeps subagent digests whole', () => {
-    const messages = history();
-    const removed = compactToolMessages(messages);
+const content = (h: ChatHistory<CompactableMessage>, id: string) => h.view().find((m) => m.tool_call_id === id)?.content as string;
 
-    expect(removed).toBeGreaterThan(0);
-    expect((messages[2].content as string).length).toBeLessThan(1000);
-    expect(messages[2].content).toContain('read_file output pruned');
-    expect(messages[3].content).toBe(big('digest'));
+describe('ChatHistory.prune', () => {
+  it('prunes older workspace reads only, keeping digests, command, task and web output whole', () => {
+    const h = new ChatHistory(history());
+    const { removedChars, outputs } = h.prune(Infinity);
+
+    expect(outputs).toBe(1);
+    expect(removedChars).toBeGreaterThan(4000);
+    expect(content(h, 'c1')).toContain('read_file output pruned (5010 chars) to free context: read it again if you need it');
+    expect(content(h, 'c1').startsWith('raw file: ')).toBe(true);
+    expect(content(h, 'c2')).toBe(big('digest'));
+    expect(content(h, 'c4')).toBe(big('build log'));
+    expect(content(h, 'c5')).toBe(big('task started'));
+    expect(content(h, 'c6')).toBe(big('web page'));
+    expect(content(h, 'c3')).toBe('short grep hit');
   });
 
-  it('leaves small outputs and non-tool messages untouched', () => {
-    const messages = history();
-    compactToolMessages(messages);
+  it('keeps the two newest rounds whole, and only those at or after where it is told to protect from', () => {
+    const h = new ChatHistory(history());
+    h.prune(Infinity);
+    expect(content(h, 'c7')).toBe(big('newer file'));
+    expect(content(h, 'c8')).toBe(big('newest listing'));
 
-    expect(messages[0].content).toBe('You are a planner.');
-    expect(messages[4].content).toBe('short grep hit');
-    expect(messages[5].content).toBe('Findings so far…');
+    // Past the end: no round is protected.
+    h.prune(Infinity, h.length);
+    expect(content(h, 'c7')).toContain('output pruned');
+    expect(content(h, 'c8')).toContain('output pruned');
   });
 
-  it('keeps the head of a pruned output so the model retains a scent of it', () => {
-    const messages = history();
-    compactToolMessages(messages);
-    expect((messages[2].content as string).startsWith('raw file: ')).toBe(true);
+  it('counts a round whose results are not in yet as none of the two it keeps', () => {
+    const h = new ChatHistory([...history(), ...round([['c9', 'read_file']], [big('pending')]).slice(0, 1)]);
+    h.prune(Infinity);
+    expect(content(h, 'c7')).toBe(big('newer file'));
+    expect(content(h, 'c8')).toBe(big('newest listing'));
+    expect(content(h, 'c1')).toContain('output pruned');
+  });
+
+  it('prunes oldest first and stops once it has freed what it was asked to', () => {
+    const h = new ChatHistory([...history(), { role: 'user', content: 'next' }]);
+    const { outputs } = h.prune(100, h.length);
+    expect(outputs).toBe(1);
+    expect(content(h, 'c1')).toContain('output pruned');
+    expect(content(h, 'c7')).toBe(big('newer file'));
+  });
+
+  it('keeps its size in step with what it holds, and replaces a pruned message rather than editing it', () => {
+    const before = history();
+    const h = new ChatHistory(before);
+    const original = h.view().find((m) => m.tool_call_id === 'c1');
+    const { removedChars } = h.prune(Infinity);
+
+    expect(h.chars).toBe(h.view().reduce((n, m) => n + messageChars(m), 0));
+    expect(h.chars).toBe(before.reduce((n, m) => n + messageChars(m), 0) - removedChars);
+    expect(original?.content).toBe(big('raw file'));
   });
 
   it('is idempotent: a second pass removes nothing more', () => {
-    const messages = history();
-    compactToolMessages(messages);
-    expect(compactToolMessages(messages)).toBe(0);
+    const h = new ChatHistory(history());
+    h.prune(Infinity);
+    expect(h.prune(Infinity)).toEqual({ removedChars: 0, outputs: 0 });
   });
 });
 
-describe('withProactiveCompaction', () => {
-  const turn = (promptTokens?: number): ResearchTurn => ({ text: 'ok', toolCalls: [], hasToolCalls: false, promptTokens });
-
-  class FakeChat implements ResearchChat {
-    compactions = 0;
-    constructor(private turns: ResearchTurn[]) {}
-    async sendMessage(): Promise<ResearchTurn> { return this.turns.shift()!; }
-    async sendToolResults(): Promise<ResearchTurn> { return this.turns.shift()!; }
-    compactHistory(): number { this.compactions++; return 1; }
-  }
-
-  it('compacts as soon as a turn reports prompt tokens at or past the threshold', async () => {
-    const inner = new FakeChat([turn(COMPACTION_LIMITS.proactivePromptTokens), turn(50)]);
-    const chat = withProactiveCompaction(inner);
-    await chat.sendMessage('go');
-    expect(inner.compactions).toBe(1);
-    await chat.sendToolResults([]);
-    expect(inner.compactions).toBe(1);
+describe('ChatHistory.replace', () => {
+  it('takes a valid history whole', () => {
+    const h = new ChatHistory(history());
+    const next = [{ role: 'system', content: 'You are a planner.' }, { role: 'user', content: 'summary' }, ...round([['c8', 'glob']], ['listing'])];
+    h.replace(next);
+    expect(h.view()).toEqual(next);
+    expect(h.lastUserIndex).toBe(1);
   });
 
-  it('does not compact below the threshold or when usage is unreported', async () => {
-    const inner = new FakeChat([turn(COMPACTION_LIMITS.proactivePromptTokens - 1), turn(undefined)]);
-    const chat = withProactiveCompaction(inner);
-    await chat.sendMessage('go');
-    await chat.sendToolResults([]);
-    expect(inner.compactions).toBe(0);
-  });
-
-  it('passes the turn through unchanged and keeps compactHistory delegating', () => {
-    const inner = new FakeChat([turn(1)]);
-    const chat = withProactiveCompaction(inner);
-    expect(chat.compactHistory!()).toBe(1);
-    expect(inner.compactions).toBe(1);
-  });
-
-  it('tolerates a chat without compactHistory', async () => {
-    const bare: ResearchChat = {
-      sendMessage: async () => turn(COMPACTION_LIMITS.proactivePromptTokens + 1),
-      sendToolResults: async () => turn(),
-    };
-    const chat = withProactiveCompaction(bare);
-    const t = await chat.sendMessage('go');
-    expect(t.promptTokens).toBe(COMPACTION_LIMITS.proactivePromptTokens + 1);
-    expect(chat.compactHistory).toBeUndefined();
+  it('refuses, changing nothing, a result that answers no call before it or answers one twice', () => {
+    const h = new ChatHistory(history());
+    const before = [...h.view()];
+    expect(() => h.replace([{ role: 'user', content: 'x' }, { role: 'tool', tool_call_id: 'c1', content: 'orphan' }])).toThrow(/answers no call/);
+    expect(() => h.replace([...round([['c1', 'grep']], ['a']), { role: 'tool', tool_call_id: 'c1', content: 'again' }])).toThrow(/second time/);
+    expect(h.view()).toEqual(before);
   });
 });
 

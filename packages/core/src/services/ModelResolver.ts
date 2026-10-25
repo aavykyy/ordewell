@@ -16,6 +16,8 @@ export class ModelResolver {
   private discovery: ModelDiscovery;
   private fetchImpl?: typeof fetch;
   private cachedPickerOptions: OrchestratorOption[] | null = null;
+  /** A catalog load under way: a second ask, or a warm-up, shares it rather than fetching again. */
+  private pickerLoad: Promise<OrchestratorOption[]> | null = null;
   private lastDiscoveryErrors: Record<string, string> = {};
 
   constructor(
@@ -49,7 +51,25 @@ export class ModelResolver {
 
   async pickerOptions(): Promise<OrchestratorOption[]> {
     if (this.cachedPickerOptions) return this.cachedPickerOptions;
+    if (!this.pickerLoad) {
+      const load = this.loadPickerOptions();
+      this.pickerLoad = load;
+      void load.finally(() => { if (this.pickerLoad === load) this.pickerLoad = null; }).catch(() => {});
+    }
+    return this.pickerLoad;
+  }
 
+  /**
+   * Start loading the vendor catalogs without waiting for them, unless they
+   * are held or loading already: an API planner whose model's window is not
+   * known yet reads it from them on a later call, never waiting on the fetch.
+   */
+  warmPickerOptions(): void {
+    if (this.cachedPickerOptions || this.pickerLoad) return;
+    this.pickerOptions().catch(() => {});
+  }
+
+  private async loadPickerOptions(): Promise<OrchestratorOption[]> {
     // Which endpoints to probe is one policy shared with every other surface —
     // see collectProviderCredentials (only key-configured providers, plus an
     // explicitly-pointed openai_compatible endpoint).
@@ -119,9 +139,21 @@ export class ModelResolver {
     return window && window > 0 ? window : undefined;
   }
 
+  /**
+   * The longest reply a vendor's model is served with, from the picker
+   * catalog already held, when that catalog states one. Reads only, like
+   * {@link contextWindowFor}.
+   */
+  maxOutputTokensFor(source: string, model: string): number | undefined {
+    if (!model || !isApiProvider(source)) return undefined;
+    const cap = this.cachedPickerOptions?.find((o) => o.apiProvider === source && o.id === prefixModelId(source, stripModelPrefix(model, source)))?.maxOutputTokens;
+    return cap && cap > 0 ? cap : undefined;
+  }
+
   invalidate(): void {
     this.discovery.clear();
     this.cachedPickerOptions = null;
+    this.pickerLoad = null;
     this.lastDiscoveryErrors = {};
     if (!this.fetchImpl) {
       for (const provider of PROVIDER_PRIORITY) {

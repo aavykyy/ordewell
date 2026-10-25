@@ -12,6 +12,8 @@ export interface OrchestratorOption {
   pricing?: string;
   /** The model's context window when the catalog reports one (#49). */
   contextWindow?: number;
+  /** The longest reply the catalog says the model is served with, when it says. */
+  maxOutputTokens?: number;
 }
 
 import type { CatalogModel } from './ModelCatalog';
@@ -224,6 +226,7 @@ export function toOrchestratorOptions(
         description: s?.description || m.description || undefined,
         pricing,
         ...(m.contextLength > 0 ? { contextWindow: m.contextLength } : {}),
+        ...(m.maxOutputTokens !== undefined ? { maxOutputTokens: m.maxOutputTokens } : {}),
       });
     }
   }

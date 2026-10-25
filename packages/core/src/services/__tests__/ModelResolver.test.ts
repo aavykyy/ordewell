@@ -400,3 +400,53 @@ describe('ModelResolver.refresh', () => {
     expect(resolveProvider('google/gemini-2.5-pro', lists)).toBe('openrouter');
   });
 });
+
+describe('ModelResolver.maxOutputTokensFor', () => {
+  it('keeps the reply cap OpenRouter states for a model\'s serving provider, and none it did not state', async () => {
+    const fetchImpl = fakeFetch([['/models', { data: [
+      { id: 'vendor/capped', name: 'Capped', context_length: 131072, top_provider: { max_completion_tokens: 8192 } },
+      { id: 'vendor/uncapped', name: 'Uncapped', context_length: 131072, top_provider: { max_completion_tokens: null } },
+    ] }]]);
+    const resolver = new ModelResolver(fakeRegistry({}), configWith(), { fetchImpl });
+    await resolver.pickerOptions();
+
+    expect(resolver.maxOutputTokensFor('openrouter', 'vendor/capped')).toBe(8192);
+    expect(resolver.maxOutputTokensFor('openrouter', 'vendor/uncapped')).toBeUndefined();
+    expect(resolver.maxOutputTokensFor('openrouter', 'vendor/unlisted')).toBeUndefined();
+  });
+});
+
+describe('ModelResolver.warmPickerOptions', () => {
+  function countingFetch(): { fetchImpl: typeof fetch; calls: () => number } {
+    let calls = 0;
+    const inner = fakeFetch([['/models', { data: [{ id: 'vendor/model', name: 'Model', context_length: 64000 }] }]]);
+    return { fetchImpl: ((...args: Parameters<typeof fetch>) => { calls++; return inner(...args); }) as typeof fetch, calls: () => calls };
+  }
+
+  it('loads the catalogs in the background once, sharing a load already under way, and never again once held', async () => {
+    const { fetchImpl, calls } = countingFetch();
+    const resolver = new ModelResolver(fakeRegistry({}), configWith(), { fetchImpl });
+
+    resolver.warmPickerOptions();
+    resolver.warmPickerOptions();
+    const asked = resolver.pickerOptions();
+    expect(resolver.contextWindowFor('openrouter', 'vendor/model')).toBeUndefined();
+    await asked;
+
+    expect(calls()).toBe(1);
+    expect(resolver.contextWindowFor('openrouter', 'vendor/model')).toBe(64000);
+    resolver.warmPickerOptions();
+    expect(calls()).toBe(1);
+  });
+
+  it('raises nothing from a load that failed in the background', async () => {
+    const fetchImpl = (async () => { throw new Error('offline'); }) as typeof fetch;
+    const resolver = new ModelResolver(fakeRegistry({}), configWith(), { fetchImpl });
+
+    resolver.warmPickerOptions();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(resolver.contextWindowFor('openrouter', 'vendor/model')).toBeUndefined();
+  });
+});
+

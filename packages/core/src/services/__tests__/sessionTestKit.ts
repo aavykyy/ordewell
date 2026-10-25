@@ -55,7 +55,7 @@ export interface SessionOverrides {
   /** Fakes go through the constructor seam — Partial so a test only stubs the calls it expects. */
   aiService?: Partial<IAiService>;
   planner?: Partial<SessionPlanner>;
-  modelResolver?: Pick<ModelResolver, 'modelsForRunners'> & Partial<Pick<ModelResolver, 'getCachedRunnerModels' | 'contextWindowFor'>>;
+  modelResolver?: Pick<ModelResolver, 'modelsForRunners'> & Partial<Pick<ModelResolver, 'getCachedRunnerModels' | 'contextWindowFor' | 'maxOutputTokensFor' | 'warmPickerOptions'>>;
   skillsService?: Pick<SkillsService, 'findSkill'> & Partial<Pick<SkillsService, 'listSkills'>>;
   taskOutput?: TaskOutputSource;
   /** Defaults to git behind a config with isolation off, so no test runs git in the repo it runs in. */

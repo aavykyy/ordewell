@@ -5,6 +5,7 @@ import * as os from 'os';
 import { spawn } from 'child_process';
 import { SettingsService, getSettingsPath } from '../SettingsService';
 import { filterModelsForPrompt } from '../ModelAllowlistResolver';
+import { sessionRuntimeSettings } from '../createSession';
 
 function tempSettingsDir() {
   const dir = path.join(os.tmpdir(), `ordewell-settings-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -247,6 +248,20 @@ describe('SettingsService', () => {
     expect(raw).toEqual({
       enabledRunners: ['codex'],
     });
+  });
+
+  // Config-file control only: no setter and no settings panel offer it.
+  it('reads plannerAutoCompaction from the file, keeps it through other writes, and drops a value that is not a boolean', () => {
+    fs.writeFileSync(tempFile, JSON.stringify({ plannerAutoCompaction: false }));
+    expect(service.getAll().plannerAutoCompaction).toBe(false);
+    expect(sessionRuntimeSettings(service.getAll()).plannerAutoCompaction).toBe(false);
+
+    service.setEnabledRunners(['codex']);
+    expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8'))).toEqual({ plannerAutoCompaction: false, enabledRunners: ['codex'] });
+
+    fs.writeFileSync(tempFile, JSON.stringify({ plannerAutoCompaction: 'no' }));
+    expect(service.getAll()).toEqual({});
+    expect(sessionRuntimeSettings(service.getAll()).plannerAutoCompaction).toBeUndefined();
   });
 
   it('getSettingsPath returns the path in the user data directory', () => {

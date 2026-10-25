@@ -3,6 +3,7 @@ import { resolveHandoffReferences } from './handoffReferences';
 import { readSavedPatch } from './taskDiffRead';
 import { savedPatchOf } from '../models/Handoff';
 import { createAiService, type IAiService } from './AiService';
+import type { PlannerContextDeps } from './plannerContextBudget';
 import { PlannerBackend } from './PlannerBackend';
 import type { TaskOp } from './TaskOps';
 import { PlanChangeCheck, type PlanChangeScope } from './PlanChangeCheck';
@@ -109,6 +110,8 @@ export interface SessionRuntimeSettings {
   enabledRunners?: RunnerId[];
   /** The user's run settings (ADR-0030); absent means every default. */
   run?: GlobalRunSettings;
+  /** Whether an API planner compacts its own context before a call that would not fit; absent means on. */
+  plannerAutoCompaction?: boolean;
 }
 
 /** Calls an ops retry is told about; earlier ones are counted, not listed (ADR-0020). */
@@ -127,6 +130,7 @@ export function sessionRuntimeSettings(settings: UserSettings): SessionRuntimeSe
     modelAllowlist: settings.modelAllowlist,
     enabledRunners: settings.enabledRunners,
     run: runSettingsOf(settings),
+    ...(settings.plannerAutoCompaction !== undefined ? { plannerAutoCompaction: settings.plannerAutoCompaction } : {}),
   };
 }
 
@@ -256,9 +260,20 @@ export function createSession(deps: SessionDeps): Session {
     () => taskReadsLine(conversation?.readsLeft),
     () => webReadsLine(webReads.remaining()),
   ]);
+  // An API planner reads these before each call: its model's limits from the
+  // catalogs already held (a fetch is started, never awaited, for a model they
+  // lack), and the config file's switch, so a change applies from the next call.
+  const plannerContext: PlannerContextDeps = {
+    modelLimits: (source, model) => {
+      const contextWindow = windows.get(source, model) ?? deps.modelResolver.contextWindowFor?.(source, model);
+      if (contextWindow === undefined) deps.modelResolver.warmPickerOptions?.();
+      return { contextWindow, maxOutputTokens: deps.modelResolver.maxOutputTokensFor?.(source, model) };
+    },
+    autoCompaction: () => deps.settings().plannerAutoCompaction !== false,
+  };
   const backend = new PlannerBackend(deps.aiService
     ? { pinned: deps.aiService, busy }
-    : { provider: () => deps.config.aiProvider, create: () => createAiService(deps.config, { workspaceRoot: deps.workspaceRoot, mcpServer, turnBudgets }), busy });
+    : { provider: () => deps.config.aiProvider, create: () => createAiService(deps.config, { workspaceRoot: deps.workspaceRoot, mcpServer, turnBudgets, ...plannerContext }), busy });
   const aiService = () => backend.current();
   const store = new PlanStore();
   // A window a runner or provider reports wins, and every later stream of the
