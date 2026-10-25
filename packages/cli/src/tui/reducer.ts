@@ -49,7 +49,10 @@ function holdPlanInView(after: TuiState): TuiState {
 
 export function reduce(state: TuiState, action: Action): Step {
   const result = reduceAction(state, action);
-  if (action.type !== 'sessionMessage' && action.type !== 'taskLog') return result;
+  // A notice normally sets `scroll` to 0, which `holdReadingPlace` leaves
+  // alone; one that holds the reader's place grows the content below them
+  // exactly as live output does.
+  if (action.type !== 'sessionMessage' && action.type !== 'taskLog' && action.type !== 'notice') return result;
   return { ...result, state: holdPlanInView(holdReadingPlace(state, result.state)) };
 }
 
@@ -440,7 +443,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       });
 
     case 'notice':
-      return step(say(state, action.level === 'error' ? 'error' : 'system', action.message));
+      return step(say(state, action.level === 'error' ? 'error' : 'system', action.message, !action.holdPlace));
 
     case 'resize': {
       // A grown pane can leave both offsets pointing past the end of content
