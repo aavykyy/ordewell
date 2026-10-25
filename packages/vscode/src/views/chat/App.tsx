@@ -20,12 +20,10 @@ import type { TaskDraft } from './components/NewTaskCard';
 import type { GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId } from '@ordewell/core';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 import { planSummaryLabel, nextDock } from './planDock';
-import { DetailContext } from './detail';
 import { OpenPatchContext } from './openPatch';
 import { useFollowOutput } from './followOutput';
 import { isBuiltinSlashCommand, slashHelp } from '../../commands/slashCommands';
 import type { HostToWebview, SettingsChange, WebviewToHost } from '../../shared/protocol';
-import { hasHiddenDetail } from '@ordewell/core/plan-utils';
 import { patchedBlocks } from '../../shared/conversationPatch';
 
 declare function acquireVsCodeApi(): {
@@ -72,7 +70,7 @@ export default function App() {
     conversation, plan, isExecuting, isResearchActive, conversationBusy, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, modelAllowlist, runners, held, unsent, modesByRunner, runnerNotice, modelConfig,
     modelOptions, configuredProviders, planner, plannerKnown, runnersKnown, isReady, modelDiscoveryErrors,
-    skills, taskSkills, checkpoint, taskOutput, run, dockExpanded, dockHeight, settingsRequest, accountLimits,
+    skills, taskSkills, checkpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest, accountLimits,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
   const setError = useCallback((v: string) => dispatch({ type: 'patchError', error: v }), []);
@@ -81,8 +79,6 @@ export default function App() {
   const setDockHeight = useCallback((v: number | undefined) => dispatch({ type: 'patchDockHeight', height: v }), []);
   const setDockExpanded = useCallback((v: Updatable<boolean>) => dispatch({ type: 'patchDockExpanded', expanded: v }), []);
   const blocks = useMemo(() => patchedBlocks(conversation), [conversation]);
-  const [detailAll, setDetailAll] = useState(false);
-  const detail = useMemo(() => ({ detailAll, setDetailAll }), [detailAll]);
   /** A first Esc during a planner turn: one more within `STOP_ARM_MS` stops it. */
   const [stopArmed, setStopArmed] = useState(false);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
@@ -96,6 +92,9 @@ export default function App() {
   const runSettingsRef = useRef<HTMLElement>(null);
   const helpTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const processingRef = useRef(false);
+  /** A start is with the host; a second click is the same start, not another. */
+  const startPendingRef = useRef(false);
+  const nextStartRequest = useRef(0);
   const lastActivityRef = useRef(Date.now());
   const planRef = useRef(plan);
   planRef.current = plan;
@@ -105,6 +104,13 @@ export default function App() {
   useEffect(() => {
     processingRef.current = isResearchActive || isExecuting;
   }, [isResearchActive, isExecuting]);
+
+  // What the plan's start control shows: a click's own request, or the run's
+  // authoritative admission, until the first attempt makes it a run.
+  const isStarting = !isExecuting && (starting || activity.starting);
+  useEffect(() => {
+    startPendingRef.current = isStarting;
+  }, [isStarting]);
 
   // The pinned working line and the stack of queued prompts above the
   // composer take height from the list: each must be followed too, or the
@@ -342,13 +348,20 @@ export default function App() {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'forceStart', taskId });
   }, []);
 
-  const handleExecutePlan = useCallback(() => {
-    vscode.postMessage({ type: 'sendSystemCommand', command: 'executePlan' });
+  const requestStart = useCallback(() => {
+    // Shown before the host is even asked, and only once: two clicks while
+    // the first is still with the host are one start.
+    if (startPendingRef.current) return;
+    const requestId = nextStartRequest.current + 1;
+    nextStartRequest.current = requestId;
+    startPendingRef.current = true;
+    dispatch({ type: 'startRequested', requestId });
+    vscode.postMessage({ type: 'sendSystemCommand', command: 'executePlan', requestId });
   }, []);
 
-  const handleApproveAll = useCallback(() => {
-    vscode.postMessage({ type: 'sendSystemCommand', command: 'executePlan' });
-  }, []);
+  const handleExecutePlan = requestStart;
+
+  const handleApproveAll = requestStart;
 
   const handleStopExecution = useCallback(() => {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'stopExecution' });
@@ -509,6 +522,7 @@ export default function App() {
   const getPlaceholder = (): string => {
     if (isResearchActive) return 'Queue a message for when the planner is done...';
     if (isExecuting) return 'AI is working...';
+    if (isStarting) return 'Starting the plan...';
     if (plan && plan.tasks.length > 0) return 'Modify the plan...';
     if (blocks.some((b) => b.type === 'message' && b.role === 'planner')) return 'Reply to the planner...';
     return 'Describe what you want to build...';
@@ -619,7 +633,6 @@ export default function App() {
   const hasContent = blocks.length > 0 || isResearchActive || isExecuting || !!error;
   /** The one usage block, drawn pinned below the conversation rather than scrolling in it. */
   const usageBlock = useMemo(() => blocks.find((b) => b.type === 'usage'), [blocks]);
-  const hasDetail = useMemo(() => hasHiddenDetail(blocks), [blocks]);
 
   /**
    * The plan, mounted once. Not a timeline entry: it is the live control surface
@@ -692,6 +705,8 @@ export default function App() {
               modelsByRunner={modelsByRunner}
               modesByRunner={modesByRunner}
               isExecuting={isExecuting}
+              isStarting={isStarting}
+              runActive={isExecuting || starting || activity.advancesOnItsOwn}
               taskOutput={taskOutput}
               runnerLabels={runnerLabelMap}
               runners={runnerList}
@@ -763,7 +778,6 @@ export default function App() {
 
   return (
     <OpenPatchContext.Provider value={handleOpenPatch}>
-    <DetailContext.Provider value={detail}>
     <div className="chat-container">
       <div className="setup-panel">
         <button
@@ -891,20 +905,6 @@ export default function App() {
         </div>
       </div>
 
-      {hasDetail && (
-        <div className="chat-header">
-          <button
-            type="button"
-            className="detail-toggle"
-            aria-pressed={detailAll}
-            onClick={() => setDetailAll((v) => !v)}
-            title="Show or hide the full thinking, command and subagent detail for the whole conversation"
-          >
-            {detailAll ? 'Collapse all' : 'Expand all'}
-          </button>
-        </div>
-      )}
-
       {slashOutput && (
         <div className="slash-output">{slashOutput}</div>
       )}
@@ -957,8 +957,8 @@ export default function App() {
         )}
 
         <ConversationBlocks
+          key={host.conversationEpoch}
           blocks={blocks}
-          detailAll={detailAll}
           onShowPlan={handleShowPlan}
           onResolveApproval={handleResolveApproval}
         />
@@ -999,7 +999,6 @@ export default function App() {
         skills={skills}
       />
     </div>
-    </DetailContext.Provider>
     </OpenPatchContext.Provider>
   );
 }

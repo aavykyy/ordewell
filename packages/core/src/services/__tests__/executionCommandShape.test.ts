@@ -7,6 +7,12 @@ describe('parseExecutionCommand', () => {
       .toEqual({ ok: true, command: { command: 'retry_task', task: 't1', from: 'session', message: 'go on' } });
   });
 
+  it('keeps an override\'s yes and the status it was asked about, and refuses a yes that is not a flag', () => {
+    expect(parseExecutionCommand({ command: 'mark_complete', task: 't1', confirmed: true, seen: 'failed' }))
+      .toEqual({ ok: true, command: { command: 'mark_complete', task: 't1', confirmed: true, seen: 'failed' } });
+    expect(parseExecutionCommand({ command: 'mark_not_done', task: 't1', confirmed: 'yes' }).ok).toBe(false);
+  });
+
   it('takes a command with no fields', () => {
     expect(parseExecutionCommand({ command: 'merge_all', task: 'ignored' })).toEqual({ ok: true, command: { command: 'merge_all' } });
   });

@@ -24,6 +24,9 @@ record of who built what, rather than `git log`.
   follow light themes (#20).
 - **Mayuri** ([@mayuriphad](https://github.com/mayuriphad)) — diagnosed and fixed the
   planner's duplicated usage-limit message (#79, #96).
+- [@haltingstate](https://github.com/haltingstate) — made the terminal UI's
+  stepper say what a saved step does next, instead of encoding it in a
+  sentinel index (#123).
 
 Thank you. Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 

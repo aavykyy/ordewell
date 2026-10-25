@@ -138,7 +138,42 @@ console.log('4) restoreChat clears a stuck local "stopped" flag (App\'s own stop
   ok(await page.locator('.plan-revision-chip').count() === 1, 'plan marker renders after restore (stop-gate cleared)');
 }
 
-console.log('5) watchdog re-enables input after silence (fake clock)');
+console.log('5) a reload rebuilds every run of activity collapsed, whatever was open before it (ADR-0017 X1)');
+{
+  const driver = createDriver();
+  currentDriver = driver;
+  const args = '{"path":"src/old.ts"}';
+  driver.host.receive({ type: 'planner_turn_started', turnId: 'open-1', prompt: 'read the old file' });
+  driver.host.receive({ type: 'research_step', tool: 'read_file', args, toolCallId: 'c-old', turnId: 'open-1' });
+  driver.host.flush();
+  await sendAll(driver.take());
+  await page.waitForTimeout(60);
+  const group = page.locator('.activity-group-toggle').last();
+  ok(await group.innerText() === 'Reading a file', 'a live run says what it is still doing');
+  await group.click();
+  await page.locator('.cmd-row-toggle').last().click();
+  driver.host.receive({
+    type: 'research_step_done', turnId: 'open-1',
+    step: { id: 'rs-old', tool: 'read_file', args, result: 'old body', timestamp: '2026-01-01T00:00:00.000Z', success: true, outcome: 'success', toolCallId: 'c-old' },
+  });
+  driver.host.flush();
+  await sendAll(driver.take());
+  await page.waitForTimeout(60);
+  ok(await group.innerText() === 'Read a file', 'the run recounts as its call settles');
+  ok(await page.locator('.cmd-row.expanded .cmd-row-output').innerText() === 'old body', 'the row opened while pending stays open as it settles');
+
+  await send({ type: 'restoreChat' });
+  driver.host.reload(RELOAD_FIXTURE);
+  await sendAll(driver.take());
+  await page.waitForTimeout(150);
+  const expanded = await page.locator('.activity-group-toggle').evaluateAll((els) => els.map((el) => el.getAttribute('aria-expanded')));
+  ok(expanded.length === 2 && expanded.every((v) => v === 'false'), `the reloaded runs are all collapsed (${expanded.join(',')})`);
+  ok(await page.locator('.cmd-row, .subagent-card').count() === 0, 'nothing of a collapsed run is drawn');
+  const summaries = await page.locator('.activity-group-toggle').allInnerTexts();
+  ok(JSON.stringify(summaries) === JSON.stringify(['Delegated to an agent', 'Read a file']), `each saved run says what it did (${summaries.join(' | ')})`);
+}
+
+console.log('6) watchdog re-enables input after silence (fake clock)');
 {
   const driver = createDriver();
   currentDriver = driver;

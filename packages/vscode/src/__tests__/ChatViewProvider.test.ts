@@ -184,6 +184,7 @@ describe('ChatViewProvider conversation reloads', () => {
           expect.objectContaining({ type: 'tool', headline: { name: 'Read', keyArg: 'a.ts' }, status: 'ok' }),
           expect.objectContaining({ type: 'plan', status: 'generated', taskCount: 1 }),
         ],
+        replaced: true,
       },
     ]);
   });
@@ -193,7 +194,7 @@ describe('ChatViewProvider conversation reloads', () => {
     provider.replaceConversation({ conversationHistory: history, researchLog });
 
     expect(posted.some((m) => m.type === 'restoreChat')).toBe(false);
-    expect(posted.at(-1)).toMatchObject({ type: 'conversationPatch' });
+    expect(posted.at(-1)).toMatchObject({ type: 'conversationPatch', replaced: true });
   });
 
   it('tells the webview when to lock and free the input', () => {

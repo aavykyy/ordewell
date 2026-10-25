@@ -127,8 +127,7 @@ awaited before the turn ends.**
   research, with its log, usage, stop and retry like any task. It waits for a
   free slot like any other task. Its handoff is drawn in the conversation as the
   run update that delivered it: whole when short, folded after a few lines when
-  long with the lines left out counted, and opened by the conversation's one
-  detail switch. A chain continues in the conversation as its reports arrive,
+  long with the lines left out counted, and opened on its own (ADR-0017, X1). A chain continues in the conversation as its reports arrive,
   so the user can follow it and stop it at any point.
 
 ## Considered options
@@ -189,3 +188,4 @@ awaited before the turn ends.**
 - 2026-10-24 — retitled from "Evidence the planner needs is a research task, and its report wakes the planner": only evidence the planner must decide on is a research task (R5).
 - 2026-10-24 — the explore skill's choice between approaches: explorers save their prototypes as patches, a check fixed beforehand decides eligibility, a judge only when several pass, and the build task applies the chosen patch (R5).
 - 2026-10-24 — the judge only recommends and is always a research task: the planner adds the build task on the recommended patch, and approving that task is the pick, as [ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md) says (R5).
+- 2026-10-25 — a long report in a run update opens on its own in VS Code, which has no detail switch any more (R6; ADR-0017 X1).

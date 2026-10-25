@@ -357,7 +357,7 @@ describe('help overlay', () => {
 describe('plan pane', () => {
   const tasks: TaskView[] = [
     { id: 'a', order: 1, title: 'First', type: 'ai', status: 'pending', dependencies: [] },
-    { id: 'b', order: 2, title: 'Second', type: 'ai', status: 'running', dependencies: [] },
+    { id: 'b', order: 2, title: 'Second', type: 'ai', status: 'running', dependencies: [], attempted: true },
   ];
   const planned = initialState({ sessionId: 's1', tasks, focus: 'plan' });
 
@@ -618,7 +618,6 @@ describe('plan pane', () => {
 
   it.each([
     ['c', 'cancel'],
-    ['m', 'complete'],
     ['s', 'skip'],
   ])('%s acts on the selected task', (char, action) => {
     const s = { ...planned, selectedTask: 1 };

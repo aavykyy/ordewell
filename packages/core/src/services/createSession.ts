@@ -39,7 +39,7 @@ import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type User
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
-import { surfacePlan, type HeldEdit, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
+import { surfacePlan, type HeldEdit, type RunActivity, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
 import { SubagentRuns } from './SubagentRuns';
@@ -68,7 +68,7 @@ import type { IRunner } from '../interfaces/IRunner';
 import type { TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { IsolationHandoff, IsolationMergeResult, IsolationView, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
 import type { IsolationRunController } from './IsolationRunController';
-import { PlanEditor } from './PlanEditor';
+import { PlanEditor, type TaskEditOptions } from './PlanEditor';
 import { PlanEditError } from './PlanEditError';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { ExecutionCommands, mergeStopped, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
@@ -556,6 +556,8 @@ export class Session {
   private saveRefusedFor: string | null = null;
   /** User controls in flight; see {@link withSave}. */
   private controlsInFlight = 0;
+  /** A whole-plan start opening; a second Execute joins it rather than resetting the run under it. */
+  private runOpening: Promise<void> | null = null;
   private unsubObserver: (() => void) | null;
   private readonly hostSessionId?: string;
   private currentSessionId: string;
@@ -860,6 +862,7 @@ export class Session {
       startsHeld: () => this.orchestrator.startsHeld,
       hasLiveWork: () => this.orchestrator.hasLiveWork,
       startsPending: () => this.orchestrator.startsPending,
+      advancesOnItsOwn: () => this.orchestrator.advancesOnItsOwn,
       admitStart: () => this.orchestrator.admitStart(),
       running: (taskId) => this.orchestrator.getAttempt(taskId) !== undefined,
       maxParallel: () => this.config.maxParallelSessions,
@@ -1132,6 +1135,18 @@ export class Session {
   /** The attempts of a task that have a saved log, oldest first. */
   taskLogAttempts(taskId: string): number[] {
     return listTaskLogAttempts(this.taskLogLocation, taskId);
+  }
+
+  /**
+   * Mark tasks a saved plan has no attempted flag for but whose logs prove an
+   * attempt ran. Only AI and script tasks: a manual task's completion wrote a
+   * handoff log, which is not a chat.
+   */
+  private creditLoggedAttempts(tasks: readonly Task[]): void {
+    for (const task of flattenTasks(tasks)) {
+      if (task.attempted || task.type === 'user') continue;
+      if (this.taskLogAttempts(task.id).length > 0) task.attempted = true;
+    }
   }
 
   /** One attempt's saved log, for `replayTaskLog` — what a reopened task view shows. */
@@ -1917,13 +1932,21 @@ export class Session {
     return this.plan;
   }
 
-  private async runWholePlan(origin: RunOrigin): Promise<void> {
+  private runWholePlan(origin: RunOrigin): Promise<void> {
+    // Before the first await: two Executes can arrive while the run is still
+    // opening, and the second must join the one under way rather than load the
+    // plan over it and spawn its tasks a second time.
+    if (this.runOpening) return this.runOpening;
     const plan = this.idlePlan();
-    await this.withSave(async () => {
+    const opening = this.withSave(async () => {
       // Approved first: the scheduler reads the record at each start.
       this.record.approvePlan();
       plan.status = 'approved';
       await this.orchestrator.beginRun(origin);
+    });
+    this.runOpening = opening;
+    return opening.finally(() => {
+      if (this.runOpening === opening) this.runOpening = null;
     });
   }
 
@@ -2188,6 +2211,9 @@ export class Session {
    * answers as stopped rather than waiting on a question that no longer stands.
    */
   stopExecution(): void {
+    // The opening stopped here may still be awaiting a spawn; an Execute after
+    // this Stop starts afresh instead of joining a run that no longer stands.
+    this.runOpening = null;
     this.saved(() => this.orchestrator.stop());
     this.approvals.clear((request) => request.kind === 'task_start');
     this.broadcast({ type: 'execution_stopped' });
@@ -2195,6 +2221,14 @@ export class Session {
 
   /** Something will start without being asked again; see {@link TaskOrchestrator.startsPending}. */
   get startsPending(): boolean { return this.orchestrator.startsPending; }
+
+  /**
+   * What the run is doing — starting, running, scheduled, resumable, and
+   * whether it advances on its own — for a surface or a guard that must tell a
+   * start on its way from real execution.
+   * See {@link TaskOrchestrator.activity}.
+   */
+  get activity(): RunActivity { return this.orchestrator.activity; }
 
   /**
    * Run a user control and save what it changed before any surface hears of
@@ -2274,18 +2308,18 @@ export class Session {
   }
 
   /** Patch one task's fields, checked as the planner's task ops are; see {@link PlanEditor.updateTask}. */
-  async updateTask(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
-    return this.editor.updateTask(taskId, changes);
+  async updateTask(taskId: string, changes: Partial<Task>, options?: TaskEditOptions): Promise<LegacyPlanState | null> {
+    return this.editor.updateTask(taskId, changes, options);
   }
 
   /** Move one task onto a different runner, re-deriving what is scoped to it; see {@link PlanEditor.setTaskRunner}. */
-  async setTaskRunner(taskId: string, runner: RunnerId): Promise<LegacyPlanState | null> {
-    return this.editor.setTaskRunner(taskId, runner);
+  async setTaskRunner(taskId: string, runner: RunnerId, options?: TaskEditOptions): Promise<LegacyPlanState | null> {
+    return this.editor.setTaskRunner(taskId, runner, options);
   }
 
   /** Replace one task's dependency list, under the same guard as a field patch; see {@link PlanEditor.setTaskDependencies}. */
-  async setTaskDependencies(taskId: string, dependencies: string[]): Promise<LegacyPlanState | null> {
-    return this.editor.setTaskDependencies(taskId, dependencies);
+  async setTaskDependencies(taskId: string, dependencies: string[], options?: TaskEditOptions): Promise<LegacyPlanState | null> {
+    return this.editor.setTaskDependencies(taskId, dependencies, options);
   }
 
   /** Delete one task, cancelling its runner first if it runs; see {@link PlanEditor.removeTask}. */
@@ -2335,6 +2369,10 @@ export class Session {
     // Adopting the saved session's id keeps subsequent persists writing to the
     // same file instead of forking the session under a fresh identity.
     if (opts?.sessionId) this.currentSessionId = opts.sessionId;
+    // A plan saved before a task kept its attempted mark is read against the
+    // attempt logs it left, so upgrading keeps the chats it already had. A
+    // manual task's handoff log is not an attempt, and stays no chat.
+    if (adopting) this.creditLoggedAttempts(plan.tasks);
     this.orchestrator.loadPlan(plan.tasks, plan.runners);
     // Loading normalizes statuses (a failed task gets a fresh chance) on the
     // store's copy; the adopted plan shows that result, not the caller's input.

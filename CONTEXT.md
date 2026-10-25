@@ -2292,8 +2292,8 @@ orchestrator schedules on the outcome, it does not re-derive it.
 *Avoid:* "review result", "verification result" as separate concepts — they were
 two redundant shapes for the same fact and collapse into the Verdict.
 
-**Mark complete** — the user action of force-completing any task regardless of
-runner state. Promotes the task to `status: 'completed'`, records a synthetic
+**Mark complete** — the user action of force-completing a task by hand.
+Promotes the task to `status: 'completed'`, records a synthetic
 `pass` Verdict with a `manual` verification check, archives the task to the
 execution log, and unblocks dependents so the scheduler can advance. Distinct
 from `cancelTask` (which returns a task to `pending` and places it on hold) and
@@ -2303,6 +2303,16 @@ A clean runner exit without a completion call is a failed verdict, never implici
 completion. It is the user's vouch for the work, and the only way to land work
 no passing verdict landed: the supervisor cannot Mark complete. Works on a
 *Skipped task* too, landing its kept work.
+For an AI or script task it is a recovery action taken with the run stopped
+(ADR-0029): refused while the plan is starting or running, an attempt is
+starting, running or integrating, or scheduled or resumed work could still
+advance the task, whatever its status, a completed task included; the refusal
+says to Stop the run first. Once stopped it needs the user's explicit yes
+(`confirmed` on the command, with the status they were asked about), which
+says it vouches for the work although no passing verdict said it was done, may
+land its kept changes and releases its dependents on a future run; a call
+without it, or about a task that moved on since, is refused. A manual task's
+sign-off is the user's own work and is never held up by a run.
 *Avoid:* "skip" for this concept — Skip lands nothing (see *Skipped task*).
 
 **Mark not done** — the inverse user action, and the only way back out of a
@@ -2313,9 +2323,16 @@ feeding them a result that no longer exists. The task is placed on hold like a
 cancel, so a running plan does not immediately re-spawn the work just un-marked
 (Retry / Force Start / Run release the hold), and a plan whose status had
 reached `completed` returns to `approved`. It is a no-op on any task that is not
-completed. Both directions are one affordance per surface, never two: the VS
-Code task-check ring toggles, and the TUI's `m` picks its direction from the
-selected task's status (footer hint follows: `m done` / `m undone`).
+completed. It clears only the completion: the work the task did stays, and
+tasks that already ran on its result are not undone. It is held to Mark
+complete's rules for an AI or script task: refused while a run could advance
+the task, and confirmed by the user once stopped. Both directions are one
+affordance per surface, never two, and never a status symbol: the VS Code
+task-check ring only shows status, and Mark complete / Mark not done are one
+button at the bottom of a task's or subtask's expanded details; the TUI's `m`
+picks its direction from the selected task's status (footer hint follows:
+`m done` / `m undone`) and asks before it sends; `ordewell complete` and
+`uncomplete` ask too, or take `--yes`.
 *Avoid:* "un-skip" — a skipped task is not completed, so this does not apply to
 it; "reopen" — and do not model it as `retryTask`, which counts a retry attempt
 and releases the hold.
@@ -2479,16 +2496,30 @@ the same in the TUI and VS Code.
 *Avoid:* keeping a stopped turn's late deltas "until the daemon answers" —
 that was one surface's rule and the two drifted.
 
-**Detail view (detail-all)** — the single expand-all toggle per surface: the
-TUI's ctrl+o and VS Code's header button flip one `detailAll` flag that decides
-whether tool blocks show their arguments and full output, subagent blocks show
-their children and digest, and so on. Collapsed is the default: a row per call
-(`Name(keyArg)`) and one preview line. There are deliberately no per-block
-expanded states (see ADR-0017's rejected options). The TUI's ctrl+L clears the
-conversation but keeps the usage line.
-*Avoid:* "expandable row" per block — one toggle, one place, per surface;
-*Avoid:* claiming the surfaces share the flag's key — ctrl+o is the TUI's
-spelling, not the concept.
+**Detail view (detail-all)** — the TUI's single expand-all toggle: ctrl+o
+flips one `detailAll` flag that decides whether tool blocks show their
+arguments and full output, subagent blocks show their children and digest, and
+so on. Collapsed is the default: a row per call (`Name(keyArg)`) and one
+preview line. The TUI deliberately has no per-block expanded states (see
+ADR-0017's rejected options). The TUI's ctrl+L clears the conversation but
+keeps the usage line.
+*Avoid:* using it for VS Code, which has no expand-all and folds activity
+instead (**Activity group**).
+
+**Activity group** — VS Code's fold of one run of activity between two
+messages (thinking, calls, subagents, setup and compaction notices, answered
+approvals): one line that says what the run did, counted from the blocks' own
+facts (`Ran 4 commands, fetched 2 pages (2 failed)`), collapsed by default. A
+call that was refused, denied or not executed is never counted as run
+(`1 command denied`), and a denial beside the call it stopped is told once,
+on the call. Opened, it draws its rows as their collapsed previews,
+and each row opens on its own (ADR-0017, X1). A waiting approval, an error,
+other notices and every message stay outside any group, and a script task's
+log has none: its rows are drawn whole. What is open is the webview's state,
+keyed on block ids.
+*Avoid:* "turn" for it — the prose between a turn's calls splits its activity
+into several groups; *Avoid:* counting what a call ran (a script's commands)
+rather than the call.
 
 **Usage record** (`UsageRecord`) — what one model call consumed, as its
 provider or runner *reported* it: token counts, cached input share, the
@@ -2687,14 +2718,15 @@ setting; a Guarded session can have an Act supervisor. *Avoid:* "mandate" until
 
 **Run settings** — the machine-wide user settings that say how a run is
 started, watched and merged: **Supervisor level**, **Auto-merge at gates**,
-**Autorun**, the supervisor's retry limit and the wake-up read budget
-(ADR-0030). Saved in
-`settings.json` beside the Planned-with trailer, which is not a panel value; changed only by the user through `/settings` (or the headless
-commands behind it) or `PATCH /api/settings`, never by the
-planner. A change applies at once to the session it is made in; another
-session's run under way keeps its values until it ends. A run's own copy is
-`runSettings` on the plan, which only **Run supervision** writes; the plan
-stores no other copy.
+**Autorun**, the supervisor's retry limit (ADR-0030) and the wake-up read
+budget (`wakeUpReadBudget`). The budget has no row in the UI: it is set only by
+`ordewell supervisor reads <n>` or in `settings.json`, never by `/settings`.
+All of them are saved in `settings.json` beside the Planned-with trailer, which
+is not a panel value; the rows `/settings` shows are changed only by the user
+there, a headless command, or `PATCH /api/settings`, never by the planner. A
+change applies at once to the session it is made in; another session's run
+under way keeps its values until it ends. A run's own copy is `runSettings` on
+the plan, which only **Run supervision** writes; the plan stores no other copy.
 *Avoid:* "autonomy" or "autonomy settings" for them — *autonomy* is the
 Full/Guarded level only, shown on its own Setup row; *Avoid:* "plan settings"
 (they stopped being per plan).

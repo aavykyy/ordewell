@@ -79,7 +79,7 @@ describe('OrchestratorPool.adoptSavedSession', () => {
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
     pool.adoptSavedSession(meta.id, workspace);
 
-    await expect(pool.session(meta.id).execute({ command: 'mark_complete', task: 't2' }, { kind: 'user' })).resolves.toMatchObject({ ok: true });
+    await expect(pool.session(meta.id).execute({ command: 'mark_complete', task: 't2', confirmed: true }, { kind: 'user' })).resolves.toMatchObject({ ok: true });
   });
 
   // persist() derives the filename from goal + createdAt + id, so adopting a

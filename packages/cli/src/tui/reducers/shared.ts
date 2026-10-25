@@ -1,4 +1,4 @@
-import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, PlanUsage, PlannerUsage, ResearchLogEntry, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskLogEvent } from '@ordewell/core';
+import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskLogEvent, TaskStatus } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -52,7 +52,8 @@ export type Effect =
   /** Schedules the stop-arm expiry; the runtime owns the timer, not the reducer. */
   | { type: 'disarmStop'; afterMs: number; arm: number }
   /** `watch` asks the runtime to hold the execution stream open for this action — see `taskActionEffect`. */
-  | { type: 'taskAction'; sessionId: string; taskId: string; action: TaskAction; watch?: boolean }
+  /** `confirmed`: the user's yes to an override, with the status they were asked about (ADR-0029). */
+  | { type: 'taskAction'; sessionId: string; taskId: string; action: TaskAction; watch?: boolean; confirmed?: { seen: TaskStatus } }
   | { type: 'addTask'; sessionId: string; title: string }
   /** `/settings`: only the changed values, saved the way their headless commands save them, then `message` as one notice. */
   | { type: 'saveSettings'; run: Partial<GlobalRunSettings>; autonomous?: boolean; maxParallel?: number; message: string; sessionId?: string }
@@ -133,7 +134,7 @@ export type Action =
   | { type: 'taskUpdated'; taskId: string; changes: Record<string, unknown>; sessionId?: string }
   | { type: 'taskCheckpoint'; taskId: string; title: string; summary: string; sessionId?: string }
   /** The run's status stream: folded through core's `reduceRun`, status-only fields and all. */
-  | { type: 'statusUpdate'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; sessionId?: string }
+  | { type: 'statusUpdate'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; activity?: RunActivity; sessionId?: string }
   /** The run as the daemon sends it when a socket connects, before the next update. */
   | { type: 'runSnapshot'; view: RunView; approvals?: ApprovalRequestMessage[]; sessionId?: string }
   /** The edit the open planner turn holds, as it would leave the plan; null once it landed or was dropped. */
@@ -188,7 +189,29 @@ export function step(state: TuiState, effects: Effect[] = []): Step {
   return { state, effects };
 }
 
-export const fail = (state: TuiState, message: string): Step => step(say(state, 'error', message));
+export const fail = (state: TuiState, message: string): Step => step(reportError(state, message));
+
+/**
+ * A local error, where the user can see it. The chat pane draws a task's own
+ * log while one is open, so the planner transcript would swallow it: the view's
+ * notice row is the one place that is on screen.
+ */
+export function reportError(state: TuiState, message: string): TuiState {
+  return state.taskView
+    ? { ...state, taskView: { ...state.taskView, notice: message } }
+    : say(state, 'error', message);
+}
+
+/**
+ * A notice answers the key that was refused. Any next key that is not just
+ * scrolling dismisses it, so the view's own key hints come back — a script
+ * view has no composer whose next send would clear it.
+ */
+export function clearNotice(state: TuiState): TuiState {
+  return state.taskView?.notice
+    ? { ...state, taskView: { ...state.taskView, notice: undefined } }
+    : state;
+}
 
 /**
  * A planner/execution result carries the session id it was produced for. A

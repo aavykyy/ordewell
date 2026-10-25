@@ -1,7 +1,8 @@
 import React from 'react';
 import type { HandoffDigest, StoredHandoff, TaskRowHandoff } from '@ordewell/core';
-import { handoffFindingsText, handoffPeekParts, handoffReferenceText, REPORT_PREVIEW_LINES, savedPatchViews, severityLabel, worstSeverity } from '@ordewell/core/plan-utils';
+import { handoffFindingsText, handoffPeekParts, handoffReferenceText, savedPatchViews, severityLabel, worstSeverity } from '@ordewell/core/plan-utils';
 import { useOpenPatch } from '../openPatch';
+import ReportBody from './ReportBody';
 
 export function HandoffPeek({ handoff }: { handoff: TaskRowHandoff | null }) {
   if (!handoff) return null;
@@ -13,17 +14,13 @@ export function HandoffPeek({ handoff }: { handoff: TaskRowHandoff | null }) {
 }
 
 /** The same handoff in a plan card and an attempt log (ADR-0047); only the log carries the report. */
-export default function TaskHandoff({ handoff, expanded = false, taskName, onReadFull }: {
+export default function TaskHandoff({ handoff, taskName, onReadFull }: {
   handoff: HandoffDigest | StoredHandoff;
-  expanded?: boolean;
   taskName?: (id: string) => string | undefined;
   onReadFull?: () => void;
 }) {
   const severity = worstSeverity(handoff.findings);
   const report = 'report' in handoff ? handoff.report : undefined;
-  const lines = report ? report.replace(/\n+$/, '').split('\n') : [];
-  const shown = expanded ? lines : lines.slice(0, REPORT_PREVIEW_LINES);
-  const hidden = lines.length - shown.length;
   const more = handoff.findingCount - handoff.findings.length;
   // A patch gets its own block below (ADR-0050); the artifacts list keeps the
   // author's references, which stay one line each.
@@ -68,8 +65,7 @@ export default function TaskHandoff({ handoff, expanded = false, taskName, onRea
       {report && (
         <div className="chat-report">
           <div className="chat-report-head">Report</div>
-          <pre className="chat-report-body task-handoff-report">{shown.join('\n')}</pre>
-          {hidden > 0 && <span className="cmd-row-more">+{hidden} line{hidden === 1 ? '' : 's'} of the report</span>}
+          <ReportBody lines={report.replace(/\n+$/, '').split('\n')} className="chat-report-body task-handoff-report" />
         </div>
       )}
       {onReadFull && <button type="button" className="task-log-open-btn" onClick={onReadFull}>Read full handoff</button>}

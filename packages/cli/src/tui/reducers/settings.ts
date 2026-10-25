@@ -32,7 +32,7 @@ const supervisorOff = (_state: TuiState, choices: StepChoices): boolean => choic
 // their minimum up, with no ceiling (parseCount, parseMaxParallel).
 export const SETTINGS: StepperDefinition = {
   title: 'Settings',
-  advanceOnEnter: false,
+  afterSave: 'stay',
   hint: 'Saved for this run and every later one. Each choice is saved when you press enter.',
   steps: [
     {
@@ -61,13 +61,6 @@ export const SETTINGS: StepperDefinition = {
       hint: 'How many times the supervisor may retry one task in a run',
       skip: supervisorOff,
       number: { min: 0, current: (state) => state.runSettings.supervisorRetryLimit },
-    },
-    {
-      id: 'reads',
-      label: 'Supervisor reads',
-      hint: 'How many reads the supervisor may make each time it wakes up',
-      skip: supervisorOff,
-      number: { min: 1, current: (state) => state.runSettings.wakeUpReadBudget },
     },
     {
       id: 'automerge',
@@ -118,10 +111,6 @@ function saveChoices(state: TuiState, choices: StepChoices): Step {
   if (choices.retries !== undefined && Number(choices.retries) !== state.runSettings.supervisorRetryLimit) {
     run.supervisorRetryLimit = Number(choices.retries);
     changed.push(`Supervisor retries ${choices.retries}`);
-  }
-  if (choices.reads !== undefined && Number(choices.reads) !== state.runSettings.wakeUpReadBudget) {
-    run.wakeUpReadBudget = Number(choices.reads);
-    changed.push(`Supervisor reads ${choices.reads}`);
   }
   const automerge = choices.automerge === 'on';
   if (automerge !== state.runSettings.mergeAtGatesAutomatically) {

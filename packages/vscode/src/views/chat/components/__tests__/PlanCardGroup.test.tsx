@@ -49,6 +49,40 @@ describe('PlanCardGroup — Execute Plan / Stop', () => {
     expect(screen.getByText('Stop')).toBeTruthy();
   });
 
+  it('offers Stop for a queued start or a usage-limit hold, though nothing executes', () => {
+    const onStopExecution = vi.fn();
+    render(
+      <PlanCardGroup run={EMPTY_RUN}
+        tasks={[makeTask()]}
+        models={emptyModels}
+        isExecuting={false}
+        runActive
+        onExecutePlan={vi.fn()}
+        onStopExecution={onStopExecution}
+      />,
+    );
+
+    expect(screen.queryByText('Execute Plan')).toBeNull();
+    fireEvent.click(screen.getByText('Stop'));
+    expect(onStopExecution).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the run activity when no explicit runActive is passed', () => {
+    const run = { ...EMPTY_RUN, activity: { ...EMPTY_RUN.activity!, advancesOnItsOwn: true } };
+    render(
+      <PlanCardGroup run={run}
+        tasks={[makeTask()]}
+        models={emptyModels}
+        isExecuting={false}
+        onExecutePlan={vi.fn()}
+        onStopExecution={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('Execute Plan')).toBeNull();
+    expect(screen.getByText('Stop')).toBeTruthy();
+  });
+
   it('calls onExecutePlan when Execute Plan is clicked', () => {
     const onExecutePlan = vi.fn();
     render(

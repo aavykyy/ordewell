@@ -11,7 +11,7 @@ function run(text: string, overrides: Partial<TuiState> = {}) {
 }
 
 const task = (over: Partial<TaskView>): TaskView => ({
-  id: 'task-1', order: 1, title: 'Do the thing', type: 'ai', status: 'pending', dependencies: [], ...over,
+  id: 'task-1', order: 1, title: 'Do the thing', type: 'ai', status: 'pending', dependencies: [], attempted: true, ...over,
 });
 
 const planned: Partial<TuiState> = {
@@ -261,7 +261,6 @@ describe('execution', () => {
 
 describe('task control', () => {
   const cases: [string, Effect][] = [
-    ['/complete task-a', { type: 'taskAction', sessionId: 'session-1', taskId: 'task-a', action: 'complete' }],
     ['/skip task-a', { type: 'taskAction', sessionId: 'session-1', taskId: 'task-a', action: 'skip' }],
     ['/retry task-a', { type: 'taskAction', sessionId: 'session-1', taskId: 'task-a', action: 'retry', watch: true }],
     ['/cancel task-a', { type: 'taskAction', sessionId: 'session-1', taskId: 'task-a', action: 'cancel' }],

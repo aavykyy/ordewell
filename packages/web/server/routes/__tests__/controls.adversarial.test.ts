@@ -67,7 +67,7 @@ describe('adversarial: a reference the CLI URL-encodes', () => {
   it('a control naming a task by its exact title, spaces and a hash, resolves as typed', async () => {
     const h = start([task('t1', 1), task('t2', 2, { title: 'Deploy the #2 parser' })]);
 
-    const res = await h.command({ command: 'mark_complete', task: 'Deploy the #2 parser' });
+    const res = await h.command({ command: 'mark_complete', task: 'Deploy the #2 parser', confirmed: true });
 
     expect(res.status).toBe(200);
     expect(await json(res)).toEqual({ ok: true, message: 'Marked task #2 "Deploy the #2 parser" complete.' });

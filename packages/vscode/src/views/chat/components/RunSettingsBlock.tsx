@@ -135,18 +135,11 @@ function RunSettingsRows({ value, onChange }: { value: RunSettingsValue; onChang
       <PillRow label="Autonomy" options={AUTONOMY} current={value.autonomous} onPick={(autonomous) => onChange({ autonomous })} />
       <PillRow label="Supervisor" options={SUPERVISOR} current={run.supervisorLevel} onPick={(supervisorLevel) => onChange({ run: { supervisorLevel } })} />
       {run.supervisorLevel !== 'off' && (
-        <>
-          <NumberRow
-            label="Supervisor retries" value={run.supervisorRetryLimit} min={0} host={value}
-            hint={(n) => (n === 0 ? 'Never retry a task.' : `Retry one task up to ${plural(n, 'time', 'times')}.`)}
-            onCommit={(supervisorRetryLimit) => onChange({ run: { supervisorRetryLimit } })}
-          />
-          <NumberRow
-            label="Supervisor reads" value={run.wakeUpReadBudget} min={1} host={value}
-            hint={(n) => `Up to ${plural(n, 'read', 'reads')} each time it wakes.`}
-            onCommit={(wakeUpReadBudget) => onChange({ run: { wakeUpReadBudget } })}
-          />
-        </>
+        <NumberRow
+          label="Supervisor retries" value={run.supervisorRetryLimit} min={0} host={value}
+          hint={(n) => (n === 0 ? 'Never retry a task.' : `Retry one task up to ${plural(n, 'time', 'times')}.`)}
+          onCommit={(supervisorRetryLimit) => onChange({ run: { supervisorRetryLimit } })}
+        />
       )}
       <PillRow label="Automerge" options={AUTOMERGE} current={run.mergeAtGatesAutomatically} onPick={(mergeAtGatesAutomatically) => onChange({ run: { mergeAtGatesAutomatically } })} />
       <PillRow label="Autorun" options={AUTORUN} current={run.autorun} onPick={(autorun) => onChange({ run: { autorun } })} />

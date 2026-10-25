@@ -346,6 +346,13 @@ describe('keepExecutionState', () => {
     expect(result[0].subtasks[0]).toMatchObject({ status: 'skipped', skipReason: 'The test host is unavailable' });
   });
 
+  it('keeps the attempted mark of a task a planner restates, so its chat does not vanish', () => {
+    const current = [{ ...todo('a', 1), attempted: true as const }];
+    const rewrite = [todo('a', 1)];
+
+    expect(keepExecutionState(current, rewrite)[0].attempted).toBe(true);
+  });
+
   it('keeps a settled task exactly as it stands wherever the rewrite names it', () => {
     const running = createTask({ id: 'b', order: 2, title: 'B', prompt: 'do b', status: 'in_progress' });
     const held = createTask({ id: 'c', order: 3, title: 'C', prompt: 'do c', status: 'awaiting_user' });
@@ -464,6 +471,17 @@ describe('a status update carries the task type a surface tags it by', () => {
 
     expect(serializeTaskStatus(script).type).toBe('script');
     expect(serializeTaskStatus(createTask({ id: 't2', title: 'Build' })).type).toBe('ai');
+  });
+});
+
+describe('a started task on the wire', () => {
+  it('carries its attempted mark with the plan and with a status update, and nothing on a task never run', () => {
+    const started = createTask({ id: 't1', title: 'Build', attempted: true });
+
+    expect(serializeTask(surfaceTask(started)).attempted).toBe(true);
+    expect(serializeTaskStatus(started).attempted).toBe(true);
+    expect(serializeTask(surfaceTask(createTask({ id: 't2' })))).not.toHaveProperty('attempted');
+    expect(serializeTaskStatus(createTask({ id: 't2' }))).not.toHaveProperty('attempted');
   });
 });
 

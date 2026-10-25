@@ -425,6 +425,9 @@ export class Attempts {
     this.spawnCounts.set(task.id, attempt.attempt);
     this.live.set(task.id, attempt);
     this.deps.research?.started(task);
+    // Before the status leaves: a surface may show its chat from the first
+    // status of the attempt, with no output or usage required yet.
+    store.markAttempted(task.id);
     // A script spends nothing a ledger counts: no model, no tokens (ADR-0035).
     if (!script) store.startAttemptUsage(task.id, attempt.attempt, attempt.runner, attempt.startedAt);
     store.setTaskOutputSummary(task.id, undefined);

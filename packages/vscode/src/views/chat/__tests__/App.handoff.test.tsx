@@ -5,7 +5,7 @@ import { createTask, type HandoffDigest, type HandoffPatch, type RunTask } from 
 import App from '../App';
 import { api, post } from './hostBridge';
 
-const task = createTask({ id: 't1', order: 1, title: 'Review boundary', status: 'completed' });
+const task = createTask({ id: 't1', order: 1, title: 'Review boundary', status: 'completed', attempted: true });
 const handoff: HandoffDigest = {
   summary: 'Keep the token scoped.\nMore context.', findingCount: 28,
   findings: [{ id: 'F1', severity: 'blocker', title: 'Sibling read', detail: 'The token can read a sibling.', evidence: [{ kind: 'file', path: 'src/token.ts', line: 42 }] }],
@@ -62,9 +62,9 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     expect(document.querySelector('.task-handoff-summary')).toBeNull();
   });
 
-  it.each(['script', 'user'] as const)('shows the %s handoff from a saved plan with no findings', (type) => {
+  it('shows a script handoff from a saved plan with no findings, and opens its chat', () => {
     post({ type: 'planUpdated', plan: {
-      tasks: [{ ...task, type, handoff: { summary: 'Finished', findings: [], findingCount: 0 } }],
+      tasks: [{ ...task, type: 'script', handoff: { summary: 'Finished', findings: [], findingCount: 0 } }],
       generatedAt: '', lastUpdated: '', status: 'approved', runners: [],
     } });
     expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Handed over · no findings · Finished');
@@ -72,6 +72,17 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     expect(screen.getByText('Handoff · no findings')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Read full handoff' }));
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'openTaskLog', taskId: 't1' });
+  });
+
+  it('shows a manual handoff without offering a chat it never had', () => {
+    post({ type: 'planUpdated', plan: {
+      tasks: [{ ...task, type: 'user', attempted: undefined, handoff: { summary: 'Finished', findings: [], findingCount: 0 } }],
+      generatedAt: '', lastUpdated: '', status: 'approved', runners: [],
+    } });
+    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Handed over · no findings · Finished');
+    fireEvent.click(screen.getByText('Review boundary'));
+    expect(screen.getByText('Handoff · no findings')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Read full handoff' })).toBeNull();
   });
 
   it('shows the saved patch its attempt kept, and opens it in an editor tab (ADR-0050)', () => {

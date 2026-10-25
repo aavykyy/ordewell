@@ -929,6 +929,10 @@ describe('OpenCodeAdapter task mode — shared protocol behaviour', () => {
 });
 
 describe('OpenCodeAdapter planner — still read-only', () => {
+  // A host running inside OpenCode carries its own configuration, which a child rightly keeps.
+  beforeEach(() => { vi.stubEnv('OPENCODE_CONFIG_CONTENT', undefined); });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
   /** A planner turn whose message POST stays open until `release`, as the real one does. */
   function plannerServer(routes: Record<string, (body: unknown) => Reply | Promise<Reply>> = {}) {
     let release: () => void = () => {};

@@ -55,6 +55,16 @@ function runningRefusal(task: Pick<Task, 'title'>, action: string): string {
   return `"${task.title}" is running and cannot be ${action} now: the user can stop it first, or change it after it finishes`;
 }
 
+/**
+ * Why the task card's edit may not land: the card offers its editors only on a
+ * task that has not started, and execution reached that task while the edit
+ * was waiting on discovery or a skill check. The wider direct path still lets
+ * the user change a live task, so this is the card's own precondition.
+ */
+export function startedEditRefusal(task: Pick<Task, 'title'>): string {
+  return `"${task.title}" started before this change was saved, so it was not changed: only a task that has not started can be edited while the plan runs`;
+}
+
 const AI_ONLY_FIELDS = ['assignedModel', 'taskMode', 'autonomy', 'ops'] as const satisfies readonly (keyof Task)[];
 
 /** What a task loses on becoming a script task (ADR-0035): everything a runner would read. */

@@ -21,7 +21,7 @@ beforeAll(() => {
  */
 
 const task = (i: number, title = `Task number ${i + 1}`): TaskView => ({
-  id: `t${i}`, order: i + 1, title, type: 'ai', status: 'pending', dependencies: [],
+  id: `t${i}`, order: i + 1, title, type: 'ai', status: 'pending', dependencies: [], attempted: true,
 });
 const tasksOf = (n: number): TaskView[] => Array.from({ length: n }, (_, i) => task(i));
 

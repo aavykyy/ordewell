@@ -36,7 +36,7 @@ import { capConflictFiles } from './conflictFiles';
 import { resolveWorkspaceEnv, type WorkspaceEnv } from './workspaceEnv';
 import { continuability, sessionOwner } from './continuation';
 import { quotedList } from '../utils/quotedList';
-import type { RunMergeView } from './SessionMessage';
+import type { RunMergeView, RunActivity } from './SessionMessage';
 import { ScriptRunner } from './ScriptRunner';
 import type { StoredHandoff } from '../models/Handoff';
 import { userTaskHandoff } from '../models/DerivedHandoff';
@@ -631,6 +631,11 @@ export class TaskOrchestrator {
         if (!held) return;
         held = false;
         this.admissions--;
+        // The window a surface drew as "starting" is over. A claimed start has
+        // an attempt and is announced by its tick; one let go with nothing live
+        // (declined, cancelled, refused after asking) otherwise leaves the
+        // last status update saying work is still on its way.
+        if (this.admissions === 0 && this.attempts.size === 0) this.emit('onTaskChanged');
       },
     };
   }
@@ -638,11 +643,42 @@ export class TaskOrchestrator {
   /**
    * Something can still start that nobody has to ask for again: a start
    * admitted and not yet claimed, a force start queued behind its
-   * dependencies, or a task that resumes on its own at its usage limit's
-   * reset. A Stop is owed to it, whether or not anything runs.
+   * dependencies, a task that resumes on its own at its usage limit's
+   * reset, or a start a dirty checkout parked for Stash and continue to
+   * replay. A Stop is owed to it, whether or not anything runs.
    */
   get startsPending(): boolean {
-    return this.admissions > 0 || this.queuedStarts.size > 0 || this.store.allTasks.some(waitsForReset);
+    return this.admissions > 0 || this.queuedStarts.size > 0 || this.runs.blocked || this.store.allTasks.some(waitsForReset);
+  }
+
+  /**
+   * The plan's activity as one word for every surface: a start on its way,
+   * work running, a scheduler driving the plan, or a run that resumes by
+   * itself. `starting` is the async window between a start being admitted and
+   * its first claim — the window a surface must not draw as execution and a
+   * manual override must not race. `advancesOnItsOwn` is the override guard's
+   * own predicate, so a surface asks only what the seam would accept.
+   */
+  get activity(): RunActivity {
+    return {
+      starting: this.admissions > 0 && this.attempts.size === 0,
+      running: this.attempts.size > 0,
+      scheduled: this.isScheduling,
+      resumable: this.awaitsResume,
+      advancesOnItsOwn: this.advancesOnItsOwn,
+    };
+  }
+
+  /**
+   * Whether anything could still move a task on without being asked: a start
+   * on its way, an attempt in any phase (starting, running, integrating), a
+   * scheduler driving the plan, a usage-limit hold or a scheduled resume. What
+   * a manual override of an AI or script task must not race (ADR-0029). A run
+   * that ended on a failure is not here: nothing advances until a retry or
+   * skip, so overriding the failed task is the way out.
+   */
+  get advancesOnItsOwn(): boolean {
+    return this.startsPending || this.attempts.size > 0 || this.isScheduling || this.runState.kind === 'held';
   }
 
   /** A start admitted now that nothing has to count as live work: one that claims before it awaits, or follows on from one that did. */

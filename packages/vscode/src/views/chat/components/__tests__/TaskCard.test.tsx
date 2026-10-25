@@ -100,66 +100,114 @@ describe('TaskCard — Run Task button', () => {
     expect(screen.getByText('Completion Marker')).toBeTruthy();
   });
 
-  it('calls onMarkComplete when the status circle is clicked on a pending task', () => {
+  it.each(['pending', 'failed', 'skipped', 'completed'] as const)('never changes completion when the status circle of a %s task is clicked', (status) => {
     const onMarkComplete = vi.fn();
-    render(
-      <TaskCard
-        task={makeTask({ status: 'pending' })}
-        models={emptyModels}
-        isExecuting={true}
-        onMarkComplete={onMarkComplete}
-      />,
+    const onMarkIncomplete = vi.fn();
+    const { container } = render(
+      <TaskCard task={makeTask({ status })} models={emptyModels} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />,
     );
-    const check = screen.getByTitle('Click to mark executed');
+    const check = container.querySelector('.task-check') as HTMLElement;
+
     fireEvent.click(check);
+    fireEvent.keyDown(check, { key: 'Enter' });
+    fireEvent.keyDown(check, { key: ' ' });
+
+    expect(onMarkComplete).not.toHaveBeenCalled();
+    expect(onMarkIncomplete).not.toHaveBeenCalled();
+    expect(check.classList.contains('clickable')).toBe(false);
+    expect(check.getAttribute('title')).not.toMatch(/click/i);
+    expect(check.getAttribute('tabindex')).toBeNull();
+  });
+
+  it('offers no Mark complete on a collapsed card', () => {
+    render(<TaskCard task={makeTask({ status: 'pending' })} models={emptyModels} onMarkComplete={vi.fn()} onMarkIncomplete={vi.fn()} />);
+
+    expect(screen.queryByText('Mark complete')).toBeNull();
+    expect(screen.queryByText('Mark not done')).toBeNull();
+  });
+
+  it('puts Mark complete last in the expanded details, below everything else', () => {
+    const onMarkComplete = vi.fn();
+    const { container } = render(
+      <TaskCard task={makeTask({ status: 'failed' })} models={emptyModels} onMarkComplete={onMarkComplete} />,
+    );
+    fireEvent.click(screen.getByText('Test task'));
+
+    const body = container.querySelector('.task-card-body') as HTMLElement;
+    const button = screen.getByText('Mark complete');
+    expect(body.lastElementChild?.contains(button)).toBe(true);
+    fireEvent.click(button);
     expect(onMarkComplete).toHaveBeenCalledWith('t1');
   });
 
-  it('does not call onMarkComplete when the status circle is clicked on a completed task', () => {
-    const onMarkComplete = vi.fn();
-    render(
-      <TaskCard
-        task={makeTask({ status: 'completed' })}
-        models={emptyModels}
-        isExecuting={true}
-        onMarkComplete={onMarkComplete}
-      />,
-    );
-    const check = screen.getByTitle('Executed');
-    fireEvent.click(check);
-    expect(onMarkComplete).not.toHaveBeenCalled();
-  });
-
-  it('calls onMarkIncomplete when the status circle is clicked on a completed task', () => {
-    const onMarkComplete = vi.fn();
+  it('offers Mark not done, and only that, at the bottom of a completed task', () => {
     const onMarkIncomplete = vi.fn();
+    const onMarkComplete = vi.fn();
     render(
-      <TaskCard
-        task={makeTask({ status: 'completed' })}
-        models={emptyModels}
-        isExecuting={true}
-        onMarkComplete={onMarkComplete}
-        onMarkIncomplete={onMarkIncomplete}
-      />,
+      <TaskCard task={makeTask({ status: 'completed' })} models={emptyModels} isExecuting={false} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />,
     );
-    fireEvent.click(screen.getByTitle('Executed: click to mark not done'));
+    fireEvent.click(screen.getByText('Test task'));
+
+    expect(screen.queryByText('Mark complete')).toBeNull();
+    fireEvent.click(screen.getByText('Mark not done'));
     expect(onMarkIncomplete).toHaveBeenCalledWith('t1');
     expect(onMarkComplete).not.toHaveBeenCalled();
   });
 
-  it('offers Mark Not Done in the action row of a completed task', () => {
-    const onMarkIncomplete = vi.fn();
+  it('holds an AI task\'s override back, and says why, while the run goes on', () => {
+    const onMarkComplete = vi.fn();
+    render(<TaskCard task={makeTask({ status: 'pending' })} models={emptyModels} isExecuting onMarkComplete={onMarkComplete} />);
+    fireEvent.click(screen.getByText('Test task'));
+
+    const button = screen.getByText('Mark complete') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText(/Stop the run first/)).toBeTruthy();
+    fireEvent.click(button);
+    expect(onMarkComplete).not.toHaveBeenCalled();
+  });
+
+  it('holds an AI task\'s override back for a queued start or a usage-limit hold, though nothing executes', () => {
+    const onMarkComplete = vi.fn();
+    render(<TaskCard task={makeTask({ status: 'pending' })} models={emptyModels} isExecuting={false} runActive onMarkComplete={onMarkComplete} />);
+    fireEvent.click(screen.getByText('Test task'));
+
+    const button = screen.getByText('Mark complete') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText(/Stop the run first/)).toBeTruthy();
+    fireEvent.click(button);
+    expect(onMarkComplete).not.toHaveBeenCalled();
+  });
+
+  it('lets a manual task be signed off during a run', () => {
+    const onMarkComplete = vi.fn();
+    render(<TaskCard task={makeTask({ status: 'pending', type: 'user', assignedRunner: undefined })} models={emptyModels} isExecuting onMarkComplete={onMarkComplete} />);
+    fireEvent.click(screen.getByText('Test task'));
+
+    fireEvent.click(screen.getByText('Mark complete'));
+
+    expect(onMarkComplete).toHaveBeenCalledWith('t1');
+  });
+
+  it('waits for a manual task\'s steps before it can be signed off', () => {
     render(
       <TaskCard
-        task={makeTask({ status: 'completed' })}
+        task={makeTask({ status: 'pending', type: 'user', assignedRunner: undefined, userSteps: [{ order: 1, instruction: 'Rotate the key', completed: false }] })}
         models={emptyModels}
-        isExecuting={true}
-        onMarkIncomplete={onMarkIncomplete}
+        isExecuting
+        onMarkComplete={vi.fn()}
       />,
     );
     fireEvent.click(screen.getByText('Test task'));
-    fireEvent.click(screen.getByText('Mark Not Done'));
-    expect(onMarkIncomplete).toHaveBeenCalledWith('t1');
+
+    expect((screen.getByText('Mark complete') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Complete all steps above first')).toBeTruthy();
+  });
+
+  it('offers no override on a task that is running', () => {
+    render(<TaskCard task={makeTask({ status: 'running' })} models={emptyModels} isExecuting onMarkComplete={vi.fn()} />);
+    fireEvent.click(screen.getByText('Test task'));
+
+    expect(screen.queryByText('Mark complete')).toBeNull();
   });
 });
 

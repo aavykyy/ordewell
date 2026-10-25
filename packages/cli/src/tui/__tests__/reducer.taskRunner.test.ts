@@ -119,17 +119,20 @@ describe('plan pane — mode picker (M)', () => {
 });
 
 describe('plan pane — new keys do not disturb the existing ones', () => {
-  it('keeps lowercase f as start and lowercase m as mark-complete', () => {
+  it('keeps lowercase f as start and lowercase m as a mark that asks first', () => {
     expect(press(planPane(), 'char', 'f').effects).toEqual([expect.objectContaining({ type: 'taskAction', action: 'force-start' })]);
-    expect(press(planPane(), 'char', 'm').effects).toEqual([expect.objectContaining({ type: 'taskAction', action: 'complete' })]);
+    const asked = press(planPane(), 'char', 'm');
+    expect(asked.effects).toEqual([]);
+    expect(asked.state.overlay).toMatchObject({ kind: 'confirm', action: { kind: 'mark-override', taskId: 't1', direction: 'complete' } });
   });
 
-  it('m on a completed task un-marks it — one key for both directions', () => {
+  it('m on a completed task asks to un-mark it — one key for both directions', () => {
     const done = planPane({ tasks: [task({ status: 'completed' })] });
 
-    expect(press(done, 'char', 'm').effects).toEqual([expect.objectContaining({
-      type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'uncomplete',
-    })]);
+    const asked = press(done, 'char', 'm');
+
+    expect(asked.effects).toEqual([]);
+    expect(asked.state.overlay).toMatchObject({ kind: 'confirm', action: { kind: 'mark-override', taskId: 't1', direction: 'uncomplete', seen: 'completed' } });
   });
 });
 

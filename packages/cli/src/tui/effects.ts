@@ -1,6 +1,6 @@
 import { execSync } from 'child_process';
 import {
-  clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, mergeOutcome, newTaskFields, taskActionCommand, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
+  clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, mergeOutcome, confirmedOverride, newTaskFields, taskActionCommand, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
   type PlannerModelRecall,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
@@ -244,7 +244,8 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     case 'taskAction': {
       const { sessionId, taskId, action } = effect;
       // A refusal comes back in the seam's words, a task with no resume scheduled included.
-      const request = () => api.execute(sessionId, taskActionCommand(action, taskId));
+      const command = taskActionCommand(action, taskId);
+      const request = () => api.execute(sessionId, effect.confirmed ? confirmedOverride(command, effect.confirmed.seen) : command);
       // A spawning action (see `taskActionEffect`) reports its progress the same
       // way a whole run does, so it needs the same stream open around it.
       await (effect.watch ? withExecutionStream(deps, sessionId, request) : request());

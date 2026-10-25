@@ -3,7 +3,7 @@ import { cursorInLines, type CursorPosition } from './editor';
 import { assignmentFlagText, checkpointCardLines, conversationLines, tokenLine } from './blocks';
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
-import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, scriptTaskView, selectedPlanRow, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
 import { SUPERVISOR_LEVEL_LABEL, type DiscoveredModel, type HeldEditMark } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
@@ -65,7 +65,8 @@ export interface ComposerView {
  */
 export function composerView(state: TuiState): ComposerView | null {
   const active = state.focus === 'chat' && !state.overlay;
-  if (!active) return null;
+  // A script's log is output only (ADR-0035): there is no composer to draw.
+  if (!active || scriptTaskView(state)) return null;
 
   const { text, cursor } = state.editor;
   const room = chatEditorRoomFor(state, true);
@@ -130,12 +131,13 @@ export function footerHints(state: TuiState): string[] {
   // A task's composer queues its text behind the running step; ctrl-s is the
   // other way to send it, named while there is text it would send.
   const tv = state.taskView;
-  const taskSends = !!tv && tv.view.working && !!state.editor.text.trim() && !continuesTask(findTask(state.tasks, tv.taskId));
+  const script = scriptTaskView(state);
+  const taskSends = !!tv && !script && tv.view.working && !!state.editor.text.trim() && !continuesTask(findTask(state.tasks, tv.taskId));
   const sendNowHint = planning || taskSends ? 'ctrl-s send now' : null;
   const stopRunnerHint = runnerStoppable(state) ? 'ctrl-x stop runner' : null;
   // The same choices the card lists, kept in reach while the question scrolls
   // away. A tool request waiting ahead answers first, and its card says how.
-  const checkpointHints = tv && waitingCheckpoint(findTask(state.tasks, tv.taskId)) && !waitingApproval(tv)
+  const checkpointHints = tv && !script && waitingCheckpoint(findTask(state.tasks, tv.taskId)) && !waitingApproval(tv)
     ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject']
     : [];
 
@@ -303,13 +305,16 @@ function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>,
     header.resumes ? inRow(header.resumes) : '',
   ].filter(Boolean);
   const approval = waitingApproval(tv);
-  const hint = approval
-    ? ['ctrl-y allow', ...(approval.allowForTask ? ['ctrl-t allow for task'] : []), 'ctrl-g deny (composer text is the note)']
-    : waitingCheckpoint(task)
-      ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject', 'ctrl-x stop runner']
-      : header.resumes
-        ? ['ctrl-x don\'t resume']
-        : [...(runnerStoppable(state) ? ['ctrl-x stop runner'] : []), 'ctrl-r remove queued', 'ctrl-s send now'];
+  // A script's log is read-only output (ADR-0035): no runner, queue or send keys.
+  const hint = scriptTaskView(state)
+    ? ['read-only output', 'esc back']
+    : approval
+      ? ['ctrl-y allow', ...(approval.allowForTask ? ['ctrl-t allow for task'] : []), 'ctrl-g deny (composer text is the note)']
+      : waitingCheckpoint(task)
+        ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject', 'ctrl-x stop runner']
+        : header.resumes
+          ? ['ctrl-x don\'t resume']
+          : [...(runnerStoppable(state) ? ['ctrl-x stop runner'] : []), 'ctrl-r remove queued', 'ctrl-s send now'];
   if (approval && waitingCheckpoint(task)) hint.push('then the checkpoint');
   const index = tv.attempts.indexOf(tv.attempt);
   if (tv.attempts.length > 1) hint.push(`alt←/→ attempt ${index >= 0 ? index + 1 : 1}/${tv.attempts.length}`);
@@ -346,6 +351,8 @@ export const SPINNER_CYCLE = 40;
 export function runnerStoppable(state: TuiState): boolean {
   const tv = state.taskView;
   if (!tv || !chatActivity(state)?.busy) return false;
+  // A script runs no model: there is no turn to interrupt (ADR-0035).
+  if (scriptTaskView(state)) return false;
   const task = findTask(state.tasks, tv.taskId);
   return !task?.awaitingApproval && !waitingApproval(tv);
 }
@@ -365,6 +372,7 @@ export interface ChatActivity {
 export function chatActivity(state: TuiState): ChatActivity | null {
   const tv = state.taskView;
   if (!tv) {
+    if (state.status === 'starting') return { label: 'Starting the plan…', busy: true };
     if (!plannerInFlight(state)) return null;
     const label = state.planner === 'condensing' ? 'Condensing…' : state.planner === 'awaiting' ? 'Waiting for the planner…' : 'Planning…';
     return { label, busy: true };
@@ -384,6 +392,7 @@ export function chatActivity(state: TuiState): ChatActivity | null {
  * plan pane's title takes the longest one that fits its width.
  */
 export function runHints(state: TuiState): string[] {
+  if (state.status === 'starting') return ['starting…', 'starting'];
   const waiting = state.tasks.filter((t) => t.status === 'awaiting_user').length;
   if (waiting > 0) return [waiting === 1 ? '1 task waits for you' : `${waiting} tasks wait for you`, `${waiting} waiting`];
   // As plain as a task that waits on the user: the run waits on a merge (ADR-0020).
@@ -1335,7 +1344,7 @@ function commandSheetBody(cols: number): string[] {
   // view's keys run far past any width on a single one.
   body.push(
     '',
-    style.bold('In a task view (enter on a task)'),
+    style.bold('In a task chat (enter on a started task)'),
     style.grey('  ctrl-s sends now: interrupts the running step, then delivers the composer text or, with it empty, the highlighted pending message'),
     style.grey('  ctrl-n/ctrl-p pick a pending message (the newest until you do) · ctrl-r removes a queued one'),
     style.grey('  ctrl-x stops the runner\'s running turn, and it then waits for your next message: on a task paused on a usage limit, it keeps it from resuming'),

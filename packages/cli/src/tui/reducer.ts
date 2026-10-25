@@ -5,7 +5,7 @@ import { activeToken, composerCompletions, findCommand, parseRunnerCommand, pars
 import { applyKey, commit } from './editor';
 import { say, wiped } from './transcript';
 import { blockedPicker, handoffArrived, showDiff } from './handoff';
-import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, scriptTaskView, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { syncApprovals } from './reducers/approvals';
@@ -17,9 +17,9 @@ import { applySettings, foldRun, followSession, planSnapshot, withRun } from './
 import { refillPicker, reseedRunnerChoice } from './reducers/pickers';
 import { refreshStepper } from './reducers/stepper';
 import {
-  handleMouseSelect, isMouseSelect, isWheel, scrollChat, scrollDelta, scrollPointed, settlePanes, settlePlan, toggleDetail,
+  handleMouseSelect, isMouseSelect, isScrollKey, isWheel, scrollChat, scrollDelta, scrollPointed, settlePanes, settlePlan, toggleDetail,
 } from './reducers/pointer';
-import { clamp, clampSelection, stale, step, type Action, type Effect, type Step } from './reducers/shared';
+import { clamp, clampSelection, clearNotice, reportError, stale, step, type Action, type Effect, type Step } from './reducers/shared';
 
 export { initialState } from './state';
 export { resolveTaskId } from './reducers/taskEdits';
@@ -70,7 +70,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // (`task-1`), so nothing of the last one's — a merge gate, a checkpoint, its
     // tasks — may carry over into this.
     case 'sessionStarted':
-      return step(withRun({ ...state, sessionId: action.sessionId, goal: action.goal, taskView: null }, EMPTY_RUN));
+      return step(withRun({ ...state, sessionId: action.sessionId, goal: action.goal, taskView: null, status: 'idle' }, EMPTY_RUN));
 
     // A loaded session is a different one: the turn the old one had out, the
     // prompts held behind it and a stop armed against it are not this one's.
@@ -82,6 +82,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         sessionId: action.sessionId,
         goal: action.goal,
         taskView: null,
+        status: 'idle',
         planner: 'idle',
         turnGate: NO_TURN,
         pendingApprovals: [],
@@ -104,6 +105,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         sessionId: null,
         goal: '',
         taskView: null,
+        status: 'idle',
         turnGate: NO_TURN,
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
@@ -248,9 +250,11 @@ function reduceAction(state: TuiState, action: Action): Step {
         tasks: action.tasks,
         ...(action.runMerge !== undefined ? { runMerge: action.runMerge } : {}),
         ...(action.usage !== undefined ? { usage: action.usage } : {}),
+        ...(action.activity !== undefined ? { activity: action.activity } : {}),
       });
-      // The indicator follows the tasks, not the stream: once none is running
-      // the run is over, whatever the daemon's scheduler still holds armed.
+      // The indicator follows the run's own activity first, then the tasks:
+      // beginning a run is "starting" until it claims, and once none is
+      // running the run is over, whatever the scheduler still holds armed.
       const status = runStatus(next, next.tasks);
       return step({ ...next, status });
     }
@@ -321,7 +325,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // without sending this notice again until a reconnect opens.
     case 'followLost': {
       if (stale(state, action.sessionId)) return step(state);
-      if (state.status === 'executing') return reduceAction(state, { type: 'executionLost', sessionId: action.sessionId });
+      if (state.status === 'executing' || state.status === 'starting') return reduceAction(state, { type: 'executionLost', sessionId: action.sessionId });
       return step(say(state, 'system', 'Lost the connection to the daemon; reconnecting to follow this session.'));
     }
 
@@ -417,7 +421,12 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'failed': {
       // A failed call may have been the task view's log read; the view falls
       // back to whatever the live stream sent rather than waiting forever.
-      if (!action.turn) return step(say(taskLogAbandoned(state), 'error', action.message));
+      if (!action.turn) {
+        const abandoned = reportError(taskLogAbandoned(state), action.message);
+        // A whole-plan start answered nothing but this failure: no run is on
+        // its way, so the start indicator must not outlive it.
+        return step(state.status === 'starting' ? { ...abandoned, status: 'idle' } : abandoned);
+      }
       // A force send stopped the turn in flight; the forced turn is already on
       // its way, so the stop is not news and the prompts held behind it keep
       // their order rather than draining into the turn replacing it. Only the
@@ -428,7 +437,13 @@ function reduceAction(state: TuiState, action: Action): Step {
         state = restoreForced(state);
       }
       const quiet = plannerInFlight(state) && state.stopRequested;
-      const reported = { ...(quiet ? state : say(state, 'error', action.message)), planner: 'idle' as const };
+      const reported = {
+        ...(quiet ? state : reportError(state, action.message)),
+        planner: 'idle' as const,
+        // A start that never reached the daemon has no run to wait for: the
+        // spinner must not outlive the failure that answered it.
+        status: state.status === 'starting' ? 'idle' as const : state.status,
+      };
       // A planner turn dying IS a turn ending — the queue would otherwise wait
       // on a next one that never comes.
       if (!plannerInFlight(state)) return step(reported);
@@ -520,6 +535,12 @@ function plannerResendOf(plan: unknown): TuiState['plannerResend'] {
 }
 
 function runStatus(state: TuiState, tasks: TaskView[]): RunStatus {
+  // The run's own authoritative word first: an admitted start that has not
+  // claimed is "starting", never "executing", and a claimed one is running
+  // even if the first status tick has not caught up yet.
+  const activity = state.run.activity;
+  if (activity?.starting) return 'starting';
+  if (activity?.running) return 'executing';
   if (tasks.some(isTaskRunning)) return 'executing';
   // A task waiting on the user is not executing, but the run is not over
   // either — the indicator says it waits rather than going idle. A run paused
@@ -545,6 +566,9 @@ function handleKey(state: TuiState, key: Key): Step {
   // arm is dropped and the key goes on to whatever it normally does — a press
   // that arrives after the arm must not be swallowed by the arming itself.
   if (state.stopArmed && key.name !== 'escape') state = disarmStop(state);
+  // A notice answers the key that was refused: the next key that is not a
+  // scroll dismisses it, so the view's key hints come back.
+  if (state.taskView?.notice && !isScrollKey(key)) state = clearNotice(state);
   if (key.name === 'ctrl-c') return interrupt(state);
   if (key.name === 'ctrl-d' && !state.editor.text && !state.overlay) {
     return step({ ...state, exiting: true }, [{ type: 'exit' }]);
@@ -598,6 +622,12 @@ function handleKey(state: TuiState, key: Key): Step {
   if (state.taskView) {
     const handled = handleTaskViewKey(state, key);
     if (handled) return handled;
+    // A script's log is read-only output (ADR-0035): attempts and scrolling
+    // still read it, but nothing types, sends, interrupts or answers there.
+    if (scriptTaskView(state)) {
+      const scroll = scrollDelta(key, state, 'chat');
+      return scroll !== null ? scrollChat(state, scroll) : step(state);
+    }
   }
 
   if (key.name === 'enter') return submit(state);

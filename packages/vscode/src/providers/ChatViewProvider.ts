@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { type AccountLimitSnapshot, type GlobalRunSettings, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type PlanStatus, type RunnerId, type RunView } from '@ordewell/core';
+import { type AccountLimitSnapshot, type GlobalRunSettings, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type PlanStatus, type RunnerId, type RunActivity, type RunView } from '@ordewell/core';
 import { ConversationViewHost, type SavedConversation } from '../ConversationViewHost';
 import { RunViewHost } from '../RunViewHost';
 import { renderWebviewHtml } from './webviewHtml';
@@ -117,6 +117,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   planApproved(): void { this.setState('approved'); }
+
+  /** The run's own state after an Execute settled; `requestId` drops a reply for a session the webview has left. */
+  showRunActivity(activity: RunActivity, requestId?: number): void {
+    this.postMessage({ type: 'runActivity', activity, ...(requestId !== undefined ? { requestId } : {}) });
+  }
 
   /** Drop the handoff card and every per-task isolation indicator. */
   clearIsolationHandoff(): void {

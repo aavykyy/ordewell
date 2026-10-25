@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { SeatbeltBackend, SANDBOX_EXEC } from '../seatbelt';
 import { BubblewrapBackend, findBubblewrap } from '../bubblewrap';
+import { sealedShellProfile, type SealedRunOptions } from '../plannerSandbox';
 import { SandboxUnsupportedError, type SandboxInvocation, type SandboxLimits, type SandboxProfile, type ProbeExec } from '../SandboxBackend';
 
 const SH: SandboxInvocation = { shell: '/bin/sh', shellArgs: ['-c'], env: { PATH: '/usr/bin:/bin', HOME: '/home/me' } };
@@ -26,6 +27,35 @@ function sealed(overrides: Partial<SandboxProfile> = {}): SandboxProfile {
 
 /** A path built to break out of any quoting a backend might have done by hand. */
 const HOSTILE = '/tmp/a"b) (allow file-write* (subpath "/"))\n(allow network*)';
+
+/** A read-only task's checkout, the worktree it may write, and a repo group's task workspace. */
+const REPO = '/work/repo';
+const WORKTREE = `${REPO}/.ordewell/worktrees/run/1-review`;
+const GROUP = `${REPO}/.ordewell/worktrees/run/3-group`;
+const ALPHA = `${GROUP}/alpha`;
+const BETA = `${GROUP}/beta`;
+const SEALED_HOST = { platform: 'linux' as NodeJS.Platform, reads: ['/usr', '/bin'], masked: [] };
+
+type Mount = { op: '--bind' | '--ro-bind' | '--tmpfs' | '--tmp-overlay'; src?: string; dest: string };
+
+/** The mounts a bubblewrap argv builds, in the order it builds them, up to the shell it runs. */
+function mounts(args: readonly string[]): Mount[] {
+  const out: Mount[] = [];
+  for (let i = 0; i < args.indexOf('--'); i++) {
+    const arg = args[i];
+    if (arg === '--bind' || arg === '--ro-bind') {
+      out.push({ op: arg, src: args[i + 1], dest: args[i + 2] });
+      i += 2;
+    } else if (arg === '--tmpfs') {
+      out.push({ op: arg, dest: args[i + 1] });
+      i += 1;
+    } else if (arg === '--overlay-src' && args[i + 2] === '--tmp-overlay') {
+      out.push({ op: '--tmp-overlay', src: args[i + 1], dest: args[i + 3] });
+      i += 3;
+    }
+  }
+  return out;
+}
 
 describe('SeatbeltBackend.wrap', () => {
   const seatbelt = new SeatbeltBackend();
@@ -373,6 +403,66 @@ describe('BubblewrapBackend.wrap', () => {
       // A worktree's `.git` is still overmounted read-only after its writable bind.
       expect(joined).toContain('--ro-bind /ws/alpha/.git /ws/alpha/.git');
       expect(joined).toContain('--ro-bind /ws/beta/.git /ws/beta/.git');
+    });
+
+    describe('over a nested writable worktree (ADR-0046)', () => {
+      const layouts: Array<[string, SealedRunOptions & { scratch: string }, readonly string[]]> = [
+        ['one repository', { workspace: REPO, writable: WORKTREE, scratch: SCRATCH, limits: LIMITS }, [SCRATCH, WORKTREE]],
+        ['a repo group', { workspace: REPO, writable: GROUP, worktrees: [ALPHA, BETA], scratch: SCRATCH, limits: LIMITS }, [SCRATCH, ALPHA, BETA]],
+      ];
+
+      it.each(layouts)('with an overlay, makes only scratch and the admitted worktrees writable: %s', (_name, opts, writables) => {
+        const { args } = bwrap().wrap(SH, sealedShellProfile({ ...SEALED_HOST, overlay: true }, opts));
+        const m = mounts(args);
+        const rw = m.filter((mount) => mount.op === '--bind');
+        expect(rw.map((mount) => mount.dest).sort()).toEqual([...writables].sort());
+        for (const mount of rw) expect(mount.src).toBe(mount.dest);
+
+        // The checkout is one throwaway overlay, mounted before the binds nested inside it.
+        const overlay = m.findIndex((mount) => mount.op === '--tmp-overlay' && mount.dest === REPO);
+        expect(overlay).toBeGreaterThan(-1);
+        expect(m.find((mount) => mount.op === '--ro-bind' && mount.dest === REPO)).toBeUndefined();
+        for (const mount of rw) if (mount.dest.startsWith(`${REPO}/`)) expect(m.indexOf(mount)).toBeGreaterThan(overlay);
+        // The private /tmp comes first, since the scratch directory and a temporary checkout live under it.
+        expect(m.findIndex((mount) => mount.op === '--tmpfs' && mount.dest === '/tmp')).toBeLessThan(overlay);
+
+        // A worktree's .git is overmounted read-only after every writable bind.
+        const lastWrite = Math.max(...rw.map((mount) => m.indexOf(mount)));
+        for (const worktree of writables.filter((p) => p !== SCRATCH)) {
+          expect(m.findIndex((mount) => mount.op === '--ro-bind' && mount.dest === `${worktree}/.git`)).toBeGreaterThan(lastWrite);
+        }
+
+        // A tmpfs upper, never a host directory one that would keep the layer.
+        expect(args).not.toContain('--overlay');
+        const sources = args.flatMap((arg, i) => (arg === '--overlay-src' ? [i] : []));
+        expect(sources.length).toBeGreaterThan(0);
+        for (const i of sources) {
+          expect(args[i + 2]).toBe('--tmp-overlay');
+          expect(args[i + 3]).toBe(args[i + 1]);
+        }
+      });
+
+      it.each(layouts)('without an overlay, binds the checkout read-only and still only the worktrees writable: %s', (_name, opts, writables) => {
+        const { args } = bwrap().wrap(SH, sealedShellProfile({ ...SEALED_HOST, overlay: false }, opts));
+        const m = mounts(args);
+        expect(args).not.toContain('--overlay-src');
+        expect(args).not.toContain('--tmp-overlay');
+
+        const checkout = m.findIndex((mount) => mount.op === '--ro-bind' && mount.dest === REPO);
+        expect(checkout).toBeGreaterThan(-1);
+        const rw = m.filter((mount) => mount.op === '--bind');
+        expect(rw.map((mount) => mount.dest).sort()).toEqual([...writables].sort());
+        for (const mount of rw) {
+          expect(mount.src).toBe(mount.dest);
+          // The checkout is mounted before the writable bind nested inside it.
+          if (mount.dest.startsWith(`${REPO}/`)) expect(m.indexOf(mount)).toBeGreaterThan(checkout);
+        }
+
+        const lastWrite = Math.max(...rw.map((mount) => m.indexOf(mount)));
+        for (const worktree of writables.filter((p) => p !== SCRATCH)) {
+          expect(m.findIndex((mount) => mount.op === '--ro-bind' && mount.dest === `${worktree}/.git`)).toBeGreaterThan(lastWrite);
+        }
+      });
     });
   });
 });

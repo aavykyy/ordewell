@@ -79,6 +79,9 @@ describe('adversarial: a session saved before the change reloads and runs', () =
     const session = makeSession({ workspaceRoot: () => workspace, sessionId: 'legacy-1', openTaskLog });
     session.loadPlan(plan, 'build it', workspace, { sessionId: 'legacy-1' });
     expect(taskOf(session, 't2')!.status).toBe('pending');
+    // Its saved log is the attempt the upgraded plan did not carry a mark for.
+    expect(taskOf(session, 't1')!.attempted).toBe(true);
+    expect(taskOf(session, 't2')!.attempted).toBeUndefined();
 
     // The legacy log replays: runs joined with the paragraph break, as before runs carried ids.
     expect(session.taskLogAttempts('t1')).toEqual([1]);

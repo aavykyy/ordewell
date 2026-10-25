@@ -205,3 +205,29 @@ describe('setModelAllowlist', () => {
     expect(reduceHost(set, msg({ type: 'setModelAllowlist', allowlist: {} })).modelAllowlist).toEqual({});
   });
 });
+
+describe('conversationEpoch: which conversation the blocks belong to', () => {
+  const block = { type: 'message' as const, id: 'b1', role: 'user' as const, text: 'hi', streaming: false };
+  const patch = (order: string[]) => msg({ type: 'conversationPatch', order, changed: order.length ? [block] : [] });
+
+  it('moves on when a session is restored, and when the host empties the conversation', () => {
+    const shown = reduceHost(INITIAL_HOST_STATE, patch(['b1']));
+    expect(shown.conversationEpoch).toBe(INITIAL_HOST_STATE.conversationEpoch);
+    const restored = reduceHost(shown, msg({ type: 'restoreChat' }));
+    expect(restored.conversationEpoch).toBe(shown.conversationEpoch + 1);
+    const emptied = reduceHost(shown, patch([]));
+    expect(emptied.conversationEpoch).toBe(shown.conversationEpoch + 1);
+  });
+
+  it('moves on when the host replaces the conversation with blocks that reuse its ids', () => {
+    const shown = reduceHost(INITIAL_HOST_STATE, patch(['b1']));
+    const compacted = reduceHost(shown, msg({ type: 'conversationPatch', order: ['b1'], changed: [{ ...block, text: 'summary' }], replaced: true }));
+    expect(compacted.conversationEpoch).toBe(shown.conversationEpoch + 1);
+  });
+
+  it('stays put while the same conversation is patched, or an empty one stays empty', () => {
+    const shown = reduceHost(INITIAL_HOST_STATE, patch(['b1']));
+    expect(reduceHost(shown, patch(['b1'])).conversationEpoch).toBe(shown.conversationEpoch);
+    expect(reduceHost(INITIAL_HOST_STATE, patch([])).conversationEpoch).toBe(INITIAL_HOST_STATE.conversationEpoch);
+  });
+});

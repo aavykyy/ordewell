@@ -28,7 +28,7 @@ const models: DiscoveredModel[] = [
 function planWithOneTask(goal: string): LegacyPlanState {
   const at = '2026-01-01T00:00:00Z';
   return {
-    tasks: [createTask({ id: 't1', order: 1, title: goal, prompt: goal, assignedRunner: 'claude-code', taskMode: 'default' })],
+    tasks: [createTask({ id: 't1', order: 1, title: goal, prompt: goal, assignedRunner: 'claude-code', taskMode: 'default', attempted: true })],
     generatedAt: at,
     status: 'draft',
     runners: ['claude-code'],
@@ -162,6 +162,10 @@ function fakeSession() {
     planState: null,
     planTasks: [],
     runSnapshot: vi.fn(() => ({ tasks: [], runMerge: null, handoff: null, mergeResult: null })),
+    taskLogAttempts: vi.fn(() => []),
+    taskLog: vi.fn(() => []),
+    invokeTaskCommand: vi.fn(() => ''),
+    outstandingApprovals: vi.fn(() => []),
     isolationView: vi.fn(() => null),
     removeQueuedMessage: vi.fn(),
     reset: vi.fn(),
@@ -528,7 +532,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     await h.host.start();
     __resetPanels();
     (h.session.spies as unknown as { planTasks: unknown[] }).planTasks = [
-      createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'claude-code' }),
+      createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'claude-code', attempted: true }),
     ];
 
     h.chat.messages.fire({ type: 'openTaskLog', taskId: 't1' });
@@ -648,6 +652,16 @@ describe("the Settings panel's Run block", () => {
     await vi.waitFor(() => expect(h.settings.updateRunSettings).toHaveBeenCalledWith({ wakeUpReadBudget: 20 }));
     expect(h.session.spies.applyRunSettings).toHaveBeenCalledWith({ wakeUpReadBudget: 20 });
     expect(lastPush()).toEqual([true, { ...RUN_SETTINGS_DEFAULTS, wakeUpReadBudget: 20 }, 2]);
+  });
+
+  it('keeps a manually configured read budget when another run setting is saved', async () => {
+    h.settings.updateRunSettings({ wakeUpReadBudget: 30 });
+
+    h.chat.messages.fire({ type: 'changeSettings', change: { run: { supervisorLevel: 'off' } } });
+
+    await vi.waitFor(() => expect(h.settings.updateRunSettings).toHaveBeenCalledWith({ supervisorLevel: 'off' }));
+    expect(h.settings.getRunSettings().wakeUpReadBudget).toBe(30);
+    expect(lastPush()).toEqual([true, { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', wakeUpReadBudget: 30 }, 2]);
   });
 
   it.each([
@@ -881,7 +895,7 @@ describe('the host\'s one account-limit monitor', () => {
     await h.host.start();
     await vi.waitFor(() => expect(monitor.snapshots()[0].status).toBe('fresh'));
     __resetPanels();
-    const task = createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'codex' });
+    const task = createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'codex', attempted: true });
     Object.assign(h.session.spies, { planTasks: [task], taskLogAttempts: () => [], taskLog: () => [], outstandingApprovals: () => [] });
 
     h.chat.messages.fire({ type: 'openTaskLog', taskId: 't1' });

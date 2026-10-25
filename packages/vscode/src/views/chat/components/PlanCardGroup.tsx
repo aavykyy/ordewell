@@ -20,6 +20,10 @@ interface PlanCardGroupProps {
   /** The enabled runners and allowlist each task is flagged against; absent until the host has sent them. */
   runnerScope?: AssignmentScope;
   isExecuting?: boolean;
+  /** A whole-plan start is on its way: show it, and refuse a second one. */
+  isStarting?: boolean;
+  /** Anything that could still move a task on without being asked (core's `advancesOnItsOwn`): a queued start or usage-limit hold too, so Stop stays reachable and Mark waits. */
+  runActive?: boolean;
   runnerLabels?: Record<string, string>;
   /** Tail of each running task's runner output, keyed by task id. */
   taskOutput?: Record<string, string>;
@@ -70,6 +74,8 @@ export default function PlanCardGroup({
   runners,
   runnerScope,
   isExecuting,
+  isStarting,
+  runActive: runActiveProp,
   runnerLabels: _runnerLabels,
   taskOutput,
   onResolveConflict,
@@ -125,6 +131,14 @@ export default function PlanCardGroup({
   };
   const rowTasks = sorted.map(withLoopState);
   const anyWaitsForApproval = useMemo(() => [...runByTask.values()].some((t) => t.waitsForApproval === true), [runByTask]);
+  // The run's own word when the host does not pass one: a card is never
+  // offered a mark the core would refuse, even when it is drawn from `run`.
+  const runActive = runActiveProp ?? run.activity?.advancesOnItsOwn ?? false;
+  // Stop is owed to anything that could still move a task on, even when
+  // nothing is executing: a force start queued behind its dependencies, or a
+  // task waiting out a usage limit. Execute is offered only when nothing is.
+  const stopNow = !!onStopExecution && (isExecuting || runActive);
+  const showExecute = !isStarting && !isExecuting && !runActive && !!onExecutePlan;
 
   const dependentCountMap = useMemo(() => {
     const m = new Map<string, number>();
@@ -139,18 +153,20 @@ export default function PlanCardGroup({
   return (
     <div className="plan-card-group">
       {totalUsage && <div className="plan-usage">{totalUsage}</div>}
-      {(onExecutePlan || onStopExecution || (onApproveAll && anyWaitsForApproval)) && (
+      {(onExecutePlan || onStopExecution || isStarting || runActive || (onApproveAll && anyWaitsForApproval)) && (
         <div className="plan-action-bar">
-          {isExecuting ? (
-            onStopExecution && (
-              <button className="plan-action-btn stop" onClick={onStopExecution}>Stop</button>
-            )
-          ) : (
-            onExecutePlan && (
-              <button className="plan-action-btn execute" onClick={onExecutePlan}>Execute Plan</button>
-            )
+          {isStarting && (
+            <button className="plan-action-btn starting" type="button" disabled aria-busy="true">
+              <span className="plan-action-spinner" /> Starting&hellip;
+            </button>
           )}
-          {onApproveAll && anyWaitsForApproval && (
+          {stopNow && (
+            <button className="plan-action-btn stop" onClick={onStopExecution}>Stop</button>
+          )}
+          {showExecute && (
+            <button className="plan-action-btn execute" onClick={onExecutePlan}>Execute Plan</button>
+          )}
+          {onApproveAll && anyWaitsForApproval && !isStarting && (
             <button className="plan-action-btn approve" onClick={onApproveAll}
               title="Approve every task that waits for your approval: each starts once its dependencies finish">
               Approve all
@@ -183,6 +199,7 @@ export default function PlanCardGroup({
                 runnerScope={runnerScope}
                 effectiveRunner={effectiveRunner}
                 isExecuting={isExecuting}
+                runActive={runActive}
                 dependentCount={dependentCountMap.get(task.id) ?? 0}
                 output={taskOutput?.[task.id]}
                 onResolveConflict={onResolveConflict}
