@@ -24,7 +24,16 @@ export interface DecideOptions {
    * to report, rather than raising a prompt nobody can answer.
    */
   prompting?: boolean;
+  /**
+   * Where this read's decisions go, the first URL's and any redirect hop's,
+   * in place of the session's approval record. A read-only task's are its
+   * attempt's, never the planner's (ADR-0046), so its policy records nothing
+   * without one.
+   */
+  record?: DecisionRecord;
 }
+
+export type DecisionRecord = (req: ApprovalRequest, granted: boolean, source: ApprovalSource) => void;
 
 export interface WebReadPolicyOptions {
   approval: IApproval;
@@ -118,48 +127,50 @@ export class WebReadPolicy {
   async decide(read: WebRead, opts: DecideOptions = {}): Promise<WebReadDecision> {
     const target = read.kind === 'fetch' ? this.vetFetch(read.url) : this.vetSearch(read);
     const { request, label } = target;
-    if (target.refused) return this.refuse(request, target.refused.source, target.refused.reason);
+    const record = this.recordFor(opts);
+    if (target.refused) return this.refuse(record, request, target.refused.source, target.refused.reason);
 
     // Before the mode, since the mode may be `allow`: an exclusion holds in every mode.
     const list = this.approval.allowlist?.();
     if (list && scopeExcluded(list, request.scope)) {
-      return this.refuse(request, 'excluded', `${label} refused: ${request.scope} is excluded by the planner allowlist. Continue without it.`);
+      return this.refuse(record, request, 'excluded', `${label} refused: ${request.scope} is excluded by the planner allowlist. Continue without it.`);
     }
 
     // Spent before the approval resolves, so reads raised in parallel cannot
-    // all pass the check at once; given back if the read does not happen.
+    // all pass the check at once; given back if the read is refused (a cancelled
+    // one keeps it: its host may already have been looked up).
     const spent = this.spend();
     if (!spent) {
-      return this.refuse(request, 'budget', `${label} refused: ${this.reader.budget.spent} (${this.budget()}). Continue with what you have, and ${this.reader.budget.tell} that more reading would need a higher budget.`);
+      return this.refuse(record, request, 'budget', `${label} refused: ${this.reader.budget.spent} (${this.budget()}). Continue with what you have, and ${this.reader.budget.tell} that more reading would need a higher budget.`);
     }
     if (opts.prompting === false) {
       // A subagent may never prompt: only what is already standing — a grant,
       // the allowlist, or Full's mode — lets the read through.
       const standing = this.approval.peek?.(request);
       if (standing?.decision === 'allow') {
-        this.approval.record?.(request, true, standing.source);
-        return this.resolved(target, spent.turn);
+        record?.(request, true, standing.source);
+        return this.resolved(record, target, spent.turn);
       }
       this.refund(spent.turn);
-      return this.subagentRefusal(read, request, standing?.source ?? 'no-channel');
+      return this.subagentRefusal(record, read, request, standing?.source ?? 'no-channel');
     }
-    if (await this.approval.request(request)) return this.resolved(target, spent.turn);
+    if (await this.approval.request(request)) return this.resolved(record, target, spent.turn);
     this.refund(spent.turn);
     return { allowed: false, reason: read.kind === 'fetch'
       ? `Fetch not approved: ${request.scope}. Continue without it, or ask the user to approve this origin or add it to the planner allowlist.`
       : 'Web search not approved. Continue without it, or fetch a documentation URL you already know.' };
   }
 
-  private subagentRefusal(read: WebRead, request: ApprovalRequest, source: ApprovalSource): WebReadDecision {
+  private subagentRefusal(record: DecisionRecord | undefined, read: WebRead, request: ApprovalRequest, source: ApprovalSource): WebReadDecision {
     const label = read.kind === 'fetch' ? 'Fetch' : 'Web search';
     const { gap, background } = this.reader;
     if (source === 'mode') {
-      return this.refuse(request, source, `${label} refused: ${request.scope} is not covered by the planner allowlist in allowlist mode. ${gap}; the user must add a standing approval or change the approval mode.`);
+      return this.refuse(record, request, source, `${label} refused: ${request.scope} is not covered by the planner allowlist in allowlist mode. ${gap}; the user must add a standing approval or change the approval mode.`);
     }
     if (source === 'remembered') {
-      return this.refuse(request, source, `${label} refused: ${request.scope} was previously refused in this session. ${gap}; the user must add a standing approval or start a new session.`);
+      return this.refuse(record, request, source, `${label} refused: ${request.scope} was previously refused in this session. ${gap}; the user must add a standing approval or start a new session.`);
     }
-    this.approval.record?.(request, false, source);
+    record?.(request, false, source);
     return { allowed: false, reason: read.kind === 'fetch'
       ? `Fetch refused: ${request.scope} is not approved in this session, and ${background} where nothing can be approved. ${gap}; the planner can fetch it directly.`
       : `Web search refused: ${background} where nothing can be approved. ${gap}; the planner can search directly.` };
@@ -180,17 +191,28 @@ export class WebReadPolicy {
   }
 
   /** The last check, the one that leaves the machine: every DNS answer for the host must be public. */
-  private async resolved(target: Target, turn: string | undefined): Promise<WebReadDecision> {
+  private async resolved(record: DecisionRecord | undefined, target: Target, turn: string | undefined): Promise<WebReadDecision> {
     if (!target.resolve) return ALLOWED;
     const egress = await vetEgress(target.resolve.hostname, target.resolve.port, this.resolveHost);
     if (egress.ok) return ALLOWED;
     this.refund(turn);
-    return this.refuse(target.request, 'guard', guardRefusal(egress.reason));
+    return this.refuse(record, target.request, 'guard', guardRefusal(egress.reason));
   }
 
-  private refuse(request: ApprovalRequest, source: ApprovalSource, reason: string): WebReadDecision {
-    this.approval.record?.(request, false, source);
+  private refuse(record: DecisionRecord | undefined, request: ApprovalRequest, source: ApprovalSource, reason: string): WebReadDecision {
+    record?.(request, false, source);
     return { allowed: false, reason };
+  }
+
+  /**
+   * A planner's decisions reach the session's record, the conversation's
+   * approval cards; a task attempt's go only where its read says, since they
+   * are not the planner's (ADR-0046).
+   */
+  private recordFor(opts: DecideOptions): DecisionRecord | undefined {
+    if (opts.record) return opts.record;
+    if (this.options.task !== undefined || !this.approval.record) return undefined;
+    return (req, granted, source) => this.approval.record?.(req, granted, source);
   }
 
   private vetFetch(raw: string): Target {

@@ -229,22 +229,28 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   decided, so reads made in parallel cannot overspend it. A retry and a
   continue are new attempts with a fresh count; a respawn of the runner
   within an attempt (ADR-0025) keeps it. A cross-origin redirect hop counts,
-  as the planner's does.
+  as the planner's does, and so does a read its caller cancels once it was
+  allowed: by then its host may already have been looked up.
 - **Carried by the host, apart from the shell.** The reads leave from
   Ordewell's process, not the task shell: they work before and after the
   shell's first sealed run, and they neither unseal it nor give its commands
   the network.
 - **Ended with the attempt.** The attempt's reader (`TaskWebReader`) ends
   when the attempt ends or its spawn is abandoned: a read in flight is
-  aborted through to its connection, and none starts after. The token is
+  aborted through to its connection, none starts after, and one whose
+  transport answers anyway hands the runner nothing. The token is
   revoked with the attempt (ADR-0022, A2), and a call its caller cancels is
   aborted too.
-- **Recorded.** A refusal's reason is the call's result; an allowed read's
-  result ends by saying the policy allowed it and how many reads the attempt
-  has left. Both reach the attempt's log as the tool's result, and every
-  decision reaches the session's decision record naming the task, as a
-  planner's names the planner; a refused credential is recorded without the
-  URL or query.
+- **Recorded in the attempt's log, not the planner's conversation.** Each
+  decision is the call's own result: a refusal's reason, or, for an allowed
+  read, a closing line naming each origin or search provider decided and what
+  allowed it (the approval mode, the planner allowlist or a grant given in
+  this session), a cross-origin redirect hop's included, and how many reads
+  the attempt has left. The attempt's log keeps it as the tool's result. None
+  becomes an approval card in the planner's conversation, as a task runner's
+  approval request does not (ADR-0018, A1): the reads are the task's, and a
+  budget's worth of them per attempt would bury the planner's own. A refused
+  credential is recorded without the URL or query.
 
 ### Nothing lands
 
@@ -433,3 +439,4 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-10-22 — handoffs carry read-only results and `read_task` joins the allowed task tools (ADR-0047, #120).
 - 2026-10-24 — a task's saved patch comes back with its handoff, captured by Ordewell's git only inside the task's seal (ADR-0050).
 - 2026-10-25 — a read-only task reads the web through Ordewell's `fetch` and `web_search`, under the planner's web-read policy without prompting and with a budget per attempt; native web tools stay refused.
+- 2026-10-25 — a task's web-read decisions are recorded in its attempt's log, an allowed read's naming what allowed it, and never in the planner's conversation; a read answered after its attempt ended hands the runner nothing; a cancelled allowed read keeps its count.

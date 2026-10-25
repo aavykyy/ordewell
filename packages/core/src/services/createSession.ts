@@ -387,7 +387,8 @@ export function createSession(deps: SessionDeps): Session {
   });
   // Every planner's web reads, carried here or natively, and every read-only
   // task's, are decided by the one policy, which asks through the same channel
-  // as paths and commands. The response cache and search provider are
+  // as paths and commands. A task's decisions go to its attempt's log, never
+  // to this channel (ADR-0046). The response cache and search provider are
   // process-wide, so parallel sessions, their subagents and their tasks share
   // bytes and the search cooldown.
   const fetcher = new HttpWebFetcher({

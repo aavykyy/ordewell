@@ -1,9 +1,11 @@
 import type { ToolOutcome } from './IFileSystem';
-import type { WebRead, WebReadDecision } from '../services/webReadPolicy';
+import type { DecisionRecord, WebRead, WebReadDecision } from '../services/webReadPolicy';
 
 /** What a caller that can go away hands a read: once `signal` aborts, nothing more leaves for it. */
 export interface WebReadOptions {
   signal?: AbortSignal;
+  /** Where the read's decisions go instead of the session's record; see `DecideOptions.record`. */
+  record?: DecisionRecord;
 }
 
 export interface IWebFetcher {
