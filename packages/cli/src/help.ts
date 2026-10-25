@@ -57,7 +57,8 @@ Planner, models and runners:
   ordewell allowlist set|clear|show       Limit which models a runner may use
   ordewell auto [full|guarded]    (headless) Autonomy level for new plans, Full or Guarded; /settings covers it
   ordewell supervisor [off|watch|act]  (headless) Whether the planner watches or acts on your runs;
-                                  also: supervisor retries <n>, supervisor reads <n>; /settings covers it
+                                  /settings covers it; also: supervisor retries <n>
+  ordewell supervisor reads <n>   (headless) Reads the supervisor may make each wake-up; set only here or in settings.json
   ordewell automerge [on|off]     (headless) Merge at merge gates and at the end of a run; /settings covers it
   ordewell trailer [on|off]       (headless) End Ordewell's commits with "Planned-with: Ordewell"; set only here or in settings.json
   ordewell autorun [on|off]       (headless) Start each plan the planner submits, without review; /settings covers it

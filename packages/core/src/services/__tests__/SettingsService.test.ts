@@ -508,6 +508,15 @@ describe('SettingsService', () => {
       expect(service.getRunSettings().supervisorLevel).toBe('watch');
     });
 
+    it('keeps a hand-supplied read budget through an unrelated save and a reload', () => {
+      fs.writeFileSync(tempFile, JSON.stringify({ supervisorLevel: 'watch', wakeUpReadBudget: 30 }));
+
+      new SettingsService(tempFile).updateRunSettings({ supervisorRetryLimit: 4 });
+
+      expect(JSON.parse(fs.readFileSync(tempFile, 'utf8')).wakeUpReadBudget).toBe(30);
+      expect(new SettingsService(tempFile).getRunSettings().wakeUpReadBudget).toBe(30);
+    });
+
     it('has the Planned-with line on for a file that never mentioned it, and keeps a choice to turn it off', () => {
       fs.writeFileSync(tempFile, JSON.stringify({ autorun: true }));
       expect(new SettingsService(tempFile).getRunSettings().plannedWithTrailer).toBe(true);

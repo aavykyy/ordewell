@@ -28,4 +28,11 @@ describe('ordewell --help', () => {
     expect(line).toContain('setup');
     expect(line).not.toMatch(/interactive|wizard/i);
   });
+
+  it('does not claim /settings sets the supervisor read budget', () => {
+    const line = help().split('\n').find((l) => l.includes('supervisor reads'));
+
+    expect(line).toContain('set only here or in settings.json');
+    expect(line).not.toContain('/settings');
+  });
 });
