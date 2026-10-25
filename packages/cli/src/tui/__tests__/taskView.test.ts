@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { replayTaskLog, type AttemptUsage, type RunnerCommand, type TaskLogEvent } from '@ordewell/core';
+import { EMPTY_RUN, replayTaskLog, type AttemptUsage, type RunnerCommand, type TaskLogEvent } from '@ordewell/core';
 import { stripAnsi, width } from '../ansi';
 import { chatPaneWidth } from '../geometry';
 import { inboundFor } from '../inbound';
@@ -17,7 +17,8 @@ function run(text: string, overrides: Partial<TuiState> = {}) {
 }
 
 const task = (over: Partial<TaskView> = {}): TaskView => ({
-  id: 't1', order: 1, title: 'Refactor PlanStore', type: 'ai', status: 'in_progress', dependencies: [], assignedRunner: 'claude-code', ...over,
+  id: 't1', order: 1, title: 'Refactor PlanStore', type: 'ai', status: 'in_progress', dependencies: [], assignedRunner: 'claude-code',
+  attempted: true, ...over,
 });
 
 const planned = (over: Partial<TuiState> = {}): TuiState =>
@@ -72,6 +73,68 @@ describe('opening and closing the task view', () => {
     expect(effects).toEqual([{ type: 'openTaskLog', sessionId: 's1', taskId: 'child' }]);
   });
 
+  it('does not open a chat for a task that never started, and says why in the planner chat', () => {
+    const { state, effects } = reduce(planned({ tasks: [task({ status: 'pending', attempted: undefined })] }), { type: 'key', key: key('enter') });
+    expect(state.taskView).toBeNull();
+    expect(state.focus).toBe('plan');
+    expect(effects).toEqual([]);
+    expect(messagesOf(state).at(-1)).toMatchObject({
+      role: 'error',
+      text: 'This task hasn’t started yet. Its chat becomes available when it starts.',
+    });
+  });
+
+  it.each(['completed', 'skipped'] as const)('does not open an empty chat for a never-run %s task', (status) => {
+    const before = planned({ tasks: [task({ status, attempted: undefined })] });
+    const { state, effects } = reduce(before, { type: 'key', key: key('enter') });
+    expect(state.taskView).toBeNull();
+    expect(effects).toEqual([]);
+    expect(messagesOf(state).at(-1)?.text).toBe('This task hasn’t started yet. Its chat becomes available when it starts.');
+  });
+
+  it('opens a script task\'s own chat once it started, though it has no usage ledger', () => {
+    const { state, effects } = reduce(planned({ tasks: [task({ type: 'script', status: 'in_progress', attempted: true, attemptUsage: undefined })] }), { type: 'key', key: key('enter') });
+    expect(state.taskView?.taskId).toBe('t1');
+    expect(effects).toEqual([{ type: 'openTaskLog', sessionId: 's1', taskId: 't1' }]);
+  });
+
+  it('keeps the chat reachable after a cancel returned it to pending', () => {
+    const { state, effects } = reduce(planned({ tasks: [task({ status: 'pending', attempted: true })] }), { type: 'key', key: key('enter') });
+    expect(state.taskView?.taskId).toBe('t1');
+    expect(effects).toEqual([{ type: 'openTaskLog', sessionId: 's1', taskId: 't1' }]);
+  });
+
+  it('refuses /open for a task that never started, with the same error', () => {
+    const base = planned({ focus: 'chat', tasks: [task({ status: 'pending', attempted: undefined })] });
+    const { state, effects } = run('/open 1', base);
+    expect(state.taskView).toBeNull();
+    expect(effects).toEqual([]);
+    expect(messagesOf(state).at(-1)?.text).toBe('This task hasn’t started yet. Its chat becomes available when it starts.');
+  });
+
+  it('takes a live status update\'s attempted mark before any output or usage arrives', () => {
+    const base = planned({ tasks: [task({ status: 'pending', attempted: undefined })] });
+    const live = reduce(base, {
+      type: 'statusUpdate', sessionId: 's1',
+      tasks: [{ id: 't1', status: 'in_progress', verdict: null, attempted: true }],
+    }).state;
+    expect(live.tasks[0].attempted).toBe(true);
+    expect(reduce(live, { type: 'key', key: key('enter') }).effects).toEqual([
+      { type: 'openTaskLog', sessionId: 's1', taskId: 't1' },
+    ]);
+  });
+
+  it('keeps a subtask\'s chat its own', () => {
+    const base = planned({
+      expandedTaskId: 'parent', selectedTask: 1,
+      tasks: [task({ id: 'parent', attempted: true, subtasks: [task({ id: 'child', status: 'pending', attempted: undefined })] })],
+    });
+    const { state, effects } = reduce(base, { type: 'key', key: key('enter') });
+    expect(state.taskView).toBeNull();
+    expect(effects).toEqual([]);
+    expect(messagesOf(state).at(-1)?.text).toBe('This task hasn’t started yet. Its chat becomes available when it starts.');
+  });
+
   it('t is no longer a plan shortcut', () => {
     const base = planned();
     const { state, effects } = reduce(base, { type: 'key', key: key('char', 't') });
@@ -90,6 +153,90 @@ describe('opening and closing the task view', () => {
   it('a new session drops the task view', () => {
     const { state } = reduce(opened(), { type: 'sessionCleared' });
     expect(state.taskView).toBeNull();
+  });
+});
+
+describe('a refusal while a task view is open', () => {
+  const second = task({ id: 't2', order: 2, title: 'Second task', status: 'pending', attempted: undefined });
+  const viewing = (over: Partial<TuiState> = {}): TuiState =>
+    initialState({ sessionId: 's1', focus: 'plan', selectedTask: 1, tasks: [task(), second], taskView: loaded(), ...over });
+
+  it('shows a refused open in the view\'s notice row, not only the hidden transcript', () => {
+    const { state, effects } = reduce(viewing(), { type: 'key', key: key('enter') });
+
+    expect(state.taskView?.taskId).toBe('t1');
+    expect(effects).toEqual([]);
+    expect(state.taskView?.notice).toContain('hasn’t started');
+    expect(plain(state)).toContain('hasn’t started');
+  });
+
+  it('shows a refused mark in the view\'s notice row too', () => {
+    const done = task({ status: 'completed' });
+    const activity = { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: true };
+    const before = viewing({ tasks: [done, second], selectedTask: 0, run: { ...EMPTY_RUN, activity } });
+
+    const { state, effects } = reduce(before, { type: 'key', key: key('char', 'm') });
+
+    expect(state.overlay).toBeNull();
+    expect(effects).toEqual([]);
+    expect(state.taskView?.notice).toContain('Stop the run first');
+    expect(plain(state)).toContain('cannot be mark');
+  });
+
+  it('dismisses the notice on the next key that is not a scroll, bringing the key hints back', () => {
+    const done = task({ status: 'completed' });
+    const activity = { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: true };
+    const before = viewing({ tasks: [done, second], selectedTask: 0, run: { ...EMPTY_RUN, activity } });
+    const refused = reduce(before, { type: 'key', key: key('char', 'm') }).state;
+    expect(plain(refused)).not.toContain('ctrl-r remove queued');
+
+    const scrolled = reduce(refused, { type: 'key', key: key('pagedown') }).state;
+    expect(scrolled.taskView?.notice).toContain('Stop the run first');
+
+    const next = reduce(scrolled, { type: 'key', key: key('tab') }).state;
+    expect(next.taskView?.notice).toBeUndefined();
+    expect(plain(next)).toContain('ctrl-r remove queued');
+  });
+});
+
+describe('a script task\'s view', () => {
+  const script = task({ type: 'script', status: 'in_progress', assignedRunner: undefined });
+  const scriptOpened = (): TuiState => initialState({
+    sessionId: 's1', focus: 'chat', tasks: [script],
+    taskView: loaded({ view: { ...replayTaskLog([]), working: true } }),
+  });
+
+  it('is output only: no runner, queue or send hints and no composer', () => {
+    const frame = plain(scriptOpened());
+
+    expect(frame).not.toContain('ctrl-x stop runner');
+    expect(frame).not.toContain('ctrl-r remove queued');
+    expect(frame).not.toContain('ctrl-s send now');
+    expect(frame).toContain('takes no messages');
+    expect(frame).toContain('read-only output');
+  });
+
+  it('takes no typed message and sends nothing', () => {
+    const before = scriptOpened();
+
+    const typed = reduce(before, { type: 'key', key: key('char', 'h') });
+
+    expect(typed.state.editor.text).toBe('');
+    expect(reduce(before, { type: 'key', key: key('enter') }).effects).toEqual([]);
+    expect(reduce(before, { type: 'key', key: key('ctrl-s') }).effects).toEqual([]);
+  });
+
+  it('dismisses a refusal notice on the next key, since it has no composer to send', () => {
+    const base = scriptOpened();
+    const refused = { ...base, taskView: { ...base.taskView!, notice: 'This task hasn’t started yet.' } };
+    expect(plain(refused)).toContain('This task hasn’t started yet.');
+
+    const scrolled = reduce(refused, { type: 'key', key: key('pagedown') }).state;
+    expect(scrolled.taskView?.notice).toBe('This task hasn’t started yet.');
+
+    const cleared = reduce(scrolled, { type: 'key', key: key('char', 'h') }).state;
+    expect(cleared.taskView?.notice).toBeUndefined();
+    expect(plain(cleared)).toContain('read-only output');
   });
 });
 
@@ -295,7 +442,7 @@ describe('the task view draws as a runner, not the planner', () => {
     expect(out).toContain('Refactor PlanStore');
     // The log ends with a completed turn, so the header reads the saved status;
     // "working" is the header's word only while a turn is live.
-    expect(out).toContain('claude-code · in_progress');
+    expect(out).toContain('claude-code · running');
     expect(out).toContain('ctrl-r remove queued');
     expect(out).toContain('ctrl-x stop runner');
   });
@@ -306,6 +453,11 @@ describe('the task view draws as a runner, not the planner', () => {
       taskView: loaded({ view: replayTaskLog([]) }),
     });
     expect(plain(waiting)).toContain('waiting for your input');
+  });
+
+  it('says why a skipped task was skipped', () => {
+    const skipped = opened({ tasks: [task({ status: 'skipped', skipReason: 'no GPU on this host' })] });
+    expect(plain(skipped)).toContain('skipped: no GPU on this host');
   });
 
   it('labels the composer with the task number', () => {
@@ -575,8 +727,24 @@ describe('the task view header says what the task is doing', () => {
       taskView: loaded({ view: replayTaskLog([{ type: 'turn_start', message: 'Do the task' }]) }),
     });
 
-    expect(header(completed)).toContain('· completed');
+    expect(header(completed)).toContain('· done');
     expect(header(completed)).not.toContain('· working');
+  });
+
+  // The header words the store's status the way the plan pane and VS Code do,
+  // rather than printing `pending`/`completed`/`skipped` raw.
+  it.each([
+    ['pending', 'to do'],
+    ['approved', 'to do'],
+    ['in_progress', 'running'],
+    ['completed', 'done'],
+    ['failed', 'failed'],
+    ['skipped', 'skipped'],
+    ['blocked', 'blocked'],
+    ['cancelled', 'to do'],
+  ])('words the store status %s as %s', (status, word) => {
+    const state = opened({ tasks: [task({ status })], taskView: loaded({ view: replayTaskLog([]) }) });
+    expect(header(state)).toContain(`· ${word}`);
   });
 
   it('names a subtask by its dotted reference in the log header', () => {

@@ -290,6 +290,10 @@ describe('task_ops conversation turns', () => {
     expect(session.isExecuting).toBe(false);
 
     await expect(session.execute({ command: 'run_plan' }, { kind: 'user' })).resolves.toMatchObject({ ok: true });
+    // The stop held it: starting the plan again is not a retry.
+    expect(spawned).toEqual(['b']);
+
+    await expect(session.execute({ command: 'force_start', task: 'b' }, { kind: 'user' })).resolves.toMatchObject({ ok: true });
     expect(spawned).toEqual(['b', 'b']);
   });
 
@@ -623,139 +627,6 @@ describe('task_ops conversation turns', () => {
     expect(outgoing).toMatch(/^#2 id=b "Build"/m);
     expect(outgoing).toMatch(/^ {2}#2\.1 id=b1 "Compile"/m);
     expect(outgoing).toMatch(/^ {2}#2\.2 id=b2 "Bundle" .*deps:\[#2\.1\]/m);
-  });
-});
-
-describe('requestMerge — planner-driven merge', () => {
-  it('routes a merge through the conversation loop and applies the merge op', async () => {
-    const continueConversation = vi.fn().mockResolvedValue({
-      kind: 'task_ops',
-      ops: [{ op: 'merge', taskIds: ['a', 'b'], merged: { title: 'Setup + Build', prompt: 'do both' } }],
-      text: '{"taskOps":[...]}',
-      researchLog: [],
-    });
-    const session = makeSession({
-      aiService: {
-        startConversation: vi.fn(),
-        continueConversation,
-        hasActiveConversation: () => true,
-        reset: vi.fn(),
-      },
-    });
-    session.loadPlan(planWithTasks(), 'build it', testWorkspace, { persist: false });
-
-    await session.requestMerge(['a', 'b']);
-
-    // The outgoing message carries the merge intent + the plan context block.
-    const outgoing = String(continueConversation.mock.calls[0][0]);
-    expect(outgoing).toContain('Merge');
-    expect(outgoing).toContain('<current_plan>');
-    expect(outgoing).toContain('"merge"');
-    // Two tasks collapsed into one.
-    expect(session.planTasks).toHaveLength(1);
-    expect(session.planTasks[0].title).toBe('Setup + Build');
-  });
-
-  it('throws a pre-flight compatibility error before any LLM call', async () => {
-    const continueConversation = vi.fn();
-    const session = makeSession({
-      aiService: {
-        startConversation: vi.fn(),
-        continueConversation,
-        hasActiveConversation: () => true,
-        reset: vi.fn(),
-      },
-    });
-    session.loadPlan(planWithTasks(), 'g', testWorkspace, { persist: false });
-
-    await expect(session.requestMerge(['a'])).rejects.toThrow(/at least two/i);
-    expect(continueConversation).not.toHaveBeenCalled();
-  });
-
-  it('feeds an invalid merge back and applies the corrected retry', async () => {
-    const continueConversation = vi.fn()
-      .mockResolvedValueOnce({
-        kind: 'task_ops',
-        ops: [{ op: 'merge', taskIds: ['a', 'b'], merged: {} }], // missing title
-        text: '', researchLog: [],
-      })
-      .mockResolvedValueOnce({
-        kind: 'task_ops',
-        ops: [{ op: 'merge', taskIds: ['a', 'b'], merged: { title: 'Setup + Build' } }],
-        text: '', researchLog: [],
-      });
-    const session = makeSession({
-      aiService: {
-        startConversation: vi.fn(),
-        continueConversation,
-        hasActiveConversation: () => true,
-        reset: vi.fn(),
-      },
-    });
-    session.loadPlan(planWithTasks(), 'g', testWorkspace, { persist: false });
-
-    await session.requestMerge(['a', 'b']);
-
-    expect(continueConversation).toHaveBeenCalledTimes(2);
-    expect(String(continueConversation.mock.calls[1][0])).toMatch(/rejected/);
-    expect(session.planTasks).toHaveLength(1);
-    expect(session.planTasks[0].title).toBe('Setup + Build');
-  });
-});
-
-describe('requestSplit — planner-driven split', () => {
-  it('routes a split through the conversation loop and applies the split op', async () => {
-    const continueConversation = vi.fn().mockResolvedValue({
-      kind: 'task_ops',
-      ops: [{
-        op: 'split', taskId: 'b',
-        parts: [
-          { title: 'Build core', prompt: 'core' },
-          { title: 'Build UI', prompt: 'ui' },
-        ],
-      }],
-      text: '{"taskOps":[...]}',
-      researchLog: [],
-    });
-    const session = makeSession({
-      aiService: {
-        startConversation: vi.fn(),
-        continueConversation,
-        hasActiveConversation: () => true,
-        reset: vi.fn(),
-      },
-    });
-    session.loadPlan(planWithTasks(), 'build it', testWorkspace, { persist: false });
-
-    await session.requestSplit('b');
-
-    const outgoing = String(continueConversation.mock.calls[0][0]);
-    expect(outgoing).toContain('Split');
-    expect(outgoing).toContain('<current_plan>');
-    expect(outgoing).toContain('"split"');
-    // One task replaced by two.
-    expect(session.planTasks).toHaveLength(3);
-    const parts = session.planTasks.filter((t) => t.title.startsWith('Build'));
-    expect(parts).toHaveLength(2);
-    expect(parts[1].dependencies).toEqual([parts[0].id]);
-  });
-
-  it('throws a pre-flight error for a completed task before any LLM call', async () => {
-    const continueConversation = vi.fn();
-    const session = makeSession({
-      aiService: {
-        startConversation: vi.fn(),
-        continueConversation,
-        hasActiveConversation: () => true,
-        reset: vi.fn(),
-      },
-    });
-    const plan = planWithTasks();
-    plan.tasks[1].status = 'completed';
-    session.loadPlan(plan, 'g', testWorkspace, { persist: false });
-
-    await expect(session.requestSplit('b')).rejects.toThrow(/completed/i);
-    expect(continueConversation).not.toHaveBeenCalled();
   });
 });
 

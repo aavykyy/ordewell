@@ -88,8 +88,25 @@ or run `code --install-extension ordewell.ordewell`. In Cursor, Windsurf or VSCo
 get it from [Open VSX](https://open-vsx.org/extension/ordewell/ordewell). The
 extension bundles its own core and needs nothing from npm.
 
-**Requirements:** Node.js 20 or newer, at least one of Claude Code, Codex or
+**Requirements:** Node.js 20.3 or newer, at least one of Claude Code, Codex or
 OpenCode, and git for task isolation. On Windows, run the terminal UI under WSL.
+
+## What Ordewell sends
+
+Once a day, Ordewell asks ordewell.ai whether a newer version is out. The request
+carries two things: the version you run and a random install ID, kept in
+`~/.ordewell/version-check.json` and shared by the CLI and the VS Code extension. Nothing else is sent: no
+code, prompts, paths, file names or account details. Like any server, ordewell.ai
+sees the IP address the request comes from.
+
+The first time Ordewell starts on a machine, it shows a notice saying this and
+sends nothing. The first check happens on a later start. If Ordewell cannot write
+that file, it shows no notice and never sends anything. When a newer version is
+out, Ordewell shows one line naming it.
+
+To turn the check off, set `ORDEWELL_NO_VERSION_CHECK=1` or `DO_NOT_TRACK=1`, or
+turn off VS Code's telemetry for the extension. Turned off, Ordewell sends
+nothing and writes no install ID.
 
 ## Quick start
 
@@ -138,6 +155,13 @@ Tried it? [Tell us how your first run went](https://github.com/ordewell/ordewell
 4. **Review and merge.** Ordewell combines the changes for your review. Read the
    diff, then merge it into your branch or discard the run. If a task or a merge
    needs your attention, Ordewell shows you where.
+
+The commits Ordewell writes (a task's merge, work a task left uncommitted, a
+conflict repair, the merge into your branch) end with a `Planned-with: Ordewell`
+line, a git trailer that `git interpret-trailers` reads. Commits a coding agent
+made itself are not changed. To leave the line out, run `ordewell trailer off`
+(or set `"plannedWithTrailer": false` in `settings.json`); the next commit
+follows it.
 
 The planner only reads; tasks run as you, in the mode the plan assigns. For
 exactly what each part can touch and what to use for untrusted repositories, see

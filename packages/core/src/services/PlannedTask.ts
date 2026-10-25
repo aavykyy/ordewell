@@ -307,6 +307,18 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   return { task, errors, ignored, renamed, adjustments };
 }
 
+/** An AI task on a runner outside `runners`: what a plan accepted earlier is held to again where it lands, the runners enabled then being the ones that count. */
+export function checkPlanRunners(tasks: readonly Task[], runners: readonly RunnerId[] | undefined): PlanTaskError[] {
+  if (!runners) return [];
+  return flattenTasksWithParents(tasks)
+    .filter(({ task: t }) => t.type === 'ai' && !runners.includes(t.assignedRunner))
+    .map(({ task: t, parent }) => ({
+      taskId: t.id,
+      field: 'assignedRunner',
+      message: `${taskWhere(t.title, parent?.title)} has invalid assignedRunner "${t.assignedRunner}". Expected one of: ${runners.join(', ')}`,
+    }));
+}
+
 /**
  * The rules a plan's tasks are held to together, subtasks included, whichever
  * route they arrived by and whoever wrote them, the planner or the user.
@@ -356,10 +368,8 @@ export function checkPlanInvariants(
     if (t.ops && t.taskMode !== undefined && t.taskMode === taggedReadOnlyMode(runnerModes?.[t.assignedRunner])) {
       fail('taskMode', `${where} is an ops task, which acts in the workspace, so it cannot use the read-only profile`);
     }
-    if (runners && t.type === 'ai' && !runners.includes(t.assignedRunner)) {
-      fail('assignedRunner', `${where} has invalid assignedRunner "${t.assignedRunner}". Expected one of: ${runners.join(', ')}`);
-    }
   }
+  errors.push(...checkPlanRunners(tasks, runners));
   errors.push(...loopErrors(tasks));
   for (const { task: t, parent } of rows) {
     // Self-dependencies are reported with the cycle below, including its full path.

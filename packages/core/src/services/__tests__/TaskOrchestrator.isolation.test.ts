@@ -89,6 +89,21 @@ describe('TaskOrchestrator with worktree isolation', () => {
     });
   });
 
+  it('lands a passed task with the commit its handoff stated, before the handoff is on the task', async () => {
+    const { orchestrator, isolation, sessionFor } = setup();
+    const t1 = task('t1', 1);
+    orchestrator.loadPlan([t1]);
+    await orchestrator.approveReview();
+    const openMerge = isolation.holdIntegration('t1');
+
+    sessionFor('t1')!.reportComplete({ status: 'done', summary: 'Next: wire it up.', commit: { subject: 'Greet the user', body: 'Why it changed.' } });
+    await vi.waitFor(() => expect(isolation.taskIdsFor('integrate')).toEqual(['t1']));
+    expect(orchestrator.runs.current?.tasks.t1.commit).toEqual({ subject: 'Greet the user', body: 'Why it changed.' });
+
+    openMerge();
+    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
+  });
+
   it('holds a dependent back until its predecessor is integrated, then starts it from the new tip', async () => {
     const { orchestrator, isolation, pass, spawn } = setup();
     const t1 = task('t1', 1);
@@ -860,7 +875,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     await orchestrator.start();
 
     expect(spawn).toHaveBeenCalledTimes(2);
-    expect(isolation.calls).toContainEqual({ op: 'discard', integration: 'delete' });
+    expect(isolation.calls).toContainEqual({ op: 'discard', integration: 'delete-merged' });
     expect(spawn.mock.calls[1][0].cwd).toBe('/fake-worktrees/run2/1-t1');
     expect(spawnedCwd('t1')).toBe('/fake-worktrees/run1/1-t1');
   });
@@ -966,7 +981,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
       const [first, repair] = spawn.mock.calls.map(([o]) => o);
       expect(repair).toMatchObject({ taskId: 't1', cwd: first.cwd, runner: first.runner, modelId: 'opus', thinkingEffort: 'high', mode: 'acceptEdits' });
       expect(repair.prompt).toContain('conflicted in a.ts');
-      expect(repair.prompt).toContain('git merge --no-edit ordewell/run1/integration');
+      expect(repair.prompt).toContain("git merge --no-edit -m 'Merge: Task t1 (resolve conflicts with integration)' ordewell/run1/integration");
       expect(repair.prompt).toContain('What the task was asked to do:\ndo t1');
       expect(repair.prompt).toContain('only then call `task_complete`');
       expect(isolation.taskIdsFor('prepare')).toEqual(['t1']);
@@ -1088,6 +1103,42 @@ describe('TaskOrchestrator with worktree isolation', () => {
       expect(orchestrator.activeTaskIds).toEqual(['t1']);
     });
 
+    it('leaves the repair Mark complete starts without the summary of the completion it did not reach', async () => {
+      const { orchestrator, latest, spawn } = repairing(undefined, { conflictRepairAttempts: 1 });
+      orchestrator.loadPlan([task('t1', 1), task('t2', 2)]);
+      await orchestrator.approveReview();
+      latest('t1').emitExit(1);
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('failed'));
+
+      await orchestrator.markTaskComplete('t1');
+
+      await vi.waitFor(() => expect(spawn.mock.calls.filter(([o]) => o.taskId === 't1')).toHaveLength(2));
+      expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
+      expect(orchestrator.storeInstance.get('t1')!.outputSummary).toBeUndefined();
+    });
+
+    it('starts a repair owed outside a scheduled run once the slot it waited for frees', async () => {
+      const { orchestrator, pass, latest, spawn, notifications } = repairing(undefined, { maxParallelSessions: 1, conflictRepairAttempts: 1 });
+      const t1 = task('t1', 1);
+      const t2 = task('t2', 2);
+      orchestrator.loadPlan([t1, t2]);
+      await orchestrator.forceStartTask('t1');
+      latest('t1').emitExit(1);
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('failed'));
+      await orchestrator.forceStartTask('t2');
+      expect(orchestrator.activeTaskIds).toEqual(['t2']);
+
+      await orchestrator.markTaskComplete('t1');
+      expect(messages(notifications.info)).toContain('Task "Task t1" is repaired once a slot is free.');
+
+      pass(t2);
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(3));
+      expect(spawn.mock.calls[2][0]).toMatchObject({ taskId: 't1', cwd: '/fake-worktrees/run1/1-t1' });
+      expect(orchestrator.runs.taskIsolation('t1')).toMatchObject({ state: 'repairing' });
+      expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
+      expect(orchestrator.isScheduling).toBe(false);
+    });
+
     it('starts a retried task over with every repair available again, from a fresh worktree', async () => {
       const { orchestrator, isolation, pass, latest, passLatest, spawn } = repairing(undefined, { conflictRepairAttempts: 1 });
       const t1 = task('t1', 1);
@@ -1122,7 +1173,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
       await orchestrator.approveReview();
       pass(t1);
       await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
-      expect(spawn.mock.calls[1][0].prompt).toContain('In each repository the task changed — api, web — run `git merge --no-edit ordewell/run1/integration`');
+      expect(spawn.mock.calls[1][0].prompt).toContain('In each repository the task changed — api, web — run `git merge --no-edit -m \'Merge: Task t1 (resolve conflicts with integration)\' ordewell/run1/integration`');
       expect(messages(notifications.info)).toContain('Repairing the conflict of task "Task t1" in its own worktrees (repair 1 of 2).');
       isolation.outcomes.set('t1', 'merged');
 

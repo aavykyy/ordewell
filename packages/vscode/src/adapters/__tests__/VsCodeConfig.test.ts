@@ -176,11 +176,11 @@ describe('the autonomy level (ADR-0030)', () => {
 
   it('is the level saved in the user\'s settings, which every surface shares', async () => {
     const config = new VsCodeConfig(await makeStore({}));
-    expect(config.autonomousMode).toBe(true);
-
-    new SettingsService().setAutonomousMode(false);
-
     expect(config.autonomousMode).toBe(false);
+
+    new SettingsService().setAutonomousMode(true);
+
+    expect(config.autonomousMode).toBe(true);
   });
 
   it('copies a level set in the old VS Code setting once, then clears that setting', async () => {

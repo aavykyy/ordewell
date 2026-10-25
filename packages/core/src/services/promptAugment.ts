@@ -3,8 +3,9 @@ import { flattenTasksWithParents } from '../models/Task';
 import type { PreservedWork, PreviousWork } from '../interfaces/IWorktreeIsolation';
 import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
+import { assignedRunnerOf } from './AssignmentScope';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
-import { REPORT_MAX_CHARS, boundedHandoffLines, findingLines, namedHandoff, type HandoffDigest, type StoredHandoff } from '../models/Handoff';
+import { REPORT_MAX_CHARS, artifactLines, boundedHandoffLines, findingLines, namedHandoff, openingLines, type HandoffDigest, type StoredHandoff } from '../models/Handoff';
 
 const MAX_TAIL_CHARS = 500;
 /** Each dependency's share of a dependent's prompt, which carries every direct dependency's handoff (ADR-0047). */
@@ -73,7 +74,7 @@ function indent(text: string): string {
 
 /**
  * A dependency's handoff within its share of the prompt (ADR-0047): the
- * summary, then whole findings in the producer's order, stopping before the
+ * commit and summary, then whole findings in the producer's order, stopping before the
  * first that would pass the ceiling, then the artifacts, which it does not
  * count. A finding is never cut. Those left out are counted from
  * `findingCount`, which includes the ones the plan's digest does not hold,
@@ -193,14 +194,14 @@ export function renderPlanMap(planTasks: readonly Task[], currentTaskId: string,
     const order = row.parent ? row.label : row.label.padStart(2, ' ');
     const arrow = isCurrent ? '   ← you are here' : '';
     // A script task runs on no runner (ADR-0035): what it is says more than the runner it was never given.
-    const runner = row.task.type === 'script' ? ' (script)' : row.task.assignedRunner ? ` (${row.task.assignedRunner})` : '';
+    const assigned = assignedRunnerOf(row.task);
+    const runner = row.task.type === 'script' ? ' (script)' : assigned ? ` (${assigned})` : '';
     return `${order}. [${tag.padEnd(7, ' ')}] ${row.task.title}${runner}${arrow}`;
   });
 
   const footer = omitted > 0 ? `\n(${omitted} task${omitted === 1 ? '' : 's'} omitted from this view)` : '';
-  const runnerNote = currentTask?.assignedRunner
-    ? `\nYou are running as: ${currentTask.assignedRunner}`
-    : '';
+  const currentRunner = currentTask && assignedRunnerOf(currentTask);
+  const runnerNote = currentRunner ? `\nYou are running as: ${currentRunner}` : '';
 
   return [
     '## Plan map',
@@ -211,7 +212,12 @@ export function renderPlanMap(planTasks: readonly Task[], currentTaskId: string,
   ].join('\n');
 }
 
+/** What a read-only task is told it may do beyond reading (ADR-0050): the tool that keeps its prototype past its worktree. */
+export const READ_ONLY_PATCH_NOTE = 'This task is read-only and its worktree is thrown away when it ends. If you build a prototype there, keep it with the `save_patch` tool before you finish: a later task can then apply it.';
+
 export interface ComposeOptions {
+  /** A read-only task: told of `save_patch` (ADR-0050). */
+  readOnly?: boolean;
   planMapEnabled?: boolean;
   planMapMaxEntries?: number;
   /** The task's skills as resolved where this attempt runs. */
@@ -227,7 +233,9 @@ export interface ComposeOptions {
 function renderSinceLastRound(task: Task, allTasks: readonly Task[], loop: NonNullable<ComposeOptions['loop']>): string {
   const lines = ['## Since your last round', '', '### Your previous handoff'];
   if (loop.previousHandoff) {
-    lines.push(loop.previousHandoff.summary, ...loop.previousHandoff.findings.flatMap(({ id, severity, title }) => findingLines({ id, severity, title })));
+    // The opening the shared renderer writes, so a commit-only handoff is not blank; the findings stay one line each.
+    const previous = namedHandoff(allTasks, loop.previousHandoff);
+    lines.push(...openingLines(previous), ...previous.findings.flatMap(({ id, severity, title }) => findingLines({ id, severity, title })), ...artifactLines(previous));
   } else {
     lines.push('Your previous findings are not structured.', loop.previousReport || '(no previous report captured)');
   }
@@ -337,6 +345,8 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
   if (opts?.carriedOver) blocks.push(renderCarriedOver(opts.carriedOver.from, opts.carriedOver.work));
 
   if (opts?.skills?.length) blocks.push(renderTaskSkills(opts.skills));
+
+  if (opts?.readOnly) blocks.push(READ_ONLY_PATCH_NOTE);
 
   if (isHitlTask(task)) blocks.push(CHECKPOINT_INSTRUCTION);
 

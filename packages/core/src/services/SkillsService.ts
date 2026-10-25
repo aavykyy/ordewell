@@ -182,6 +182,15 @@ function copyDirSync(src: string, dest: string): void {
   }
 }
 
+/** Seeding is retried on every read, so one warning per built-in is enough. */
+const warnedSeedFailures = new Set<string>();
+
+function warnSeedFailure(name: string, err: unknown): void {
+  if (warnedSeedFailures.has(name)) return;
+  warnedSeedFailures.add(name);
+  console.warn(`Could not seed built-in skill ${name}; reading it from the package instead: ${String(err)}`);
+}
+
 function fileHash(file: string): string | undefined {
   try {
     return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -327,9 +336,31 @@ export class SkillsService {
       }
       if (!this.isUntouchedSeed(name, currentHash)) return false;
     }
-    copyDirSync(srcDir, dest);
+    try {
+      copyDirSync(srcDir, dest);
+    } catch (err) {
+      // A read-only home or a full disk must not take the TUI or the planner
+      // down: a built-in that cannot be seeded is read from the package instead.
+      warnSeedFailure(name, err);
+      return false;
+    }
     if (srcHash) this.recordSeed(name, srcHash);
     return true;
+  }
+
+  /**
+   * A built-in read where it ships, for a home that cannot hold the seed. It is
+   * reported as `global` because that is the precedence a built-in has — it
+   * still shadows a workspace copy of the same name.
+   */
+  private packagedBuiltin(name: string): SkillInfo | undefined {
+    let file: string | undefined;
+    try {
+      file = skillFileIn(builtinSkillsDir(), name);
+    } catch {
+      return undefined;
+    }
+    return file ? parseSkillFile(file, name, 'global') : undefined;
   }
 
   seedBuiltinSkill(name: string): boolean {
@@ -372,9 +403,19 @@ export class SkillsService {
   findSkill(name: string): SkillInfo | undefined {
     if (!isSkillName(name)) return undefined;
     this.pruneRetired();
-    if ((BUILTIN_SKILL_NAMES as readonly string[]).includes(name)) this.seed(name);
-    const globalFile = skillFileIn(this.globalDir(), name);
-    if (globalFile) return parseSkillFile(globalFile, name, 'global');
+    const builtin = (BUILTIN_SKILL_NAMES as readonly string[]).includes(name);
+    if (builtin) {
+      this.seed(name);
+      const globalFile = skillFileIn(this.globalDir(), name);
+      if (globalFile) return parseSkillFile(globalFile, name, 'global');
+      // The seed is only a copy for the user to edit: when it cannot be made,
+      // the built-in still resolves, and still outranks a workspace copy.
+      const packaged = this.packagedBuiltin(name);
+      if (packaged) return packaged;
+    } else {
+      const globalFile = skillFileIn(this.globalDir(), name);
+      if (globalFile) return parseSkillFile(globalFile, name, 'global');
+    }
     for (const workspaceDir of this.workspaceDirs()) {
       const workspaceFile = skillFileIn(workspaceDir, name);
       if (workspaceFile) return parseSkillFile(workspaceFile, name, 'workspace');
@@ -402,12 +443,24 @@ export class SkillsService {
     return this.readCatalog();
   }
 
-  /** Inspect installed skills without seeding, refreshing or pruning global files. */
+  /**
+   * Inspect installed skills without seeding, refreshing or pruning global
+   * files. A built-in that is not seeded here still ships with Ordewell, so it
+   * is listed at global precedence: this is the catalog the planner uses even
+   * on a home that cannot hold the seeds.
+   */
   readCatalog(): SkillCatalog {
     const byName = new Map<string, SkillInfo>();
     const global = readDir(this.globalDir(), 'global');
     for (const skill of global.skills) {
       byName.set(skill.name, skill);
+    }
+    // A read-only home cannot hold the seed, but the built-in is still there
+    // in the package, and still outranks a workspace copy of its name.
+    for (const name of BUILTIN_SKILL_NAMES) {
+      if (byName.has(name)) continue;
+      const packaged = this.packagedBuiltin(name);
+      if (packaged) byName.set(name, packaged);
     }
     const shadowed: ShadowedSkill[] = [];
     const invalid = [...global.invalid];

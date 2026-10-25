@@ -43,8 +43,12 @@ describe('task starts and Stop sent to the daemon at once', () => {
 
   function daemon() {
     const spawned: FakeRunnerSession[] = [];
+    // A start the test holds under way: a Run now takes a body to read before it reaches the seam, so it no longer overlaps a Stop sent in the same tick.
+    let hold: Promise<void> | undefined;
+    let release = () => {};
     const runner: IRunner = {
       spawn: vi.fn(async (opts: RunnerSpawnOptions) => {
+        await hold;
         const s = new FakeRunnerSession(`s${spawned.length + 1}`, opts.taskId);
         spawned.push(s);
         return s;
@@ -58,7 +62,13 @@ describe('task starts and Stop sent to the daemon at once', () => {
     const app = new Hono();
     app.route('/api/plans', plansRoute(pool));
     const post = (sessionId: string, route: string) => app.request(`/api/plans/${sessionId}/${route}`, { method: 'POST' });
-    return { pool, post, spawnedIds: () => spawned.map((s) => s.taskId) };
+    const run = (sessionId: string, task: string) => app.request(`/api/plans/${sessionId}/execute-command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: 'run_task', task }),
+    });
+    const holdSpawns = () => { hold = new Promise<void>((resolve) => { release = resolve; }); };
+    return { pool, post, run, holdSpawns, releaseSpawns: () => release(), spawns: runner.spawn, spawnedIds: () => spawned.map((s) => s.taskId), spawnedSessions: () => spawned };
   }
 
   function approvedPlan(): LegacyPlanState {
@@ -87,24 +97,31 @@ describe('task starts and Stop sent to the daemon at once', () => {
   }
 
   it('answers a Run sent beside Stop as not started, Stop as stopped, and leaves the task not started', async () => {
-    const { post, id, session, spawnedIds } = adopted('session-run-stop');
+    const { post, run: runTask, holdSpawns, releaseSpawns, spawns, id, session, spawnedSessions } = adopted('session-run-stop');
+    holdSpawns();
 
-    const [run, stop] = await Promise.all([post(id, 'tasks/t1/run'), post(id, 'stop')]);
+    const running = runTask(id, 't1');
+    // The spawn itself is what the Stop lands in: waiting on the session's pending starts would race the claim that reaches it.
+    await vi.waitFor(() => expect(spawns).toHaveBeenCalled());
+    const stop = await post(id, 'stop');
+    releaseSpawns();
+    const run = await running;
 
     expect(stop.status).toBe(200);
     expect(await stop.json()).toMatchObject({ status: 'stopped', message: expect.stringContaining('Stopped the run') });
     expect(run.status).toBe(400);
     expect(await run.json()).toMatchObject({ error: STOPPED_BEFORE_START, code: 'refused' });
     await vi.waitFor(() => expect(session.isExecuting).toBe(false));
-    expect(spawnedIds()).toEqual([]);
+    // A session the runner returned after the Stop is let go, not kept running for a task that is not.
+    await vi.waitFor(() => expect(spawnedSessions().map((s) => s.killed || s.stopped)).toEqual([true]));
     expect(status(session, 't1')).toBe('pending');
   });
 
   it('starts one of two Runs sent at once for the last slot, and refuses the other', async () => {
     process.env.ORDEWELL_MAX_PARALLEL = '1';
-    const { post, id, spawnedIds } = adopted('session-two-runs');
+    const { run: runTask, id, spawnedIds } = adopted('session-two-runs');
 
-    const [first, second] = await Promise.all([post(id, 'tasks/t1/run'), post(id, 'tasks/t2/run')]);
+    const [first, second] = await Promise.all([runTask(id, 't1'), runTask(id, 't2')]);
 
     expect([first.status, second.status].sort()).toEqual([200, 400]);
     const refused = first.status === 400 ? first : second;

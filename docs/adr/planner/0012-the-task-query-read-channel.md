@@ -6,11 +6,12 @@ status: accepted
 
 ## Problem
 
-The per-turn plan context block (`Session.planContextBlock`) deliberately
-carries only short fields — id, order, title, status, type, runner, model,
-mode, effort, autonomy, deps. A twenty-task plan re-sent in full on every
-message would burn thousands of tokens a turn on content the model is not
-touching, so the block was built to be cheap by construction: it never
+The plan block (`PlannerConversation.planView`), which a turn's message
+carries whole or as what changed (T10), deliberately carries only short
+fields — id, order, title, status, type, runner, model, mode, effort,
+autonomy, deps. A twenty-task plan sent with every field would burn thousands
+of tokens on content the model is not touching, so the block was built to be
+cheap by construction: it never
 carries a task's `prompt`, its `description`, its `userSteps`, a completed
 task's `verdict` or `outputSummary`, or `userStoriesCovered`.
 
@@ -24,10 +25,11 @@ the source of truth, not a guess dressed as one) or the user has to paste the
 current text back into chat by hand, which defeats having a plan the model
 can already see at all.
 
-The same gap sits behind the runner/model catalog. `Session.catalogBlock`
-already re-sends the *ids* every turn so an edit can pick a valid
-`assignedModel`/`taskMode` without scrolling back to the system prompt, but
-it caps at 100 models per runner and never carries a model's label, its
+The same gap sits behind the runner/model catalog.
+`PlannerConversation.catalogBlock` already states the *ids* in a turn's
+message — once per live context, and again when they change (T10) — so an
+edit can pick a valid `assignedModel`/`taskMode` without scrolling back to the
+system prompt, but it caps at 100 models per runner and never carries a model's label, its
 thinking-effort variants, or a mode's description — detail a query answer
 carries in full, once, on the turn that actually needs it.
 
@@ -123,6 +125,40 @@ than cached or replayed.
   and no committed plan — it is legal on the very first planning turn, so a
   planner unsure what a runner offers can ask instead of guessing from the
   capped `<available_models>` block, before task 1 is even drafted.
+- **The plan goes whole once per live context, then as what changed (T10).**
+  A vendor planner keeps its message list and a harness planner its session
+  ([ADR-0009](0009-coding-agents-as-planners.md), T3), so every block a turn
+  sends stays in the model's context. The plan block — its `<current_plan>`
+  lines and the read and edit protocol after them — goes whole to a live
+  context that holds no intact copy. Every later turn sends a `<plan_changes>`
+  block instead: the line, in the same format, of each task added or whose
+  line changed since the turn before, a line naming each task removed, what
+  runs and is locked now (or that nothing runs), and one line pointing to the
+  protocol in the last whole block, and to `task_query` for a planner that
+  has lost it. With nothing changed it says so in one line. The whole block
+  goes again when a task's reference changed (a reorder, or an insert or
+  removal that renumbers `#order` or a dotted label: every line names its
+  dependencies by reference) and when saying what changed would take longer.
+  The catalog block follows the same rule: once per live context, and again
+  when it changes. A planner with Ordewell's tools gets the tools reminder in
+  its place by that rule too, once per live context, since the reminder never
+  changes and its system prompt already says to read the catalog just before
+  submitting ([ADR-0022](../runners/0022-ordewell-mcp-server.md), L3).
+  `PromptBlocks` owns what the live context holds of the blocks. A turn's
+  blocks count as held only once it lands normally, so the turn after one
+  that failed, was stopped, cut off or abandoned, ended on the planner's usage
+  limit and is sent again
+  ([ADR-0044](0044-the-planners-usage-limit-waits-and-resends.md)), or landed
+  only after a corrective retry is sent the whole plan: its message may stay
+  in the context unread. A new live context holds none of them: the opening, a
+  replay from the transcript (after a reload, a planner switch, a harness
+  planner's model or effort switch, a backend reset by a settings change, a
+  refused resume), Ordewell's own compaction, a session reset. Nor does a
+  context compacted in place: a harness agent's own compaction, which its
+  adapter reports for the planner's context and never for a subagent's or
+  another thread's, and a vendor planner's pruning of its history
+  (`IAiService.compactions`). A vendor planner's model switch keeps its
+  message list, so it is none of these.
 
 ## Live output field
 
@@ -250,6 +286,14 @@ ADR-0008's exploration envelope is unchanged.
   way to escape (T5) — the alternative of simply cutting the model off was
   rejected for the reason ADR-0008 already established for `bash`: an
   unanswered request is worse than an answered one that comes with a nudge.
+- **Send the whole plan block, and the catalog, in every turn (M7).** The
+  design until 2026-10-23. Dropped: the live context keeps every copy, so the
+  planner's context grew with turns times plan size, and every supervisor
+  wake-up ([ADR-0029](../supervision/0029-the-supervisor.md)) and research
+  report ([ADR-0037](../supervision/0037-research-tasks-wake-the-planner.md))
+  added another whole copy while a run went on. A change block costs a turn
+  only what changed, and the whole block still goes wherever the planner's
+  view may be stale (T10).
 
 ## History
 
@@ -260,3 +304,4 @@ ADR-0008's exploration envelope is unchanged.
 - 2026-10-11 — T4: a wake-up turn spends the plan's wake-up read budget in place of the per-user-turn caps ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-13 — references resolve through the shared `TaskRefs` grammar, which reaches subtasks by their dotted label.
 - 2026-10-18 — an edit's model and mode are checked by the assignment resolver, which every writer calls, rather than by `TaskEditValidator` (T7, M3).
+- 2026-10-23 — T10: the plan and catalog blocks go whole once per live context, then as what changed (M7).

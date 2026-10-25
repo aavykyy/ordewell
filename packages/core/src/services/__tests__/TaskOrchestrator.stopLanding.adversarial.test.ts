@@ -74,3 +74,55 @@ describe('adversarial: a Stop while a landing is in flight', () => {
     expect(env.orchestrator.hasLiveWork).toBe(false);
   });
 });
+
+describe('adversarial: a control on a task while Mark complete lands it', () => {
+  async function landing(env: ReturnType<typeof setup>, failFirst: boolean) {
+    env.orchestrator.loadPlan([change('t1', 1), change('t2', 2)]);
+    await env.orchestrator.forceStartTask('t1');
+    if (failFirst) {
+      await vi.waitFor(() => expect(env.spawn).toHaveBeenCalledTimes(1));
+      const session = (await env.spawn.mock.results[0].value) as FakeRunnerSession;
+      session.emitExit(1);
+      await vi.waitFor(() => expect(env.status('t1')).toBe('failed'));
+    }
+    const openMerge = env.isolation.holdIntegration('t1');
+    const marked = env.orchestrator.markTaskComplete('t1');
+    await vi.waitFor(() => expect(env.isolation.taskIdsFor('integrate')).toEqual(['t1']));
+    return { openMerge, marked };
+  }
+
+  it('refuses a retry, and keeps the worktree the landing is merging', async () => {
+    const env = setup();
+    const { openMerge, marked } = await landing(env, true);
+
+    await expect(env.orchestrator.retryTask('t1')).rejects.toThrow('is being marked complete: its work is landing');
+    expect(env.isolation.calls).not.toContainEqual({ op: 'release', taskId: 't1', keep: false });
+    openMerge();
+    await marked;
+
+    expect(env.status('t1')).toBe('completed');
+  });
+
+  it('refuses a cancel of a task marked complete while it ran', async () => {
+    const env = setup();
+    const { openMerge, marked } = await landing(env, false);
+
+    await expect(env.orchestrator.cancelTask('t1')).rejects.toThrow('is being marked complete: its work is landing');
+    expect(env.isolation.taskIdsFor('release')).toEqual([]);
+    openMerge();
+    await marked;
+
+    expect(env.status('t1')).toBe('completed');
+  });
+
+  it('refuses a skip rather than ignoring it', async () => {
+    const env = setup();
+    const { openMerge, marked } = await landing(env, true);
+
+    await expect(env.orchestrator.skipTask('t1')).rejects.toThrow('is being marked complete: its work is landing');
+    openMerge();
+    await marked;
+
+    expect(env.status('t1')).toBe('completed');
+  });
+});

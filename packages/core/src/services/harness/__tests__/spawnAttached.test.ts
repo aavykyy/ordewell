@@ -83,6 +83,27 @@ describe('spawnAttached', () => {
     }
   });
 
+  it('takes a runner back at once when the attempt is cancelled while it is still starting', async () => {
+    const cancel = new AbortController();
+    const disposed: string[] = [];
+    const revoked: string[] = [];
+    const spawned = spawnAttached({
+      runner: 'opencode',
+      create: () => ({ dispose: () => { disposed.push('adapter'); }, mcpAttached: async () => 'connected' as const }),
+      issueToken: async () => ({ url: 'http://127.0.0.1:1/mcp', token: 'tok-1' }),
+      revoke: (token) => { revoked.push(token); },
+      start: () => new Promise<void>(() => {}),
+      cancelled: cancel.signal,
+      failed: (first, second) => `${first} ${second}`,
+    });
+    await Promise.resolve();
+    cancel.abort();
+
+    await expect(spawned).resolves.toBeNull();
+    expect(disposed).toEqual(['adapter']);
+    expect(revoked).toEqual(['tok-1']);
+  });
+
   it('kills a spawn that did not attach, takes its token back and keeps the respawn on a fresh token', async () => {
     const env = spawning(['pending', true]);
 
@@ -163,6 +184,35 @@ describe('awaitAttach', () => {
       );
 
       await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(await attached).toBe('failed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let a probe that never answers outlast the cap', async () => {
+    vi.useFakeTimers();
+    try {
+      const attached = awaitAttach(() => new Promise<AttachState>(() => {}), 5_000, 1_000);
+
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(await attached).toBe('pending');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is failed as soon as the process ends under a probe that never answers', async () => {
+    vi.useFakeTimers();
+    try {
+      let exit!: () => void;
+      const ended = new Promise<void>((resolve) => { exit = resolve; });
+      const attached = awaitAttach(() => new Promise<AttachState>(() => {}), 60_000, 1_000, ended);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      exit();
 
       expect(await attached).toBe('failed');
     } finally {

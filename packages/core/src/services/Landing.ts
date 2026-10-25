@@ -3,10 +3,13 @@ import type { IConfig } from '../interfaces/IConfig';
 import type { IsolationOutcome, IsolationRun, RepairEvidence } from '../interfaces/IWorktreeIsolation';
 import type { PlanStore } from './PlanStore';
 import type { IsolationRunController } from './IsolationRunController';
-import { changedReposOf, integrationBranchNameOf, SELF_REPO } from './isolationRecord';
+import { changedReposOf, SELF_REPO } from './isolationRecord';
+import { handoffBranchName } from './mergeWording';
 import { capConflictFiles } from './conflictFiles';
 import { buildConflictRepairPrompt, buildConflictResolutionPrompt } from './PlanPrompts';
 import { landsNothing, type AttemptKind } from './attemptKind';
+import type { HandoffCommit } from '../models/Handoff';
+import { landingMessage } from './landingMessage';
 
 /** Which repair of a task an attempt is, of the most `conflictRepairAttempts` allows. */
 export interface RepairAttempt {
@@ -56,6 +59,8 @@ export interface LandingDeps {
   config: Pick<IConfig, 'conflictRepairAttempts'>;
   /** Read-only: only the orchestrator changes a task. `planTasks` labels a subtask by its dotted reference. */
   tasks: Pick<PlanStore, 'get' | 'planTasks'>;
+  /** Whether a repair merge's message ends with the Planned-with trailer; read as the prompt is built. */
+  plannedWith?: () => boolean;
 }
 
 const NOTHING_TO_LAND: LandingOutcome = { kind: 'nothing-to-land', messages: [] };
@@ -74,8 +79,10 @@ export class Landing {
   private readonly runs: IsolationRunController;
   private readonly config: Pick<IConfig, 'conflictRepairAttempts'>;
   private readonly tasks: Pick<PlanStore, 'get' | 'planTasks'>;
+  private readonly plannedWith: () => boolean;
 
   constructor(deps: LandingDeps) {
+    this.plannedWith = deps.plannedWith ?? (() => false);
     this.runs = deps.runs;
     this.config = deps.config;
     this.tasks = deps.tasks;
@@ -85,13 +92,14 @@ export class Landing {
    * Land a passed attempt's work. One whose worktree has no unlanded record
    * behind it any more — the run was discarded under it — cannot land. A
    * read-only attempt's worktree goes instead, whatever it changed: its
-   * report is its result (ADR-0046).
+   * report is its result (ADR-0046). `commit` is the one the attempt's done
+   * handoff stated, which Ordewell's own commits for the task are written from.
    */
-  async landPassed(task: Task, attempt: { worktree: boolean; kind: AttemptKind }): Promise<LandingOutcome> {
+  async landPassed(task: Task, attempt: { worktree: boolean; kind: AttemptKind }, commit?: HandoffCommit): Promise<LandingOutcome> {
     if (landsNothing(attempt.kind)) return this.discard(task, attempt.worktree);
     if (!attempt.worktree) return NOTHING_TO_LAND;
     if (!this.hasUnlandedWork(task.id)) return this.unmerged(task, 'failed');
-    const landing = await this.runs.integrate(task);
+    const landing = await this.runs.integrate(task, commit);
     return landing === 'merged' ? { kind: 'landed', messages: [] } : this.unmerged(task, landing);
   }
 
@@ -173,11 +181,12 @@ export class Landing {
     const record = run.tasks[task.id];
     const conflict = {
       branch: record?.branch ?? '',
+      message: landingMessage('repair-merge', record ?? task, this.plannedWith()),
       repos: Object.keys(record?.repairBase ?? {}),
       ...(record?.conflictRepo ? { conflictRepo: record.conflictRepo } : {}),
       ...(record?.conflictFiles ? { conflictFiles: record.conflictFiles } : {}),
     };
-    return buildConflictRepairPrompt(task, conflict, integrationBranchNameOf(run), this.tasks.planTasks);
+    return buildConflictRepairPrompt(task, conflict, handoffBranchName(run), this.tasks.planTasks);
   }
 
   private hasUnlandedWork(taskId: string): boolean {
@@ -193,7 +202,7 @@ export class Landing {
 
   private unmerged(task: Readonly<Task>, landing: Exclude<IsolationOutcome, 'merged'>): UnlandedOutcome {
     const run = this.runs.current;
-    const branch = run ? integrationBranchNameOf(run) : 'the integration branch';
+    const branch = run ? handoffBranchName(run) : 'the integration branch';
     const record = run?.tasks[task.id];
     // Named only where there is a repo to name: a group of one reads as it always has.
     const inRepo = record?.conflictRepo && record.conflictRepo !== SELF_REPO ? record.conflictRepo : null;
@@ -244,7 +253,7 @@ export class Landing {
   private describeEvidence(evidence: Exclude<RepairEvidence, { ok: true }>): string {
     const run = this.runs.current;
     const inRepo = evidence.repo !== SELF_REPO ? ` in ${evidence.repo}` : '';
-    const branch = run ? integrationBranchNameOf(run) : 'the integration branch';
+    const branch = run ? handoffBranchName(run) : 'the integration branch';
     switch (evidence.reason) {
       case 'not-merged': return `finished, but its branch${inRepo} does not contain ${branch}`;
       case 'conflict-markers': {
@@ -267,12 +276,13 @@ export class Landing {
  * task's landing is in conflict. Linking the two, so the conflicted task lands
  * once the resolver has, stays with the caller.
  */
-export function conflictResolverTask(task: Readonly<Task>, run: IsolationRun | null, plan?: readonly Task[]): Partial<Task> | null {
+export function conflictResolverTask(task: Readonly<Task>, run: IsolationRun | null, plan?: readonly Task[], plannedWith = false): Partial<Task> | null {
   const record = run?.tasks[task.id];
   if (!run || record?.status !== 'conflict') return null;
-  const integrationBranch = integrationBranchNameOf(run);
+  const integrationBranch = handoffBranchName(run);
   const conflict = {
     branch: record.branch,
+    message: landingMessage('repair-merge', record, plannedWith),
     repos: changedReposOf(record),
     ...(record.conflictRepo ? { conflictRepo: record.conflictRepo } : {}),
   };

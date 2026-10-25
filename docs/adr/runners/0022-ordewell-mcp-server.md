@@ -27,7 +27,7 @@ text markers have no role.
 
 | token | bound to | tools |
 |---|---|---|
-| **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, findings?, artifacts?, report?, reason?})`, `checkpoint({question})`, `read_task({task, attempt?, include_report?})`; a read-only task's also `run_command({command})`, its only shell ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)) |
+| **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, findings?, artifacts?, report?, reason?})`, `checkpoint({question})`, `read_task({task, attempt?, include_report?})`, and for a change task `apply_patch({task, attempt?})`, which merges a saved patch into its worktree ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)); a read-only task's also `run_command({command})`, its only shell ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)), and `save_patch({})`, which keeps what that shell changed as a patch ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)) |
 | **Planner token** | one session's planner conversation | `list_runners()`, `list_models({runner})`, `submit_plan({tasks})`, `edit_plan({ops})`, `task_query({...})`, `task_output({task, attempt?, kinds?, ...})`, `task_diff({task, repo?, path?, ...})`, `load_skill({name})` (a model-invocable planner skill's instructions; [ADR-0024](../planner/0024-unified-skills.md)) |
 
 #37's runner-facing tools (`board_post`, `report`, …) join the task side later,
@@ -110,7 +110,11 @@ on the same mechanism.
   ([ADR-0028](../planner-envelope/0028-planners-never-run-repository-config.md)).
 - **Prompts teach the connected tools (S4).** The connector checks the runner's
   own MCP attach state before sending the prompt. A failed attach receives no
-  task or planning prompt.
+  task or planning prompt. Attached means the model is offered the tools, for
+  as long as the runner lives: OpenCode 2.x, which rebuilds its services from
+  the launch configuration and so drops the runtime setting that lists them
+  outside code mode, is launched never to evict those services and has the
+  setting made again before every turn.
 
 ### Tasks: evidence, not opinion
 
@@ -163,18 +167,27 @@ planner tools are recorded here as an explicit entry against both:
   recorded starting commit. These are bounded answers, not a path into
   `.ordewell/` or an arbitrary git ref (ADR-0012).
 - **The only writes are `submit_plan` and `edit_plan` (P2).** They go through
-  the same validation and commit path as the envelopes they replace: the live
-  catalog, the assignment resolver (ADR-0003: a stray model id in a
-  submitted plan is replaced by the allowlist's, its effort carried to the
-  nearest level, and the result reports the adjustment), and `applyTaskOps`
-  with `TaskEditValidator` (ADR-0012). The same
-  tasks produce the same plan by either route, and the plan stays the source
-  of truth (ADR-0001). A structural edit during a live run applies at once to
+  the same check and commit path as the envelopes they replace. One module,
+  `PlanChangeCheck`, holds every planner change to its rules, a whole plan or a
+  batch of task ops, as it is made and again as its turn lands it, against
+  one live scope: the enabled runners for a plan (the plan's own as well for
+  an edit), their modes, the assignment resolver (ADR-0003: a stray model id
+  in a submitted plan is replaced by the allowlist's, its effort carried to
+  the nearest level, and the result reports the adjustment), `applyTaskOps`
+  with `TaskEditValidator` (ADR-0012), the attached skills (ADR-0024) and, for
+  the supervisor, its oscillation guard (ADR-0029). An envelope plan is parsed
+  against the same intake. A change accepted as it is made is refused as it
+  lands only for something that moved in between, and the adjustments the
+  planner is told are the ones landing makes. Refusals are structured, naming
+  the task and field or the op, and no caller reads them back out of their
+  wording. The same tasks produce the same plan by either route, and the plan
+  stays the source of truth (ADR-0001). A structural edit during a live run applies at once to
   tasks not yet started and is refused, with a note, for a running or
   finished task, exactly as an envelope edit is (ADR-0029).
 - **Execution tools are a further explicit entry (P5).** `run_plan`, `run_task`,
   `stop_task`, `stop_run`, `retry_task`, `message_task`, `answer_approval` (deny
-  or escalate, never allow), `merge_all`, `skip_task` (lands nothing, never
+  or escalate, never allow), `answer_checkpoint` (the supervisor at Act's, or the
+  user's), `merge_all`, `skip_task` (lands nothing, never
   marks work complete) and `run_script` change what runs, not files
   ([ADR-0029](../supervision/0029-the-supervisor.md)). `run_script` adds a
   script task to the plan and starts it in one step, and answers with its
@@ -295,3 +308,8 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-21 — a read-only task's token serves `run_command`, and says so in the runner's configuration (ADR-0046).
 - 2026-10-22 — decided, not built: `task_complete` carries a handoff and the task token gains `read_task` ([ADR-0047](../supervision/0047-structured-task-handoffs.md), #120).
 - 2026-10-22 — implemented the handoff envelope and task-scoped `read_task` (V4; ADR-0047, #120).
+- 2026-10-24 — P2: one check (`PlanChangeCheck`) for every planner change, at submit and at landing, with structured refusals; a whole plan is re-held to the plan's rules as it lands.
+- 2026-10-24 — `answer_checkpoint` joins the execution tools, for the supervisor at Act ([ADR-0029](../supervision/0029-the-supervisor.md)).
+- 2026-10-24 — S4 holds for the runner's whole life: OpenCode 2.1.4 evicted an idle planner's services after an hour and rebuilt them with Ordewell's tools inside code mode, out of the planner's reach.
+- 2026-10-24 — a read-only task's token serves `save_patch` (ADR-0050).
+- 2026-10-24 — a change task's token serves `apply_patch` (ADR-0050).

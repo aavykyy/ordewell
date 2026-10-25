@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { createTask, resolveTaskRef, type Task, type TaskSkillSnapshot } from '../../models/Task';
 import type { HandoffDigest, HandoffFinding } from '../../models/Handoff';
-import { TASK_COMPLETION_CONTRACT } from '../mcp';
-import { augmentPromptWithPriorOutputs, composeAugmentedPrompt, composeContinuationPrompt, renderPlanMap, summarizeOutput } from '../promptAugment';
+import { TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../mcp';
+import { augmentPromptWithPriorOutputs, composeAugmentedPrompt, composeContinuationPrompt, READ_ONLY_PATCH_NOTE, renderPlanMap, summarizeOutput } from '../promptAugment';
 
 describe('summarizeOutput', () => {
   it('clips output to last 500 chars', () => {
@@ -103,6 +103,36 @@ describe('prior outputs of a dependency with a handoff (ADR-0047)', () => {
     ].join('\n'));
     expect(out).not.toContain('THE WHOLE HANDOFF AS ONE TEXT');
     expect(out).not.toContain('more findings');
+  });
+
+  it('gives the commit subject, then its body, then the summary', () => {
+    const dep = review({
+      commit: { subject: 'Add a daily version check', body: 'Users ran stale builds for weeks.\nNobody told them.' },
+      summary: 'The check is checkVersion() in core/src/version.ts.',
+      findings: [],
+      findingCount: 0,
+    });
+
+    const out = composeAugmentedPrompt(fix, [dep, fix], { planMapEnabled: false });
+
+    expect(out).toContain([
+      '- Handoff:',
+      '  Commit: Add a daily version check',
+      '  Users ran stale builds for weeks.',
+      '  Nobody told them.',
+      '',
+      '  The check is checkVersion() in core/src/version.ts.',
+      '',
+      'fix it',
+    ].join('\n'));
+  });
+
+  it('gives a handoff that is only a commit as that commit', () => {
+    const dep = review({ commit: { subject: 'Add a daily version check' }, summary: '', findings: [], findingCount: 0 });
+
+    const out = composeAugmentedPrompt(fix, [dep, fix], { planMapEnabled: false });
+
+    expect(out).toContain(['- Handoff:', '  Commit: Add a daily version check', '', 'fix it'].join('\n'));
   });
 
   it('tells the dependent it can read any of them in full with read_task', () => {
@@ -236,6 +266,18 @@ describe('a check sees what changed since its last round (ADR-0047)', () => {
     const out = composeAugmentedPrompt(check, [check], { loop: { round: 2, previousReport: report } });
 
     expect(out).toContain(`Your previous findings are not structured.\n${report}`);
+  });
+
+  it('opens its previous handoff with the commit it stated, so a commit-only handoff is not blank', () => {
+    const check = createTask({ id: 'check', order: 1, title: 'Review', prompt: 'Review.', loop: { body: ['fix'], maxRounds: 3 } });
+    const fix = createTask({ id: 'fix', order: 2, title: 'Fix', dependencies: ['check'] });
+
+    const out = composeAugmentedPrompt(check, [check, fix], { loop: {
+      round: 2,
+      previousHandoff: { commit: { subject: 'Tighten the parser', body: 'It accepted blank lines.' }, summary: '', findings: [], findingCount: 0, artifacts: [{ kind: 'file', path: 'src/parser.ts' }] },
+    } });
+
+    expect(out).toContain('### Your previous handoff\nCommit: Tighten the parser\nIt accepted blank lines.\nArtifacts: src/parser.ts (unresolved)\n');
   });
 
   it('omits the block for round 1 and for a script check', () => {
@@ -446,6 +488,19 @@ describe('renderPlanMap', () => {
   });
 });
 
+describe('renderPlanMap runners', () => {
+  it('names the runner of an AI task only, not of a script or a manual one', () => {
+    const ai = createTask({ id: 'a', order: 1, title: 'Build', assignedRunner: 'codex' });
+    const man = createTask({ id: 'm', order: 2, title: 'Review by hand', type: 'user', assignedRunner: 'codex' });
+    const script = createTask({ id: 's', order: 3, title: 'Push', type: 'script', assignedRunner: 'codex', commands: [['git', 'push']] });
+    const out = renderPlanMap([ai, man, script], 'a');
+    expect(out).toContain('Build (codex)');
+    expect(out).toMatch(/Review by hand(?! \()/);
+    expect(out).not.toContain('Review by hand (codex)');
+    expect(out).toContain('Push (script)');
+  });
+});
+
 describe('composeAugmentedPrompt', () => {
   it('emits plan map + prior outputs + base prompt in order', () => {
     const a = createTask({
@@ -513,6 +568,19 @@ describe('composeAugmentedPrompt', () => {
     expect(out).toMatch(/do not write the report to a file/);
   });
 
+  it('asks only a change task for its commit, and moves what changed and why out of its summary (ADR-0047)', () => {
+    const change = taskCompletionContract({ commits: true });
+
+    expect(taskCompletionContract({})).toBe(TASK_COMPLETION_CONTRACT);
+    expect(TASK_COMPLETION_CONTRACT).not.toContain('`commit`');
+    expect(change.startsWith(TASK_COMPLETION_CONTRACT)).toBe(true);
+    expect(change).toMatch(/`commit`.*72 characters or fewer.*imperative mood/);
+    expect(change).toMatch(/tells a human reviewer what changed and why/);
+    expect(change).toMatch(/summary no longer repeats that/);
+    expect(change).toMatch(/paths, symbols, decisions.*`artifacts`.*what is left and what to watch/);
+    expect(change).toMatch(/summary may be empty/);
+  });
+
   it('leaves a continued task\'s report rule to the instructions its resumed session is started with', () => {
     const out = composeContinuationPrompt(createTask({ id: 'a', prompt: 'review it' }), 'Look again');
     expect(out).not.toContain('task_complete');
@@ -540,6 +608,14 @@ describe('composeAugmentedPrompt', () => {
     ];
     expect(composeAugmentedPrompt(tasks[0], tasks)).not.toContain('## Task skills');
     expect(composeAugmentedPrompt(tasks[0], tasks, { skills: [] })).not.toContain('## Task skills');
+  });
+
+  // The prompt is the only place a read-only task learns its worktree's prototype can be kept (ADR-0050).
+  it('tells a read-only task, and no other, that save_patch keeps its prototype', () => {
+    const tasks = [createTask({ id: 'a', order: 1, title: 'A', prompt: 'try it' })];
+    expect(composeAugmentedPrompt(tasks[0], tasks, { readOnly: true })).toContain(READ_ONLY_PATCH_NOTE);
+    expect(READ_ONLY_PATCH_NOTE).toMatch(/keep it with the `save_patch` tool before you finish: a later task can then apply it/);
+    expect(composeAugmentedPrompt(tasks[0], tasks)).not.toContain('save_patch');
   });
 
   it('includes checkpoint instructions for HITL tasks (autonomy=HITL)', () => {

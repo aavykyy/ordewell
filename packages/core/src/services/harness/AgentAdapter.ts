@@ -232,6 +232,8 @@ export interface TaskStartOptions extends AgentStartCommon {
   /** The task's runner mode id, as the plan names it. */
   mode: string;
   flags: TaskRunnerFlags;
+  /** The attempt's work lands as a commit (ADR-0047): its completion contract asks for the message. */
+  commits?: true;
   /**
    * The Ordewell MCP server and this attempt's token (ADR-0022), injected
    * with its tools pre-approved. A task is never started without it: its
@@ -306,6 +308,13 @@ export interface AgentAdapter {
    * runner reports the server cannot connect.
    */
   mcpAttached?(): Promise<boolean | AttachState>;
+
+  /**
+   * Registers a listener for the process ending, for any reason; a planner
+   * reads it to tell a runner that exited while it started. Fires at most
+   * once. `lastWords` is how it ended, with its stderr tail.
+   */
+  onProcessExit?(listener: (code: number, lastWords?: string) => void): void;
 
   /**
    * The approved project servers (ADR-0028) this runner started but cannot

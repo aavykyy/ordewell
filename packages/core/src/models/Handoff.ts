@@ -4,9 +4,10 @@ import { resolveTaskRef, taskRefOf, titledTaskRefOf } from '../services/TaskRefs
 
 /*
  * A task's handoff (ADR-0047): what it tells the tasks that read it, as its
- * `task_complete` call stated it. A short summary, atomic findings Ordewell
- * numbers, typed artifacts, and a long report kept in the attempt's log and
- * never pushed. A handoff is neither the verdict nor evidence of passing.
+ * `task_complete` call stated it. A change task's commit message, a short
+ * summary, atomic findings Ordewell numbers, typed artifacts, and a long
+ * report kept in the attempt's log and never pushed. A handoff is neither
+ * the verdict nor evidence of passing.
  */
 
 /** Advice to the reader of how much a finding matters; it never reaches the verdict. */
@@ -47,8 +48,48 @@ export type HandoffEvidence =
   | { kind: 'task'; task: string; finding?: string }
   | { kind: 'url'; url: string };
 
-/** What a task produced, by the same four kinds as evidence. */
-export type HandoffArtifact = HandoffEvidence;
+/**
+ * What a saved patch does not carry as the task's worktree held it
+ * (ADR-0050): `excluded`, a symbolic link or a submodule, never carried;
+ * `dropped`, a file whose part of the patch was over the size cap;
+ * `normalized`, a file git converts on the way in (its text, eol, filter or
+ * encoding attributes), whose bytes in the patch differ from the file the
+ * task left. `paths` names the first few; `count` is all of them.
+ */
+export interface PatchFlag {
+  kind: 'excluded' | 'dropped' | 'normalized';
+  count: number;
+  paths: string[];
+}
+
+/**
+ * A read-only task's prototype, saved with `save_patch` (ADR-0050): the patch
+ * Ordewell keeps beside the attempt's log, and what is in it. Only Ordewell
+ * adds one, never the author: the completion call's artifacts are the other
+ * four kinds.
+ */
+export interface HandoffPatch {
+  kind: 'patch';
+  /** The patch file, relative to the workspace root. */
+  path: string;
+  /** The attempt that saved it, beside whose log it is kept. */
+  attempt: number;
+  /** The commit it was taken against, where it applies as it is. */
+  base: string;
+  files: number;
+  /** Lines added and removed, binary files counting none. */
+  added: number;
+  removed: number;
+  /** Of {@link files}, those whose change is binary. */
+  binary: number;
+  bytes: number;
+  /** The SHA-256 of the patch file's bytes, hex: what `apply_patch` checks the file against before it applies it. */
+  sha256: string;
+  flags?: PatchFlag[];
+}
+
+/** What a task produced: the four kinds of evidence, or a patch Ordewell saved for it. */
+export type HandoffArtifact = HandoffEvidence | HandoffPatch;
 
 export interface HandoffFinding {
   /** `F1` … `Fn`, assigned by Ordewell in the order the author gave them. */
@@ -59,8 +100,18 @@ export interface HandoffFinding {
   evidence?: HandoffEvidence[];
 }
 
+/**
+ * A change task's commit message, as its author wrote it for a human
+ * reviewer: what changed and why. The summary is for the next agent.
+ */
+export interface HandoffCommit {
+  subject: string;
+  body?: string;
+}
+
 /** What the plan keeps on a task: enough for a surface or a dependent's prompt without reading a log. */
 export interface HandoffDigest {
+  commit?: HandoffCommit;
   summary: string;
   /** The first {@link DIGEST_FINDINGS} findings; the rest are in the attempt's log. */
   findings: HandoffFinding[];
@@ -75,6 +126,9 @@ export interface StoredHandoff extends HandoffDigest {
 
 /** A handoff as its author sends it, before Ordewell numbers the findings. */
 export interface Handoff {
+  /** How the attempt ended, as the call said: a commit counts only with `done`. */
+  status?: 'done' | 'blocked' | 'failed';
+  commit?: HandoffCommit;
   summary: string;
   findings?: Omit<HandoffFinding, 'id'>[];
   artifacts?: HandoffArtifact[];
@@ -90,6 +144,8 @@ export const REPORT_MAX_CHARS = 20_000;
  */
 export const HANDOFF_LIMITS = {
   summary: 1_500,
+  commitSubject: 100,
+  commitBody: 500,
   findings: 50,
   title: 200,
   detail: 2_000,
@@ -108,8 +164,11 @@ export function storedHandoff(handoff: Handoff): StoredHandoff | undefined {
   const findings = (handoff.findings ?? []).map((f, i): HandoffFinding => ({ id: `F${i + 1}`, ...f }));
   const artifacts = handoff.artifacts ?? [];
   const report = handoff.report?.trim();
-  if (!summary && findings.length === 0 && artifacts.length === 0 && !report) return undefined;
+  // A blocked or failed attempt lands nothing, so its summary carries everything.
+  const commit = handoff.status === 'done' && handoff.commit ? withoutTrailers(handoff.commit) : undefined;
+  if (!commit && !summary && findings.length === 0 && artifacts.length === 0 && !report) return undefined;
   return {
+    ...(commit ? { commit } : {}),
     summary,
     findings,
     findingCount: findings.length,
@@ -118,9 +177,47 @@ export function storedHandoff(handoff: Handoff): StoredHandoff | undefined {
   };
 }
 
+/**
+ * A handoff that also names the patch its attempt saved (ADR-0050).
+ * Ordewell adds it, past the author's own artifacts and their limit, and an
+ * attempt that ended without a completion call still hands it on.
+ */
+export function withPatch(handoff: StoredHandoff | undefined, patch: HandoffPatch): StoredHandoff {
+  if (!handoff) return { summary: '', findings: [], findingCount: 0, artifacts: [patch] };
+  return { ...handoff, artifacts: [...(handoff.artifacts ?? []), patch] };
+}
+
+/** The patch a handoff names, if its attempt saved one (ADR-0050). */
+export function savedPatchOf(handoff: HandoffDigest | undefined): HandoffPatch | undefined {
+  return handoff?.artifacts?.find((a): a is HandoffPatch => a.kind === 'patch');
+}
+
+/** `Co-Authored-By: …`, `Signed-off-by: …`: git trailer form with a hyphenated token, which prose never has. */
+const ATTRIBUTION_TRAILER = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+:\s*\S/;
+const GENERATED_WITH = /^\W*Generated (?:with|by)\b/i;
+const TRAILER = /^[A-Za-z0-9-]+:\s*\S/;
+
+/**
+ * A commit with no trailers in its body. The trailers a landed commit
+ * carries are Ordewell's to decide, so an author's attribution is dropped,
+ * not refused: it is a habit, not a mistake worth a resend. An attribution line
+ * goes wherever it stands; any other `Token: value` line only in a closing
+ * paragraph of nothing else, as git would read a trailer block, so a body of
+ * one `Why: …` line keeps it.
+ */
+function withoutTrailers({ subject, body }: HandoffCommit): HandoffCommit {
+  const kept = (body ?? '').split('\n').filter((line) => !ATTRIBUTION_TRAILER.test(line.trim()) && !GENERATED_WITH.test(line.trim()));
+  const paragraphs = kept.join('\n').trim().split(/\n\s*\n/);
+  const last = paragraphs.at(-1)!.split('\n');
+  if (paragraphs.length > 1 && last.every((line) => TRAILER.test(line.trim()))) paragraphs.pop();
+  const cleaned = paragraphs.join('\n\n').trim();
+  return { subject, ...(cleaned ? { body: cleaned } : {}) };
+}
+
 /** What the plan keeps of a handoff: no report, and at most {@link DIGEST_FINDINGS} findings. */
 export function handoffDigest(handoff: StoredHandoff): HandoffDigest {
   return {
+    ...(handoff.commit ? { commit: handoff.commit } : {}),
     summary: handoff.summary,
     findings: handoff.findings.slice(0, DIGEST_FINDINGS),
     findingCount: handoff.findingCount,
@@ -133,7 +230,7 @@ export type HandoffTaskName = (taskId: string) => string | undefined;
 
 /** A handoff with the tasks it cites named by their references in `plan`, as a reader names them. */
 export function namedHandoff<H extends HandoffDigest>(plan: readonly Task[], handoff: H): H {
-  const named = (refs: readonly HandoffEvidence[]) => refs.map((r) => (r.kind === 'task' ? { ...r, task: taskRefOf(plan, r.task) ?? r.task } : r));
+  const named = <R extends HandoffArtifact>(refs: readonly R[]) => refs.map((r) => (r.kind === 'task' ? { ...r, task: taskRefOf(plan, r.task) ?? r.task } : r));
   return {
     ...handoff,
     findings: handoff.findings.map((f) => (f.evidence ? { ...f, evidence: named(f.evidence) } : f)),
@@ -141,14 +238,114 @@ export function namedHandoff<H extends HandoffDigest>(plan: readonly Task[], han
   };
 }
 
-/** A typed reference as a reader says it: `src/a.ts:42`, `commit abc`, `task #2 F1`, a URL. */
-export function handoffReferenceText(ref: HandoffEvidence, taskName: HandoffTaskName = () => undefined): string {
+/** A typed reference as a reader says it: `src/a.ts:42`, `commit abc`, `task #2 F1`, a URL, a saved patch. */
+export function handoffReferenceText(ref: HandoffArtifact, taskName: HandoffTaskName = () => undefined): string {
   switch (ref.kind) {
     case 'file': return `${ref.line !== undefined ? `${ref.path}:${ref.line}` : ref.path}${ref.resolved === true ? '' : ' (unresolved)'}`;
     case 'commit': return `commit ${ref.sha}${ref.repo ? ` in ${ref.repo}` : ''}${ref.resolved === true ? '' : ' (unresolved)'}`;
     case 'task': return `task ${taskName(ref.task) ?? ref.task}${ref.finding ? ` ${ref.finding}` : ''}`;
     case 'url': return ref.url;
+    case 'patch': return patchText(ref);
   }
+}
+
+const FLAG_WORDS: Record<PatchFlag['kind'], string> = {
+  excluded: 'not carried (links and submodules)',
+  dropped: 'dropped over the size cap',
+  normalized: 'normalized by git attributes',
+};
+
+/** `1 file` or `3 files`. */
+function counted(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+/** A size as a reader takes it in: bytes, KB or MB. */
+export function byteSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** One flag of a saved patch as text: what it is, how many, and the paths it names. */
+export function patchFlagText(flag: PatchFlag): string {
+  const more = flag.count - flag.paths.length;
+  return `${FLAG_WORDS[flag.kind]}: ${counted(flag.count, 'file')}${flag.paths.length ? ` (${flag.paths.join(', ')}${more > 0 ? `, +${more} more` : ''})` : ''}`;
+}
+
+/** What a saved patch changes, once: files, binary files, lines and size (ADR-0050). */
+export function patchChangesText(patch: HandoffPatch): string {
+  const binary = patch.binary > 0 ? `, ${patch.binary} binary` : '';
+  return `${counted(patch.files, 'file')}${binary}, +${patch.added} -${patch.removed}, ${byteSize(patch.bytes)}`;
+}
+
+/** The same without the size, for a row that already names the patch and has little room (ADR-0050). */
+export function patchLinesText(patch: HandoffPatch): string {
+  const binary = patch.binary > 0 ? `, ${patch.binary} binary` : '';
+  return `${counted(patch.files, 'file')}${binary}, +${patch.added} -${patch.removed}`;
+}
+
+/** A saved patch as one line: where, how big, from which commit, and its flags (ADR-0050). */
+export function patchText(patch: HandoffPatch): string {
+  const flags = patch.flags?.length ? `; ${patch.flags.map(patchFlagText).join('; ')}` : '';
+  return `patch ${patch.path} (attempt ${patch.attempt}): ${patchChangesText(patch)}, from commit ${patch.base.slice(0, 12)}${flags}`;
+}
+
+/**
+ * A saved patch as a preview block (ADR-0050): what it changes and the commit
+ * it applies to, the file to open, and every path it left out. The compact
+ * surfaces say it in one line with `patchText`; this is for a task's handoff,
+ * where there is room for the flags.
+ */
+export function patchLines(patch: HandoffPatch): string[] {
+  const view = patchView(patch);
+  return [`Patch: ${view.changes}, ${view.base}`, view.saved, ...view.flags];
+}
+
+/**
+ * A saved patch as every surface shows it (ADR-0050): what was saved, the
+ * files and lines it changes, where the file is, and what it left out. Each
+ * surface paints these words and offers its own way to open the file; none of
+ * them works out a count, a size or a flag for itself.
+ */
+export interface PatchView {
+  /** The patch file, relative to the workspace root: what a surface opens. */
+  path: string;
+  /** "attempt 1". */
+  attempt: string;
+  /** "3 files, 1 binary, +42 -7, 1.5 KB". */
+  changes: string;
+  /** "from commit abc123def456". */
+  base: string;
+  /** "saved as <path> (attempt 1)": the fact it was saved, and the file to open. */
+  saved: string;
+  /** One line per flag: what it left out, how many and which paths; empty when it left out nothing. */
+  flags: string[];
+  /** The compact row's part: "patch: 3 files, 1 binary, +42 -7". */
+  peek: string;
+}
+
+/** One saved patch, worded once for every surface. */
+export function patchView(patch: HandoffPatch): PatchView {
+  return {
+    path: patch.path,
+    attempt: `attempt ${patch.attempt}`,
+    changes: patchChangesText(patch),
+    base: `from commit ${patch.base.slice(0, 12)}`,
+    saved: `saved as ${patch.path} (attempt ${patch.attempt})`,
+    flags: (patch.flags ?? []).map(patchFlagText),
+    peek: `patch: ${patchLinesText(patch)}`,
+  };
+}
+
+/** Every patch a handoff names, in the order Ordewell added them. */
+export function savedPatchViews(handoff: HandoffDigest | undefined): PatchView[] {
+  return (handoff?.artifacts ?? []).filter((a): a is HandoffPatch => a.kind === 'patch').map(patchView);
+}
+
+/** The patch a handoff names, as a surface shows it; null when it names none. */
+export function savedPatchView(handoff: HandoffDigest | undefined): PatchView | null {
+  return savedPatchViews(handoff)[0] ?? null;
 }
 
 /** One finding as text: its id, severity and title, then its detail and evidence under it. */
@@ -165,12 +362,19 @@ export function artifactLines(handoff: HandoffDigest, taskName: HandoffTaskName 
   return handoff.artifacts?.length ? [`Artifacts: ${handoff.artifacts.map((a) => handoffReferenceText(a, taskName)).join('; ')}`] : [];
 }
 
+/** A handoff's opening as text: its commit, subject then body, then the summary. */
+export function openingLines(handoff: HandoffDigest): string[] {
+  const { commit, summary } = handoff;
+  if (!commit) return [summary];
+  return [`Commit: ${commit.subject}`, ...(commit.body ? commit.body.split('\n') : []), ...(summary ? ['', summary] : [])];
+}
+
 /** Each pushed handoff's text ceiling, excluding artifacts (ADR-0047). */
 export const HANDOFF_PUSH_CHARS = 4_000;
 
 /** Shared push rendering: reserve the closing pointer before accepting each whole finding. */
 export function boundedHandoffLines(handoff: HandoffDigest, omission: (more: number) => string, taskName: HandoffTaskName = () => undefined, footer = ''): string[] {
-  const lines = [handoff.summary];
+  const lines = openingLines(handoff);
   let shown = 0;
   const closing = (count: number) => [
     ...(handoff.findingCount > count ? [omission(handoff.findingCount - count)] : []),
@@ -196,7 +400,7 @@ export interface HandoffPreviewOptions {
 }
 
 /**
- * A handoff as a compact surface prints it (ADR-0047): the summary, each
+ * A handoff as a compact surface prints it (ADR-0047): the commit, the summary, each
  * finding's title line (`F1 [blocker] Title`), how many the digest left out,
  * and the artifacts. The detail and evidence stay in the attempt's log.
  */
@@ -205,18 +409,26 @@ export function handoffPreviewLines(handoff: HandoffDigest, options: HandoffPrev
   const shown = handoff.findings.slice(0, limit);
   const more = handoff.findingCount - shown.length;
   const summary = handoff.summary.trim();
+  const { commit } = handoff;
+  // A patch gets a block with its flags; the artifact list keeps one line per
+  // reference the author gave, so a path is never cut out of a joined line.
+  const patches = (handoff.artifacts ?? []).filter((a): a is HandoffPatch => a.kind === 'patch');
+  const others = (handoff.artifacts ?? []).filter((a) => a.kind !== 'patch');
+  const artifacts = others.length ? artifactLines({ ...handoff, artifacts: others }, options.taskName) : [];
   return [
+    ...(commit ? [`Commit: ${commit.subject}`, ...(commit.body ? commit.body.split('\n') : [])] : []),
     ...(summary ? summary.split('\n') : []),
     ...shown.map((f) => `${f.id} [${f.severity}] ${f.title}`),
     ...(more > 0 ? [`+${more} more finding${more === 1 ? '' : 's'}, in the attempt's log`] : []),
-    ...artifactLines(handoff, options.taskName),
+    ...artifacts,
+    ...patches.flatMap(patchLines),
   ];
 }
 
 /**
- * A handoff as a wake-up carries it (ADR-0029, ADR-0037): the summary, its
- * findings whole within the shared ceiling, how many are left out, and the
- * artifacts. The report is never pushed; it waits in the attempt's log.
+ * A handoff as a wake-up carries it (ADR-0029, ADR-0037): the commit and
+ * summary, its findings whole within the shared ceiling, how many are left
+ * out, and the artifacts. The report is never pushed; it waits in the attempt's log.
  */
 export function handoffWakeLines(handoff: HandoffDigest, taskName: HandoffTaskName = () => undefined): string[] {
   return boundedHandoffLines(handoff,
@@ -226,11 +438,12 @@ export function handoffWakeLines(handoff: HandoffDigest, taskName: HandoffTaskNa
 
 /**
  * A handoff as text, for a reader with no structure to render it from: the
- * summary, every finding it holds with its id, severity, detail and evidence,
- * how many the digest left out, the artifacts, and the report when it has one.
+ * commit and summary, every finding it holds with its id, severity, detail
+ * and evidence, how many the digest left out, the artifacts, and the report
+ * when it has one.
  */
 export function handoffLines(handoff: HandoffDigest | StoredHandoff, taskName: HandoffTaskName = () => undefined): string[] {
-  const lines = [handoff.summary];
+  const lines = openingLines(handoff);
   if (handoff.findings.length > 0) lines.push('', 'Findings:', ...handoff.findings.flatMap((f) => findingLines(f, taskName)));
   const more = handoff.findingCount - handoff.findings.length;
   if (more > 0) lines.push(`+${more} more finding${more === 1 ? '' : 's'}, in the attempt's log`);
@@ -301,7 +514,7 @@ export function checkHandoff<H extends Handoff>(handoff: H, producerId: string, 
     return { ...ref, task: target.id };
   };
   const findings = handoff.findings?.map((f, i) => (f.evidence ? { ...f, evidence: f.evidence.map((e, j) => check(e, `findings[${i}].evidence[${j}]`)) } : f));
-  const artifacts = handoff.artifacts?.map((a, i) => check(a, `artifacts[${i}]`));
+  const artifacts = handoff.artifacts?.map((a, i) => (a.kind === 'patch' ? a : check(a, `artifacts[${i}]`)));
   if (refusals.length > 0) return { ok: false, refusal: [...refusals, RESEND].join('\n') };
   return { ok: true, handoff: { ...handoff, ...(findings ? { findings } : {}), ...(artifacts ? { artifacts } : {}) } };
 }

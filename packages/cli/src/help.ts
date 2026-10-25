@@ -29,8 +29,8 @@ Planning:
 Tasks (<id> is an order number or a task ID):
   ordewell add-task --title "..."  Add a task to the current plan
   ordewell remove-task <id>       Remove a task from the current plan
-  ordewell complete <id>          Mark a task complete (alias: mark-complete)
-  ordewell uncomplete <id>        Mark a completed task not done
+  ordewell complete <id>          Mark a task complete (alias: mark-complete; asks first, --yes skips the question)
+  ordewell uncomplete <id>        Mark a completed task not done (asks first, --yes skips the question)
   ordewell skip <id>              Skip a task: nothing it did lands, dependents go ahead
   ordewell force-start <id>       Approve a task and start it now, or once its dependencies finish (asks past a merge gate)
   ordewell run-task <id>          Run only one task
@@ -57,8 +57,10 @@ Planner, models and runners:
   ordewell allowlist set|clear|show       Limit which models a runner may use
   ordewell auto [full|guarded]    (headless) Autonomy level for new plans, Full or Guarded; /settings covers it
   ordewell supervisor [off|watch|act]  (headless) Whether the planner watches or acts on your runs;
-                                  also: supervisor retries <n>, supervisor reads <n>; /settings covers it
+                                  /settings covers it; also: supervisor retries <n>
+  ordewell supervisor reads <n>   (headless) Reads the supervisor may make each wake-up; set only here or in settings.json
   ordewell automerge [on|off]     (headless) Merge at merge gates and at the end of a run; /settings covers it
+  ordewell trailer [on|off]       (headless) End Ordewell's commits with "Planned-with: Ordewell"; set only here or in settings.json
   ordewell autorun [on|off]       (headless) Start each plan the planner submits, without review; /settings covers it
   ordewell parallel [<n>]         (headless) How many AI tasks run at once, a live run included; /settings covers it
   ordewell refresh                Re-discover runners and model catalogs
@@ -66,7 +68,7 @@ Planner, models and runners:
 
 Other:
   ordewell web                    Start the API server (foreground; --daemon for background)
-  ordewell setup                  Interactive first-run setup wizard
+  ordewell setup                  Write a starter .env configuration file
   ordewell skills                 List installed skills and shadowed workspace duplicates
   ordewell --help               Show this help
   ordewell --version            Print the installed version (alias: version, -v)
@@ -79,7 +81,7 @@ TUI planner chat keys (in the composer):
   ctrl-s              Send now: stop the running planner turn and send this message next
                       (with the composer empty, the newest queued prompt)
 
-TUI task view keys (t on a structured task; /help in the TUI lists them all):
+TUI task view keys (enter on a task; /help in the TUI lists them all):
   ctrl-s              Send now: interrupt the running step and deliver the composer text next
                       (with the composer empty, the highlighted pending message,
                       one the runner already has included)
@@ -91,9 +93,14 @@ Plan options:
   --runner <id>       Runner to use (repeatable; default: all enabled runners)
   --workspace /path   Workspace directory (default: cwd)
   --no-chat           One-shot plan; skips the planner dialogue
+  --yes               Start the plan as soon as it is generated, without a review pause
+  --verbose           Show each planning step as it happens
 
 Run options:
   --session-id <id>   Execute a specific session (default: last session)
+  --workspace /path   Workspace directory (default: cwd)
+  --stash             Stash a dirty tree and continue in the task's worktree
+  --without-isolation Run the plan in your checkout; tasks share it
 
 Status options:
   --session-id <id>   Show full detail for one session
@@ -113,7 +120,7 @@ Task options (add-task):
   --description "..." Task description (default: the title)
   --prompt "..."      AI instructions (AI tasks only; default: the description)
   --type ai|user      Task type (default: ai)
-  --depends-on <id>   Dependency task ID (repeatable)
+  --depends-on <ref>  Dependency task: an order number or a task ID (repeatable)
 
 Stop options:
   --server            Stop the background server daemon
@@ -144,7 +151,8 @@ Environment:
                              ${runnerIdList()}: plan with that CLI,
                              no API key (uses its own subscription)
   ORDEWELL_PLANNER_EFFORT    Thinking effort for a coding-agent planner
-  ORCHESTRATOR_MODEL         Default: deepseek/deepseek-v4-flash
+  ORCHESTRATOR_MODEL         Planner model; no default. Required for an API planner, optional
+                             for a coding-agent planner (unset: the agent's own default)
   OPENROUTER_BASE_URL        Default: https://openrouter.ai/api/v1
   ORDEWELL_AUTONOMOUS_MODE   true: Full, false: Guarded; overrides what "ordewell auto" saved
   ORDEWELL_APPROVAL_MODE     What the planner may run beyond read-only commands: auto (default:

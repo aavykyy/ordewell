@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, act, fireEvent, cleanup } from '@testing-library/react';
-import type { DisplayBlock } from '@ordewell/core';
+import { EMPTY_TASK_LOG, EMPTY_TASK_LOG_FOLLOW, taskLogHeaderView, type AttemptUsage, type DisplayBlock, type RunnerCommand, type StructuredTurnEnd, type TaskLogFollow, type TaskLogHeaderTask, type TaskUsageSummary, type UsageTotals } from '@ordewell/core';
 import { replayTaskLog } from '@ordewell/core/plan-utils';
 import TaskLogApp from '../TaskLogApp';
 import type { HostToTaskLog, TaskLogStatus } from '../../../shared/taskLogProtocol';
@@ -12,17 +12,83 @@ function send(msg: HostToTaskLog): void {
   act(() => { window.dispatchEvent(new MessageEvent('message', { data: msg })); });
 }
 
-function status(overrides: Partial<TaskLogStatus> = {}): TaskLogStatus {
+/**
+ * The header fields the app used to take raw (`working`, `planStatus`, …) are
+ * turned into a real log and read through core's one header view, so these
+ * tests draw what the TUI draws rather than a hand-copied header.
+ */
+type StatusOverrides = Partial<TaskLogStatus> & {
+  planStatus?: string;
+  working?: boolean;
+  awaitingReason?: TaskLogHeaderTask['awaitingReason'];
+  skipReason?: string;
+  resumeAt?: string;
+  awaitingApproval?: number;
+  continuable?: boolean;
+  lastTurnEnd?: StructuredTurnEnd;
+  usage?: Pick<TaskUsageSummary, 'totals' | 'contextFill'>;
+  usageTotal?: Pick<TaskUsageSummary, 'totals' | 'contextFill'>;
+  commands?: readonly RunnerCommand[];
+};
+
+function attemptOf(n: number, usage: Pick<TaskUsageSummary, 'totals' | 'contextFill'>): AttemptUsage {
+  return {
+    attempt: n, runner: 'claude-code', startedAt: '', wallTimeMs: 0, totals: usage.totals, byModel: [],
+    ...(usage.contextFill
+      ? { lastPromptTokens: usage.contextFill.usedTokens, ...(usage.contextFill.windowTokens ? { contextWindow: usage.contextFill.windowTokens } : {}) }
+      : {}),
+  };
+}
+
+/** What a second attempt adds to reach a stated task total, for the past-attempt case below. */
+function remainder(total: UsageTotals, own: UsageTotals): UsageTotals {
+  const left: UsageTotals = { ...total };
+  for (const key of ['inputTokens', 'outputTokens', 'cachedInputTokens'] as const) {
+    const value = (total[key] ?? 0) - (own[key] ?? 0);
+    if (value > 0) left[key] = value; else delete left[key];
+  }
+  const cost = Object.entries(total.reportedCost ?? {}).flatMap(([currency, amount]) => {
+    const value = amount - (own.reportedCost?.[currency] ?? 0);
+    return value > 0 ? [[currency, value] as const] : [];
+  });
+  if (cost.length > 0) left.reportedCost = Object.fromEntries(cost); else delete left.reportedCost;
+  return left;
+}
+
+function status(over: StatusOverrides = {}): TaskLogStatus {
+  const {
+    planStatus = 'in_progress', working = false, awaitingReason, skipReason, resumeAt,
+    awaitingApproval = 0, continuable = false, lastTurnEnd, usage, usageTotal, commands,
+    attempt = 1, attempts = [1], ...rest
+  } = over;
+  const ledger = usageTotal && usage
+    ? [attemptOf(1, usage), attemptOf(2, { totals: remainder(usageTotal.totals, usage.totals), ...(usageTotal.contextFill ? { contextFill: usageTotal.contextFill } : {}) })]
+    : usage ? [attemptOf(1, usage)] : [];
+  const view = {
+    ...EMPTY_TASK_LOG,
+    working,
+    ...(lastTurnEnd ? { lastTurnEnd } : {}),
+    ...(commands?.length ? { blocks: [{ type: 'runner_loaded' as const, id: 'r', commands: [...commands], mcpServers: [] }] } : {}),
+  };
+  const follow: TaskLogFollow = { ...EMPTY_TASK_LOG_FOLLOW, view, attempts, attempt };
   return {
     taskId: 't1', order: 2, title: 'Parse JSON', runner: 'claude-code',
-    planStatus: 'in_progress', awaitingApproval: 0, working: false, queued: [], attempts: [1], attempt: 1, continuable: false,
-    ...overrides,
+    header: taskLogHeaderView({
+      status: planStatus,
+      ...(awaitingReason ? { awaitingReason } : {}),
+      ...(skipReason !== undefined ? { skipReason } : {}),
+      resumeAt: resumeAt ?? null,
+      continuable,
+      attemptUsage: ledger,
+    }, follow, awaitingApproval, attempt),
+    queued: [], attempts, attempt,
+    ...rest,
   };
 }
 
 const message = (id: string, text: string): DisplayBlock => ({ type: 'message', id, role: 'agent', text, streaming: false });
 
-function init(overrides: Partial<TaskLogStatus> = {}, blocks: DisplayBlock[] = [message('b1', 'hello from the agent')]): void {
+function init(overrides: StatusOverrides = {}, blocks: DisplayBlock[] = [message('b1', 'hello from the agent')]): void {
   send({ type: 'init', status: status(overrides), blocks });
 }
 
@@ -32,7 +98,14 @@ describe('the task log tab (ADR-0018, V1)', () => {
     api.postMessage.mockClear();
   });
 
-  it('draws a handoff from the attempt log and expands its full report with the shared detail switch', () => {
+  it('names a subtask by its dotted reference in the header', () => {
+    render(<TaskLogApp />);
+    init({ orderLabel: '2.1' });
+
+    expect(document.querySelector('.task-log-title')?.textContent).toBe('Task 2.1 · Parse JSON');
+  });
+
+  it('draws a handoff from the attempt log and opens its full report with the report\'s own disclosure', () => {
     const report = Array.from({ length: 12 }, (_, i) => `Report line ${i + 1}`).join('\n');
     const view = replayTaskLog([{ type: 'handoff', handoff: {
       summary: 'Check the token boundary.', findingCount: 2,
@@ -60,15 +133,19 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.getByText('docs/result.md (unresolved)')).toBeTruthy();
     expect(document.querySelector('.task-handoff-report')).toHaveTextContent('Report line 8');
     expect(document.querySelector('.task-handoff-report')).not.toHaveTextContent('Report line 9');
-    expect(screen.getByText('+4 lines of the report')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    const more = screen.getByRole('button', { name: '+4 lines of the report' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    expect(more).toHaveAttribute('aria-controls', document.querySelector('.task-handoff-report')!.id);
+    expect(screen.queryByRole('button', { name: /expand all|collapse all/i })).toBeNull();
+    fireEvent.click(more);
     expect(document.querySelector('.task-handoff-report')?.textContent).toBe(report);
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }));
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Show less of the report' }));
     expect(document.querySelector('.task-handoff-report')).not.toHaveTextContent('Report line 9');
     expect(screen.getByText('Done')).toBeTruthy();
   });
 
-  it.each(['script', 'user'])('draws a %s handoff with no findings and no detail toggle for a short report', (kind) => {
+  it.each(['script', 'user'])('draws a %s handoff with no findings and nothing to open for a short report', (kind) => {
     render(<TaskLogApp />);
     const view = replayTaskLog([{ type: 'handoff', handoff: {
       summary: `${kind} finished`, findings: [], findingCount: 0, report: 'Short report',
@@ -77,7 +154,7 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.getByText('Handoff · no findings')).toBeTruthy();
     expect(screen.getByText(`${kind} finished`)).toBeTruthy();
     expect(screen.getByText('Short report')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Expand all' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /of the report|expand all/i })).toBeNull();
   });
 
   it('replaces a live handoff through a patch and drops it when switching attempts', () => {
@@ -126,6 +203,18 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
+  it('draws an earlier attempt\'s own spend above the task total', () => {
+    render(<TaskLogApp />);
+    init({
+      attempt: 1, attempts: [1, 2],
+      usage: { totals: { inputTokens: 1000, reportedCost: { USD: 0.5 } }, contextFill: { usedTokens: 10_000, windowTokens: 200_000 } },
+      usageTotal: { totals: { inputTokens: 1500, reportedCost: { USD: 1.5 } }, contextFill: { usedTokens: 50_000, windowTokens: 200_000 } },
+    });
+
+    const lines = [...document.querySelectorAll('.usage-line')].map((el) => el.textContent);
+    expect(lines).toEqual(['attempt 1: ctx 10k (5%) · $0.50', 'task total: ctx 50k (25%) · $1.50']);
+  });
+
   it('completes only the runner commands and sends a command with arguments', () => {
     render(<TaskLogApp />);
     init({ working: true, commands: [{ name: 'compact', description: 'Compact native context', argumentHint: '[focus]', kind: 'builtin' }] });
@@ -155,10 +244,13 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.getByText('/compact keep APIs')).toBeTruthy();
     expect(screen.getByText('done')).toBeTruthy();
     expect(screen.getByText('Native context summary')).toBeTruthy();
+    const groups = () => [...document.querySelectorAll<HTMLButtonElement>('.activity-group-toggle')];
+    expect(groups().map((g) => g.textContent)).toEqual(["Loaded the runner's setup", 'Compacted the context']);
+    groups().forEach((g) => fireEvent.click(g));
     expect(screen.getByText('Context compacted by the runner on its own · 12k → 3k tokens')).toBeTruthy();
     expect(screen.getByText(/Runner loaded 1 skill/)).toBeTruthy();
     expect(screen.queryByText('docs (connected)')).toBeNull();
-    fireEvent.click(screen.getByText('Expand all'));
+    fireEvent.click(screen.getByRole('button', { name: /Runner loaded 1 skill/ }));
     expect(screen.getByText('docs (connected)')).toBeTruthy();
     expect(screen.getByText('/review')).toBeTruthy();
   });
@@ -221,6 +313,15 @@ describe('the task log tab (ADR-0018, V1)', () => {
     act(() => { fireEvent.click(screen.getByLabelText('Send')); });
 
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendTaskMessage', text: 'use Postgres' });
+  });
+
+  it('says what a waiting task waits on, and why a skipped one was skipped', () => {
+    render(<TaskLogApp />);
+    init({ planStatus: 'awaiting_user', awaitingReason: 'files-changed' });
+    expect(screen.getByText('Changed tracked files', { selector: '.task-log-state' })).toBeTruthy();
+
+    send({ type: 'status', status: status({ planStatus: 'skipped', skipReason: 'no GPU on this host' }) });
+    expect(screen.getByText('Skipped: no GPU on this host', { selector: '.task-log-state' })).toBeTruthy();
   });
 
   it('shows an undelivered message from the task log with an empty queue', () => {
@@ -433,6 +534,45 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.queryByLabelText('Send')).toBeNull();
   });
 
+  it('draws a script task\'s log as output only, with no composer or queue (ADR-0035)', () => {
+    render(<TaskLogApp />);
+    init({ script: true, working: true, planStatus: 'in_progress' });
+
+    expect(document.querySelector('.task-log-composer')).toBeNull();
+    expect(screen.queryByPlaceholderText(/Message the task/)).toBeNull();
+    expect(screen.queryByLabelText('Send')).toBeNull();
+    expect(document.querySelector('.task-log-readonly')?.textContent).toContain('takes no messages');
+  });
+
+  it('keeps every step of a script task\'s log in view, its whole output and exit with it, folding nothing (ADR-0035)', () => {
+    const tail = Array.from({ length: 6 }, (_, i) => `test ${i + 1} failed`).join('\n');
+    const run = replayTaskLog([
+      { type: 'script_run', argv: ['npm', 'ci'] },
+      { type: 'script_output', text: 'added 12 packages\n' },
+      { type: 'script_exit', code: 0, signal: null, durationMs: 2000 },
+      { type: 'script_run', argv: ['npm', 'test'] },
+      { type: 'script_output', text: `${tail}\n` },
+      { type: 'script_exit', code: 1, signal: null, durationMs: 3000 },
+      { type: 'script_run', argv: ['npm', 'run', 'lint'] },
+      { type: 'script_output', text: 'linting src/\n' },
+    ]);
+    render(<TaskLogApp />);
+    init({ script: true, working: true, planStatus: 'in_progress' }, [...run.blocks]);
+
+    expect(document.querySelector('.activity-group')).toBeNull();
+    const rows = [...document.querySelectorAll('.conversation > .cmd-row')];
+    expect(rows.map((row) => row.querySelector('.cmd-row-head')?.textContent)).toEqual(['Run(npm ci)', 'Run(npm test)', 'Run(npm run lint)']);
+    expect(rows[1]).toHaveTextContent('test 6 failed');
+    expect(rows[1]).toHaveTextContent('exited 1 after 3 s');
+    expect(rows[2]).toHaveTextContent('linting src/');
+    // Each command once, in its head: no arguments block repeats it.
+    expect(document.querySelector('.conversation .cmd-row-args')).toBeNull();
+    expect(rows[1]).not.toHaveTextContent('"command"');
+    // Output only: nothing in it opens or closes.
+    expect(document.querySelector('.conversation [aria-expanded]')).toBeNull();
+    expect(document.querySelector('.task-log-readonly')?.textContent).toContain('Its output is above.');
+  });
+
   describe('a runner\'s tool request (ADR-0018, A1)', () => {
     const request = (overrides: Partial<Extract<DisplayBlock, { type: 'approval' }>> = {}): DisplayBlock => ({
       type: 'approval', id: 'b2', approvalId: 'ap-1', kind: 'runner_tool', subject: 'Bash(npm test)', scope: 'Bash', status: 'pending', allowForTask: true,
@@ -472,6 +612,8 @@ describe('the task log tab (ADR-0018, V1)', () => {
         request({ id: 'b3', approvalId: 'ap-2', status: 'denied', decidedBy: 'asked', note: 'use notes/' }),
         request({ id: 'b4', approvalId: 'ap-3', status: 'withdrawn' }),
       ]);
+      expect(screen.getByRole('button', { name: 'Settled 3 approval requests (1 denied)' })).toHaveAttribute('aria-expanded', 'false');
+      fireEvent.click(screen.getByRole('button', { name: 'Settled 3 approval requests (1 denied)' }));
       expect(screen.getByText('Approved for this task')).toBeTruthy();
       expect(screen.getByText('Note to the agent: use notes/')).toBeTruthy();
       expect(screen.getByText('Withdrawn')).toBeTruthy();
@@ -524,5 +666,70 @@ describe('a message the runner reads mid-turn (ADR-0023)', () => {
     expect(prompt.compareDocumentPosition(read) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(read.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText('then add tests')).toBeTruthy();
+  });
+});
+
+describe('the runner\'s activity, folded (ADR-0017, X1)', () => {
+  beforeEach(() => {
+    cleanup();
+    api.postMessage.mockClear();
+  });
+
+  const turn = replayTaskLog([
+    { type: 'turn_start', message: 'parse it' },
+    { type: 'thinking', text: 'Look first.' },
+    { type: 'tool_call', id: 'c1', name: 'Bash', args: '{"command":"ls"}' },
+    { type: 'tool_result', id: 'c1', output: 'src', success: true },
+    { type: 'tool_call', id: 'c2', name: 'WebFetch', args: '{"url":"https://example.com"}' },
+    { type: 'tool_result', id: 'c2', output: 'refused', success: false },
+    { type: 'text', text: 'Now the parser.' },
+    { type: 'tool_call', id: 'c3', name: 'Write', args: '{"file_path":"src/parse.ts"}' },
+    { type: 'approval_requested', approvalId: 'ap-1', tool: 'Write', args: '{"file_path":"src/parse.ts"}', allowForTask: false },
+  ]);
+  const top = () => [...document.querySelectorAll('.conversation > *')].map((el) => (el.classList.contains('activity-group')
+    ? el.querySelector('.activity-group-toggle')!.textContent : el.className.split(' ')[0]));
+
+  it('says what each run did between the agent\'s messages, the waiting request outside where it is answered', () => {
+    render(<TaskLogApp />);
+    init({ working: true }, [...turn.blocks]);
+    expect(top()).toEqual(['chat-msg', 'Ran a command, fetched a page (1 failed)', 'chat-msg', 'Making an edit', 'approval-card']);
+    expect(screen.getByRole('button', { name: 'Allow' })).toBeTruthy();
+  });
+
+  it('tells a call the user denied once, as denied, though its result came back failed', () => {
+    const denied = replayTaskLog([
+      { type: 'turn_start', message: 'clean up' },
+      { type: 'tool_call', id: 't3', name: 'Bash', args: '{"command":"rm -rf dist"}' },
+      { type: 'approval_requested', approvalId: 'ap-3', tool: 'Bash', args: '{"command":"rm -rf dist"}', allowForTask: false, toolCallId: 't3' },
+      { type: 'approval_decided', approvalId: 'ap-3', decision: 'deny' },
+      { type: 'tool_result', id: 't3', output: 'The user denied this call', success: false },
+    ]);
+    render(<TaskLogApp />);
+    init({ working: true }, [...denied.blocks]);
+    expect(top()).toEqual(['chat-msg', '1 command denied']);
+    expect(document.querySelector('.activity-group')).toHaveAttribute('data-state', 'failed');
+    fireEvent.click(document.querySelector<HTMLButtonElement>('.activity-group-toggle')!);
+    // Both rows stay in the group, for what was asked and what was answered.
+    expect(document.querySelector('.activity-group-body .cmd-row')).toBeTruthy();
+    expect(document.querySelector('.activity-group-body .approval-card')).toHaveAttribute('data-status', 'denied');
+  });
+
+  it('keeps what was opened as the live patch settles the call, and opens nothing for another attempt', () => {
+    render(<TaskLogApp />);
+    init({ working: true, attempts: [1, 2], attempt: 2 }, [...turn.blocks]);
+    const groups = () => [...document.querySelectorAll<HTMLButtonElement>('.activity-group-toggle')];
+    fireEvent.click(groups()[1]);
+    fireEvent.click(document.querySelector<HTMLButtonElement>('.activity-group-body .cmd-row-header > button')!);
+    expect(document.querySelector('.cmd-row-args')).toBeTruthy();
+
+    const settled = replayTaskLog([{ type: 'tool_result', id: 'c3', output: '@@ -0,0 +1 @@\n+export {}', success: true }], turn);
+    const changed = settled.blocks.filter((b) => !turn.blocks.includes(b));
+    send({ type: 'patch', order: settled.blocks.map((b) => b.id), changed });
+    expect(groups()[1].textContent).toBe('Made an edit');
+    expect(groups()[1]).toHaveAttribute('aria-expanded', 'true');
+    expect(document.querySelector('.activity-group-body .cmd-row-header > button')).toHaveAttribute('aria-expanded', 'true');
+
+    send({ type: 'init', status: status({ attempts: [1, 2], attempt: 1 }), blocks: [...turn.blocks] });
+    expect(groups().map((g) => g.getAttribute('aria-expanded'))).toEqual(['false', 'false']);
   });
 });

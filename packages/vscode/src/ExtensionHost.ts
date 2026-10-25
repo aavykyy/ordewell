@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import {
-  createSession, createSkillsService, detectInstalledPlanner, createEmptyPlan, flattenTasks, parseMaxParallel, sessionRuntimeSettings,
+  createSession, createSkillsService, detectInstalledPlanner, createEmptyPlan, flattenTasks, parseMaxParallel, sessionRuntimeSettings, taskRefOf,
   type PlannerBackendId, type GlobalRunSettings, type LegacyPlanState, type RunnerId, type Session, type SessionDeps,
 } from '@ordewell/core';
 import { registerCommands, type CommandDeps } from './commands/CommandRegistry';
+import { enableRunner } from './commands/enabledRunners';
 import { handleSlashCommand, type SlashDeps } from './commands/SlashParser';
 import { confirmRisks } from './commands/runSettings';
 import { handleApprovePlan, handleSessionMessage, handleStartPlanning, type PlanManagerDeps } from './plan/PlanManager';
@@ -78,6 +80,28 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     console.log(`[Ordewell] ${msg}`);
   };
 
+  /**
+   * A workspace-relative file Ordewell kept, such as a handoff's saved patch
+   * (ADR-0050), opened in an editor tab. The path comes from a webview, so it
+   * is refused unless it stays inside the workspace; a saved patch is under
+   * `.ordewell/`, never outside it.
+   */
+  const openWorkspaceFile = async (file: string): Promise<void> => {
+    const root = services.fsAdapter.getWorkspaceRoot();
+    const absolute = path.resolve(root, file);
+    const relative = path.relative(root, absolute);
+    if (!file || path.isAbsolute(file) || file.split(/[\\/]/).includes('..') || relative.startsWith('..') || path.isAbsolute(relative)) {
+      void vscodeApi.window.showErrorMessage(`Ordewell: cannot open ${JSON.stringify(file)}: it is not a workspace path.`);
+      return;
+    }
+    try {
+      const doc = await vscodeApi.workspace.openTextDocument(vscodeApi.Uri.file(absolute));
+      await vscodeApi.window.showTextDocument(doc, { preview: false });
+    } catch (err) {
+      void vscodeApi.window.showErrorMessage(`Ordewell: ${file} could not be opened: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   const state: HostState = {
     plan: createEmptyPlan(),
     goal: '',
@@ -102,6 +126,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     setCurrentGoal: (goal) => { state.goal = goal; },
     workspaceRoot: () => services.fsAdapter.getWorkspaceRoot(),
     log,
+    warn: (msg) => { void vscodeApi.window.showWarningMessage(msg); },
   });
   const persist = (): void => persistState(persistenceDeps());
   const saveSession = (): void => saveCurrentSession(persistenceDeps());
@@ -133,6 +158,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     extensionUri: services.context.extensionUri,
     session: () => requireSession(),
     getTask: (taskId) => flattenTasks(requireSession().planTasks).find((t) => t.id === taskId),
+    orderLabel: (taskId) => taskRefOf(requireSession().planTasks, taskId)?.replace(/^#/, ''),
+    openFile: (path) => { void openWorkspaceFile(path); },
     log,
   });
 
@@ -201,8 +228,23 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       setPlanner: (provider) => planner.apply(provider),
       setPlannerModel: (modelId, effort) => planner.setModel(modelId, effort),
       openTaskLog: (taskId) => taskLogs.open(taskId),
+      openFile: (path) => { void openWorkspaceFile(path); },
       setPlanDockHeight: (height) => { void services.context.globalState.update(PLAN_DOCK_HEIGHT_KEY, height); },
       changeSettings,
+      enableRunner: async (runnerId) => {
+        const saved = await enableRunner(
+          {
+            runnerRegistry: services.runnerRegistry,
+            settingsService: services.settingsService,
+            config: services.config,
+            sendRunnerAndModels: () => discovery.refresh(),
+          },
+          runnerId,
+        );
+        // An id nothing names is a stale click or a hand-made message: no
+        // manifest owns it, so there is nothing to save.
+        if (!saved) log(`Ignored a request to enable the unknown runner "${runnerId}".`);
+      },
     },
     getPendingRunners: () => state.pendingRunners,
     setPendingRunners: (runners) => { state.pendingRunners = runners; },
@@ -352,6 +394,10 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     );
 
     restoreState(persistenceDeps());
+    // Open task-log tabs survive a window reload or an extension update. VS Code
+    // asks the serializer during activation, so the plan must be restored first
+    // or a restored tab would find no task and close itself.
+    services.context.subscriptions.push(taskLogs.register());
     checkPlannerSetting();
 
     services.context.subscriptions.push(services.config.onDidChange(() => {
@@ -400,6 +446,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     taskLogs.dispose();
     persistState(persistenceDeps());
     services.runner.stopAll();
+    // The session closes with the window, and with it its lease (ADR-0049).
+    sessionCell.current?.destroy();
     log('Ordewell deactivated');
   }
 

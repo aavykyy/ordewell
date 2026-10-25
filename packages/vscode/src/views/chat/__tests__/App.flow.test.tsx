@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, fireEvent } from '@testing-library/react';
 import type { ResearchStep, SessionMessage } from '@ordewell/core';
 import App from '../App';
-import { api, hostBridge, post, rowKinds } from './hostBridge';
+import { activityRows, api, hostBridge, openActivity, post, rowKinds } from './hostBridge';
 import type { HostToWebview } from '../../../shared/protocol';
 
 function send(msg: HostToWebview) {
@@ -62,6 +62,8 @@ describe('chat plan flow', () => {
   it('draws the planner\'s thinking as it streams, as one collapsed line', () => {
     host.session(turnStarted(), thought('Analyzing the repo.'));
 
+    expect(document.querySelector('.activity-group-toggle')!.textContent).toBe('Thinking…');
+    openActivity();
     expect(document.querySelector('.activity-think-head')!.textContent).toContain('Thinking…');
     expect(document.querySelector('.activity-think-pre')).toBeNull();
   });
@@ -90,14 +92,17 @@ describe('chat plan flow', () => {
 
   it('turns the spawn call into one subagent card with its brief, status and digest — its own calls stay inside it', () => {
     host.session(turnStarted(), call('spawn_research_agent', { prompt: 'explore auth' }, 'c-spawn', 'sub-1'));
-    expect(rowKinds()).toEqual(['cmd-row']);
+    expect(rowKinds()).toEqual(['activity-group']);
+    openActivity();
+    expect(activityRows()).toEqual(['cmd-row']);
 
     host.session(
       { type: 'subagent_started', turnId: TURN, subagentId: 'sub-1', brief: 'explore auth' },
       call('read_file', { path: 'src/auth.ts' }, 'c-read', 'sub-1'),
     );
     expect(document.querySelector('.subagent-card-status')!.textContent).toBe('running…');
-    expect(rowKinds()).toEqual(['subagent-card']);
+    expect(activityRows()).toEqual(['subagent-card']);
+    expect(document.querySelector('.activity-group-toggle')!.textContent).toBe('Delegating to an agent');
 
     host.session(
       done({ tool: 'read_file', args: '{"path":"src/auth.ts"}', result: 'contents', toolCallId: 'c-read', subagentId: 'sub-1' }),
@@ -113,12 +118,15 @@ describe('chat plan flow', () => {
     host.session(turnStarted(), call('read_file', { path: 'src/a.ts' }, 'tc-1'), call('read_file', { path: 'src/b.ts' }, 'tc-2'));
     // Out of order: the second call settles first.
     host.session(done({ tool: 'read_file', args: '{"path":"src/b.ts"}', result: 'b body', toolCallId: 'tc-2' }));
+    expect(document.querySelector('.activity-group-toggle')!.textContent).toBe('Read a file (1 more running)');
+    openActivity();
 
     const rows = () => [...document.querySelectorAll('.cmd-row')].map((r) => [r.querySelector('.cmd-row-head')!.textContent, r.getAttribute('data-status')]);
     expect(rows()).toEqual([['Read(src/a.ts)', 'pending'], ['Read(src/b.ts)', 'ok']]);
 
     host.session(done({ tool: 'read_file', args: '{"path":"src/a.ts"}', result: 'a body', toolCallId: 'tc-1' }));
     expect(rows()).toEqual([['Read(src/a.ts)', 'ok'], ['Read(src/b.ts)', 'ok']]);
+    expect(document.querySelector('.activity-group-toggle')!.textContent).toBe('Read 2 files');
   });
 
   it('shows a refused command as refused, with the reason in its preview', () => {
@@ -127,6 +135,8 @@ describe('chat plan flow', () => {
       turnStarted(), call('bash', args, 'tc-1'),
       done({ tool: 'bash', args: JSON.stringify(args), result: 'Command refused: writes belong to the runners.', success: false, outcome: 'refused', toolCallId: 'tc-1' }),
     );
+    expect(document.querySelector('.activity-group-toggle')!.textContent).toBe('1 command denied');
+    openActivity();
 
     const row = document.querySelector('.cmd-row')!;
     expect(row.getAttribute('data-status')).toBe('denied');
@@ -140,13 +150,17 @@ describe('chat plan flow', () => {
       delta('Now I need to find the tests.', 's2'), call('grep', { pattern: 'x' }),
     );
 
-    expect(rowKinds()).toEqual(['chat-msg', 'cmd-row', 'chat-msg', 'cmd-row']);
+    expect(rowKinds()).toEqual(['chat-msg', 'activity-group', 'chat-msg', 'activity-group']);
+    openActivity();
+    expect(activityRows()).toEqual(['cmd-row', 'cmd-row']);
   });
 
   it('keeps reasoning and commands interleaved in arrival order', () => {
     host.session(turnStarted(), thought('Scanning the repo…'), call('list_dir', { path: '.' }), { type: 'planner_thinking_delta', turnId: TURN, segmentId: 'k2', text: 'Checking entry points…' });
 
-    expect(rowKinds()).toEqual(['activity-think', 'cmd-row', 'activity-think']);
+    expect(rowKinds()).toEqual(['activity-group']);
+    openActivity();
+    expect(activityRows()).toEqual(['activity-think', 'cmd-row', 'activity-think']);
   });
 
   it('shows runner output inside the task card once execution starts', () => {
@@ -430,6 +444,20 @@ describe('input watchdog', () => {
     }
 
     expect(processing()).toBe(true);
+  });
+
+  it('never calls a planner hung while its approval card waits for an answer', () => {
+    host.session(turnStarted());
+    host.session({ type: 'approval_request', id: 'ap-1', kind: 'shell_command', subject: 'npm test', scope: 'npm test', turnId: TURN });
+    api.postMessage.mockClear();
+
+    wait(125_000);
+
+    // The turn is still open and Stop is still offered: quiet is what waiting
+    // for the user looks like, not a hang.
+    expect(processing()).toBe(true);
+    expect(document.querySelector('.approval-card')).toBeTruthy();
+    expect(api.postMessage).not.toHaveBeenCalledWith({ type: 'addNote', text: expect.stringContaining('stopped responding') });
   });
 });
 

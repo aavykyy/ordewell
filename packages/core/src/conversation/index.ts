@@ -9,6 +9,8 @@ export { fromTranscript } from './transcript';
 export { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, runnerToolSubject } from './taskLog';
 export type { TaskLogView } from './taskLog';
 export { toolHeadline, outputPreview, outputLines, diffStat, diffRows, diffSummary } from './format';
+export { approvalKindText, approvalStatusText, handoffFindingsText, handoffPeekParts, planMarkerParts } from './labels';
+export type { HandoffPeekSubject } from './labels';
 export type { DiffRow, DiffRowKind } from './format';
 export type { OutputPreview } from './format';
 export { EMPTY_HOLD, holdPrompt, drainNext, unsendLatest, unsendAll, takeAt, aheadOfDraft } from './promptHold';

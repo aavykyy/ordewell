@@ -135,6 +135,30 @@ describe('reduceHost runView isolation', () => {
   });
 });
 
+describe('a runner enabled from the Runners block', () => {
+  const installed = (enabled: string[]) => [
+    { id: 'claude-code', displayName: 'Claude Code', enabled: enabled.includes('claude-code') },
+    { id: 'codex', displayName: 'Codex', enabled: enabled.includes('codex') },
+  ];
+
+  it('joins the plan\'s runner set at once, and an older runner list cannot drop it again', () => {
+    const known = reduceHost(INITIAL_HOST_STATE, msg({ type: 'setRunners', runners: installed(['claude-code']) }));
+
+    const enabling = reduceHost(known, { type: 'enableRunnerRequested', runnerId: 'codex' });
+    expect(enabling.runners).toEqual(['claude-code', 'codex']);
+
+    // Discovery started before the host saved the choice: its list still says Codex is off.
+    const stale = reduceHost(enabling, msg({ type: 'setRunners', runners: installed(['claude-code']) }));
+    expect(stale.runners).toEqual(['claude-code', 'codex']);
+    expect(stale.enabledRunnerIds).toEqual(['claude-code', 'codex']);
+
+    // The list for the saved choice settles it.
+    const saved = reduceHost(stale, msg({ type: 'setRunners', runners: installed(['claude-code', 'codex']) }));
+    expect(saved.runners).toEqual(['claude-code', 'codex']);
+    expect(saved.pendingRunnerEnables).toEqual([]);
+  });
+});
+
 describe('setModesByRunner', () => {
   it('keeps the host\'s one-line notice for a runner whose modes are off, and drops it once they are back', () => {
     const notice = { line: 'Codex sandbox unavailable on this host: read-only and Guarded modes are off', docs: 'https://example.test/docs' };
@@ -150,5 +174,31 @@ describe('setModelAllowlist', () => {
     const set = reduceHost(INITIAL_HOST_STATE, msg({ type: 'setModelAllowlist', allowlist: { codex: ['gpt-5'] } }));
     expect(set.modelAllowlist).toEqual({ codex: ['gpt-5'] });
     expect(reduceHost(set, msg({ type: 'setModelAllowlist', allowlist: {} })).modelAllowlist).toEqual({});
+  });
+});
+
+describe('conversationEpoch: which conversation the blocks belong to', () => {
+  const block = { type: 'message' as const, id: 'b1', role: 'user' as const, text: 'hi', streaming: false };
+  const patch = (order: string[]) => msg({ type: 'conversationPatch', order, changed: order.length ? [block] : [] });
+
+  it('moves on when a session is restored, and when the host empties the conversation', () => {
+    const shown = reduceHost(INITIAL_HOST_STATE, patch(['b1']));
+    expect(shown.conversationEpoch).toBe(INITIAL_HOST_STATE.conversationEpoch);
+    const restored = reduceHost(shown, msg({ type: 'restoreChat' }));
+    expect(restored.conversationEpoch).toBe(shown.conversationEpoch + 1);
+    const emptied = reduceHost(shown, patch([]));
+    expect(emptied.conversationEpoch).toBe(shown.conversationEpoch + 1);
+  });
+
+  it('moves on when the host replaces the conversation with blocks that reuse its ids', () => {
+    const shown = reduceHost(INITIAL_HOST_STATE, patch(['b1']));
+    const compacted = reduceHost(shown, msg({ type: 'conversationPatch', order: ['b1'], changed: [{ ...block, text: 'summary' }], replaced: true }));
+    expect(compacted.conversationEpoch).toBe(shown.conversationEpoch + 1);
+  });
+
+  it('stays put while the same conversation is patched, or an empty one stays empty', () => {
+    const shown = reduceHost(INITIAL_HOST_STATE, patch(['b1']));
+    expect(reduceHost(shown, patch(['b1'])).conversationEpoch).toBe(shown.conversationEpoch);
+    expect(reduceHost(INITIAL_HOST_STATE, patch([])).conversationEpoch).toBe(INITIAL_HOST_STATE.conversationEpoch);
   });
 });

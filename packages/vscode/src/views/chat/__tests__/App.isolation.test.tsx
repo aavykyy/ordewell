@@ -102,9 +102,8 @@ describe('App — worktree isolation (ADR-0013)', () => {
       mergeResult: { outcome: 'blocked', blocked: [{ repo: 'api', reason: 'conflict', files: ['src/a.ts'] }] },
     }));
 
-    const block = document.querySelector('.isolation-merge-block');
-    expect(block?.textContent).toContain('api');
-    expect(block?.textContent).toContain('src/a.ts');
+    const block = document.querySelector('.isolation-merge-result');
+    expect(block?.textContent).toBe('Merged nothing, so every tree is as it was: api would conflict in src/a.ts. Each repository\'s ordewell/run-1/integration is a plain branch you can merge by hand.');
 
     sendRun(EMPTY_RUN);
     expect(document.querySelector('.isolation-merge-result')).toBeNull();

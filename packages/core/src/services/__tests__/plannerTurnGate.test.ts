@@ -146,8 +146,6 @@ describe('a message sent while the probe is out', () => {
   const sends: [string, (session: ReturnType<typeof makeSession>) => Promise<LegacyPlanState>][] = [
     ['a reply', (s) => s.continueConversation('rename task 1')],
     ['a force send', (s) => s.forceSendPrompt('rename task 1')],
-    ['a merge', (s) => s.requestMerge(['t1', 't2'])],
-    ['a split', (s) => s.requestSplit('t1')],
   ];
   for (const [kind, send] of sends) {
     it(`waits for it, then is answered by the agent it finds: ${kind}`, async () => {
@@ -217,8 +215,6 @@ describe('after the selected vendor\'s key is taken away', () => {
   const sends: [string, (session: ReturnType<typeof makeSession>) => Promise<unknown>][] = [
     ['a reply', (s) => s.continueConversation('rename task 1')],
     ['a force send', (s) => s.forceSendPrompt('rename task 1')],
-    ['a merge', (s) => s.requestMerge(['t1', 't2'])],
-    ['a split', (s) => s.requestSplit('t1')],
     ['a compaction', (s) => s.compactConversation()],
   ];
   for (const [kind, send] of sends) {

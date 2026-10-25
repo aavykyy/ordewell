@@ -46,12 +46,24 @@ const handoffFinding = z.object({
   evidence: z.array(handoffReference).max(HANDOFF_LIMITS.evidence).optional().describe('Where a reader can check it.'),
 });
 
+const handoffCommit = z.object({
+  subject: z.string().trim()
+    .min(1, 'The commit subject is required: one line saying what changed.')
+    .max(HANDOFF_LIMITS.commitSubject, `The commit subject is at most ${HANDOFF_LIMITS.commitSubject} characters: keep it to 72 or fewer and put the why in body.`)
+    .regex(/^[^\r\n]*$/, 'The commit subject is one line: put the why in body.')
+    .describe('One line of 72 characters or fewer, in the imperative mood: "Add a daily version check behind ORDEWELL_NO_VERSION_CHECK".'),
+  body: z.string().max(HANDOFF_LIMITS.commitBody, `The commit body is at most ${HANDOFF_LIMITS.commitBody} characters: one to three lines on why; the specifics go in summary.`).optional()
+    .describe('One to three lines on why. No trailers: those are Ordewell\'s to add.'),
+});
+
 const taskCompleteInput = z.object({
   status: z.enum(['done', 'blocked', 'failed'])
     .describe("'done' only when the task is fully complete. 'blocked' or 'failed' end the attempt without passing."),
   summary: z.string().max(HANDOFF_LIMITS.summary, `The summary is at most ${HANDOFF_LIMITS.summary} characters: put the long form in report.`)
     .describe('The handoff the next task reads first, written for that reader: what changed, what is left, what to watch.'),
   reason: z.string().optional().describe("Why the task is blocked or failed. Expected for anything but 'done'."),
+  commit: handoffCommit.optional()
+    .describe("A change task's commit message, for a human reviewer: what changed and why. Only kept with status 'done'."),
   findings: z.array(handoffFinding).max(HANDOFF_LIMITS.findings).optional()
     .describe('What the next reader must act on, one item each, most important first. Ordewell numbers them F1, F2, … in this order.'),
   artifacts: z.array(handoffReference).max(HANDOFF_LIMITS.artifacts).optional()
@@ -108,15 +120,23 @@ const readTaskInput = z.object({
   include_report: z.boolean().optional().describe(`Also return its report, the long form, of at most ${HANDOFF_LIMITS.report} characters.`),
 });
 
+const savePatchInput = z.object({});
+
+const applyPatchInput = z.object({
+  task: taskRef,
+  attempt: z.number().int().min(1).optional().describe('One of its saved attempts; omit for the latest.'),
+});
+
 const modelAssignment = z.looseObject({
   modelId: z.string(),
   modelLabel: z.string().optional(),
   thinkingEffort: z.string().optional().describe("A variant id from that model's variants list."),
 });
 
-// Loose on purpose: the plan goes through the same validation and repair as the
-// plan envelope (ADR-0022, P2), and a schema stricter than that path would
-// make the two routes disagree about the same tasks.
+// Loose on purpose: a plan from either route meets one check (`PlanChangeCheck`,
+// ADR-0022 P2), this tool's through it and the plan envelope's parse against
+// its intake, and a schema stricter than that check would make the two routes
+// disagree about the same tasks.
 const planTask = z.looseObject({
   id: z.string().optional(),
   order: z.number().optional(),
@@ -230,9 +250,17 @@ const answerApprovalInput = z.object({
   note: z.string().optional().describe('With "deny": what the runner should do instead. It reads this.'),
 });
 
+const answerCheckpointInput = z.object({
+  task: taskRef,
+  answer: z.enum(['approve', 'reject']).describe('"approve": the task goes on. "reject": the runner is told the reason and acts on it.'),
+  reason: z.string().optional().describe('Required with "reject": what the runner should do instead. It reads this.'),
+});
+
 export type TaskCompleteArgs = z.infer<typeof taskCompleteInput>;
 export type CheckpointArgs = z.infer<typeof checkpointInput>;
 export type ReadTaskArgs = z.infer<typeof readTaskInput>;
+export type SavePatchArgs = z.infer<typeof savePatchInput>;
+export type ApplyPatchArgs = z.infer<typeof applyPatchInput>;
 export type ListRunnersArgs = z.infer<typeof listRunnersInput>;
 export type ListModelsArgs = z.infer<typeof listModelsInput>;
 export type LoadSkillArgs = z.infer<typeof loadSkillInput>;
@@ -251,6 +279,7 @@ export type RetryTaskArgs = z.infer<typeof retryTaskInput>;
 export type MessageTaskArgs = z.infer<typeof messageTaskInput>;
 export type SkipTaskArgs = z.infer<typeof skipTaskInput>;
 export type AnswerApprovalArgs = z.infer<typeof answerApprovalInput>;
+export type AnswerCheckpointArgs = z.infer<typeof answerCheckpointInput>;
 export type RunScriptArgs = z.infer<typeof runScriptInput>;
 
 /** What a handler answers with. `isError` marks a refusal the caller should act on. */
@@ -297,6 +326,10 @@ export interface TaskToolHandler {
   readTask?: Run<ReadTaskArgs>;
   /** A read-only task's shell (ADR-0046); only its token lists `run_command`. */
   runCommand?: Run<TaskRunCommandArgs>;
+  /** A read-only task's prototype kept as a patch (ADR-0050); only its token lists `save_patch`. */
+  savePatch?: Run<SavePatchArgs>;
+  /** A saved patch applied into the task's own worktree (ADR-0050); a read-only task's token does not list `apply_patch`. */
+  applyPatch?: Run<ApplyPatchArgs>;
 }
 
 export interface PlannerToolHandler {
@@ -319,6 +352,7 @@ export interface PlannerToolHandler {
   skipTask?: Run<SkipTaskArgs>;
   messageTask?: Run<MessageTaskArgs>;
   answerApproval?: Run<AnswerApprovalArgs>;
+  answerCheckpoint?: Run<AnswerCheckpointArgs>;
   mergeAll?: Run<RunPlanArgs>;
   runScript?: Run<RunScriptArgs>;
 }
@@ -330,6 +364,103 @@ export interface McpTool<H> {
   annotations?: { readOnlyHint: boolean };
   /** Validate `args` and hand them to the handler's method for this tool. */
   call(handler: H, args: unknown, context: McpToolContext): Promise<McpToolReply>;
+}
+
+/** A field's path as a runner reads it in a refusal: `summary`, `findings[0].title`. */
+function fieldPath(path: readonly PropertyKey[]): string {
+  return path.reduce<string>((text, part) => (typeof part === 'number' ? `${text}[${part}]` : text ? `${text}.${String(part)}` : String(part)), '');
+}
+
+function valueAt(value: unknown, path: readonly PropertyKey[]): unknown {
+  let current = value;
+  for (const part of path) {
+    if (typeof part === 'number') {
+      if (!Array.isArray(current)) return undefined;
+      current = current[part];
+    } else if (current !== null && typeof current === 'object') {
+      current = (current as Record<PropertyKey, unknown>)[part];
+    } else return undefined;
+  }
+  return current;
+}
+
+/**
+ * A refusal that says how far past its bound an argument went. Naming only the
+ * limit left a runner that had cut its summary to 380 characters with no way
+ * to see that 9000 had arrived, and that its findings and report had leaked in
+ * beside it (ADR-0047).
+ */
+function boundedRefusal(issue: z.core.$ZodIssue, args: unknown): string | undefined {
+  if (issue.code !== 'too_big' || (issue.origin !== 'string' && issue.origin !== 'array')) return undefined;
+  const value = valueAt(args, issue.path);
+  const size = issue.origin === 'string'
+    ? typeof value === 'string' ? value.length : typeof value === 'number' ? String(value).length : undefined
+    : Array.isArray(value) ? value.length : undefined;
+  if (size === undefined) return undefined;
+  const unit = issue.origin === 'string' ? 'characters' : 'items';
+  const hint = issue.message.startsWith('Too big:') ? '' : ` ${issue.message}`;
+  return `${fieldPath(issue.path)} is ${size} ${unit}; the limit is ${issue.maximum}.${hint}`;
+}
+
+const LEAKED_PARAMETER = /<\/parameter>|<parameter\s+name\s*=\s*"([^"]*)">/g;
+
+interface LeakedMarkup {
+  path: string;
+  names: string[];
+  closing: boolean;
+}
+
+/** The tool-call markup a runner's harness left inside a string argument instead of sending it as an argument. */
+function leakedMarkupIn(value: unknown): LeakedMarkup[] {
+  const found: LeakedMarkup[] = [];
+  const walk = (node: unknown, path: string): void => {
+    if (typeof node === 'string') {
+      const names: string[] = [];
+      let closing = false;
+      for (const match of node.matchAll(LEAKED_PARAMETER)) {
+        if (match[1] !== undefined) names.push(match[1]);
+        else closing = true;
+      }
+      if (names.length > 0 || closing) found.push({ path, names: [...new Set(names)], closing });
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.forEach((item, i) => walk(item, `${path}[${i}]`));
+      return;
+    }
+    if (node !== null && typeof node === 'object') {
+      for (const [key, item] of Object.entries(node)) walk(item, path ? `${path}.${key}` : key);
+    }
+  };
+  walk(value, '');
+  return found;
+}
+
+/**
+ * Says which parameters leaked into a string, without reading them out of it:
+ * another tool's markup is not evidence of what the runner meant (ADR-0047),
+ * so the runner is told to send each one as its own argument.
+ */
+function markupRefusal(leaks: readonly LeakedMarkup[]): string {
+  return leaks.map(({ path, names, closing }) => {
+    const tags = [...names.map((n) => `<parameter name="${n}">`), ...(closing ? ['</parameter>'] : [])];
+    const guide = names.length > 0
+      ? ` The parameters ${names.map((n) => JSON.stringify(n)).join(', ')} are inside it; pass them as separate arguments, not inside ${path}.`
+      : ' Pass each argument separately, not inside one string.';
+    return `${path} contains leaked tool-call markup: ${tags.join(', ')}.${guide}`;
+  }).join('\n');
+}
+
+function invalidArguments(name: string, error: z.ZodError, args: unknown): string {
+  const issues = error.issues.map((issue) => {
+    const refusal = boundedRefusal(issue, args);
+    return refusal === undefined ? issue : { ...issue, message: refusal };
+  });
+  const leaks = leakedMarkupIn(args);
+  return [
+    `Invalid ${name} arguments: ${z.prettifyError(new z.ZodError(issues))}`,
+    ...(leaks.length > 0 ? [markupRefusal(leaks)] : []),
+  ].join('\n');
 }
 
 function tool<H, S extends z.ZodObject>(
@@ -348,7 +479,7 @@ function tool<H, S extends z.ZodObject>(
       const run = pick(handler);
       if (!run) return { text: `${name} is not available in this session.`, isError: true };
       const parsed = input.safeParse(args ?? {});
-      if (!parsed.success) return { text: `Invalid ${name} arguments: ${z.prettifyError(parsed.error)}`, isError: true };
+      if (!parsed.success) return { text: invalidArguments(name, parsed.error, args ?? {}), isError: true };
       return run(parsed.data, context);
     },
   };
@@ -369,14 +500,32 @@ export const TASK_COMPLETION_CONTRACT = [
   `The long story, if there is one, goes in \`report\`: it is kept with this attempt and read only on demand. A review or other read-only task especially: its findings are its result, so state each one, and do not write the report to a file.`,
 ].join('\n\n');
 
-export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
+const COMMIT_CONTRACT = 'This task\'s work lands as a commit, so with status `done` also give `commit`: a `subject` of one line, 72 characters or fewer, in the imperative mood ("Add a daily version check behind ORDEWELL_NO_VERSION_CHECK"), and a `body` of one to three lines on why, with no trailers. The commit tells a human reviewer what changed and why, so the summary no longer repeats that: it holds the exact specifics the next agent needs (paths, symbols, decisions) alongside `artifacts`, plus what is left and what to watch, and the summary may be empty when there is nothing to add.';
+
+/** The completion contract for one attempt: only one whose work lands as a commit is asked for its message (ADR-0047). */
+export function taskCompletionContract(opts: { commits?: true }): string {
+  return opts.commits ? `${TASK_COMPLETION_CONTRACT}\n\n${COMMIT_CONTRACT}` : TASK_COMPLETION_CONTRACT;
+}
+
+/** What every task has: it ends, asks, and reads the record (ADR-0022, ADR-0047). */
+const SHARED_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   tool(TASK_COMPLETE_TOOL, 'Report that this task has ended, and how, with its handoff for the tasks that read it. Call it once, as your last action.',
     taskCompleteInput, (h) => h.taskComplete?.bind(h)),
   tool('checkpoint', "Ask the user a question and wait for the answer, which is this call's result.",
     checkpointInput, (h) => h.checkpoint?.bind(h)),
   // It reads Ordewell's own record, not the tree, so a read-only task has it too (ADR-0047).
-  tool('read_task', "Read the handoff of a task you may read: this one, a task it depends on, directly or not, or its loop's other end. Returns what that task handed over, as its attempt's log keeps it: the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them.",
+  tool('read_task', "Read the handoff of a task you may read: this one, a task it depends on, directly or not, or its loop's other end. Returns what that task handed over, as its attempt's log keeps it: its commit, the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them.",
     readTaskInput, (h) => h.readTask?.bind(h), { readOnlyHint: true }),
+];
+
+/**
+ * A task that works in the tree: the shared tools, and `apply_patch`, which
+ * brings a prototype a read-only task saved (ADR-0050) into its worktree.
+ */
+export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
+  ...SHARED_TASK_TOOLS,
+  tool('apply_patch', "Apply the patch that a task you may read (the same ones read_task reads) saved with save_patch into your own worktree, as a three-way merge. At the commit the patch was taken against it reproduces that task's changes; at a later one it merges them with what has landed since. It answers exactly what happened: applied cleanly, with every change staged; or applied with conflicts, naming each conflicted path (a binary file holds no markers and is named as binary), the markers left in your worktree for you to resolve and `git add`; or nothing applied, and why. A worktree that still holds an earlier conflict, or changes of yours to the patch's files that are not staged yet, applies nothing. The patch is another task's work: read what it changed, and run the checks here, since its author ran theirs at its own base.",
+    applyPatchInput, (h) => h.applyPatch?.bind(h)),
 ];
 
 /**
@@ -391,14 +540,17 @@ export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
 const PLANNER_READ_ONLY = { readOnlyHint: true };
 
 /**
- * A read-only task's tools (ADR-0046): the task tools, and `run_command`, its
- * only shell. Its hint describes its landing effects: nothing it changes
- * reaches the plan's branches.
+ * A read-only task's tools (ADR-0046): the task tools, `run_command`, its
+ * only shell, and `save_patch`, which keeps what that shell changed as a
+ * patch (ADR-0050). Their hints describe their landing effects: nothing either
+ * changes reaches the plan's branches.
  */
 export const READ_ONLY_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
-  ...TASK_TOOLS,
-  tool('run_command', "Run a shell command: git, the project's tests and scripts, anything you need to look at or try. Nothing you change lands: this task's own worktree, when it has one, is thrown away when the task ends, and only your task_complete summary comes back. Read-only commands, and those the user's allowlist covers, run at once; anything else runs sealed instead, and nobody is ever asked: no network, no home directory or credentials, nothing writable but $TMPDIR (which is also $HOME) and the task's own worktree, so you can try a fix or add a failing test and run the suite there. Once one command has run sealed, every later one does too, so run what needs the network first. git can read the repository but not record anything in it. Where this machine has no sandbox, a command that would run sealed is refused. Use it instead of a shell of your own.",
+  ...SHARED_TASK_TOOLS,
+  tool('run_command', "Run a shell command: git, the project's tests and scripts, anything you need to look at or try. Nothing you change lands: this task's own worktree, when it has one, is thrown away when the task ends, and only your task_complete handoff comes back, with the patch save_patch kept if you saved one. Read-only commands, and those the user's allowlist covers, run at once; anything else runs sealed instead, and nobody is ever asked: no network, no home directory or credentials, nothing writable but $TMPDIR (which is also $HOME) and the task's own worktree, so you can try a fix or add a failing test and run the suite there. Once one command has run sealed, every later one does too, so run what needs the network first. git can read the repository but not record anything in it. Where this machine has no sandbox, a command that would run sealed is refused. Use it instead of a shell of your own.",
     taskRunCommandInput, (h) => h.runCommand?.bind(h), PLANNER_READ_ONLY),
+  tool('save_patch', "Keep what your commands changed in this task's worktree as a patch, so a later task can apply your prototype after the worktree is thrown away. Ordewell takes every change against the commit the worktree was cut from (new, changed, deleted, renamed and binary files and modes), runs the capture sealed, checks that the patch replays to the same tree, keeps it with this attempt and names it in your handoff as a patch artifact. Nothing of it lands. Not carried: links, submodules, ignored files, empty directories, and what Ordewell linked in. A file over the size cap is dropped and named; one git normalizes on the way in (its text, eol or filter attributes) is carried as git stores it, and named; a case-only rename, or an unreadable file, refuses the whole save. Saving again replaces the patch. Save once your prototype is as you want it handed on, before task_complete.",
+    savePatchInput, (h) => h.savePatch?.bind(h), PLANNER_READ_ONLY),
 ];
 
 /**
@@ -418,7 +570,7 @@ export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     runPlanInput, (h) => h.runPlan?.bind(h), PLANNER_EXECUTES),
   tool('run_task', 'Start one task now. Refused, with the reason, for a task whose dependencies have not finished, one waiting for Merge all, or one the user has not approved; in Guarded the user is asked first. A task this reply\'s edit_plan adds may be named by the handle that edit gave it, or its title; the start waits for the edit to land as the reply ends.',
     oneTaskInput, (h) => h.runTask?.bind(h), PLANNER_EXECUTES),
-  tool('stop_task', 'Stop one running task: it goes back to not started and is held until retried, and its open approvals are denied.',
+  tool('stop_task', 'Stop one running task: it goes back to not started and stays held, through a run_plan too, until it is retried or force started, and its open approvals are denied.',
     oneTaskInput, (h) => h.stopTask?.bind(h), PLANNER_EXECUTES),
   tool('stop_run', 'Stop every running task and the run. The plan is kept.',
     runPlanInput, (h) => h.stopRun?.bind(h), PLANNER_EXECUTES),
@@ -426,10 +578,12 @@ export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     retryTaskInput, (h) => h.retryTask?.bind(h), PLANNER_EXECUTES),
   tool('skip_task', 'Give up waiting for a task that failed, is blocked or is waiting for input: it ends as skipped, none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done, told your reason. It never marks work complete. Only the supervisor at Act may, in a wake-up turn; a reason is required.',
     skipTaskInput, (h) => h.skipTask?.bind(h), PLANNER_EXECUTES),
-  tool('message_task', 'Send a message to a running task, or answer one waiting for input. A message to a task paused on a usage limit resumes it in its saved session.',
+  tool('message_task', 'Send a message to a running task, or answer one waiting for input. A message to a task paused on a usage limit resumes it in its saved session. A task waiting at a checkpoint is answered with answer_checkpoint, not a message.',
     messageTaskInput, (h) => h.messageTask?.bind(h), PLANNER_EXECUTES),
-  tool('answer_approval', 'Answer a request a task\'s runner is waiting on: deny it with a note, or escalate it to the user. It never allows.',
+  tool('answer_approval', 'Answer a request a task\'s runner is waiting on: deny it with a note, or escalate it to the user. It never allows. It does not cover a checkpoint: that is answer_checkpoint.',
     answerApprovalInput, (h) => h.answerApproval?.bind(h), PLANNER_EXECUTES),
+  tool('answer_checkpoint', 'Answer the checkpoint a task\'s runner waits at, as the user does from its card: approve it and the task goes on, or reject it with a reason the runner acts on. Only the supervisor at Act may, in a wake-up turn; in the user\'s own turn they answer it from the task\'s checkpoint card, so tell them what it asks. A checkpoint that asks for the user\'s judgement on an irreversible or outward effect is not yours to approve: leave it for the user and say why. A message does not answer a checkpoint.',
+    answerCheckpointInput, (h) => h.answerCheckpoint?.bind(h), PLANNER_EXECUTES),
   tool('merge_all', 'Merge the run\'s landed work into the user\'s branch, as their Merge all does, opening the merge gates that wait on it. Only the supervisor at Act may, in a wake-up turn; otherwise the user presses Merge all.',
     runPlanInput, (h) => h.mergeAll?.bind(h), PLANNER_EXECUTES),
   tool('run_script', 'Perform an exact effect yourself — a push, a tag, one setting on a cloud resource — as a script task: added to the plan and started at once, at the workspace root, with no model. Returns its verdict and the end of its output, or after a minute that it is still running; its result then reaches you in a run update when it ends. The user consents first: in Guarded, or in Full without autorun, they are asked on the approval card, shown the commands as written, and a denial leaves the task in the plan, not approved. For an effect that needs judgment, add an ops task instead; a change to repository files is a change task.',

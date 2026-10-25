@@ -46,7 +46,7 @@ coding-agent session, both task runners and coding-agent planners.**
   manifests in `~/.ordewell/plugins/` are ignored, with one notice at host
   startup. No unknown runner is silently routed to a terminal.
 - Task logs are the inspection surface: Enter on a task in the TUI's plan pane,
-  and Open log in VS Code. `ordewell terminal`, `/terminal`, `t` and
+  and Open chat in VS Code (once an attempt has started). `ordewell terminal`, `/terminal`, `t` and
   Structured/Terminal badges are removed. tmux is not required.
 
 API planners keep their existing validated JSON plan, edit and query envelopes;
@@ -209,3 +209,4 @@ tmux; the TUI remains unverified on native Windows (ADR-0010).
 - 2026-10-10 — the TUI task-log surface corrected to Enter on a task in the plan pane.
 - 2026-10-17 — ADR-0007 folded in under Considered options; D1 and D2, the two rules other ADRs cited to it, are Key properties here (D2 was its T7).
 - 2026-10-21 — a task whose runner never reports the server connected is held with a reason instead of failed, while a `failed` report still fails it; a planner turn fails either way.
+- 2026-10-25 — the VS Code control reads "Open chat", not "Open log".

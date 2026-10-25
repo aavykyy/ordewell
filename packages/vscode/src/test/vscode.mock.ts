@@ -264,6 +264,12 @@ export const window = {
     dispose: vi.fn(),
   })) as never,
   createWebviewPanel: vi.fn((viewType: string, title: string) => createFakeWebviewPanel(viewType, title)) as never,
+  registerWebviewPanelSerializer: vi.fn(() => ({ dispose: vi.fn() })) as never,
+};
+
+export const env = {
+  isTelemetryEnabled: true,
+  onDidChangeTelemetryEnabled: vi.fn(() => ({ dispose: vi.fn() })) as never,
 };
 
 export const commands = {

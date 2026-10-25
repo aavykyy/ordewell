@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { RUN_SETTINGS_DEFAULTS,
-  createTask, defaultEnabledRunners, RunnerRegistry, recordedInstalledPlanner, resetInstalledPlanner,
+  createTask, defaultEnabledRunners, saveState, RunnerRegistry, recordedInstalledPlanner, resetInstalledPlanner,
   type AiProvider, type DiscoveredModel, type IRunner, type LegacyPlanState, type PlannerUsability,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
   type RunView, type Session, type SessionDeps, type SettingsService,
@@ -18,7 +18,7 @@ import type { VsCodeConfig } from '../adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from '../adapters/VsCodeNotification';
 import type { WebviewToHost } from '../shared/protocol';
-import { __panels, __resetPanels, window } from '../test/vscode.mock';
+import { __panels, __resetPanels, createFakeWebviewPanel, window } from '../test/vscode.mock';
 
 const models: DiscoveredModel[] = [
   { modelId: 'claude-sonnet-4-5', modelLabel: 'Claude Sonnet 4.5', variants: [], runnerProvider: 'anthropic' },
@@ -27,7 +27,7 @@ const models: DiscoveredModel[] = [
 function planWithOneTask(goal: string): LegacyPlanState {
   const at = '2026-01-01T00:00:00Z';
   return {
-    tasks: [createTask({ id: 't1', order: 1, title: goal, prompt: goal, assignedRunner: 'claude-code', taskMode: 'default' })],
+    tasks: [createTask({ id: 't1', order: 1, title: goal, prompt: goal, assignedRunner: 'claude-code', taskMode: 'default', attempted: true })],
     generatedAt: at,
     status: 'draft',
     runners: ['claude-code'],
@@ -79,6 +79,7 @@ function fakeVscodeApi() {
   const api = {
     window: {
       registerWebviewViewProvider: vi.fn(() => ({ dispose: vi.fn() })),
+      registerWebviewPanelSerializer: vi.fn(() => ({ dispose: vi.fn() })),
       showWarningMessage,
       showInformationMessage: vi.fn(),
       showErrorMessage: vi.fn(),
@@ -148,11 +149,17 @@ function fakeSession() {
     planState: null,
     planTasks: [],
     runSnapshot: vi.fn(() => ({ tasks: [], runMerge: null, handoff: null, mergeResult: null })),
+    taskLogAttempts: vi.fn(() => []),
+    taskLog: vi.fn(() => []),
+    invokeTaskCommand: vi.fn(() => ''),
+    outstandingApprovals: vi.fn(() => []),
     isolationView: vi.fn(() => null),
     removeQueuedMessage: vi.fn(),
     reset: vi.fn(),
     abortPlannerTurn: vi.fn(() => false),
     loadPlan: vi.fn(),
+    destroy: vi.fn(),
+    heldElsewhere: vi.fn(() => null),
     execute: vi.fn(async () => ({ ok: true, message: 'done' })),
     executePlan: vi.fn(async () => {}),
     stopExecution: vi.fn(),
@@ -334,6 +341,9 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     await h.host.start();
 
     expect(h.vscodeApi.api.window.registerWebviewViewProvider).toHaveBeenCalledWith('ordewellChatView', h.chat.provider, expect.anything());
+    // Task-log panels are created through the `vscode` module itself, so their
+    // serializer registers there rather than on this injected api.
+    expect(window.registerWebviewPanelSerializer).toHaveBeenCalledWith('ordewellTaskLog', expect.anything());
     expect(h.vscodeApi.api.commands.registerCommand).toHaveBeenCalledWith('ordewell.setPlanner', expect.any(Function));
   });
 
@@ -479,7 +489,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     await vi.waitFor(() => expect(h.session.spies.execute).toHaveBeenCalledWith({ command: 'run_plan' }, { kind: 'user' }));
     // The plan's own status is not the host's to set: the run_plan above is the approval, and the Session keeps it.
     expect(h.session.spies.loadPlan).toHaveBeenCalledWith(
-      expect.objectContaining({ tasks: [expect.objectContaining({ id: 't1', status: 'approved' })] }),
+      expect.objectContaining({ tasks: [expect.not.objectContaining({ status: 'approved' })] }),
       'build a parser',
       h.services.fsAdapter.getWorkspaceRoot(),
     );
@@ -499,13 +509,15 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     expect(stopAll).toHaveBeenCalled();
     // A goal still waiting for the probe is stopped with the host's runners.
     expect(h.session.spies.abortPlannerTurn).toHaveBeenCalled();
+    // Closed with the window, so another host may open it (ADR-0049).
+    expect(h.session.spies.destroy).toHaveBeenCalled();
   });
 
   it('opens a task log tab on request, through the one registry', async () => {
     await h.host.start();
     __resetPanels();
     (h.session.spies as unknown as { planTasks: unknown[] }).planTasks = [
-      createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'claude-code' }),
+      createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'claude-code', attempted: true }),
     ];
 
     h.chat.messages.fire({ type: 'openTaskLog', taskId: 't1' });
@@ -513,6 +525,29 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     await vi.waitFor(() => expect(__panels).toHaveLength(1));
     expect(__panels[0].viewType).toBe('ordewellTaskLog');
     expect(__panels[0].title).toBe('Task 1 · Parse JSON');
+  });
+
+  it('has the plan loaded before VS Code asks it to restore a task-log tab', async () => {
+    saveState(planWithOneTask('build a parser'), h.workspace);
+    h.session.spies.loadPlan.mockImplementation((plan: LegacyPlanState) => {
+      (h.session.spies as unknown as { planTasks: LegacyPlanState['tasks'] }).planTasks = plan.tasks;
+    });
+    const register = window.registerWebviewPanelSerializer as unknown as ReturnType<typeof vi.fn>;
+    const panel = createFakeWebviewPanel('ordewellTaskLog', 'Task log');
+    // VS Code revives the tab while activation is still running, so the
+    // serializer must already see the task the reloaded plan holds.
+    register.mockImplementation((_viewType: string, serializer: { deserializeWebviewPanel: (p: unknown, state: unknown) => Promise<void> }) => {
+      void serializer.deserializeWebviewPanel(panel, { taskId: 't1' });
+      return { dispose: vi.fn() };
+    });
+
+    try {
+      await h.host.start();
+    } finally {
+      register.mockImplementation(() => ({ dispose: vi.fn() }));
+    }
+
+    expect(panel.dispose).not.toHaveBeenCalled();
   });
 });
 
@@ -602,6 +637,16 @@ describe("the Settings panel's Run block", () => {
     await vi.waitFor(() => expect(h.settings.updateRunSettings).toHaveBeenCalledWith({ wakeUpReadBudget: 20 }));
     expect(h.session.spies.applyRunSettings).toHaveBeenCalledWith({ wakeUpReadBudget: 20 });
     expect(lastPush()).toEqual([true, { ...RUN_SETTINGS_DEFAULTS, wakeUpReadBudget: 20 }, 2]);
+  });
+
+  it('keeps a manually configured read budget when another run setting is saved', async () => {
+    h.settings.updateRunSettings({ wakeUpReadBudget: 30 });
+
+    h.chat.messages.fire({ type: 'changeSettings', change: { run: { supervisorLevel: 'off' } } });
+
+    await vi.waitFor(() => expect(h.settings.updateRunSettings).toHaveBeenCalledWith({ supervisorLevel: 'off' }));
+    expect(h.settings.getRunSettings().wakeUpReadBudget).toBe(30);
+    expect(lastPush()).toEqual([true, { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', wakeUpReadBudget: 30 }, 2]);
   });
 
   it.each([

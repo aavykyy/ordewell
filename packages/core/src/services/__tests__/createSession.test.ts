@@ -381,7 +381,7 @@ describe('Session phase transitions', () => {
     };
 
     session.loadPlan(plan, 'Test', '/repo');
-    await session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
+    await session.execute({ command: 'mark_complete', task: 't1', confirmed: true }, { kind: 'user' });
     expect(session.executionLog).toHaveLength(1);
 
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
@@ -447,34 +447,41 @@ describe('currentPlanState — the live plan a surface refreshes from', () => {
   const statusOf = (session: Session, id: string): string | undefined =>
     session.currentPlanState?.pendingTasks.find((t) => t.id === id)?.status;
 
+  // Marking a running AI task complete by hand is refused while the run goes on, so the runner reports it done.
+  async function finish(session: Session, sessions: FakeRunnerSession[], id: string): Promise<void> {
+    sessions.find((s) => s.taskId === id)!.reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(taskOf(session, id)!.status).toBe('completed'));
+  }
+
   // The defect this pins: marking one task done re-read the plan through the
   // saved-session boundary, which normalizes `in_progress` to `pending` because
   // a session off disk has no runners behind it. Every sibling still executing
   // came back as never started, and the plan pane dropped its spinner.
   it('keeps a parallel sibling in_progress after another task is marked complete', async () => {
-    const { session } = twoParallel();
+    const { session, sessions } = twoParallel();
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(statusOf(session, 't2')).toBe('in_progress');
 
-    await session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
+    await finish(session, sessions, 't1');
 
     expect(statusOf(session, 't2')).toBe('in_progress');
   });
 
-  it('reports a task the mark-complete just fanned out to as in_progress', async () => {
-    const { session } = twoParallel();
+  it('reports a task the completion just fanned out to as in_progress', async () => {
+    const { session, sessions } = twoParallel();
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    await session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
+    await finish(session, sessions, 't1');
+    await vi.waitFor(() => expect(statusOf(session, 't3')).toBe('in_progress'));
 
     expect(statusOf(session, 't3')).toBe('in_progress');
   });
 
   it('moves a finished task to the execution log without duplicating it', async () => {
-    const { session } = twoParallel();
+    const { session, sessions } = twoParallel();
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    await session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
+    await finish(session, sessions, 't1');
     const state = session.currentPlanState;
 
     expect(state?.phase).toBe('executing');
@@ -1321,7 +1328,7 @@ describe('session id stability (persist seam)', () => {
 });
 
 // Nothing from one session may bleed into another: not the PlanStore tasks
-// (planContextBlock would present them to the model as the CURRENT plan),
+// (the plan block would present them to the model as the CURRENT plan),
 // not the live LLM conversation (the next message would continue the old
 // session's thread and re-emit its plan), not the execution log or queue.
 describe('cross-session isolation', () => {
@@ -1355,6 +1362,27 @@ describe('cross-session isolation', () => {
     const outgoing = continueConversation.mock.calls[0][0] as string;
     expect(outgoing).not.toContain('Old secret task');
     expect(outgoing).not.toContain('<current_plan>');
+  });
+
+  it('startPlanning does not announce the new plan as emptied to a planner that never saw the old one', async () => {
+    const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
+    const session = makeSession({
+      aiService: {
+        startConversation: vi.fn().mockResolvedValue({ kind: 'message', text: 'What storage?', researchLog: [] }),
+        continueConversation,
+        hasActiveConversation: () => true,
+      },
+    });
+
+    // A turn over the old plan leaves its rows in that planner's context.
+    session.loadPlan(planWith('old-1', 'Old task'), 'Old goal', '/repo');
+    await session.continueConversation('and now?');
+    expect(continueConversation.mock.calls[0][0]).toContain('<current_plan>');
+
+    await session.startPlanning('new unrelated goal', ['claude-code']);
+    await session.continueConversation('sounds good, proceed');
+
+    expect(continueConversation.mock.calls[1][0]).not.toContain('The plan now has no tasks.');
   });
 
   it('startPlanning drops a live conversation left over from the previous session', async () => {

@@ -16,7 +16,7 @@ import { continuesTask, findTask, resumesTask, type Focus, type TuiState } from 
  * of assume.
  */
 
-/** Below this the plan pane is not worth showing, and neither is the chat beside it. */
+/** Below this the plan pane is not worth showing beside the chat, and neither is the chat beside it. */
 export const PLAN_MIN_COLS = 32;
 export const PLAN_MAX_COLS = 64;
 
@@ -26,34 +26,87 @@ const PANE_INDENT = 4;
 /** Prompt glyph, plus one column for the caret the frame paints itself. */
 const CHAT_PROMPT_COLS = 2;
 
-/** The plan pane appears once there is a plan, and only if it would not crowd the chat. */
-export function planPaneWidth(state: TuiState): number {
-  if (state.tasks.length === 0) return 0;
-  const wanted = Math.min(PLAN_MAX_COLS, Math.floor(state.cols * 0.46));
-  return wanted >= PLAN_MIN_COLS && state.cols - wanted > PLAN_MIN_COLS ? wanted : 0;
-}
-
-/** What the chat pane gets: the terminal, less the plan pane and the divider between them. */
-export function chatPaneWidth(state: TuiState): number {
-  const plan = planPaneWidth(state);
-  return plan === 0 ? state.cols : state.cols - plan - 1;
+/**
+ * A pane's place on the screen: 1-based and inclusive, the same coordinates a
+ * mouse report carries, so a pointer is "in" a pane exactly when it is in the
+ * rectangle.
+ */
+export interface PaneRect {
+  row: number;
+  col: number;
+  rows: number;
+  cols: number;
 }
 
 /**
- * The screen columns a pane owns, 1-based and inclusive — what a pointer has to
- * be inside to be "in" that pane, and the span a selection is clipped to.
- *
- * The divider sits between the two and belongs to neither, so a drag pinned to
- * the plan starts at the first column *after* it. With no plan pane the chat
- * has the whole terminal, and so does a `'plan'` asked for anyway — there is no
- * second pane to hand back a span for, and an empty one would silently copy
- * nothing.
+ * How the body is divided. With no plan the chat has all of it; with one, the
+ * plan sits beside the chat while the terminal is wide enough for both, and
+ * under it — at the full width, above the composer — once it is not.
  */
-export function paneColumns(state: TuiState, pane: Focus): { first: number; last: number } {
-  const plan = planPaneWidth(state);
-  if (plan === 0) return { first: 1, last: state.cols };
-  const chat = chatPaneWidth(state);
-  return pane === 'chat' ? { first: 1, last: chat } : { first: chat + 2, last: state.cols };
+export type BodyMode = 'chat' | 'side' | 'stacked';
+
+/** The plan pane's width beside the chat, or 0 where the two would not both fit. */
+function sidePlanWidth(cols: number): number {
+  const wanted = Math.min(PLAN_MAX_COLS, Math.floor(cols * 0.46));
+  return wanted >= PLAN_MIN_COLS && cols - wanted > PLAN_MIN_COLS ? wanted : 0;
+}
+
+export function bodyMode(state: TuiState): BodyMode {
+  if (state.tasks.length === 0) return 'chat';
+  return sidePlanWidth(state.cols) > 0 ? 'side' : 'stacked';
+}
+
+/** How wide the plan pane is: 0 when there is no plan, the terminal when it is stacked. */
+export function planPaneWidth(state: TuiState): number {
+  const mode = bodyMode(state);
+  return mode === 'chat' ? 0 : mode === 'side' ? sidePlanWidth(state.cols) : state.cols;
+}
+
+/** What the chat pane gets: the terminal, less the plan pane and the divider between them when they are side by side. */
+export function chatPaneWidth(state: TuiState): number {
+  return bodyMode(state) === 'side' ? state.cols - sidePlanWidth(state.cols) - 1 : state.cols;
+}
+
+/** What the stacked split has to know about each pane's content, in rows. */
+export interface StackNeeds {
+  /** Rows the chat would fill if nothing limited it. */
+  chat: number;
+  /** Fewest rows the chat is still usable at (its pinned header, a couple of transcript lines). */
+  chatMin: number;
+  plan: number;
+  planMin: number;
+}
+
+/**
+ * Divides `body` rows between a stacked chat and plan.
+ *
+ * Each gets what its content needs while both fit. Under contention they split
+ * evenly — the chat taking the odd row — but a pane that needs less than its
+ * half gives the rest to the other, so a three-task plan does not sit in half a
+ * screen of blanks and a one-line transcript does not either. Neither goes under
+ * its minimum.
+ *
+ * Where the body cannot hold both minimums the focused pane wins: the other
+ * shrinks to one row (the plan's header, or the chat's last line) and then to
+ * nothing, so the pane the keys are going to is never the one that vanished.
+ */
+export function stackRows(body: number, needs: StackNeeds, focus: Focus): { chat: number; plan: number } {
+  if (body <= 0) return { chat: 0, plan: 0 };
+  const chatMin = Math.min(needs.chat, needs.chatMin);
+  const planMin = Math.min(needs.plan, needs.planMin);
+
+  if (body < chatMin + planMin) {
+    const other = Math.min(1, body - 1);
+    return focus === 'plan' ? { chat: other, plan: body - other } : { chat: body - other, plan: other };
+  }
+
+  const half = Math.floor(body / 2);
+  let plan: number;
+  if (needs.chat + needs.plan <= body || needs.plan <= half) plan = needs.plan;
+  else if (needs.chat <= body - half) plan = body - needs.chat;
+  else plan = half;
+  plan = Math.max(planMin, Math.min(plan, body - chatMin));
+  return { chat: body - plan, plan };
 }
 
 /** Text width inside a labelled block of the plan pane, given that pane's width. */

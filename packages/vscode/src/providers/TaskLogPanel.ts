@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
-import { latestTaskCommands } from '../shared/taskCommands';
-import { canContinue, isMeasured, pausedOnLimit, resumeLabel, taskUsageSummary, usageLine, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { assignedRunnerOf, taskActionCommand, canContinue, taskLogHeaderView, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG_FOLLOW, followTaskLog } from '@ordewell/core/plan-utils';
 import { diffConversation } from '../shared/conversationPatch';
 import { renderWebviewHtml } from './webviewHtml';
@@ -23,6 +22,10 @@ export interface TaskLogSession {
 export interface TaskLogPanelDeps {
   session: TaskLogSession;
   getTask: (taskId: string) => Task | undefined;
+  /** The task's dotted reference ("2", "2.1"): a subtask's own order restarts at 1. */
+  orderLabel?: (taskId: string) => string | undefined;
+  /** Open a workspace-relative file the handoff saved, such as its patch (ADR-0050). */
+  openFile: (path: string) => void;
   log: (msg: string) => void;
 }
 
@@ -47,6 +50,8 @@ export class TaskLogPanel {
   private sequence = 0;
   private ready = false;
   private lastStatus = '';
+  /** When the runner last went quiet, as the status stream says it: the Session keeps no per-task answer to ask for. */
+  private idleSince: string | null = null;
 
   constructor(
     private readonly panel: vscode.WebviewPanel,
@@ -69,7 +74,7 @@ export class TaskLogPanel {
     panel.onDidDispose(() => onDisposed());
   }
 
-  /** Bring the tab to the front; used when "Open log" is clicked on an open panel. */
+  /** Bring the tab to the front; used when "Open chat" is clicked on an open panel. */
   reveal(): void { this.panel.reveal(); }
 
   dispose(): void { this.panel.dispose(); }
@@ -87,6 +92,7 @@ export class TaskLogPanel {
       else this.push();
       return;
     }
+    if (msg.type === 'status_update') this.idleSince = msg.tasks.find((t) => t.id === this.taskId)?.idleSince ?? null;
     if (TASK_STATE_EVENTS.has(msg.type)) this.pushStatus();
   }
 
@@ -120,11 +126,14 @@ export class TaskLogPanel {
         this.controlAsync(() => this.userCommand({ command: 'interrupt_task', task: this.taskId }));
         return;
       case 'cancelResume':
-        this.controlAsync(() => this.userCommand({ command: 'cancel_resume', task: this.taskId }));
+        this.controlAsync(() => this.userCommand(taskActionCommand('cancel-resume', this.taskId)));
         return;
       case 'resumeNow':
         this.follow = { ...this.follow, followLatest: true };
-        this.controlAsync(() => this.userCommand({ command: 'retry_task', task: this.taskId, from: 'session' }));
+        this.controlAsync(() => this.userCommand(taskActionCommand('resume-now', this.taskId)));
+        return;
+      case 'openFile':
+        this.deps.openFile(msg.path);
         return;
       case 'continueTask':
         // The continue is a new attempt: show it, even from an earlier one.
@@ -199,36 +208,27 @@ export class TaskLogPanel {
 
   private status(): TaskLogStatus {
     const task = this.deps.getTask(this.taskId);
-    const resumes = task ? resumeLabel(task) : null;
-    const spend = task ? taskUsageSummary(task) : undefined;
-    // A log saved before attempt ledgers still measured its own usage; it is
-    // the only report there is, and the TUI task view draws it too.
-    const logged = this.follow.view.usage;
-    const loggedLine = logged && isMeasured(logged.totals) ? usageLine(logged) : undefined;
-    const usage = spend && spend.attempts > 0
-      ? { totals: spend.totals, ...(spend.contextFill ? { contextFill: spend.contextFill } : {}) }
-      : loggedLine
-        ? { totals: loggedLine.totals, ...(loggedLine.contextFill ? { contextFill: loggedLine.contextFill } : {}) }
-        : undefined;
+    const approvals = this.deps.session.outstandingApprovals()
+      .filter((p) => p.request.kind === 'runner_tool' && p.request.taskId === this.taskId).length;
     return {
-      commands: latestTaskCommands(this.deps.session, this.taskId),
       taskId: this.taskId,
       order: task?.order ?? 0,
+      orderLabel: this.deps.orderLabel?.(this.taskId),
       title: task?.title ?? '',
-      runner: task?.assignedRunner ?? '',
-      planStatus: task?.status ?? 'pending',
-      awaitingReason: task?.awaitingReason,
-      ...(resumes ? { resumes } : {}),
-      awaitingApproval: this.deps.session.outstandingApprovals()
-        .filter((p) => p.request.kind === 'runner_tool' && p.request.taskId === this.taskId).length,
-      working: this.follow.view.working,
-      lastTurnEnd: this.follow.view.lastTurnEnd,
+      runner: (task && assignedRunnerOf(task)) ?? '',
+      script: task?.type === 'script',
+      header: taskLogHeaderView({
+        status: task?.status ?? '',
+        ...(task?.awaitingReason ? { awaitingReason: task.awaitingReason } : {}),
+        ...(task?.skipReason !== undefined ? { skipReason: task.skipReason } : {}),
+        resumeAt: task?.resumeAt ?? null,
+        idleSince: this.idleSince,
+        continuable: task ? canContinue(task) : false,
+        attemptUsage: task?.attemptUsage ?? [],
+      }, this.follow, approvals, this.follow.attempt),
       queued: this.follow.view.queued,
       attempts: this.follow.attempts,
       attempt: this.follow.attempt,
-      continuable: task ? canContinue(task) : false,
-      resumable: task ? pausedOnLimit(task) && canContinue(task) : false,
-      ...(usage ? { usage } : {}),
     };
   }
 
@@ -258,7 +258,7 @@ export class TaskLogPanel {
   }
 }
 
-/** The tab title ADR-0018 asks for: `Task N · <title>`. */
-export function taskTabTitle(status: Pick<TaskLogStatus, 'order' | 'title'>): string {
-  return `Task ${status.order} · ${status.title}`;
+/** The tab title ADR-0018 asks for: `Task N · <title>`, with a subtask's dotted reference. */
+export function taskTabTitle(status: Pick<TaskLogStatus, 'order' | 'orderLabel' | 'title'>): string {
+  return `Task ${status.orderLabel ?? status.order} · ${status.title}`;
 }

@@ -1,5 +1,5 @@
 import { codexSandboxNotice, createSkillsService, EnvConfig } from '@ordewell/core';
-import { canSetDependencies, dependencyCandidates, resolveTaskRef, resolveUserTaskRef, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf } from '@ordewell/core/plan-utils';
+import { canSetDependencies, dependencyCandidates, noExecutorRefusal, resolveTaskRef, resolveUserTaskRef, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf } from '@ordewell/core/plan-utils';
 import { assignedModelFor, effortsForTask, modelsForTask, modesForTask, runnerAccepts } from '../tui/taskAssignment';
 import { findTask, type TaskView } from '../tui/state';
 import type { ApiClient } from '../apiClient';
@@ -44,9 +44,7 @@ const RUNNER_USAGE = 'Usage: ordewell task-runner <task-id-or-order> [<runner>] 
 
 export async function handleTaskRunner(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   await withTask(subArgs, RUNNER_USAGE, injectedApi, async (api, sessionId, task, tasks, runner) => {
-    if (task.type !== 'ai') {
-      fail('Manual tasks do not run on an executor, so they have no runner.');
-    }
+    if (task.type !== 'ai') fail(noExecutorRefusal(task.type, 'they have no runner.', 'it has no runner.'));
 
     const state = await api.getRunners();
     if (!runner) {
@@ -75,6 +73,7 @@ const MODEL_USAGE = 'Usage: ordewell task-model <task-id-or-order> [<model-id>] 
 
 export async function handleTaskModel(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   await withTask(subArgs, MODEL_USAGE, injectedApi, async (api, sessionId, task, tasks, modelId) => {
+    if (task.type !== 'ai') fail(noExecutorRefusal(task.type, 'they have no executor model.', 'it has no model.'));
     const catalog = await fetchCatalog(api);
     const options = modelsForTask(catalog.models, task);
 
@@ -113,6 +112,7 @@ const EFFORT_USAGE = 'Usage: ordewell task-effort <task-id-or-order> [<level>|de
 
 export async function handleTaskEffort(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   await withTask(subArgs, EFFORT_USAGE, injectedApi, async (api, sessionId, task, tasks, level) => {
+    if (task.type !== 'ai') fail(noExecutorRefusal(task.type, 'they have no thinking effort.', 'it has no thinking effort.'));
     const catalog = await fetchCatalog(api);
     const variants = effortsForTask(catalog.models, task);
     const current = task.assignedModel?.thinkingEffort;
@@ -151,6 +151,7 @@ const MODE_USAGE = 'Usage: ordewell task-mode <task-id-or-order> [<mode>] [--ses
 
 export async function handleTaskMode(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   await withTask(subArgs, MODE_USAGE, injectedApi, async (api, sessionId, task, tasks, mode) => {
+    if (task.type !== 'ai') fail(noExecutorRefusal(task.type, 'they have no executor mode.', 'it has no mode.'));
     const catalog = await fetchCatalog(api);
     const modes = modesForTask(catalog.modesByRunner, task);
 

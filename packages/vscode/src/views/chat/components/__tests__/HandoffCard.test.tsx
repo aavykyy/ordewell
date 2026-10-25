@@ -4,12 +4,14 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import HandoffCard from '../HandoffCard';
 import type { IsolationMergeResult } from '@ordewell/core';
 
+const landed = [
+  { taskId: 't2', order: 2, title: 'Second task' },
+  { taskId: 't1', order: 1, title: 'First task' },
+];
+
 const handoff = {
-  repos: [{ path: '.', integrationBranch: 'ordewell/run-1/integration', baseRef: 'abcdef0123456789' }],
-  landed: [
-    { taskId: 't2', order: 2, title: 'Second task' },
-    { taskId: 't1', order: 1, title: 'First task' },
-  ],
+  repos: [{ path: '.', integrationBranch: 'ordewell/run-1/integration', baseRef: 'abcdef0123456789', landed }],
+  landed,
 };
 
 const groupHandoff = {
@@ -101,7 +103,18 @@ describe('HandoffCard — repo group (ADR-0014)', () => {
     expect(document.querySelector('.isolation-handoff-repo')).toBeNull();
   });
 
-  it('shows every blocking repository, its reason and files, and how to merge by hand', () => {
+  it('treats a one-repo workspace that is not the root as a group, as core does', () => {
+    const oneNested = {
+      repos: [{ path: 'api', integrationBranch: 'ordewell/run-1/integration', baseRef: 'aaaa11112222', landed: [{ taskId: 't1', order: 1, title: 'Add rate limiting' }] }],
+      landed: [{ taskId: 't1', order: 1, title: 'Add rate limiting' }],
+    };
+    render(<HandoffCard {...oneNested} onAction={vi.fn()} />);
+
+    expect(screen.getByText('Merge all')).toBeTruthy();
+    expect(document.querySelector('.isolation-handoff-repo-path')!.textContent).toBe('api');
+  });
+
+  it('shows every blocking repository, its reason and files, in core\'s words', () => {
     const blocked: IsolationMergeResult = {
       outcome: 'blocked',
       blocked: [
@@ -111,23 +124,56 @@ describe('HandoffCard — repo group (ADR-0014)', () => {
     };
     render(<HandoffCard {...groupHandoff} mergeResult={blocked} onAction={vi.fn()} />);
 
-    const blocks = [...document.querySelectorAll('.isolation-merge-block')].map((el) => el.textContent);
-    expect(blocks).toHaveLength(2);
-    expect(blocks[0]).toContain('api');
-    expect(blocks[0]).toContain('conflict');
-    expect(blocks[0]).toContain('src/a.ts');
-    expect(blocks[1]).toContain('web');
-    expect(blocks[1]).toContain('uncommitted');
-    expect(blocks[1]).toContain('src/b.ts');
-    expect(screen.getByText(/can be merged by hand/)).toBeTruthy();
+    expect(document.querySelector('.isolation-merge-result')!.textContent).toBe(
+      'Merged nothing, so every tree is as it was: api would conflict in src/a.ts; web has uncommitted changes to src/b.ts. Each repository\'s ordewell/run-1/integration is a plain branch you can merge by hand.',
+    );
+  });
+
+  it('words a git failure as core does', () => {
+    const blocked: IsolationMergeResult = { outcome: 'blocked', blocked: [{ repo: 'api', reason: 'git-error', files: [] }] };
+    render(<HandoffCard {...groupHandoff} mergeResult={blocked} onAction={vi.fn()} />);
+
+    expect(document.querySelector('.isolation-merge-result')!.textContent).toBe(
+      'Merged nothing, so every tree is as it was: git could not check api. Each repository\'s ordewell/run-1/integration is a plain branch you can merge by hand.',
+    );
   });
 
   it('names the repos that landed when a merge stopped part-way', () => {
     const partial: IsolationMergeResult = { outcome: 'conflict', repo: 'web', files: ['src/b.ts'], landed: ['api'] };
     render(<HandoffCard {...groupHandoff} mergeResult={partial} onAction={vi.fn()} />);
 
-    expect(screen.getByText(/stopped in/)).toBeTruthy();
-    expect(screen.getByText(/api.*stay merged/)).toBeTruthy();
+    expect(document.querySelector('.isolation-merge-result')!.textContent).toBe(
+      'Merging ordewell/run-1/integration conflicted in web (src/b.ts), so it was aborted there. api was merged already and stays merged. Each repository\'s ordewell/run-1/integration is a plain branch you can merge by hand.',
+    );
+  });
+
+  it('draws a lone repo\'s blocked merge all, not just a group\'s', () => {
+    const blocked: IsolationMergeResult = {
+      outcome: 'blocked',
+      blocked: [{ repo: '.', reason: 'wrong-branch', files: [], expected: 'main', actual: 'feature-x' }],
+    };
+    render(<HandoffCard {...handoff} mergeResult={blocked} onAction={vi.fn()} />);
+
+    expect(document.querySelector('.isolation-merge-result')!.textContent).toBe(
+      'Merged nothing, so every tree is as it was: your checkout is on feature-x; this run started on main. Check out main and press Merge all again.',
+    );
+  });
+
+  it('draws a lone repo\'s clean merge in the lone-repo wording', () => {
+    render(<HandoffCard {...handoff} mergeResult={{ outcome: 'merged' }} onAction={vi.fn()} />);
+
+    expect(document.querySelector('.isolation-merge-result')!.textContent).toBe(
+      'Merged ordewell/run-1/integration into your checked-out branch.',
+    );
+  });
+
+  it('tells a lone repo whose merge conflicted to resolve it with git', () => {
+    const conflict: IsolationMergeResult = { outcome: 'conflict', repo: '.', files: ['src/a.ts'] };
+    render(<HandoffCard {...handoff} mergeResult={conflict} onAction={vi.fn()} />);
+
+    expect(document.querySelector('.isolation-merge-result')!.textContent).toBe(
+      'Merging ordewell/run-1/integration conflicted, so it was aborted: your tree is as it was. Merge it with git and resolve the conflict there.',
+    );
   });
 });
 
@@ -170,7 +216,9 @@ describe('HandoffCard — the branch the run started on', () => {
     };
     render(<HandoffCard {...groupHandoff} mergeResult={blocked} onAction={vi.fn()} />);
 
-    expect(document.querySelector('.isolation-merge-block')!.textContent).toBe('api is in the middle of a rebase; this run started on main. Finish or abort the rebase, then merge again');
+    expect(document.querySelector('.isolation-merge-result')!.textContent).toBe(
+      'Merged nothing, so every tree is as it was: api is in the middle of a rebase; this run started on main. Finish or abort the rebase in api, then press Merge all again. Each repository\'s ordewell/run-1/integration is a plain branch you can merge by hand.',
+    );
   });
 
   it('says which branch to check out when a repository is on another', () => {
@@ -180,6 +228,8 @@ describe('HandoffCard — the branch the run started on', () => {
     };
     render(<HandoffCard {...groupHandoff} mergeResult={blocked} onAction={vi.fn()} />);
 
-    expect(document.querySelector('.isolation-merge-block')!.textContent).toBe('api is on feature-x; this run started on main. Check out main and merge again');
+    expect(document.querySelector('.isolation-merge-result')!.textContent).toBe(
+      'Merged nothing, so every tree is as it was: api is on feature-x; this run started on main. Check out main and press Merge all again. Each repository\'s ordewell/run-1/integration is a plain branch you can merge by hand.',
+    );
   });
 });

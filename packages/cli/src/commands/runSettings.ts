@@ -2,7 +2,7 @@ import type { GlobalRunSettings } from '@ordewell/core';
 import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
 import {
-  ACT_RISK, AUTORUN_RISK, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary,
+  ACT_RISK, AUTORUN_RISK, SUPERVISOR_LEVEL_LABEL, PLANNED_WITH_LABEL, automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary, trailerSummary,
 } from '@ordewell/core';
 import { connect, fail } from './shared';
 
@@ -14,6 +14,7 @@ import { connect, fail } from './shared';
 
 const SUPERVISOR_USAGE = 'Usage: ordewell supervisor [off|watch|act] · ordewell supervisor retries <n> · ordewell supervisor reads <n>';
 const AUTOMERGE_USAGE = 'Usage: ordewell automerge [on|off]';
+const TRAILER_USAGE = 'Usage: ordewell trailer [on|off]';
 const AUTORUN_USAGE = 'Usage: ordewell autorun [on|off]';
 
 async function save(api: ApiClient, changes: Partial<GlobalRunSettings>): Promise<void> {
@@ -54,6 +55,21 @@ export async function handleAutomerge(subArgs: string[], injectedApi?: ApiClient
   }
   await save(api, { mergeAtGatesAutomatically: enabled });
   console.log(`Merge automatically (gates, end of run): ${enabled ? 'on' : 'off'}, from each session's next run.`);
+}
+
+export async function handleTrailer(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
+  const [arg] = positionals(subArgs);
+  const enabled = arg === undefined ? null : parseSwitch(arg);
+  if (arg !== undefined && enabled === null) fail(TRAILER_USAGE);
+
+  const api = await connect(subArgs, injectedApi);
+  if (enabled === null) {
+    console.log(trailerSummary((await api.getSettings()).run));
+    console.log(`  ${TRAILER_USAGE}`);
+    return;
+  }
+  await save(api, { plannedWithTrailer: enabled });
+  console.log(`${PLANNED_WITH_LABEL}: ${enabled ? 'on' : 'off'}, from each session's next commit.`);
 }
 
 export async function handleAutorun(subArgs: string[], injectedApi?: ApiClient): Promise<void> {

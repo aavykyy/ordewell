@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, landsNothing, mergeExcludes, takesSkills,
+  attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, landsNothing, mergeExcludes, takesSkills, writesCommit,
   type AttemptKind, type AttemptPromptSources,
 } from '../attemptKind';
 import type { AttemptIntent } from '../IsolationRunController';
@@ -59,15 +59,15 @@ describe('classifyAttempt', () => {
 });
 
 describe('what each kind decides', () => {
-  const table: Array<[string, { mergeExcludes: boolean; decidesIsolation: boolean; checksTree: boolean; cwd: string }]> = [
-    ['change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'fresh' }],
-    ['ops', { mergeExcludes: true, decidesIsolation: false, checksTree: true, cwd: 'workspace' }],
-    ['repair', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'kept' }],
-    ['continued change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'restored' }],
-    ['continued ops', { mergeExcludes: true, decidesIsolation: false, checksTree: true, cwd: 'workspace' }],
-    ['carried-over change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'restored' }],
-    ['read-only', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'throwaway' }],
-    ['continued read-only', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'throwaway' }],
+  const table: Array<[string, { writesCommit: boolean; mergeExcludes: boolean; decidesIsolation: boolean; checksTree: boolean; cwd: string }]> = [
+    ['change', { writesCommit: true, mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'fresh' }],
+    ['ops', { writesCommit: false, mergeExcludes: true, decidesIsolation: false, checksTree: true, cwd: 'workspace' }],
+    ['repair', { writesCommit: false, mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'kept' }],
+    ['continued change', { writesCommit: true, mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'restored' }],
+    ['continued ops', { writesCommit: false, mergeExcludes: true, decidesIsolation: false, checksTree: true, cwd: 'workspace' }],
+    ['carried-over change', { writesCommit: true, mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'restored' }],
+    ['read-only', { writesCommit: false, mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'throwaway' }],
+    ['continued read-only', { writesCommit: false, mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'throwaway' }],
   ];
 
   it.each(table)('a %s attempt', async (name, expected) => {
@@ -80,6 +80,7 @@ describe('what each kind decides', () => {
     const place = await attemptCwd(kind, createTask({ id: 't1' }), runs);
 
     expect({
+      writesCommit: writesCommit(kind),
       mergeExcludes: mergeExcludes(kind),
       decidesIsolation: decidesIsolation(kind),
       checksTree: checksTree(kind),
@@ -125,13 +126,13 @@ describe('attemptPrompt', () => {
   }
 
   const table: Array<[string, { has: string[]; lacks: string[]; reads: Array<'repairPrompt' | 'previousAttempt'> }]> = [
-    ['change', { has: ['ORIGINAL BODY', '### Skill: tdd'], lacks: ['## Previous attempt'], reads: [] }],
+    ['change', { has: ['ORIGINAL BODY', '### Skill: tdd'], lacks: ['## Previous attempt', 'save_patch'], reads: [] }],
     ['ops', { has: ['ORIGINAL BODY', '### Skill: tdd', '## Previous attempt', 'created resource group rg-dev'], lacks: [], reads: ['previousAttempt'] }],
     ['repair', { has: ['MERGE THE INTEGRATION BRANCH'], lacks: ['ORIGINAL BODY', '### Skill: tdd', '## Previous attempt'], reads: ['repairPrompt'] }],
     ['continued change', { has: ['Check the working tree'], lacks: ['ORIGINAL BODY', '### Skill: tdd'], reads: [] }],
     ['continued ops', { has: ['in the same checkout', 'was not undone'], lacks: ['ORIGINAL BODY', '## Previous attempt'], reads: [] }],
     ['carried-over change', { has: ['ORIGINAL BODY', '### Skill: tdd', 'previous attempt on codex', 'may be unfinished'], lacks: ['## Previous attempt'], reads: [] }],
-    ['read-only', { has: ['ORIGINAL BODY', '### Skill: tdd'], lacks: ['## Previous attempt'], reads: [] }],
+    ['read-only', { has: ['ORIGINAL BODY', '### Skill: tdd', 'keep it with the `save_patch` tool before you finish'], lacks: ['## Previous attempt'], reads: [] }],
     ['continued read-only', { has: ['nothing your earlier attempt changed was kept'], lacks: ['ORIGINAL BODY', 'Your previous changes are in the working tree'], reads: [] }],
   ];
 

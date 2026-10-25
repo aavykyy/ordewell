@@ -69,7 +69,7 @@ describe('POST /:sessionId/generate', () => {
   });
 
   // A missing workspace is a readable 400, not a 500 with a stack — the
-  // client (TUI, VS Code, web) shows the message directly.
+  // client (TUI, VS Code) shows the message directly.
   it('reports a missing workspace as a 400 with a readable message, not a 500', async () => {
     const badWorkspacePool = fakePool({
       generatePlan: vi.fn().mockRejectedValue(new WorkspaceNotFoundError('/nope')),
@@ -122,51 +122,61 @@ describe('POST /:sessionId/generate', () => {
   });
 });
 
-describe('task control routes', () => {
-  it.each([
-    ['run', { command: 'run_task', task: 't9' }],
-    ['retry', { command: 'retry_task', task: 't9', from: 'fresh' }],
-    ['cancel', { command: 'stop_task', task: 't9' }],
-  ])('POST tasks/:taskId/%s reaches the command seam as the user', async (segment, command) => {
-    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'done' });
+describe('the execute-command route', () => {
+  const send = async (execute: ReturnType<typeof vi.fn>, body: unknown, sessionId = 's1') => {
     const pool = fakePool({ session: vi.fn().mockReturnValue({ execute }) } as never);
     const { plansRoute } = await import('../../routes/plans');
     const app = new Hono();
     app.route('/api/plans', plansRoute(pool));
+    return app.request(`/api/plans/${sessionId}/execute-command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  };
 
-    const res = await app.request(`/api/plans/s1/tasks/t9/${segment}`, { method: 'POST' });
+  it.each([
+    { command: 'run_task', task: 't9' },
+    { command: 'retry_task', task: 't9', from: 'fresh' },
+    { command: 'stop_task', task: 't9' },
+  ])('reaches the command seam as the user: %j', async (command) => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'done' });
+
+    const res = await send(execute, command);
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, message: 'done' });
     expect(execute).toHaveBeenCalledWith(command, { kind: 'user' });
   });
 
-  it('force-starts through the seam, answering the queued line from its payload', async () => {
+  it('answers a force start\'s queued line from its payload', async () => {
     const line = 'Task "Deploy" is approved and starts once task "Build" finishes.';
     const execute = vi.fn().mockResolvedValue({ ok: true, message: line, payload: { kind: 'queued', line } });
-    const pool = fakePool({ session: vi.fn().mockReturnValue({ execute }) } as never);
-    const { plansRoute } = await import('../../routes/plans');
-    const app = new Hono();
-    app.route('/api/plans', plansRoute(pool));
 
-    const res = await app.request('/api/plans/s1/tasks/t9/force-start', { method: 'POST' });
+    const res = await send(execute, { command: 'force_start', task: 't9' });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, queued: line, message: line });
+    expect(await res.json()).toEqual({ ok: true, message: line, payload: { kind: 'queued', line } });
     expect(execute).toHaveBeenCalledWith({ command: 'force_start', task: 't9' }, { kind: 'user' });
   });
 
   it('answers a seam refusal with 400 and its reason', async () => {
     const execute = vi.fn().mockResolvedValue({ ok: false, outcome: 'refused', message: 'Task #9 "Deploy" is not running: there is nothing to stop.' });
-    const pool = fakePool({ session: vi.fn().mockReturnValue({ execute }) } as never);
-    const { plansRoute } = await import('../../routes/plans');
-    const app = new Hono();
-    app.route('/api/plans', plansRoute(pool));
 
-    const res = await app.request('/api/plans/s1/tasks/t9/cancel', { method: 'POST' });
+    const res = await send(execute, { command: 'stop_task', task: 't9' });
 
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'Task #9 "Deploy" is not running: there is nothing to stop.', code: 'refused' });
+  });
+
+  it('keeps the result of a Merge all that git stopped with its refusal', async () => {
+    const result = { status: 'conflict', conflicts: ['a.ts'] };
+    const execute = vi.fn().mockResolvedValue({ ok: false, outcome: 'refused', message: 'The merge stopped.', payload: { kind: 'merge', result } });
+
+    const res = await send(execute, { command: 'merge_all' });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'The merge stopped.', code: 'refused', payload: { kind: 'merge', result } });
   });
 
   it('returns 404 for an unknown session', async () => {
@@ -177,25 +187,41 @@ describe('task control routes', () => {
     const app = new Hono();
     app.route('/api/plans', plansRoute(pool));
 
-    const res = await app.request('/api/plans/nope/tasks/t9/retry', { method: 'POST' });
+    const res = await app.request('/api/plans/nope/execute-command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: 'retry_task', task: 't9', from: 'fresh' }),
+    });
     expect(res.status).toBe(404);
   });
 
-  it('does not shadow the tasks/merge route', async () => {
-    const requestMerge = vi.fn().mockResolvedValue({ tasks: [] });
-    const pool = fakePool({ session: vi.fn().mockReturnValue({ requestMerge }) } as never);
+  it('does not expose the retired task merge or split endpoints', async () => {
+    const requestMerge = vi.fn();
+    const requestSplit = vi.fn();
+    const continuePlanning = vi.fn();
+    const pool = fakePool({
+      session: vi.fn().mockReturnValue({ requestMerge, requestSplit }),
+      continuePlanning,
+    } as never);
     const { plansRoute } = await import('../../routes/plans');
     const app = new Hono();
     app.route('/api/plans', plansRoute(pool));
 
-    const res = await app.request('/api/plans/s1/tasks/merge', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ taskIds: ['a', 'b'] }),
-    });
+    for (const [path, body] of [
+      ['/api/plans/s1/tasks/merge', { taskIds: ['a', 'b'] }],
+      ['/api/plans/s1/tasks/t1/split', {}],
+    ] as const) {
+      const res = await app.request(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(404);
+    }
 
-    expect(res.status).toBe(200);
-    expect(requestMerge).toHaveBeenCalledWith(['a', 'b']);
+    expect(requestMerge).not.toHaveBeenCalled();
+    expect(requestSplit).not.toHaveBeenCalled();
+    expect(continuePlanning).not.toHaveBeenCalled();
   });
 });
 

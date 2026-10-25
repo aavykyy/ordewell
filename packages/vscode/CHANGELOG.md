@@ -9,6 +9,10 @@
   Dependents can pull the full handoff, and a loop's check gets its fix's
   handoff and its own previous findings. Research run updates carry summaries
   and whole findings; long reports stay in attempt logs.
+- **A read-only task's saved patch.** A task that tried a change can keep it as
+  a patch. Its task card and its log show how many files and lines the patch
+  changes, where it is saved and what it left out, with an Open patch button
+  that opens the file in an editor tab.
 - **Script tasks.** A plan can hold a task with no runner and no model, a list
   of commands or one script that Ordewell runs at the workspace root; its exit
   status is its verdict. The plan shows its body, read-only, in place of a
@@ -22,10 +26,10 @@
 - **Check-and-fix loops.** A task can be a loop's check: while it fails with
   rounds left, the tasks of its body fix what it found and the check runs
   again, with no planner turn in between. The plan shows each loop's rounds.
-- **Research tasks.** The planner can hand a longer investigation to a
-  read-only task whose report wakes it with the result, at every supervisor
-  level. Research tasks run within the run's Parallel limit like any other
-  task.
+- **Research tasks.** When the planner must decide something on what a
+  read-only task finds, it marks that task as research, and its report wakes it
+  with the result, at every supervisor level. Research tasks run within the
+  run's Parallel limit like any other task.
 - **The planner chooses a strategy before it outlines a plan**, from answering
   a question with no plan to exploring an open problem one round at a time,
   and each of its turns tells it how full its context is and what remains of
@@ -39,14 +43,87 @@
   macOS use its own shell**, off by default and on checked versions only, with
   every command run in Ordewell's sealed profile with the network. A
   workspace cannot set it.
+- **A daily version check.** Once a day Ordewell asks ordewell.ai whether a
+  newer version is out and shows one line when it is. The request carries the
+  version you run and a random install ID, shared with the CLI through
+  `~/.ordewell/version-check.json`; nothing else is sent, though ordewell.ai
+  sees the IP address of any request. The first start shows a notice and sends
+  nothing. Turn it off with VS Code's telemetry setting
+  (`telemetry.telemetryLevel`), `ORDEWELL_NO_VERSION_CHECK=1` or
+  `DO_NOT_TRACK=1`: off, no notice, no ID and no request.
+- **Real commit messages.** A change task can state a commit message, and the
+  commits Ordewell writes to land it use it instead of git's default merge
+  message. Handoffs show the commit.
+- **A `Planned-with: Ordewell` trailer** ends the commits Ordewell writes. Turn
+  it off with `ordewell trailer off` (it is not in the settings panel).
+- **Installed coding agents that are switched off now show in the Runners
+  block.** Clicking one enables it in the shared settings file and in the next
+  plan's runner set; before, it could only be enabled from the command palette
+  or the TUI.
 
 ### Changed
 
+- **The chat and task logs fold what an agent did.** Each run of thinking,
+  calls, subagents and setup notices between two messages is one line that
+  says what it did, such as "Ran 4 commands, fetched 2 pages (2 failed)", and
+  opens to its rows. Each row, each step of a subagent and each long report
+  opens on its own. A line with something failed or denied in it is coloured
+  as a failure, and a call that never ran is never counted as run. Requests
+  waiting for an answer, errors and every message stay in view, and a script
+  task's log folds nothing: each command shows its whole output and exit. The
+  Expand all and Collapse all buttons are gone.
+- **Merge and Split are planner requests, not task-card buttons.** Ask the
+  planner in chat to merge or split tasks; the task cards no longer carry the
+  controls, their selection banner or their inline error.
 - **A read-only task is the same on every runner.** It reads with its runner's
   own tools, runs commands sealed with its worktree writable, so a review can
   run the tests, and lands nothing: its report is its result.
 - **A runner that cannot connect to Ordewell's tools holds its task** instead
   of failing it, and every hold shows its reason on the task's status badge.
+- **The planner chooses between its own agents and a research task by what the
+  result is, not by how long it will take.** A conclusion it needs this turn
+  stays in the turn; evidence that needs a worktree, another runner's judgement
+  or your eye, or that a later task acts on, is a task of its own, marked as
+  research only when the planner must decide something on its report, and a
+  search that takes rounds is the `explore` skill.
+- **The planner is sent its plan whole once, then only what changed.** The
+  whole plan goes again after a reorder, a reset or compaction, or a turn that
+  did not land.
+- **Opening a session another Ordewell host is running is refused.** The
+  message names the window or process that holds it. Before, a second window
+  loaded the session as well, and the two removed each other's task worktrees
+  and overwrote its file
+  ([ADR-0049](docs/adr/isolation/0049-a-session-has-one-live-host.md)).
+- **A plan marker and a handoff preview use the terminal's words.** The marker
+  reads `Plan generated · 3 tasks`, and the preview names the findings count,
+  severity, commit and the first line of the summary.
+- **The inert `ordewell.researchEnabled` setting is gone.** It never changed
+  what the planner did.
+
+### Fixed
+
+- **A task log's header follows the attempt on screen.** Its usage is that
+  attempt's, with the task total beneath it, its `/` commands come from that
+  attempt, and a runner that has gone quiet reads Stalled after the next status
+  update.
+- **A task log tab reopens after a window reload.** The tab finds its task
+  again, and a tab whose task left the plan closes instead of staying empty.
+- **A subtask's log tab is named by its dotted reference** (`Task 2.1 · …`),
+  and its card carries the same Waits for Merge all, Conflict and Repairing
+  badges as its parent's.
+- **An early Stop releases the chat.** Stopping before the planner turn opened
+  no longer leaves the webview drawing the turn as working.
+- **A turn waiting on your approval card is no longer called a hang** by the
+  chat's watchdog.
+- **Approving a plan no longer marks a manual task approved before the run
+  reaches it**, and a task whose approval the planner withdraws is announced
+  instead of changing silently.
+- **Merge all's guidance in the handoff card is the terminal's next step**,
+  including for a lone repository whose merge conflicted: your tree is as it
+  was, and you merge the branch yourself with git.
+- **A script task's or a manual task's log tab no longer names a runner** it does
+  not have.
+
 ## [0.10.12] - 2026-10-22
 
 ### Fixed

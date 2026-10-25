@@ -399,6 +399,48 @@ describe('a usage-limit pause keeps the run open', () => {
     expect(orchestrator.status).toBe('completed');
   });
 
+  // A pause is no verdict, however the limit arrived: a failed one would read
+  // as a failure to the planner, the task's report and every surface.
+  it.each(stops)('records no verdict and archives nothing when the task pauses because %s', async (_how, stop) => {
+    const { orchestrator, sessions, spawn, task } = setup();
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+    if (stop.refuse) spawn.mockRejectedValueOnce(new RunnerStartupExit(`The claude-code task runner exited with code 1.\n\n${LIMIT}`));
+    await orchestrator.forceStartTask('t1');
+    stop.hit?.(sessions[0]);
+    await until(() => task('t1').status === 'awaiting_user');
+    await flushMicrotasks(20);
+
+    expect(task('t1')).toMatchObject({ awaitingReason: 'usage-limit', resumeAt: RESUME_AT });
+    expect(task('t1').verdict).toBeUndefined();
+    expect(task('t1').outputSummary?.reviewReason).toMatch(/usage limit|session limit/);
+    expect(orchestrator.storeInstance.getExecutionLog()).toEqual([]);
+  });
+
+  // A refused start once only ticked, so a task started alone kept its run
+  // without an end; every way in now settles as the attempt's verdict would.
+  const untimed = "You've hit your session limit.";
+  const untimedStops: [string, { refuse?: true; hit?: (session: FakeRunnerSession) => void }][] = [
+    ['its turn fails on the limit', { hit: (session) => hitLimitInTurn(session, untimed) }],
+    ['its runner exits on the limit', { hit: (session) => { session.emitOutput(untimed); session.emitExit(1); } }],
+    ['the limit refuses its start', { refuse: true }],
+  ];
+
+  it.each(untimedStops)('ends the run of a task started alone that waits for the user because %s', async (_how, stop) => {
+    const { orchestrator, sessions, spawn, task } = setup();
+    const events = runEvents(orchestrator);
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+    if (stop.refuse) spawn.mockRejectedValueOnce(new RunnerStartupExit(`The claude-code task runner exited with code 1.\n\n${untimed}`));
+    await orchestrator.forceStartTask('t1');
+    stop.hit?.(sessions[0]);
+    await until(() => task('t1').status === 'awaiting_user');
+    await flushMicrotasks(20);
+
+    expect(task('t1')).toMatchObject({ awaitingReason: 'usage-limit' });
+    expect(task('t1').resumeAt).toBeUndefined();
+    expect(orchestrator.awaitsResume).toBe(false);
+    expect(events).toEqual(['started:user', 'complete']);
+  });
+
   it('and an edit while it is held does not read as a running plan', async () => {
     const { orchestrator, sessions, task } = setup({ maxParallelSessions: 2 });
     const tasks = [
@@ -737,5 +779,106 @@ describe('resuming a task paused on a usage limit now', () => {
     await expect(orchestrator.resumeNow('t1', 'user')).rejects.toThrow('no saved session');
     await expect(orchestrator.resumeNow('t2', 'user')).rejects.toThrow('not paused on a usage limit');
     expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+describe('a task started on its own that pauses on a usage limit, once the pause ends', () => {
+  function lone() {
+    const events: string[] = [];
+    const ctx = setup({ maxParallelSessions: 1 });
+    ctx.orchestrator.subscribe({
+      onReviewNeeded: () => events.push('review'),
+      onExecutionComplete: () => events.push('complete'),
+    });
+    return { ...ctx, events };
+  }
+
+  it('ends its run when the resumed attempt passes, without asking for a review', async () => {
+    const { orchestrator, sessions, spawn, task, events } = lone();
+    orchestrator.loadPlan([
+      createTask({ id: 't1', order: 1, title: 'Alone', prompt: 'do first' }),
+      createTask({ id: 't2', order: 2, title: 'Other', prompt: 'do second' }),
+    ]);
+    await orchestrator.forceStartTask('t1');
+    hitLimitInTurn(sessions[0]);
+    await until(() => task('t1').status === 'awaiting_user');
+
+    await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
+    await until(() => spawn.mock.calls.length === 2);
+    sessions[1].reportComplete({ status: 'done', summary: '' });
+    await until(() => task('t1').status === 'completed');
+    await flushMicrotasks();
+
+    expect(events).toEqual(['complete']);
+    expect(orchestrator.awaitsResume).toBe(false);
+    expect(orchestrator.isScheduling).toBe(false);
+    expect(spawn.mock.calls.map(([o]) => o.taskId)).toEqual(['t1', 't1']);
+  });
+
+  it('starts nothing else at the reset, even with the plan approved by an earlier run', async () => {
+    const { orchestrator, sessions, spawn, task } = lone();
+    orchestrator.loadPlan([
+      createTask({ id: 't0', order: 1, title: 'Base', prompt: 'do base' }),
+      createTask({ id: 't1', order: 2, title: 'Alone', prompt: 'do first' }),
+      createTask({ id: 't2', order: 3, title: 'After base', prompt: 'do second', dependencies: ['t0'] }),
+    ]);
+    await orchestrator.approveReview();
+    orchestrator.stop();
+    await orchestrator.forceStartTask('t1');
+    const lonely = sessions.find((s) => s.taskId === 't1')!;
+    hitLimitInTurn(lonely);
+    await until(() => task('t1').status === 'awaiting_user');
+
+    await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
+    await until(() => task('t1').status === 'in_progress');
+    await flushMicrotasks();
+
+    expect(orchestrator.isScheduling).toBe(false);
+    expect(spawn.mock.calls.slice(-1).map(([o]) => o.taskId)).toEqual(['t1']);
+    expect(task('t0').status).not.toBe('in_progress');
+  });
+
+  it('leaves no run scheduling once the paused task is marked complete', async () => {
+    const { orchestrator, sessions, spawn, task } = lone();
+    orchestrator.loadPlan([
+      createTask({ id: 't1', order: 1, title: 'Alone', prompt: 'do first' }),
+      createTask({ id: 't2', order: 2, title: 'Other', prompt: 'do second' }),
+    ]);
+    await orchestrator.forceStartTask('t1');
+    hitLimitInTurn(sessions[0]);
+    await until(() => task('t1').status === 'awaiting_user');
+
+    await orchestrator.markTaskComplete('t1');
+    await flushMicrotasks();
+
+    expect(orchestrator.awaitsResume).toBe(false);
+    expect(orchestrator.isScheduling).toBe(false);
+    expect(orchestrator.status).not.toBe('running');
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts it again alone, and nothing else, once it moves to another runner', async () => {
+    const { orchestrator, sessions, spawn, task, events } = lone();
+    orchestrator.loadPlan([
+      createTask({ id: 't1', order: 1, title: 'Alone', prompt: 'do first' }),
+      createTask({ id: 't2', order: 2, title: 'Other', prompt: 'do second' }),
+    ], ['claude-code', 'codex']);
+    await orchestrator.forceStartTask('t1');
+    hitLimitInTurn(sessions[0]);
+    await until(() => task('t1').status === 'awaiting_user');
+
+    // What a runner edit lands: the released changes written, then a tick.
+    orchestrator.storeInstance.update('t1', orchestrator.releaseMovedResume('t1', { assignedRunner: 'codex' }));
+    await orchestrator.tick();
+    await until(() => spawn.mock.calls.length === 2);
+
+    expect(spawn.mock.calls[1][0]).toMatchObject({ taskId: 't1', runner: 'codex' });
+    expect(orchestrator.awaitsResume).toBe(false);
+    expect(orchestrator.isScheduling).toBe(false);
+    sessions[1].reportComplete({ status: 'done', summary: '' });
+    await until(() => task('t1').status === 'completed');
+    await flushMicrotasks();
+    expect(events).toEqual(['complete']);
+    expect(spawn.mock.calls.map(([o]) => o.taskId)).toEqual(['t1', 't1']);
   });
 });

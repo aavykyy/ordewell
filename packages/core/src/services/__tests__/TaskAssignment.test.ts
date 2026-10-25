@@ -58,7 +58,7 @@ describe('resolveAssignment: a task moved to another runner', () => {
       assignedRunner: 'codex',
       // 'adaptive' is Claude-only; the ladder maps it to medium, then down to the nearest level Codex offers.
       assignedModel: { modelId: 'gpt-5-codex', modelLabel: 'GPT-5-CODEX', thinkingEffort: 'low', availableVariants: ['low', 'high'] },
-      taskMode: 'fullAccess',
+      taskMode: 'agent',
     });
     expect(outcome.ok && outcome.adjustments).toEqual([
       { taskId: 't1', title: 'Refactor PlanStore', field: 'assignedModel', from: 'claude-sonnet-4-5', to: 'gpt-5-codex' },
@@ -133,7 +133,7 @@ describe('resolveAssignment: a new task', () => {
   it('gets its runner\'s first model and the level\'s mode', () => {
     const outcome = resolveAssignment({ writer: 'userAdd', task: { ...claudeTask({ assignedRunner: 'codex', assignedModel: undefined }), taskMode: undefined }, catalog: catalog() });
 
-    expect(landed(outcome)).toMatchObject({ assignedModel: { modelId: 'gpt-5-codex', modelLabel: 'GPT-5-CODEX', availableVariants: ['low', 'high'] }, taskMode: 'fullAccess' });
+    expect(landed(outcome)).toMatchObject({ assignedModel: { modelId: 'gpt-5-codex', modelLabel: 'GPT-5-CODEX', availableVariants: ['low', 'high'] }, taskMode: 'agent' });
   });
 
   it('keeps a model and a mode the user chose when the runner offers them', () => {
@@ -154,7 +154,7 @@ describe('resolveAssignment: a new task', () => {
 
     const outcome = resolveAssignment({ writer: 'edit', task: part, from, readOnly: false, catalog: catalog() });
 
-    expect(landed(outcome)).toMatchObject({ assignedModel: { modelId: 'gpt-5-codex' }, taskMode: 'fullAccess' });
+    expect(landed(outcome)).toMatchObject({ assignedModel: { modelId: 'gpt-5-codex' }, taskMode: 'agent' });
   });
 });
 
@@ -268,7 +268,7 @@ describe('resolveAssignment: a manual task', () => {
   // Bug: the flip derived nothing, so the task ran on the legacy `build` default.
   it('turned into an AI task gets the mode and model the planner path gives one', () => {
     const manual = createTask({ id: 't1', title: 'Sign off', type: 'user', assignedRunner: 'codex' });
-    expect(landed(edit('user', manual, { type: 'ai', prompt: 'sign it off' }))).toMatchObject({ taskMode: 'fullAccess', assignedModel: { modelId: 'gpt-5-codex' } });
+    expect(landed(edit('user', manual, { type: 'ai', prompt: 'sign it off' }))).toMatchObject({ taskMode: 'agent', assignedModel: { modelId: 'gpt-5-codex' } });
   });
 });
 

@@ -6,7 +6,7 @@ import {
   DEFAULT_RUNNERS, ModelResolver, RunnerRegistry, saveState, clearState,
   listSessions, loadSession,
   SettingsService, installedPlannerDetected,
-  type ExecutionCommand,
+  taskActionCommand, type ExecutionCommand,
 } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { forkConversation, rewindConversation, compactConversation } from '../plan/conversation';
@@ -14,7 +14,8 @@ import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import { SecretStore, type ApiProvider } from '../adapters/SecretStore';
 import { configureModelAllowlist } from './configureModelAllowlist';
-import { executeUserCommand, forceStartPastGate, handleNewSession } from '../plan/PlanManager';
+import { toggleRunner } from './enabledRunners';
+import { executeUserCommand, forceStartPastGate, handleNewSession, markTaskByHand } from '../plan/PlanManager';
 
 export interface CommandDeps {
   session: Session;
@@ -119,11 +120,14 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       }
       if (!target) return;
 
-      const newEnabled = deps.settingsService.updateEnabledRunners((saved) => {
-        const enabled = saved ?? deps.config.enabledRunners;
-        return enabled.includes(target) ? enabled.filter((r) => r !== target) : [...enabled, target];
-      });
-      await deps.sendRunnerAndModels();
+      const newEnabled = await toggleRunner(
+        {
+          settingsService: deps.settingsService,
+          config: deps.config,
+          sendRunnerAndModels: deps.sendRunnerAndModels,
+        },
+        target,
+      );
       vscode.window.showInformationMessage(`Enabled runners: ${newEnabled.length === 0 ? '(none: enable at least one)' : newEnabled.join(', ')}`);
     }),
   );
@@ -249,7 +253,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         if (!picked) return;
         taskId = picked.description;
       }
-      await userCommand({ command: 'mark_complete', task: taskId });
+      await userCommand(() => markTaskByHand('complete', taskId!, deps));
     }),
   );
   context.subscriptions.push(
@@ -271,7 +275,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         if (!picked) return;
         taskId = picked.description;
       }
-      await userCommand({ command: 'mark_not_done', task: taskId });
+      await userCommand(() => markTaskByHand('uncomplete', taskId!, deps));
     }),
   );
   context.subscriptions.push(
@@ -285,21 +289,21 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     vscode.commands.registerCommand('ordewell.skipTask', async (taskItem?: Task) => {
       const taskId = taskItem?.id;
       if (!taskId) return;
-      await userCommand({ command: 'skip_task', task: taskId });
+      await userCommand(taskActionCommand('skip', taskId));
     }),
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.retryTask', async (taskItem?: Task) => {
       const taskId = taskItem?.id;
       if (!taskId) return;
-      await userCommand({ command: 'retry_task', task: taskId, from: 'fresh' });
+      await userCommand(taskActionCommand('retry', taskId));
     }),
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.cancelTask', async (taskItem?: Task) => {
       const taskId = taskItem?.id;
       if (!taskId) return;
-      await userCommand({ command: 'stop_task', task: taskId });
+      await userCommand(taskActionCommand('cancel', taskId));
     }),
   );
   context.subscriptions.push(

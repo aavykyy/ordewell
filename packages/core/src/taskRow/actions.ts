@@ -1,5 +1,6 @@
 import { NOT_STARTED } from './status';
-import type { TaskType } from '../models/Task';
+import type { TaskStatus, TaskType } from '../models/Task';
+import type { ExecutionCommand } from '../services/ExecutionCommands';
 
 /**
  * What a user can do to one task from its row. For a task paused on a usage
@@ -71,14 +72,49 @@ export function markAction(task: { status: string }): 'complete' | 'uncomplete' 
 }
 
 /**
- * The mark an action asks the session for, or null when it is not a mark.
- * Skip is not one: it ends the task without vouching for its work, which
- * only Mark complete does.
+ * What a surface's task control can ask: a row's action, a start, or a fresh
+ * retry. Every one is a single call at the command seam; see {@link taskActionCommand}.
  */
-export function markRequestFor(action: string): 'complete' | 'uncomplete' | null {
-  if (action === 'complete') return 'complete';
-  if (action === 'uncomplete') return 'uncomplete';
-  return null;
+export type TaskAction = TaskRowAction | 'run' | 'retry';
+
+/**
+ * The command a task control sends the seam as the user (ADR-0029). One table
+ * for every surface, so a button means the same command in the terminal, the
+ * editor and the daemon. Skip is no mark: it ends the task without vouching for
+ * its work, which only `complete` does. `reason` is skip's, optional for the user.
+ */
+export function taskActionCommand(action: TaskAction, task: string, reason?: string): ExecutionCommand {
+  switch (action) {
+    case 'run': return { command: 'run_task', task };
+    case 'retry': return { command: 'retry_task', task, from: 'fresh' };
+    case 'cancel': return { command: 'stop_task', task };
+    // The user says the limit has reset early: the task resumes in its saved session now.
+    case 'resume-now': return { command: 'retry_task', task, from: 'session' };
+    case 'cancel-resume': return { command: 'cancel_resume', task };
+    case 'skip': return { command: 'skip_task', task, ...(reason ? { reason } : {}) };
+    case 'force-start': return { command: 'force_start', task };
+    case 'complete': return { command: 'mark_complete', task };
+    case 'uncomplete': return { command: 'mark_not_done', task };
+  }
+}
+
+/**
+ * Whether Mark complete or Mark not done on this task needs the user's explicit
+ * yes (ADR-0029): an AI or script task's override vouches for work no verdict
+ * passed. A manual task's is the user's own sign-off, and is asked of no one.
+ */
+export function overrideNeedsConfirmation(task: { type: TaskType }): boolean {
+  return task.type !== 'user';
+}
+
+/**
+ * An override command carrying the user's yes. `seen` is the status they were
+ * asked about: a task that moved on meanwhile is refused, not overridden. A
+ * caller that never looked, like a scripted `--yes`, leaves it out. Any other
+ * command is returned as it was.
+ */
+export function confirmedOverride(command: ExecutionCommand, seen?: TaskStatus): ExecutionCommand {
+  return command.command === 'mark_complete' || command.command === 'mark_not_done' ? { ...command, confirmed: true, ...(seen ? { seen } : {}) } : command;
 }
 
 /** Change versus ops can still be flipped (ADR-0020): an AI task that has not started. */

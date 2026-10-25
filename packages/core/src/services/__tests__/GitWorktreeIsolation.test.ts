@@ -8,6 +8,7 @@ import { createWorktreeIsolation, type GitExecFn, type WorktreeIsolationDeps } f
 import type { IsolationRun } from '../../interfaces/IWorktreeIsolation';
 import type { Task } from '../../models/Task';
 import { fakeConfig } from '../../testing';
+import { landingMessage, messageArgs } from '../landingMessage';
 
 const hasGit = (() => {
   try { execFileSync('git', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; }
@@ -82,6 +83,13 @@ function branches(root: string, pattern = 'ordewell/*'): string[] {
 }
 
 const execFileAsync = promisify(execFile);
+
+/** The git subcommand an invocation runs, past any `-c key=value` it starts with. */
+function subcommand(args: string[]): string | undefined {
+  let i = 0;
+  while (args[i] === '-c') i += 2;
+  return args[i];
+}
 
 /** Real git, except that `git worktree add` fails in the given repositories. */
 function refuseWorktreesIn(...repoRoots: string[]): GitExecFn {
@@ -461,6 +469,188 @@ describe.skipIf(!hasGit)('WorktreeIsolation integration queue', () => {
     expect(git(root, 'log', '--format=%s', run.repos[0].integrationBranch)).toContain('runner commit');
   });
 
+  it('writes the commit the task stated on its leftover work and its merge', async () => {
+    const root = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Add greeting');
+    const { cwd } = await iso.prepare(t, run);
+    writeFileSync(join(cwd, 'greeting.txt'), 'hi\n');
+
+    const commit = { subject: 'Greet the user on start', body: 'The banner was empty.\nNow it says hi.' };
+    expect(await iso.integrate(t, run, undefined, commit)).toBe('merged');
+
+    const integration = run.repos[0].integrationBranch;
+    expect(git(root, 'log', '-1', '--format=%B', integration)).toBe('Merge: Greet the user on start\n\nThe banner was empty.\nNow it says hi.');
+    expect(git(root, 'log', '-1', '--format=%B', `${integration}^2`)).toBe('Greet the user on start\n\nThe banner was empty.\nNow it says hi.');
+  });
+
+  it.each([true, false])('writes the stated commit verbatim when the user\'s commit.cleanup strips # lines (trailer %s)', async (plannedWith) => {
+    const root = repo();
+    git(root, 'config', 'commit.cleanup', 'strip');
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }), plannedWith: () => plannedWith });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Fix the parser');
+    const { cwd } = await iso.prepare(t, run);
+    writeFileSync(join(cwd, 'parser.txt'), 'fixed\n');
+
+    expect(await iso.integrate(t, run, undefined, { subject: '#42 Fix the parser', body: '# Changes\n- one' })).toBe('merged');
+
+    const integration = run.repos[0].integrationBranch;
+    const trailer = plannedWith ? '\n\nPlanned-with: Ordewell' : '';
+    expect(git(root, 'log', '-1', '--format=%B', `${integration}^2`)).toBe(`#42 Fix the parser\n\n# Changes\n- one${trailer}`);
+    expect(git(root, 'log', '-1', '--format=%B', integration)).toBe(`Merge: #42 Fix the parser\n\n# Changes\n- one${trailer}`);
+  });
+
+  it('falls back to the task title when the task stated no commit', async () => {
+    const root = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Add greeting\nwith a second line');
+    const { cwd } = await iso.prepare(t, run);
+    writeFileSync(join(cwd, 'greeting.txt'), 'hi\n');
+
+    expect(await iso.integrate(t, run)).toBe('merged');
+
+    const integration = run.repos[0].integrationBranch;
+    expect(git(root, 'log', '-1', '--format=%B', integration)).toBe('Merge: Add greeting');
+    expect(git(root, 'log', '-1', '--format=%B', `${integration}^2`)).toBe('Add greeting');
+  });
+
+  it('never rewrites a commit the runner made, and gives only the leftover work the stated message', async () => {
+    const root = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Mixed');
+    const { cwd } = await iso.prepare(t, run);
+    writeFileSync(join(cwd, 'committed.txt'), 'a\n');
+    git(cwd, 'add', 'committed.txt');
+    git(cwd, 'commit', '-q', '-m', 'runner commit');
+    writeFileSync(join(cwd, 'loose.txt'), 'b\n');
+
+    expect(await iso.integrate(t, run, undefined, { subject: 'Stated subject' })).toBe('merged');
+
+    const integration = run.repos[0].integrationBranch;
+    expect(git(root, 'log', '--reverse', '--format=%s', `${integration}^1..${integration}^2`).split('\n')).toEqual(['runner commit', 'Stated subject']);
+    expect(git(root, 'log', '-1', '--format=%B', integration)).toBe('Merge: Stated subject');
+  });
+
+  describe('the Planned-with trailer (ADR-0030)', () => {
+    const trailers = (cwd: string, ref: string): string =>
+      execFileSync('git', ['interpret-trailers', '--parse'], { input: git(cwd, 'log', '-1', '--format=%B', ref), encoding: 'utf8' });
+
+    async function landOne(deps: Partial<WorktreeIsolationDeps>, title: string) {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }), ...deps });
+      const run = await iso.startRun(root);
+      const t = task(1, title);
+      const { cwd } = await iso.prepare(t, run);
+      writeFileSync(join(cwd, 'committed.txt'), 'a\n');
+      git(cwd, 'add', 'committed.txt');
+      git(cwd, 'commit', '-q', '-m', 'runner commit');
+      writeFileSync(join(cwd, 'loose.txt'), 'b\n');
+      expect(await iso.integrate(t, run, undefined, { subject: 'Stated subject', body: 'Stated body.' })).toBe('merged');
+      return { root, integration: run.repos[0].integrationBranch };
+    }
+
+    it('is parsed by git on the landing merge and on the leftover work, and never on the runner\'s commit', async () => {
+      const { root, integration } = await landOne({ plannedWith: () => true }, 'Mixed');
+
+      expect(trailers(root, integration)).toBe('Planned-with: Ordewell\n');
+      expect(trailers(root, `${integration}^2`)).toBe('Planned-with: Ordewell\n');
+      expect(git(root, 'log', '-1', '--format=%B', integration)).toBe('Merge: Stated subject\n\nStated body.\n\nPlanned-with: Ordewell');
+      expect(trailers(root, `${integration}^2^`)).toBe('');
+      expect(git(root, 'log', '-1', '--format=%B', `${integration}^2^`)).toBe('runner commit');
+    });
+
+    it('is left off when the setting is off, or when nothing says', async () => {
+      const off = await landOne({ plannedWith: () => false }, 'Off');
+      expect(git(off.root, 'log', '--format=%B', `${off.integration}^1..${off.integration}`)).not.toContain('Planned-with');
+
+      const unsaid = await landOne({}, 'Unsaid');
+      expect(git(unsaid.root, 'log', '--format=%B', `${unsaid.integration}^1..${unsaid.integration}`)).not.toContain('Planned-with');
+    });
+
+    it('follows the setting as each landing is written, with no new isolation', async () => {
+      const root = repo();
+      let on = true;
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }), plannedWith: () => on });
+      const run = await iso.startRun(root);
+      const integration = run.repos[0].integrationBranch;
+      for (const [order, setting] of [[1, true], [2, false], [3, true]] as const) {
+        on = setting;
+        const t = task(order, `Task ${order}`);
+        const { cwd } = await iso.prepare(t, run);
+        writeFileSync(join(cwd, `f${order}.txt`), 'x\n');
+        expect(await iso.integrate(t, run)).toBe('merged');
+      }
+
+      const merges = git(root, 'log', '--merges', '--format=%H', integration).split('\n');
+      expect(merges.map((sha) => trailers(root, sha))).toEqual(['Planned-with: Ordewell\n', '', 'Planned-with: Ordewell\n']);
+    });
+
+    it('closes Merge all\'s merge into a branch that moved, which names the tasks it brings and never the integration branch', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }), plannedWith: () => true });
+      const run = await iso.startRun(root);
+      for (const [order, title, commit] of [[1, 'Add alpha', { subject: 'Greet the user' }], [2, 'Add beta', undefined]] as const) {
+        const t = task(order, title);
+        const { cwd } = await iso.prepare(t, run);
+        writeFileSync(join(cwd, `f${order}.txt`), 'x\n');
+        expect(await iso.integrate(t, run, undefined, commit)).toBe('merged');
+      }
+      writeFileSync(join(root, 'mine.txt'), 'mine\n');
+      git(root, 'add', 'mine.txt');
+      git(root, 'commit', '-q', '-m', 'user work');
+
+      expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'merged' });
+
+      expect(git(root, 'log', '-1', '--format=%B')).toBe('Merge: Greet the user and 1 more\n\n- Greet the user\n- Add beta\n\nPlanned-with: Ordewell');
+      expect(trailers(root, 'HEAD')).toBe('Planned-with: Ordewell\n');
+      expect(git(root, 'log', '--format=%B')).not.toContain('ordewell/');
+    });
+
+    it('names Merge all\'s merge of one task for it alone, and leaves the trailer off when the setting is off', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }), plannedWith: () => false });
+      const run = await iso.startRun(root);
+      const t = task(1, 'Add alpha');
+      const { cwd } = await iso.prepare(t, run);
+      writeFileSync(join(cwd, 'alpha.txt'), 'alpha\n');
+      expect(await iso.integrate(t, run)).toBe('merged');
+      git(root, 'commit', '-q', '--allow-empty', '-m', 'user work');
+
+      expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'merged' });
+
+      expect(git(root, 'log', '-1', '--format=%B')).toBe('Merge: Add alpha');
+    });
+
+    it('closes the kept-work rescue and a continue\'s merge of it, both named for the task, as they land with it', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }), plannedWith: () => true });
+      const run = await iso.startRun(root);
+      const resumed = task(1, 'Resume me');
+      const first = await iso.prepare(resumed, run);
+      writeFileSync(join(first.cwd, 'half.txt'), 'half\n');
+      await iso.release(run, resumed.id, { keep: true });
+      const meanwhile = task(2, 'Land meanwhile');
+      const other = await iso.prepare(meanwhile, run);
+      writeFileSync(join(other.cwd, 'other.txt'), 'other\n');
+      expect(await iso.integrate(meanwhile, run)).toBe('merged');
+
+      const again = await iso.prepare(resumed, run, 'restore');
+      expect(readFileSync(join(again.cwd, 'half.txt'), 'utf8')).toBe('half\n');
+      expect(await iso.integrate(resumed, run, undefined, { subject: 'Finish it' })).toBe('merged');
+
+      const integration = run.repos[0].integrationBranch;
+      const subjects = git(root, 'log', '--format=%s', integration).split('\n');
+      expect(subjects).toEqual(expect.arrayContaining(['Merge: Finish it', 'Merge: Resume me (resume its kept work)', 'WIP: Resume me']));
+      expect(git(root, 'log', '--format=%B', integration)).not.toMatch(/ordewell\/|Merge commit/);
+      const ours = git(root, 'rev-list', integration, '--not', 'main').split('\n');
+      expect(ours.map((sha) => trailers(root, sha))).toEqual(ours.map(() => 'Planned-with: Ordewell\n'));
+    });
+  });
+
   it('treats a task that changed nothing as merged', async () => {
     const root = repo();
     const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
@@ -502,6 +692,19 @@ describe.skipIf(!hasGit)('WorktreeIsolation integration queue', () => {
 
     expect(await iso.integrate(t, run)).toBe('failed');
     expect(run.tasks['task-1'].landingError).toBe(`the integration branch is checked out in ${root}`);
+  });
+  it('names what a hook said when it refuses the merge commit of a landing', async () => {
+    const root = repo();
+    writeFileSync(join(root, '.git', 'hooks', 'pre-merge-commit'), '#!/bin/sh\necho "lint: subject is too long" >&2\nexit 1\n', { mode: 0o755 });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Hooked landing');
+    const { cwd } = await iso.prepare(t, run);
+    writeFileSync(join(cwd, 'work.txt'), 'the runner wrote this\n');
+
+    expect(await iso.integrate(t, run)).toBe('failed');
+
+    expect(run.tasks['task-1']).toMatchObject({ status: 'failed', landingError: expect.stringContaining('lint: subject is too long') });
   });
 });
 
@@ -662,6 +865,78 @@ describe.skipIf(!hasGit)('WorktreeIsolation conflict repair', () => {
     mergeAndResolve(b.cwd, integration, 'left and right   \n');
 
     expect(await iso.verifyRepair(t2, run)).toEqual({ ok: true });
+  });
+
+  it('lands a repair with the commit the conflicted landing stated, though the repair states none', async () => {
+    const root = repo({ 'shared.txt': 'base\n' });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const [t1, t2] = [task(1, 'Left'), task(2, 'Right')];
+    const a = await iso.prepare(t1, run);
+    const b = await iso.prepare(t2, run);
+    writeFileSync(join(a.cwd, 'shared.txt'), 'left\n');
+    writeFileSync(join(b.cwd, 'shared.txt'), 'right\n');
+    expect(await iso.integrate(t1, run)).toBe('merged');
+    expect(await iso.integrate(t2, run, undefined, { subject: 'Say right', body: 'Left was wrong.' })).toBe('conflict');
+    const integration = run.repos[0].integrationBranch;
+
+    await iso.reopen(t2, run);
+    mergeAndResolve(b.cwd, integration);
+    writeFileSync(join(b.cwd, 'note.txt'), 'left over\n');
+    expect(await iso.verifyRepair(t2, run)).toEqual({ ok: true });
+    expect(await iso.integrate(t2, run)).toBe('merged');
+
+    expect(git(root, 'log', '-1', '--format=%B', integration)).toBe('Merge: Say right\n\nLeft was wrong.');
+    expect(git(root, 'log', '-1', '--format=%B', `${integration}^2`)).toBe('Say right\n\nLeft was wrong.');
+  });
+
+  it('names the rescue and the restore of a conflicted task\'s kept work for the commit its landing stated, not its title', async () => {
+    const root = repo({ 'shared.txt': 'base\n' });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const [t1, t2] = [task(1, 'Left'), task(2, 'Right')];
+    const a = await iso.prepare(t1, run);
+    const b = await iso.prepare(t2, run);
+    writeFileSync(join(a.cwd, 'shared.txt'), 'left\n');
+    writeFileSync(join(b.cwd, 'shared.txt'), 'right\n');
+    expect(await iso.integrate(t1, run)).toBe('merged');
+    expect(await iso.integrate(t2, run, undefined, { subject: 'Say right', body: 'Left was wrong.' })).toBe('conflict');
+    const integration = run.repos[0].integrationBranch;
+    await iso.reopen(t2, run);
+    mergeAndResolve(b.cwd, integration);
+    writeFileSync(join(b.cwd, 'note.txt'), 'not committed yet\n');
+    // Moves the tip, so the kept work comes back with a merge, not a fast-forward.
+    const t3 = task(3, 'Elsewhere');
+    const c = await iso.prepare(t3, run);
+    writeFileSync(join(c.cwd, 'other.txt'), 'other\n');
+    expect(await iso.integrate(t3, run)).toBe('merged');
+
+    const again = await iso.prepare(t2, run, 'restore');
+
+    expect(again.restoration).toBe('restored');
+    expect(readFileSync(join(again.cwd, 'note.txt'), 'utf8')).toBe('not committed yet\n');
+    expect(git(root, 'log', '-1', '--format=%s', again.preserved![0].commit)).toBe('WIP: Say right');
+    expect(git(again.cwd, 'log', '-1', '--format=%s')).toBe('Merge: Say right (resume its kept work)');
+    expect(await iso.integrate(t2, run)).toBe('merged');
+    expect(git(root, 'log', '-1', '--format=%B', integration)).toBe('Merge: Say right\n\nLeft was wrong.');
+  });
+
+  it('leaves no internal branch name in history when the repair merges with the message its prompt gives', async () => {
+    const { root, iso, run, t2, b, integration } = await conflicted();
+    await iso.reopen(t2, run);
+
+    const message = landingMessage('repair-merge', run.tasks['task-2']);
+    expect(() => git(b.cwd, 'merge', '--no-edit', ...messageArgs(message), integration)).toThrow();
+    writeFileSync(join(b.cwd, 'shared.txt'), 'left and right\n');
+    git(b.cwd, 'add', 'shared.txt');
+    git(b.cwd, 'commit', '-q', '--no-edit', '--cleanup=strip');
+    expect(await iso.verifyRepair(t2, run)).toEqual({ ok: true });
+    expect(await iso.integrate(t2, run)).toBe('merged');
+
+    expect(git(root, 'log', '-1', '--format=%B', `${integration}^2`)).toBe('Merge: Right (resolve conflicts with integration)');
+    const subjects = git(root, 'log', '--format=%s', integration).split('\n');
+    expect(subjects).toContain('Merge: Right (resolve conflicts with integration)');
+    expect(subjects.filter((s) => s.includes('ordewell/'))).toEqual([]);
   });
 
   it('lands a repaired branch cleanly, with one merge on the tip, keeping what the repair did on the record', async () => {
@@ -949,7 +1224,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation never deletes work that has not land
     expect(existsSync(stopped.cwd)).toBe(false);
     expect(git(root, 'show', `${branch}:half-done.txt`)).toBe('not committed yet');
     expect(git(root, 'show', `${branch}:README.md`)).toBe('edited');
-    expect(git(root, 'log', '-1', '--format=%s', branch)).toBe('WIP: Stopped mid-work (kept by Ordewell before removing its worktree)');
+    expect(git(root, 'log', '-1', '--format=%s', branch)).toBe('WIP: Stopped mid-work');
     expect(branches(root)).toEqual([]);
     // The state dir's own ignore file is meant to be committed (it carves out .ordewell/skills); nothing else may show.
     expect(git(root, 'status', '--porcelain', '--untracked-files=all')).toBe('?? .ordewell/.gitignore');
@@ -1047,6 +1322,58 @@ describe.skipIf(!hasGit)('WorktreeIsolation never deletes work that has not land
     expect(git(root, 'show', `ordewell-preserved/${run.id}/1-retried:first-try.txt`)).toBe('first try');
   });
 
+  describe('when the user\'s git hides untracked files from status', () => {
+    // `status.showUntrackedFiles=no` is a common setting for huge trees; work made only of new files must still read as work.
+    it('a retry keeps an attempt whose only work is new files', async () => {
+      const root = repo();
+      git(root, 'config', 'status.showUntrackedFiles', 'no');
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(root);
+      const first = await iso.prepare(task(1, 'Retried'), run);
+      writeFileSync(join(first.cwd, 'feature.ts'), 'export const feature = 1;\n');
+      await iso.release(run, 'task-1', { keep: true });
+
+      const retry = await iso.prepare(task(1, 'Retried'), run);
+
+      expect(retry.preserved).toEqual([expect.objectContaining({ branch: `ordewell-preserved/${run.id}/1-retried` })]);
+      expect(git(root, 'show', `ordewell-preserved/${run.id}/1-retried:feature.ts`)).toBe('export const feature = 1;');
+    });
+
+    it('crash recovery keeps an active attempt whose only work is new files', async () => {
+      const root = repo();
+      git(root, 'config', 'status.showUntrackedFiles', 'no');
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(root);
+      const { cwd } = await iso.prepare(task(1, 'Crashed'), run);
+      writeFileSync(join(cwd, 'new.ts'), 'export const x = 1;\n');
+
+      const result = await iso.pruneOrphans(JSON.parse(JSON.stringify(run)) as IsolationRun);
+
+      expect(result.kept).toEqual([{ taskId: 'task-1', order: 1, title: 'Crashed' }]);
+      expect(readFileSync(join(cwd, 'new.ts'), 'utf8')).toBe('export const x = 1;\n');
+    });
+  });
+
+  it('a retry that cannot start still says where the last attempt\'s work was kept', async () => {
+    const root = repo();
+    let refusing = false;
+    const [real, refuse] = [refuseWorktreesIn(), refuseWorktreesIn(root)];
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }), execFileImpl: (file, args, opts) => (refusing ? refuse : real)(file, args, opts) });
+    const run = await iso.startRun(root);
+    const first = await iso.prepare(task(1, 'Retried'), run);
+    writeFileSync(join(first.cwd, 'kept-work.txt'), 'work\n');
+    await iso.release(run, 'task-1', { keep: true });
+
+    refusing = true;
+    const failure = await iso.prepare(task(1, 'Retried'), run).then(() => null, (err: unknown) => err);
+
+    const branch = `ordewell-preserved/${run.id}/1-retried`;
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({ message: expect.stringContaining('git worktree failed'), preserved: [expect.objectContaining({ repo: '.', branch })] });
+    expect(git(root, 'show', `${branch}:kept-work.txt`)).toBe('work');
+    expect(run.tasks).toEqual({});
+  });
+
   it('a retry whose last attempt it cannot keep does not start over it', async () => {
     const root = repo();
     const iso = create({ config: fakeConfig({ worktreeIsolation: true }), execFileImpl: rescueFails });
@@ -1056,6 +1383,80 @@ describe.skipIf(!hasGit)('WorktreeIsolation never deletes work that has not land
 
     await expect(iso.prepare(task(1, 'Retried'), run)).rejects.toThrow(/could not keep/);
     expect(readFileSync(join(first.cwd, 'first-try.txt'), 'utf8')).toBe('first try\n');
+  });
+
+  describe('a registration no record holds', () => {
+    it('prepare succeeds after the directory of the last attempt was deleted and its registration left', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(root);
+      const first = await iso.prepare(task(1, 'Retried'), run);
+      rmSync(first.cwd, { recursive: true, force: true });
+      run.tasks = {};
+
+      const retry = await iso.prepare(task(1, 'Retried'), run);
+
+      expect(retry.cwd).toBe(first.cwd);
+      expect(git(retry.cwd, 'branch', '--show-current')).toBe(first.branch);
+      expect(worktreePaths(root).sort()).toEqual([root, retry.cwd].sort());
+    });
+
+    it('prepare keeps the uncommitted work of a leftover at the task\'s own path, then starts over it', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(root);
+      const first = await iso.prepare(task(1, 'Retried'), run);
+      writeFileSync(join(first.cwd, 'half-done.txt'), 'half\n');
+      run.tasks = {};
+
+      const retry = await iso.prepare(task(1, 'Retried'), run);
+
+      const kept = `ordewell-preserved/${run.id}/1-retried`;
+      expect(retry.preserved).toEqual([expect.objectContaining({ repo: '.', branch: kept })]);
+      expect(git(root, 'show', `${kept}:half-done.txt`)).toBe('half');
+      expect(existsSync(join(retry.cwd, 'half-done.txt'))).toBe(false);
+      expect(run.tasks['task-1'].workspace).toBe(retry.cwd);
+    });
+
+    it('prepare refuses, and removes nothing, when the leftover\'s work cannot be kept', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }), execFileImpl: rescueFails });
+      const run = await iso.startRun(root);
+      const first = await iso.prepare(task(1, 'Retried'), run);
+      writeFileSync(join(first.cwd, 'first-try.txt'), 'first try\n');
+      run.tasks = {};
+
+      await expect(iso.prepare(task(1, 'Retried'), run)).rejects.toThrow(/could not keep/);
+      expect(readFileSync(join(first.cwd, 'first-try.txt'), 'utf8')).toBe('first try\n');
+    });
+
+    it('prepare never removes a worktree another live record of the run holds', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(root);
+      const held = await iso.prepare(task(1, 'Held'), run);
+      writeFileSync(join(held.cwd, 'in-flight.txt'), 'running\n');
+      // A record that names the path a retry of task 1 would use, under another branch.
+      run.tasks = { other: { ...run.tasks['task-1'], taskId: 'other', branch: `ordewell/${run.id}/elsewhere` } };
+
+      await expect(iso.prepare(task(1, 'Held'), run)).rejects.toThrow();
+      expect(readFileSync(join(held.cwd, 'in-flight.txt'), 'utf8')).toBe('running\n');
+      expect(branches(root)).toContain(held.branch);
+    });
+
+    it('pruneOrphans drops a registration whose directory is gone, with its branch', async () => {
+      const root = repo();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(root);
+      const first = await iso.prepare(task(1, 'Crashed'), run);
+      rmSync(first.cwd, { recursive: true, force: true });
+      run.tasks = {};
+
+      await iso.pruneOrphans(run);
+
+      expect(worktreePaths(root)).toEqual([root]);
+      expect(branches(root)).toEqual([`ordewell/${run.id}/integration`]);
+    });
   });
 
   it('never overwrites a branch kept earlier: a second keep for the same task gets its own', async () => {
@@ -1091,7 +1492,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation never deletes work that has not land
 
 describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
   function repoWithLocalState(): string {
-    const root = repo({ '.gitignore': 'node_modules/\n.env\n.venv/\n', 'README.md': 'hi\n', '.env.example': 'KEY=\n' });
+    const root = repo({ '.gitignore': 'node_modules/\n.env\n.venv/\n.claude/\n', 'README.md': 'hi\n', '.env.example': 'KEY=\n' });
     mkdirSync(join(root, 'node_modules', 'left-pad'), { recursive: true });
     writeFileSync(join(root, 'node_modules', 'left-pad', 'index.js'), 'module.exports = 1;\n');
     mkdirSync(join(root, '.venv'));
@@ -1143,7 +1544,9 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
     expect(await iso.integrate(t, run)).toBe('merged');
     const tree = git(root, 'ls-tree', '-r', '--name-only', run.repos[0].integrationBranch).split('\n');
     expect(tree).toContain('feature.txt');
-    expect(tree.some((f) => f.startsWith('node_modules') || f.startsWith('.venv') || f === '.envrc' || f === '.env')).toBe(false);
+    // `.claude/` is a directory-only rule, so it would not match the symlink
+    // a task worktree gets: the landing commit must exclude it by name.
+    expect(tree.some((f) => f.startsWith('node_modules') || f.startsWith('.venv') || f === '.envrc' || f === '.env' || f === '.claude')).toBe(false);
     expect(tree.some((f) => f.startsWith('.ordewell'))).toBe(false);
   });
 
@@ -1453,7 +1856,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
     const intruders: Array<() => void> = [];
     let handing: Promise<unknown> = Promise.resolve();
     const exec: GitExecFn = async (file, args, opts) => {
-      const isMerge = args[0] === 'merge' && args.includes('--no-ff');
+      const isMerge = subcommand(args) === 'merge' && args.includes('--no-ff');
       if (isMerge) {
         reachMerge();
         await mergeReleased;
@@ -1631,6 +2034,22 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
     expect(git(root, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toBe(git(root, 'rev-parse', 'feature'));
     expect(readFileSync(join(root, 'shared.txt'), 'utf8')).toBe('resolved by hand\n');
     expect(existsSync(join(root, 'alpha.txt'))).toBe(false);
+  });
+
+  it('names what git objected to when a lone repository cannot take its merge, and leaves the user\'s edit alone', async () => {
+    const root = repo({ 'shared.txt': 'base\n' });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Edit shared');
+    const { cwd } = await iso.prepare(t, run);
+    writeFileSync(join(cwd, 'shared.txt'), 'run\n');
+    await iso.integrate(t, run);
+    await iso.handoff(run);
+    writeFileSync(join(root, 'shared.txt'), 'uncommitted\n');
+
+    expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'failed', repo: '.', error: expect.stringContaining('would be overwritten by merge') });
+
+    expect(readFileSync(join(root, 'shared.txt'), 'utf8')).toBe('uncommitted\n');
   });
 
   it('after Merge all, discarding what is merged leaves no branch, worktree or directory of the run, and the work on the user\'s branch', async () => {
@@ -1826,7 +2245,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation for merge gates and ops tasks (ADR-0
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
     const execFileImpl: GitExecFn = async (file, args, opts) => {
-      if (args[0] === 'merge' && args.includes('--no-ff')) {
+      if (subcommand(args) === 'merge' && args.includes('--no-ff')) {
         reached();
         await held;
       }
@@ -2248,6 +2667,22 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       expect(git(join(dir, 'api'), 'log', '--format=%s', integrationOf(run))).not.toContain('Web only');
     });
 
+    it('writes the same stated commit for the merge in every repository the task changed', async () => {
+      const dir = pair();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(dir);
+      const t = task(1, 'Edit both');
+      const { cwd } = await iso.prepare(t, run);
+      writeFileSync(join(cwd, 'api', 'route.ts'), 'route\n');
+      writeFileSync(join(cwd, 'web', 'page.html'), 'page\n');
+
+      expect(await iso.integrate(t, run, undefined, { subject: 'Serve the page', body: 'Route and page together.' })).toBe('merged');
+
+      for (const repoDir of [join(dir, 'api'), join(dir, 'web')]) {
+        expect(git(repoDir, 'log', '-1', '--format=%B', integrationOf(run))).toBe('Merge: Serve the page\n\nRoute and page together.');
+      }
+    });
+
     /** Task 1 lands a change to web.txt; task 2, prepared beside it, changes both repositories and collides in web. */
     async function secondConflicts() {
       const dir = pair();
@@ -2286,6 +2721,50 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
         expect(git(integrationDir, 'rev-parse', 'HEAD')).toBe(before[repo as 'api' | 'web']);
       }
       expect(git(join(dir, 'api'), 'show', `${b.branch}:api.txt`)).toBe('both');
+    });
+
+    it('a task prepared while another is mid-landing starts from the group\'s tips before it, so a landing rolled back never lands through it', async () => {
+      const dir = pair();
+      let armed = false;
+      const held = { release: () => undefined as void, reached: false };
+      const gate = new Promise<void>((resolve) => { held.release = resolve; });
+      let thirdBased!: () => void;
+      const thirdBranched = new Promise<void>((resolve) => { thirdBased = resolve; });
+      const exec: GitExecFn = async (file, args, opts) => {
+        if (armed && subcommand(args) === 'merge' && args.includes('--no-ff') && opts.cwd?.endsWith(join('integration', 'web'))) {
+          held.reached = true;
+          await gate;
+        }
+        if (args.includes('worktree') && args.includes('add') && args.some((a) => a.endsWith('3-independent'))) thirdBased();
+        const { stdout, stderr } = await execFileAsync(file, args, { cwd: opts.cwd, env: opts.env });
+        return { stdout: String(stdout), stderr: String(stderr) };
+      };
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }), execFileImpl: exec });
+      const run = await iso.startRun(dir);
+      const [first, both, independent] = [task(1, 'Edit web'), task(2, 'Edit both'), task(3, 'Independent')];
+      const f = await iso.prepare(first, run);
+      const b = await iso.prepare(both, run);
+      writeFileSync(join(f.cwd, 'web', 'web.txt'), 'first\n');
+      writeFileSync(join(b.cwd, 'api', 'api.txt'), 'both\n');
+      writeFileSync(join(b.cwd, 'web', 'web.txt'), 'both\n');
+      expect(await iso.integrate(first, run)).toBe('merged');
+
+      armed = true;
+      const landing = iso.integrate(both, run);
+      await vi.waitFor(() => expect(held.reached).toBe(true));
+      // api's integration branch already holds task 2's merge; web's does not yet.
+      const prepared = iso.prepare(independent, run);
+      // Once it has branched from a tip the damage is done; if it is waiting its turn instead, there is nothing to see.
+      await Promise.race([thirdBranched, new Promise((resolve) => setTimeout(resolve, 1000))]);
+      held.release();
+      expect(await landing).toBe('conflict');
+
+      const i = await prepared;
+      writeFileSync(join(i.cwd, 'web', 'other.txt'), 'other\n');
+      expect(await iso.integrate(independent, run)).toBe('merged');
+
+      expect(run.tasks['task-2'].status).toBe('conflict');
+      expect(git(join(dir, 'api'), 'show', `${integrationOf(run)}:api.txt`)).toBe('api');
     });
 
     it('lands the task in both repositories once a resolver has merged its branch by hand', async () => {
@@ -2435,7 +2914,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
         const dir = trio();
         const { persisted, tips, workspace } = await crashDuringLanding(dir, {
           conflict: false,
-          at: (run) => (args, cwd) => args[0] === 'merge' && cwd === integrationDir(dir, run, 'web'),
+          at: (run) => (args, cwd) => subcommand(args) === 'merge' && cwd === integrationDir(dir, run, 'web'),
         });
         expect(tip(dir, 'api', persisted)).not.toBe(tips.api);
         expect(persisted.landing).toEqual({ taskId: 'task-2', tips });
@@ -2489,7 +2968,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
         const dir = trio();
         const { persisted, tips } = await crashDuringLanding(dir, {
           conflict: false,
-          at: (run) => (args, cwd) => args[0] === 'merge' && cwd === integrationDir(dir, run, 'web'),
+          at: (run) => (args, cwd) => subcommand(args) === 'merge' && cwd === integrationDir(dir, run, 'web'),
         });
         // Something other than this landing committed on top of it.
         const api = join(dir, 'api');
@@ -2556,7 +3035,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
 
   describe('handoff', () => {
     /** A handed-off run whose one task changed api.txt and web.txt. */
-    async function handedOff(deps: Partial<WorktreeIsolationDeps> = {}, opts: { idleRepo?: string } = {}) {
+    async function handedOff(deps: Partial<WorktreeIsolationDeps> = {}, opts: { idleRepo?: string; addsToWeb?: string } = {}) {
       const dir = pair();
       if (opts.idleRepo) initRepo(join(dir, opts.idleRepo), { 'idle.txt': 'idle\n' });
       const iso = create({ config: fakeConfig({ worktreeIsolation: true }), ...deps });
@@ -2565,6 +3044,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       const { cwd } = await iso.prepare(t, run);
       writeFileSync(join(cwd, 'api', 'api.txt'), 'run api\n');
       writeFileSync(join(cwd, 'web', 'web.txt'), 'run web\n');
+      if (opts.addsToWeb) writeFileSync(join(cwd, 'web', opts.addsToWeb), 'run adds\n');
       expect(await iso.integrate(t, run)).toBe('merged');
       await iso.handoff(run);
       const heads = () => ({ api: git(join(dir, 'api'), 'rev-parse', 'HEAD'), web: git(join(dir, 'web'), 'rev-parse', 'HEAD') });
@@ -2651,6 +3131,49 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       expect(readFileSync(join(dir, 'web', 'notes.txt'), 'utf8')).toBe('uncommitted notes\n');
     });
 
+    it('merges nothing anywhere when an untracked file of the user\'s is where the merge would add one', async () => {
+      const { dir, iso, run, heads } = await handedOff({}, { addsToWeb: 'new.txt' });
+      writeFileSync(join(dir, 'web', 'new.txt'), 'mine\n');
+      const before = heads();
+
+      expect(await iso.mergeIntoCheckedOut(run)).toEqual({
+        outcome: 'blocked',
+        blocked: [{ repo: 'web', reason: 'uncommitted-changes', files: ['new.txt'] }],
+      });
+
+      expect(heads()).toEqual(before);
+      expect(readFileSync(join(dir, 'web', 'new.txt'), 'utf8')).toBe('mine\n');
+      expect(readFileSync(join(dir, 'api', 'api.txt'), 'utf8')).toBe('api\n');
+    });
+
+    it('merges nothing anywhere when the user has staged a change and the merge needs a merge commit', async () => {
+      const { dir, iso, run, heads } = await handedOff();
+      commitIn(join(dir, 'web'), 'other.txt', 'o\n');
+      writeFileSync(join(dir, 'web', 'staged.txt'), 'staged\n');
+      git(join(dir, 'web'), 'add', 'staged.txt');
+      const before = heads();
+
+      expect(await iso.mergeIntoCheckedOut(run)).toEqual({
+        outcome: 'blocked',
+        blocked: [{ repo: 'web', reason: 'uncommitted-changes', files: ['staged.txt'] }],
+      });
+
+      expect(heads()).toEqual(before);
+      expect(readFileSync(join(dir, 'api', 'api.txt'), 'utf8')).toBe('api\n');
+      expect(git(join(dir, 'web'), 'diff', '--cached', '--name-only')).toBe('staged.txt');
+    });
+
+    it('lets a staged change that nothing overlaps wait while the merge fast-forwards', async () => {
+      const { dir, iso, run } = await handedOff();
+      writeFileSync(join(dir, 'web', 'staged.txt'), 'staged\n');
+      git(join(dir, 'web'), 'add', 'staged.txt');
+
+      expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'merged' });
+
+      expect(git(join(dir, 'web'), 'diff', '--cached', '--name-only')).toBe('staged.txt');
+      expect(readFileSync(join(dir, 'web', 'web.txt'), 'utf8')).toBe('run web\n');
+    });
+
     it('merges nothing anywhere while a merge of the user\'s own is in progress in one repository, and leaves it alone', async () => {
       const { dir, iso, run, heads } = await handedOff();
       const web = join(dir, 'web');
@@ -2689,10 +3212,10 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       const { dir, iso, run } = await handedOff();
       // A diverged branch makes a real merge commit, which the hook then refuses.
       commitIn(join(dir, 'web'), 'other.txt', 'o\n');
-      writeFileSync(join(dir, 'web', '.git', 'hooks', 'pre-merge-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+      writeFileSync(join(dir, 'web', '.git', 'hooks', 'pre-merge-commit'), '#!/bin/sh\necho "lint: subject is too long" >&2\nexit 1\n', { mode: 0o755 });
       const webHead = git(join(dir, 'web'), 'rev-parse', 'HEAD');
 
-      expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'failed', repo: 'web', landed: ['api'] });
+      expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'failed', repo: 'web', error: expect.stringContaining('lint: subject is too long'), landed: ['api'] });
 
       expect(readFileSync(join(dir, 'api', 'api.txt'), 'utf8')).toBe('run api\n');
       expect(git(join(dir, 'web'), 'rev-parse', 'HEAD')).toBe(webHead);

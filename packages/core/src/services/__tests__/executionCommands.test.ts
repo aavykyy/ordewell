@@ -908,6 +908,66 @@ describe('the command seam: merge_all', () => {
 
 });
 
+describe('the command seam: tasks started one by one with run_task', () => {
+  /** An approved plan with one task the planner started alone: no scheduled run is under way. */
+  async function lone() {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]), 'goal', testWorkspace, { persist: false });
+    expect(await env.run({ command: 'run_task', task: 't1' })).toMatchObject({ ok: true });
+    expect(env.session.status).not.toBe('running');
+    return env;
+  }
+
+  // The scheduler is not driving a task started alone: nothing starts its dependents but the user's Execute or the planner's run_plan.
+  it('does not start the dependents of a lone task when it finishes', async () => {
+    const env = await lone();
+
+    env.latest('t1').reportComplete({ status: 'done', summary: 'did t1' });
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('completed'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(env.spawned('t2')).toHaveLength(0);
+    expect(taskOf(env.session, 't2')!.status).not.toBe('in_progress');
+  });
+
+  it('lets the planner\'s run_plan join a lone task\'s run, so its dependents start as it finishes', async () => {
+    const env = await lone();
+
+    const outcome = await env.run({ command: 'run_plan' });
+
+    expect(outcome).toEqual({ ok: true, message: 'The plan is running: task #1 "Task t1" is already running, and each approved task starts as its dependencies finish.' });
+    expect(env.session.status).toBe('running');
+    expect(env.spawned('t1')).toHaveLength(1);
+    env.latest('t1').reportComplete({ status: 'done', summary: 'did t1' });
+    await vi.waitFor(() => expect(env.spawned('t2')).toHaveLength(1));
+  });
+
+  it('joins approving nothing: a task added after the user approved the plan stays theirs to approve, and the answer says so', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { title: 'Add divide' })], { approvedTasks: ['t1', 't2'] }), 'goal', testWorkspace, { persist: false });
+    await env.run({ command: 'run_task', task: 't1' });
+
+    const outcome = await env.run({ command: 'run_plan' });
+
+    expect(outcome).toEqual({ ok: true, message: 'The plan is running: task #1 "Task t1" is already running, and each approved task starts as its dependencies finish. Task #3 "Add divide" was added after the user approved the plan, so it waits until they start it or execute the plan.' });
+    expect(env.session.planState!.approvedTasks).toEqual(['t1', 't2']);
+    env.latest('t1').reportComplete({ status: 'done', summary: 'did t1' });
+    await vi.waitFor(() => expect(env.spawned('t2')).toHaveLength(1));
+    expect(env.spawned('t3')).toHaveLength(0);
+  });
+
+  it('refuses the planner a join in a plan the user never executed, naming Execute plan as what makes the run', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { status: 'draft' }), 'goal', testWorkspace, { persist: false });
+    await env.session.execute({ command: 'force_start', task: 't1' }, { kind: 'user' });
+
+    const outcome = await env.run({ command: 'run_plan' });
+
+    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: 'The user has not approved this plan yet: they approve it by executing it themselves (Execute plan). Ask them to. Tasks started with run_task are not a scheduled run, so their dependents start only once the user executes the plan.' });
+    expect(env.session.status).not.toBe('running');
+  });
+});
+
 describe('the command seam\'s extension points', () => {
   const admission = () => ({ current: () => true, release: vi.fn() });
 
@@ -915,7 +975,7 @@ describe('the command seam\'s extension points', () => {
     const tasks = [task('t1', 1)];
     return {
       tasks: () => tasks, planApproved: () => true, taskApproved: () => true, waitsForApproval: () => false, approve: vi.fn(), autonomous: () => true, autorun: () => false,
-      scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, startsPending: () => false, admitStart: admission,
+      scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, startsPending: () => false, advancesOnItsOwn: () => false, admitStart: admission,
       running: () => true, maxParallel: () => 3, runBlocked: () => false,
       startWaits: () => [], waitingRequests: () => [],
       runPlan: vi.fn(), joinRun: vi.fn(async () => ''), startTask: vi.fn(), forceStart: vi.fn(), markComplete: vi.fn(), markNotDone: vi.fn(), interrupt: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(), resumeNow: vi.fn(),
@@ -1051,6 +1111,72 @@ describe('the command seam\'s extension points', () => {
     expect(host.record).not.toHaveBeenCalled();
   });
 
+  // Seen live: an Act supervisor added a fix task with edit_plan and was told its run_task could not start in the turn.
+  it.each([
+    ['run_task', { command: 'run_task', task: 'Fix it' } as ExecutionCommand, { command: 'run_task', task: 't2' }, 'start task #2 "Fix it"'],
+    ['a fresh retry_task', { command: 'retry_task', task: 'Fix it', from: 'fresh' } as ExecutionCommand, { command: 'retry_task', task: 't2', from: 'fresh' }, 'retry task #2 "Fix it"'],
+  ])('holds the Act supervisor\'s %s of a task its own edit adds until the edit lands, with no run in progress', async (_, asked, queued, intent) => {
+    const edited = [task('t1', 1), task('t2', 2, { title: 'Fix it' })];
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, taskApproved: (id: string) => id === 't1', heldEdit: vi.fn(() => true), editedTasks: () => edited };
+    const actor: ExecutionActor = { kind: 'supervisor', level: 'act' };
+    const request = vi.fn();
+    const commands = new ExecutionCommands({ host, consent: { request } });
+
+    expect(await commands.run(asked, actor)).toMatchObject({ ok: true, message: expect.stringMatching(new RegExp(`^Queued: ${intent} happens once your edit lands`)) });
+    expect(host.deferUntilLanded).toHaveBeenCalledWith(queued, actor, intent, expect.objectContaining({ current: expect.any(Function) }));
+    expect(request).not.toHaveBeenCalled();
+    expect(host.startTask).not.toHaveBeenCalled();
+  });
+
+  it('starts, once the edit has landed and approved the supervisor\'s task, what the Act supervisor queued', async () => {
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, taskApproved: () => true };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+    const actor: ExecutionActor = { kind: 'supervisor', level: 'act' };
+
+    await commands.replay({ command: 'run_task', task: 't1' }, actor, admission());
+
+    expect(host.startTask).toHaveBeenCalledWith('t1', actor);
+    expect(host.queuedNotRun).not.toHaveBeenCalled();
+  });
+
+  it('holds the Act supervisor\'s run of a plan whose edit adds a task, which its edit approves as it lands', async () => {
+    const edited = [task('t1', 1), task('t2', 2, { title: 'Fix it' })];
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, taskApproved: (id: string) => id === 't1', heldEdit: () => true, editedTasks: () => edited };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    expect(await commands.run({ command: 'run_plan' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: true, message: expect.stringMatching(/^Queued: /) });
+    expect(host.deferUntilLanded).toHaveBeenCalled();
+  });
+
+  it('still refuses an unapproved task the plan already holds to the Act supervisor, which no edit of its own adds', async () => {
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, taskApproved: () => false, heldEdit: () => true };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    expect(await commands.run({ command: 'run_task', task: 't1' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringContaining('not approved to run') });
+    expect(host.deferUntilLanded).not.toHaveBeenCalled();
+  });
+
+  it.each(['watch', 'off'] as const)('still refuses the %s supervisor\'s start of a task its edit adds, in the words of its level', async (level) => {
+    const edited = [task('t1', 1), task('t2', 2, { title: 'Fix it' })];
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, heldEdit: () => true, editedTasks: () => edited };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    const outcome = await commands.run({ command: 'run_task', task: 'Fix it' }, { kind: 'supervisor', level });
+
+    expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringContaining('Suggest it to the user instead') });
+    expect(host.deferUntilLanded).not.toHaveBeenCalled();
+  });
+
+  it('keeps a skip of a task the supervisor\'s own edit adds refused, and never held', async () => {
+    const edited = [task('t1', 1), task('t2', 2, { title: 'Fix it' })];
+    const host = { ...stubHost(), heldEdit: () => true, editedTasks: () => edited };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    expect(await commands.run({ command: 'skip_task', task: 'Fix it', reason: 'not needed' }, { kind: 'supervisor', level: 'act' }))
+      .toMatchObject({ ok: false, outcome: 'refused', message: expect.stringContaining('cannot be skipped in it') });
+    expect(host.deferUntilLanded).not.toHaveBeenCalled();
+  });
+
   it('with autorun on and Full, starts an unapproved task the planner asks for, and approves it with its subtasks', async () => {
     const host = { ...stubHost(), autorun: () => true, running: () => false, hasLiveWork: () => false, taskApproved: () => false };
     const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
@@ -1131,6 +1257,57 @@ describe('the command seam\'s extension points', () => {
     expect(host.record).toHaveBeenCalledWith(expect.objectContaining({ command: 'run_task', outcome: 'refused', detail: STOPPED_BEFORE_START }), expect.any(String));
     expect(host.queuedNotRun).toHaveBeenCalledWith('Not done: the queued start of task #1 "Task t1" was stopped before it could start.');
     expect(host.startTask).not.toHaveBeenCalled();
+  });
+
+  it('refuses a Run whose start a Stop ended while its spawn was under way, as stopped before it started', async () => {
+    let live = true;
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, admitStart: () => ({ current: () => live, release: vi.fn() }), startTask: vi.fn(async () => { live = false; }) };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    const outcome = await commands.run({ command: 'run_task', task: 't1' }, PLANNER);
+
+    expect(host.startTask).toHaveBeenCalledWith('t1', PLANNER);
+    expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: STOPPED_BEFORE_START });
+  });
+
+  it.each([
+    ['run_plan', { command: 'run_plan' }, 'runPlan'],
+    ['force_start', { command: 'force_start', task: 't1' }, 'forceStart'],
+    ['approve_review', { command: 'approve_review' }, 'approveReview'],
+  ] as const)('refuses a %s whose start a Stop ended while it acted, as stopped before it started', async (_name, command, act) => {
+    let live = true;
+    const host = {
+      ...stubHost(), running: () => false, hasLiveWork: () => false, admitStart: () => ({ current: () => live, release: vi.fn() }),
+      [act]: vi.fn(async () => { live = false; }),
+    };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    const outcome = await commands.run(command, { kind: 'user' });
+
+    expect(host[act]).toHaveBeenCalled();
+    expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: STOPPED_BEFORE_START });
+  });
+
+  const failedWithSession: Task = { ...task('t1', 1), status: 'failed', runnerSessionId: 'sess-1' };
+  const pausedWithSession: Task = { ...task('t1', 1), status: 'awaiting_user', awaitingReason: 'usage-limit', runnerSessionId: 'sess-1' };
+
+  it.each([
+    ['continues a failed task in its saved session', { command: 'retry_task', task: 't1', from: 'session', message: 'go on' }, [failedWithSession], { kind: 'user' }, false, 'continueTask'],
+    ['resumes a task paused on its usage limit', { command: 'retry_task', task: 't1', from: 'session' }, [pausedWithSession], { kind: 'user' }, false, 'resumeNow'],
+    ['joins a run under way, for the user', { command: 'run_plan' }, [task('t1', 1)], { kind: 'user' }, true, 'joinRun'],
+    ['joins a run under way, for the planner', { command: 'run_plan' }, [task('t1', 1)], PLANNER, true, 'joinRun'],
+  ] as const)('refuses a start that %s whose admission a Stop ended while it acted, as stopped before it started', async (_name, command, tasks, actor, liveWork, act) => {
+    let live = true;
+    const host = {
+      ...stubHost(), tasks: () => [...tasks], running: () => liveWork, hasLiveWork: () => liveWork,
+      admitStart: () => ({ current: () => live, release: vi.fn() }),
+      [act]: vi.fn(async () => { live = false; return ''; }),
+    };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    const outcome = await commands.run(command, actor);
+    expect(host[act]).toHaveBeenCalled();
+    expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: STOPPED_BEFORE_START });
   });
 
   it('names no held edit when there is none', async () => {

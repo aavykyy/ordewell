@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { render } from '../render';
 import { bodyRows, chatBodyLines, helpLayout } from '../layout';
 import { stripAnsi, style, width } from '../ansi';
@@ -39,8 +39,8 @@ const reply = (content: string): Action => ({
 });
 
 const tasks: TaskView[] = [
-  { id: 'a', order: 1, title: 'Add the login route', type: 'ai', status: 'completed', dependencies: [] },
-  { id: 'b', order: 2, title: 'Write the tests', type: 'ai', status: 'running', dependencies: ['a'] },
+  { id: 'a', order: 1, title: 'Add the login route', type: 'ai', status: 'completed', dependencies: [], attempted: true },
+  { id: 'b', order: 2, title: 'Write the tests', type: 'ai', status: 'running', dependencies: ['a'], attempted: true },
   { id: 'c', order: 3, title: 'Review by hand', type: 'user', status: 'pending', dependencies: ['b'] },
 ];
 
@@ -492,6 +492,15 @@ describe('plan pane', () => {
 });
 
 describe('status line', () => {
+  // A fake clock keeps the resume label's two forms — a same-day time and a
+  // dated one — from depending on when the suite runs.
+  beforeEach(() => {
+    vi.useFakeTimers({ now: new Date(2026, 9, 14, 11, 0), toFake: ['Date'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const viewing = (taskId: string, over: Partial<TuiState> = {}): Partial<TuiState> => ({
     taskView: { taskId, view: EMPTY_TASK_LOG, attempts: [1], attempt: 1, pending: [], loaded: true, followLatest: true, queuedIndex: 0 },
     ...over,
@@ -522,7 +531,11 @@ describe('status line', () => {
   it('states a usage-limit pause\'s resume time in that task\'s chat', () => {
     const resumeAt = new Date(2026, 9, 14, 12, 12).toISOString();
     const paused = [{ ...tasks[1], status: 'awaiting_user', awaitingReason: 'usage-limit' as const, resumeAt }];
-    expect(text({ tasks: paused, ...viewing('b') })).toMatch(/paused · resumes .*12:12/);
+    expect(text({ tasks: paused, ...viewing('b') })).toContain('paused · resumes 12:12pm');
+
+    // Another day names the date, so a resume tomorrow is never read as today's.
+    const tomorrow = [{ ...tasks[1], status: 'awaiting_user', awaitingReason: 'usage-limit' as const, resumeAt: new Date(2026, 9, 15, 8, 10).toISOString() }];
+    expect(text({ tasks: tomorrow, ...viewing('b') })).toContain('paused · resumes Oct 15, 8:10am');
   });
 });
 
@@ -538,6 +551,12 @@ describe('plan pane run hints', () => {
     expect(text({ tasks: waiting, ...taskChat })).toContain('Plan 1/3 · 1 task waits for you');
   });
 
+  it('says a start is starting in the plan title and the status row', () => {
+    const out = text({ tasks, status: 'starting' });
+    expect(out).toContain('Plan 1/3 · starting…');
+    expect(out).toContain('Starting the plan…');
+  });
+
   it('carries the Merge all pause in its title, in either chat', () => {
     expect(text({ cols: 140, tasks, status: 'executing', runMerge: mergePaused })).toContain('paused for Merge all: /handoff merge');
     expect(text({ cols: 140, tasks, status: 'executing', runMerge: mergePaused, ...taskChat })).toContain('paused for Merge all: /handoff merge');
@@ -547,8 +566,10 @@ describe('plan pane run hints', () => {
     expect(text({ tasks, status: 'executing', runMerge: mergePaused })).toContain('Plan 1/3 · paused · /handoff merge');
   });
 
-  it('falls back to the status row where a narrow terminal has no plan pane', () => {
-    expect(text({ cols: 60, tasks: waiting })).toContain('1 task waits for you');
+  it('carries the hint in the stacked plan\'s title where a narrow terminal puts the plan under the chat', () => {
+    const out = text({ cols: 60, tasks: waiting });
+    expect(out).toContain('Plan 1/3 · 1 task waits for you');
+    expect(out.match(/1 task waits for you/g)).toHaveLength(1);
   });
 });
 
@@ -809,15 +830,15 @@ describe('footer', () => {
     expect(out).not.toMatch(/f start/);
   });
 
-  it('advertises opening the log on the selected task', () => {
-    expect(text({ tasks, focus: 'plan', cols: 140 })).toMatch(/enter log/);
+  it('advertises opening the chat on the selected task', () => {
+    expect(text({ tasks, focus: 'plan', cols: 140 })).toMatch(/enter chat/);
   });
 
   it('wraps the plan hints instead of truncating the tail off a narrow terminal', () => {
     // A single truncated line hid the keys the footer exists to teach.
     const out = render(initialState({ tasks, focus: 'plan', rows: 40, cols: 60 }));
 
-    expect(out.join('\n')).toMatch(/enter log/);
+    expect(out.join('\n')).toMatch(/enter chat/);
     expect(out.every((line) => line.length <= 60)).toBe(true);
   });
 
@@ -1512,8 +1533,8 @@ describe('plan markers', () => {
   it('then says what the plan became, and how many tasks it has', () => {
     const building: SessionMessage = { type: 'plan_token', turnId: 't1', token: '{"tasks":' };
 
-    expect(blockRows(heard(80, building, plan('Plan generated with 2 tasks.', 't1')), '◇')).toEqual(['◇ Plan generated (2 tasks)']);
-    expect(blockRows(heard(80, plan('Plan updated — now 1 task.')), '◇')).toEqual(['◇ Plan updated (1 task)']);
+    expect(blockRows(heard(80, building, plan('Plan generated with 2 tasks.', 't1')), '◇')).toEqual(['◇ Plan generated · 2 tasks']);
+    expect(blockRows(heard(80, plan('Plan updated — now 1 task.')), '◇')).toEqual(['◇ Plan updated · 1 task']);
   });
 });
 

@@ -51,7 +51,7 @@ describe('/settings', () => {
   it('opens on Autonomy and pre-selects every current value', () => {
     let state = typed(base({ autonomous: false, maxParallel: 3 }), '/settings').state;
     const seen: { step: string; highlighted: string | undefined }[] = [];
-    for (let i = 0; i < 7; i += 1) {
+    for (let i = 0; i < 6; i += 1) {
       seen.push(onScreen(state));
       state = press(state, 'tab').state;
     }
@@ -59,11 +59,32 @@ describe('/settings', () => {
       { step: 'Autonomy', highlighted: 'Guarded' },
       { step: 'Supervisor', highlighted: 'Watch' },
       { step: 'Supervisor retries', highlighted: '2' },
-      { step: 'Supervisor reads', highlighted: '12' },
       { step: 'Automerge', highlighted: 'Off' },
       { step: 'Autorun', highlighted: 'Off' },
       { step: 'Parallel', highlighted: '3' },
     ]);
+  });
+
+  it('has no Supervisor reads step, at Watch, Off or Act, including after switching level with the panel open', () => {
+    const labels = (state: TuiState): string[] => stepper(state).trail.map((t) => t.label);
+    const watch = typed(base(), '/settings').state;
+    expect(labels(watch)).toEqual(['Autonomy', 'Supervisor', 'Supervisor retries', 'Automerge', 'Autorun', 'Parallel']);
+    expect(labels(watch)).not.toContain('Supervisor reads');
+
+    const off = press(walk(watch, 'tab', 'up'), 'enter').state;
+    expect(labels(off)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel']);
+    expect(labels(off)).not.toContain('Supervisor reads');
+
+    const asked = press(walk(watch, 'tab', 'down'), 'enter');
+    expect(asked.state.overlay).toMatchObject({ kind: 'confirm', message: 'Settings: Supervisor Act' });
+    const act = press(asked.state, 'enter').state;
+    expect(act.runSettings.supervisorLevel).toBe('act');
+    expect(labels(act)).toContain('Supervisor retries');
+    expect(labels(act)).not.toContain('Supervisor reads');
+
+    const offAgain = press(walk(act, 'up', 'up'), 'enter').state;
+    expect(offAgain.runSettings.supervisorLevel).toBe('off');
+    expect(labels(offAgain)).not.toContain('Supervisor reads');
   });
 
   it('enter saves the choice at once and stays on the step, marked as the current value', () => {
@@ -75,7 +96,7 @@ describe('/settings', () => {
   });
 
   it('shows a saved value in the header and when the step is visited again', () => {
-    const atAutomerge = walk(typed(base(), '/settings').state, 'tab', 'tab', 'tab', 'tab', 'up');
+    const atAutomerge = walk(typed(base(), '/settings').state, 'tab', 'tab', 'tab', 'up');
     const { state, effects } = press(atAutomerge, 'enter');
     expect(effects).toEqual([save({ mergeAtGatesAutomatically: true }, 'Settings: Automerge on')]);
     expect(state.runSettings.mergeAtGatesAutomatically).toBe(true);
@@ -87,7 +108,7 @@ describe('/settings', () => {
   });
 
   it('keeps the saved value when the daemon answers with it', () => {
-    const saved = press(walk(typed(base(), '/settings').state, 'tab', 'tab', 'tab', 'tab', 'up'), 'enter').state;
+    const saved = press(walk(typed(base(), '/settings').state, 'tab', 'tab', 'tab', 'up'), 'enter').state;
     const run = { ...saved.runSettings, mergeAtGatesAutomatically: true };
     const { state } = reduce(saved, { type: 'settingsLoaded', settings: { run } });
     expect(onScreen(state)).toEqual({ step: 'Automerge', highlighted: 'On' });
@@ -106,7 +127,7 @@ describe('/settings', () => {
 
   it('esc keeps every choice already saved and undoes nothing', () => {
     const saved = press(walk(typed(base(), '/settings').state, 'down'), 'enter').state;
-    const { state, effects } = press(walk(saved, 'tab', 'tab', 'tab', 'tab', 'up'), 'escape');
+    const { state, effects } = press(walk(saved, 'tab', 'tab', 'tab', 'up'), 'escape');
     expect(effects).toEqual([]);
     expect(state.overlay).toBeNull();
     expect(state.autonomous).toBe(false);
@@ -117,7 +138,7 @@ describe('/settings', () => {
     const highlighted = press(walk(typed(base(), '/settings').state, 'down'), 'escape');
     expect(highlighted.effects).toEqual([]);
     expect(highlighted.state.autonomous).toBe(true);
-    const typedOnly = press(type(walk(typed(base(), '/settings').state, ...Array<string>(6).fill('tab')), '9'), 'escape');
+    const typedOnly = press(type(walk(typed(base(), '/settings').state, ...Array<string>(5).fill('tab')), '9'), 'escape');
     expect(typedOnly.effects).toEqual([]);
     expect(typedOnly.state.maxParallel).toBe(5);
   });
@@ -130,7 +151,7 @@ describe('/settings', () => {
     expect(onScreen(state).step).toBe('Autonomy');
   });
 
-  it('hides the supervisor retries and reads steps as soon as the supervisor is saved Off', () => {
+  it('hides the supervisor retries step as soon as the supervisor is saved Off', () => {
     const atOff = typed(base({ runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }), '/settings').state;
     expect(stepper(atOff).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel']);
 
@@ -162,7 +183,7 @@ describe('/settings', () => {
   });
 
   it('asks before Autorun on, and returns to the step either way', () => {
-    const atAutorun = walk(typed(base(), '/settings').state, ...Array<string>(5).fill('tab'), 'up');
+    const atAutorun = walk(typed(base(), '/settings').state, ...Array<string>(4).fill('tab'), 'up');
     const asked = press(atAutorun, 'enter');
     expect(asked.state.overlay).toMatchObject({ kind: 'confirm', message: 'Settings: Autorun on' });
 
@@ -177,7 +198,7 @@ describe('/settings', () => {
   });
 
   it('saves any whole number typed for Parallel, staying on the step', () => {
-    const state = walk(typed(base(), '/settings').state, ...Array<string>(6).fill('tab'));
+    const state = walk(typed(base(), '/settings').state, ...Array<string>(5).fill('tab'));
     expect(onScreen(state)).toEqual({ step: 'Parallel', highlighted: '5' });
     const done = press(type(state, '17'), 'enter');
     expect(done.effects).toEqual([save({}, 'Settings: Parallel 17', { maxParallel: 17 })]);
@@ -185,22 +206,26 @@ describe('/settings', () => {
     expect(onScreen(done.state)).toEqual({ step: 'Parallel', highlighted: '17' });
   });
 
-  it('refuses 0 for Parallel and Supervisor reads, and takes it for Supervisor retries', () => {
-    const parallel = walk(type(walk(typed(base(), '/settings').state, ...Array<string>(6).fill('tab')), '0'), 'enter');
+  it('refuses 0 for Parallel and takes it for Supervisor retries', () => {
+    const parallel = walk(type(walk(typed(base(), '/settings').state, ...Array<string>(5).fill('tab')), '0'), 'enter');
     expect(onScreen(parallel)).toEqual({ step: 'Parallel', highlighted: '0' });
-    const reads = walk(type(walk(typed(base(), '/settings').state, 'tab', 'tab', 'tab'), '0'), 'enter');
-    expect(onScreen(reads)).toEqual({ step: 'Supervisor reads', highlighted: '0' });
 
     const retries = press(type(walk(typed(base(), '/settings').state, 'tab', 'tab'), '0'), 'enter');
     expect(retries.effects).toEqual([save({ supervisorRetryLimit: 0 }, 'Settings: Supervisor retries 0')]);
     expect(onScreen(retries.state)).toEqual({ step: 'Supervisor retries', highlighted: '0' });
   });
 
+  it('keeps a manually configured read budget through an unrelated save', () => {
+    const state = base({ runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'watch', wakeUpReadBudget: 30 } });
+    const saved = press(walk(typed(state, '/settings').state, 'tab', 'tab', 'tab', 'up'), 'enter');
+    expect(saved.effects).toEqual([save({ mergeAtGatesAutomatically: true }, 'Settings: Automerge on')]);
+    expect(saved.state.runSettings.wakeUpReadBudget).toBe(30);
+  });
+
   it('↓ stops at each count\'s minimum', () => {
     const down = (tabs: number, presses: number): string | undefined =>
       onScreen(walk(typed(base(), '/settings').state, ...Array<string>(tabs).fill('tab'), ...Array<string>(presses).fill('down'))).highlighted;
     expect(down(2, 5)).toBe('0');
-    expect(down(3, 20)).toBe('1');
-    expect(down(6, 10)).toBe('1');
+    expect(down(5, 10)).toBe('1');
   });
 });

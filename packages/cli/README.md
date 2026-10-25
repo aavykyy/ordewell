@@ -11,7 +11,7 @@ from evidence, and leaves the final merge to you.
 npm install -g @ordewell/cli        # or: npm install -g ordewell
 ```
 
-**Requirements:** Node.js 20 or newer, at least one of Claude Code, Codex or
+**Requirements:** Node.js 20.3 or newer, at least one of Claude Code, Codex or
 OpenCode, and git for task isolation. Linux, macOS and Windows are supported;
 on Windows, run the terminal UI under WSL.
 
@@ -29,11 +29,16 @@ effort in one flow, so there is no separate model or effort command. Press `?` i
 the plan pane for the full key sheet; the footer shows only the keys that apply
 to the selected task.
 
-Every command in the terminal UI is also a subcommand, except `/settings`: it is
-a panel over headless commands that remain for scripts (`ordewell auto`,
-`supervisor`, `automerge`, `autorun` and `parallel`). `/planner` has its own
-`ordewell planner`, and its model and effort steps are `ordewell model` and
-`ordewell planner-effort`.
+Most commands in the terminal UI are also subcommands. The exceptions: `/help`
+is `ordewell --help`; `/quit`, `/new` (every `ordewell plan` starts a fresh
+session) and `/save` (plans persist as they change) have no subcommand; `/load`
+and `/delete` are `ordewell sessions load|delete`; `/open` opens a task's view
+in the full-screen terminal, where a shell has no view to switch to
+(`ordewell checkpoint` answers from one); `/mouse` configures that terminal; and
+`/settings` is a panel over headless commands that remain for scripts
+(`ordewell auto`, `supervisor`, `automerge`, `trailer`, `autorun` and
+`parallel`). `/planner` has its own `ordewell planner`, and its model and effort
+steps are `ordewell model` and `ordewell planner-effort`.
 
 ```bash
 export AI_PROVIDER=claude-code      # plan with Claude Code, Codex or OpenCode
@@ -44,8 +49,8 @@ ordewell handoff review             # read the diff
 ordewell handoff merge              # bring it onto your branch
 ```
 
-Run `ordewell --help` for the full list, or `ordewell setup` for guided
-configuration.
+Run `ordewell --help` for the full list, or `ordewell setup` to write a
+starter `.env` file.
 
 Type `/name` in the conversation to load a skill, and use `ordewell skills` to
 list the ones a workspace sees and `ordewell task-skills` to attach them to a

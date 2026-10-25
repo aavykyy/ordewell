@@ -52,6 +52,8 @@ export class RunnerProcess {
   readonly ended: Promise<void>;
   private markEnded!: () => void;
   private child: ChildProcess | null = null;
+  /** Disposed before, or while, it launched: nothing may be spawned for an owner that has gone. */
+  private disposed = false;
   private exitStatus: RunnerExit | null = null;
   /** The process itself reported its end, before its pipes drained; see {@link hasExited}. */
   private exitReported = false;
@@ -105,6 +107,9 @@ export class RunnerProcess {
     if (!isExecutableResolved(command.command, launch, PATH, { platform: this.deps.platform, exists: this.deps.exists })) {
       throw new ExecutableNotFoundError(command.command, PATH);
     }
+    // The awaits above leave room for a dispose: a Stop takes the adapter back
+    // while its start runs on, and a dispose finds no child to kill yet.
+    if (this.disposed) throw new Error('The runner was stopped before it launched.');
     this.spawnEnv = runnerEnv(PATH, workspace, command.env?.(workspace), command.envDrop);
 
     const child = spawnInOwnGroup((detached) => this.deps.spawn(launch.file, launch.args, {
@@ -220,6 +225,7 @@ export class RunnerProcess {
    * disposed runner is never the reason the host refuses to exit.
    */
   dispose(): void {
+    this.disposed = true;
     const child = this.child;
     this.child = null;
     killTree(child, { platform: this.deps.platform });

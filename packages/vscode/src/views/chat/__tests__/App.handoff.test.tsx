@@ -1,11 +1,11 @@
 import React from 'react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { createTask, type HandoffDigest, type RunTask } from '@ordewell/core';
+import { createTask, type HandoffDigest, type HandoffPatch, type RunTask } from '@ordewell/core';
 import App from '../App';
 import { api, post } from './hostBridge';
 
-const task = createTask({ id: 't1', order: 1, title: 'Review boundary', status: 'completed' });
+const task = createTask({ id: 't1', order: 1, title: 'Review boundary', status: 'completed', attempted: true });
 const handoff: HandoffDigest = {
   summary: 'Keep the token scoped.\nMore context.', findingCount: 28,
   findings: [{ id: 'F1', severity: 'blocker', title: 'Sibling read', detail: 'The token can read a sibling.', evidence: [{ kind: 'file', path: 'src/token.ts', line: 42 }] }],
@@ -43,9 +43,28 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     expect(document.querySelector('.task-handoff-peek')).toBeNull();
   });
 
-  it.each(['script', 'user'] as const)('shows the %s handoff from a saved plan with no findings', (type) => {
+  it('starts the summary at its first line with words', () => {
+    update({ ...task, handoff: { ...handoff, summary: '\n\n  Keep the token scoped.\nMore context.' } });
+    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Handed over · 28 findings · Blocker · Keep the token scoped.');
+  });
+
+  it('shows the commit before the summary, and a handoff with only a commit', () => {
+    update({ ...task, handoff: { ...handoff, commit: { subject: 'Scope the token', body: 'Reads stay in the tenant.' } } });
+    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Commit: Scope the token · Keep the token scoped.');
+    fireEvent.click(screen.getByText('Review boundary'));
+    const section = document.querySelector('.task-handoff')!;
+    expect(section.querySelector('.task-handoff-commit')).toHaveTextContent('Commit: Scope the tokenReads stay in the tenant.');
+    expect(section.querySelector('.task-handoff-commit')!.compareDocumentPosition(section.querySelector('.task-handoff-summary')!))
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    fireEvent.click(screen.getByText('Review boundary'));
+    update({ ...task, handoff: { summary: '', findings: [], findingCount: 0, commit: { subject: 'Only a commit' } } });
+    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Handed over · no findings · Commit: Only a commit');
+    expect(document.querySelector('.task-handoff-summary')).toBeNull();
+  });
+
+  it('shows a script handoff from a saved plan with no findings, and opens its chat', () => {
     post({ type: 'planUpdated', plan: {
-      tasks: [{ ...task, type, handoff: { summary: 'Finished', findings: [], findingCount: 0 } }],
+      tasks: [{ ...task, type: 'script', handoff: { summary: 'Finished', findings: [], findingCount: 0 } }],
       generatedAt: '', lastUpdated: '', status: 'approved', runners: [],
     } });
     expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Handed over · no findings · Finished');
@@ -53,6 +72,36 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     expect(screen.getByText('Handoff · no findings')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Read full handoff' }));
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'openTaskLog', taskId: 't1' });
+  });
+
+  it('shows a manual handoff without offering a chat it never had', () => {
+    post({ type: 'planUpdated', plan: {
+      tasks: [{ ...task, type: 'user', attempted: undefined, handoff: { summary: 'Finished', findings: [], findingCount: 0 } }],
+      generatedAt: '', lastUpdated: '', status: 'approved', runners: [],
+    } });
+    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Handed over · no findings · Finished');
+    fireEvent.click(screen.getByText('Review boundary'));
+    expect(screen.getByText('Handoff · no findings')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Read full handoff' })).toBeNull();
+  });
+
+  it('shows the saved patch its attempt kept, and opens it in an editor tab (ADR-0050)', () => {
+    const patch: HandoffPatch = {
+      kind: 'patch', path: '.ordewell/sessions/s1/tasks/t1/1.patch', attempt: 1,
+      base: 'a'.repeat(40), files: 2, added: 9, removed: 1, binary: 0, bytes: 900, sha256: 'f'.repeat(64),
+      flags: [{ kind: 'excluded', count: 1, paths: ['docs/link'] }],
+    };
+    update({ ...task, handoff: { ...handoff, artifacts: [patch] } });
+
+    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('patch: 2 files, +9 -1');
+    fireEvent.click(screen.getByText('Review boundary'));
+    const block = document.querySelector('.task-handoff-patch')!;
+    expect(block).toHaveTextContent('Patch · 2 files, +9 -1, 900 B');
+    expect(block).toHaveTextContent('saved as .ordewell/sessions/s1/tasks/t1/1.patch (attempt 1)');
+    expect(block).toHaveTextContent('from commit aaaaaaaaaaaa');
+    expect(block).toHaveTextContent('not carried (links and submodules): 1 file (docs/link)');
+    fireEvent.click(screen.getByRole('button', { name: 'Open patch' }));
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'openFile', path: '.ordewell/sessions/s1/tasks/t1/1.patch' });
   });
 
   it('keeps the loop badge and status beside a handoff', () => {

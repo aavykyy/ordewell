@@ -7,13 +7,16 @@ import { createApp } from './app';
 import { runEffect } from './effects';
 import { registerSkillCommands } from './slash';
 import { openTerminal } from './terminal';
+import { startCliVersionCheck } from '../versionCheck';
 
 /**
  * `ordewell tui` — the full-screen terminal client. By default each launch
  * gets its own private daemon, so two terminals never share a session list.
- * Pass `--port`/`ORDEWELL_PORT` to instead drive the well-known daemon the
- * VS Code extension and the web UI use, so a plan started here can be picked
- * up anywhere else.
+ * Pass `--port`/`ORDEWELL_PORT` to instead drive the well-known daemon other
+ * CLI invocations use, so a plan started here can be picked up from another
+ * terminal. (The VS Code extension runs core's `Session` in-process; a plan
+ * travels between it and the terminal through the saved-session store, not the
+ * daemon.)
  */
 export async function handleTui(subArgs: string[]): Promise<void> {
   if (!process.stdin.isTTY) {
@@ -48,8 +51,7 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   // daemon's process-wide session map, so a task added in one shows up live
   // in the other. Each unflagged launch instead gets its own daemon on a
   // free port, private by construction; `--port`/`ORDEWELL_PORT` opts back
-  // into the shared daemon (e.g. to pick up a plan from the VS Code
-  // extension or the web UI).
+  // into the shared daemon (e.g. to pick up a plan from another CLI or TUI).
   const explicitPort = flag(subArgs, '--port') || process.env.ORDEWELL_PORT;
   const targetPort = explicitPort ? resolvePort(subArgs) : await findFreePort();
   const { port, owned: ownedAtLaunch } = await ensureDaemonOwned(targetPort, { detached: false });
@@ -67,6 +69,15 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   // mouse back for drag-select, and this env var makes that stick.
   const mouseCapture = process.env.ORDEWELL_TUI_MOUSE !== 'false' && process.env.ORDEWELL_TUI_MOUSE !== '0';
 
+  // Started once the daemon is up, with nothing awaited between here and
+  // `createApp`: the notice is synchronous and lands in the first frame, and an
+  // update line, which only a later tick can bring, always finds the app.
+  let versionCheckNotice = '';
+  startCliVersionCheck({
+    onNotice: (text) => { versionCheckNotice = text; },
+    onUpdate: (line) => app.dispatch({ type: 'notice', message: line }),
+  });
+
   const settings = new SettingsService();
   const app = createApp({
     // The level the daemon plans with: the saved one, unless the environment overrides it (ADR-0030).
@@ -82,6 +93,7 @@ export async function handleTui(subArgs: string[]): Promise<void> {
       ...(ownedAtLaunch ? { runSettings: settings.getRunSettings(), runSettingsKnown: true } : {}),
       mouseCapture,
       taskSkills,
+      versionCheckNotice,
     },
     draw: (frame) => terminal?.draw(frame),
     perform: (effect) =>

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { makeSession } from './sessionTestKit';
 
-describe('planContextBlock task-shape fields', () => {
+describe('the plan block\'s task-shape fields', () => {
   function planWithMixedTasks(): LegacyPlanState {
     return {
       tasks: [
@@ -68,6 +68,9 @@ describe('planContextBlock task-shape fields', () => {
     // Model/mode fields are meaningless for a MAN task and must not appear.
     expect(manLine).not.toContain('mode:');
     expect(manLine).not.toContain('model:');
+    // The runner the plan stored for it is nothing a manual task runs on.
+    expect(manLine).not.toContain('runner:');
+    expect(aiLine).toContain('runner:');
   });
 
   it('marks a task in its runner\'s read-only mode as read-only', async () => {

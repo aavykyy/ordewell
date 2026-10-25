@@ -1,16 +1,16 @@
-import { firstGrapheme, pad, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
+import { firstGrapheme, nextBoundary, pad, previousBoundary, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
 import { cursorInLines, type CursorPosition } from './editor';
 import { assignmentFlagText, checkpointCardLines, conversationLines, tokenLine } from './blocks';
-import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
+import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
-import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, scriptTaskView, selectedPlanRow, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
 import { SUPERVISOR_LEVEL_LABEL, type DiscoveredModel, type HeldEditMark } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { approvalLabel, scriptTaskText, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeLabel, resumeTime, runnerForProvider, severityLabel, taskRowView, tasksTotalText, taskUsageSummary, plannerContextFill, usageText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
+import { assignedRunnerOf, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -33,18 +33,67 @@ const CHROME_ROWS = 1;
 // ── Chrome extents ───────────────────────────────────────────────────────────
 
 /**
- * The chat input's wrapped lines, or `null` when the editor is blurred and
- * therefore always exactly one row (a literal newline would otherwise push
- * every row below it down one line).
+ * The most draft text the composer wraps and paints around the caret. The
+ * transcript caps a block at 32KB for the same reason, but the composer is
+ * repainted on every keystroke and `wrapLines` cannot cache a draft that
+ * changes, so its cap is smaller. The window follows the caret rather than
+ * showing the head: a pasted log leaves the caret at its end, and typing there
+ * must not happen off screen.
  */
-export function chatInputWrap(state: TuiState): WrapLine[] | null {
-  const active = state.focus === 'chat' && !state.overlay;
-  if (!active) return null;
-  return wrapLines(state.editor.text, chatEditorRoomFor(state, true));
-}
+const COMPOSER_WINDOW_CHARS = 8 * 1024;
 
 /** The empty rows the composer carries above and below its text, on the grey band. */
 export const COMPOSER_BAND_ROWS = 2;
+
+/** The part of the draft the composer actually wraps, paints and reports hiding. */
+export interface ComposerView {
+  /** The shown slice of the draft. */
+  text: string;
+  /** Where `text` starts in the draft. */
+  base: number;
+  /** Wrapped lines of `text`; their `start` offsets are relative to `text`. */
+  lines: WrapLine[];
+  hiddenBefore: number;
+  hiddenAfter: number;
+}
+
+/**
+ * The chat input's visible window — the wrapped lines around the caret that
+ * the composer paints — or `null` when the editor is blurred and therefore
+ * always exactly one row (a literal newline would otherwise push every row
+ * below it down one line).
+ */
+export function composerView(state: TuiState): ComposerView | null {
+  const active = state.focus === 'chat' && !state.overlay;
+  // A script's log is output only (ADR-0035): there is no composer to draw.
+  if (!active || scriptTaskView(state)) return null;
+
+  const { text, cursor } = state.editor;
+  const room = chatEditorRoomFor(state, true);
+  const start = text.length <= COMPOSER_WINDOW_CHARS
+    ? 0
+    : Math.max(0, Math.min(text.length - COMPOSER_WINDOW_CHARS, cursor - Math.floor(COMPOSER_WINDOW_CHARS / 2)));
+  // Back up to the start of a grapheme rather than cutting a joined cluster.
+  const before = previousBoundary(text, start);
+  const windowBase = nextBoundary(text, before) > start ? before : start;
+  const shown = text.slice(windowBase, windowBase + COMPOSER_WINDOW_CHARS);
+  const all = wrapLines(shown, room);
+  const cursorLine = cursorInLines(all, Math.max(0, cursor - windowBase), shown.length).line;
+  // A short terminal keeps half its rows for the transcript and chrome: the
+  // caret's own line is always inside this window, so typing stays visible.
+  const cap = Math.max(1, Math.min(all.length, Math.floor(state.rows / 2) - COMPOSER_BAND_ROWS));
+  const from = Math.max(0, Math.min(all.length - cap, cursorLine - Math.floor(cap / 2)));
+  const first = all[from].start;
+  const end = from + cap < all.length ? all[from + cap].start : shown.length;
+  const visible = shown.slice(first, end);
+  return {
+    text: visible,
+    base: windowBase + first,
+    lines: all.slice(from, from + cap).map((line) => ({ ...line, start: line.start - first })),
+    hiddenBefore: windowBase + first,
+    hiddenAfter: text.length - (windowBase + end),
+  };
+}
 
 /**
  * Every row the composer takes: its text rows plus the band rows around them.
@@ -52,7 +101,7 @@ export const COMPOSER_BAND_ROWS = 2;
  * what keeps the frame at exactly `state.rows` lines.
  */
 export function composerRows(state: TuiState): number {
-  return (chatInputWrap(state)?.length ?? 1) + COMPOSER_BAND_ROWS;
+  return (composerView(state)?.lines.length ?? 1) + COMPOSER_BAND_ROWS;
 }
 
 /**
@@ -82,12 +131,13 @@ export function footerHints(state: TuiState): string[] {
   // A task's composer queues its text behind the running step; ctrl-s is the
   // other way to send it, named while there is text it would send.
   const tv = state.taskView;
-  const taskSends = !!tv && tv.view.working && !!state.editor.text.trim() && !continuesTask(findTask(state.tasks, tv.taskId));
+  const script = scriptTaskView(state);
+  const taskSends = !!tv && !script && tv.view.working && !!state.editor.text.trim() && !continuesTask(findTask(state.tasks, tv.taskId));
   const sendNowHint = planning || taskSends ? 'ctrl-s send now' : null;
   const stopRunnerHint = runnerStoppable(state) ? 'ctrl-x stop runner' : null;
   // The same choices the card lists, kept in reach while the question scrolls
   // away. A tool request waiting ahead answers first, and its card says how.
-  const checkpointHints = tv && waitingCheckpoint(findTask(state.tasks, tv.taskId)) && !waitingApproval(tv)
+  const checkpointHints = tv && !script && waitingCheckpoint(findTask(state.tasks, tv.taskId)) && !waitingApproval(tv)
     ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject']
     : [];
 
@@ -208,41 +258,63 @@ function queuedTaskBubble(message: QueuedTaskMessage, target: boolean, sends: bo
     : truncate(`  ${line}`, cols));
 }
 
+/** Every status kind's word in a plan row, sentence case. */
+const STATUS_WORD: Record<TaskStatusKind, string> = {
+  done: 'Done',
+  failed: 'Failed',
+  running: 'Running',
+  quiet: 'Stalled',
+  awaiting: 'Awaiting',
+  blocked: 'Blocked',
+  skipped: 'Skipped',
+  todo: 'To do',
+};
+
 /**
- * Completion can kill a runner before its log's turn ends, so a settled
- * task's status wins. Otherwise a runner request waiting for an answer wins,
- * then a live turn, then what an `awaiting_user` task waits on (a checkpoint
- * over plain input), then the task's own status.
+ * The task as the opened log's header reads it: the store's facts plus the
+ * silence only this surface tracks. The daemon's count of runner requests
+ * waiting for an answer is passed beside it.
  */
-function taskActivity(task: TaskView | undefined, working: boolean): string {
-  if (task?.status === 'completed' || task?.status === 'failed') return task.status;
-  const approvals = approvalLabel(task?.awaitingApproval);
-  if (approvals) return inRow(approvals);
-  if (working) return 'working';
-  if (task?.status === 'awaiting_user') {
-    const resumes = resumeLabel(task);
-    return [inRow(awaitingLabel(task) ?? 'Waiting for your input'), resumes ? inRow(resumes) : ''].filter(Boolean).join(' · ');
-  }
-  return task?.status ?? '';
+function logHeaderTask(task: TaskView | undefined): TaskLogHeaderTask {
+  return {
+    status: task?.status ?? '',
+    ...(task?.awaitingReason ? { awaitingReason: task.awaitingReason } : {}),
+    ...(task?.skipReason !== undefined ? { skipReason: task.skipReason } : {}),
+    resumeAt: task?.resumeAt ?? null,
+    idleSince: task?.idleSince ?? null,
+    continuable: task?.continuable === true,
+    attemptUsage: task?.attemptUsage ?? [],
+  };
+}
+
+/** What core says the opened task's log header shows: one reading for both surfaces (ADR-0018, V1). */
+function logHeader(state: TuiState, tv: NonNullable<TuiState['taskView']>): TaskLogHeaderView {
+  const task = findTask(state.tasks, tv.taskId);
+  return taskLogHeaderView(logHeaderTask(task), tv, task?.awaitingApproval ?? 0, tv.attempt);
 }
 
 /** The task view's two pinned rows: the accent bar, and the keys it owns. */
 function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>, cols: number): string[] {
   const task = findTask(state.tasks, tv.taskId);
+  const header = logHeader(state, tv);
   const parts = [
     `→ Task ${task ? refFor(state, task).slice(1) : '?'}`,
     task?.title ?? '(task removed)',
-    task?.assignedRunner ?? '',
-    taskActivity(task, tv.view.working),
+    (task && assignedRunnerOf(task)) ?? '',
+    task ? inRow(header.state.label) : '',
+    header.resumes ? inRow(header.resumes) : '',
   ].filter(Boolean);
   const approval = waitingApproval(tv);
-  const hint = approval
-    ? ['ctrl-y allow', ...(approval.allowForTask ? ['ctrl-t allow for task'] : []), 'ctrl-g deny (composer text is the note)']
-    : waitingCheckpoint(task)
-      ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject', 'ctrl-x stop runner']
-      : task && resumeLabel(task)
-        ? ['ctrl-x don\'t resume']
-        : [...(runnerStoppable(state) ? ['ctrl-x stop runner'] : []), 'ctrl-r remove queued', 'ctrl-s send now'];
+  // A script's log is read-only output (ADR-0035): no runner, queue or send keys.
+  const hint = scriptTaskView(state)
+    ? ['read-only output', 'esc back']
+    : approval
+      ? ['ctrl-y allow', ...(approval.allowForTask ? ['ctrl-t allow for task'] : []), 'ctrl-g deny (composer text is the note)']
+      : waitingCheckpoint(task)
+        ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject', 'ctrl-x stop runner']
+        : header.resumes
+          ? ['ctrl-x don\'t resume']
+          : [...(runnerStoppable(state) ? ['ctrl-x stop runner'] : []), 'ctrl-r remove queued', 'ctrl-s send now'];
   if (approval && waitingCheckpoint(task)) hint.push('then the checkpoint');
   const index = tv.attempts.indexOf(tv.attempt);
   if (tv.attempts.length > 1) hint.push(`alt←/→ attempt ${index >= 0 ? index + 1 : 1}/${tv.attempts.length}`);
@@ -279,6 +351,8 @@ export const SPINNER_CYCLE = 40;
 export function runnerStoppable(state: TuiState): boolean {
   const tv = state.taskView;
   if (!tv || !chatActivity(state)?.busy) return false;
+  // A script runs no model: there is no turn to interrupt (ADR-0035).
+  if (scriptTaskView(state)) return false;
   const task = findTask(state.tasks, tv.taskId);
   return !task?.awaitingApproval && !waitingApproval(tv);
 }
@@ -298,8 +372,10 @@ export interface ChatActivity {
 export function chatActivity(state: TuiState): ChatActivity | null {
   const tv = state.taskView;
   if (!tv) {
+    if (state.status === 'starting') return { label: 'Starting the plan…', busy: true };
     if (!plannerInFlight(state)) return null;
-    return { label: state.planner === 'condensing' ? 'Condensing…' : 'Planning…', busy: true };
+    const label = state.planner === 'condensing' ? 'Condensing…' : state.planner === 'awaiting' ? 'Waiting for the planner…' : 'Planning…';
+    return { label, busy: true };
   }
   const own = findTask(state.tasks, tv.taskId);
   const task = state.tasks.find((t) => t.subtasks?.some((s) => s.id === tv.taskId)) ?? own;
@@ -316,6 +392,7 @@ export function chatActivity(state: TuiState): ChatActivity | null {
  * plan pane's title takes the longest one that fits its width.
  */
 export function runHints(state: TuiState): string[] {
+  if (state.status === 'starting') return ['starting…', 'starting'];
   const waiting = state.tasks.filter((t) => t.status === 'awaiting_user').length;
   if (waiting > 0) return [waiting === 1 ? '1 task waits for you' : `${waiting} tasks wait for you`, `${waiting} waiting`];
   // As plain as a task that waits on the user: the run waits on a merge (ADR-0020).
@@ -418,7 +495,7 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   // The usage rows are the session's (or the opened task's), not lines of the
   // transcript: they keep the pane's bottom rows while everything above them
   // scrolls — unless the pane is a single row, which belongs to the conversation.
-  const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, blocks, cols) : [...plannerResendRow(state, cols), ...tokenRow(blocks, cols)];
+  const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, cols) : [...plannerResendRow(state, cols), ...tokenRow(blocks, cols)];
   // The per-model rows are the expendable part: they yield to the transcript
   // so a short pane never trades its last conversation row for a breakdown.
   const footer = usage.slice(0, Math.max(1, rows - taskHeader.length - 1));
@@ -443,27 +520,100 @@ const tokenRow = (blocks: readonly DisplayBlock[], cols: number): string[] => {
 };
 
 /**
- * The opened task's usage: its whole spend across every attempt, with the meter
- * of the latest. On a past attempt that attempt's own numbers come first, the
- * task total under them. An attempt with no ledger of its own — a log saved
- * before logs and ledgers shared one number — has the log's own last usage
- * block there instead, and still the task total.
+ * The opened task's usage, as core's log header words it: its whole spend
+ * across every attempt, with the meter of the latest. On a past attempt that
+ * attempt's own numbers come first, the task total under them. An attempt with
+ * no ledger of its own — a log saved before logs and ledgers shared one number
+ * — has the log's own last usage block there instead, and still the task total.
  */
-function taskUsageFooter(state: TuiState, tv: NonNullable<TuiState['taskView']>, blocks: readonly DisplayBlock[], cols: number): string[] {
-  const task = findTask(state.tasks, tv.taskId);
-  const reported = task?.attemptUsage ?? [];
-  if (!task || reported.length === 0) return tokenRow(blocks, cols);
-  const onScreen = tv.attempt > 0 ? reported.find((a) => a.attempt === tv.attempt) : reported.at(-1);
-  const total = usageText(taskUsageSummary(task));
-  const totalRow = total ? [style.grey(truncate(onScreen === reported.at(-1) ? total : `task total: ${total}`, cols))] : [];
-  if (onScreen === reported.at(-1)) return totalRow;
-  const own = onScreen ? usageText({ totals: onScreen.totals, contextFill: plannerContextFill(onScreen) }) : null;
-  return [...(onScreen ? (own ? [style.grey(truncate(`attempt ${onScreen.attempt}: ${own}`, cols))] : []) : tokenRow(blocks, cols)), ...totalRow];
+function taskUsageFooter(state: TuiState, tv: NonNullable<TuiState['taskView']>, cols: number): string[] {
+  return logHeader(state, tv).usage.map((row) => style.grey(truncate(row.text, cols)));
+}
+
+/**
+ * Where the body's panes are, measured: the one answer the renderer and every
+ * reducer take their sizes from, so a pane is never painted at one height and
+ * scrolled at another.
+ *
+ * Side by side the panes share the body's rows. Stacked they share its columns,
+ * and the rows are divided by what each pane has to say — which is why this
+ * lives with the content layouts rather than in `geometry.ts`, whose widths need
+ * no content. `plan` is `null` only while there is no plan; a stacked plan that
+ * the body has no room for is a rect of zero rows.
+ */
+export interface BodyPanes {
+  mode: BodyMode;
+  chat: PaneRect;
+  plan: PaneRect | null;
+}
+
+/** Transcript rows below the task view's pinned header that keep a stacked chat worth looking at. */
+const STACKED_CHAT_BODY_MIN = 2;
+/** The plan's header, the line under it, and one task row. */
+const STACKED_PLAN_MIN = 3;
+const UNBOUNDED = Number.MAX_SAFE_INTEGER;
+
+export function bodyPanes(state: TuiState): BodyPanes {
+  const mode = bodyMode(state);
+  const rows = bodyRows(state);
+  const chatCols = chatPaneWidth(state);
+  if (mode === 'chat') return { mode, chat: { row: 1, col: 1, rows, cols: chatCols }, plan: null };
+
+  const planCols = planPaneWidth(state);
+  if (mode === 'side') {
+    return { mode, chat: { row: 1, col: 1, rows, cols: chatCols }, plan: { row: 1, col: chatCols + 2, rows, cols: planCols } };
+  }
+
+  // Measured with no row limit, so the answer is what each pane would fill, not
+  // what it was last handed.
+  const chat = chatLayout(state, UNBOUNDED, chatCols);
+  const split = stackRows(rows, {
+    chat: chat.header.length + chat.lines.length + chat.footer.length,
+    chatMin: chat.header.length + STACKED_CHAT_BODY_MIN,
+    plan: planLayout(state, UNBOUNDED, planCols).lines.length,
+    planMin: STACKED_PLAN_MIN,
+  }, state.focus);
+  return {
+    mode,
+    chat: { row: 1, col: 1, rows: split.chat, cols: chatCols },
+    plan: { row: 1 + split.chat, col: 1, rows: split.plan, cols: planCols },
+  };
+}
+
+/** The pane a screen row falls in, or `null` for the chrome under the body. Only a stacked body is split by row. */
+export function stackedPaneAtRow(panes: BodyPanes, row: number): Focus | null {
+  if (panes.mode !== 'stacked' || !panes.plan) return null;
+  if (row >= panes.chat.row && row < panes.chat.row + panes.chat.rows) return 'chat';
+  return row >= panes.plan.row && row < panes.plan.row + panes.plan.rows ? 'plan' : null;
+}
+
+/**
+ * The screen cells a selection pinned to `pane` may cover, inclusive and
+ * 1-based. Side by side the panes share rows, so columns alone keep a copy from
+ * splicing them; stacked they share columns, so rows do — a drag out of the
+ * transcript stops at its last row instead of picking up the plan's first.
+ * Beside the chat (or alone) a pane's rows run the whole frame, composer included.
+ * With no plan to pin to, a `'plan'` gets the chat's area rather than an empty one.
+ */
+export interface SelectionArea {
+  firstRow: number;
+  lastRow: number;
+  firstCol: number;
+  lastCol: number;
+}
+
+export function selectionArea(state: TuiState, pane: Focus, panes: BodyPanes = bodyPanes(state)): SelectionArea {
+  const rect = pane === 'plan' && panes.plan ? panes.plan : panes.chat;
+  if (panes.mode === 'stacked') {
+    return { firstRow: rect.row, lastRow: Math.max(rect.row, rect.row + rect.rows - 1), firstCol: rect.col, lastCol: rect.col + rect.cols - 1 };
+  }
+  return { firstRow: 1, lastRow: state.rows, firstCol: rect.col, lastCol: rect.col + rect.cols - 1 };
 }
 
 /** How far back the chat pane can be scrolled at the size it is about to be painted. */
 export function chatScrollMax(state: TuiState): number {
-  return chatLayout(state, bodyRows(state), chatPaneWidth(state)).maxScroll;
+  const { chat } = bodyPanes(state);
+  return chatLayout(state, chat.rows, chat.cols).maxScroll;
 }
 
 // ── Welcome ──────────────────────────────────────────────────────────────────
@@ -655,7 +805,6 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ),
     setupRow('Autonomy', state.autonomous ? style.yellow('Full') : 'Guarded', '', cols),
     setupRow('Run', runSettingsValue(state), '/settings', cols),
-    setupRow('Research', 'runs within the Parallel limit', '', cols),
     '',
   ];
   // Only once nothing usable was found: a key reaches the welcome with the catalog, after the probe.
@@ -668,7 +817,10 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
       ),
       '',
     ];
-  const tail = [...notice, style.grey('/help   all commands'), workspaceLine(state.workspace, cols)];
+  const versionCheck = state.versionCheckNotice
+    ? [...wrap(style.grey(state.versionCheckNotice), Math.max(1, cols - 1)), '']
+    : [];
+  const tail = [...notice, ...versionCheck, style.grey('/help   all commands'), workspaceLine(state.workspace, cols)];
 
   const rest = ['', ...prompt, ...approval, '', ...setup, ...tail];
   const logo = welcomeLogo(rest.length, rows, cols);
@@ -796,12 +948,15 @@ const clampOffset = (layout: PlanLayout, offset: number): number =>
  * that takes: one that is already visible stays put, one above lands on the
  * first body line, one below on the last. A span taller than the body cannot be
  * both, so its first line wins. Reaching the first row shows the spacer under
- * the header again rather than stopping one line short of it.
+ * the header again rather than stopping one line short of it, when the body is
+ * tall enough to hold both.
  */
 export function revealOffset(layout: PlanLayout, offset: number, span: LineSpan): number {
   const at = clampOffset(layout, offset);
   const bodyHeight = layout.rows - 1;
-  const first = span.start <= (layout.rowSpans[0]?.start ?? layout.anchor.start) ? 0 : span.start - 1;
+  // The spacer under the header comes back with the first row only if the row
+  // still fits under it — a one-line body would otherwise show nothing but the spacer.
+  const first = span.start <= (layout.rowSpans[0]?.start ?? layout.anchor.start) && span.end <= bodyHeight ? 0 : span.start - 1;
   if (span.start < 1 + at || span.end - span.start + 1 > bodyHeight) return clampOffset(layout, first);
   if (span.end > at + layout.rows - 1) return clampOffset(layout, span.end - layout.rows + 1);
   return at;
@@ -856,13 +1011,13 @@ export function rowNearestView(layout: PlanLayout, offset: number, row: number):
 
 /** The plan pane's geometry at the size it is about to be painted. */
 export function planScrollExtent(state: TuiState): PlanLayout {
-  const cols = planPaneWidth(state);
-  // A pane too narrow to show has nothing to scroll; measuring it anyway would
-  // wrap every title to a column and invent an offset the user can never see.
-  if (cols === 0) {
+  const { plan } = bodyPanes(state);
+  // A pane with no room has nothing to scroll; measuring it anyway would
+  // invent an offset the user can never see.
+  if (!plan || plan.rows === 0) {
     return { lines: [], rowSpans: [], anchor: { start: 0, end: 0 }, rows: 0, maxScroll: 0 };
   }
-  return planLayout(state, bodyRows(state), cols);
+  return planLayout(state, plan.rows, plan.cols);
 }
 
 /** The discovered catalog per runner, rebuilt from the models each was tagged with, so an allowlist is read as the planner reads it. */
@@ -929,7 +1084,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   const mode = task.type === 'ai'
     ? `mode: ${task.taskMode ?? 'default'}${row.autonomous ? style.yellow(' ⚡') : ''}`
     : '';
-  const runner = task.assignedRunner ?? '';
+  const runner = row.runner ?? '';
   const bodyPad = parent ? '      ' : '    ';
   // Only a state that wants the user gets a word: a runner approval ("enter
   // opens it") and a task stopped at a question. Running and quiet are the
@@ -956,11 +1111,9 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   // What it handed over (ADR-0047): one compact row, its count first so a long
   // summary can be cut without taking what a reader scans for with it.
   if (row.handoff) {
-    const summary = sanitize(row.handoff.summary).split('\n').map((line) => line.trim()).find((line) => line !== '') ?? '';
-    const findings = row.handoff.findingCount === 0
-      ? 'no findings'
-      : `${row.handoff.findingCount} finding${row.handoff.findingCount === 1 ? '' : 's'}${row.handoff.severity ? ` · ${inRow(severityLabel(row.handoff.severity))}` : ''}`;
-    lines.push(style.grey(truncate(`${bodyPad}↳ handed over · ${findings}${summary ? ` · ${summary}` : ''}`, cols)));
+    // The commit subject and summary are the author's text, so they are cleaned here rather than in core.
+    const handed = handoffPeekParts(row.handoff).map(sanitize).join(' · ');
+    lines.push(style.grey(truncate(`${bodyPad}↳ handed over · ${handed}`, cols)));
   }
   // The one isolation state that needs the user; every other stays out of the
   // row and shows only in the expanded detail below.
@@ -1013,7 +1166,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   if (expanded) {
     if (skills) lines.push(style.grey(truncate(`${bodyPad}skills: ${skills}`, cols)));
     if (effort || mode) lines.push(style.grey(truncate(`${bodyPad}${[effort, mode].filter(Boolean).join(' · ')}`, cols)));
-    lines.push(style.grey(`${bodyPad}${task.status.replace(/_/g, ' ')}`));
+    lines.push(style.grey(`${bodyPad}${STATUS_WORD[taskStatusKind(task)]}`));
     if (task.isolation && task.isolation.state !== 'none' && task.isolation.branch) {
       lines.push(...taskText('Branch', task.isolation.branch, cols, bodyPad));
       if (row.repos.length > 0) lines.push(...taskText('Repos', row.repos.join(', '), cols, bodyPad));
@@ -1191,7 +1344,7 @@ function commandSheetBody(cols: number): string[] {
   // view's keys run far past any width on a single one.
   body.push(
     '',
-    style.bold('In a task view (enter on a task)'),
+    style.bold('In a task chat (enter on a started task)'),
     style.grey('  ctrl-s sends now: interrupts the running step, then delivers the composer text or, with it empty, the highlighted pending message'),
     style.grey('  ctrl-n/ctrl-p pick a pending message (the newest until you do) · ctrl-r removes a queued one'),
     style.grey('  ctrl-x stops the runner\'s running turn, and it then waits for your next message: on a task paused on a usage limit, it keeps it from resuming'),

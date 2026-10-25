@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import http from 'http';
 import { WebSocketServer } from 'ws';
-import { ApiClient } from '../apiClient';
+import { ApiClient, DaemonError, deliveryOf } from '../apiClient';
 
 /** Spin up a throwaway server that records which port served each request. */
 function startServer(label: string): Promise<{ port: number; close: () => void }> {
@@ -54,12 +54,12 @@ describe('ApiClient', () => {
     });
     servers.push(srv);
 
-    await new ApiClient(srv.port, '/work/app').taskControl('session-1', 't1', 'retry');
+    await new ApiClient(srv.port, '/work/app').execute('session-1', { command: 'retry_task', task: 't1', from: 'fresh' });
 
     expect(hits).toEqual([
-      'POST /api/plans/session-1/tasks/t1/retry',
+      'POST /api/plans/session-1/execute-command',
       'POST /api/sessions/session-1/load?workspace=%2Fwork%2Fapp',
-      'POST /api/plans/session-1/tasks/t1/retry',
+      'POST /api/plans/session-1/execute-command',
     ]);
   });
 
@@ -73,7 +73,35 @@ describe('ApiClient', () => {
     });
     servers.push(srv);
 
-    await expect(new ApiClient(srv.port, '/work/app').taskControl('session-9', 't1', 'retry')).rejects.toThrow('Session not found');
+    await expect(new ApiClient(srv.port, '/work/app').execute('session-9', { command: 'retry_task', task: 't1', from: 'fresh' })).rejects.toThrow('Session not found');
+    expect(hits).toHaveLength(2);
+  });
+
+  // ADR-0049: "not found" would send the user to /sessions to reload it, which
+  // is refused the same way; who holds the session is what they need to hear.
+  it('surfaces a re-adoption refused because another host holds the session, not the 404 before it', async () => {
+    const hits: string[] = [];
+    const holder = { hostId: 'host-a', pid: 37797, host: { kind: 'daemon', port: 3742 }, since: '2026-10-24T01:40:00.000Z', heartbeatAt: '2026-10-24T01:54:00.000Z', runnerGroups: [] };
+    const srv = await startCustomServer((req, res) => {
+      hits.push(`${req.method} ${req.url}`);
+      res.setHeader('Content-Type', 'application/json');
+      if (req.url?.startsWith('/api/sessions/session-1/load')) {
+        res.statusCode = 409;
+        return res.end(JSON.stringify({ error: 'This session is open in another Ordewell host: the Ordewell daemon on port 3742 (pid 37797)', code: 'session_held', sessionHeld: { holder } }));
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'Session not found', code: 'session_not_found' }));
+    });
+    servers.push(srv);
+
+    const err = await new ApiClient(srv.port, '/work/app').execute('session-1', { command: 'retry_task', task: 't1', from: 'fresh' }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(DaemonError);
+    expect((err as DaemonError).code).toBe('session_held');
+    expect((err as DaemonError).status).toBe(409);
+    expect((err as DaemonError).sessionHeld?.holder.pid).toBe(37797);
+    expect((err as Error).message).toContain('pid 37797');
+    // Refused, so never retried.
     expect(hits).toHaveLength(2);
   });
 
@@ -88,6 +116,25 @@ describe('ApiClient', () => {
     const [fromA, fromB] = await Promise.all([clientA.getSessions(), clientB.getSessions()]);
     expect(fromA[0].id).toBe('server-a');
     expect(fromB[0].id).toBe('server-b');
+  });
+
+  // Before this, each returned the error body as its success type: `stop`
+  // printed "Execution stopped." and exited 0 while nothing had stopped.
+  it.each([
+    ['stopExecution', (client: ApiClient) => client.stopExecution('s1')],
+    ['closeSession', (client: ApiClient) => client.closeSession('s1')],
+    ['cancelPlanning', (client: ApiClient) => client.cancelPlanning('s1')],
+    ['getSessions', (client: ApiClient) => client.getSessions()],
+  ])('turns a 500 from %s into a DaemonError', async (_name, call) => {
+    const srv = await startCustomServer((_req, res) => {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'boom' }));
+    });
+    servers.push(srv);
+
+    const result = call(new ApiClient(srv.port));
+    await expect(result).rejects.toBeInstanceOf(DaemonError);
+    await expect(result).rejects.toThrow('boom');
   });
 
   it('reads a multi-byte character split across response chunks intact', async () => {
@@ -158,9 +205,14 @@ describe('ApiClient', () => {
     const wss = new WebSocketServer({ port: 0 });
     await new Promise<void>((resolve) => wss.once('listening', () => resolve()));
     const port = (wss.address() as { port: number }).port;
+    let markGone!: () => void;
+    const gone = new Promise<void>((resolve) => { markGone = resolve; });
     wss.on('connection', (ws) => {
+      // Both frames are queued in this turn, before the client's handler sees
+      // the first and closes, so the second is on the wire and must be dropped.
       ws.send(JSON.stringify({ type: 'planner_turn_ended', turnId: 't1', outcome: 'message' }));
       ws.send(JSON.stringify({ type: 'planner_text_delta', turnId: 't2', segmentId: 's', text: 'uno' }));
+      ws.on('close', markGone);
     });
     servers.push({ close: () => wss.close() });
 
@@ -170,7 +222,9 @@ describe('ApiClient', () => {
       if ((e as { type: string }).type === 'planner_turn_ended') stream.close();
     });
     await stream.ready;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // The close handshake completing means the client has handled what the
+    // server queued; a fixed sleep would race a loaded machine's handshake.
+    await gone;
 
     expect(events.map((e) => e.type)).toEqual(['planner_turn_ended']);
   });
@@ -297,38 +351,69 @@ describe('ApiClient — endpoints the TUI drives', () => {
     });
   });
 
-  it('allows a normal long planner turn instead of failing with Request timed out', async () => {
+  // The planner-turn routes send nothing until the turn ends, so a socket-idle
+  // timeout reads a turn that is still running as a failure.
+  describe('socket idle timeout', () => {
     const previous = process.env.ORDEWELL_HTTP_TIMEOUT_MS;
-    delete process.env.ORDEWELL_HTTP_TIMEOUT_MS;
-
-    vi.spyOn(http, 'request').mockImplementation(((options: http.RequestOptions, respond: (res: http.IncomingMessage) => void) => {
-      const req = new EventEmitter() as EventEmitter & http.ClientRequest;
-      req.write = vi.fn();
-      req.destroy = vi.fn();
-      req.end = () => {
-        process.nextTick(() => {
-          if (Number(options.timeout) < 900_000) {
-            req.emit('timeout');
-            return;
-          }
-          const res = new EventEmitter() as EventEmitter & http.IncomingMessage;
-          res.statusCode = 200;
-          respond(res);
-          res.emit('data', Buffer.from(JSON.stringify({ plan: { tasks: [] } })));
-          res.emit('end');
-        });
-        return req;
-      };
-      return req;
-    }) as typeof http.request);
-
-    try {
-      await expect(new ApiClient(3742).sendConversationMessage('s1', 'remove the header label'))
-        .resolves.toEqual({ tasks: [] });
-    } finally {
+    afterEach(() => {
       if (previous === undefined) delete process.env.ORDEWELL_HTTP_TIMEOUT_MS;
       else process.env.ORDEWELL_HTTP_TIMEOUT_MS = previous;
+    });
+
+    /** Answers `{}` and records the `timeout` option each request was given. */
+    function recordTimeouts(): Array<number | undefined> {
+      const seen: Array<number | undefined> = [];
+      vi.spyOn(http, 'request').mockImplementation(((options: http.RequestOptions, respond: (res: http.IncomingMessage) => void) => {
+        seen.push(options.timeout);
+        const req = new EventEmitter() as EventEmitter & http.ClientRequest;
+        req.write = vi.fn();
+        req.destroy = vi.fn();
+        req.end = () => {
+          process.nextTick(() => {
+            const res = new EventEmitter() as EventEmitter & http.IncomingMessage;
+            res.statusCode = 200;
+            respond(res);
+            res.emit('data', Buffer.from(JSON.stringify({ plan: { tasks: [] }, runners: [] })));
+            res.emit('end');
+          });
+          return req;
+        };
+        return req;
+      }) as typeof http.request);
+      return seen;
     }
+
+    const turnCalls: Array<[string, (c: ApiClient) => Promise<unknown>]> = [
+      ['startConversation', (c) => c.startConversation('s1', 'goal')],
+      ['sendConversationMessage', (c) => c.sendConversationMessage('s1', 'hi')],
+      ['forceSendPlannerMessage', (c) => c.forceSendPlannerMessage('s1', 'hi')],
+      ['compactConversation', (c) => c.compactConversation('s1')],
+      ['generatePlan', (c) => c.generatePlan('goal')],
+    ];
+
+    it.each(turnCalls)('does not bound %s by socket idleness', async (_name, call) => {
+      delete process.env.ORDEWELL_HTTP_TIMEOUT_MS;
+      const seen = recordTimeouts();
+      await call(new ApiClient(3742));
+      expect(seen).toHaveLength(1);
+      expect(seen[0] ?? 0).toBe(0);
+    });
+
+    it('still bounds a short call by the default idle timeout', async () => {
+      delete process.env.ORDEWELL_HTTP_TIMEOUT_MS;
+      const seen = recordTimeouts();
+      await new ApiClient(3742).getRunners();
+      expect(seen).toEqual([900_000]);
+    });
+
+    it('lets ORDEWELL_HTTP_TIMEOUT_MS override both', async () => {
+      process.env.ORDEWELL_HTTP_TIMEOUT_MS = '1234';
+      const seen = recordTimeouts();
+      const client = new ApiClient(3742);
+      await client.getRunners();
+      await client.sendConversationMessage('s1', 'hi');
+      expect(seen).toEqual([1234, 1234]);
+    });
   });
 });
 
@@ -364,6 +449,16 @@ describe('ApiClient — adopting a saved session', () => {
     expect((await new ApiClient(server.port).adoptSession('s1')).run).toEqual(run);
   });
 
+  it('hands on the planner turn the session is running', async () => {
+    const server = await startCustomServer((_req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ ok: true, plan: {}, goal: '', plannerTurnId: 't1' }));
+    });
+    servers.push(server);
+
+    expect((await new ApiClient(server.port).adoptSession('s1')).plannerTurnId).toBe('t1');
+  });
+
   it('omits the workspace when none is given', async () => {
     let url = '';
     const server = await startCustomServer((req, res) => {
@@ -388,7 +483,7 @@ describe('ApiClient — adopting a saved session', () => {
     await expect(new ApiClient(server.port).adoptSession('s1')).rejects.toThrow('Session not found');
   });
 
-  it('sends, takes back and interrupts on a task\'s own routes, and surfaces a refusal', async () => {
+  it('sends one command to the one route, answering the seam\'s line and payload, and surfaces a refusal', async () => {
     const hits: string[] = [];
     const srv = await startCustomServer((req, res) => {
       let body = '';
@@ -396,24 +491,22 @@ describe('ApiClient — adopting a saved session', () => {
       req.on('end', () => {
         hits.push(`${req.method} ${req.url} ${body}`.trim());
         res.setHeader('Content-Type', 'application/json');
-        if (req.url?.endsWith('/interrupt')) {
+        if (body.includes('interrupt_task')) {
           res.statusCode = 400;
-          return res.end(JSON.stringify({ error: 'Task "Only" is not running' }));
+          return res.end(JSON.stringify({ error: 'Task "Only" is not running', code: 'refused' }));
         }
-        res.end(JSON.stringify(req.method === 'DELETE' ? { removed: true } : { id: 'msg-1' }));
+        res.end(JSON.stringify({ ok: true, message: 'Sent.', payload: { kind: 'message', id: 'msg-1' } }));
       });
     });
     servers.push(srv);
     const client = new ApiClient(srv.port);
 
-    expect(await client.sendTaskMessage('s1', 't1', 'use Postgres')).toEqual({ id: 'msg-1' });
-    expect(await client.removeQueuedTaskMessage('s1', 't1', 'msg-1')).toEqual({ removed: true });
-    await expect(client.interruptTask('s1', 't1')).rejects.toThrow('is not running');
+    expect(await client.execute('s1', { command: 'message_task', task: 't1', text: 'use Postgres' })).toEqual({ ok: true, message: 'Sent.', payload: { kind: 'message', id: 'msg-1' } });
+    await expect(client.execute('s1', { command: 'interrupt_task', task: 't1' })).rejects.toThrow('is not running');
 
     expect(hits).toEqual([
-      'POST /api/plans/s1/tasks/t1/messages {"text":"use Postgres"}',
-      'DELETE /api/plans/s1/tasks/t1/messages/msg-1',
-      'POST /api/plans/s1/tasks/t1/interrupt',
+      'POST /api/plans/s1/execute-command {"command":"message_task","task":"t1","text":"use Postgres"}',
+      'POST /api/plans/s1/execute-command {"command":"interrupt_task","task":"t1"}',
     ]);
   });
 
@@ -435,34 +528,6 @@ describe('ApiClient — adopting a saved session', () => {
     expect(hits).toEqual(['POST /api/plans/s1/tasks/t1/commands {"name":"compact","args":"keep the API notes"}']);
   });
 
-  it('force sends a new or a queued message on its own routes, and surfaces a refusal (ADR-0023, F1)', async () => {
-    const hits: string[] = [];
-    const srv = await startCustomServer((req, res) => {
-      let body = '';
-      req.on('data', (chunk) => { body += String(chunk); });
-      req.on('end', () => {
-        hits.push(`${req.method} ${req.url} ${body}`.trim());
-        res.setHeader('Content-Type', 'application/json');
-        if (req.url?.includes('/t2/')) {
-          res.statusCode = 400;
-          return res.end(JSON.stringify({ error: 'Task "Two" is not running, so there is no turn to send a message to' }));
-        }
-        res.end(JSON.stringify(req.url?.endsWith('/messages/now') ? { id: 'msg-3' } : { sent: true }));
-      });
-    });
-    servers.push(srv);
-    const client = new ApiClient(srv.port);
-
-    expect(await client.forceSendTaskMessage('s1', 't1', 'stop now')).toEqual({ id: 'msg-3' });
-    expect(await client.forceSendQueuedTaskMessage('s1', 't1', 'msg-2')).toEqual({ sent: true });
-    await expect(client.forceSendTaskMessage('s1', 't2', 'stop now')).rejects.toThrow('no turn to send a message to');
-
-    expect(hits.slice(0, 2)).toEqual([
-      'POST /api/plans/s1/tasks/t1/messages/now {"text":"stop now"}',
-      'POST /api/plans/s1/tasks/t1/messages/msg-2/now',
-    ]);
-  });
-
   it('send now in the planner chat posts to the converse/now route (ADR-0023, F5)', async () => {
     const hits: string[] = [];
     const srv = await startCustomServer((req, res) => {
@@ -480,30 +545,6 @@ describe('ApiClient — adopting a saved session', () => {
     expect(await client.forceSendPlannerMessage('s1', 'use Postgres instead')).toEqual({ tasks: [] });
 
     expect(hits).toEqual(['POST /api/plans/s1/converse/message/now {"message":"use Postgres instead"}']);
-  });
-
-  it('continues a finished task on its own route, and surfaces a refusal (ADR-0018, K1)', async () => {
-    const hits: string[] = [];
-    const srv = await startCustomServer((req, res) => {
-      let body = '';
-      req.on('data', (chunk) => { body += String(chunk); });
-      req.on('end', () => {
-        hits.push(`${req.method} ${req.url} ${body}`.trim());
-        res.setHeader('Content-Type', 'application/json');
-        if (req.url?.includes('/t2/')) {
-          res.statusCode = 400;
-          return res.end(JSON.stringify({ error: 'Task "Two" cannot be continued: its runner left no saved session to resume' }));
-        }
-        res.end(JSON.stringify({ ok: true }));
-      });
-    });
-    servers.push(srv);
-    const client = new ApiClient(srv.port);
-
-    expect(await client.continueTask('s1', 't1', 'also handle arrays')).toEqual({ ok: true });
-    await expect(client.continueTask('s1', 't2', 'go on')).rejects.toThrow('cannot be continued');
-
-    expect(hits[0]).toBe('POST /api/plans/s1/tasks/t1/continue {"text":"also handle arrays"}');
   });
 
   it('answers a planner prompt with a yes/no and a runner\'s request with its whole decision', async () => {
@@ -529,3 +570,34 @@ describe('ApiClient — adopting a saved session', () => {
   });
 });
 
+
+describe('deliveryOf', () => {
+  it('reads a daemon refusal as an answer', () => {
+    expect(deliveryOf(new DaemonError('no key', 400))).toBe('answered');
+  });
+
+  it('reads a refused connection as never delivered', () => {
+    expect(deliveryOf(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:3742'), { code: 'ECONNREFUSED' }))).toBe('refused');
+  });
+
+  it.each(['Request timed out', 'socket hang up', 'read ECONNRESET', 'write EPIPE'])('reads "%s" as an unknown outcome', (message) => {
+    expect(deliveryOf(new Error(message))).toBe('unknown');
+  });
+
+  // The response arrived, so the request was delivered even though its body
+  // could not be used. Calling that unknown is what made the TUI read the
+  // session back as if the daemon might still be running the turn.
+  it('reads a 200 whose body cannot be used as an answer, not as a lost request', async () => {
+    const server = await startCustomServer((_req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end('null');
+    });
+    try {
+      const err = await new ApiClient(server.port).startConversation('s1', 'goal').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(deliveryOf(err)).not.toBe('unknown');
+    } finally {
+      server.close();
+    }
+  });
+});

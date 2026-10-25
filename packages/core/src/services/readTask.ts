@@ -10,6 +10,8 @@ export interface TaskLogReader {
   /** The attempts of a task that have a saved log, oldest first. */
   attempts(taskId: string): number[];
   events(taskId: string, attempt: number): readonly TaskLogEvent[];
+  /** The patch a read-only attempt saved beside its log (ADR-0050), or undefined when it kept none. */
+  patch?(taskId: string, attempt: number): Buffer | undefined;
 }
 
 /**
@@ -47,7 +49,7 @@ export function readTask(args: ReadTaskArgs, readerId: string, plan: readonly Ta
 }
 
 /** The handoff an attempt ended with: the last one its log holds. */
-function loggedHandoff(events: readonly TaskLogEvent[]): StoredHandoff | undefined {
+export function loggedHandoff(events: readonly TaskLogEvent[]): StoredHandoff | undefined {
   return events.filter((e): e is Extract<TaskLogEvent, { type: 'handoff' }> => e.type === 'handoff').at(-1)?.handoff;
 }
 

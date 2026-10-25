@@ -137,11 +137,14 @@ describe('ConversationViewHost', () => {
       expect(screen.blocks().at(-1)).toMatchObject({ type: 'plan', status: 'building', text: '{"tasks":' });
     });
 
-    it('does nothing when no turn is open', () => {
+    it('tells the webview the turn is closed even when it never opened here', () => {
+      // The webview locks its composer as soon as it sends, before the host has
+      // opened the turn: a Stop then must still release that gate, or every
+      // later plan update is dropped as the stopped turn's.
       host.stop();
       vi.runAllTimers();
 
-      expect(screen.posts).toEqual([]);
+      expect(screen.posts).toEqual([{ type: 'plannerTurn', active: false }]);
     });
   });
 

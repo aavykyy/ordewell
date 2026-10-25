@@ -19,11 +19,10 @@ import type { TaskDraft } from './components/NewTaskCard';
 import type { GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId } from '@ordewell/core';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 import { planSummaryLabel, nextDock } from './planDock';
-import { DetailContext } from './detail';
+import { OpenPatchContext } from './openPatch';
 import { useFollowOutput } from './followOutput';
 import { isBuiltinSlashCommand, slashHelp } from '../../commands/slashCommands';
 import type { HostToWebview, SettingsChange, WebviewToHost } from '../../shared/protocol';
-import { hasHiddenDetail } from '@ordewell/core/plan-utils';
 import { patchedBlocks } from '../../shared/conversationPatch';
 
 declare function acquireVsCodeApi(): {
@@ -70,7 +69,7 @@ export default function App() {
     conversation, plan, isExecuting, isResearchActive, conversationBusy, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, modelAllowlist, runners, held, unsent, modesByRunner, runnerNotice, modelConfig,
     modelOptions, configuredProviders, planner, plannerKnown, runnersKnown, isReady, modelDiscoveryErrors,
-    skills, taskSkills, checkpoint, taskOutput, run, dockExpanded, dockHeight, settingsRequest,
+    skills, taskSkills, checkpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
   const setIsResearchActive = useCallback((v: boolean) => dispatch({ type: 'patchResearchActive', active: v }), []);
@@ -80,8 +79,6 @@ export default function App() {
   const setDockHeight = useCallback((v: number | undefined) => dispatch({ type: 'patchDockHeight', height: v }), []);
   const setDockExpanded = useCallback((v: Updatable<boolean>) => dispatch({ type: 'patchDockExpanded', expanded: v }), []);
   const blocks = useMemo(() => patchedBlocks(conversation), [conversation]);
-  const [detailAll, setDetailAll] = useState(false);
-  const detail = useMemo(() => ({ detailAll, setDetailAll }), [detailAll]);
   /** A first Esc during a planner turn: one more within `STOP_ARM_MS` stops it. */
   const [stopArmed, setStopArmed] = useState(false);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
@@ -95,6 +92,9 @@ export default function App() {
   const runSettingsRef = useRef<HTMLElement>(null);
   const helpTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const processingRef = useRef(false);
+  /** A start is with the host; a second click is the same start, not another. */
+  const startPendingRef = useRef(false);
+  const nextStartRequest = useRef(0);
   const lastActivityRef = useRef(Date.now());
   const planRef = useRef(plan);
   planRef.current = plan;
@@ -104,6 +104,13 @@ export default function App() {
   useEffect(() => {
     processingRef.current = isResearchActive || isExecuting;
   }, [isResearchActive, isExecuting]);
+
+  // What the plan's start control shows: a click's own request, or the run's
+  // authoritative admission, until the first attempt makes it a run.
+  const isStarting = !isExecuting && (starting || activity.starting);
+  useEffect(() => {
+    startPendingRef.current = isStarting;
+  }, [isStarting]);
 
   // The working line is drawn below the conversation blocks, and the stack of
   // queued prompts above the composer takes height from the list: each must
@@ -151,10 +158,15 @@ export default function App() {
   // unlock the input instead of leaving the chat bricked. A harness planner
   // quiet on screen still sends liveness, so only real silence trips it; the
   // window is generous — non-streaming providers can legitimately stay quiet
-  // for a minute while a model thinks.
+  // for a minute while a model thinks. A turn waiting on the user's approval
+  // card is quiet by design, and must never be called a hang.
   const WATCHDOG_MS = 120_000;
+  const approvalWaiting = useMemo(
+    () => blocks.some((b) => b.type === 'approval' && b.status === 'pending'),
+    [blocks],
+  );
   useEffect(() => {
-    if (!isResearchActive) return;
+    if (!isResearchActive || approvalWaiting) return;
     lastActivityRef.current = Date.now();
     const timer = setInterval(() => {
       if (Date.now() - lastActivityRef.current < WATCHDOG_MS) return;
@@ -162,7 +174,7 @@ export default function App() {
       pushSystem('The planner stopped responding, so the input was re-enabled. Your last message may not have been processed: try sending it again.');
     }, 5_000);
     return () => clearInterval(timer);
-  }, [isResearchActive, pushSystem]);
+  }, [isResearchActive, approvalWaiting, pushSystem]);
 
   const handleNewSession = useCallback(() => {
     dispatch({ type: 'resetSession', kind: 'new' });
@@ -216,6 +228,14 @@ export default function App() {
       }
       return [...prev, runnerId];
     });
+  }, []);
+
+  const handleEnableRunner = useCallback((runnerId: RunnerId) => {
+    // Optimistic here as well as at the host: the save is quick but the
+    // discovery behind the re-sent list can take a while, and the click has to
+    // read as done.
+    dispatch({ type: 'enableRunnerRequested', runnerId });
+    vscode.postMessage({ type: 'enableRunner', runnerId });
   }, []);
 
   const handleConfigureApiKey = useCallback(() => {
@@ -328,13 +348,20 @@ export default function App() {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'forceStart', taskId });
   }, []);
 
-  const handleExecutePlan = useCallback(() => {
-    vscode.postMessage({ type: 'sendSystemCommand', command: 'executePlan' });
+  const requestStart = useCallback(() => {
+    // Shown before the host is even asked, and only once: two clicks while
+    // the first is still with the host are one start.
+    if (startPendingRef.current) return;
+    const requestId = nextStartRequest.current + 1;
+    nextStartRequest.current = requestId;
+    startPendingRef.current = true;
+    dispatch({ type: 'startRequested', requestId });
+    vscode.postMessage({ type: 'sendSystemCommand', command: 'executePlan', requestId });
   }, []);
 
-  const handleApproveAll = useCallback(() => {
-    vscode.postMessage({ type: 'sendSystemCommand', command: 'executePlan' });
-  }, []);
+  const handleExecutePlan = requestStart;
+
+  const handleApproveAll = requestStart;
 
   const handleStopExecution = useCallback(() => {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'stopExecution' });
@@ -348,6 +375,12 @@ export default function App() {
   // for it. Opening is idempotent host-side — an open tab is focused.
   const handleOpenTaskLog = useCallback((taskId: string) => {
     vscode.postMessage({ type: 'openTaskLog', taskId });
+  }, []);
+
+  // A handoff's saved patch is a workspace file beside the attempt's log
+  // (ADR-0050): the host opens it in an editor tab, as it opens a run's diff.
+  const handleOpenPatch = useCallback((path: string) => {
+    vscode.postMessage({ type: 'openFile', path });
   }, []);
 
   // A card's message box (ADR-0018, M1; ADR-0023, F1) uses the same routes the
@@ -470,22 +503,6 @@ export default function App() {
     dispatch({ type: 'checkpointAnswered' });
   }, [checkpoint]);
 
-  const handleMergeTasks = useCallback((taskIds: string[]) => {
-    const current = planRef.current;
-    if (!current) return;
-    const titles = taskIds.map((id) => current.tasks.find((t) => t.id === id)?.title ?? id);
-    pushSystem(`Requesting merge of: ${titles.join(' + ')}.`);
-    vscode.postMessage({ type: 'mergeTasks', taskIds });
-  }, [pushSystem]);
-
-  const handleSplitTask = useCallback((taskId: string) => {
-    const current = planRef.current;
-    if (!current) return;
-    const task = current.tasks.find((t) => t.id === taskId);
-    pushSystem(`Requesting split of: ${task?.title ?? taskId}.`);
-    vscode.postMessage({ type: 'splitTask', taskId });
-  }, [pushSystem]);
-
   // The host owns every isolation action: opening the diff, and the merge,
   // discard and cleanup that touch the user's real branches.
   const handleIsolationAction = useCallback((action: 'reviewDiff' | 'merge' | 'discard' | 'cleanup' | 'resolveConflict', taskId?: string) => {
@@ -505,6 +522,7 @@ export default function App() {
   const getPlaceholder = (): string => {
     if (isResearchActive) return 'Queue a message for when the planner is done...';
     if (isExecuting) return 'AI is working...';
+    if (isStarting) return 'Starting the plan...';
     if (plan && plan.tasks.length > 0) return 'Modify the plan...';
     if (blocks.some((b) => b.type === 'message' && b.role === 'planner')) return 'Reply to the planner...';
     return 'Describe what you want to build...';
@@ -583,7 +601,6 @@ export default function App() {
     () => (runnersKnown ? { enabledRunners: enabledRunnerIds, allowlist: modelAllowlist, models: modelsByRunner } : undefined),
     [runnersKnown, enabledRunnerIds, modelAllowlist, modelsByRunner],
   );
-  const visibleRunners = runnerList.filter((r) => enabledRunnerIds.includes(r.id));
 
   // An API key is one of two ways in (ADR-0009): an installed coding agent
   // plans on its own subscription, so key-less is a working setup, not a
@@ -617,7 +634,6 @@ export default function App() {
   const streaming = blocks.some((b) => (b.type === 'message' || b.type === 'thinking') && b.streaming);
   /** The one usage block, drawn pinned below the conversation rather than scrolling in it. */
   const usageBlock = useMemo(() => blocks.find((b) => b.type === 'usage'), [blocks]);
-  const hasDetail = useMemo(() => hasHiddenDetail(blocks), [blocks]);
 
   /**
    * The plan, mounted once. Not a timeline entry: it is the live control surface
@@ -690,6 +706,8 @@ export default function App() {
               modelsByRunner={modelsByRunner}
               modesByRunner={modesByRunner}
               isExecuting={isExecuting}
+              isStarting={isStarting}
+              runActive={isExecuting || starting || activity.advancesOnItsOwn}
               taskOutput={taskOutput}
               runnerLabels={runnerLabelMap}
               runners={runnerList}
@@ -713,8 +731,6 @@ export default function App() {
               onForceStart={handleForceStart}
               onMarkComplete={handleMarkComplete}
               onMarkIncomplete={handleMarkIncomplete}
-              onMerge={handleMergeTasks}
-              onSplit={handleSplitTask}
               onExecutePlan={handleExecutePlan}
               onStopExecution={handleStopExecution}
               onApproveAll={handleApproveAll}
@@ -762,7 +778,7 @@ export default function App() {
   };
 
   return (
-    <DetailContext.Provider value={detail}>
+    <OpenPatchContext.Provider value={handleOpenPatch}>
     <div className="chat-container">
       <div className="setup-panel">
         <button
@@ -853,10 +869,19 @@ export default function App() {
         <section className="setup-block">
           <div className="setup-block-title">Runners</div>
           <div className="setup-block-hint">
-            Coding agents that execute the plan's tasks. Toggle which ones the planner may assign.
+            Coding agents that execute the plan's tasks. Toggle which ones the planner may assign; click a disabled agent to enable it on every surface.
           </div>
           <div className="runner-pills">
-            {visibleRunners.map((r) => {
+            {runnerList.map((r) => {
+              if (!enabledRunnerIds.includes(r.id)) {
+                return (
+                  <button key={r.id} className="runner-pill disabled"
+                    onClick={() => handleEnableRunner(r.id)}
+                    title={`Click to enable ${r.displayName} as a runner on every surface`}>
+                    <span className="runner-dot" /> {r.displayName}
+                  </button>
+                );
+              }
               const isToggled = runners.includes(r.id);
               return (
                 <button key={r.id} className={`runner-pill ${isToggled ? 'on' : 'off'}`}
@@ -866,10 +891,10 @@ export default function App() {
                 </button>
               );
             })}
-            {visibleRunners.length === 0 && !runnersKnown && (
+            {runnerList.length === 0 && !runnersKnown && (
               <span className="setup-block-empty">{DETECTING}</span>
             )}
-            {visibleRunners.length === 0 && runnersKnown && (
+            {runnerList.length === 0 && runnersKnown && (
               <span className="setup-block-empty">
                 No coding agent detected: install {orNames(agentNames, 'a coding agent')}, then run <code>/refresh</code>.
               </span>
@@ -880,20 +905,6 @@ export default function App() {
         {host.runSettings && <RunSettingsBlock ref={runSettingsRef} value={host.runSettings} expanded={runExpanded} onToggle={() => setRunExpanded((v) => !v)} onChange={handleSettingsChange} />}
         </div>
       </div>
-
-      {hasDetail && (
-        <div className="chat-header">
-          <button
-            type="button"
-            className="detail-toggle"
-            aria-pressed={detailAll}
-            onClick={() => setDetailAll((v) => !v)}
-            title="Show or hide the full thinking, command and subagent detail for the whole conversation"
-          >
-            {detailAll ? 'Collapse all' : 'Expand all'}
-          </button>
-        </div>
-      )}
 
       {slashOutput && (
         <div className="slash-output">{slashOutput}</div>
@@ -947,8 +958,8 @@ export default function App() {
         )}
 
         <ConversationBlocks
+          key={host.conversationEpoch}
           blocks={blocks}
-          detailAll={detailAll}
           onShowPlan={handleShowPlan}
           onResolveApproval={handleResolveApproval}
         />
@@ -983,6 +994,6 @@ export default function App() {
         skills={skills}
       />
     </div>
-    </DetailContext.Provider>
+    </OpenPatchContext.Provider>
   );
 }

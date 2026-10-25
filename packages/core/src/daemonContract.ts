@@ -4,6 +4,7 @@ import type { IsolationMergeResult } from './interfaces/IWorktreeIsolation';
 import type { SessionMeta } from './models/Session';
 import type { DiscoveredModel } from './models/Task';
 import type { PlannerNotReady } from './services/plannerReadiness';
+import type { SessionHeld } from './services/sessionLease';
 import type { PendingApproval } from './services/PendingApprovals';
 import type { RunView, SessionMessage, SessionNotice, SurfacePlan, SurfacePlanState } from './services/SessionMessage';
 import type { ConversationCompaction, RewindTarget } from './services/PlannerConversation';
@@ -12,6 +13,7 @@ import type { OrchestratorOption } from './services/ProviderRouting';
 import type { RunnerModeInfo } from './services/ModeResolver';
 import type { GlobalRunSettings, UserSettings } from './services/SettingsService';
 import type { TaskLogEvent } from './models/TaskLog';
+import type { CommandPayload } from './services/ExecutionCommands';
 
 /**
  * The daemon contract: every HTTP body the local daemon sends, in one place.
@@ -49,7 +51,9 @@ export type DaemonErrorCode =
   /** The request asked for something the plan, task or conversation does not allow. */
   | 'refused'
   | 'checkpoint_not_waiting'
-  | 'approval_not_outstanding';
+  | 'approval_not_outstanding'
+  /** Another live Ordewell host runs this session (ADR-0049); `sessionHeld` names it. */
+  | 'session_held';
 
 /** The body of every non-2xx answer a route gives. */
 export interface ErrorBody {
@@ -59,6 +63,10 @@ export interface ErrorBody {
   workspace?: string;
   /** Set with `planner_not_ready`: the reason as data, so a client can word it in its own commands. */
   plannerNotReady?: PlannerNotReady;
+  /** Set with `session_held`: the host that holds the session, and the runners a gone one left. */
+  sessionHeld?: SessionHeld;
+  /** Set on a command the seam refused after the act ran and stopped: the Merge all git would not take. */
+  payload?: CommandPayload;
 }
 
 /**
@@ -74,9 +82,23 @@ export interface OkResponse extends Worded {
   ok: boolean;
 }
 
-/** A task start's answer: `queued` says why it did not start now, when the task waits for its dependencies instead. */
-export interface TaskStartResponse extends OkResponse {
-  queued?: string;
+/** `GET /api/server`: which process owns the port, so a stop can be verified before it signals one. */
+export interface ServerInfoResponse {
+  pid: number;
+  port: number;
+}
+
+/**
+ * `POST /api/plans/:id/execute-command`: the body is an `ExecutionCommand`, run
+ * as the user (ADR-0029), and this is its answer. `message` is the seam's own
+ * line, `payload` what a button needs beyond it (a queued message's id, a force
+ * start's queued line). A refusal is the one `ErrorBody` every route gives, code
+ * `refused`.
+ */
+export interface ExecuteCommandResponse {
+  ok: true;
+  message: string;
+  payload?: CommandPayload;
 }
 
 /**
@@ -131,21 +153,13 @@ export interface CancelPlanningResponse {
   cancelled: boolean;
 }
 
-/** `POST …/resume/cancel` (cancelled is true: a task with no resume scheduled is refused) and `POST …/converse/resend/cancel` (false when nothing waited). */
+/** `POST …/converse/resend/cancel`: `cancelled` is false when nothing waited. */
 export interface CancelResumeResponse extends Worded {
   cancelled: boolean;
 }
 
 export interface TaskMessageResponse {
   id: string;
-}
-
-export interface ForceSendResponse extends Worded {
-  sent: boolean;
-}
-
-export interface RemoveMessageResponse extends Worded {
-  removed: boolean;
 }
 
 export interface MergeGateEntry {
@@ -215,6 +229,11 @@ export interface AdoptSessionResponse extends OkResponse {
   goal: string;
   /** The adopted session's run, as {@link SessionResponse.run}. */
   run?: RunView;
+  /**
+   * The planner turn holding the session when it was adopted. Absent when none
+   * is, which is what lets a surface that lost a turn end settle it.
+   */
+  plannerTurnId?: string;
 }
 
 export interface TaskLogAttemptsResponse {

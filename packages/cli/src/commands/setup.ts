@@ -27,11 +27,18 @@ export function handleSetup(subArgs: string[]): void {
     content += `ORCHESTRATOR_MODEL=${chosenModel}\n`;
   }
 
-  const apiKey = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
+  // The variable the key came from is the variable it is stored under: a bare
+  // OPENAI_API_KEY resolves to the openai provider, but not when it has been
+  // relabelled as an OpenRouter key.
+  const apiKey = process.env.OPENROUTER_API_KEY
+    ? { name: 'OPENROUTER_API_KEY', value: process.env.OPENROUTER_API_KEY }
+    : process.env.OPENAI_API_KEY
+      ? { name: 'OPENAI_API_KEY', value: process.env.OPENAI_API_KEY }
+      : undefined;
   const geminiKey = process.env.GEMINI_API_KEY;
 
   if (apiKey) {
-    content += `OPENROUTER_API_KEY=${apiKey}\n`;
+    content += `${apiKey.name}=${apiKey.value}\n`;
   } else if (geminiKey) {
     content += `GEMINI_API_KEY=${geminiKey}\n`;
   } else {
@@ -39,7 +46,7 @@ export function handleSetup(subArgs: string[]): void {
   }
 
   content += `
-# Default models (uncomment to change)
+# Planner model and API endpoint (uncomment to set)
 # ORCHESTRATOR_MODEL=deepseek/deepseek-v4-flash
 # OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 

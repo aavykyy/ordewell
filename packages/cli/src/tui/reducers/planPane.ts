@@ -1,7 +1,7 @@
-import { markAction, resumeLabel, taskRowActions } from '@ordewell/core';
+import { manualOverrideConfirmation, manualOverrideStopFirst, markAction, overrideNeedsConfirmation, resumeLabel, taskRowActions, type OverrideDirection, type TaskStatus } from '@ordewell/core';
 import { applyKey, emptyEditor, type EditorState } from '../editor';
 import { taskEditorRoom } from '../geometry';
-import { findTask, planRows, refFor, selectedPlanRow, type TaskView, type TuiState } from '../state';
+import { findTask, planRows, refFor, selectedPlanRow, titledRefFor, type TaskView, type TuiState } from '../state';
 import type { Key } from '../keys';
 import { scrollDelta, scrollPlan, settlePlan } from './pointer';
 import { openTaskView } from './taskView';
@@ -9,7 +9,7 @@ import {
   addTask, confirmForceStartPastGate, confirmRemoveTask, openTaskDepsPicker, openTaskEffortPicker, openTaskModePicker, openTaskModelPicker,
   openTaskRunnerPicker, openTaskSkillsPicker, toggleTaskOps,
 } from './taskEdits';
-import { clampSelection, step, type Effect, type Step, type TaskAction } from './shared';
+import { clampSelection, fail, step, type Effect, type Step, type TaskAction } from './shared';
 
 const PLAN_SHORTCUTS: Record<string, TaskAction> = {
   c: 'cancel',
@@ -26,11 +26,62 @@ const SPAWNS_RUNNER: TaskAction[] = ['force-start', 'retry', 'resume-now'];
  * first spinner frame and never settled. A plan run already holds that stream,
  * so a second subscription would report the run finishing twice.
  */
-export function taskActionEffect(state: TuiState, sessionId: string, taskId: string, action: TaskAction): Effect {
+export function taskActionEffect(state: TuiState, sessionId: string, taskId: string, action: TaskAction, confirmed?: { seen: TaskStatus }): Effect {
   const watch = SPAWNS_RUNNER.includes(action) && state.status !== 'executing';
-  return watch
-    ? { type: 'taskAction', sessionId, taskId, action, watch: true }
-    : { type: 'taskAction', sessionId, taskId, action };
+  return {
+    type: 'taskAction', sessionId, taskId, action,
+    ...(watch ? { watch: true } : {}),
+    ...(confirmed ? { confirmed } : {}),
+  };
+}
+
+/**
+ * Mark complete or Mark not done on `task`, asked first (ADR-0029). An AI or
+ * script task's override is explained in the core's words and the daemon gets
+ * the user's yes on the command; it is not asked at all while the run could
+ * still advance the task — starting, running, scheduled, a queued force start
+ * or a usage-limit hold — since the daemon would refuse it. A manual
+ * task's is the user's own sign-off: asked on a shortcut, which is one
+ * accidental key away, and sent as typed from a slash command. The status the
+ * user was asked about travels with the yes, so a task that moved on while the
+ * popup was open is refused rather than overridden.
+ */
+export function confirmMark(state: TuiState, task: TaskView, direction: OverrideDirection, shortcut: boolean): Step {
+  const needsYes = overrideNeedsConfirmation(task);
+  if (!state.sessionId) return fail(state, 'No active plan.');
+  if (!needsYes && !shortcut) return step(state, [taskActionEffect(state, state.sessionId, task.id, direction)]);
+  const activity = state.run.activity;
+  if (needsYes && activity?.advancesOnItsOwn) {
+    return fail(state, manualOverrideStopFirst(direction, `task ${titledRefFor(state, task)}`));
+  }
+  const label = `task ${titledRefFor(state, task)}`;
+  const message = needsYes
+    ? manualOverrideConfirmation(direction, label)
+    : direction === 'complete'
+      ? `Mark ${label} done? It is your own sign-off: what depends on it can start.`
+      : `Mark ${label} not done? Your sign-off is taken back and it waits until you retry or start it.`;
+  return step({
+    ...state,
+    overlay: {
+      kind: 'confirm',
+      title: direction === 'complete' ? `Mark ${titledRefFor(state, task)} complete?` : `Mark ${titledRefFor(state, task)} not done?`,
+      message,
+      action: { kind: 'mark-override', taskId: task.id, direction, seen: task.status as TaskStatus },
+    },
+  });
+}
+
+/**
+ * The whole-plan start, shown as starting at once: the daemon opens the run
+ * asynchronously, and until its first task claims there is nothing yet to call
+ * executing. A second press while that is under way is the same start.
+ */
+export function startPlan(state: TuiState, sessionId: string): Step {
+  if (state.status === 'starting') return step(state);
+  // A run already under way takes Execute as its join: nothing is starting, so
+  // the indicator stays executing and the call goes through as before.
+  if (state.status === 'executing') return step(state, [{ type: 'execute', sessionId }]);
+  return step({ ...state, status: 'starting' }, [{ type: 'execute', sessionId }]);
 }
 
 export function handlePlanKey(state: TuiState, key: Key): Step {
@@ -60,7 +111,7 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
 
   // pageup/pagedown only — a wheel notch is routed by the pointer well above
   // this, and never reaches the focused pane's handler.
-  const scroll = scrollDelta(key, state);
+  const scroll = scrollDelta(key, state, 'plan');
   if (scroll !== null) return scrollPlan(state, scroll, true);
 
   // Before the row guard: with no tasks there is no row, and this is the way in.
@@ -94,7 +145,7 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
 
   // `E` is the plan pane's equivalent of /run: it starts the whole plan, not
   // the selected task, hence the uppercase.
-  if (key.char === 'E') return step(state, [{ type: 'execute', sessionId: state.sessionId }]);
+  if (key.char === 'E') return startPlan(state, state.sessionId);
 
   // The run's explicit stop, matching /stop and the uppercase of `E`.
   if (key.char === 'S') return step(state, [{ type: 'stopExecution', sessionId: state.sessionId }]);
@@ -104,7 +155,9 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
   if (key.char === 'r') {
     return taskRowActions(task).includes('resume-now') ? step(state, [taskActionEffect(state, state.sessionId, task.id, 'resume-now')]) : step(state);
   }
-  const action = key.char === 'm' ? markAction(task) : shortcut;
+  // A mark is never one keystroke: it asks first, whatever the task (ADR-0029).
+  if (key.char === 'm') return confirmMark(state, task, markAction(task), true);
+  const action = shortcut;
   if (action === 'force-start' && task.mergeGate?.length) return confirmForceStartPastGate(state, task);
   if (action) {
     return step(state, [taskActionEffect(state, state.sessionId, task.id, action)]);
@@ -130,7 +183,7 @@ function handleTaskEditKey(state: TuiState, task: TaskView, editor: EditorState,
   if (key.name === 'escape') return step(settlePlan({ ...state, expandedTaskId: null, taskEditor: null }));
   // The page keys still scroll the pane rather than move through the text,
   // same as when nothing is expanded.
-  const scroll = scrollDelta(key, state);
+  const scroll = scrollDelta(key, state, 'plan');
   if (scroll !== null) return scrollPlan(state, scroll, true);
   return step(settlePlan({ ...state, taskEditor: applyKey(editor, key, taskEditorRoom(state)) }));
 }

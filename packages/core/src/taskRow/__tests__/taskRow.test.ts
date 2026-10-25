@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, markRequestFor, opsEditable,
-  titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, blockedByLabel, holdLabel, skippedLabel, type TaskRowSubject, type TaskRowAction,
+  taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, taskActionCommand, overrideNeedsConfirmation, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, opsEditable,
+  titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, noExecutorRefusal, blockedByLabel, holdLabel, skippedLabel, type TaskRowSubject, type TaskRowAction,
 } from '..';
 import { taskRef, titledTaskRef } from '../../services/TaskRefs';
 
@@ -146,14 +146,51 @@ describe('actions per status', () => {
   });
 
   it.each([
-    ['complete', 'complete'],
-    ['skip', null],
-    ['uncomplete', 'uncomplete'],
-    ['cancel', null],
-    ['force-start', null],
-    ['retry', null],
-  ])('%s asks for the mark %s', (action, mark) => {
-    expect(markRequestFor(action)).toBe(mark);
+    ['run', { command: 'run_task', task: 't1' }],
+    ['retry', { command: 'retry_task', task: 't1', from: 'fresh' }],
+    ['cancel', { command: 'stop_task', task: 't1' }],
+    ['resume-now', { command: 'retry_task', task: 't1', from: 'session' }],
+    ['cancel-resume', { command: 'cancel_resume', task: 't1' }],
+    ['skip', { command: 'skip_task', task: 't1' }],
+    ['force-start', { command: 'force_start', task: 't1' }],
+    ['complete', { command: 'mark_complete', task: 't1' }],
+    ['uncomplete', { command: 'mark_not_done', task: 't1' }],
+  ] as const)('%s is the command %j', (action, command) => {
+    expect(taskActionCommand(action, 't1')).toEqual(command);
+  });
+
+  it('carries the reason only on a skip', () => {
+    expect(taskActionCommand('skip', 't1', 'not needed')).toEqual({ command: 'skip_task', task: 't1', reason: 'not needed' });
+    expect(taskActionCommand('cancel', 't1', 'not needed')).toEqual({ command: 'stop_task', task: 't1' });
+  });
+});
+
+describe('an override\'s yes (ADR-0029)', () => {
+  it.each([['ai', true], ['script', true], ['user', false]] as const)('a %s task needs the user\'s yes: %s', (type, needs) => {
+    expect(overrideNeedsConfirmation({ type })).toBe(needs);
+  });
+
+  it('puts the yes and the status the user was asked about on a mark, in either direction', () => {
+    expect(confirmedOverride({ command: 'mark_complete', task: 't1' }, 'failed')).toEqual({ command: 'mark_complete', task: 't1', confirmed: true, seen: 'failed' });
+    expect(confirmedOverride({ command: 'mark_not_done', task: 't1' }, 'completed')).toEqual({ command: 'mark_not_done', task: 't1', confirmed: true, seen: 'completed' });
+  });
+
+  it('carries no status for a yes that never looked, as a scripted --yes gives', () => {
+    expect(confirmedOverride({ command: 'mark_complete', task: 't1' })).toEqual({ command: 'mark_complete', task: 't1', confirmed: true });
+  });
+
+  it('words the question for each direction, naming what it leaves alone', () => {
+    expect(manualOverrideConfirmation('complete', 'task #1 Fix')).toBe('Mark task #1 Fix complete? You vouch for its work although no passing verdict said it was done. Any changes it kept may land in your run, and the tasks that depend on it are released to start on a future run.');
+    expect(manualOverrideConfirmation('uncomplete', 'task #1 Fix')).toBe('Mark task #1 Fix not done? This clears its completion and holds it until you retry or start it. The work it did stays where it is, and tasks that already ran on its result are not undone.');
+  });
+
+  it('tells the user to Stop the run first, in sentence case', () => {
+    expect(manualOverrideStopFirst('complete', 'task #1 Fix')).toBe('Task #1 Fix cannot be marked complete while the plan is starting, running or waiting to resume, because the run could still move it on. Stop the run first, and mark it once everything has stopped.');
+    expect(manualOverrideStopFirst('uncomplete', 'task #1 Fix')).toContain('cannot be marked not done');
+  });
+
+  it('leaves every other command as it was', () => {
+    expect(confirmedOverride({ command: 'skip_task', task: 't1' }, 'pending')).toEqual({ command: 'skip_task', task: 't1' });
   });
 });
 
@@ -170,6 +207,17 @@ describe('the compact handoff a row shows (ADR-0047)', () => {
     expect(taskRowView(subject()).handoff).toBeNull();
   });
 
+  it('carries the saved patch its attempt kept, when it saved one (ADR-0050)', () => {
+    const patch = { kind: 'patch' as const, path: '.ordewell/sessions/s1/tasks/t1/1.patch', attempt: 1, base: 'a'.repeat(40), files: 2, added: 9, removed: 1, binary: 0, bytes: 900, sha256: 'f'.repeat(64) };
+    const row = taskRowView(subject({
+      status: 'completed',
+      handoff: { summary: 'Tried it.', findings: [], findingCount: 0, artifacts: [patch] },
+    }));
+
+    expect(row.handoff?.patch?.peek).toBe('patch: 2 files, +9 -1');
+    expect(taskRowView(subject({ status: 'completed', handoff: { summary: 's', findings: [], findingCount: 0 } })).handoff).not.toHaveProperty('patch');
+  });
+
   it('carries the summary, the whole finding count and the worst severity the digest keeps', () => {
     const row = taskRowView(subject({
       status: 'completed',
@@ -178,6 +226,14 @@ describe('the compact handoff a row shows (ADR-0047)', () => {
 
     expect(row.handoff).toEqual({ summary: 'Added the route.', findingCount: 3, severity: 'blocker' });
     expect(row.status).toBe('done');
+  });
+
+  it('carries the commit message a task stated, and leaves the key out when it stated none', () => {
+    const commit = { subject: 'Add the route', body: 'Why it is needed.' };
+    const stated = taskRowView(subject({ status: 'completed', handoff: { summary: 's', findings: [], findingCount: 0, commit } }));
+
+    expect(stated.handoff).toEqual({ commit, summary: 's', findingCount: 0, severity: null });
+    expect(taskRowView(subject({ status: 'completed', handoff: { summary: 's', findings: [], findingCount: 0 } })).handoff).not.toHaveProperty('commit');
   });
 
   it('keeps a count whose findings the digest left out, and says the severity it can see', () => {
@@ -417,6 +473,65 @@ describe('texts', () => {
     ['   ', 'anything', null],
   ])('a hand-added %j with prompt %j starts as %j', (title, prompt, fields) => {
     expect(newTaskFields(title, prompt)).toEqual(fields);
+  });
+
+  it.each([
+    ['script', 'A script task runs no model, so it has no runner.'],
+    ['manual', 'Manual tasks do not run an executor, so they have no runner.'],
+  ])('words the refusal to give a %s task an executor choice for that type', (type, refusal) => {
+    expect(noExecutorRefusal(type, 'they have no runner.', 'it has no runner.')).toBe(refusal);
+  });
+});
+
+describe('whether a row\'s task has a chat', () => {
+  const chat = (over: Partial<TaskRowSubject>): boolean => taskRowView(subject(over)).chatAvailable;
+  const ledgerEntry = { attempt: 1, runner: 'claude-code', startedAt: '2026-10-01T00:00:00Z', wallTimeMs: 0, totals: {}, byModel: [] };
+
+  it('is absent before any attempt starts, whatever the status says', () => {
+    for (const status of ['pending', 'approved', 'blocked', 'completed', 'failed', 'skipped']) {
+      expect(chat({ status }), status).toBe(false);
+    }
+  });
+
+  it('is there once an attempt has started, and stays after any ending or a return to pending', () => {
+    for (const status of ['in_progress', 'awaiting_user', 'completed', 'failed', 'skipped', 'pending']) {
+      expect(chat({ status, attempted: true }), status).toBe(true);
+    }
+  });
+
+  it('reads the attempt ledger of a plan saved before the flag', () => {
+    expect(chat({ status: 'completed', attemptUsage: [ledgerEntry] })).toBe(true);
+    expect(chat({ status: 'pending', attemptUsage: [] })).toBe(false);
+  });
+
+  it('is a script task\'s own, with no ledger to count', () => {
+    expect(chat({ type: 'script', status: 'in_progress', attempted: true })).toBe(true);
+    expect(chat({ type: 'script', status: 'completed' })).toBe(false);
+  });
+
+  it('is never a manual task\'s, even if a stray mark says otherwise', () => {
+    expect(chat({ type: 'user', status: 'completed', attempted: true })).toBe(false);
+    expect(chat({ type: 'user', status: 'pending', attemptUsage: [ledgerEntry] })).toBe(false);
+  });
+});
+
+describe('the runner a row shows — only an AI task has one', () => {
+  it('is the assigned runner of an AI task, an ops task included', () => {
+    expect(taskRowView(subject({ assignedRunner: 'codex' })).runner).toBe('codex');
+    expect(taskRowView(subject({ assignedRunner: 'codex', ops: true })).runner).toBe('codex');
+  });
+
+  it.each(['script', 'user'] as const)('is nothing for a %s task, whatever runner the plan holds for it', (type) => {
+    expect(taskRowView(subject({ type, assignedRunner: 'opencode' })).runner).toBeNull();
+  });
+
+  it('is nothing for an AI task that holds no runner', () => {
+    expect(taskRowView(subject()).runner).toBeNull();
+  });
+
+  it.each(['script', 'user'] as const)('flags a %s task for a runner that is off in no scope: it has none to be off', (type) => {
+    const scope = { enabledRunners: ['claude-code'], allowlist: {} };
+    expect(taskRowView(subject({ type, assignedRunner: 'opencode' }), { runnerScope: scope }).assignmentFlag).toBeNull();
   });
 });
 

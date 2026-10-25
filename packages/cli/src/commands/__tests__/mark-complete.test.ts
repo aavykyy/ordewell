@@ -35,17 +35,22 @@ async function capture(fn: () => Promise<void>): Promise<{ stdout: string; stder
 }
 
 /** A daemon that records what it is asked and answers each control in the seam's words. */
-async function daemon(answer: (url: string) => { status: number; body: unknown }, hits: string[] = []) {
+async function daemon(answer: (command: { command: string }) => { status: number; body: unknown }, hits: string[] = []) {
   return startServer((req, res) => {
-    req.resume();
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
-      hits.push(`${req.method} ${req.url}`);
-      const { status, body } = answer(req.url ?? '');
+      const sent = Buffer.concat(chunks).toString('utf8');
+      hits.push(`${req.method} ${req.url} ${sent}`);
+      const { status, body } = answer(sent ? JSON.parse(sent) : { command: '' });
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(body));
     });
   });
 }
+
+/** What was sent to the seam: the plan the CLI reads first to know what to ask is not a command. */
+const posts = (hits: string[]): string[] => hits.filter((hit) => hit.startsWith('POST'));
 
 describe('handleMarkComplete', () => {
   it('sends the task as typed, for the seam to resolve, and prints the seam\'s line', async () => {
@@ -56,29 +61,19 @@ describe('handleMarkComplete', () => {
 
     const { stdout } = await capture(() => handleMarkComplete(['--session-id', 'session-1', '2'], api));
 
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/2/complete']);
+    expect(posts(hits)).toEqual(['POST /api/plans/session-1/execute-command {"command":"mark_complete","task":"2"}']);
     expect(stdout).toBe('Marked task #2 "Second" complete.');
     srv.close();
   });
 
-  it('keeps a title or an order with a hash intact in the route', async () => {
+  it('keeps a title or an order with a hash intact in the command', async () => {
     const hits: string[] = [];
     const srv = await daemon(() => ({ status: 200, body: { ok: true, message: 'ok' } }), hits);
     const { handleMarkComplete } = await import('../mark-complete');
 
     await capture(() => handleMarkComplete(['--session-id', 'session-1', '#2.1'], new ApiClient(srv.port)));
 
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/%232.1/complete']);
-    srv.close();
-  });
-
-  it('falls back to its own words when an older daemon sends no line', async () => {
-    const srv = await daemon(() => ({ status: 200, body: { ok: true } }));
-    const { handleMarkComplete } = await import('../mark-complete');
-
-    const { stdout } = await capture(() => handleMarkComplete(['--session-id', 'session-1', '2'], new ApiClient(srv.port)));
-
-    expect(stdout).toBe('Task marked complete.');
+    expect(posts(hits)).toEqual(['POST /api/plans/session-1/execute-command {"command":"mark_complete","task":"#2.1"}']);
     srv.close();
   });
 
@@ -97,16 +92,146 @@ describe('handleMarkComplete', () => {
 describe('handleUncomplete and handleSkip', () => {
   it('print the seam\'s lines for Mark not done and Skip', async () => {
     const hits: string[] = [];
-    const srv = await daemon((url) => ({ status: 200, body: { ok: true, message: url.endsWith('/skip') ? 'Skipped task #2.' : 'Marked task #2 not done.' } }), hits);
+    const srv = await daemon(({ command }) => ({ status: 200, body: { ok: true, message: command === 'skip_task' ? 'Skipped task #2.' : 'Marked task #2 not done.' } }), hits);
     const mod = await import('../mark-complete');
     const api = new ApiClient(srv.port);
 
     const undone = await capture(() => mod.handleUncomplete(['--session-id', 'session-1', '2'], api));
     const skipped = await capture(() => mod.handleSkip(['--session-id', 'session-1', '2', '--reason', 'not needed'], api));
 
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/2/uncomplete', 'POST /api/plans/session-1/tasks/2/skip']);
+    expect(posts(hits)).toEqual([
+      'POST /api/plans/session-1/execute-command {"command":"mark_not_done","task":"2"}',
+      'POST /api/plans/session-1/execute-command {"command":"skip_task","task":"2","reason":"not needed"}',
+    ]);
     expect(undone.stdout).toBe('Marked task #2 not done.');
     expect(skipped.stdout).toBe('Skipped task #2.');
+    srv.close();
+  });
+});
+
+/**
+ * Mark complete and Mark not done of an AI or script task are overrides
+ * (ADR-0029): the CLI asks first, with the core's words, and the daemon gets
+ * the yes on the command. `--yes` has asked already; no terminal is a no.
+ */
+describe('an override of an AI or script task', () => {
+  const plan = (status: string, type = 'ai') => ({
+    meta: {},
+    plan: { phase: 'planning', pendingTasks: [{ id: 't1', order: 1, title: 'Parse JSON', description: 'd', type, status, dependencies: [], subtasks: [] }], executionLog: [] },
+  });
+
+  async function overrideDaemon(status: string, type = 'ai', hits: string[] = [], activity?: Record<string, boolean>) {
+    return startServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        const sent = Buffer.concat(chunks).toString('utf8');
+        hits.push(`${req.method} ${req.url?.split('?')[0]} ${sent}`.trim());
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(req.method === 'GET'
+          ? { ...plan(status, type), ...(activity ? { run: { tasks: [], runMerge: null, handoff: null, mergeResult: null, activity } } : {}) }
+          : { ok: true, message: 'Marked it.' }));
+      });
+    });
+  }
+
+  it('asks in the core\'s words, then sends the yes with the status it was asked about', async () => {
+    const hits: string[] = [];
+    const srv = await overrideDaemon('failed', 'ai', hits);
+    const asked: string[] = [];
+    const { handleMarkComplete } = await import('../mark-complete');
+
+    const { stdout } = await capture(() => handleMarkComplete(['--session-id', 'session-1', '1'], new ApiClient(srv.port), async (question) => { asked.push(question); return true; }));
+
+    expect(asked).toEqual([expect.stringMatching(/^Mark task #1 Parse JSON complete\? You vouch for its work although no passing verdict said it was done\..* Go ahead\?$/)]);
+    expect(posts(hits)).toEqual(['POST /api/plans/session-1/execute-command {"command":"mark_complete","task":"1","confirmed":true,"seen":"failed"}']);
+    expect(stdout).toBe('Marked it.');
+    srv.close();
+  });
+
+  it('says what Mark not done leaves alone', async () => {
+    const hits: string[] = [];
+    const srv = await overrideDaemon('completed', 'script', hits);
+    const asked: string[] = [];
+    const { handleUncomplete } = await import('../mark-complete');
+
+    await capture(() => handleUncomplete(['--session-id', 'session-1', '1'], new ApiClient(srv.port), async (question) => { asked.push(question); return true; }));
+
+    expect(asked[0]).toContain('The work it did stays where it is');
+    expect(posts(hits)).toEqual(['POST /api/plans/session-1/execute-command {"command":"mark_not_done","task":"1","confirmed":true,"seen":"completed"}']);
+    srv.close();
+  });
+
+  it('does not ask while a queued start or a usage-limit hold could still move the task on', async () => {
+    const hits: string[] = [];
+    const srv = await overrideDaemon('pending', 'ai', hits, {
+      starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: true,
+    });
+    const ask = vi.fn(async () => true);
+    const { handleMarkComplete } = await import('../mark-complete');
+
+    const { stderr, exitCode } = await capture(() => handleMarkComplete(['--session-id', 'session-1', '1'], new ApiClient(srv.port), ask));
+
+    expect(ask).not.toHaveBeenCalled();
+    expect(posts(hits)).toEqual([]);
+    expect(stderr).toContain('Stop the run first');
+    expect(exitCode).toBe(1);
+    srv.close();
+  });
+
+  it('sends nothing, and says so, when the user says no', async () => {
+    const hits: string[] = [];
+    const srv = await overrideDaemon('pending', 'ai', hits);
+    const { handleMarkComplete } = await import('../mark-complete');
+
+    const { stderr, exitCode } = await capture(() => handleMarkComplete(['--session-id', 'session-1', '1'], new ApiClient(srv.port), async () => false));
+
+    expect(posts(hits)).toEqual([]);
+    expect(stderr).toContain('Nothing was changed. Pass --yes');
+    expect(exitCode).toBe(1);
+    srv.close();
+  });
+
+  it('treats no terminal as a no: nothing is approved implicitly', async () => {
+    const hits: string[] = [];
+    const srv = await overrideDaemon('pending', 'ai', hits);
+    const { handleMarkComplete } = await import('../mark-complete');
+    const tty = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    try {
+      const { exitCode } = await capture(() => handleMarkComplete(['--session-id', 'session-1', '1'], new ApiClient(srv.port)));
+      expect(exitCode).toBe(1);
+    } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { value: tty, configurable: true });
+    }
+
+    expect(posts(hits)).toEqual([]);
+    srv.close();
+  });
+
+  it('--yes has asked already: it sends the yes without a prompt or a lookup', async () => {
+    const hits: string[] = [];
+    const srv = await overrideDaemon('pending', 'ai', hits);
+    const ask = vi.fn(async () => false);
+    const { handleMarkComplete } = await import('../mark-complete');
+
+    await capture(() => handleMarkComplete(['--session-id', 'session-1', '1', '--yes'], new ApiClient(srv.port), ask));
+
+    expect(ask).not.toHaveBeenCalled();
+    expect(hits).toEqual(['POST /api/plans/session-1/execute-command {"command":"mark_complete","task":"1","confirmed":true}']);
+    srv.close();
+  });
+
+  it('signs off a manual task without a prompt', async () => {
+    const hits: string[] = [];
+    const srv = await overrideDaemon('pending', 'user', hits);
+    const ask = vi.fn(async () => false);
+    const { handleMarkComplete } = await import('../mark-complete');
+
+    await capture(() => handleMarkComplete(['--session-id', 'session-1', '1'], new ApiClient(srv.port), ask));
+
+    expect(ask).not.toHaveBeenCalled();
+    expect(posts(hits)).toEqual(['POST /api/plans/session-1/execute-command {"command":"mark_complete","task":"1"}']);
     srv.close();
   });
 });

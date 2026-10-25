@@ -27,11 +27,11 @@ export const PLAN_KEYS = {
   expand: { keys: '→', meaning: "reveal a task's subtasks, then edit its prompt, or show a script task's body", group: 'Navigation', hint: '→ expand' },
   log: {
     keys: 'enter',
-    meaning: "open the task's log and message its runner or, at a checkpoint, answer it",
+    meaning: "open the task's log: its output for a script task, or the chat with its runner (and, at a checkpoint, its answer)",
     group: 'Navigation',
-    hint: (task) => (task?.status === 'awaiting_user' && task.awaitingReason === 'checkpoint' ? 'enter answer' : 'enter log'),
+    hint: (task) => (task?.type === 'script' ? 'enter output' : task?.status === 'awaiting_user' && task.awaitingReason === 'checkpoint' ? 'enter answer' : 'enter chat'),
   },
-  back: { keys: 'esc', meaning: "collapse the task, or leave a task's log for the plan", group: 'Navigation' },
+  back: { keys: 'esc', meaning: "collapse the task, or leave a task's chat for the plan", group: 'Navigation' },
 
   runner: { keys: 'R', meaning: "pick the task's runner", group: 'Assign' },
   model: { keys: 'o', meaning: "pick the task's model", group: 'Assign', hint: 'o model' },
@@ -104,21 +104,23 @@ function hintOf(id: PlanKeyId, task: TaskView | undefined): string {
 function taskKeyIds(task: TaskView | undefined, runActive: boolean): PlanKeyId[] {
   if (!task) return ['add'];
   const row = taskRowView(task);
-  if (row.conflict) return ['resolve', 'log'];
+  // Only a started task has a chat to enter; its status or a manual mark is not one.
+  const chat = (...ids: PlanKeyId[]): PlanKeyId[] => (row.chatAvailable ? ids : ids.filter((id) => id !== 'log'));
+  if (row.conflict) return chat('resolve', 'log');
   if (row.actions.includes('resume-now') || row.resumes) {
-    return [...(row.actions.includes('resume-now') ? ['resume' as const] : []), ...(row.resumes ? ['cancel' as const] : []), 'skip', 'log'];
+    return chat(...(row.actions.includes('resume-now') ? ['resume' as const] : []), ...(row.resumes ? ['cancel' as const] : []), 'skip', 'log');
   }
   switch (row.status) {
     case 'running':
     case 'quiet':
-      return runActive ? ['log', 'cancel', 'stop'] : ['log', 'cancel'];
-    case 'awaiting': return ['log', 'mark', 'skip'];
-    case 'failed': return ['retry', 'skip', 'log'];
+      return chat(...(runActive ? ['log' as const, 'cancel' as const, 'stop' as const] : ['log' as const, 'cancel' as const]));
+    case 'awaiting': return chat('log', 'mark', 'skip');
+    case 'failed': return chat('retry', 'skip', 'log');
     case 'skipped':
-    case 'done': return ['mark', 'log'];
-    case 'blocked': return ['start', 'skip', 'runPlan'];
+    case 'done': return chat('mark', 'log');
+    case 'blocked': return chat('start', 'skip', 'runPlan', 'log');
     // A manual task and a script task have no model to pick.
-    default: return row.kind === 'user' ? ['mark', 'runPlan'] : row.kind === 'script' ? ['start', 'runPlan'] : ['start', 'runPlan', 'model', 'effort'];
+    default: return row.kind === 'user' ? ['mark', 'runPlan'] : row.kind === 'script' ? chat('log', 'start', 'runPlan') : chat('log', 'start', 'runPlan', 'model', 'effort');
   }
 }
 

@@ -8,7 +8,12 @@ interface Geometry { content: number; top: number }
 
 function Log({ lines }: { lines: string[] }) {
   const ref = useFollowOutput<HTMLDivElement>(lines);
-  return <div data-testid="log" ref={ref}>{lines.map((l) => <p key={l}>{l}</p>)}</div>;
+  return (
+    <div data-testid="log" ref={ref}>
+      {lines.map((l) => <p key={l}>{l}</p>)}
+      <button type="button" aria-expanded="false">details</button>
+    </div>
+  );
 }
 
 function fake(el: HTMLElement, geometry: Geometry): void {
@@ -59,5 +64,30 @@ describe('following a live log', () => {
     geometry.content = 900;
     rerender(['one', 'two']);
     expect(geometry.top).toBe(900);
+  });
+
+  it('leaves a reader at the bottom where they opened a disclosure, so newer output does not pull them past it', async () => {
+    geometry.content = 600;
+    rerender(['one', 'two']);
+    expect(geometry.top).toBe(600);
+
+    act(() => { fireEvent.click(log.querySelector('button')!); });
+    geometry.content = 900; // what the disclosure opened, below the fold, with no scroll
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+    geometry.content = 1000;
+    rerender(['one', 'two', 'three']);
+    expect(geometry.top).toBe(600);
+  });
+
+  it('keeps following when a click opens nothing below the fold', async () => {
+    geometry.content = 600;
+    rerender(['one', 'two']);
+    act(() => { fireEvent.click(log.querySelector('button')!); });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+    geometry.content = 700;
+    rerender(['one', 'two', 'three']);
+    expect(geometry.top).toBe(700);
   });
 });

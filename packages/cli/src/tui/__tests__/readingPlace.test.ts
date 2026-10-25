@@ -48,6 +48,32 @@ describe('the planner chat while output arrives', () => {
   });
 });
 
+describe('the planner chat while output arrives, with the plan stacked under it', () => {
+  const tasks = Array.from({ length: 6 }, (_, i) => ({ id: `t${i}`, order: i + 1, title: `Task ${i + 1}`, type: 'ai' as const, status: 'pending', dependencies: [] }));
+  const long = (): TuiState => fed(initialState({ rows: 30, cols: 50, sessionId: 's1', tasks }), Array.from({ length: 40 }, (_, i) => plannerReply(i)));
+
+  it('keeps a scrolled-back reader on the same lines', () => {
+    const back = { ...long(), scroll: 12 };
+    const before = painted(back);
+
+    const after = fed(back, [plannerReply(98), plannerReply(99)]);
+
+    expect(after.scroll).toBeGreaterThan(12);
+    expect(painted(after)).toBe(before);
+  });
+
+  it('keeps the selected task on screen when a reply takes rows from the plan', () => {
+    const state = fed(initialState({ rows: 24, cols: 50, sessionId: 's1', tasks: Array.from({ length: 30 }, (_, i) => ({ ...tasks[0], id: `t${i}`, order: i + 1, title: `Task ${i + 1}` })), focus: 'plan' }), []);
+    // positioned near the bottom of a viewport the transcript is about to squeeze
+    let positioned = state;
+    for (let i = 0; i < 12; i++) positioned = reduce(positioned, { type: 'key', key: { name: 'down' } }).state;
+    const grown = fed(positioned, Array.from({ length: 40 }, (_, i) => plannerReply(i)));
+
+    expect(painted(grown)).toContain('❯ ·');
+    expect(painted(grown)).toContain('Task 13');
+  });
+});
+
 describe('a task view while its log streams', () => {
   const lines = (from: number, to: number): TaskLogEvent[] => Array.from({ length: to - from }, (_, i): TaskLogEvent => (
     { type: 'text_delta', text: `runner line ${from + i}\n\n` }

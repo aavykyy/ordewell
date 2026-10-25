@@ -54,6 +54,24 @@ describe('the assignment while a plan executes', () => {
   });
 });
 
+describe('a script or manual card names no runner, whatever runner the plan stores for it', () => {
+  beforeEach(cleanup);
+
+  it.each([
+    ['script', { type: 'script' as const, commands: [['git', 'push']], assignedModel: undefined }],
+    ['manual', { type: 'user' as const, assignedModel: undefined }],
+  ])('on a %s task, running or not, collapsed or open', (_kind, over) => {
+    for (const isExecuting of [false, true]) {
+      const { container } = render(<TaskCard task={task({ status: 'pending', ...over })} models={[]} isExecuting={isExecuting} {...pickers} />);
+      expect(container.textContent).not.toContain('codex');
+      fireEvent.click(screen.getByText('Work'));
+      expect(container.textContent).not.toContain('codex');
+      expect(screen.queryByLabelText('Runner')).toBeNull();
+      cleanup();
+    }
+  });
+});
+
 describe('the assignment flag on a subtask card', () => {
   beforeEach(cleanup);
 
@@ -62,5 +80,41 @@ describe('the assignment flag on a subtask card', () => {
     render(<SubTaskCard task={sub} parentTask={task({ subtasks: [sub] })} models={[]} isExecuting runnerScope={{ enabledRunners: ['claude-code'], allowlist: {} }} {...pickers} />);
 
     expect(screen.getByText('codex is switched off').getAttribute('title')).toMatch(/^Failed; a retry would run it there unless moved\./);
+  });
+});
+
+// The card and the host's edit guard read one run fact: an editor the card
+// offers is one the host accepts.
+describe('the editors follow whether the run could still move the plan on, not only a live attempt', () => {
+  beforeEach(cleanup);
+
+  it('holds a settled task read-only while the scheduler waits on a manual task, with nothing live', () => {
+    const { container } = render(<TaskCard task={task({ status: 'completed' })} models={[]} runActive {...pickers} />);
+    fireEvent.click(screen.getByText('Work'));
+
+    expect(screen.queryByLabelText('Runner')).toBeNull();
+    expect(container.querySelector('.task-assignment-readonly')?.textContent).toBe('Assignedcodex · GPT · high');
+  });
+
+  it('still lets a task that has not started keep its editors then', () => {
+    render(<TaskCard task={task({ status: 'pending' })} models={[]} runActive {...pickers} />);
+    fireEvent.click(screen.getByText('Work'));
+
+    expect(screen.getByLabelText('Runner')).toBeTruthy();
+  });
+
+  it('holds a settled subtask read-only the same way', () => {
+    const sub = task({ id: 'sub', status: 'completed' });
+    render(<SubTaskCard task={sub} parentTask={task({ subtasks: [sub] })} models={[]} runActive {...pickers} />);
+    fireEvent.click(screen.getByText('Work'));
+
+    expect(screen.queryByLabelText('Runner')).toBeNull();
+  });
+
+  it('keeps the failed task editable once a run has ended on it, so it can be fixed and retried', () => {
+    render(<TaskCard task={task({ status: 'failed' })} models={[]} runActive={false} {...pickers} />);
+    fireEvent.click(screen.getByText('Work'));
+
+    expect(screen.getByLabelText('Runner')).toBeTruthy();
   });
 });

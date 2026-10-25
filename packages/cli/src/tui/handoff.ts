@@ -2,7 +2,7 @@ import type { Effect, Step } from './reducers/shared';
 import { say } from './transcript';
 import { sanitize } from './ansi';
 import type { Key } from './keys';
-import { checkoutRule, handoffBase, handoffBranch, isRepoGroup, mergeTarget, repairedLanded, repairedNotice } from '../isolation';
+import { checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, mergeTarget, repairedLanded, repairedNotice } from '@ordewell/core';
 import type { HandoffView, Overlay, PickerItem, TuiState } from './state';
 
 /**
@@ -68,14 +68,14 @@ export function handoffCommand(state: TuiState, arg: string | undefined): Step {
 export function handoffArrived(state: TuiState, handoff: HandoffView): TuiState {
   const landed = handoff.landed.length;
   const where = isRepoGroup(handoff) ? ` in ${reposOf(handoff)}` : '';
-  const branch = handoffBranch(handoff);
+  const branch = handoffBranchName(handoff);
   const tasks = `${landed} task${landed === 1 ? '' : 's'} landed`;
   const received = { ...state, handoff };
 
   if (handoff.deferredTo === 'supervisor') {
     return say(received, 'system', `Run finished on ${branch}${where}: ${tasks}. The supervisor may merge it; /handoff to review it yourself.`);
   }
-  const returned = state.handoff?.deferredTo === 'supervisor' && handoffBranch(state.handoff) === branch;
+  const returned = state.handoff?.deferredTo === 'supervisor' && handoffBranchName(state.handoff) === branch;
   const told = say(
     received,
     'system',
@@ -96,7 +96,7 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
     case 'review':
       return { state, effects: [{ type: 'isolationReviewDiff', sessionId }] };
     case 'cleanup':
-      return { state: closed, effects: [{ type: 'isolationCleanup', sessionId, branch: handoffBranch(handoff) }] };
+      return { state: closed, effects: [{ type: 'isolationCleanup', sessionId, branch: handoffBranchName(handoff) }] };
     case 'merge':
       if (midRun(state)) {
         return {
@@ -105,7 +105,7 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
             overlay: {
               kind: 'confirm',
               title: isRepoGroup(handoff) ? 'Merge what has landed into your branches?' : 'Merge what has landed into your branch?',
-              message: `Merge ${handoffBranch(handoff)} as it stands now into ${mergeTarget(handoff)}.${checkoutRule(handoff)} The run goes on: tasks waiting for Merge all start once it has merged, and later tasks land on the same branch for the next Merge all. A merge that conflicts is aborted, and your ${isRepoGroup(handoff) ? 'trees stay' : 'tree stays'} as ${isRepoGroup(handoff) ? 'they were' : 'it was'}.${repairedNotice(handoff)}`,
+              message: `Merge ${handoffBranchName(handoff)} as it stands now into ${mergeTarget(handoff)}.${checkoutRule(handoff)} The run goes on: tasks waiting for Merge all start once it has merged, and later tasks land on the same branch for the next Merge all. A merge that conflicts is aborted, and your ${isRepoGroup(handoff) ? 'trees stay' : 'tree stays'} as ${isRepoGroup(handoff) ? 'they were' : 'it was'}.${repairedNotice(handoff)}`,
               action: { kind: 'merge-run' },
             },
           },
@@ -119,13 +119,13 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
             ? {
               kind: 'confirm',
               title: 'Merge all into your branches?',
-              message: `Merge ${handoffBranch(handoff)} into ${mergeTarget(handoff)}.${checkoutRule(handoff)} It checks every repository first and merges none unless every repository can take it; on git older than 2.38 it goes repository by repository and stops at the first that fails. A merge that conflicts is aborted, and your trees stay as they were. Once every repository has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}`,
+              message: `Merge ${handoffBranchName(handoff)} into ${mergeTarget(handoff)}.${checkoutRule(handoff)} It checks every repository first and merges none unless every repository can take it; on git older than 2.38 it goes repository by repository and stops at the first that fails. A merge that conflicts is aborted, and your trees stay as they were. Once every repository has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}`,
               action: { kind: 'merge-run' },
             }
             : {
               kind: 'confirm',
               title: 'Merge into your branch?',
-              message: `Merge ${handoffBranch(handoff)} into ${mergeTarget(handoff)}.${checkoutRule(handoff)} If it conflicts the merge is aborted and your tree stays as it was. Once it has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}`,
+              message: `Merge ${handoffBranchName(handoff)} into ${mergeTarget(handoff)}.${checkoutRule(handoff)} If it conflicts the merge is aborted and your tree stays as it was. Once it has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}`,
               action: { kind: 'merge-run' },
             },
         },
@@ -138,7 +138,7 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
           overlay: {
             kind: 'confirm',
             title: 'Discard this run?',
-            message: `Removes the run's worktrees and task branches and deletes ${handoffBranch(handoff)}${isRepoGroup(handoff) ? ` in ${reposOf(handoff)}` : ''}. Tasks keep their status: mark one not done if you did not keep its work.`,
+            message: `Removes the run's worktrees and task branches and deletes ${handoffBranchName(handoff)}${isRepoGroup(handoff) ? ` in ${reposOf(handoff)}` : ''}. Tasks keep their status: mark one not done if you did not keep its work.`,
             action: { kind: 'discard-run' },
           },
         },
@@ -156,18 +156,18 @@ export function confirmedHandoff(state: TuiState, kind: 'merge-run' | 'discard-r
   const repaired = repairedLanded(handoff);
   const effect: Effect = kind === 'merge-run'
     ? {
-      type: 'isolationMerge', sessionId, branch: handoffBranch(handoff),
+      type: 'isolationMerge', sessionId, branch: handoffBranchName(handoff),
       ...(isRepoGroup(handoff) ? { group: true } : {}),
       ...(repaired.length > 0 ? { repaired } : {}),
     }
-    : { type: 'isolationDiscard', sessionId, branch: handoffBranch(handoff) };
+    : { type: 'isolationDiscard', sessionId, branch: handoffBranchName(handoff) };
   return { state: closed, effects: [effect] };
 }
 
 /** The diff arrived: show it in the overlay, opening it if the request came from `/handoff review`. */
 export function showDiff(state: TuiState, diff: string): TuiState {
   const handoff = currentHandoff(state);
-  if (diff.trim() === '') return say(state, 'system', `Nothing differs from ${handoff ? handoffBase(handoff, 8) : 'the base commit'}.`);
+  if (diff.trim() === '') return say(state, 'system', `Nothing differs from ${handoff ? handoffBaseLine(handoff, 8) : 'the base commit'}.`);
   const index = state.overlay?.kind === 'handoff' ? state.overlay.index : 0;
   // Tabs are expanded before sanitizing, which would turn each into one space
   // and flatten tab-indented code — the one thing a review needs to read.

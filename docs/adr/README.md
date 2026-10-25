@@ -292,7 +292,8 @@ What the planner may run, read and reach, and the sandbox under it.
 | [0032](planner-envelope/0032-runner-state-outside-the-workspace.md) | Runner state outside the workspace | accepted | [0008](planner-envelope/0008-planner-exploration-envelope.md), [0026](planner-envelope/0026-one-envelope-for-every-planner.md), [0028](planner-envelope/0028-planners-never-run-repository-config.md) | — |
 | [0033](planner-envelope/0033-codex-planner-without-its-sandbox.md) | A Codex planner without its sandbox | accepted | [0009](planner/0009-coding-agents-as-planners.md), [0011](planner-envelope/0011-sandboxing-the-planners-shell.md), [0026](planner-envelope/0026-one-envelope-for-every-planner.md) | [0046](planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md) |
 | [0036](planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md) | The planner's shell: sealed runs instead of refusals, and the harness's own shell as an opt-in | accepted | [0008](planner-envelope/0008-planner-exploration-envelope.md), [0011](planner-envelope/0011-sandboxing-the-planners-shell.md), [0026](planner-envelope/0026-one-envelope-for-every-planner.md) | [0046](planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md) |
-| [0046](planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md) | A read-only task is Ordewell's: its runner's reads, a sealed shell, and nothing lands | accepted | [0001](routing/0001-autonomous-mode-resolution.md), [0013](isolation/0013-worktree-isolation.md), [0022](runners/0022-ordewell-mcp-server.md), [0027](planner-envelope/0027-web-reads-in-the-planner-envelope.md), [0028](planner-envelope/0028-planners-never-run-repository-config.md), [0033](planner-envelope/0033-codex-planner-without-its-sandbox.md), [0036](planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md), [0037](supervision/0037-research-tasks-wake-the-planner.md) | — |
+| [0046](planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md) | A read-only task is Ordewell's: its runner's reads, a sealed shell, and nothing lands | accepted | [0001](routing/0001-autonomous-mode-resolution.md), [0013](isolation/0013-worktree-isolation.md), [0022](runners/0022-ordewell-mcp-server.md), [0027](planner-envelope/0027-web-reads-in-the-planner-envelope.md), [0028](planner-envelope/0028-planners-never-run-repository-config.md), [0033](planner-envelope/0033-codex-planner-without-its-sandbox.md), [0036](planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md), [0037](supervision/0037-research-tasks-wake-the-planner.md) | [0050](planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md) |
+| [0050](planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md) | A read-only task can hand off its prototype as a patch | accepted | [0022](runners/0022-ordewell-mcp-server.md), [0046](planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md), [0047](supervision/0047-structured-task-handoffs.md) | — |
 
 ### routing/
 
@@ -315,7 +316,7 @@ How runners are driven, messaged and given Ordewell tools.
 | ADR | Title | Status | Amends | Amended by |
 |---|---|---|---|---|
 | [0018](runners/0018-structured-runner-transport.md) | Structured runner transport: drive task runners through their programmatic protocol | accepted | — | [0023](runners/0023-messages-reach-a-running-task.md), [0041](routing/0041-a-tasks-model-follows-the-runners-own-switch.md), [0044](planner/0044-the-planners-usage-limit-waits-and-resends.md) |
-| [0022](runners/0022-ordewell-mcp-server.md) | The Ordewell MCP server: task and planner tools behind per-caller tokens | accepted | — | [0029](supervision/0029-the-supervisor.md), [0035](supervision/0035-effects-are-consented-and-recorded.md), [0043](routing/0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md), [0046](planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md), [0047](supervision/0047-structured-task-handoffs.md) |
+| [0022](runners/0022-ordewell-mcp-server.md) | The Ordewell MCP server: task and planner tools behind per-caller tokens | accepted | — | [0029](supervision/0029-the-supervisor.md), [0035](supervision/0035-effects-are-consented-and-recorded.md), [0043](routing/0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md), [0046](planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md), [0047](supervision/0047-structured-task-handoffs.md), [0050](planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md) |
 | [0023](runners/0023-messages-reach-a-running-task.md) | Messages reach a running task between tool calls | accepted | [0018](runners/0018-structured-runner-transport.md) | — |
 | [0025](runners/0025-structured-only-runners.md) | Structured-only runners | accepted | supersedes [0007](runners/0025-structured-only-runners.md) | — |
 
@@ -325,11 +326,12 @@ Worktrees, repo groups, conflicts, ops tasks and merge gates.
 
 | ADR | Title | Status | Amends | Amended by |
 |---|---|---|---|---|
-| [0013](isolation/0013-worktree-isolation.md) | Worktree isolation: one checkout per task, one branch per run | accepted | — | [0014](isolation/0014-multi-repo-workspaces.md), [0015](isolation/0015-conflict-repair.md), [0020](isolation/0020-ops-tasks-and-merge-gates.md), [0029](supervision/0029-the-supervisor.md), [0030](supervision/0030-global-run-settings.md), [0034](supervision/0034-a-failed-task-blocks-only-its-dependents.md), [0042](isolation/0042-merge-all-lands-only-on-the-branch-the-run-started-on.md), [0046](planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md) |
+| [0013](isolation/0013-worktree-isolation.md) | Worktree isolation: one checkout per task, one branch per run | accepted | — | [0014](isolation/0014-multi-repo-workspaces.md), [0015](isolation/0015-conflict-repair.md), [0020](isolation/0020-ops-tasks-and-merge-gates.md), [0029](supervision/0029-the-supervisor.md), [0030](supervision/0030-global-run-settings.md), [0034](supervision/0034-a-failed-task-blocks-only-its-dependents.md), [0042](isolation/0042-merge-all-lands-only-on-the-branch-the-run-started-on.md), [0046](planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md), [0049](isolation/0049-a-session-has-one-live-host.md) |
 | [0014](isolation/0014-multi-repo-workspaces.md) | Multi-repo workspaces: isolate a repo group, land it atomically | accepted | [0013](isolation/0013-worktree-isolation.md) | [0020](isolation/0020-ops-tasks-and-merge-gates.md), [0042](isolation/0042-merge-all-lands-only-on-the-branch-the-run-started-on.md) |
 | [0015](isolation/0015-conflict-repair.md) | Conflict repair: the task repairs its own conflict, bounded and evidenced | accepted | [0013](isolation/0013-worktree-isolation.md) | [0034](supervision/0034-a-failed-task-blocks-only-its-dependents.md) |
 | [0020](isolation/0020-ops-tasks-and-merge-gates.md) | Ops tasks run in the workspace, behind a merge gate | accepted | [0013](isolation/0013-worktree-isolation.md), [0014](isolation/0014-multi-repo-workspaces.md) | [0029](supervision/0029-the-supervisor.md), [0030](supervision/0030-global-run-settings.md), [0035](supervision/0035-effects-are-consented-and-recorded.md) |
 | [0042](isolation/0042-merge-all-lands-only-on-the-branch-the-run-started-on.md) | Merge all lands only on the branch the run started on | accepted | [0013](isolation/0013-worktree-isolation.md), [0014](isolation/0014-multi-repo-workspaces.md) | — |
+| [0049](isolation/0049-a-session-has-one-live-host.md) | A session has one live host: the session lease | accepted | [0013](isolation/0013-worktree-isolation.md) | — |
 
 ### supervision/
 
@@ -341,9 +343,9 @@ The supervisor, run settings, failure policy, consent and research tasks.
 | [0030](supervision/0030-global-run-settings.md) | Run settings are global, saved and live; autorun | accepted | [0001](routing/0001-autonomous-mode-resolution.md), [0013](isolation/0013-worktree-isolation.md), [0020](isolation/0020-ops-tasks-and-merge-gates.md), [0029](supervision/0029-the-supervisor.md) | [0035](supervision/0035-effects-are-consented-and-recorded.md) |
 | [0034](supervision/0034-a-failed-task-blocks-only-its-dependents.md) | A failed task blocks only its dependents | accepted | [0013](isolation/0013-worktree-isolation.md), [0015](isolation/0015-conflict-repair.md), [0029](supervision/0029-the-supervisor.md) | [0045](supervision/0045-a-check-repeats-with-its-fix-until-it-passes.md) |
 | [0035](supervision/0035-effects-are-consented-and-recorded.md) | Every effect is consented to and recorded, whoever performs it | accepted | [0008](planner-envelope/0008-planner-exploration-envelope.md), [0009](planner/0009-coding-agents-as-planners.md), [0020](isolation/0020-ops-tasks-and-merge-gates.md), [0022](runners/0022-ordewell-mcp-server.md), [0026](planner-envelope/0026-one-envelope-for-every-planner.md), [0029](supervision/0029-the-supervisor.md), [0030](supervision/0030-global-run-settings.md) | — |
-| [0037](supervision/0037-research-tasks-wake-the-planner.md) | Research that outlives a planner turn is a research task, and its report wakes the planner | accepted | [0009](planner/0009-coding-agents-as-planners.md), [0029](supervision/0029-the-supervisor.md) | [0046](planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md), [0047](supervision/0047-structured-task-handoffs.md) |
+| [0037](supervision/0037-research-tasks-wake-the-planner.md) | Evidence the planner decides on is a research task, and its report wakes the planner | accepted | [0009](planner/0009-coding-agents-as-planners.md), [0029](supervision/0029-the-supervisor.md) | [0046](planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md), [0047](supervision/0047-structured-task-handoffs.md) |
 | [0045](supervision/0045-a-check-repeats-with-its-fix-until-it-passes.md) | A check repeats with its fix until it passes | accepted | [0029](supervision/0029-the-supervisor.md), [0034](supervision/0034-a-failed-task-blocks-only-its-dependents.md) | [0047](supervision/0047-structured-task-handoffs.md) |
-| [0047](supervision/0047-structured-task-handoffs.md) | Every task ends with a handoff: a short summary, atomic findings and a way to pull the rest | accepted | [0022](runners/0022-ordewell-mcp-server.md), [0029](supervision/0029-the-supervisor.md), [0037](supervision/0037-research-tasks-wake-the-planner.md), [0045](supervision/0045-a-check-repeats-with-its-fix-until-it-passes.md) | — |
+| [0047](supervision/0047-structured-task-handoffs.md) | Every task ends with a handoff: a short summary, atomic findings and a way to pull the rest | accepted | [0022](runners/0022-ordewell-mcp-server.md), [0029](supervision/0029-the-supervisor.md), [0037](supervision/0037-research-tasks-wake-the-planner.md), [0045](supervision/0045-a-check-repeats-with-its-fix-until-it-passes.md) | [0050](planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md) |
 
 ### surfaces/
 
@@ -356,12 +358,13 @@ The TUI and the shared conversation view.
 
 ### platform/
 
-Windows and the per-workspace environment.
+Windows, the per-workspace environment and what Ordewell sends from the machine.
 
 | ADR | Title | Status | Amends | Amended by |
 |---|---|---|---|---|
 | [0010](platform/0010-windows-support.md) | Windows support: one launch seam, one shell seam, one dialect | accepted | — | — |
 | [0016](platform/0016-per-workspace-environment.md) | Per-workspace environment for the planner and agents | accepted | — | — |
+| [0048](platform/0048-a-daily-version-check-with-a-notice-first-and-one-install-per-machine.md) | A daily version check, with a notice first and one install per machine | accepted | — | — |
 
 ### Retired numbers
 

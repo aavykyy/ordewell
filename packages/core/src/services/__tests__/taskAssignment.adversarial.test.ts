@@ -69,7 +69,7 @@ describe('adversarial: merge and split parts naming only a runner', () => {
     ], ['claude-code', 'codex'], CATALOG);
     expect(result.ok).toBe(true);
     const merged = result.tasks.find((t) => t.title === 'Merged')!;
-    expect(merged).toMatchObject({ assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5-codex' }, taskMode: 'fullAccess' });
+    expect(merged).toMatchObject({ assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5-codex' }, taskMode: 'agent' });
     expect(result.adjustments?.map((a) => [a.field, a.from, a.to])).toContainEqual(['assignedModel', 'claude-sonnet-4-5', 'gpt-5-codex']);
   });
 
@@ -122,7 +122,7 @@ describe('adversarial: a manual task turned into an AI one by a planner update',
       { op: 'update', taskId: 'm1', changes: { type: 'ai', prompt: 'sign it off' } },
     ], ['claude-code', 'codex'], CATALOG);
     expect(result.ok).toBe(true);
-    expect(result.tasks[0]).toMatchObject({ type: 'ai', taskMode: 'fullAccess', assignedModel: { modelId: 'gpt-5-codex' } });
+    expect(result.tasks[0]).toMatchObject({ type: 'ai', taskMode: 'agent', assignedModel: { modelId: 'gpt-5-codex' } });
   });
 
   it('lifting read-only re-derives the mode off the read-only one', () => {

@@ -79,6 +79,15 @@ export function landsNothing(kind: AttemptKind): boolean {
 }
 
 /**
+ * Whether the attempt's runner is told to write the commit message its work
+ * lands with (ADR-0047): a change task's, fresh, continued or carried over.
+ * Ops and read-only work commits nothing, and a repair resolves a merge.
+ */
+export function writesCommit(kind: AttemptKind): boolean {
+  return kind.kind === 'change' || kind.kind === 'carryOver' || (kind.kind === 'continuation' && kind.work === 'change');
+}
+
+/**
  * Merge all and ops work never overlap (ADR-0020): the merge rewrites the
  * checkout an ops attempt acts from, and it is the one collision the planner
  * cannot order, because the merge is the user's. Both sides read this: an
@@ -186,8 +195,9 @@ export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): str
       // the next one is told what the last one did.
       return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, previousAttempt: src.previousAttempt(task.id), loop });
     case 'change':
-    case 'readOnly':
       return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, loop });
+    case 'readOnly':
+      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, loop, readOnly: true });
     case 'carryOver':
       return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, carriedOver: { from: kind.from, work: src.previousWork }, loop });
   }

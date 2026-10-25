@@ -6,6 +6,7 @@ import type { ResearchShell, ShellLaunch } from '../researchShell';
 import { SEALED_RUN_MARK } from '../researchStepSummary';
 import { BubblewrapBackend, findBubblewrap } from './bubblewrap';
 import { SANDBOX_EXEC, SeatbeltBackend } from './seatbelt';
+import { processAlive } from '../../utils/processTree';
 import { execProbe, type ProbeExec, type SandboxBackend, type SandboxGitEntry, type SandboxInvocation, type SandboxLaunch, type SandboxLimits, type SandboxProfile } from './SandboxBackend';
 
 /**
@@ -410,15 +411,6 @@ function removeScratch(dir: string): void {
   }
 }
 
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
 /**
  * Remove what a process left behind that died without exiting: killed, or a
  * test worker torn down mid-run, where no exit hook runs. Each directory names
@@ -565,6 +557,11 @@ export class PlannerShellSandbox {
       { shell: opts.shell, shellArgs: opts.shellArgs ?? ['-c'], env: opts.env ?? process.env },
       { ...profile, limits: undefined, throwaway: undefined },
     );
+  }
+
+  /** The scratch directory every launch here gets as `$TMPDIR` and `$HOME`, made if it is not there. */
+  scratchPath(): string {
+    return this.scratchDir();
   }
 
   /** The session ended: its scratch directory goes, and a next session starts with a fresh one and its own notice. */

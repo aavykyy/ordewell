@@ -135,6 +135,10 @@ export function nextBoundary(text: string, offset: number): number {
   return offset + firstGrapheme(text.slice(offset)).length;
 }
 
+/** SGR paint: the only escapes a row may carry through a cut. */
+// eslint-disable-next-line no-control-regex
+const SGR = /^\x1b\[([0-9;]*)m$/;
+
 /** Cut to `max` visible columns, marking the cut with an ellipsis. */
 export function truncate(text: string, max: number): string {
   if (max <= 0) return '';
@@ -142,13 +146,26 @@ export function truncate(text: string, max: number): string {
 
   let out = '';
   let used = 0;
-  for (const char of graphemes(stripAnsi(text))) {
-    const w = stringWidth(char);
-    if (used + w > max - 1) break;
-    out += char;
-    used += w;
+  // Whether the retained text ends inside a style. The cut closes it, so a
+  // caller appending to the row does not inherit the colour of what was cut.
+  let painted = false;
+  for (const part of text.split(ESCAPE_SPLIT)) {
+    if (part.startsWith('\x1b')) {
+      const sgr = SGR.exec(part);
+      if (!sgr) continue;
+      out += part;
+      const codes = sgr[1].split(';').filter(Boolean);
+      painted = !(codes.length === 0 || codes.includes('0'));
+      continue;
+    }
+    for (const char of graphemes(part)) {
+      const w = stringWidth(char);
+      if (used + w > max - 1) return `${out}…${painted ? '\x1b[0m' : ''}`;
+      out += char;
+      used += w;
+    }
   }
-  return out + '…';
+  return `${out}…${painted ? '\x1b[0m' : ''}`;
 }
 
 export function pad(text: string, target: number): string {
@@ -174,15 +191,42 @@ function chopWord(piece: string, max: number): string[] {
   const chunks: string[] = [];
   let cur = '';
   let curWidth = 0;
-  for (const ch of graphemes(piece)) {
-    const w = stringWidth(ch);
-    if (cur && curWidth + w > max) {
-      chunks.push(cur);
-      cur = ch;
-      curWidth = w;
-    } else {
-      cur += ch;
-      curWidth += w;
+  // The SGR sequences in force when the current chunk began. A chunk cut out
+  // of a painted word has to carry them again: rows are diffed and written
+  // independently, so a continuation row cannot rely on the colour the row
+  // above it opened. Escape sequences are measured as zero width — measured
+  // like text, a chunk boundary could fall inside `\x1b[0m`, leaving a
+  // truncated sequence on one row and its tail printed as text on the next.
+  let active: string[] = [];
+  const startChunk = (ch: string, w: number): void => {
+    chunks.push(cur);
+    cur = active.join('') + ch;
+    curWidth = w;
+  };
+  for (const part of piece.split(ESCAPE_SPLIT)) {
+    if (part.startsWith('\x1b')) {
+      // eslint-disable-next-line no-control-regex
+      const sgr = /^\x1b\[([0-9;]*)m$/.exec(part);
+      if (sgr) {
+        const codes = sgr[1].split(';').filter(Boolean);
+        if (codes.length === 0 || codes.includes('0')) active = [];
+        const opens = codes.filter((code) => code !== '0');
+        if (opens.length > 0) active.push(`\x1b[${opens.join(';')}m`);
+      }
+      cur += part;
+      continue;
+    }
+    for (const ch of graphemes(part)) {
+      // Printable ASCII is one column per code unit. A pasted single-line blob
+      // is the worst case for this loop, and asking string-width once per
+      // character of it costs an order of magnitude more than measuring it.
+      const w = PRINTABLE_ASCII.test(ch) ? 1 : stringWidth(ch);
+      if (curWidth > 0 && curWidth + w > max) {
+        startChunk(ch, w);
+      } else {
+        cur += ch;
+        curWidth += w;
+      }
     }
   }
   chunks.push(cur);
@@ -272,8 +316,30 @@ export function wrap(text: string, max: number): string[] {
   return wrapLines(text, max).map((l) => l.line);
 }
 
+/**
+ * `text` inside `seq`, with the style re-opened after every reset inside it, so
+ * a nested colour or attribute ends only itself and the outer text keeps its
+ * own paint. The final reset closes the style once.
+ */
+function restoring(seq: string, text: string): string {
+  return `${seq}${text.split('\x1b[0m').join(`\x1b[0m${seq}`)}\x1b[0m`;
+}
+
 function colour(open: string | (() => string)): (text: string) => string {
-  return (text: string) => (style.enabled ? `\x1b[${typeof open === 'string' ? open : open()}m${text}\x1b[0m` : text);
+  return (text: string) => {
+    if (!style.enabled) return text;
+    return restoring(`\x1b[${typeof open === 'string' ? open : open()}m`, text);
+  };
+}
+
+/**
+ * An SGR attribute that carries state rather than colour — inverse video for
+ * a caret or a selected row. `NO_COLOR` asks for no colour, not for these:
+ * with the hardware cursor hidden, dropping them leaves nothing marking the
+ * insertion point. They are off only when the output is not a terminal at all.
+ */
+function attribute(open: string): (text: string) => string {
+  return (text: string) => (style.attributes ? restoring(`\x1b[${open}m`, text) : text);
 }
 
 export interface Rgb { r: number; g: number; b: number }
@@ -324,12 +390,14 @@ const reBand = (text: string): string => {
 export const style = {
   /** Set false when the output is piped or the terminal has no colour. */
   enabled: true,
+  /** Set false only when the output is not a terminal; see `attribute`. */
+  attributes: true,
   bold: colour('1'),
   dim: colour('2'),
   italic: colour('3'),
   underline: colour('4'),
   strike: colour('9'),
-  inverse: colour('7'),
+  inverse: attribute('7'),
   red: colour('31'),
   green: colour('32'),
   yellow: colour('33'),
@@ -350,7 +418,7 @@ export const style = {
    * reset inside, or the first painted word in the row would end the bar.
    */
   highlight: (text: string): string =>
-    (style.enabled ? `\x1b[7m${text.split('\x1b[0m').join('\x1b[0m\x1b[7m')}\x1b[0m` : text),
+    (style.attributes ? `\x1b[7m${text.split('\x1b[0m').join('\x1b[0m\x1b[7m')}\x1b[0m` : text),
   /**
    * The band the user's own messages and the composer sit on (see `bandBg`).
    * The background is re-asserted after every reset inside, or the `❯` and a

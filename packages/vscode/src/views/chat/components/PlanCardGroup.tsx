@@ -1,11 +1,11 @@
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import TaskCard from './TaskCard';
 import NewTaskCard from './NewTaskCard';
 import ProposedTasks from './ProposedTasks';
 import type { TaskDraft } from './NewTaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
 import { Task, DiscoveredModel, TaskModelAssignment, RunTask, RunView, type AssignmentScope } from '@ordewell/core';
-import { canMergeTasks, canSplitTask, tasksTotalText } from '@ordewell/core/plan-utils';
+import { tasksTotalText } from '@ordewell/core/plan-utils';
 
 /** What each level allows, in the picker's tooltip: Act's risk is said where it is chosen (ADR-0029). */
 interface PlanCardGroupProps {
@@ -20,6 +20,10 @@ interface PlanCardGroupProps {
   /** The enabled runners and allowlist each task is flagged against; absent until the host has sent them. */
   runnerScope?: AssignmentScope;
   isExecuting?: boolean;
+  /** A whole-plan start is on its way: show it, and refuse a second one. */
+  isStarting?: boolean;
+  /** Anything that could still move a task on without being asked (core's `advancesOnItsOwn`): a queued start or usage-limit hold too, so Stop stays reachable and Mark waits. */
+  runActive?: boolean;
   runnerLabels?: Record<string, string>;
   /** Tail of each running task's runner output, keyed by task id. */
   taskOutput?: Record<string, string>;
@@ -46,8 +50,6 @@ interface PlanCardGroupProps {
   onForceStart?: (taskId: string) => void;
   onMarkComplete?: (taskId: string) => void;
   onMarkIncomplete?: (taskId: string) => void;
-  onMerge?: (taskIds: string[]) => void;
-  onSplit?: (taskId: string) => void;
   onExecutePlan?: () => void;
   onStopExecution?: () => void;
   /** Approve every task that waits for approval: each starts once its dependencies finish (ADR-0035). */
@@ -72,6 +74,8 @@ export default function PlanCardGroup({
   runners,
   runnerScope,
   isExecuting,
+  isStarting,
+  runActive: runActiveProp,
   runnerLabels: _runnerLabels,
   taskOutput,
   onResolveConflict,
@@ -94,8 +98,6 @@ export default function PlanCardGroup({
   onForceStart,
   onMarkComplete,
   onMarkIncomplete,
-  onMerge,
-  onSplit,
   onExecutePlan,
   onStopExecution,
   onApproveAll,
@@ -106,15 +108,12 @@ export default function PlanCardGroup({
   expandedTaskId: expandedTaskIdProp,
   onExpandedTaskChange,
 }: PlanCardGroupProps) {
-  const [mergeSelectedIds, setMergeSelectedIds] = useState<string[]>([]);
-  const [mergeValidationError, setMergeValidationError] = useState<string | null>(null);
   // Accordion: at most one top-level task open at a time.
   const [internalExpandedTaskId, setInternalExpandedTaskId] = useState<string | null>(null);
   const expandedTaskId = expandedTaskIdProp !== undefined ? expandedTaskIdProp : internalExpandedTaskId;
   const setExpandedTaskId = onExpandedTaskChange ?? setInternalExpandedTaskId;
   const totalUsage = tasksTotalText(tasks);
   const sorted = [...tasks].sort((a, b) => a.order - b.order);
-  const mergeMode = mergeSelectedIds.length > 0;
 
   // One lookup for every card's own run entry, keyed by id: the plan draws the
   // card, the run tells it what its status badges say.
@@ -132,6 +131,14 @@ export default function PlanCardGroup({
   };
   const rowTasks = sorted.map(withLoopState);
   const anyWaitsForApproval = useMemo(() => [...runByTask.values()].some((t) => t.waitsForApproval === true), [runByTask]);
+  // The run's own word when the host does not pass one: a card is never
+  // offered a mark the core would refuse, even when it is drawn from `run`.
+  const runActive = runActiveProp ?? run.activity?.advancesOnItsOwn ?? false;
+  // Stop is owed to anything that could still move a task on, even when
+  // nothing is executing: a force start queued behind its dependencies, or a
+  // task waiting out a usage limit. Execute is offered only when nothing is.
+  const stopNow = !!onStopExecution && (isExecuting || runActive);
+  const showExecute = !isStarting && !isExecuting && !runActive && !!onExecutePlan;
 
   const dependentCountMap = useMemo(() => {
     const m = new Map<string, number>();
@@ -143,107 +150,23 @@ export default function PlanCardGroup({
     return m;
   }, [tasks]);
 
-  useEffect(() => {
-    if (!mergeValidationError) return;
-    const timer = setTimeout(() => setMergeValidationError(null), 4000);
-    return () => clearTimeout(timer);
-  }, [mergeValidationError]);
-
-  const canMerge = !isExecuting && onMerge && sorted.length > 1;
-  const canSplit = !isExecuting && onSplit;
-
-  const handleMergeClick = useCallback((taskId: string) => {
-    setMergeSelectedIds((prev) => {
-      if (prev.includes(taskId)) {
-        return prev.filter((id) => id !== taskId);
-      }
-      return [...prev, taskId];
-    });
-    setMergeValidationError(null);
-  }, []);
-
-  const handleApplyMerge = useCallback(() => {
-    const sortedIds = mergeSelectedIds
-      .map((id) => ({ id, order: tasks.find((t) => t.id === id)?.order ?? 0 }))
-      .sort((a, b) => a.order - b.order);
-
-    const selectedSet = new Set(sortedIds.map((s) => s.id));
-    const allOrderedIds = sorted.map((t) => t.id);
-    const minOrderIdx = allOrderedIds.indexOf(sortedIds[0].id);
-    const maxOrderIdx = allOrderedIds.indexOf(sortedIds[sortedIds.length - 1].id);
-
-    const hasGap = allOrderedIds
-      .slice(minOrderIdx, maxOrderIdx + 1)
-      .some((id) => !selectedSet.has(id));
-
-    if (hasGap) {
-      const titles = sortedIds.map((s) => `"${tasks.find((t) => t.id === s.id)?.title ?? s.id}"`);
-      setMergeValidationError(`Cannot merge non-consecutive tasks. Unselected task(s) exist between ${titles.join(', ')}.`);
-      return;
-    }
-
-    const compat = canMergeTasks(tasks, sortedIds.map((s) => s.id));
-    if (!compat.ok) {
-      setMergeValidationError(compat.error ?? 'These tasks cannot be merged.');
-      return;
-    }
-
-    onMerge?.(sortedIds.map((s) => s.id));
-    setMergeSelectedIds([]);
-  }, [mergeSelectedIds, tasks, sorted, onMerge]);
-
-  const cancelMerge = useCallback(() => {
-    setMergeSelectedIds([]);
-    setMergeValidationError(null);
-  }, []);
-
-  const handleSplitClick = useCallback((taskId: string) => {
-    const compat = canSplitTask(tasks, taskId);
-    if (!compat.ok) {
-      setMergeValidationError(compat.error ?? 'This task cannot be split.');
-      return;
-    }
-    onSplit?.(taskId);
-  }, [tasks, onSplit]);
-
-  const handleMergeKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      cancelMerge();
-    }
-  }, [cancelMerge]);
-
   return (
     <div className="plan-card-group">
       {totalUsage && <div className="plan-usage">{totalUsage}</div>}
-      {mergeMode && (
-        <div className="plan-merge-banner" onKeyDown={handleMergeKeyDown}>
-          <span>Merge selected tasks (<strong>{mergeSelectedIds.length}</strong> selected)</span>
-          <button className="plan-merge-apply" onClick={handleApplyMerge} disabled={mergeSelectedIds.length < 2}>
-            Merge {mergeSelectedIds.length} tasks
-          </button>
-          <button className="plan-merge-cancel" onClick={cancelMerge}>Cancel</button>
-        </div>
-      )}
-      {mergeValidationError && (
-        <div className="merge-validation-error-banner" onClick={() => setMergeValidationError(null)}>
-          {mergeValidationError}
-          <span className="merge-error-dismiss">&times;</span>
-        </div>
-      )}
-
-      {(onExecutePlan || onStopExecution || (onApproveAll && anyWaitsForApproval)) && (
+      {(onExecutePlan || onStopExecution || isStarting || runActive || (onApproveAll && anyWaitsForApproval)) && (
         <div className="plan-action-bar">
-          {isExecuting ? (
-            onStopExecution && (
-              <button className="plan-action-btn stop" onClick={onStopExecution}>Stop</button>
-            )
-          ) : (
-            onExecutePlan && (
-              <button className="plan-action-btn execute" onClick={onExecutePlan}>Execute Plan</button>
-            )
+          {isStarting && (
+            <button className="plan-action-btn starting" type="button" disabled aria-busy="true">
+              <span className="plan-action-spinner" /> Starting&hellip;
+            </button>
           )}
-          {onApproveAll && anyWaitsForApproval && (
+          {stopNow && (
+            <button className="plan-action-btn stop" onClick={onStopExecution}>Stop</button>
+          )}
+          {showExecute && (
+            <button className="plan-action-btn execute" onClick={onExecutePlan}>Execute Plan</button>
+          )}
+          {onApproveAll && anyWaitsForApproval && !isStarting && (
             <button className="plan-action-btn approve" onClick={onApproveAll}
               title="Approve every task that waits for your approval: each starts once its dependencies finish">
               Approve all
@@ -261,15 +184,9 @@ export default function PlanCardGroup({
           const runnerModels = effectiveRunner ? modelsByRunner?.[effectiveRunner] : undefined;
           const taskModels = runnerModels && runnerModels.length > 0 ? runnerModels : models;
           const taskModes = effectiveRunner ? (modesByRunner?.[effectiveRunner] ?? []) : [];
-          const isMergeSelected = mergeSelectedIds.includes(task.id);
-          const isMergeTarget = mergeMode && !isMergeSelected;
-          const isMergeSource = isMergeSelected;
 
           return (
-            <div
-              key={task.id}
-              className={`task-card-with-actions ${isMergeSource ? 'merge-source' : ''} ${isMergeTarget ? 'merge-target' : ''}`}
-            >
+            <div key={task.id} className="task-card-with-actions">
               <TaskCard
                 task={task}
                 run={runByTask.get(task.id)}
@@ -282,6 +199,7 @@ export default function PlanCardGroup({
                 runnerScope={runnerScope}
                 effectiveRunner={effectiveRunner}
                 isExecuting={isExecuting}
+                runActive={runActive}
                 dependentCount={dependentCountMap.get(task.id) ?? 0}
                 output={taskOutput?.[task.id]}
                 onResolveConflict={onResolveConflict}
@@ -308,22 +226,6 @@ export default function PlanCardGroup({
                 onSendMessage={onSendMessage}
                 onSendMessageNow={onSendMessageNow}
                 onOpenLog={onOpenLog}
-                planActions={!isExecuting && (canMerge || canSplit) ? (
-                  <div className="task-inline-actions">
-                    {canMerge && (
-                      <button
-                        className={`task-merge-btn ${isMergeSelected ? 'active' : ''}`}
-                        onClick={(e) => { e.stopPropagation(); handleMergeClick(task.id); }}
-                        title={isMergeSelected ? 'Deselect task' : mergeMode ? 'Select task to merge' : 'Select tasks to merge'}
-                      >
-                        {isMergeSelected ? 'Selected' : 'Merge'}
-                      </button>
-                    )}
-                    {canSplit && !mergeMode && (
-                      <button className="task-split-btn" onClick={(e) => { e.stopPropagation(); handleSplitClick(task.id); }} title="Split this task into multiple parts (the planner generates the breakdown)">Split</button>
-                    )}
-                  </div>
-                ) : null}
                 expanded={expandedTaskId === task.id}
                 onExpandedChange={(next) => setExpandedTaskId(next ? task.id : null)}
               />

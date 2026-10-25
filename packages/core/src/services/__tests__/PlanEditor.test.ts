@@ -35,7 +35,7 @@ function tasks(): Task[] {
  * is the session's contract in miniature — the op runs, and only a change is
  * saved and announced — so what the editor hands it is all that is asserted.
  */
-function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; run?: IsolationRun | null; skills?: SkillInfo[]; uncommitted?: SkillLookup['uncommitted']; live?: (taskId: string) => boolean } = {}) {
+function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; run?: IsolationRun | null; skills?: SkillInfo[]; uncommitted?: SkillLookup['uncommitted']; live?: (taskId: string) => boolean; plannedWith?: () => boolean } = {}) {
   const store = new PlanStore();
   const now = '2026-01-01T00:00:00Z';
   const plan: LegacyPlanState | null = opts.plan === false ? null : { tasks: [], generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now };
@@ -69,7 +69,6 @@ function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Recor
     planEdited: vi.fn(),
   };
   const runs = { current: opts.run ?? null, linkResolver: vi.fn() };
-  const plannerTools = vi.fn(() => false);
   const notice = vi.fn();
   const approve = vi.fn<(ids: readonly string[]) => void>();
   const editor = new PlanEditor({
@@ -80,13 +79,13 @@ function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Recor
     scheduler,
     runs,
     broadcast: (m) => { sent.push(m); events.push(m.type); },
-    plannerTools,
     taskSkills: () => ({ findSkill: (name) => opts.skills?.find((s) => s.name === name), searchedDirs: () => [], uncommitted: opts.uncommitted }),
     notice,
     approve,
+    ...(opts.plannedWith ? { plannedWith: opts.plannedWith } : {}),
   });
   const task = (id: string) => store.get(id);
-  return { editor, store, plan, events, sent, catalog, remembered, mutate, scheduler, runs, plannerTools, notice, approve, task };
+  return { editor, store, plan, events, sent, catalog, remembered, mutate, scheduler, runs, notice, approve, task };
 }
 
 describe('PlanEditor.updateTask', () => {
@@ -137,6 +136,34 @@ describe('PlanEditor.updateTask', () => {
     await expect(editor.updateTask('t1', { assignedRunner: 'codex', title: 'Set up' })).rejects.toThrow('"Setup" has a live runner, so its runner cannot change now: stop the task first');
     expect(mutate).not.toHaveBeenCalled();
     expect(task('t1')).toMatchObject({ assignedRunner: 'claude-code', title: 'Setup' });
+  });
+
+  // The card offers its editors only on a task that has not started. The
+  // wider direct path keeps its contract, where a live task's prompt can still
+  // be changed; this is the card's own narrower precondition.
+  it('refuses a card edit to a task whose runner is live, while a direct edit of its prompt still lands', async () => {
+    const { editor, task, mutate } = setup({ live: () => true });
+
+    await expect(editor.updateTask('t1', { prompt: 'do it differently' }, { requireUnstarted: true }))
+      .rejects.toThrow(/"Setup" started before this change was saved, so it was not changed/);
+    expect(mutate).not.toHaveBeenCalled();
+    expect(task('t1')!.prompt).toBe('setup');
+
+    await editor.updateTask('t1', { prompt: 'do it differently' });
+    expect(task('t1')!.prompt).toBe('do it differently');
+  });
+
+  it('refuses a card edit whose task started while its new runner was being discovered, changing nothing', async () => {
+    const { editor, store, task, mutate, catalog } = setup();
+    vi.mocked(catalog.runner).mockImplementationOnce(async () => {
+      store.update('t1', { status: 'in_progress' });
+      return CATALOGS.codex;
+    });
+
+    await expect(editor.updateTask('t1', { assignedRunner: 'codex', title: 'Set up' }, { requireUnstarted: true }))
+      .rejects.toThrow(/"Setup" started before this change was saved, so it was not changed/);
+    expect(mutate).not.toHaveBeenCalled();
+    expect(task('t1')).toMatchObject({ assignedRunner: 'claude-code', title: 'Setup', status: 'in_progress' });
   });
 
   const skill = (name: string, appliesTo: SkillInfo['appliesTo']): SkillInfo => ({
@@ -385,7 +412,7 @@ describe('PlanEditor.addTask', () => {
 
     await editor.addTask({ title: 'Docs', prompt: 'write docs' });
 
-    expect(store.planTasks.at(-1)).toMatchObject({ title: 'Docs', assignedRunner: 'claude-code', assignedModel: { modelId: 'claude-sonnet-4-5' }, taskMode: 'build' });
+    expect(store.planTasks.at(-1)).toMatchObject({ title: 'Docs', assignedRunner: 'claude-code', assignedModel: { modelId: 'claude-sonnet-4-5' }, taskMode: 'acceptEdits' });
   });
 
   it('keeps what the caller chose where the runner offers it, and drops dependencies on tasks that are gone', async () => {
@@ -462,6 +489,14 @@ describe('PlanEditor.addConflictResolver', () => {
     expect(events).toEqual(['saved', 'plan announced', 'tick']);
   });
 
+  it('writes the resolver\'s merge message with the Planned-with trailer when the setting is on', async () => {
+    const { editor, store } = setup({ run: conflicted, plannedWith: () => true });
+
+    await editor.addConflictResolver('t1');
+
+    expect(store.planTasks.at(-1)!.prompt).toContain("-m 'Merge: Setup (resolve conflicts with integration)' -m 'Planned-with: Ordewell'");
+  });
+
   it('refuses a task that did not conflict, or a plan with no run', async () => {
     await expect(setup({ run: conflicted }).editor.addConflictResolver('t2')).rejects.toBeInstanceOf(PlanEditError);
     await expect(setup().editor.addConflictResolver('t1')).rejects.toThrow(/conflicted/);
@@ -469,39 +504,6 @@ describe('PlanEditor.addConflictResolver', () => {
 
   it('answers null without a plan', async () => {
     expect(await setup({ plan: false, run: conflicted }).editor.addConflictResolver('t1')).toBeNull();
-  });
-});
-
-describe('PlanEditor merge and split requests', () => {
-  it('words a merge of compatible tasks for the planner', () => {
-    const { editor, plannerTools } = setup();
-
-    const prompt = editor.mergeRequest(['t1', 't2']);
-
-    expect(prompt).toContain('id=t1');
-    expect(prompt).toContain('id=t2');
-    expect(plannerTools).toHaveBeenCalled();
-  });
-
-  it('words a split for the planner', () => {
-    const { editor } = setup();
-
-    expect(editor.splitRequest('t2')).toContain('Split task #2 "Build"');
-  });
-
-  it('refuses before the planner is consulted at all', () => {
-    const { editor, plannerTools } = setup();
-
-    expect(() => editor.mergeRequest(['t1'])).toThrow(/at least two/i);
-    expect(() => editor.splitRequest('ghost')).toThrow('Task not found');
-    expect(plannerTools).not.toHaveBeenCalled();
-  });
-
-  it('refuses without a plan', () => {
-    const { editor } = setup({ plan: false });
-
-    expect(() => editor.mergeRequest(['t1', 't2'])).toThrow('No active plan state');
-    expect(() => editor.splitRequest('t1')).toThrow('No active plan state');
   });
 });
 

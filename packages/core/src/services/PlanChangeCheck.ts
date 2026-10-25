@@ -1,0 +1,208 @@
+import type { RunnerId, Task } from '../models/Task';
+import type { RunnerModeInfo } from './ModeResolver';
+import { validatePlanTasks, type PlanTasksResult } from './PlanValidator';
+import { checkPlanInvariants } from './PlannedTask';
+import { applyTaskOps, opRefusalText, type OpRef, type TaskOp } from './TaskOps';
+import { resolveAssignments, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
+import { checkOpSkills, checkPlanSkills, type SkillCheck, type SkillLookup } from './taskSkills';
+
+/**
+ * When a planner's change is checked: as the planner makes it, where an edit
+ * joins the ops its turn already holds, or as its turn lands it, whole.
+ */
+export type CheckPhase = 'submit' | 'land';
+
+/**
+ * A change the planner makes to the plan: a whole plan, or a batch of task
+ * ops. A plan is its JSON as the planner submits it, and the tasks it was
+ * accepted as once it lands.
+ */
+export type PlannerChange<P extends CheckPhase = CheckPhase> =
+  | { kind: 'plan'; tasks: P extends 'land' ? readonly Task[] : unknown }
+  | { kind: 'ops'; ops: TaskOp[] };
+
+/** One reason a change was refused: the task and field it is about, or the op. */
+export interface PlanChangeError {
+  taskId?: string;
+  /** A task's field, `skills`, or `tasks` for the plan as a whole. */
+  field?: string;
+  op?: OpRef;
+  message: string;
+}
+
+/** A refusal as the planner reads it in prose, its op named first. */
+export function planChangeErrorText(error: PlanChangeError): string {
+  return opRefusalText(error);
+}
+
+export type CheckedChange =
+  | {
+    ok: true;
+    /**
+     * The plan's tasks as the change leaves them, assignments resolved. A
+     * plan's at submit are the tasks it was accepted as, which landing
+     * resolves under the catalog of that moment.
+     */
+    tasks: Task[];
+    /** What landing changes in what the planner wrote, named (ADR-0003): the same at submit as at landing while the catalog holds. */
+    adjustments: AssignmentAdjustment[];
+    /** What was accepted but not used, or may be missing when a task starts. */
+    warnings: string[];
+    /** What an edit changed, for the transcript; empty for a plan. */
+    summary: string[];
+    /** The id each of an edit's handles names. */
+    handles: ReadonlyMap<string, string>;
+  }
+  | {
+    ok: false;
+    errors: PlanChangeError[];
+    /** The runners the change was held to, for a refusal to name what would be accepted. */
+    runners: RunnerId[];
+  };
+
+export type PassedChange = Extract<CheckedChange, { ok: true }>;
+
+/** What a change is checked against, read as each check runs: a session's live state, or a one-shot planner's request. */
+export interface PlanChangeScope {
+  /** The plan's tasks as they stand. */
+  tasks(): readonly Task[];
+  /** The runners a change may put a task on (`assignableRunners`): those enabled for a whole plan, the plan's own too for an edit. */
+  runners(kind: PlannerChange['kind']): RunnerId[];
+  /** What an assignment is resolved against, with the modes of `runners`. */
+  catalog(runners: RunnerId[]): AssignmentCatalog & { runnerModes?: Record<RunnerId, RunnerModeInfo[]> };
+  /** Where attached skill names are looked up; absent, none are. */
+  skills?(): SkillLookup;
+  /** The ops the open turn already holds, which an edit made at submit joins. */
+  held?(): readonly TaskOp[];
+  /** Tasks put in the plan past the held edit, as `run_script` puts its own, which a reorder may leave out (ADR-0035). */
+  addedPast?(): ReadonlySet<string>;
+  /** A further refusal of what the change leaves: the supervisor's oscillation guard (ADR-0029). */
+  guard?(before: readonly Task[], after: readonly Task[]): string | undefined;
+}
+
+/** What a whole plan's JSON is held to as it is submitted. */
+export interface PlanIntake {
+  runners: RunnerId[];
+  runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
+  autonomousDefault?: boolean;
+}
+
+const NO_SKILLS: SkillCheck = { errors: [], warnings: [] };
+
+/**
+ * The one check a planner's change to the plan meets (ADR-0022, P2), on every
+ * route and at both ends of its turn: `submit_plan` and a plan envelope, an
+ * edit made through `edit_plan` and a `taskOps` reply, as it is made and as it
+ * lands. Every rule reads one scope, so a change accepted at submit is refused
+ * at landing only for something that moved in between, and the adjustments
+ * the planner is shown at submit are the ones landing makes.
+ */
+export class PlanChangeCheck {
+  constructor(private readonly scope: PlanChangeScope) {}
+
+  /** What a whole plan's JSON is held to: what an envelope's parse must hold its candidates to, for both routes to agree. */
+  intake(): PlanIntake {
+    const runners = this.scope.runners('plan');
+    const { runnerModes, autonomousDefault } = this.scope.catalog(runners);
+    return { runners, ...(runnerModes ? { runnerModes } : {}), ...(autonomousDefault !== undefined ? { autonomousDefault } : {}) };
+  }
+
+  /**
+   * Hold `change` to every rule at `phase`. Its one wait, the skill lookup,
+   * comes before every rule that reads the plan, and `then` gets what passed
+   * in the tick those rules ran in, so nothing can move the plan between the
+   * check and what is done with it.
+   */
+  async check<P extends CheckPhase>(change: PlannerChange<P>, phase: P, then?: (passed: PassedChange) => void): Promise<CheckedChange> {
+    const read = this.read(change, phase);
+    if (read && !read.ok) return this.refused(change, read.errors);
+    const lookup = this.scope.skills?.();
+    const skills = !lookup ? NO_SKILLS : change.kind === 'ops' ? await checkOpSkills(change.ops, lookup) : await checkPlanSkills(read?.tasks ?? landing(change), lookup);
+    const checked = this.rules(change, phase, skills, read);
+    if (checked.ok) then?.(checked);
+    return checked;
+  }
+
+  /** {@link check} without the skill lookup, for a change that attaches none or is only being shown. */
+  checkNow<P extends CheckPhase>(change: PlannerChange<P>, phase: P): CheckedChange {
+    const read = this.read(change, phase);
+    if (read && !read.ok) return this.refused(change, read.errors);
+    return this.rules(change, phase, NO_SKILLS, read);
+  }
+
+  /** A plan's JSON read into tasks as it is submitted; nothing in it reads the plan. */
+  private read<P extends CheckPhase>(change: PlannerChange<P>, phase: P): PlanTasksResult | undefined {
+    if (change.kind !== 'plan' || phase !== 'submit') return undefined;
+    const { runners, runnerModes, autonomousDefault } = this.intake();
+    return validatePlanTasks({ tasks: change.tasks }, runners, runnerModes, autonomousDefault);
+  }
+
+  private rules<P extends CheckPhase>(change: PlannerChange<P>, phase: P, skills: SkillCheck, read: PlanTasksResult | undefined): CheckedChange {
+    const runners = this.scope.runners(change.kind);
+    const catalog = this.scope.catalog(runners);
+    const before = this.scope.tasks();
+    const skillErrors: PlanChangeError[] = skills.errors.map((e) => ({ ...e, field: 'skills' }));
+
+    if (change.kind === 'plan') {
+      const tasks = read?.ok ? read.tasks : [...landing(change)];
+      // A landing plan waited out the rest of its reply, so the runners it was accepted against may be gone (ADR-0003 V1).
+      const broken = phase === 'land' ? checkPlanInvariants(tasks, runners, catalog.runnerModes) : [];
+      if (broken.length > 0 || skillErrors.length > 0) return this.refused(change, [...broken, ...skillErrors]);
+      const resolved = resolveAssignments(tasks, before, catalog);
+      const warnings = [...(read?.ok ? read.warnings ?? [] : []), ...skills.warnings];
+      return { ok: true, tasks: phase === 'land' ? resolved.tasks : tasks, adjustments: resolved.adjustments, warnings, summary: [], handles: new Map() };
+    }
+
+    if (skillErrors.length > 0) return this.refused(change, skillErrors);
+    const held = phase === 'submit' ? this.scope.held?.() ?? [] : [];
+    const applied = applyTaskOps(before, change.ops, runners, catalog, held, this.scope.addedPast?.());
+    if (!applied.ok) return this.refused(change, applied.refusals);
+    const tripped = this.scope.guard?.(before, applied.tasks);
+    if (tripped) return this.refused(change, [{ message: tripped }]);
+    // Then what landing changes besides the edit's own ops: an untouched task's effort the catalog no longer offers, say.
+    const resolved = resolveAssignments(applied.tasks, before, catalog);
+    return {
+      ok: true,
+      tasks: resolved.tasks,
+      adjustments: [...applied.adjustments ?? [], ...resolved.adjustments],
+      warnings: skills.warnings,
+      summary: applied.summary,
+      handles: applied.handles ?? new Map(),
+    };
+  }
+
+  private refused(change: PlannerChange, errors: PlanChangeError[]): CheckedChange {
+    return { ok: false, errors, runners: this.scope.runners(change.kind) };
+  }
+}
+
+/** A landing plan's tasks: its phase's type says they are tasks, not JSON. */
+function landing(change: Extract<PlannerChange, { kind: 'plan' }>): readonly Task[] {
+  return change.tasks as readonly Task[];
+}
+
+/**
+ * The scope of a planner with no session behind it: a one-shot plan, checked
+ * against the request that asked for it and an empty plan.
+ */
+export function requestScope(request: {
+  runners: RunnerId[];
+  runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
+  autonomousDefault?: boolean;
+  modelsByRunner?: AssignmentCatalog['modelsByRunner'];
+  perRunnerAllowlist?: AssignmentCatalog['perRunnerAllowlist'];
+  taskSkills?: SkillLookup;
+}): PlanChangeScope {
+  const { taskSkills } = request;
+  return {
+    tasks: () => [],
+    runners: () => request.runners,
+    catalog: () => ({
+      modelsByRunner: request.modelsByRunner ?? {},
+      ...(request.runnerModes ? { runnerModes: request.runnerModes } : {}),
+      ...(request.perRunnerAllowlist ? { perRunnerAllowlist: request.perRunnerAllowlist } : {}),
+      ...(request.autonomousDefault !== undefined ? { autonomousDefault: request.autonomousDefault } : {}),
+    }),
+    ...(taskSkills ? { skills: () => taskSkills } : {}),
+  };
+}

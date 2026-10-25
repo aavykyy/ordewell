@@ -185,6 +185,31 @@ describe('TaskOrchestrator: script tasks (ADR-0035)', () => {
     expect(task.verdict!.reason).toBe(`The script failed: \`git push origin main\` exited with code 1.\n\nThe end of its error output:\n${limitWords}`);
   });
 
+  it('says in the verdict where the whole output is, and names the file as an artifact of the handoff', async () => {
+    const e = setup();
+    e.orchestrator.loadPlan([script('s1', 1)]);
+    await e.orchestrator.approveReview();
+    const file = '/repo/.ordewell/sessions/s/tasks/s1/1.output.txt';
+
+    e.end('s1', { outcome: 'failed', command: 'npm run ci', status: { code: 1, signal: null }, errorTail: 'Test failed', fullOutput: { file, droppedChars: 0 } });
+
+    await vi.waitFor(() => expect(e.status('s1')).toBe('failed'));
+    expect(e.orchestrator.storeInstance.get('s1')!.verdict!.reason).toBe(`The script failed: \`npm run ci\` exited with code 1.\n\nThe end of its error output:\nTest failed\n\nAll of its output is in ${file}`);
+    expect(e.handoffs.at(-1)!.handoff.artifacts).toEqual([{ kind: 'file', path: file }]);
+    expect(e.orchestrator.storeInstance.get('s1')!.handoff!.artifacts).toEqual([{ kind: 'file', path: file }]);
+  });
+
+  it('says how much of the output a hard cap did not keep', async () => {
+    const e = setup();
+    e.orchestrator.loadPlan([script('s1', 1)]);
+    await e.orchestrator.approveReview();
+
+    e.end('s1', { outcome: 'timed-out', command: 'make', timeoutMs: 600_000, errorTail: '', fullOutput: { file: '/out.txt', droppedChars: 1234 } });
+
+    await vi.waitFor(() => expect(e.status('s1')).toBe('failed'));
+    expect(e.orchestrator.storeInstance.get('s1')!.verdict!.reason).toContain('All of its output is in /out.txt, except its last 1234 characters, which were not saved.');
+  });
+
   it('fails a script its time limit ended, saying so', async () => {
     const e = setup();
     e.orchestrator.loadPlan([script('s1', 1)]);

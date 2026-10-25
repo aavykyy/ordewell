@@ -21,6 +21,9 @@ let migrated = false;
  * on disk, which would otherwise permanently skip lifting anything added to
  * this list later (`.env` did exactly that: real API keys stranded in the old
  * dir because the settings.json move had already made the new dir exist).
+ *
+ * Best-effort: a home it cannot write (read-only, full disk) must not take the
+ * CLI down before `--help`, and the old file stays where it is.
  */
 export function migrateOldConfigDir(): void {
   if (migrated) return;
@@ -33,9 +36,12 @@ export function migrateOldConfigDir(): void {
   const liftFile = (name: string): void => {
     const oldFile = path.join(oldDir, name);
     const newFile = path.join(newDir, name);
-    if (fs.existsSync(oldFile) && !fs.existsSync(newFile)) {
+    if (!fs.existsSync(oldFile) || fs.existsSync(newFile)) return;
+    try {
       fs.mkdirSync(newDir, { recursive: true });
       fs.copyFileSync(oldFile, newFile);
+    } catch (err) {
+      console.warn(`Could not move ${oldFile} to ${newFile}: ${String(err)}`);
     }
   };
 

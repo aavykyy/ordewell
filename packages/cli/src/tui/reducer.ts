@@ -1,11 +1,11 @@
-import { blockingFailures, DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, NO_TURN, fromTranscript, holdPrompt, taskStartedNotice, type RunnerId } from '@ordewell/core';
-import { chatEditorRoomFor } from './geometry';
+import { blockingFailures, DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, NO_TURN, fromTranscript, holdPrompt, taskLogCommands, taskStartedNotice, type RunnerId } from '@ordewell/core';
+import { bodyMode, chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
 import { applyKey, commit } from './editor';
 import { say, wiped } from './transcript';
 import { blockedPicker, handoffArrived, showDiff } from './handoff';
-import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, runnerCommands, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, scriptTaskView, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { syncApprovals } from './reducers/approvals';
@@ -17,13 +17,18 @@ import { applySettings, foldRun, followSession, planSnapshot, withRun } from './
 import { refillPicker, reseedRunnerChoice } from './reducers/pickers';
 import { refreshStepper } from './reducers/stepper';
 import {
-  handleMouseSelect, isMouseSelect, isWheel, scrollChat, scrollDelta, scrollPointed, settlePlan, toggleDetail,
+  handleMouseSelect, isMouseSelect, isScrollKey, isWheel, scrollChat, scrollDelta, scrollPointed, settlePanes, settlePlan, toggleDetail,
 } from './reducers/pointer';
-import { clamp, clampSelection, stale, step, type Action, type Effect, type Step } from './reducers/shared';
+import { clamp, clampSelection, clearNotice, reportError, stale, step, type Action, type Effect, type Step } from './reducers/shared';
 
 export { initialState } from './state';
 export { resolveTaskId } from './reducers/taskEdits';
 export type { Action, Effect, Step, TaskAction } from './reducers/shared';
+
+/** The cause a lost-reply line carries, when the effect knew one. */
+function because(reason: string | undefined): string {
+  return reason ? ` (${reason})` : '';
+}
 
 /**
  * Live output never moves a reader who scrolled back: the offset counts lines
@@ -37,10 +42,23 @@ function holdReadingPlace(before: TuiState, after: TuiState): TuiState {
   return grown > 0 ? { ...after, scroll: clamp(after.scroll + grown, chatScrollMax(after)) } : after;
 }
 
+/**
+ * Stacked, the plan's height follows what the transcript has to say, so a reply
+ * landing in the chat can take rows from the plan — and a selection that was
+ * just inside its viewport falls off the end. A viewport the user has not
+ * positioned (`null`) follows the selection by itself and needs nothing.
+ */
+function holdPlanInView(after: TuiState): TuiState {
+  return after.planScroll === null || bodyMode(after) !== 'stacked' ? after : settlePlan(after);
+}
+
 export function reduce(state: TuiState, action: Action): Step {
   const result = reduceAction(state, action);
-  if (action.type !== 'sessionMessage' && action.type !== 'taskLog') return result;
-  return { ...result, state: holdReadingPlace(state, result.state) };
+  // A notice normally sets `scroll` to 0, which `holdReadingPlace` leaves
+  // alone; one that holds the reader's place grows the content below them
+  // exactly as live output does.
+  if (action.type !== 'sessionMessage' && action.type !== 'taskLog' && action.type !== 'notice') return result;
+  return { ...result, state: holdPlanInView(holdReadingPlace(state, result.state)) };
 }
 
 function reduceAction(state: TuiState, action: Action): Step {
@@ -52,7 +70,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // (`task-1`), so nothing of the last one's — a merge gate, a checkpoint, its
     // tasks — may carry over into this.
     case 'sessionStarted':
-      return step(withRun({ ...state, sessionId: action.sessionId, goal: action.goal, taskView: null }, EMPTY_RUN));
+      return step(withRun({ ...state, sessionId: action.sessionId, goal: action.goal, taskView: null, status: 'idle' }, EMPTY_RUN));
 
     // A loaded session is a different one: the turn the old one had out, the
     // prompts held behind it and a stop armed against it are not this one's.
@@ -64,6 +82,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         sessionId: action.sessionId,
         goal: action.goal,
         taskView: null,
+        status: 'idle',
         planner: 'idle',
         turnGate: NO_TURN,
         pendingApprovals: [],
@@ -73,9 +92,11 @@ function reduceAction(state: TuiState, action: Action): Step {
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
       }, EMPTY_RUN));
 
-    // The daemon registers a session only once planning succeeds; when it does
-    // not, holding on to the id would send every next message to a session the
-    // server never had.
+    // The daemon registers a session before its opening turn runs, and drops it
+    // itself when it refuses the turn or the goal is discarded; any other
+    // failure it answered leaves no conversation a reply could continue, so the
+    // id is let go rather than guessed at. A reply that was merely lost is not
+    // this: the session is the daemon's and the turn may be running (`turnLost`).
     case 'sessionCleared':
       // Prompts belong to the session that raised them; the old planner is gone,
       // and the turn gate it held with it.
@@ -84,6 +105,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         sessionId: null,
         goal: '',
         taskView: null,
+        status: 'idle',
         turnGate: NO_TURN,
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
@@ -120,12 +142,48 @@ function reduceAction(state: TuiState, action: Action): Step {
       return drainQueue(state, settled);
     }
 
+    // The call that carried the turn's reply died, so nothing will say the turn
+    // is over but the daemon. The prompts held behind it, and the turn itself,
+    // wait for that; a send-now in doubt is not given back, as the daemon may
+    // have taken it.
+    case 'turnLost': {
+      if (stale(state, action.sessionId) || !plannerInFlight(state)) return step(state);
+      const awaiting: TuiState = { ...state, planner: 'awaiting', forceSendPending: null };
+      return step(say(awaiting, 'system', `The reply was lost on the way${because(action.reason)}: the planner may still be running this turn or may have finished it. Showing what the server holds.`));
+    }
+
+    // The daemon's own word on the session. A turn it still runs is live, and
+    // ends through `sessionMessage` below; otherwise the gate's turn is over,
+    // and settles as any turn that returned its plan.
+    case 'turnReconciled': {
+      if (stale(state, action.sessionId)) return step(state);
+      if (action.plannerTurnId !== undefined) {
+        // The gate follows the turn actually running: its own end is what
+        // releases the queue, a stranger's output is not dropped as a stale one's.
+        const gate = action.plannerTurnId === state.turnGate.open
+          ? state.turnGate
+          : { open: action.plannerTurnId, stopped: null };
+        return step(showPlan({ ...state, turnGate: gate }, action.plan));
+      }
+      const redrawn = reduceAction({ ...state, turnGate: NO_TURN }, action.chat).state;
+      const settled = reduceAction(redrawn, { type: 'planUpdated', plan: action.plan, sessionId: action.sessionId });
+      // The redraw replaced the line `turnLost` spoke, and with it the reason a message may be missing.
+      return { ...settled, state: say(settled.state, 'system', `The reply to your last message was lost on the way${because(action.reason)}; this is what the server holds.`) };
+    }
+
     // A message never ends a turn: `planUpdated` does (see `converse`), so a
     // queued prompt drains onto a settled state. Until then the status only
-    // says whether a call is out.
-    case 'sessionMessage':
+    // says whether a call is out. The exception is a turn whose call was lost:
+    // there is no `planUpdated` coming, so the stream's end of it sends for the
+    // session to be read back.
+    case 'sessionMessage': {
       if (stale(state, action.sessionId)) return step(state);
-      return step(followSession(state, action.message));
+      const next = followSession(state, action.message);
+      const { sessionId } = state;
+      const lostTurnEnded = action.message.type === 'planner_turn_ended' && state.planner === 'awaiting'
+        && next.turnGate.open === null && !state.forceSendPending;
+      return step(next, lostTurnEnded && sessionId ? [{ type: 'reconcileTurn', sessionId }] : []);
+    }
 
     // The run as the daemon sends it when a socket connects: the whole view is
     // adopted, so a surface joining mid-run has it before the next update — and
@@ -192,9 +250,11 @@ function reduceAction(state: TuiState, action: Action): Step {
         tasks: action.tasks,
         ...(action.runMerge !== undefined ? { runMerge: action.runMerge } : {}),
         ...(action.usage !== undefined ? { usage: action.usage } : {}),
+        ...(action.activity !== undefined ? { activity: action.activity } : {}),
       });
-      // The indicator follows the tasks, not the stream: once none is running
-      // the run is over, whatever the daemon's scheduler still holds armed.
+      // The indicator follows the run's own activity first, then the tasks:
+      // beginning a run is "starting" until it claims, and once none is
+      // running the run is over, whatever the scheduler still holds armed.
       const status = runStatus(next, next.tasks);
       return step({ ...next, status });
     }
@@ -260,10 +320,20 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (plannerInFlight(state)) return step(showPlan(state, action.plan));
       return reduceAction(state, { type: 'planUpdated', plan: action.plan, sessionId: action.sessionId });
 
-    // The follow is open while nothing runs, so its loss is news only with a run on screen.
-    case 'followLost':
-      if (stale(state, action.sessionId) || state.status !== 'executing') return step(state);
-      return reduceAction(state, { type: 'executionLost', sessionId: action.sessionId });
+    // The follow is the only subscription open while nothing runs, so losing
+    // it stops live updates entirely: say so, and let the effects side retry
+    // without sending this notice again until a reconnect opens.
+    case 'followLost': {
+      if (stale(state, action.sessionId)) return step(state);
+      if (state.status === 'executing' || state.status === 'starting') return reduceAction(state, { type: 'executionLost', sessionId: action.sessionId });
+      return step(say(state, 'system', 'Lost the connection to the daemon; reconnecting to follow this session.'));
+    }
+
+    // A follow that opens again may be the only way a lost reply's turn end
+    // arrives: its socket was gone when the daemon broadcast it.
+    case 'followRestored':
+      if (stale(state, action.sessionId) || state.planner !== 'awaiting') return step(state);
+      return step(state, [{ type: 'reconcileTurn', sessionId: action.sessionId }]);
 
     case 'executionLost': {
       if (stale(state, action.sessionId)) return step(state);
@@ -351,7 +421,12 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'failed': {
       // A failed call may have been the task view's log read; the view falls
       // back to whatever the live stream sent rather than waiting forever.
-      if (!action.turn) return step(say(taskLogAbandoned(state), 'error', action.message));
+      if (!action.turn) {
+        const abandoned = reportError(taskLogAbandoned(state), action.message);
+        // A whole-plan start answered nothing but this failure: no run is on
+        // its way, so the start indicator must not outlive it.
+        return step(state.status === 'starting' ? { ...abandoned, status: 'idle' } : abandoned);
+      }
       // A force send stopped the turn in flight; the forced turn is already on
       // its way, so the stop is not news and the prompts held behind it keep
       // their order rather than draining into the turn replacing it. Only the
@@ -362,7 +437,13 @@ function reduceAction(state: TuiState, action: Action): Step {
         state = restoreForced(state);
       }
       const quiet = plannerInFlight(state) && state.stopRequested;
-      const reported = { ...(quiet ? state : say(state, 'error', action.message)), planner: 'idle' as const };
+      const reported = {
+        ...(quiet ? state : reportError(state, action.message)),
+        planner: 'idle' as const,
+        // A start that never reached the daemon has no run to wait for: the
+        // spinner must not outlive the failure that answered it.
+        status: state.status === 'starting' ? 'idle' as const : state.status,
+      };
       // A planner turn dying IS a turn ending — the queue would otherwise wait
       // on a next one that never comes.
       if (!plannerInFlight(state)) return step(reported);
@@ -382,7 +463,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       });
 
     case 'notice':
-      return step(say(state, action.level === 'error' ? 'error' : 'system', action.message));
+      return step(say(state, action.level === 'error' ? 'error' : 'system', action.message, !action.holdPlace));
 
     case 'resize': {
       // A grown pane can leave both offsets pointing past the end of content
@@ -393,7 +474,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       // span anchored where the plan pane used to begin would end up straddling
       // the new one, which is exactly the splice pinning a pane prevents.
       const resized = { ...state, rows: action.rows, cols: action.cols, selection: null };
-      return step(settlePlan({ ...resized, scroll: clamp(resized.scroll, chatScrollMax(resized)) }));
+      return step(settlePanes(resized));
     }
 
     // Whether there is anything to animate is the app loop's call (it owns the
@@ -454,6 +535,12 @@ function plannerResendOf(plan: unknown): TuiState['plannerResend'] {
 }
 
 function runStatus(state: TuiState, tasks: TaskView[]): RunStatus {
+  // The run's own authoritative word first: an admitted start that has not
+  // claimed is "starting", never "executing", and a claimed one is running
+  // even if the first status tick has not caught up yet.
+  const activity = state.run.activity;
+  if (activity?.starting) return 'starting';
+  if (activity?.running) return 'executing';
   if (tasks.some(isTaskRunning)) return 'executing';
   // A task waiting on the user is not executing, but the run is not over
   // either — the indicator says it waits rather than going idle. A run paused
@@ -479,6 +566,9 @@ function handleKey(state: TuiState, key: Key): Step {
   // arm is dropped and the key goes on to whatever it normally does — a press
   // that arrives after the arm must not be swallowed by the arming itself.
   if (state.stopArmed && key.name !== 'escape') state = disarmStop(state);
+  // A notice answers the key that was refused: the next key that is not a
+  // scroll dismisses it, so the view's key hints come back.
+  if (state.taskView?.notice && !isScrollKey(key)) state = clearNotice(state);
   if (key.name === 'ctrl-c') return interrupt(state);
   if (key.name === 'ctrl-d' && !state.editor.text && !state.overlay) {
     return step({ ...state, exiting: true }, [{ type: 'exit' }]);
@@ -512,7 +602,7 @@ function handleKey(state: TuiState, key: Key): Step {
   if (key.name === 'wheelignored') return step(state);
   if (key.name === 'tab' && state.focus === 'chat') {
     const token = activeToken(state.editor.text, state.editor.cursor);
-    const matches = token ? composerCompletions(token, state.taskView ? runnerCommands(state.taskView) : null) : [];
+    const matches = token ? composerCompletions(token, state.taskView ? taskLogCommands(state.taskView.view) : null) : [];
     if (token && matches.length > 0) {
       const { text: full } = state.editor;
       const completed = `/${matches[0]} `;
@@ -523,7 +613,7 @@ function handleKey(state: TuiState, key: Key): Step {
   if (key.name === 'tab') {
     // The pane is hidden while the plan is empty, so there is nothing to focus.
     if (state.focus === 'chat' && state.tasks.length === 0) return step(state);
-    return step({ ...state, focus: state.focus === 'chat' ? 'plan' : 'chat' });
+    return step(settlePanes({ ...state, focus: state.focus === 'chat' ? 'plan' : 'chat' }));
   }
   if (state.focus === 'plan') return handlePlanKey(state, key);
 
@@ -532,6 +622,12 @@ function handleKey(state: TuiState, key: Key): Step {
   if (state.taskView) {
     const handled = handleTaskViewKey(state, key);
     if (handled) return handled;
+    // A script's log is read-only output (ADR-0035): attempts and scrolling
+    // still read it, but nothing types, sends, interrupts or answers there.
+    if (scriptTaskView(state)) {
+      const scroll = scrollDelta(key, state, 'chat');
+      return scroll !== null ? scrollChat(state, scroll) : step(state);
+    }
   }
 
   if (key.name === 'enter') return submit(state);
@@ -546,7 +642,7 @@ function handleKey(state: TuiState, key: Key): Step {
   // Page keys and the wheel scroll the transcript. Up/down always go to the
   // editor: single-line drafts get history recall, multi-line drafts get cursor
   // movement between wrapped lines.
-  const scroll = scrollDelta(key, state);
+  const scroll = scrollDelta(key, state, 'chat');
   if (scroll !== null) return scrollChat(state, scroll);
 
   const multilineEditor = state.editor.text.includes('\n');
@@ -584,7 +680,7 @@ function submit(state: TuiState): Step {
     const taskId = state.taskView.taskId;
     const task = findTask(state.tasks, taskId);
     const command = parseRunnerCommand(text);
-    const offered = runnerCommands(state.taskView);
+    const offered = taskLogCommands(state.taskView.view);
     if (command && offered.length > 0 && !runnerCommandFor(offered, command.name)) {
       const notice = `/${command.name} is not a command ${task?.assignedRunner ?? 'the runner'} offers this task: type / to see them.`;
       return step({ ...cleared, taskView: { ...state.taskView, notice } });

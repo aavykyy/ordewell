@@ -55,13 +55,17 @@ describe('OrchestratorPool.updateSettings — environment allowlist', () => {
 
   it('refuses the variables that disable approval prompting', () => {
     const before = process.env.ORDEWELL_AUTONOMOUS_MODE;
+    // A runner's own environment may already carry these; a refusal leaves
+    // each exactly as it was, which an `undefined` bet would misread.
+    const beforeApprovalMode = process.env.ORDEWELL_APPROVAL_MODE;
+    const beforeApprovalAllow = process.env.ORDEWELL_APPROVAL_ALLOW;
     const result = pool.updateSettings({
       env: { ORDEWELL_AUTONOMOUS_MODE: 'true', ORDEWELL_APPROVAL_MODE: 'yolo', ORDEWELL_APPROVAL_ALLOW: 'rm' },
     });
 
     expect(process.env.ORDEWELL_AUTONOMOUS_MODE).toBe(before);
-    expect(process.env.ORDEWELL_APPROVAL_MODE).toBeUndefined();
-    expect(process.env.ORDEWELL_APPROVAL_ALLOW).toBeUndefined();
+    expect(process.env.ORDEWELL_APPROVAL_MODE).toBe(beforeApprovalMode);
+    expect(process.env.ORDEWELL_APPROVAL_ALLOW).toBe(beforeApprovalAllow);
     expect(result.rejectedEnvKeys)
       .toEqual(['ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_APPROVAL_MODE', 'ORDEWELL_APPROVAL_ALLOW']);
   });

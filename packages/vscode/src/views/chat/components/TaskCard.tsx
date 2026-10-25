@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { taskCommand, useRunnerCommands, useTaskCommands } from './RunnerCommands';
 import SubTaskCard from './SubTaskCard';
 import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
@@ -10,7 +10,7 @@ import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
-import { blockedByLabel, dependencyCandidates, capConflictFiles, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
+import { blockedByLabel, dependencyCandidates, capConflictFiles, cardEditable, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind, AssignmentScope } from '@ordewell/core';
 
 export interface RunnerMode {
@@ -28,6 +28,13 @@ export interface RunnerOption {
   displayName: string;
 }
 
+/**
+ * A task's entry in the run view. Its status is the newest word while a run
+ * streams — `task_started` reaches it before the plan refresh does — so the
+ * card's editability reads it when present.
+ */
+export type TaskCardRun = Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage'> & { status?: Task['status'] };
+
 interface TaskCardProps {
   task: Task;
   models: DiscoveredModel[];
@@ -44,6 +51,8 @@ interface TaskCardProps {
   configuredProviders?: ('openrouter' | 'google' | 'openai_compatible')[];
   modelApiMapping?: Record<string, ('openrouter' | 'google' | 'openai_compatible')[]>;
   isExecuting?: boolean;
+  /** Anything that could still move a task on without being asked: a queued start or usage-limit hold too, not only a live attempt. Defaults to `isExecuting`. */
+  runActive?: boolean;
   /** Tail of this task's live runner output, if any has arrived. */
   output?: string;
   /**
@@ -51,7 +60,7 @@ interface TaskCardProps {
    * runner approvals, isolation and merge gate. Absent before the host has
    * folded the run, in which case the plan's own fields are all there is.
    */
-  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound'>;
+  run?: TaskCardRun;
   /** Every task's run entry, keyed by id, so a subtask card can read its own hold. */
   runsByTask?: ReadonlyMap<string, RunTask>;
   /** Opt in to resolving this task's merge conflict as an AI task. */
@@ -88,7 +97,6 @@ interface TaskCardProps {
   onSendMessageNow?: (taskId: string, text: string) => void;
   /** Open (or focus) this task's log tab (ADR-0018, V1). */
   onOpenLog?: (taskId: string) => void;
-  planActions?: React.ReactNode;
   /** Controlled expansion. When both are supplied the parent owns which card is
    *  open (an accordion); omitted, the card keeps its own state. */
   expanded?: boolean;
@@ -165,39 +173,63 @@ const CHECK_STATE: Record<TaskStatusKind, 'done' | 'running' | 'stalled' | 'fail
 };
 
 /** Minimal to-do / done indicator: empty ring → sweeping ring → filled check.
- *  The ring is a toggle: clicking an unfinished task marks it executed, clicking
- *  a done one takes it back to not-executed. */
-export function TaskCheck({ row, taskId, onMarkComplete, onMarkIncomplete }: { row: Pick<TaskRowView, 'status' | 'mark'>; taskId?: string; onMarkComplete?: (taskId: string) => void; onMarkIncomplete?: (taskId: string) => void }) {
+ *  It only reports the task's status. Completion is changed deliberately, from
+ *  Mark complete / Mark not done at the bottom of the expanded details. */
+export function TaskCheck({ row }: { row: Pick<TaskRowView, 'status'> }) {
   const state = CHECK_STATE[row.status];
-  const toggle = row.mark === 'uncomplete' ? onMarkIncomplete : onMarkComplete;
-  const clickable = !!toggle && !!taskId;
   const title = state === 'done'
-    ? (clickable ? 'Executed: click to mark not done' : 'Executed')
+    ? 'Executed'
     : state === 'running'
       ? 'Running'
       : state === 'stalled'
         ? 'Stalled: no output recently'
         : state === 'skipped'
-          ? (clickable ? 'Skipped: click to mark complete, which lands its kept work' : 'Skipped: nothing of it landed')
+          ? 'Skipped: nothing of it landed'
           : state === 'failed'
-            ? (clickable ? 'Failed: click to mark executed' : 'Failed')
-            : (clickable ? 'Click to mark executed' : 'To do');
+            ? 'Failed'
+            : 'To do';
   return (
-    <span
-      className={`task-check ${state} ${clickable ? 'clickable' : ''}`}
-      title={title}
-      onClick={(e) => {
-        if (!clickable) return;
-        e.stopPropagation();
-        toggle!(taskId!);
-      }}
-    >
+    <span className={`task-check ${state}`} role="img" aria-label={title} title={title}>
       {state === 'done' && (
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path d="M4.2 8.6l2.4 2.4 5.2-5.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )}
     </span>
+  );
+}
+
+/**
+ * Mark complete / Mark not done, at the bottom of a task's expanded details and
+ * nowhere else. The host asks the user to confirm an AI or script task's
+ * override, and the core refuses it while a run could advance the task
+ * (ADR-0029); the button is held back here as well so the refusal is explained
+ * before the click. A manual task is the user's own sign-off, so a run never
+ * holds it up.
+ */
+export function TaskMarkControl({ taskId, row, runActive, hint, onMarkComplete, onMarkIncomplete }: {
+  taskId: string;
+  row: Pick<TaskRowView, 'status' | 'mark' | 'kind'>;
+  /** The run could still move this task on without being asked — a queued start or a usage-limit hold included. */
+  runActive: boolean;
+  /** Why a manual task cannot be signed off yet; the button waits for it. */
+  hint?: string;
+  onMarkComplete?: (taskId: string) => void;
+  onMarkIncomplete?: (taskId: string) => void;
+}) {
+  const handler = row.mark === 'uncomplete' ? onMarkIncomplete : onMarkComplete;
+  if (!handler || row.status === 'running' || row.status === 'quiet') return null;
+  const stopFirst = runActive && row.kind !== 'user';
+  const label = row.mark === 'uncomplete' ? 'Mark not done' : 'Mark complete';
+  const why = stopFirst ? 'Stop the run first: the run could still move this task on' : hint;
+  return (
+    <div className="task-mark-control">
+      <button type="button" className="task-mark-btn" disabled={!!why} title={why ?? label}
+        onClick={(e) => { e.stopPropagation(); handler(taskId); }}>
+        {label}
+      </button>
+      {why && <span className="task-mark-hint">{why}</span>}
+    </div>
   );
 }
 
@@ -218,6 +250,36 @@ export function AssignmentFlag({ row }: { row: Pick<TaskRowView, 'assignmentFlag
       title={`${consequence[0].toUpperCase()}${consequence.slice(1)}. Change its runner or model to move it, or ask the planner to.`}>
       {row.assignmentFlag}
     </span>
+  );
+}
+
+/** What holds a task back or runs on its isolated work, on the collapsed card: a merge gate, a stopped integration, a conflict repair. */
+export function IsolationBadges({ row }: { row: Pick<TaskRowView, 'mergeGate' | 'conflict' | 'repairing'> }) {
+  return (
+    <>
+      {row.mergeGate && (
+        <span className="task-isolation-badge gate"
+          title={`The work of ${row.mergeGate.join(', ')} is not merged into your branch yet. Merge all lets this task go on.`}>
+          Waits for Merge all
+        </span>
+      )}
+
+      {/* A stopped integration is not a hidden failure (US33) — visible on the
+          collapsed card, since it is the one isolation state that needs a
+          decision, not just inspection. */}
+      {row.conflict && (
+        <span className="task-isolation-badge conflict" title={`Integrating this task conflicted${row.conflict.repo ? ` in ${row.conflict.repo}` : ''}${row.conflict.files ? `: ${row.conflict.files}` : ''}. Its worktree and branch are kept.`}>
+          Conflict{row.conflict.repo ? ` in ${row.conflict.repo}` : ''}
+        </span>
+      )}
+
+      {/* Still running, so it reads as progress, not a blocker like a conflict (ADR-0015). */}
+      {row.repairing && (
+        <span className="task-isolation-badge repairing" title={`Repairing the conflict in its own worktree${row.repairing.files ? `: ${row.repairing.files}` : ''}.`}>
+          Repairing{row.repairing.attempt ? ` (${row.repairing.attempt.attempt} of ${row.repairing.attempt.limit})` : ''}
+        </span>
+      )}
+    </>
   );
 }
 
@@ -266,7 +328,7 @@ export function TaskActions({ taskId, actions, labels, handlers }: {
 }) {
   return (
     <div className="task-actions">
-      {actions.map((action) => {
+      {actions.filter((action) => action !== 'complete' && action !== 'uncomplete').map((action) => {
         const handler = handlers[action];
         return handler && (
           <button key={action} className={`task-action-btn ${ACTION_CLASS[action]}`} onClick={(e) => { e.stopPropagation(); handler(taskId); }}>
@@ -352,7 +414,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, planActions, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -377,7 +439,22 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
   const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
   // The run's verdict and round are the newer word on a loop's check: they say whether it is between rounds (ADR-0045).
-  const row = taskRowView({ ...task, handoff, idleSince, awaitingApproval, isolation, mergeGate, holdReason: run?.holdReason, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true, ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}) }, { tasks: siblings, modes: activeModes, runnerScope });
+  const row = taskRowView({
+    ...task,
+    handoff,
+    idleSince,
+    awaitingApproval,
+    isolation,
+    mergeGate,
+    holdReason: run?.holdReason,
+    continuable: run?.continuable === true,
+    waitsForApproval: run?.waitsForApproval === true,
+    attempted: run?.attempted ?? task.attempted,
+    ...(run?.attemptUsage ? { attemptUsage: run.attemptUsage } : {}),
+    ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
+  }, { tasks: siblings, modes: activeModes, runnerScope });
+  // Its chat exists only once an attempt has started; status alone never says so.
+  const chatAvailable = row.chatAvailable;
   const conflictFiles = isolatedWork?.conflictFiles ?? [];
   const repair = isolatedWork?.repair ?? null;
 
@@ -385,6 +462,22 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
 
   const status = statusBadge(row);
   const isUserTask = task.type === 'user';
+  // While anything could still move the plan on (a live attempt, a start, a
+  // scheduler waiting on a manual task or a hold), a task that has not itself
+  // started keeps its editors; execution, a start the run already shows, and a
+  // settled task do not. The host's edit guard reads the same fact. The run's
+  // status is the newer word: `task_started` reaches it first.
+  const canEdit = cardEditable(runActive ?? !!isExecuting, { status: run?.status ?? task.status }, run
+    ? { awaitingApproval, isolation }
+    : undefined);
+
+  // A draft is not the plan's: once execution reaches the task, drop it rather
+  // than bring it back if the task returns to pending.
+  useEffect(() => {
+    if (canEdit) return;
+    setEditingPrompt(null);
+    setEditingDeps(false);
+  }, [canEdit]);
 
   const handlePromptSave = () => {
     if (editingPrompt !== null && editingPrompt !== task.prompt) {
@@ -414,7 +507,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
 
 
   const runnerOptions = runnerOptionsFor(runners, task.assignedRunner);
-  const canEditDeps = !isExecuting && !!onDependenciesChange;
+  const canEditDeps = canEdit && !!onDependenciesChange;
   // Only a running or waiting AI task has a runner turn to reach; a manual task
   // or one not yet started has none. One paused on a usage limit is reached
   // by resuming it, which needs its saved session.
@@ -429,7 +522,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
       <div className={`task-card task-${task.type} ${expanded ? 'expanded' : ''}`}>
         <div className="task-card-header" onClick={() => setExpanded(!expanded)}>
           <span className="task-card-lead">
-            <TaskCheck row={row} taskId={task.id} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
+            <TaskCheck row={row} />
             <span className="task-order">{row.orderLabel}</span>
             <span className={`task-type-badge ${task.type}`}>
               {isUserTask ? 'Manual' : row.kind === 'script' ? 'Script' : 'AI'}
@@ -441,21 +534,21 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
               <span className="task-type-badge ops" title="An ops task: it changes no repository files and runs in your checkout, once the work it depends on is merged">Ops</span>
             )}
           </span>
-          <div className={`task-heading-block${onOpenLog ? ' task-heading-block-with-log' : ''}`}>
+          <div className={`task-heading-block${onOpenLog && chatAvailable ? ' task-heading-block-with-log' : ''}`}>
             <button type="button" className="task-heading" aria-expanded={expanded}
               title={expanded ? 'Collapse task details' : 'Expand task details'}
               onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}>
               <span className="task-title-text">{task.title}</span>
             </button>
-            {/* Outside the heading button, so Open log can share its line without nesting a button in a button. */}
+            {/* Outside the heading button, so Open chat can share its line without nesting a button in a button. */}
             <TaskAssignment task={task} />
-            {onOpenLog && (
+            {onOpenLog && chatAvailable && (
               <button type="button" className="task-log-open-btn task-log-open-btn-stacked"
-                aria-label="Open log"
+                aria-label="Open chat"
                 onClick={(e) => { e.stopPropagation(); onOpenLog(task.id); }}
-                title="Open this task's log in an editor tab">
+                title="Open this task's chat in an editor tab">
                 <span>Open</span>
-                <span>log</span>
+                <span>chat</span>
               </button>
             )}
           </div>
@@ -476,7 +569,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             <p className="task-description">{task.description}</p>
 
             {handoff && <TaskHandoff handoff={handoff} taskName={(id) => taskRefOf(siblings ?? [], id)}
-              onReadFull={onOpenLog ? () => onOpenLog(task.id) : undefined} />}
+              onReadFull={onOpenLog && chatAvailable ? () => onOpenLog(task.id) : undefined} />}
 
             {/* Worktrees are an implementation detail unless something needs the
                 user's attention (US34) — so the branch and path live in the
@@ -590,17 +683,6 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
                     </li>
                   ))}
                 </ol>
-                {onMarkComplete && (
-                  <div className="step-actions">
-                    <button className="step-complete-btn" disabled={!allStepsComplete && task.userSteps!.length > 0}
-                      onClick={(e) => { e.stopPropagation(); onMarkComplete(task.id); }}>
-                      Mark Complete
-                    </button>
-                    {!allStepsComplete && task.userSteps!.length > 0 && (
-                      <span className="step-hint">Complete all steps above first</span>
-                    )}
-                  </div>
-                )}
               </div>
             )}
 
@@ -612,7 +694,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
               </div>
             )}
 
-            {!isExecuting && task.type === 'ai' && task.prompt && (
+            {canEdit && task.type === 'ai' && task.prompt && (
               editingPrompt === null ? (
                 <div className="task-prompt task-prompt-editable" onClick={(e) => { e.stopPropagation(); setEditingPrompt(task.prompt ?? ''); }} title="Click to edit prompt">
                   {task.prompt}
@@ -631,15 +713,15 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
               )
             )}
 
-            {isExecuting && task.type === 'ai' && task.prompt && (
+            {!canEdit && task.type === 'ai' && task.prompt && (
               <div className="task-prompt task-prompt-readonly">{task.prompt}</div>
             )}
 
-            {/* The pickers are hidden once the plan runs; what they decided stays readable. */}
-            {isExecuting && <TaskAssignmentReadout task={task} />}
+            {/* A task execution has reached shows what its pickers decided; one still queued keeps them. */}
+            {!canEdit && <TaskAssignmentReadout task={task} />}
 
             {/* Runner first: it decides which models, efforts and modes exist below it. */}
-            {!isExecuting && task.type === 'ai' && runnerOptions.length > 0 && onRunnerChange && (
+            {canEdit && task.type === 'ai' && runnerOptions.length > 0 && onRunnerChange && (
               <div className="model-selector" style={{ marginTop: '8px' }}>
                 <label htmlFor={`task-runner-${task.id}`}>Runner</label>
                 <select id={`task-runner-${task.id}`} value={task.assignedRunner}
@@ -651,14 +733,14 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
               </div>
             )}
 
-            {!isExecuting && task.type === 'ai' && models.length > 0 && onModelChange && (
+            {canEdit && task.type === 'ai' && models.length > 0 && onModelChange && (
               <ModelSelector models={models} currentModel={task.assignedModel}
                 configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
                 onChange={(assignment) => onModelChange(task.id, assignment)}
                 onOpen={onModelsRefreshNeeded} />
             )}
 
-            {!isExecuting && task.type === 'ai' && onModeChange && (
+            {canEdit && task.type === 'ai' && onModeChange && (
               <div className="model-selector" style={{ marginTop: '8px' }}>
                 <label htmlFor={`task-mode-${task.id}`}
                   title={row.autonomous ? 'Full: runs without permission prompts. /settings changes the level' : undefined}>
@@ -675,10 +757,10 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
 
             {task.type === 'ai' && (
               <SkillChips idPrefix="task" taskId={task.id} skills={task.skills} catalog={taskSkills}
-                onChange={!isExecuting ? onSkillsChange : undefined} />
+                onChange={canEdit ? onSkillsChange : undefined} />
             )}
 
-            {!isExecuting && onOpsChange && row.opsEditable && (
+            {canEdit && onOpsChange && row.opsEditable && (
               <label className="task-ops-toggle" title="An ops task changes no repository files: it acts on outside systems or on your branch's refs, from your checkout, once the work it depends on is merged.">
                 <input type="checkbox" checked={!!task.ops} onChange={(e) => onOpsChange(task.id, e.target.checked)} />
                 Ops task: runs in your checkout, not a worktree
@@ -708,7 +790,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
                     <SubTaskCard key={sub.id} task={sub} parentTask={task} tasks={siblings} models={subModels}
                       modes={subModes} runners={runners} runnerScope={runnerScope} effectiveRunner={subRunner}
                       configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
-                      isExecuting={isExecuting} run={runsByTask?.get(sub.id)}
+                      isExecuting={isExecuting} runActive={runActive} run={runsByTask?.get(sub.id)}
                       onRunnerChange={onRunnerChange}
                       onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
                       taskSkills={taskSkills} onSkillsChange={onSkillsChange}
@@ -728,8 +810,12 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             {/* A usage-limit pause holds the run, which then reads as not executing. */}
             {(isExecuting || paused) && (
               <TaskActions taskId={task.id} actions={row.actions} labels={ACTION_LABELS}
-                handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart, complete: onMarkComplete, uncomplete: onMarkIncomplete }} />
+                handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart }} />
             )}
+
+            <TaskMarkControl taskId={task.id} row={row} runActive={runActive ?? !!isExecuting}
+              hint={isExecuting && isUserTask && task.userSteps && task.userSteps.length > 0 && !allStepsComplete ? 'Complete all steps above first' : undefined}
+              onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
           </div>
         )}
       </div>
@@ -757,36 +843,15 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
 
         <LoopBadge loop={row.loop} />
 
-        {row.mergeGate && (
-          <span className="task-isolation-badge gate"
-            title={`The work of ${row.mergeGate.join(', ')} is not merged into your branch yet. Merge all lets this task go on.`}>
-            Waits for Merge all
-          </span>
-        )}
-
-        {/* A stopped integration is not a hidden failure (US33) — visible on the
-            collapsed card, since it is the one isolation state that needs a
-            decision, not just inspection. */}
-        {row.conflict && (
-          <span className="task-isolation-badge conflict" title={`Integrating this task conflicted${row.conflict.repo ? ` in ${row.conflict.repo}` : ''}${row.conflict.files ? `: ${row.conflict.files}` : ''}. Its worktree and branch are kept.`}>
-            Conflict{row.conflict.repo ? ` in ${row.conflict.repo}` : ''}
-          </span>
-        )}
-
-        {/* Still running, so it reads as progress, not a blocker like a conflict (ADR-0015). */}
-        {row.repairing && (
-          <span className="task-isolation-badge repairing" title={`Repairing the conflict in its own worktree${row.repairing.files ? `: ${row.repairing.files}` : ''}.`}>
-            Repairing{row.repairing.attempt ? ` (${row.repairing.attempt.attempt} of ${row.repairing.attempt.limit})` : ''}
-          </span>
-        )}
+        <IsolationBadges row={row} />
 
         {/* Approvals arrive mid-turn and leave the status alone (ADR-0018,
             A1), so waiting on one is a badge beside it, which opens the log
             where the request is answered. */}
-        {row.approvals && (
+        {row.approvals && chatAvailable && (
           <button type="button" className="task-approval-badge"
             onClick={(e) => { e.stopPropagation(); onOpenLog?.(task.id); }}
-            title="The runner is waiting for you to allow or deny a tool call: open the log to answer">
+            title="The runner is waiting for you to allow or deny a tool call: open the chat to answer">
             {row.approvals}
           </button>
         )}
@@ -817,12 +882,10 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
         {(isExecuting || row.holdReason || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
           <StatusBadge status={status} />
         )}
-        {planActions}
-
-        {/* Beside Merge and Split rather than in the header, where it held the
-            title's last stretch for a button only shown on hover. The host
-            confirms removal with a real modal: a `confirm()` here would never
-            fire — VS Code sandboxes the webview without `allow-modals`. */}
+        {/* In the footer rather than in the header, where it held the title's
+            last stretch for a button only shown on hover. The host confirms
+            removal with a real modal: a `confirm()` here would never fire — VS
+            Code sandboxes the webview without `allow-modals`. */}
         {!isExecuting && onRemoveTask && (
           <button className="task-remove-btn" onClick={(e) => { e.stopPropagation(); onRemoveTask(task.id); }} title="Remove task">&#10005;</button>
         )}

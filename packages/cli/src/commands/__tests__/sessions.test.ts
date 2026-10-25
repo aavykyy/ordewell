@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import fs from 'fs';
 import http from 'http';
+import os from 'os';
+import path from 'path';
 import { ApiClient } from '../../apiClient';
 
 const saved: unknown[][] = [];
@@ -61,6 +64,44 @@ async function sessionsServer(hits: string[]) {
 beforeEach(() => { saved.length = 0; });
 
 describe('handleSessions', () => {
+  it('reports a delete the daemon did not perform and exits non-zero', async () => {
+    const srv = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(req.method === 'DELETE'
+        ? JSON.stringify({ ok: false, message: 'No session "session-nope" was found in /tmp/ws.' })
+        : JSON.stringify([]));
+    });
+    const { handleSessions } = await import('../sessions');
+    const { stderr, exitCode } = await capture(() =>
+      handleSessions(['delete', 'session-nope', '--workspace', '/tmp/ws'], new ApiClient(srv.port)),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('No session "session-nope" was found');
+    srv.close();
+  });
+
+  it('expands the short id `status` prints for delete', async () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-sessions-short-'));
+    fs.mkdirSync(path.join(ws, '.ordewell', 'sessions'), { recursive: true });
+    fs.writeFileSync(
+      path.join(ws, '.ordewell', 'sessions', 's1.json'),
+      JSON.stringify({ meta: { id: 'session-9a407a988bb0706e009055b784ac2257' } }),
+    );
+    const hits: string[] = [];
+    const srv = await startServer((req, res) => {
+      hits.push(`${req.method} ${req.url}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const { handleSessions } = await import('../sessions');
+    await capture(() => handleSessions(['delete', '84ac2257', '--workspace', ws], new ApiClient(srv.port)));
+
+    expect(hits[0]).toBe('DELETE /api/sessions/session-9a407a988bb0706e009055b784ac2257?workspace=' + encodeURIComponent(ws));
+    srv.close();
+    fs.rmSync(ws, { recursive: true, force: true });
+  });
+
   it('lists sessions from the sessionStore-backed endpoint', async () => {
     const hits: string[] = [];
     const srv = await sessionsServer(hits);
@@ -128,6 +169,26 @@ describe('handleSessions', () => {
       handleSessions(['load', 'session-42'], new ApiClient(srv.port)),
     );
     expect(stderr).toContain('Session not found');
+    expect(exitCode).toBe(1);
+    expect(saved).toEqual([]);
+    srv.close();
+  });
+
+  it('load names the host that runs the session, and keeps the marker where it was (ADR-0049)', async () => {
+    const held = 'This session is open in another Ordewell host: a TUI (pid 76271), through its daemon on port 49558 (pid 76279) has held it since 10/24/2026, 1:40:00 AM. Close it there, or stop that process, then open it here.';
+    const srv = await startServer((req, res) => {
+      if ((req.url || '').includes('/load')) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: held, code: 'session_held' }));
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ meta: META, plan: { tasks: [] } }));
+    });
+    const { handleSessions } = await import('../sessions');
+    const { stderr, exitCode } = await capture(() =>
+      handleSessions(['load', 'session-42'], new ApiClient(srv.port)),
+    );
+    expect(stderr).toContain(held);
     expect(exitCode).toBe(1);
     expect(saved).toEqual([]);
     srv.close();

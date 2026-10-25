@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { listSessions, loadSessionPlanState, openTaskLog, saveSession, SessionNotFoundError } from '@ordewell/core';
+import { listSessions, loadSessionPlanState, openTaskLog, saveSession, SessionHeldError, SessionNotFoundError } from '@ordewell/core';
 import { sessionsRoute } from '../sessions';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
@@ -20,7 +20,9 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     getGoal: vi.fn().mockReturnValue('Rate limiting'),
     getPlanState: vi.fn().mockReturnValue(null),
     runSnapshot: vi.fn().mockReturnValue(null),
+    plannerTurnId: vi.fn().mockReturnValue(undefined),
     streamPosition: vi.fn().mockReturnValue({ stream: 'daemon', seq: 12 }),
+    hasSession: vi.fn().mockReturnValue(false),
     destroy: vi.fn(),
     ...overrides,
   } as unknown as OrchestratorPool;
@@ -123,6 +125,24 @@ describe('POST /api/sessions/:id/load', () => {
     expect(pool.adoptSavedSession).toHaveBeenCalledWith('s1', '/ws');
   });
 
+  // A surface that lost the turn's end reads this back to tell a gate the
+  // daemon has closed from one a live turn still holds.
+  it('names the planner turn the adopted session is running', async () => {
+    const running = fakePool({ plannerTurnId: vi.fn().mockReturnValue('t1') });
+    const app2 = new Hono();
+    app2.route('/api/sessions', sessionsRoute(running));
+
+    const res = await app2.request('/api/sessions/s1/load', { method: 'POST' });
+
+    expect(((await res.json()) as { plannerTurnId?: string }).plannerTurnId).toBe('t1');
+  });
+
+  it('leaves the turn out when no planner turn is running', async () => {
+    const res = await app.request('/api/sessions/s1/load', { method: 'POST' });
+
+    expect(await res.json()).not.toHaveProperty('plannerTurnId');
+  });
+
   it('returns the restored plan', async () => {
     const res = await app.request('/api/sessions/s1/load?workspace=/ws', { method: 'POST' });
 
@@ -153,6 +173,25 @@ describe('POST /api/sessions/:id/load', () => {
 
     expect(res.status).toBe(404);
     expect(((await res.json()) as { error?: string }).error).toBe('Session not found');
+  });
+
+  // ADR-0049: a session another live host runs is refused with a code a client
+  // switches on, and the holder as data beside the plain-words message.
+  it('answers 409 session_held, naming the holder, when another host runs the session', async () => {
+    const holder = { hostId: 'host-a', pid: 37797, host: { kind: 'daemon' as const, port: 3742 }, since: '2026-10-24T01:40:00.000Z', heartbeatAt: '2026-10-24T01:54:00.000Z', runnerGroups: [] };
+    const held = fakePool({
+      adoptSavedSession: vi.fn().mockImplementation(() => { throw new SessionHeldError({ holder }); }),
+    });
+    const app2 = new Hono();
+    app2.route('/api/sessions', sessionsRoute(held));
+
+    const res = await app2.request('/api/sessions/s1/load', { method: 'POST' });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string; code?: string; sessionHeld?: { holder: { pid: number } } };
+    expect(body.code).toBe('session_held');
+    expect(body.sessionHeld?.holder.pid).toBe(37797);
+    expect(body.error).toContain('the Ordewell daemon on port 3742 (pid 37797)');
   });
 
   it('answers 500 when adopting fails for another reason', async () => {
@@ -186,7 +225,7 @@ describe('DELETE /api/sessions/:id', () => {
     const res = await app.request(`/api/sessions/${meta.id}?workspace=${encodeURIComponent(ws)}`, { method: 'DELETE' });
 
     expect(await res.json()).toEqual({ ok: true });
-    expect(pool.destroy).toHaveBeenCalledWith(meta.id);
+    expect(pool.destroy).toHaveBeenCalledWith(meta.id, { notifyClients: true });
     expect(filesWhenDestroyed).toEqual([true]);
     expect(listSessions(ws)).toEqual([]);
   });
@@ -198,7 +237,9 @@ describe('DELETE /api/sessions/:id', () => {
 
     const res = await app.request(`/api/sessions/missing?workspace=${encodeURIComponent(ws)}`, { method: 'DELETE' });
 
-    expect(await res.json()).toEqual({ ok: false });
+    const body = (await res.json()) as { ok: boolean; message?: string };
+    expect(body.ok).toBe(false);
+    expect(body.message).toContain('missing');
   });
 });
 
@@ -212,7 +253,7 @@ describe('POST /api/sessions/:id/close', () => {
 
     expect(res.status).toBe(200);
     expect(((await res.json()) as { ok?: boolean }).ok).toBe(true);
-    expect(pool.destroy).toHaveBeenCalledWith('s1');
+    expect(pool.destroy).toHaveBeenCalledWith('s1', { notifyClients: true });
   });
 });
 

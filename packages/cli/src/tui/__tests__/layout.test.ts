@@ -120,6 +120,20 @@ describe('welcome — plan approval', () => {
   });
 });
 
+describe('welcome — the version check notice (ADR-0048)', () => {
+  const NOTICE = 'Ordewell checks for a new version once a day, sending only its version and a random install ID. '
+    + 'Set ORDEWELL_NO_VERSION_CHECK=1 to turn this off. Details: https://ordewell.ai/docs#version-check';
+
+  it('shows the one-time notice whole, wrapped to the pane', () => {
+    const text = plain(chatState(0, { rows: 40, cols: 60, versionCheckNotice: NOTICE })).replace(/\s+/g, ' ');
+    expect(text).toContain(NOTICE);
+  });
+
+  it('says nothing about it on any other start', () => {
+    expect(plain(chatState(0, { rows: 40, cols: 100 }))).not.toContain('ORDEWELL_NO_VERSION_CHECK');
+  });
+});
+
 describe('plan pane — an absolute offset that follows the selection by default', () => {
   it('reaches the first task with the last one selected', () => {
     // The delta-on-top-of-the-auto-anchor model could not do this at all: the
@@ -339,5 +353,19 @@ describe('the help sheet footer', () => {
       expect(lines).toHaveLength(24);
       expect(lines.every((line) => stripAnsi(line).length <= cols)).toBe(true);
     }
+  });
+});
+
+describe('an expanded task row', () => {
+  // The row used to print the store's own spelling, so the pane said "in
+  // progress" directly under a header that said "Running".
+  it('words the status as the task view and the header do', () => {
+    const out = plain(initialState({
+      sessionId: 's1', rows: 24, cols: 120, focus: 'plan', expandedTaskId: 't1',
+      tasks: [{ id: 't1', order: 1, title: 'Add the route', type: 'ai', status: 'in_progress', dependencies: [] }],
+    }));
+
+    expect(out).not.toContain('in progress');
+    expect(out).toContain('Running');
   });
 });

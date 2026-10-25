@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { handoffOf, migratePlanIsolation, taskIsolationOf, type Adr0013PlanIsolation, type Adr0013TaskRecord } from '../isolationRecord';
+import { handoffOf, isolationViewOfPlan, migratePlanIsolation, taskIsolationOf, type Adr0013PlanIsolation, type Adr0013TaskRecord } from '../isolationRecord';
 import { capConflictFiles } from '../conflictFiles';
 import type { IsolationRun, IsolationTaskRecord, IsolationTaskStatus, PlanIsolation } from '../../interfaces/IWorktreeIsolation';
 
@@ -193,8 +193,154 @@ describe('taskIsolationOf', () => {
   });
 });
 
-describe('capConflictFiles', () => {
-  it('joins every file when there are no more than the cap', () => {
+describe('isolationViewOfPlan', () => {
+  const record = (taskId: string, order: number, status: IsolationTaskStatus) => ({
+    taskId, order, title: `Task ${taskId}`, branch: `ordewell/r1/${order}-${taskId}`, worktree: `/ws/.ordewell/worktrees/r1/${order}-${taskId}`, status, linked: [],
+  });
+
+  // As 0.4.23 saved it: one repo, its refs on the run itself.
+  const plan = {
+    tasks: [],
+    isolation: {
+      resolvers: {},
+      run: {
+        id: 'r1', workspaceRoot: '/ws', baseRef: 'abc123', baseBranch: 'main', integrationBranch: 'ordewell/r1/integration',
+        tasks: {
+          b: record('b', 2, 'merged'),
+          a: record('a', 1, 'merged'),
+          c: record('c', 3, 'conflict'),
+          d: record('d', 4, 'failed'),
+          e: record('e', 5, 'active'),
+        },
+      },
+    },
+  };
+
+  it('lists what landed in plan order, not record order', () => {
+    const landed = [{ taskId: 'a', order: 1, title: 'Task a' }, { taskId: 'b', order: 2, title: 'Task b' }];
+    expect(isolationViewOfPlan(plan)!.handoff).toEqual({
+      repos: [{ path: '.', integrationBranch: 'ordewell/r1/integration', baseRef: 'abc123', baseBranch: 'main', landed }],
+      landed,
+    });
+  });
+
+  it('names each task\'s state the way a surface shows it', () => {
+    const { tasks } = isolationViewOfPlan(plan)!;
+    expect(Object.fromEntries(Object.entries(tasks).map(([id, t]) => [id, t.state]))).toEqual({
+      a: 'integrated', b: 'integrated', c: 'conflict', d: 'kept', e: 'active',
+    });
+    expect(tasks.c).toMatchObject({ branch: 'ordewell/r1/3-c', conflictRepo: '.' });
+  });
+
+  it('reads a repo-group record as it reads the ADR-0013 one, for a group of one', () => {
+    const groupRecord = (taskId: string, order: number, status: IsolationTaskStatus) => ({
+      taskId, order, title: `Task ${taskId}`, branch: `ordewell/r1/${order}-${taskId}`, workspace: `/ws/.ordewell/worktrees/r1/${order}-${taskId}`, status,
+      repos: { '.': { worktree: `/ws/.ordewell/worktrees/r1/${order}-${taskId}`, linked: [], ...(status === 'merged' ? { changed: true } : {}) } },
+      ...(status === 'conflict' ? { conflictRepo: '.' } : {}),
+    });
+    const groupPlan = {
+      tasks: [],
+      isolation: {
+        resolvers: {},
+        run: {
+          id: 'r1', workspaceRoot: '/ws', shared: [], sharedRepos: [],
+          repos: [{ path: '.', root: '/ws', baseRef: 'abc123', baseBranch: 'main', integrationBranch: 'ordewell/r1/integration' }],
+          tasks: {
+            b: groupRecord('b', 2, 'merged'),
+            a: groupRecord('a', 1, 'merged'),
+            c: groupRecord('c', 3, 'conflict'),
+            d: groupRecord('d', 4, 'failed'),
+            e: groupRecord('e', 5, 'active'),
+          },
+        },
+      },
+    };
+
+    expect(isolationViewOfPlan(groupPlan)).toEqual(isolationViewOfPlan(plan));
+  });
+
+  it.each([null, undefined, {}, { tasks: [] }, { isolation: {} }, { isolation: { run: { repos: [] } } }, 'nope'])('says nothing for %j', (payload) => {
+    expect(isolationViewOfPlan(payload)).toBeNull();
+  });
+
+  const currentRecord = (taskId: string, order: number, status: IsolationTaskStatus, extra: Record<string, unknown> = {}) => {
+    const workspace = `/ws/.ordewell/worktrees/r1/${order}-${taskId}`;
+    return {
+      taskId, order, title: `Task ${taskId}`, branch: `ordewell/r1/${order}-${taskId}`, workspace, status,
+      repos: { '.': { worktree: workspace, linked: [], ...(status === 'merged' ? { changed: true } : {}) } },
+      ...(status === 'conflict' ? { conflictRepo: '.' } : {}),
+      ...extra,
+    };
+  };
+  const currentPlan = (tasks: Record<string, unknown>) => ({
+    tasks: [],
+    isolation: {
+      resolvers: {},
+      run: {
+        id: 'r1', workspaceRoot: '/ws', shared: [], sharedRepos: [],
+        repos: [{ path: '.', root: '/ws', baseRef: 'abc123', baseBranch: 'main', integrationBranch: 'ordewell/r1/integration' }],
+        tasks,
+      },
+    },
+  });
+
+  it('reads a repairing task and the files a landed one was repaired for (ADR-0015)', () => {
+    const repairingPlan = currentPlan({
+      r: currentRecord('r', 1, 'repairing', { conflictFiles: ['a.ts'], repairs: 1, repairedFiles: ['a.ts'] }),
+      m: currentRecord('m', 2, 'merged', { repairs: 1, repairedFiles: ['b.ts'] }),
+    });
+
+    const { tasks, handoff } = isolationViewOfPlan(repairingPlan)!;
+    expect(tasks.r).toMatchObject({ state: 'repairing', conflictFiles: ['a.ts'], repairedFiles: ['a.ts'] });
+    expect(handoff.landed).toEqual([{ taskId: 'm', order: 2, title: 'Task m', repairedFiles: ['b.ts'] }]);
+  });
+
+  it('fills in the repair attempt only when the caller knows the limit, which a saved plan never carries', () => {
+    const repairingPlan = currentPlan({ r: currentRecord('r', 1, 'repairing', { repairs: 1, repairedFiles: ['a.ts'] }) });
+
+    expect(isolationViewOfPlan(repairingPlan)!.tasks.r).not.toHaveProperty('repair');
+    expect(isolationViewOfPlan(repairingPlan, 2)!.tasks.r).toMatchObject({ repair: { attempt: 1, limit: 2 } });
+  });
+
+  it('leaves a task whose work is already in the user\'s branch out of the handoff (ADR-0020)', () => {
+    const inHeadPlan = currentPlan({
+      m: currentRecord('m', 1, 'merged', { inHead: true }),
+      n: currentRecord('n', 2, 'merged'),
+    });
+
+    expect(isolationViewOfPlan(inHeadPlan)!.handoff.landed).toEqual([{ taskId: 'n', order: 2, title: 'Task n' }]);
+  });
+
+  it('leaves a task whose saved status this build does not know out, and keeps the rest', () => {
+    const futurePlan = currentPlan({
+      x: currentRecord('x', 1, 'merged', { status: 'future-status' }),
+      n: currentRecord('n', 2, 'merged'),
+    });
+
+    expect(Object.keys(isolationViewOfPlan(futurePlan)!.tasks)).toEqual(['n']);
+  });
+
+  it('reads the detached marker and the base branch from a saved run, and leaves each off when absent', () => {
+    const groupPlan = {
+      isolation: {
+        run: {
+          id: 'r1', workspaceRoot: '/ws', shared: [], sharedRepos: [],
+          repos: [
+            { path: 'api', root: '/ws/api', baseRef: 'aaa', startedDetached: true, integrationBranch: 'ordewell/r1/integration' },
+            { path: 'web', root: '/ws/web', baseRef: 'bbb', baseBranch: 'develop', integrationBranch: 'ordewell/r1/integration' },
+          ],
+          tasks: {},
+        },
+      },
+    };
+
+    const repos = isolationViewOfPlan(groupPlan)!.handoff.repos;
+    expect(repos.map((r) => r.startedDetached)).toEqual([true, undefined]);
+    expect(repos.map((r) => r.baseBranch)).toEqual([undefined, 'develop']);
+  });
+});
+
+describe('capConflictFiles', () => {  it('joins every file when there are no more than the cap', () => {
     expect(capConflictFiles(['a.ts', 'b.ts'])).toBe('a.ts, b.ts');
   });
 

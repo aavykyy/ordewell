@@ -1,9 +1,9 @@
-import { canMergeTasks, canSplitTask, UPDATABLE_FIELDS } from './TaskOps';
+import { UPDATABLE_FIELDS } from './TaskOps';
 import { subtreeIds } from './PlanTree';
-import { validateTaskEdit } from './TaskEditValidator';
+import { startedEditRefusal, validateTaskEdit } from './TaskEditValidator';
+import { NOT_STARTED } from '../taskRow/status';
 import { liveRunnerRefusal, resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog, type RunnerCatalog } from './TaskAssignment';
 import { clampThinkingEffort } from './ModelAllowlistResolver';
-import { buildMergePrompt, buildSplitPrompt } from './PlanPrompts';
 import { conflictResolverTask } from './Landing';
 import { checkPlanInvariants, type PlanTaskError } from './PlannedTask';
 import { PlanEditError } from './PlanEditError';
@@ -25,6 +25,18 @@ const ASSIGNMENT_FIELDS = ['assignedRunner', 'assignedModel', 'taskMode', 'type'
 /** The catalogs an edit reads, as the session holds them at the moment of the edit. */
 export type PlanEditCatalog = Pick<SessionCatalog, 'edit' | 'runner' | 'admit'>;
 
+/**
+ * How a surface's direct edit is admitted. The task card offers its editors
+ * only on a task that has not started, so its edit must not land on one the
+ * scheduler claimed while discovery or the skill check was still running.
+ * Other direct callers (the TUI, the API, the runner's own model switch) keep
+ * the wider direct-edit contract and pass nothing.
+ */
+export interface TaskEditOptions {
+  /** Refuse the edit once the task is live or its status has left the unstarted set. */
+  requireUnstarted?: boolean;
+}
+
 export interface PlanEditorDeps {
   store: PlanStore;
   /** The plan edits land on; null while the session has none. */
@@ -39,23 +51,23 @@ export interface PlanEditorDeps {
   scheduler: Pick<TaskOrchestrator, 'tick' | 'releaseTask' | 'releaseMovedResume' | 'planEdited'>;
   runs: Pick<IsolationRunController, 'current' | 'linkResolver'>;
   broadcast: SessionBroadcaster;
-  /** Whether the planner has Ordewell's tools, which changes how a merge or split is asked of it. */
-  plannerTools: () => boolean;
   /** The workspace's skill catalog under its repo group's layout, which a hand-set skill list is checked against. */
   taskSkills: () => SkillLookup;
   notice: (level: SessionNotice['level'], message: string) => void;
   /** A task the user adds themselves is theirs to run, as one they start is (ADR-0035). */
   approve: (taskIds: readonly string[]) => void;
+  /** Whether a resolver's merge message ends with the Planned-with trailer; read as the task is added. */
+  plannedWith?: () => boolean;
 }
 
 /**
  * The user's own edits to the plan: the direct side of a direct edit vs a
  * planner edit. Each one is checked by the same rules the planner's task ops
- * meet ({@link validateTaskEdit}, {@link canMergeTasks}, {@link canSplitTask}),
- * derives whatever a runner change or an added task leaves unset from that
- * runner's catalog, and lands through the session's mutation seam followed by
- * the reschedule a direct edit owes an armed scheduler. A merge or split is
- * the planner's to carry out; the editor only checks it and words the request.
+ * meet ({@link validateTaskEdit} and TaskOps' own refusals), derives whatever a
+ * runner change or an added task leaves unset from that runner's catalog, and
+ * lands through the session's mutation seam followed by the reschedule a direct
+ * edit owes an armed scheduler. A merge or split is the planner's to carry out
+ * when the user asks for one in its chat.
  */
 export class PlanEditor {
   private readonly store: PlanStore;
@@ -65,10 +77,10 @@ export class PlanEditor {
   private readonly scheduler: PlanEditorDeps['scheduler'];
   private readonly runs: PlanEditorDeps['runs'];
   private readonly broadcast: SessionBroadcaster;
-  private readonly plannerTools: () => boolean;
   private readonly taskSkills: () => SkillLookup;
   private readonly notice: PlanEditorDeps['notice'];
   private readonly approve: PlanEditorDeps['approve'];
+  private readonly plannedWith: () => boolean;
   /** Each task's latest {@link updateTask}, which the next edit to that task waits behind. */
   private readonly taskEdits = new Map<string, Promise<unknown>>();
 
@@ -80,10 +92,10 @@ export class PlanEditor {
     this.scheduler = deps.scheduler;
     this.runs = deps.runs;
     this.broadcast = deps.broadcast;
-    this.plannerTools = deps.plannerTools;
     this.taskSkills = deps.taskSkills;
     this.notice = deps.notice;
     this.approve = deps.approve;
+    this.plannedWith = deps.plannedWith ?? (() => false);
   }
 
   /**
@@ -107,9 +119,13 @@ export class PlanEditor {
    * Edits to one task commit in call order: the skill check waits on git, so
    * two quick chip edits (`[a]` then `[a, b]`) could otherwise land the first
    * one last. An empty patch changes nothing and answers whether the task exists.
+   *
+   * `options.requireUnstarted` is the task card's precondition: it is checked
+   * again after the waits, so a task the scheduler claimed meanwhile is left
+   * untouched and the edit is refused.
    */
-  updateTask(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
-    return this.inTaskOrder(taskId, () => this.applyTaskUpdate(taskId, changes));
+  updateTask(taskId: string, changes: Partial<Task>, options?: TaskEditOptions): Promise<LegacyPlanState | null> {
+    return this.inTaskOrder(taskId, () => this.applyTaskUpdate(taskId, changes, options));
   }
 
   /**
@@ -155,18 +171,21 @@ export class PlanEditor {
     return edit;
   }
 
-  private async applyTaskUpdate(taskId: string, patch: Partial<Task>): Promise<LegacyPlanState | null> {
+  private async applyTaskUpdate(taskId: string, patch: Partial<Task>, options: TaskEditOptions = {}): Promise<LegacyPlanState | null> {
     const target = this.store.get(taskId);
     if (!target) return null;
     const changes = directChanges(patch, target);
     if (Object.keys(changes).length === 0) return this.plan();
+    // Asked before discovery too: listing a runner's models spawns its CLI
+    // for an edit that could not land anyway.
+    this.refuseStartedCardEdit(target, options);
     const skills = 'skills' in changes ? await checkTaskSkillsEdit(target, patch.skills, this.taskSkills()) : undefined;
     if (skills?.errors.length) throw new PlanEditError(skills.errors.map((e) => e.message).join(' '));
     const runner = changes.assignedRunner ?? target.assignedRunner;
     // Listing models spawns the runner's own CLI: a move that could not be made anyway is refused first.
     if (changes.assignedRunner) this.refuseLiveRetarget(target);
     const discovered = changes.assignedRunner || (changes.type === 'ai' && target.type !== 'ai') ? await this.discover(runner) : undefined;
-    const landed = this.landedEdit(taskId, changes, discovered);
+    const landed = this.landedEdit(taskId, changes, discovered, options);
     if (!landed) return null;
     const { edit, adjustments } = landed;
     const moved = edit.assignedRunner !== undefined;
@@ -193,9 +212,12 @@ export class PlanEditor {
    * every wait, with what its runner, model, effort and mode resolve to. Null
    * when the task is gone; throws on a refusal.
    */
-  private landedEdit(taskId: string, changes: Partial<Task>, discovered: RunnerCatalog | undefined): { edit: Partial<Task>; adjustments: AssignmentAdjustment[] } | null {
+  private landedEdit(taskId: string, changes: Partial<Task>, discovered: RunnerCatalog | undefined, options: TaskEditOptions): { edit: Partial<Task>; adjustments: AssignmentAdjustment[] } | null {
     const before = this.store.get(taskId);
     if (!before) return null;
+    // Re-read after every wait: the scheduler may have claimed the task while
+    // its runner's catalog or its skills were being checked.
+    this.refuseStartedCardEdit(before, options);
     const check = validateTaskEdit('direct', this.store.planTasks, taskId, changes);
     if (!check.ok) throw new PlanEditError(check.error ?? 'Those changes are not valid');
     const edit: Partial<Task> = { ...changes, ...Object.fromEntries((check.clear ?? []).map((f) => [f, undefined])), ...check.set };
@@ -259,9 +281,9 @@ export class PlanEditor {
    * a dependency list arriving as a plain field patch is rejected by the same
    * rule instead of slipping past it.
    */
-  async setTaskDependencies(taskId: string, dependencies: string[]): Promise<LegacyPlanState | null> {
+  async setTaskDependencies(taskId: string, dependencies: string[], options?: TaskEditOptions): Promise<LegacyPlanState | null> {
     if (!this.plan()) return null;
-    return this.updateTask(taskId, { dependencies });
+    return this.updateTask(taskId, { dependencies }, options);
   }
 
   /**
@@ -272,9 +294,9 @@ export class PlanEditor {
    * of the same runner, or a runner for a manual task, changes nothing and
    * asks discovery nothing.
    */
-  async setTaskRunner(taskId: string, runner: RunnerId): Promise<LegacyPlanState | null> {
+  async setTaskRunner(taskId: string, runner: RunnerId, options?: TaskEditOptions): Promise<LegacyPlanState | null> {
     if (!this.plan()) return null;
-    return this.updateTask(taskId, { assignedRunner: runner });
+    return this.updateTask(taskId, { assignedRunner: runner }, options);
   }
 
   /**
@@ -328,6 +350,18 @@ export class PlanEditor {
   }
 
   /**
+   * The card's narrower precondition, not the direct path's: a task whose
+   * runner is live or whose status has left the unstarted set was claimed
+   * while the edit waited, so the edit is refused rather than retargeting,
+   * rewriting or cancelling the attempt it raced.
+   */
+  private refuseStartedCardEdit(task: Task, options: TaskEditOptions): void {
+    if (!options.requireUnstarted) return;
+    if (NOT_STARTED.has(task.status) && !this.catalog.edit().liveRunner?.(task.id)) return;
+    throw new PlanEditError(startedEditRefusal(task));
+  }
+
+  /**
    * Never silent (ADR-0001): what the user had that their edit replaced — a
    * model the allowlist excludes, or one the new runner does not offer, and
    * the effort that followed it. A model filled in where they named none
@@ -370,7 +404,7 @@ export class PlanEditor {
   async addConflictResolver(taskId: string): Promise<LegacyPlanState | null> {
     if (!this.plan()) return null;
     const task = this.store.get(taskId);
-    const draft = task ? conflictResolverTask(task, this.runs.current, this.store.planTasks) : null;
+    const draft = task ? conflictResolverTask(task, this.runs.current, this.store.planTasks, this.plannedWith()) : null;
     if (!draft) throw new PlanEditError('Only a task whose merge conflicted can be resolved as a task');
     return this.commit(() => {
       const resolver = this.store.add(draft);
@@ -378,26 +412,6 @@ export class PlanEditor {
       this.runs.linkResolver(resolver.id, taskId);
       return true;
     });
-  }
-
-  /**
-   * What to ask the planner to merge `taskIds` into one task with (ADR-0002),
-   * once they are compatible. Throws on a pre-flight failure, so the host
-   * surfaces an inline error before any LLM call.
-   */
-  mergeRequest(taskIds: string[]): string {
-    if (!this.plan()) throw new Error('No active plan state');
-    const check = canMergeTasks(this.store.planTasks, taskIds);
-    if (!check.ok) throw new Error(check.error ?? 'These tasks cannot be merged');
-    return buildMergePrompt(taskIds, this.store.planTasks, this.plannerTools());
-  }
-
-  /** What to ask the planner to decompose one task with; the model generates the breakdown. Throws like {@link mergeRequest}. */
-  splitRequest(taskId: string): string {
-    if (!this.plan()) throw new Error('No active plan state');
-    const check = canSplitTask(this.store.planTasks, taskId);
-    if (!check.ok) throw new Error(check.error ?? 'This task cannot be split');
-    return buildSplitPrompt(taskId, this.store.planTasks, this.plannerTools());
   }
 
   /**

@@ -1,16 +1,15 @@
-import { flattenTasks, type RunnerId, type SkillLoad, type Task, type Verdict } from '../models/Task';
-import { scriptBodyOf } from '../models/ScriptTask';
+import { flattenTasks, type RunnerId, type SkillLoad, type Task } from '../models/Task';
 import type { SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, snapshotSkill } from './skillInvocation';
 import { autonomyLevelLabel, readOnlyMode } from './ModeResolver';
-import { validatePlanTasks } from './PlanValidator';
 import type { AssignmentAdjustment } from './TaskAssignment';
 import {
-  fitTail, handoffRest, taskQuerySignature, OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, OUTPUT_TAIL_MAX_CHARS, TASK_QUERY_TASK_FIELDS, TASK_READ_ANSWER_OR_EDIT,
+  fitTail, readTask, taskReadDetail, verdictRead, outputSummaryRead, taskQuerySignature,
+  OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, OUTPUT_TAIL_MAX_CHARS, TASK_QUERY_TASK_FIELDS, TASK_READ_ANSWER_OR_EDIT,
   type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog, type TaskQueryField,
 } from './TaskQuery';
-import type { TaskOp } from './TaskOps';
-import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
+import { opLabel, type TaskOp } from './TaskOps';
+import type { CheckedChange, PlanChangeError } from './PlanChangeCheck';
 import type { PlanChange, ToolRead } from './PlannerConversation';
 import { commandReply, type McpToolReply, type PlannerToolHandler } from './mcp/tools';
 import type { TaskLogEvent } from '../models/TaskLog';
@@ -34,9 +33,9 @@ export interface PlannerToolsHost {
   recordSkillLoad(skill: SkillLoad): boolean;
   /** Enabled runners, their modes and their allowlisted models, as of now. */
   liveCatalog(): Promise<TaskQueryCatalog>;
-  /** What landing these tasks would change in their assignments, under the catalog and allowlist in force (ADR-0003). */
-  adjustments(tasks: readonly Task[]): AssignmentAdjustment[];
-  /** Hand a validated plan to the open planner turn. False when no turn is open. */
+  /** A submitted plan held to the one check of a plan change (`PlanChangeCheck`), against the live catalog. */
+  checkPlan(tasks: unknown): Promise<CheckedChange>;
+  /** Hand a checked plan to the open planner turn. False when no turn is open. */
   submitPlan(tasks: Task[]): boolean;
   /** Check a batch against the live catalog and hand it to the open planner turn, which commits it as it settles. */
   editPlan(ops: TaskOp[]): Promise<PlanEditOutcome>;
@@ -51,8 +50,6 @@ export interface PlannerToolsHost {
   taskLogAttempts(taskId: string): number[];
   taskLog(taskId: string, attempt: number): TaskLogEvent[];
   taskDiff(taskId: string, options: TaskDiffRead): Promise<TaskDiffResult>;
-  /** The catalog a plan's tasks will see where they run, which attached skill names are checked against. */
-  taskSkills(): SkillLookup;
   /** The planner's research shell: classified, confined and approved as the API planner's `bash` is (ADR-0026), or sealed (ADR-0036). */
   runCommand(command: string, signal: AbortSignal, opts?: BashOptions): Promise<ToolOutcome>;
   /** A fetch through the session's web fetcher, whose web-read policy decides it (ADR-0027). */
@@ -79,8 +76,8 @@ export const PLANNER_TURN_ENDED = 'The planning turn this call was made in has e
 /** What an edit made through the tool came to. */
 export type PlanEditOutcome =
   // An edit's tasks get their ids as it lands, so what its assignments were adjusted to is named by title.
-  | { ok: true; summary: string[]; coerced?: Omit<AssignmentAdjustment, 'taskId'>[] }
-  | { ok: false; errors: string[] };
+  | { ok: true; summary: string[]; coerced?: Omit<AssignmentAdjustment, 'taskId'>[]; warnings?: string[] }
+  | { ok: false; errors: PlanChangeError[] };
 
 /** The runners a set of tasks runs on. A user task runs on none, and a script task on no runner (ADR-0035). */
 export function runnersOf(tasks: readonly Task[]): RunnerId[] {
@@ -109,6 +106,10 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       command: 'answer_approval', task: String(task), answer: reply,
       ...(approval !== undefined ? { approval } : {}),
       ...(note !== undefined ? { note } : {}),
+    }),
+    answerCheckpoint: ({ task, answer: reply, reason }) => execute({
+      command: 'answer_checkpoint', task: String(task), answer: reply,
+      ...(reason !== undefined ? { reason } : {}),
     }),
     mergeAll: () => execute({ command: 'merge_all' }),
     runScript: ({ title, commands, script, timeoutMs, dependencies }, { signal }) => execute({
@@ -171,25 +172,21 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       const refused = host.editsRefused('plan');
       if (refused) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: refused }] }) };
       const turn = host.turnId();
-      const catalog = await host.liveCatalog();
-      const result = validatePlanTasks({ tasks }, catalog.runners, catalog.modes, catalog.autonomousDefault);
-      if (!result.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: result.errors, enabledRunners: catalog.runners }) };
-      const skills = await checkPlanSkills(result.tasks, host.taskSkills());
+      const checked = await host.checkPlan(tasks);
       if (host.turnId() !== turn) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: PLANNER_TURN_ENDED }] }) };
-      if (skills.errors.length > 0) {
-        return { isError: true, text: JSON.stringify({ ok: false, errors: skills.errors.map((e) => ({ ...e, field: 'skills' })) }) };
+      if (!checked.ok) {
+        // A rule a task breaks names what would be accepted; a skill is the skill catalog's, which is not the runners'.
+        const skills = checked.errors.every((e) => e.field === 'skills');
+        return { isError: true, text: JSON.stringify({ ok: false, errors: checked.errors.map(planErrorReply), ...(skills ? {} : { enabledRunners: checked.runners }) }) };
       }
-
-      const warnings = [...(result.warnings ?? []), ...skills.warnings];
-      const coerced = host.adjustments(result.tasks);
-      if (!host.submitPlan(result.tasks)) {
+      if (!host.submitPlan(checked.tasks)) {
         return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: 'No planning turn is open to take the plan.' }] }) };
       }
       return answer({
         ok: true,
-        tasks: result.tasks.length,
-        coerced,
-        ...(warnings.length > 0 ? { warnings } : {}),
+        tasks: checked.tasks.length,
+        coerced: checked.adjustments,
+        ...(checked.warnings.length > 0 ? { warnings: checked.warnings } : {}),
         next: 'The plan is committed when this reply ends. Tell the user briefly what you submitted; do not repeat the plan as JSON.',
       });
     },
@@ -226,8 +223,8 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
           ...head,
           running: false,
           reason: 'This task is not running, so there is no live output: its outcome is below.',
-          verdict: verdictDetail(task.verdict),
-          outputSummary: outputSummaryDetail(task),
+          verdict: verdictRead(task.verdict),
+          outputSummary: outputSummaryRead(task),
           handoff: endedHandoffDetail(host, task),
           lastAttempt: host.lastAttempt(task.id),
         };
@@ -248,28 +245,33 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       // The applier checks each op's fields one by one, so a loose shape is its to refuse.
       const taskOps = ops as unknown as TaskOp[];
       const refused = host.editsRefused('edit');
-      if (refused) return { isError: true, text: JSON.stringify({ ok: false, errors: [opError(refused)] }) };
-      const turn = host.turnId();
-      const skills = await checkOpSkills(taskOps, host.taskSkills());
-      if (host.turnId() !== turn) return { isError: true, text: JSON.stringify({ ok: false, errors: [opError(PLANNER_TURN_ENDED)] }) };
-      if (skills.errors.length > 0) return { isError: true, text: JSON.stringify({ ok: false, errors: skills.errors.map((e) => opError(e.message)) }) };
+      if (refused) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ message: refused }] }) };
       const outcome = await host.editPlan(taskOps);
-      if (!outcome.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: outcome.errors.map(opError) }) };
+      if (!outcome.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: outcome.errors.map(opErrorReply) }) };
       return answer({
         ok: true,
         summary: outcome.summary,
         ...(outcome.coerced?.length ? { coerced: outcome.coerced } : {}),
-        ...(skills.warnings.length > 0 ? { warnings: skills.warnings } : {}),
+        ...(outcome.warnings?.length ? { warnings: outcome.warnings } : {}),
         next: 'The edit is applied when this reply ends, and the user is shown what changed. Tell them briefly; do not repeat it as JSON.',
       });
     },
   };
 }
 
-/** The applier words an error "op 2 (update): …"; name the op so the planner can fix that one. */
-function opError(message: string): { op?: number; kind?: string; message: string } {
-  const match = /^op (\d+) \((\w+)\): ([\s\S]*)$/.exec(message);
-  return match ? { op: Number(match[1]), kind: match[2], message: match[3] } : { message };
+/** A plan's refusal pinned to the task and field it is about. */
+function planErrorReply({ taskId, field, message }: PlanChangeError): { taskId?: string; field: string; message: string } {
+  return { ...(taskId !== undefined ? { taskId } : {}), field: field ?? 'tasks', message };
+}
+
+/**
+ * An edit's refusal pinned to the op of this call it is about, so the planner
+ * can fix that one. An op an earlier call made is named in the message, since
+ * this call's numbers do not reach it.
+ */
+function opErrorReply({ op, message }: PlanChangeError): { op?: number; kind?: string; message: string } {
+  if (!op) return { message };
+  return op.earlier ? { message: `${opLabel(op)}: ${message}` } : { op: op.number, kind: op.kind, message };
 }
 
 /** A read through the budget the envelope's reads share, and what the planner is told when it is spent. */
@@ -281,38 +283,13 @@ async function read(host: PlannerToolsHost, signature: string, answerRead: () =>
   return { ...answer({ ...result.value, ...(result.landNow ? { note: TASK_READ_ANSWER_OR_EDIT } : {}) }), ...('ok' in result.value && result.value.ok === false ? { isError: true } : {}) };
 }
 
-function verdictDetail(verdict: Verdict | undefined) {
-  if (!verdict) return null;
-  return {
-    outcome: verdict.outcome,
-    reason: verdict.reason,
-    checks: verdict.checks.map((c) => ({ name: c.name, result: c.skipped ? 'skipped' : c.passed ? 'pass' : 'fail' })),
-  };
-}
-
-function outputSummaryDetail({ outputSummary, handoff }: Task) {
-  if (!outputSummary) return null;
-  const { reviewReason, logTail } = outputSummary;
-  // A task with a handoff carries its report there (ADR-0047).
-  const report = handoff ? undefined : outputSummary.report;
-  return { reviewReason, ...(report ? { report } : {}), ...(logTail ? { logTail } : {}) };
-}
-
-/** A task's handoff digest, and where the rest is. */
-function handoffDetail(plan: readonly Task[], { handoff }: Task) {
-  return handoff ? { ...namedHandoff(plan, handoff), rest: handoffRest(handoff) } : null;
-}
-
-/**
- * The whole handoff of the task's latest attempt, every finding and the
- * report, from that attempt's log; its digest where the log has none.
- */
+/** A task's whole handoff from its latest attempt's log, findings and report, else the plan's digest. */
 function endedHandoffDetail(host: PlannerToolsHost, task: Task) {
   if (!task.handoff) return null;
   const attempt = host.taskLogAttempts(task.id).at(-1);
   const events = attempt === undefined ? [] : host.taskLog(task.id, attempt);
   const logged = events.filter((e): e is Extract<TaskLogEvent, { type: 'handoff' }> => e.type === 'handoff').at(-1);
-  return logged ? namedHandoff(host.tasks(), logged.handoff) : handoffDetail(host.tasks(), task);
+  return namedHandoff(host.tasks(), logged?.handoff ?? task.handoff);
 }
 
 /** A subtask's order restarts under its parent, so a read names it by its dotted reference, never a bare order. */
@@ -324,26 +301,10 @@ function taskHead(plan: readonly Task[], task: Task) {
   return { id: task.id, ref: refOf(plan, task), title: task.title, status: task.status };
 }
 
-/** A requested field with nothing in it reads `null`, so a missing answer is never mistaken for a field not asked for. */
+/** A task read as the tool answers it: the rules are {@link readTask}'s, so both channels state them once. */
 function taskDetail(plan: readonly Task[], ref: string, fields: readonly TaskQueryField[]) {
   const task = resolveTaskRef(plan, ref);
-  if (!task) return { ref, error: 'no task matches this reference in the current plan.' };
-  const wants = (field: TaskQueryField) => fields.includes(field);
-  return {
-    ...taskHead(plan, task),
-    type: task.type,
-    ...(wants('description') ? { description: task.description || null } : {}),
-    // A script task's body is what it runs, as a prompt is what a runner is told (ADR-0035).
-    ...(wants('prompt') ? (task.type === 'script' ? { body: scriptBodyOf(task) } : { prompt: task.prompt || null }) : {}),
-    ...(wants('userSteps')
-      ? { userSteps: task.userSteps?.length ? task.userSteps.map((s) => ({ order: s.order, instruction: s.instruction, completed: s.completed === true })) : null }
-      : {}),
-    ...(wants('verdict') ? { verdict: verdictDetail(task.verdict) } : {}),
-    ...(wants('outputSummary') ? { outputSummary: outputSummaryDetail(task) } : {}),
-    ...(wants('handoff') ? { handoff: handoffDetail(plan, task) } : {}),
-    ...(wants('userStoriesCovered') ? { userStoriesCovered: task.userStoriesCovered?.length ? task.userStoriesCovered : null } : {}),
-    ...(wants('skills') ? { skills: task.skills?.length ? task.skills : null } : {}),
-  };
+  return task ? taskReadDetail(readTask(plan, task, fields)) : { ref, error: 'no task matches this reference in the current plan.' };
 }
 
 function catalogDetail(catalog: TaskQueryCatalog) {

@@ -35,7 +35,7 @@ function cloneTasks(tasks: ReadonlyArray<Readonly<Task>>): Task[] {
  * tree.
  *
  * `planRunners` lives here because it's part of the plan's identity (the runner
- * set, carried on the plan). `validateAssignedRunners` is pure store logic.
+ * set, carried on the plan). `assertAssignedRunners` is pure store logic.
  */
 export class PlanStore {
   private _planTasks: readonly Task[] = [];
@@ -120,6 +120,8 @@ export class PlanStore {
    * is not a retry, and the tasks it blocks wait for one (ADR-0034).
    */
   load(tasks: ReadonlyArray<Readonly<Task>>, runners: readonly RunnerId[], opts: { keepFailed?: boolean } = {}): void {
+    // Before anything is swapped: a refused plan leaves the one held in place.
+    assertAssignedRunners(tasks, runners);
     this._planTasks = cloneTasks(tasks);
     this._planRunners = [...runners];
     this.rebuild();
@@ -142,7 +144,6 @@ export class PlanStore {
       // runner the task is on as it loads: noted now, a move cannot lose it.
       if (task.runnerSessionId && !task.runnerSessionOwner) task.runnerSessionOwner = sessionOwner(task) ?? task.assignedRunner;
     }
-    this.validateAssignedRunners();
   }
 
   add(partial: Partial<Task>): Task {
@@ -217,6 +218,12 @@ export class PlanStore {
 
   markInProgress(id: string): void {
     this.setStatus(id, 'in_progress');
+  }
+
+  /** Its first attempt is starting: from now on its chat exists, whatever becomes of the attempt. */
+  markAttempted(id: string): void {
+    const task = this._taskMap.get(id);
+    if (task) task.attempted = true;
   }
 
   markAwaitingUser(id: string, reason?: AwaitingReason): void {
@@ -389,15 +396,17 @@ export class PlanStore {
     this._onTree?.(new Set(this._taskMap.keys()));
   }
 
-  private validateAssignedRunners(): void {
-    for (const task of this._allTasks) {
-      if (task.type !== 'ai') continue;
-      if (!this._planRunners.includes(task.assignedRunner)) {
-        throw new Error(
-          `Task "${task.title}" has assignedRunner "${task.assignedRunner}" ` +
-          `which is not in the plan's runner set: [${this._planRunners.join(', ')}]`
-        );
-      }
+}
+
+/** Throws for an AI task, subtasks included, assigned to a runner outside `runners`. */
+export function assertAssignedRunners(tasks: ReadonlyArray<Readonly<Task>>, runners: readonly RunnerId[]): void {
+  for (const task of flattenTasks(tasks)) {
+    if (task.type !== 'ai') continue;
+    if (!runners.includes(task.assignedRunner)) {
+      throw new Error(
+        `Task "${task.title}" has assignedRunner "${task.assignedRunner}" ` +
+        `which is not in the plan's runner set: [${runners.join(', ')}]`
+      );
     }
   }
 }

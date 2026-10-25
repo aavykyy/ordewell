@@ -1,19 +1,24 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type HandoffDigest, type PromptHold, type RunnerCommand, type RunTask, type RunView, type SupervisorLevel, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { SaveSettingsEffect } from './reducers/settings';
 import type { StepperState } from './reducers/stepper';
 
-export type RunStatus = 'idle' | 'executing';
+export type RunStatus = 'idle' | 'starting' | 'executing';
 
 /**
  * This surface's own planner call: a turn, a /compact, or none. Apart from
  * `status` because the two overlap — a prompt sent mid-run, a run autorun
  * starts inside the turn that landed its plan — and neither may end the other.
+ * `awaiting` is a call whose reply was lost in transit: the daemon runs a turn
+ * to its end whether or not anyone waits, so the turn is neither failed nor
+ * over until the daemon says so.
  */
-export type PlannerStatus = 'idle' | 'planning' | 'condensing';
+export type PlannerStatus = 'idle' | 'planning' | 'condensing' | 'awaiting';
 
 export interface TaskView {
+  /** An attempt of it has started: its chat exists from then on. Absent on a task never run. */
+  attempted?: boolean;
   attemptUsage?: AttemptUsage[];
   id: string;
   order: number;
@@ -80,51 +85,15 @@ export interface TaskView {
   subtasks?: TaskView[];
 }
 
-/** Where a task's isolated work stands (ADR-0013); `none` is a task with no worktree in a run that has some. */
-export type TaskIsolationState = 'none' | 'active' | 'integrated' | 'conflict' | 'repairing' | 'kept';
-
-export interface TaskIsolationView {
-  state: TaskIsolationState;
-  branch?: string;
-  /** The task workspace; for a single repo, the task's worktree. */
-  worktree?: string;
-  /** Paths of the repos the task changed. */
-  repos?: string[];
-  conflictRepo?: string;
-  /** Repo-relative paths, in `conflictRepo`, that conflicted. */
-  conflictFiles?: string[];
-  /** The conflict repair running or last run (ADR-0015), of the most a task may have. */
-  repair?: { attempt: number; limit: number };
-  repairedFiles?: string[];
-}
-
-export interface LandedTaskView {
-  taskId: string;
-  order: number;
-  title: string;
-  /** Set when the task landed only after a conflict repair (ADR-0015): the files it was started for. */
-  repairedFiles?: string[];
-}
-
-/** One repo's part of a handoff: its integration branch, where it forked, and what landed in it. */
-export interface HandoffRepoView {
-  path: string;
-  integrationBranch: string;
-  baseRef: string;
-  /** The branch the run started on; absent when it started on a detached HEAD or the record never noted one. */
-  baseBranch?: string;
-  /** Set when the run started on a detached HEAD. */
-  startedDetached?: true;
-  landed: LandedTaskView[];
-}
-
-/** What an isolated run left for the user to land: each repo's branch and base, and what landed, in plan order. */
-export interface HandoffView {
-  repos: HandoffRepoView[];
-  landed: LandedTaskView[];
-  /** An Act supervisor looks at this run first and may merge it, so it is shown without taking over the screen. */
-  deferredTo?: 'supervisor';
-}
+/**
+ * The isolation view a surface shows, in core's own shape (ADR-0013): a mark
+ * per task the run touched, and the handoff, read from a live status update or
+ * from the saved plan by `isolationViewOfPlan`. The CLI names them for its own
+ * callers; none of the values is re-declared here.
+ */
+export type TaskIsolationView = TaskIsolation;
+export type LandedTaskView = IsolationLandedTask;
+export type HandoffView = IsolationHandoff;
 
 /**
  * Landed work not yet in the user's branch, including a possible merge gate.
@@ -314,6 +283,8 @@ export type ConfirmAction =
   | { kind: 'new-session' }
   | { kind: 'remove-task'; taskId: string }
   | { kind: 'force-start-gated'; taskId: string }
+  /** Mark complete or Mark not done; `seen` is the status the user was asked about, which the daemon holds the task to (ADR-0029). */
+  | { kind: 'mark-override'; taskId: string; direction: OverrideDirection; seen: TaskStatus }
   /** `menu` is the `/settings` stepper the question was asked from, reopened once it is answered. */
   | { kind: 'save-settings'; effect: SaveSettingsEffect; menu?: StepperState }
   | { kind: 'merge-run' }
@@ -356,9 +327,9 @@ export interface TaskLogState extends TaskLogFollow {
    */
   queuedIndex: number | null;
   /**
-   * Why the composer's last text was not sent, drawn in the view in place of
-   * its key hints until the next send: the planner chat, where other notices
-   * go, is not on screen.
+   * Why the last key was refused, drawn in the view in place of its key hints
+   * until the next key that is not a scroll: the planner chat, where other
+   * notices go, is not on screen.
    */
   notice?: string;
 }
@@ -484,6 +455,8 @@ export interface TuiState {
   runnersKnown: boolean;
   /** Whether `configuredProviders` came from the catalog; until then a key may be set and not yet reported. */
   providersKnown: boolean;
+  /** The version check's one-time notice (ADR-0048), on the one start that shows it; empty on every other. */
+  versionCheckNotice: string;
   runAutoMerge: boolean | null;
   /** The current run's own level, and why its supervisor stopped if it did; null before any run. */
   runSupervisor: { level: SupervisorLevel; unsupervised?: string } | null;
@@ -611,15 +584,6 @@ export function selectedPlanRow(state: TuiState): PlanRow | null {
   return planRows(state)[state.selectedTask] ?? null;
 }
 
-/** The commands the task's runner reported in the attempt on screen (#66): empty when it reported none. */
-export function runnerCommands(tv: TaskLogState): readonly RunnerCommand[] {
-  for (let i = tv.view.blocks.length - 1; i >= 0; i--) {
-    const block = tv.view.blocks[i];
-    if (block.type === 'runner_loaded') return block.commands;
-  }
-  return [];
-}
-
 /** The request the task view's approval keys answer: the oldest one still waiting in the attempt on screen. */
 export function waitingApproval(tv: TaskLogState): ApprovalBlock | undefined {
   return tv.view.blocks.find((b): b is ApprovalBlock => b.type === 'approval' && b.status === 'pending' && b.approvalId !== undefined);
@@ -637,17 +601,16 @@ export function waitingCheckpoint(task: TaskView | undefined): string | undefine
 /**
  * A finished structured task the daemon can continue in its saved session
  * (ADR-0018, K1), or one paused on a usage limit it can resume there: the
- * composer continues it rather than messaging a turn. The status is checked
- * too, so a start the daemon has not reported the flag's end for yet is not
- * continued twice.
+ * composer continues it rather than messaging a turn. The rule is core's, so
+ * the header that names the button and the key that runs it cannot disagree.
  */
 export function continuesTask(task: TaskView | undefined): boolean {
-  return task?.continuable === true && (task.status === 'completed' || task.status === 'failed' || task.status === 'skipped' || resumesTask(task));
+  return task ? logContinues(task) : false;
 }
 
 /** A task paused on a usage limit, whose composer resumes it now with what is typed. */
 export function resumesTask(task: TaskView | undefined): boolean {
-  return task?.status === 'awaiting_user' && task.awaitingReason === 'usage-limit';
+  return task ? logResumes(task) : false;
 }
 
 /**
@@ -657,6 +620,15 @@ export function resumesTask(task: TaskView | undefined): boolean {
  */
 export function findTask(tasks: TaskView[], id: string): TaskView | undefined {
   return taskPlacement(tasks, id)?.task;
+}
+
+/**
+ * Whether the chat pane is showing a script task's log. A script runs no model,
+ * so its log is output only: nothing queues, sends, interrupts or answers there
+ * (ADR-0035).
+ */
+export function scriptTaskView(state: TuiState): boolean {
+  return state.taskView ? findTask(state.tasks, state.taskView.taskId)?.type === 'script' : false;
 }
 
 /**
@@ -730,12 +702,13 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     maxParallel: DEFAULT_MAX_PARALLEL,
     configuredProviders: [],
     allowlist: {},
-    autonomous: true,
+    autonomous: false,
     runSettings: { ...RUN_SETTINGS_DEFAULTS },
     runSettingsKnown: false,
     plannerKnown: false,
     runnersKnown: false,
     providersKnown: false,
+    versionCheckNotice: '',
     runAutoMerge: null,
     runSupervisor: null,
     mouseCapture: true,

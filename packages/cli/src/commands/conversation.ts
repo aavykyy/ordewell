@@ -1,6 +1,6 @@
 import { flag, positionals, saveLastSession } from '../utils';
 import type { ApiClient } from '../apiClient';
-import { connect, fail, headlessPlannerRefusal } from './shared';
+import { connect, fail, headlessPlannerRefusal, lostReplyHint } from './shared';
 import { resolveSessionId } from './run';
 
 const REWIND_USAGE = 'Usage: ordewell rewind [<n>] [--session-id <id>] [--workspace /path]: with no <n>, lists the messages you can rewind to.';
@@ -53,7 +53,7 @@ export async function handleCompact(subArgs: string[], injectedApi?: ApiClient):
   try {
     result = await api.compactConversation(sessionId);
   } catch (err) {
-    fail(`Failed to condense: ${headlessPlannerRefusal(err) ?? (err as Error).message}`);
+    fail(`Failed to condense: ${headlessPlannerRefusal(err) ?? (err as Error).message}`, ...[lostReplyHint(err, sessionId)].filter((hint) => hint !== null));
   }
   console.log(`Condensed ${sessionId}. The last two exchanges were kept as they were; the tasks are unchanged.\n`);
   console.log(result.summary);

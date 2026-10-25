@@ -583,7 +583,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         sandbox: opts.flags.permissionMode,
         ...(approvalPolicy ? { approvalPolicy } : {}),
         ...(approvalsReviewer ? { approvalsReviewer } : {}),
-        ...(opts.mcp ? { developerInstructions: CODEX_ORDEWELL.taskInstructions(readOnlyTask(opts)) } : {}),
+        ...(opts.mcp ? { developerInstructions: CODEX_ORDEWELL.taskInstructions({ readOnly: readOnlyTask(opts), ...(opts.commits ? { commits: true } : {}) }) } : {}),
         ...threadConfig,
         ...(readOnlyTask(opts) ? { config: { ...config, mcp_servers: { ...withheld(this.withheldServers), ...config.mcp_servers }, projects: untrustedProjects(opts.cwd), web_search: 'disabled' } } : {}),
       };
@@ -636,7 +636,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       });
       this.mcpStartupSettled = null;
       return state;
-    }, MCP_ATTACH_TIMEOUT_MS, 0);
+    }, MCP_ATTACH_TIMEOUT_MS, 0, this.processEnded);
   }
 
   private effort(): string | undefined {
@@ -654,7 +654,11 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     if (!this.process || !turn) return Promise.resolve(false);
     this.interruptRequested = true;
     const acknowledged = new Promise<boolean>((resolve) => {
-      this.whenNamed(turn, () => this.rpc.send('turn/interrupt', { threadId: this.threadId, turnId: turn.id }, (response) => resolve(response.ok)));
+      this.whenNamed(turn, () => this.rpc.send('turn/interrupt', { threadId: this.threadId, turnId: turn.id }, (response) => {
+        // A refused interrupt stops nothing, so it must not colour the turn's end.
+        if (!response.ok) this.interruptRequested = false;
+        resolve(response.ok);
+      }));
     });
     return settleWithin(acknowledged, { timeoutMs, ended: this.processEnded, onTimeout: () => false, onEnded: () => false });
   }
@@ -910,7 +914,10 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         const turn = msg.params?.turn as { id?: string; status?: string; error?: CodexTurnError } | undefined;
         if (!this.turn || (turn?.id && turn.id === this.endedTurnId)) return;
         this.closeTurn(emit);
-        if (this.interruptRequested || turn?.status === 'interrupted') {
+        // Codex's own status decides. The request only breaks the tie when it
+        // names none: a turn that finished or failed as the interrupt arrived
+        // is that, and its error and completion reminder are still owed.
+        if (turn?.status === 'interrupted' || (turn?.status === undefined && this.interruptRequested)) {
           emit({ type: 'turn_end', interrupted: true });
         } else if (turn?.status === 'failed') {
           emit(this.turnFailed(turn.error));

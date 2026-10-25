@@ -71,6 +71,11 @@ starting as usual.
   the task row's merge gate and the planner's view of the plan all read it. A
   force start reads it as forced: past a hold, a failure, a usage limit and
   the merge gate the user confirmed, never past dependencies still under way.
+  A hold someone chose (a stop, a completion taken back) lasts until a retry
+  or a force start: starting the plan again, the user's Stop of the run and an
+  edit of the same plan leave it, and only loading another plan lets it go. The
+  hold a failed start sets ("start it again") is not chosen, and a new run
+  releases it.
   A force start is judged again once its run has opened, against the task as
   it stands then: one an edit gave dependencies still under way meanwhile
   waits for them, queued or made now. The claim then checks only what can
@@ -87,10 +92,16 @@ starting as usual.
 - **A retry or a skip continues the run.** Retrying or skipping a task of a
   run that ended on a failure re-arms the scheduler, so the tasks the failed
   one blocked start once its retry passes, or on a skip once the work behind it is done — by the user,
-  or by an Act supervisor within its loop guards. A planner edit made in between is reconciled into that run rather
-  than reloaded over it, so the failed task stays failed: an edit is not a
-  retry, and a reload would drop the review approval the retry continues.
-  Loading another plan, starting a run or stopping one forgets it.
+  or by an Act supervisor within its loop guards. A run a usage-limit pause
+  holds meanwhile stays held: the retry makes it the plan's run, which the
+  reset then lets go (ADR-0018 U1). A planner edit made in between is
+  reconciled into that run rather than reloaded over it
+  (`TaskOrchestrator.adoptEdit`), so the failed task stays failed: an edit is
+  not a retry, and a reload would drop the review approval the retry continues.
+  Loading another plan, starting a run (`beginRun`) or stopping one forgets it.
+  Every one of these is an event of the run's state, and one pure function
+  (`nextRunState`, `packages/core/src/services/runState.ts`) says what each
+  leaves.
 - **A merge gate and a usage-limit pause keep their meaning.** A task at a
   merge gate (ADR-0020) waits for Merge all and keeps the run open. A
   usage-limit pause still holds the whole run until the limit resets, and the
@@ -151,3 +162,5 @@ attempt. This decides what a failure stops, not how a verdict is reached.
 - 2026-10-18 — the whole start rule is one function, with a typed reason for each wait, which every start path, the seam's refusals, the task row's merge gate and the planner's view read.
 - 2026-10-18 — a force start judged again as its run opens waits for dependencies an edit added meanwhile, queued or made now; the claim's last-moment checks are listed in full.
 - 2026-10-21 — a loop's check that fails a round with rounds left blocks nothing, ends no run and wakes no one until its loop stops or runs out of rounds; the start rule gains the check between rounds and the body waiting on its check ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md)).
+- 2026-10-24 — the run's state changes only through `nextRunState`; Execute begins a run with `beginRun` and a planner edit is adopted with `adoptEdit`; a retry while a usage-limit pause holds a run that ended on a failure keeps it held until the reset.
+- 2026-10-24 — a hold set by a stop or a taken-back completion survives starting the plan again, the user's Stop of the run and an edit of the same plan; it was cleared by all three.

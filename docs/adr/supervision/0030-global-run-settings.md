@@ -45,10 +45,16 @@ on one machine can disagree.
 
 **Full/Guarded, the supervisor level, merge at gates automatically, autorun,
 the retry limit and the wake-up read budget are machine-wide user settings,
-saved in `settings.json` and changed through `/settings` (or the headless
-commands behind it). A change applies at once to the session it is made in,
-and to every other session from its next run. Autorun, a new setting, starts
-the plan when the planner submits it.**
+saved in `settings.json`.** Full/Guarded, the supervisor level, the merge
+setting, autorun and the retry limit are changed through `/settings` (or the
+headless commands behind it). The wake-up read budget and the Planned-with line
+have no panel row: only `ordewell supervisor reads <n>` or an edit of the file
+sets the budget, and only `ordewell trailer` or an edit of the file sets the
+line. A change made through `/settings` applies at once to the session it is
+made in, and to every other session from its next run, except the Planned-with
+line, which every session reads as it writes a commit, so a change reaches the
+next landing in any session. Autorun, a new setting, starts the plan when the
+planner submits it.**
 
 ### One store, machine-wide
 
@@ -73,12 +79,13 @@ There is no per-plan value and no per-workspace override.
 
 | setting | values | default |
 |---|---|---|
-| autonomy level | Full, Guarded | Full |
+| autonomy level | Full, Guarded | **Guarded** |
 | supervisor level | Off, Watch, Act | **Watch** |
 | merge at gates automatically | on, off | off |
 | autorun | on, off | off |
+| Planned-with line in commits Ordewell writes (not in the panels) | on, off | **on** |
 | supervisor retry limit | whole number ≥ 0 | 2 |
-| wake-up read budget | whole number ≥ 1 | 12 |
+| wake-up read budget (not in the panels) | whole number ≥ 1 | 12 |
 
 Watch becomes the default because it only reads and writes notes to the user:
 it never acts, and it makes the planner's watching of a run something a new
@@ -91,14 +98,17 @@ The settings change in the planner chat, through `/settings`: a stepped panel in
 the TUI and the Run block of the chat's Settings panel in VS Code. A change is
 saved as it is made; there is no one-slash-command-per-setting on either surface.
 The headless CLI keeps one command per value for scripts, where no panel exists.
+The Planned-with line and the wake-up read budget have the command and no panel
+row.
 
 | headless command | sets |
 |---|---|
 | `ordewell auto [full\|guarded]` | autonomy level |
 | `ordewell supervisor [off\|watch\|act]` | supervisor level |
 | `ordewell supervisor retries <n>` | retry limit |
-| `ordewell supervisor reads <n>` | wake-up read budget |
+| `ordewell supervisor reads <n>` | wake-up read budget (no panel row) |
 | `ordewell automerge [on\|off]` | merge at gates automatically |
+| `ordewell trailer [on\|off]` | Planned-with line in commits Ordewell writes |
 | `ordewell autorun [on\|off]` | autorun |
 | `ordewell parallel [<n>]` | tasks that run at once |
 
@@ -114,6 +124,18 @@ left, since lowering the supervisor now lowers the run at once.
 never reach the planner as a message, and no planner tool, MCP tool or route the
 planner can reach sets a run setting. A supervisor that could raise its own
 level would make the level its own consent.
+
+### The Planned-with line
+
+`plannedWithTrailer` is not about a run's supervision: it decides whether the
+commits Ordewell itself writes (ADR-0013) end with the git trailer
+`Planned-with: Ordewell`. It is a run setting only in being the user's, saved in
+`settings.json` and set with `ordewell trailer [on|off]` or by editing the file;
+the panels do not show it, being a preference set once, not a run control. On by default, because the line
+is how a reader of the history learns a change was planned and landed by
+Ordewell; off for those who would rather keep history free of it. The run keeps
+no copy: the line is read from the user's setting as each message is written,
+so a change reaches the next landing, in any session, without a restart.
 
 ### Seeing them
 
@@ -284,7 +306,7 @@ the daemon reads it from there at generation.
   revisit, not as safe.
 - **Rejected: Guarded turns autorun into an approval card.** One setting would
   silently switch another off.
-- **Rejected: autorun on by default.** With Full also the default, a new user's
+- **Rejected: autorun on by default.** A new user's
   first goal would run agents without permission prompts from a plan they never
   saw, and the README's "review the plan" would describe a product that is not
   there out of the box.
@@ -293,6 +315,15 @@ the daemon reads it from there at generation.
   row show them on every surface.
 - **Rejected: an "Autonomy" label over all of them.** The glossary keeps
   *autonomy* for Full/Guarded; a Guarded session can have an Act supervisor.
+- **Rejected: a row in the /settings panels for the Planned-with line.** A
+  preference most users set once, or never, would take up space in the main
+  settings menu beside the values that change how a run is supervised. The
+  headless command and the file are enough, as with the daily version check
+  (ADR-0048).
+- **Rejected: a row in the /settings panels for the wake-up read budget.** It is
+  an advanced loop limit, not a run control a user tunes from the chat; a row
+  beside Autonomy and Supervisor would suggest it is safe to change without
+  knowing how the supervisor wakes. The headless command and the file stay.
 - **Rejected: keep the old routes as aliases.** One in-repo client, before 1.0.
 
 ## Consequences
@@ -348,3 +379,10 @@ the daemon reads it from there at generation.
   and two ways to set one value read as two products.
 - 2026-10-22 — the two research limits are removed: research starts are the
   planner's judgement, bounded by the run's Parallel limit ([ADR-0037](0037-research-tasks-wake-the-planner.md) R4).
+- 2026-10-23 — the Planned-with line, a seventh value: whether Ordewell's own commits end with `Planned-with: Ordewell` (ADR-0013). On by default, read as each message is written, not copied onto the run.
+- 2026-10-23 — the Planned-with line is not in the `/settings` panels or VS Code's Run block: it is set with `ordewell trailer` or in `settings.json`.
+- 2026-10-25 — the autonomy level starts Guarded on a fresh install; an
+  explicit Full, or one already saved, is kept.
+- 2026-10-25 — the wake-up read budget leaves the `/settings` panels in the TUI
+  and VS Code: it has no panel row and is set with `ordewell supervisor reads
+  <n>` or in `settings.json`, which the headless command still writes.

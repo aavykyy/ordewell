@@ -39,9 +39,10 @@ pay it *again* for every trivial task, because there's no mechanism to dial the 
 context is hot. Coupling planning to execution throws away the cheapest lever available:
 **spend reasoning where it changes the outcome, and nowhere else.**
 
-In Ordewell the planner defaults to a cheap model (`deepseek/deepseek-v4-flash` via OpenRouter, or
-Gemini Flash-class) while individual tasks can be assigned Opus, Sonnet, DeepSeek V4 Pro, Kimi,
-etc. The expensive model only shows up where a task actually warrants it.
+In Ordewell you choose the planner's model — there is no default: an API planner is refused until one
+is set, and a coding-agent planner with none uses the agent's own default. Individual tasks can then
+be assigned Opus, Sonnet, DeepSeek V4 Pro, Kimi, etc., so the expensive model only shows up where a
+task actually warrants it.
 
 ## The plan is a typed artifact, not a transcript
 
@@ -51,13 +52,13 @@ roughly:
 ```jsonc
 {
   "tasks": [{
-    "id": "…", "order": 1, "title": "…", "dependencies": ["…"],
-    "type": "ai",                                   // or "user" — a manual checklist
+    "id": "…", "order": 1, "title": "…", "description": "…",
+    "dependencies": ["…"],
+    "type": "ai",                                   // "user" is a manual checklist; "script" runs literal commands
     "prompt": "Detailed instructions for the coding agent",
-    "assignedModel": { "modelId": "…", "thinkingEffort": "low|medium|high" },
+    "assignedModel": { "modelId": "…", "modelLabel": "…", "thinkingEffort": "one of that model's variants" },
     "assignedRunner": "claude-code",                // drawn from plan.runners
-    "readOnly": true,                                // omit unless it must not change files
-    "testingStrategy": "inline|separate_task|user_verify|none"
+    "readOnly": true                                 // omit unless it must land nothing
   }]
 }
 ```
@@ -90,12 +91,15 @@ So the boundary is hardened rather than trusted:
 - **Brace-aware extraction.** `extractJsonObject()` strips fences and then scans for the outermost
   balanced `{ … }`, ignoring braces inside strings — so a prose preamble or trailing chatter
   doesn't matter.
-- **Typed, recoverable errors.** A parse failure throws a `PlanParseError`/`ReviewParseError`
-  carrying the raw text, never a bare `SyntaxError`.
+- **Typed, recoverable errors.** A parse failure throws a `PlanParseError` carrying the raw text,
+  never a bare `SyntaxError`.
 - **Re-emit-on-invalid retry.** `generatePlanWithRepair()` wraps generation: if parsing fails, it
   re-prompts the *same* model with a terse instruction to resend strict JSON, and only surfaces the
-  error if the retry also fails. The review path degrades to a safe *failing* verdict rather than
-  throwing — so a flaky reviewer response can never silently mark a task as passed.
+  error if the retry also fails.
+
+Nothing downstream asks a model to grade the plan or the work: a task's verdict comes from its
+runner's `task_complete` call, or from a script task's exit status, so there is no review response
+to be flaky in the first place.
 
 This is mundane plumbing, but it's the difference between a demo and something you'd point at your
 own repo. The structured seam is what makes everything else possible; it's also what you have to
@@ -106,15 +110,15 @@ defend.
 Once the planner assigns a model *and* a thinking-effort tier *and* says which tasks are read-only, "effort" stops
 being a global dial and becomes a scheduling decision:
 
-- A docs or config task → cheap model, low effort, and `testingStrategy: none`.
+- A docs or config task → cheap model and low effort.
 - A security-sensitive refactor → strong model, high effort, with an inline verification command
   appended to its own prompt.
-- An analysis-only task → `readOnly: true`, which selects the runner's native
-  read-only mode; every other task gets the runner's mode for the user's
-  Full/Guarded level ([ADR-0031](adr/routing/0001-autonomous-mode-resolution.md#the-planner-says-read-only-not-a-mode-adr-0031)).
-  Task modes are distinct from the harness planner's stricter controls;
-  native planning modes can permit plan-file writes. See
-  [ADR-0008](adr/planner-envelope/0008-planner-exploration-envelope.md).
+- An analysis-only task → `readOnly: true`, which means a task that lands nothing: it keeps its
+  runner's own read tools, its only shell is Ordewell's sealed `run_command`, and its worktree is
+  thrown away when it ends. Every other task gets the runner's mode for the user's Full/Guarded
+  level ([ADR-0031](adr/routing/0001-autonomous-mode-resolution.md#the-planner-says-read-only-not-a-mode-adr-0031)).
+  Task modes are distinct from the harness planner's stricter controls; see
+  [ADR-0046](adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md).
 
 The planner is making a portfolio decision across the whole job, not a single global setting. That's
 only expressible because the plan is a list of independently-parameterized tasks instead of one
@@ -123,7 +127,7 @@ monolithic agent run.
 ## The honest part: what this buys, and what it doesn't
 
 Blunt, because pretending otherwise wastes everyone's time: the *orchestration loop itself* —
-goal → plan → DAG → spawn → review — is being absorbed into the coding platforms as a native,
+goal → plan → DAG → spawn → verify — is being absorbed into the coding platforms as a native,
 free feature, and a separate-planner pattern is something any of them can replicate. If you're
 evaluating this as a startup, the orchestration mechanics are not where a defensible business
 lives.
@@ -138,7 +142,8 @@ What I think *is* durable about the design:
 - **The verification seam** — "did the agent actually do what the task said?" — is the genuinely
   unsolved part. Grading terminal output is the naive version; running the task's tests, inspecting
   the diff, and checking exit codes against a per-task success criterion is where the real product
-  is. The plan already carries a `testingStrategy` per task, which is the hook for exactly that.
+  is. Ordewell's hook is the evidence the task itself reports: a runner's `task_complete` call, or a
+  script task's exit status, carried in the task's verdict and handoff.
 - **Treating the plan as an editable, diffable, re-runnable artifact** is the thing that makes the
   whole pipeline auditable — which is what matters the moment more than one model, or more than one
   person, is in the loop.
@@ -154,5 +159,5 @@ forcing one model in one context to be all three at once.
 [`parsing.ts`](../packages/core/src/parsing.ts) and
 [`PlanRepair.ts`](../packages/core/src/services/PlanRepair.ts) (parsing + repair),
 [`OpenAiService.ts`](../packages/core/src/services/OpenAiService.ts) /
-[`GeminiService.ts`](../packages/core/src/services/GeminiService.ts) (provider-agnostic planning +
-review), and the `TaskOrchestrator` (per-task dispatch and the dependency-aware schedule).*
+[`GeminiService.ts`](../packages/core/src/services/GeminiService.ts) (provider-agnostic planning),
+and the `TaskOrchestrator` (per-task dispatch and the dependency-aware schedule).*

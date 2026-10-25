@@ -1,14 +1,16 @@
 import * as vscode from 'vscode';
 import { spawn as nodeSpawn } from 'child_process';
-import { createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider } from '@ordewell/core';
+import { createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider, processLeaseHost } from '@ordewell/core';
 import { ChatViewProvider } from './providers/ChatViewProvider';
 import { VsCodeConfig, moveAutonomyFromVsCodeSetting, moveEnabledRunnersFromVsCodeSetting } from './adapters/VsCodeConfig';
 import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
 import { SecretStore } from './adapters/SecretStore';
 import { VsCodeNotification } from './adapters/VsCodeNotification';
+import { startExtensionVersionCheck } from './versionCheck';
 import { createExtension, type ExtensionHost } from './ExtensionHost';
 
 let activeHost: ExtensionHost | undefined;
+let versionCheck: { dispose(): void } | undefined;
 
 function logTo(outputChannel: vscode.OutputChannel, msg: string): void {
   outputChannel.appendLine(`[${new Date().toISOString()}] ${msg}`);
@@ -26,6 +28,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (pluginNotice) logTo(outputChannel, pluginNotice);
 
   try {
+    // What another host's refusal names this window as (ADR-0049).
+    processLeaseHost().describe({ kind: 'vscode' });
     const secretStore = new SecretStore(context.secrets);
     await secretStore.load();
     // Bound once the resolver exists, which is itself built from this config.
@@ -65,6 +69,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }, vscode);
 
     await activeHost.start();
+    // After start, and not awaited: the check reads one small file and never
+    // waits on the network, so it cannot hold the extension back.
+    versionCheck = startExtensionVersionCheck(vscode, String(context.extension?.packageJSON?.version ?? 'unknown'));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logTo(outputChannel, `ACTIVATION ERROR: ${message}`);
@@ -73,5 +80,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export function deactivate(): void {
+  versionCheck?.dispose();
+  versionCheck = undefined;
   activeHost?.dispose();
 }

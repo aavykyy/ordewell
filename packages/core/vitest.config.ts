@@ -22,6 +22,7 @@ export default defineConfig({
       include: ['src/**/*.ts'],
       exclude: ['**/*.test.ts', '**/__tests__/**', '**/fixtures/**', '**/*.d.ts', 'dist/**'],
       thresholds: {
+        'src/conversation/labels.ts': floor(100, 100, 100),
         'src/services/PlanEditError.ts': floor(100, 100, 100),
         'src/services/PlanEditor.ts': floor(100, 92, 100),
         'src/services/TaskAssignment.ts': floor(100, 97, 100),
@@ -31,8 +32,10 @@ export default defineConfig({
         'src/services/harness/connectors.ts': floor(100, 87, 100),
         'src/services/harness/openCodeTransport.ts': floor(100, 97, 94),
         'src/services/harness/ordewellBinding.ts': floor(80, 78, 100),
+        'src/services/runState.ts': floor(100, 100, 100),
         'src/taskRow/actions.ts': floor(100, 100, 100),
         'src/taskRow/index.ts': floor(100, 100, 100),
+        'src/taskRow/logHeader.ts': floor(100, 100, 100),
         'src/taskRow/status.ts': floor(100, 100, 100),
         'src/taskRow/texts.ts': floor(100, 100, 100),
         'src/taskRow/view.ts': floor(100, 100, 100),

@@ -1,8 +1,7 @@
 import { flag, hasFlag, readLastSession } from '../utils';
-import { handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
 import { iconFor } from '../utils/output';
-import type { ApiClient, TaskStatus } from '../apiClient';
-import { holdLabel, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, scriptTaskText, skippedLabel, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL } from '@ordewell/core';
+import type { ApiClient } from '../apiClient';
+import { handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repoResultLines, scriptTaskText, skippedLabel, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, type SerializedTaskStatus } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { connect } from './shared';
 import { taskHandoffLines } from './taskHandoff';
@@ -18,7 +17,7 @@ const refOf = (id: string): string => `#${id.slice(-4)}`;
  * `repeating` is whether a check between rounds goes on, which a body task
  * that failed or was skipped stops.
  */
-function loopNote(task: TaskStatus, all: readonly TaskStatus[]): { text: string; repeating: boolean } | null {
+function loopNote(task: SerializedTaskStatus, all: readonly SerializedTaskStatus[]): { text: string; repeating: boolean } | null {
   if (task.loop) {
     const check = { id: task.id, status: task.status, loop: task.loop, loopRound: task.loopRound, ...(task.verdict ? { verdict: task.verdict } : {}) };
     const halted = task.loop.body.some((id) => ['failed', 'skipped'].includes(all.find((t) => t.id === id)?.status ?? ''));
@@ -66,10 +65,10 @@ export async function followExecution(
 ): Promise<void> {
   let blocked: string | null = null;
   let dirtyRepos: string[] = [];
-  const taskStates = new Map<string, TaskStatus>();
+  const taskStates = new Map<string, SerializedTaskStatus>();
   let lastPrinted = '';
 
-  function printStatus(tasks: TaskStatus[]): void {
+  function printStatus(tasks: SerializedTaskStatus[]): void {
     for (const t of tasks) {
       taskStates.set(t.id, t);
     }
@@ -116,7 +115,7 @@ export async function followExecution(
       process.stderr.write(`· Checkpoint: ${event.taskTitle}: ${truncateCheckpointSummary(event.summary)}: \`ordewell checkpoint <id> approve|reject [reason]\` answers it\n`);
     }
     if (event.type === 'status_update' && event.tasks) {
-      printStatus(event.tasks as TaskStatus[]);
+      printStatus(event.tasks);
       // Said once per pause: the run waits on a merge only the user makes (ADR-0020).
       const paused = event.runMerge?.paused === true;
       if (paused && !pausedAtGate) process.stderr.write('· Paused for Merge all: `ordewell handoff merge` merges what has landed, and the waiting tasks start.\n');
@@ -126,8 +125,7 @@ export async function followExecution(
       console.log('\nPlan needs your sign-off: run `ordewell approve` to continue.');
     }
     if (event.type === 'execution_complete') {
-      const s = event as { summary?: { completed?: number; failed?: number; blocked?: number; skipped?: number; total: number } };
-      const summary = s.summary || { total: 0 };
+      const summary = event.summary;
       const skipped = summary.skipped ? `, ${summary.skipped} skipped` : '';
       console.log(
         `\nDone. ${summary.completed || 0} completed, ${summary.failed || 0} failed, ${summary.blocked ?? (summary.total - (summary.completed || 0) - (summary.failed || 0))} blocked${skipped}.`,
@@ -145,7 +143,7 @@ export async function followExecution(
     if (event.type === 'isolation_handoff') {
       const n = event.landed.length;
       const where = isRepoGroup(event) ? ` in ${event.repos.map((r) => r.path).join(', ')}` : '';
-      console.log(`\nRun finished on ${handoffBranch(event)}${where}: ${n} task${n === 1 ? '' : 's'} landed.`);
+      console.log(`\nRun finished on ${handoffBranchName(event)}${where}: ${n} task${n === 1 ? '' : 's'} landed.`);
       if (isRepoGroup(event)) for (const line of repoResultLines(event)) console.log(`  ${line}`);
       if (event.deferredTo === 'supervisor') console.log('  The supervisor may merge it.');
       console.log('  `ordewell handoff review|merge|discard|cleanup` to land it.');

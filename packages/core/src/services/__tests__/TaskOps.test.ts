@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyTaskOps, parseTaskOpsJson, textHasTaskOps, canMergeTasks, canSplitTask } from '../TaskOps';
+import { applyTaskOps, parseTaskOpsJson, textHasTaskOps, canMergeTasks, canSplitTask, type TaskOp } from '../TaskOps';
 import { resolveAssignment } from '../TaskAssignment';
 import { blockingFailures } from '../blocking';
 import { validatePlanTasks } from '../PlanValidator';
@@ -131,6 +131,35 @@ describe('applyTaskOps', () => {
       expect(res.errors[0]).toMatch(why);
       expect(res.tasks).toBe(plan);
     }
+  });
+
+  // A task waiting at a checkpoint or for input still has its runner live,
+  // so reshaping it would run the same work twice.
+  it('refuses to reshape a task whose runner waits at a checkpoint or for input', () => {
+    for (const awaitingReason of ['checkpoint', 'input'] as const) {
+      const plan = samplePlan();
+      plan[0] = { ...plan[0], status: 'awaiting_user', awaitingReason };
+      const ops: TaskOp[] = [
+        { op: 'remove', taskId: 'a' },
+        { op: 'merge', taskIds: ['a', 'b'], merged: { title: 'Merged', prompt: 'do both' } },
+        { op: 'split', taskId: 'a', parts: [{ title: 'One', prompt: 'p' }, { title: 'Two', prompt: 'p' }] },
+      ];
+      for (const op of ops) {
+        const res = applyTaskOps(plan, [op], ['claude-code']);
+        expect(res.ok, `${op.op} at ${awaitingReason}`).toBe(false);
+        expect(res.errors[0]).toMatch(/"Setup" is running/);
+        expect(res.tasks).toBe(plan);
+      }
+      expect(applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { title: 'x' } }], ['claude-code']).ok).toBe(true);
+    }
+  });
+
+  it('keeps a task waiting at a checkpoint in its slot, as a running one', () => {
+    const plan = samplePlan().map((t) => ({ ...t, dependencies: [] }));
+    plan[2] = { ...plan[2], status: 'awaiting_user', awaitingReason: 'checkpoint' };
+    const res = applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { dependencies: ['#3'] } }], ['claude-code']);
+    expect(res.ok).toBe(false);
+    expect(res.errors[0]).toBe('"Setup" would have to run after "Test", which is running and cannot be moved');
   });
 
   it('resolves every ref against the pre-batch plan, not the mid-batch renumbered one', () => {
@@ -756,6 +785,26 @@ describe('applyTaskOps — split', () => {
     const res = applyTaskOps(plan, [{ op: 'split', taskId: 'b', parts: [{ title: 'x' }, { title: 'y' }] }], ['claude-code']);
     expect(res.ok).toBe(false);
     expect(res.errors[0]).toMatch(/completed/);
+  });
+});
+
+describe('a planner edit keeps its structural merge and split ops', () => {
+  // Removing the dedicated Merge and Split controls leaves the planner's
+  // natural-language edit path as the way to reshape a plan.
+  it('applies one batch that merges two tasks and splits a third', () => {
+    const res = applyTaskOps(samplePlan(), [
+      { op: 'merge', taskIds: ['a', 'b'], merged: { title: 'Setup + Build' } },
+      { op: 'split', taskId: 'c', parts: [{ title: 'Test core' }, { title: 'Test UI' }] },
+    ], ['claude-code']);
+
+    expect(res.errors).toEqual([]);
+    const merged = res.tasks.find((t) => t.title === 'Setup + Build')!;
+    expect(merged.dependencies).toEqual([]);
+    const first = res.tasks.find((t) => t.title === 'Test core')!;
+    const last = res.tasks.find((t) => t.title === 'Test UI')!;
+    expect(first.dependencies).toEqual([merged.id]);
+    expect(last.dependencies).toEqual([first.id]);
+    expect(res.tasks).toHaveLength(3);
   });
 });
 

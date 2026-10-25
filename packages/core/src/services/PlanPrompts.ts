@@ -6,8 +6,17 @@ import { SELF_REPO } from './isolationRecord';
 import { taskRefOf } from './TaskRefs';
 import type { SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, modelInvocableTaskSkills } from './skillInvocation';
+import { quotedMessageArgs } from './landingMessage';
 
-export function buildResearchToolsPrompt(): string {
+// Keeps the message the merge was given; `strip` drops the `# Conflicts:` lines git adds to it.
+const COMMIT_MERGE = 'git commit --no-edit --cleanup=strip';
+
+/**
+ * The exploration tools as the planner reads them. The spawn tool is named
+ * only where the backend can run it: a Gemini planner cannot, so advertising
+ * it there would send it to a call that always fails.
+ */
+export function buildResearchToolsPrompt(subagents = true): string {
   const lines = [
     'You have access to the following tools to explore the workspace:',
     '',
@@ -24,9 +33,11 @@ export function buildResearchToolsPrompt(): string {
     '- grep: for searching inside file contents',
     '',
     'When multiple independent tool calls are needed, batch them in a single response to save round-trips. For example, if you need to read README.md and AGENTS.md, call read_files with both paths at once.',
-    '',
-    'spawn_research_agent(prompt: string) - Launch a stateless read-only research agent that explores the workspace with its own tools and returns a digest. Use it to delegate an open-ended exploration thread — a subsystem to map, or a "how does X work here" question — whenever one emerges during research. To explore several independent areas, launch the agents CONCURRENTLY: put multiple spawn_research_agent calls in one reply and they run in parallel.',
-    'The agent sees nothing of this conversation, so its prompt must be self-contained: the area or question, the paths/symbols to start from, and exactly what the digest must report back. Do NOT use it on small or single-subsystem repos, or to read one known file — direct tools are faster there.',
+    ...(subagents ? [
+      '',
+      'spawn_research_agent(prompt: string) - Launch a stateless read-only research agent that explores the workspace with its own tools and returns a digest within your tool round. Use it for orientation: a subsystem to map, or a "how does X work here" question, when only the conclusion matters to you. To explore several independent areas, launch the agents CONCURRENTLY: put multiple spawn_research_agent calls in one reply and they run in parallel.',
+      'The agent sees nothing of this conversation, so its prompt must be self-contained: the area or question, the paths/symbols to start from, and exactly what the digest must report back: the conclusion and file:line references, no pasted file bodies, a few lines per point. Do NOT use it on small or single-subsystem repos, or to read one known file — direct tools are faster there.',
+    ] : []),
   ];
   return lines.join('\n');
 }
@@ -48,7 +59,7 @@ export function buildSubagentSystemPrompt(): string {
     '- The key symbols/functions involved and how they connect',
     '- Constraints, gotchas, or conventions the planner must respect',
     '- Direct answers to every question the task asked',
-    'Plain prose/markdown only. No questions, no task plans, no JSON. Be dense and specific; vague summaries are useless to the planner.',
+    'Plain prose/markdown only. No questions, no task plans, no JSON, no pasted file bodies: name the path and line instead. Be dense and specific, a few lines per point; vague summaries are useless to the planner.',
   ].join('\n');
 }
 
@@ -63,7 +74,7 @@ function readOnlyGuide(runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefin
   const able = runnerModes ? readOnlyRunners(runnerModes) : [];
   const possible = tools || !runnerModes || able.length > 0;
   return [
-    'Set "readOnly": true on an AI task that must land nothing: a review, an audit, an investigation, an analysis whose result is a report. It reads with its runner\'s own read tools, and its only shell is Ordewell run_command, which runs anything sealed: tests, scripts, builds, loops. Sealed means no network (there is none inside a sealed run), no home directory or credentials, and nothing writable but the task\'s own throwaway worktree, where the run isolates. There it may edit files to try a fix, or add a failing test and run the suite on it. None of that lands: the worktree is thrown away when the task ends, and its task_complete report is its result. Never on an ops task, which acts in the workspace. Leave it false or out on every other task. A read-only task\'s subtasks are read-only too unless one sets "readOnly": false.',
+    'Set "readOnly": true on an AI task that must land nothing: a review, an audit, an investigation, an analysis whose result is a report. It reads with its runner\'s own read tools, and its only shell is Ordewell run_command, which runs anything sealed: tests, scripts, builds, loops. Sealed means no network (there is none inside a sealed run), no home directory or credentials, and nothing writable but the task\'s own throwaway worktree, where the run isolates. There it may edit files to try a fix, or add a failing test and run the suite on it. None of that lands: the worktree is thrown away when the task ends, and its task_complete report is its result, unless it keeps a prototype with save_patch, which a change task that depends on it applies with apply_patch. Never on an ops task, which acts in the workspace. Leave it false or out on every other task. A read-only task\'s subtasks are read-only too unless one sets "readOnly": false.',
     'You never choose a runner mode. Each task runs in its runner\'s mode for the user\'s autonomy level (Full or Guarded), or as a read-only task when "readOnly" is true.',
     ...(tools
       ? ['A read-only task must go to a runner list_runners marks "readOnly": true.']
@@ -73,16 +84,16 @@ function readOnlyGuide(runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefin
 }
 
 /**
- * Research tasks (ADR-0037), as a read-only task's guide ends: when one is the
- * right tool, what its brief holds, and that the planner decides how many run.
- * What a task does is the read-only guide's; this only adds the report that
- * comes back.
+ * Research tasks (ADR-0037), as a read-only task's guide ends: what its brief
+ * holds, and that the planner decides how many run. When one is the right tool
+ * is {@link whoExploresSection}'s to say; what a task does is the read-only
+ * guide's. This only adds the report that comes back.
  */
 function researchTasksGuide(tools: boolean): string[] {
   return [
-    'Add "research": true to a read-only top-level AI task whose report should come back to you: research that should outlive this turn, or that you would otherwise run in the background. Its report is its task_complete summary, and when the task ends (passes, fails or is blocked) it wakes you with that report, at every supervisor level, while you keep talking with the user meanwhile. Within a single turn, wait for your own subagents instead (see RESEARCH PHASE). Never on a subtask, an ops task or a loop\'s body.',
+    'Add "research": true to a read-only top-level AI task whose report should come back to you, as WHO EXPLORES says. Its report is its task_complete summary, and when the task ends (passes, fails or is blocked) it wakes you with that report, at every supervisor level, while you keep talking with the user meanwhile. Never on a subtask, an ops task or a loop\'s body.',
     'A research task may run anything sealed and try changes in its own throwaway worktree, but lands nothing. Write its prompt as a brief it can act on without this conversation: what to find out, where to start, what the report must contain (evidence for and against, file paths and line references, what it ran and what happened), and how you will check it. Prefer a command whose exit status settles a point over its prose.',
-    `You add a research task with the plan, or ${tools ? 'with edit_plan' : 'in a task-ops reply'} later, and it starts at once without asking. Start a research task for each independent thread worth running in the background; the run's Parallel limit bounds what runs at once. In a report turn, start another only when the report opens a genuinely new question.`,
+    `You add a research task with the plan, or ${tools ? 'with edit_plan' : 'in a task-ops reply'} later, and it starts at once without asking. Start one research task for each independent question; the run's Parallel limit bounds what runs at once. In a report turn, start another only when the report opens a genuinely new question.`,
   ];
 }
 
@@ -103,13 +114,14 @@ function sealedGuide(tool: 'bash' | 'run_command'): string {
  * them. A harness planner brings its own toolbox, so naming `list_dir` or
  * `glob` there would be telling a coding agent to call tools it does not have.
  *
- * Only this block and the tool-envelope appendix differ between the two: the
+ * Only this block, the agents WHO EXPLORES names, and the tool-envelope
+ * appendix differ between the two: the
  * plan schema, the runner and mode vocabulary, the model catalog, the
  * conversational protocol and the skill and mode blocks are shared verbatim. A
  * forked prompt would mean each future block gets written twice, or silently
  * works on one backend only.
  */
-function researchPhaseBlock(harnessMode: boolean): string {
+function researchPhaseBlock(harnessMode: boolean, agents: InTurnAgents): string {
   const shared = [
     'RESEARCH PHASE:',
     '- Start by reading README.md and any agent config files (AGENTS.md, CLAUDE.md)',
@@ -120,7 +132,7 @@ function researchPhaseBlock(harnessMode: boolean): string {
       '- You are planning, not implementing: do NOT edit, create, or delete any file, and do not run commands that change the workspace',
       '- Run commands — git, gh, cloud CLIs, the project\'s own tooling — with the run_command tool, not a shell of your own. MCP tools the user configured (issue trackers, todo lists) are yours to read from too. Reads run at once; anything else is approved or refused by the user\'s settings. When something the plan needs to change is refused, add it to the plan instead: a script task when you can state the exact commands, an ops task when it needs judgment',
       `- ${sealedGuide('run_command')}`,
-      '- If you delegate exploration to your own agents, WAIT for their results inside this reply. Do NOT launch them in the background or async and end your turn saying you will report back later: your turn ending is what hands the conversation back to the user, and anything you say after it never reaches them.',
+      ...(agents === null ? [] : ['- When you delegate orientation to your own agents (WHO EXPLORES below), WAIT for their results inside this reply. Do NOT launch them in the background or async and end your turn saying you will report back later: your turn ending is what hands the conversation back to the user, and anything you say after it never reaches them.']),
     ]
     : [
       '- Use list_dir with depth=2-3 for a tree overview',
@@ -134,6 +146,55 @@ function researchPhaseBlock(harnessMode: boolean): string {
     '- Synthesize tool findings into your messages. The user does not see raw tool output; only your synthesis reaches them.',
     '- Research and questions can interleave — you can explore a file, then ask a question grounded in it, in one response',
   ].join('\n');
+}
+
+/**
+ * The agents a planner explores with inside its own turn, named as its backend
+ * names them, or null when it has none: an OpenCode planner's subagents are
+ * withheld (ADR-0009 T8, ADR-0026), and an API planner's service may have no
+ * research subagents to spawn (Gemini, which does not override
+ * `createSubagentChat`). An OpenAI-compatible planner's are Ordewell's own
+ * (ADR-0005), which return within the tool round that started them.
+ */
+export type InTurnAgents = string | null;
+
+export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = true): InTurnAgents {
+  if (!harness) return subagents ? 'spawn_research_agent' : null;
+  switch (runner) {
+    case 'claude-code': return 'your Agent tool';
+    case 'codex': return 'your own subagents, if this session has them';
+    case 'opencode': return null;
+    default: return 'your own agents, if you have any';
+  }
+}
+
+/**
+ * Who finds something out, decided by what the result is (ADR-0037 R5). A
+ * planner cannot know how long a lookup takes before it starts, so a line
+ * drawn by duration sent lookups to cold task sessions and kept evidence the
+ * plan rests on in the planner's context, from where only re-typing passes it
+ * on. The test is the brief because that is where re-typed evidence ends up,
+ * and a planner that saw no way to plan without evidence explored in its own
+ * turn, so it hears that a first plan may be research alone. Every other
+ * section refers to this one instead of restating it, and it
+ * names no section around it, so a sub-planner's role prompt (#33, #112) can
+ * include it unchanged.
+ */
+export function whoExploresSection(agents: InTurnAgents): string[] {
+  const inTurn = agents === null
+    ? 'Find it with your own reads: you have no agents of your own here.'
+    : agents === 'spawn_research_agent'
+      ? 'Find it with your own reads, or with spawn_research_agent, whose agents return within your tool round.'
+      : `Find it with your own reads, or with ${agents}, awaited inside this turn.`;
+  return [
+    'WHO EXPLORES:',
+    'Decide who finds something out by what the result is, never by how long it may take. The test: if the finding a later task acts on would end up in its brief, it is evidence; if it only decides what you say or ask the user, it is orientation.',
+    `- Orientation: you need it this turn to answer, ask or outline, only its conclusion matters, and no later task acts on it. ${inTurn}${agents === null ? '' : ' Brief each agent to return a digest: the conclusion and file:line references, no pasted file bodies, a few lines per point.'}`,
+    '- Evidence: a task of its own, when any of these holds: finding out needs a worktree (write a failing test, build, reproduce); another runner or model should judge it, for a second view or a stronger model; the user should see it and be able to stop it; or a later task will act on its findings. In the last case the later task depends on it, so the findings reach it in its handoff: do not re-type them into the later task\'s brief. Make it a research task only when you must decide something on its report; one whose report only later tasks read is a read-only task they depend on. A loop\'s fix may depend on it only when the check does: make the check depend on it, and the fix reads the report with `read_task`.',
+    '- A research task\'s summary is what you take in: pull its full report with task_output only where the plan rests on the detail.',
+    '- A first plan may be research tasks alone, when the plan cannot be outlined without their evidence: the outline is a line per task saying what it asks, and you plan the rest when their reports wake you. A vague goal the user can clarify is not one: ask first.',
+    '- Search: a problem that needs rounds of branching, where each round\'s reports decide the next, is the explore skill: rounds of research tasks. Where it is which of several approaches to take, the skill has explorers save their prototypes with save_patch, choose on a check fixed beforehand, and has the build task depend on the chosen explorer and apply its patch with apply_patch.',
+  ];
 }
 
 /**
@@ -170,8 +231,12 @@ export interface ConversationVariant {
    * tools (ADR-0022). An API planner speaks the JSON envelopes instead.
    */
   harness?: boolean;
+  /** A harness planner's runner, which names the agents it explores with in its turn ({@link inTurnAgents}). */
+  runner?: RunnerId;
   /** The skill catalog: task skills it can attach on every path, planner skills it can load only with tools. */
   skills?: readonly SkillInfo[];
+  /** Whether an API planner's service can run Ordewell's research subagents; Gemini cannot (it has no `createSubagentChat`). */
+  subagents?: boolean;
   /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order; of every repo of a group (ADR-0014). */
   isolatedExecution?: IsolatedExecution;
   /** The session offers the execution tools (ADR-0029), as MCP tools or the API planner's own. */
@@ -193,7 +258,8 @@ const EXECUTION_TOOLS_SECTION = [
   '- stop_task stops one running task; stop_run stops every running task and keeps the plan.',
   '- retry_task starts a new attempt of a failed, stopped or waiting task: "fresh" from its prompt, or "session" to continue its saved session with a message. To change what it is told, edit its prompt with edit_plan first. A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset.',
   '- message_task sends a running task a message, or answers one waiting for input.',
-  '- answer_approval denies a request a task\'s runner is waiting on, with a note saying what to do instead, or escalates it to the user. It never allows.',
+  '- answer_approval denies a request a task\'s runner is waiting on, with a note saying what to do instead, or escalates it to the user. It never allows, and it does not cover a checkpoint.',
+  '- answer_checkpoint approves the checkpoint a task\'s runner waits at, or rejects it with a reason the runner acts on. Only the supervisor at Act may, in a wake-up turn; in the user\'s own turn they answer it from the task\'s checkpoint card, so tell them what it asks. A message does not answer one.',
   '- merge_all merges the run\'s landed work into the user\'s branch. Only the supervisor at Act may, in a wake-up turn; in the user\'s own turn they press Merge all themselves.',
   '- skip_task gives up waiting for a failed, blocked or waiting task, with a reason: none of its work lands, and its dependents go ahead once the work it waited on is done. Only the supervisor at Act may, in a wake-up turn; in the user\'s own turn they skip it themselves.',
   'Only tasks the user approved start: a task you add in the user\'s turn waits for them, unless AUTORUN is on and autonomy is Full — then you may start it yourself when the user wants it run. A task the supervisor adds at Act is approved to run.',
@@ -324,9 +390,9 @@ function strategySection(execution: boolean): string[] {
       ? '- A small effect you can state as exact commands: one script task. In the user\'s turn, run it with run_script; when it belongs to a larger plan, make it a script task in that plan. An effect that needs judgment is an ops task.'
       : '- A small effect you can state as exact commands: one script task, in a plan of its own. An effect that needs judgment is an ops task.',
     '- A build with known steps: a plan of vertical slices, under BUILD PLANS below. When the build must also meet a bar that can be checked (the tests pass, a review finds nothing), end it with a loop, under LOOPS below.',
-    '- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix. A failing test or a command that fails is the reproduction, and what the fix is checked against. Give each hypothesis a research task of its own that reports the evidence for and against it, so they run in parallel while you keep talking with the user (see READ-ONLY TASKS). Plan the fix once the reports name the cause. When the reproduction is a command you can run again, make it the check of a loop whose body is the fix, under LOOPS below.',
+    '- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix. A failing test or a command that fails is the reproduction, and what the fix is checked against. When one sealed command settles a hypothesis, test it yourself this turn. Give each other hypothesis a research task of its own that reports the evidence for and against it (WHO EXPLORES). Plan the fix once the reports name the cause. When the reproduction is a command you can run again, make it the check of a loop whose body is the fix, under LOOPS below.',
     '- A goal that is done only when something passes ("until the tests pass", "until the review finds nothing"): a loop, under LOOPS below. It sits at the end of a build or a fix.',
-    '- An open problem with no known path: plan only the first round of exploration, as research tasks that each report on one question. Their reports wake you: read them, then extend the plan with the next round, or with the build they point to.',
+    '- An open problem with no known path: a search (WHO EXPLORES). Plan only the first round of exploration, as research tasks that each report on one question. Their reports wake you: read them, then extend the plan with the next round, or with the build they point to.',
     'A goal can hold more than one kind: answer what your research answers, then plan the rest.',
     '',
   ];
@@ -341,8 +407,8 @@ const CONTEXT_SECTION = [
   'YOUR CONTEXT:',
   'You are the only one who sees every piece, so your context is the scarcest resource in the run. Spend it on understanding the problem and on integration.',
   '- Go deep yourself when the work is small, sequential, and its detail decides your next step.',
-  '- Delegate when a piece is independent, large, or only its conclusion matters to you.',
-  '- Before going deep into anything that looks large, map it first (skim it, or send parallel read-only scouts), then split along the seams the map shows.',
+  '- Delegate the rest as WHO EXPLORES says, by what its result is.',
+  '- Before going deep into anything that looks large, map it first (skim it, or map it as WHO EXPLORES says), then split along the seams the map shows.',
   '- Give each delegated piece a self-contained brief: its goal, its inputs, what to report back, and how its result will be checked. A task never sees this conversation. Plan the integration step.',
   '- Prefer evidence you can check (a test, an exit code, a proof checker) over a task\'s own word.',
   '- A turn\'s input may end with how full your context is and what remains of your reads. Plan the turn around it.',
@@ -359,6 +425,7 @@ function buildConversationBody(
 ): string {
   const tools = variant.harness ?? false;
   const autorun = variant.autorun ?? false;
+  const agents = inTurnAgents(tools, variant.runner, variant.subagents ?? true);
   const submit = tools
     ? 'call list_runners and list_models, then submit the final task plan with submit_plan'
     : 'emit the final task plan as a JSON object with a "tasks" array';
@@ -372,7 +439,9 @@ function buildConversationBody(
     '4. When the strategy calls for a plan and you have enough context, produce a prose outline — a short list describing each task in order.',
     autorun ? `5. Write the outline in your reply, then ${submit} in the same reply.` : `5. After the user confirms the outline, ${submit}.`,
     '',
-    researchPhaseBlock(tools),
+    researchPhaseBlock(tools, agents),
+    '',
+    ...whoExploresSection(agents),
     '',
     ...(tools ? ['Ordewell skills load only through load_skill; do not use the native Skill tool or read skill files directly.', ...plannerSkillsBlock(variant.skills ?? []), ''] : []),
     ...strategySection(variant.execution ?? false),
@@ -467,6 +536,7 @@ function buildConversationBody(
     'LOOPS:',
     'A loop repeats a check with its fix until the check passes. Ordewell runs the rounds itself, with no turn of yours in between: the check runs, and while it fails with rounds left, the body runs and then the check runs again. A build or a fix that must end on something checkable (the suite is green, the review finds nothing) takes one; a plan without such a bar does not.',
     '- Put "loop": { "body": ["fix-id", ...], "maxRounds": 3 } on the check. "body" names, by id, the top-level tasks that fix what the check finds. Each depends on the check, and otherwise only on what the check depends on or on other tasks of the body. Whatever comes after the loop depends on the check, never on a body task.',
+    '- A loop\'s body cannot depend on a research task directly. When the fix acts on a research task\'s findings, make the check depend on the research task: the body may then depend on it too, and reads its report with `read_task` (WHO EXPLORES).',
     '- The check is a top-level AI or script task with no subtasks. A body task is a top-level AI or script task in one loop only, never a manual task, and has no subtasks either: each round runs a task again whole, so give each step its own task.',
     '- Prefer a script task as the check wherever a command can judge the work: the test suite, the type checker, the linter, a benchmark against a threshold. Its exit status is evidence you can check: 0 passes, anything else fails and starts a round.',
     '- Otherwise the check is an AI task, such as an adversarial review. Write in its prompt that it calls task_complete with status "failed" and every confirmed problem in its report when it finds any, and "done" when it confirms none. Only a "failed" report starts a round: "blocked" (it could not do the check) and a run that ends without a report start none.',
@@ -788,46 +858,6 @@ export function modelContextBlock(
 }
 
 /**
- * User-message prompt for a planner-driven merge: asks the model to combine the
- * selected tasks into one. Routed through the conversation loop, so the
- * task-ops protocol (with the "merge" op) is injected alongside it by
- * `planContextBlock`. The model emits a single taskOps merge op.
- */
-export function buildMergePrompt(taskIds: string[], tasks: readonly Task[], tools = false): string {
-  const idSet = new Set(taskIds);
-  const selected = tasks.filter((t) => idSet.has(t.id)).sort((a, b) => a.order - b.order);
-  const refs = selected.map((t) => `${taskRefOf(tasks, t.id) ?? `#${t.order}`} "${t.title}" (id=${t.id})`).join(', ');
-  return [
-    `Merge these tasks into ONE combined task: ${refs}.`,
-    'Write a clear combined title, description, and prompt that cover all of their work.',
-    'The merged task takes the union of their dependencies (excluding the merged tasks themselves) and preserves their user stories.',
-    `Set "assignedRunner" and "assignedModel" on the merged task — use one of the runners and models ${tools ? 'list_runners and list_models return' : 'listed in <available_models> above'}. Prefer the strongest model if the merged work is complex.`,
-    tools ? 'Call edit_plan with a single "merge" op:' : 'Reply with ONLY a taskOps JSON object using a single "merge" op:',
-    `  {"${tools ? 'ops' : 'taskOps'}":[{"op":"merge","taskIds":[${selected.map((t) => `"${t.id}"`).join(', ')}],"merged":{"title":"...","description":"...","prompt":"...","assignedRunner":"...","assignedModel":{"modelId":"...","modelLabel":"..."}}}]}`,
-    'If this merge needs a companion op in the same batch (e.g. an added task that should depend on the merge result), give the merge op a "handle" (any unused name) and reference it from the later op\'s taskId/dependencies.',
-  ].join('\n');
-}
-
-/**
- * User-message prompt for a planner-driven split: asks the model to decompose
- * one task into a sequence of smaller tasks. The model decides the breakdown —
- * the user does not hand-type the parts.
- */
-export function buildSplitPrompt(taskId: string, tasks: readonly Task[], tools = false): string {
-  const task = tasks.find((t) => t.id === taskId);
-  if (!task) return `Split task ${taskId} into smaller tasks.`;
-  return [
-    `Split task ${taskRefOf(tasks, task.id) ?? `#${task.order}`} "${task.title}" (id=${task.id}) into multiple smaller tasks that together accomplish the same work.`,
-    'Decompose it into a sensible ordered sequence. Write a clear title, description, and prompt for each part.',
-    'The first part inherits the original task\'s dependencies. Each later part depends on the previous part. Tasks that depended on the original now depend on the LAST part.',
-    `Set "assignedRunner" and "assignedModel" on each part — use the runners and models ${tools ? 'list_runners and list_models return' : 'listed in <available_models> above'}. You may assign different models to different parts (e.g. a stronger model for a complex part, a faster one for a simple part).`,
-    tools ? 'Call edit_plan with a single "split" op:' : 'Reply with ONLY a taskOps JSON object using a single "split" op:',
-    `  {"${tools ? 'ops' : 'taskOps'}":[{"op":"split","taskId":"${task.id}","parts":[{"title":"...","description":"...","prompt":"...","assignedRunner":"...","assignedModel":{"modelId":"...","modelLabel":"..."}},...]}]}`,
-    'If this split needs a companion op in the same batch (e.g. another task that should depend on the last part), give the split op a "handle" (any unused name) — it names the last part — and reference it from the later op\'s taskId/dependencies.',
-  ].join('\n');
-}
-
-/**
  * Runner prompt for the opt-in task that resolves an integration conflict
  * (ADR-0013). The resolver's own worktree starts at the integration tip, so the
  * merge it performs is exactly the one that conflicted; the conflicted task
@@ -839,27 +869,28 @@ export function buildSplitPrompt(taskId: string, tasks: readonly Task[], tools =
  */
 export function buildConflictResolutionPrompt(
   task: Task,
-  conflict: { branch: string; repos: string[]; conflictRepo?: string },
+  conflict: { branch: string; message: string; repos: string[]; conflictRepo?: string },
   integrationBranch: string,
   plan?: readonly Task[],
 ): string {
   const { branch } = conflict;
   const ref = taskRefOf(plan ?? [], task.id) ?? `#${task.order}`;
   const asked = `What the task was asked to do:\n${task.prompt ?? task.description}`;
+  const merge = `git merge --no-ff ${quotedMessageArgs(conflict.message)} ${branch}`;
   const repos = conflict.repos.filter((repo) => repo !== SELF_REPO);
   if (repos.length === 0) {
     return [
       `Task ${ref} "${task.title}" passed, but merging its branch \`${branch}\` into \`${integrationBranch}\` conflicted.`,
-      `This working tree starts at the tip of \`${integrationBranch}\`. Run \`git merge --no-ff ${branch}\` here and resolve every conflict so that both sides' intent survives: keep the work already integrated and add what the task contributed. Do not drop either side wholesale.`,
-      'Build and test the result the way this project does, then commit the merge.',
+      `This working tree starts at the tip of \`${integrationBranch}\`. Run \`${merge}\` here and resolve every conflict so that both sides' intent survives: keep the work already integrated and add what the task contributed. Do not drop either side wholesale.`,
+      `Build and test the result the way this project does, then commit the merge with \`${COMMIT_MERGE}\`.`,
       '',
       asked,
     ].join('\n');
   }
   return [
     `Task ${ref} "${task.title}" passed, but landing its branch \`${branch}\` on \`${integrationBranch}\` conflicted in ${conflict.conflictRepo ?? repos[0]}. A task lands in every repository it changed or in none, so none of its work has landed yet.`,
-    `This workspace holds every repository at its usual path, each starting at the tip of \`${integrationBranch}\`. In each repository the task changed — ${repos.join(', ')} — run \`git merge --no-ff ${branch}\` inside that repository's directory, and resolve every conflict so that both sides' intent survives: keep the work already integrated and add what the task contributed. Do not drop either side wholesale.`,
-    'Build and test the result the way this project does, then commit the merge in each repository.',
+    `This workspace holds every repository at its usual path, each starting at the tip of \`${integrationBranch}\`. In each repository the task changed — ${repos.join(', ')} — run \`${merge}\` inside that repository's directory, and resolve every conflict so that both sides' intent survives: keep the work already integrated and add what the task contributed. Do not drop either side wholesale.`,
+    `Build and test the result the way this project does, then commit the merge in each repository with \`${COMMIT_MERGE}\`.`,
     '',
     asked,
   ].join('\n');
@@ -874,21 +905,22 @@ export function buildConflictResolutionPrompt(
  */
 export function buildConflictRepairPrompt(
   task: Task,
-  conflict: { branch: string; repos: string[]; conflictRepo?: string; conflictFiles?: string[] },
+  conflict: { branch: string; message: string; repos: string[]; conflictRepo?: string; conflictFiles?: string[] },
   integrationBranch: string,
   plan?: readonly Task[],
 ): string {
   const { branch } = conflict;
   const ref = taskRefOf(plan ?? [], task.id) ?? `#${task.order}`;
   const files = conflict.conflictFiles ?? [];
+  const merge = `git merge --no-edit ${quotedMessageArgs(conflict.message)} ${integrationBranch}`;
   const asked = `What the task was asked to do:\n${task.prompt ?? task.description}`;
   const resolve = 'resolve every conflict so that both sides\' intent survives: keep the work already integrated and add what the task contributed.';
   const repos = conflict.repos.filter((repo) => repo !== SELF_REPO);
   if (repos.length === 0) {
     return [
       `Task ${ref} "${task.title}" passed, but merging its branch \`${branch}\` into \`${integrationBranch}\` conflicted${files.length > 0 ? ` in ${files.join(', ')}` : ''}. None of its work has landed yet.`,
-      `This is the task's own worktree, on \`${branch}\`, with its work committed. Run \`git merge --no-edit ${integrationBranch}\` here and ${resolve} Never drop either side wholesale, and never abort the merge or reset it away.`,
-      'Build and test the result the way this project does, commit the merge, and only then call `task_complete`.',
+      `This is the task's own worktree, on \`${branch}\`, with its work committed. Run \`${merge}\` here and ${resolve} Never drop either side wholesale, and never abort the merge or reset it away.`,
+      `Build and test the result the way this project does, commit the merge with \`${COMMIT_MERGE}\`, and only then call \`task_complete\`.`,
       '',
       asked,
     ].join('\n');
@@ -896,8 +928,8 @@ export function buildConflictRepairPrompt(
   const stoppedIn = conflict.conflictRepo ?? repos[0];
   return [
     `Task ${ref} "${task.title}" passed, but landing its branch \`${branch}\` on \`${integrationBranch}\` conflicted in ${stoppedIn}${files.length > 0 ? ` (${files.join(', ')})` : ''}. A task lands in every repository it changed or in none, so none of its work has landed yet.`,
-    `This is the task's own workspace, with each repository at its usual path on \`${branch}\` and the task's work committed. In each repository the task changed — ${repos.join(', ')} — run \`git merge --no-edit ${integrationBranch}\` inside that repository's directory, and ${resolve} Never drop either side wholesale, and never abort a merge or reset it away.`,
-    'Build and test the result the way this project does, commit the merge in each repository, and only then call `task_complete`.',
+    `This is the task's own workspace, with each repository at its usual path on \`${branch}\` and the task's work committed. In each repository the task changed — ${repos.join(', ')} — run \`${merge}\` inside that repository's directory, and ${resolve} Never drop either side wholesale, and never abort a merge or reset it away.`,
+    `Build and test the result the way this project does, commit the merge in each repository with \`${COMMIT_MERGE}\`, and only then call \`task_complete\`.`,
     '',
     asked,
   ].join('\n');

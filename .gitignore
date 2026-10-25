@@ -1,6 +1,10 @@
 # No trailing slash: with one, the pattern matches directories only, and a
 # node_modules *symlink* (what a scratch worktree gets) is committed instead.
+# The same goes for every local artifact Ordewell shares into a task worktree
+# (LINKED_ARTIFACTS): node_modules is mirrored, the rest are linked in.
 node_modules
+vendor
+.venv
 dist/
 dist-test/
 out/
@@ -8,6 +12,10 @@ out/
 
 # Copied from @ordewell/core by scripts/copy-skills.mjs at build time — not source.
 packages/vscode/skills/
+
+# Generated from the installed dependency tree by scripts/generate-third-party-notices.mjs.
+packages/cli/THIRD-PARTY-NOTICES.md
+packages/vscode/THIRD-PARTY-NOTICES.md
 
 # Downloaded VS Code build used by the extension integration tests (~320 MB)
 .vscode-test/
@@ -20,10 +28,11 @@ packages/vscode/skills/
 # verbatim, inline environment variables included — it has held a live API key
 # before, so this must never be committed. AGENTS.md and CLAUDE.md are
 # deliberately NOT ignored: both are written for contributors/new agents and
-# ship (CLAUDE.md is the Claude Code entry point).
-.claude/
-.opencode/
-.codegraph/
+# ship (CLAUDE.md is the Claude Code entry point). No trailing slash on these
+# either: a task worktree links them as symlinks (see node_modules above).
+.claude
+.opencode
+.codegraph
 
 # Reference repositories (cloned for comparison only)
 reference_projects/

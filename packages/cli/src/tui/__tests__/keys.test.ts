@@ -58,6 +58,53 @@ describe('decodeKey', () => {
     expect(decodeKey(seq).name).toBe(name);
   });
 
+  // terminal.ts turns on the Kitty keyboard protocol's "disambiguate" flag, so
+  // a supporting terminal (kitty, WezTerm, Ghostty, foot) re-encodes every key
+  // that produces no text as `CSI <code>;<mods> u`. Without these, Escape and
+  // every Ctrl shortcut decode as `unknown` — including the only way to cancel
+  // an overlay — and Enter/Tab/Backspace lose their names on terminals that
+  // report them too. The modifier field is one plus shift (1), alt (2), ctrl (4).
+  it.each([
+    ['\x1b[27u', 'escape'],
+    ['\x1b[13u', 'enter'],
+    ['\x1b[9u', 'tab'],
+    ['\x1b[127u', 'backspace'],
+    ['\x1b[13;2u', 'shift-enter'],
+    ['\x1b[13;3u', 'alt-enter'],
+    ['\x1b[9;2u', 'shift-tab'],
+    ['\x1b[127;3u', 'alt-backspace'],
+    ['\x1b[99;5u', 'ctrl-c'],
+    ['\x1b[115;5u', 'ctrl-s'],
+    ['\x1b[97;5u', 'ctrl-a'],
+    ['\x1b[98;3u', 'alt-b'],
+  ])('decodes the kitty CSI-u form %j as %s', (seq, name) => {
+    expect(decodeKey(seq).name).toBe(name);
+  });
+
+  it('reads a kitty CSI-u text key as its character, shift included', () => {
+    expect(decodeKey('\x1b[97u')).toEqual({ name: 'char', char: 'a' });
+    expect(decodeKey('\x1b[97;2u')).toEqual({ name: 'char', char: 'A' });
+  });
+
+  // A garbled sequence from the terminal or another process on the tty must
+  // not throw out of the stdin handler: that exits the TUI mid-session. The
+  // protocol's own functional keys (the BMP private-use block) are not text.
+  it.each([['\x1b[1114112u'], ['\x1b[999999999u'], ['\x1b[4294967296u'], ['\x1b[57352u']])(
+    'reads the out-of-range kitty code %j as unknown instead of text',
+    (seq) => {
+      expect(decodeKey(seq)).toEqual({ name: 'unknown' });
+    },
+  );
+
+  // A C0 byte with no binding is still a key, not text: typed into the editor
+  // it is invisible (sanitize drops it at draw time) and ships inside the goal.
+  it.each([['\x00'], ['\x02'], ['\x06'], ['\x16'], ['\x1a'], ['\x1c'], ['\x1f']])(
+    'reports the unbound control byte %j as unknown instead of text',
+    (seq) => {
+      expect(decodeKey(seq)).toEqual({ name: 'unknown' });
+    },
+  );
+
   it('keeps multi-byte characters intact', () => {
     expect(decodeKey('é')).toEqual({ name: 'char', char: 'é' });
   });
@@ -199,6 +246,11 @@ describe('splitKeys', () => {
 
   it('handles a tilde-terminated sequence', () => {
     expect(splitKeys('\x1b[3~x').map((k) => k.name)).toEqual(['delete', 'char']);
+  });
+
+  it('keeps kitty CSI-u keys whole', () => {
+    expect(splitKeys('\x1b[27u\x1b[99;5u\x1b[13;2u').map((k) => k.name))
+      .toEqual(['escape', 'ctrl-c', 'shift-enter']);
   });
 
   it('keeps Alt+Arrow and Alt+Delete sequences together', () => {

@@ -1,5 +1,6 @@
 import type { TaskDiffRead, TaskDiffResult } from '../services/taskDiffRead';
 import type { Task } from '../models/Task';
+import type { HandoffCommit } from '../models/Handoff';
 
 /**
  * Why isolated execution is unavailable for a workspace. The orchestrator needs
@@ -96,6 +97,13 @@ export interface IsolationTaskRecord {
    * so a stale reason cannot outlive the failure it explains.
    */
   landingError?: string;
+  /**
+   * The commit the task's done handoff stated, kept from the landing that
+   * first brought it: what Ordewell's own commits for the task are written
+   * from (ADR-0013), a repair's merge and every later landing included,
+   * though a repair's handoff states none.
+   */
+  commit?: HandoffCommit;
   /** Repo-relative paths, in `conflictRepo`, that conflicted; set only while `status` is `conflict` or `repairing`. */
   conflictFiles?: string[];
   /**
@@ -279,7 +287,7 @@ export type IsolationMergeBlockReason = 'merge-in-progress' | 'conflict' | 'unco
 export interface IsolationMergeBlock {
   repo: string;
   reason: IsolationMergeBlockReason;
-  /** The files that would conflict, or the user's uncommitted ones the merge also changes; empty for the other reasons. */
+  /** The files that would conflict, or the user's uncommitted ones the merge would change or stand in the way of; empty for the other reasons. */
   files: string[];
   /** `wrong-branch` only: the branch the run started on. */
   expected?: string;
@@ -299,6 +307,9 @@ export interface IsolationMergeBlock {
  *   which cannot preflight, or for a reason no preflight could foresee. That
  *   merge was aborted, leaving `repo` as it was; `landed` names the repos
  *   merged before it, which stay merged, and is absent when there are none.
+ *   A `failed` merge git itself refused carries the first line it said as
+ *   `error`; one that never started, for a merge of the user's already in
+ *   progress, carries none.
  *
  * A group of one is blocked only by a partial landing or by being on the wrong
  * branch; otherwise its one merge lands or is aborted whole, so it reports as
@@ -307,7 +318,7 @@ export interface IsolationMergeBlock {
 export type IsolationMergeResult =
   | { outcome: 'merged' }
   | { outcome: 'blocked'; blocked: IsolationMergeBlock[] }
-  | { outcome: 'conflict' | 'failed'; repo: string; files?: string[]; landed?: string[] };
+  | { outcome: 'conflict' | 'failed'; repo: string; files?: string[]; landed?: string[]; error?: string };
 
 /**
  * What `discard` does with each repo's integration branch: `keep` it for review
@@ -445,7 +456,9 @@ export interface IWorktreeIsolation {
    * the Runner into. Fresh attempts start clean from the tips. A `restore`
    * puts the previous attempt's preserved work on top of them, falling back
    * to the tips in every repo when any restoration conflicts (ADR-0018).
-   * `readOnly` marks the record as a read-only task's (ADR-0046).
+   * `readOnly` marks the record as a read-only task's (ADR-0046). A failure
+   * after the last attempt was replaced throws `PrepareFailedError`, naming
+   * the work that was kept on branches as that attempt's record went.
    */
   prepare(task: Task, run: IsolationRun, intent?: PrepareIntent, opts?: { readOnly?: boolean }): Promise<PreparedTask>;
 
@@ -481,8 +494,13 @@ export interface IWorktreeIsolation {
    * `persist` is called once `run.landing` is set and before the first
    * merge; the caller saves the run there, synchronously, which is what
    * lets `pruneOrphans` finish a landing a crash interrupted.
+   *
+   * `commit`, the one the task's done handoff stated, is kept on the record,
+   * and what Ordewell commits and merges for the task is written from it;
+   * without one, the record's earlier commit, else the task title. A commit
+   * the runner made is never rewritten.
    */
-  integrate(task: Task, run: IsolationRun, persist?: () => void): Promise<IsolationOutcome>;
+  integrate(task: Task, run: IsolationRun, persist?: () => void, commit?: HandoffCommit): Promise<IsolationOutcome>;
 
   /**
    * `keep: false` removes the task's worktree, branch and record (retry, task

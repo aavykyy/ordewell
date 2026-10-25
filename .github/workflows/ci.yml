@@ -29,6 +29,11 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
+    # Nothing in CI may reach ordewell.ai (ADR-0048): the integration test
+    # starts the real extension, and every step's children inherit this.
+    env:
+      ORDEWELL_NO_VERSION_CHECK: '1'
+
     steps:
       - uses: actions/checkout@v7
 
@@ -73,17 +78,35 @@ jobs:
           done
           node bench/live/drive-conversation.mjs
 
+      # node:test suites, not vitest: the runner-detection lab makes the real
+      # install probe run against shimmed CLIs in a throwaway HOME, and the
+      # pipeline test drives plan -> execute -> verify through the fake claude.
+      - name: Bench harness tests (offline, against the built core)
+        run: npm run test:bench
+
       - name: Build (vscode, cli & web)
         run: npm run build -w packages/vscode -w packages/cli -w packages/web --if-present
 
       # The extension integration test drives a real VS Code instance. Cache the
       # ~320 MB download so only the first run on a new VS Code version pays for
       # it; `test:integration` builds its own bundle (tsup.integration.config.ts).
+      #
+      # @vscode/test-electron downloads the latest stable satisfying ^1.90.0, so
+      # a key built from package.json alone restores the previous build after
+      # every VS Code release and still pays the download again. Resolve the list
+      # it resolves and key the cache on the version being tested.
+      - name: Resolve the VS Code version under test
+        id: vscode-version
+        run: |
+          version=$(node -e "fetch('https://update.code.visualstudio.com/api/releases/stable?released=true').then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }).then((v) => process.stdout.write(String(v[0])))")
+          echo "VS Code under test: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Cache the VS Code download
         uses: actions/cache@v4
         with:
           path: packages/vscode/.vscode-test
-          key: vscode-test-${{ runner.os }}-${{ hashFiles('packages/vscode/package.json') }}
+          key: vscode-test-${{ runner.os }}-${{ steps.vscode-version.outputs.version }}
 
       - name: Install xvfb if the image lacks it
         run: |
@@ -149,6 +172,12 @@ jobs:
 
       - name: Package VS Code Extension
         run: npm run package -w packages/vscode
+
+      # What a user installs: the four npm tarballs and this VSIX. This fails on
+      # a missing entry target, a LICENSE or NOTICE npm left out of `files`, a
+      # bundle that cannot start, and a third-party notice the VSIX dropped.
+      - name: Verify packaged npm and VS Code artifacts
+        run: node scripts/package-check.mjs
 
       - name: Upload .vsix
         uses: actions/upload-artifact@v4

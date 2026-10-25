@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseTaskQueryJson, renderTaskQueryAnswer, TASK_QUERY_ANSWER_MAX_CHARS, TASK_QUERY_PROTOCOL, type TaskQueryCatalog } from '../TaskQuery';
+import { parseTaskQueryJson, readTask, renderTaskQueryAnswer, taskReadDetail, TASK_QUERY_ANSWER_MAX_CHARS, TASK_QUERY_PROTOCOL, TASK_READ_TOOLS_PROTOCOL, type TaskQueryCatalog } from '../TaskQuery';
 import { createTask, type Task } from '../../models/Task';
 import type { LiveTail } from '../../interfaces/TaskOutputSource';
 
@@ -142,6 +142,15 @@ describe('rendering the output read', () => {
     expect(answer).not.toContain('The handoff, as one text.');
   });
 
+  it('answers a task\'s handoff with its commit first, subject then body', () => {
+    const changed = tasks();
+    changed[0].handoff = { commit: { subject: 'Add the parser', body: 'The old one choked on commas.' }, summary: 'parse() is in src/csv.ts.', findings: [], findingCount: 0 };
+
+    const answer = renderTaskQueryAnswer({ tasks: ['#1'], fields: ['handoff'], catalog: false }, changed, catalog);
+
+    expect(answer).toContain('handoff:\nCommit: Add the parser\nThe old one choked on commas.\n\nparse() is in src/csv.ts.\n(The whole handoff');
+  });
+
   it('says when a task has never run in this session instead of answering silence', () => {
     const { asked, liveOutput } = fakeLive({});
     const answer = renderTaskQueryAnswer(
@@ -191,6 +200,95 @@ describe('rendering the output read', () => {
   });
 });
 
+describe('one read of a task, for both channels', () => {
+  function loopPlan(): Task[] {
+    return [
+      createTask({
+        id: 'review', order: 1, title: 'Review', prompt: 'Review the cache', status: 'failed',
+        loop: { body: ['fix'], maxRounds: 3 }, loopRound: 2,
+        verdict: {
+          outcome: 'fail', reason: 'Two holes.', decidedAt: 'x', reported: 'failed',
+          checks: [{ name: 'task_complete', passed: false, skipped: false, detail: 'reported failed' }],
+        },
+      }),
+      createTask({ id: 'fix', order: 2, title: 'Fix', prompt: 'Fix it', dependencies: ['review'] }),
+    ];
+  }
+
+  it('states the loop position once, and each channel words it for its reader', () => {
+    const plan = loopPlan();
+    const check = readTask(plan, plan[0], ['description']);
+    const body = readTask(plan, plan[1], ['description']);
+
+    expect(check.loop).toEqual({ body: ['#2'], maxRounds: 3, round: 2, betweenRounds: true });
+    expect(body.loop).toEqual({ check: '#1', checkTitle: 'Review' });
+
+    expect(taskReadDetail(check).loop).toEqual({ body: ['#2'], maxRounds: 3, round: 2, betweenRounds: true });
+    expect(taskReadDetail(body).loop).toEqual({ check: '#1' });
+
+    const verdict = readTask(plan, plan[0], ['verdict']);
+    expect(verdict.verdict).toEqual({ outcome: 'fail', reason: 'Two holes.', checks: [{ name: 'task_complete', result: 'fail' }] });
+    expect(taskReadDetail(verdict).verdict).toEqual(verdict.verdict);
+
+    const text = renderTaskQueryAnswer({ tasks: ['#1', '#2'], fields: ['description'], catalog: false }, plan, catalog);
+    expect(text).toContain('loop: body #2; at most 3 rounds; failed round 2, so its body is fixing what it found and it runs again after');
+    expect(text).toContain('loop: in the body of #1 "Review", so it runs only when that check fails');
+    expect(renderTaskQueryAnswer({ tasks: ['#1'], fields: ['verdict'], catalog: false }, plan, catalog)).toContain('verdict: FAIL — Two holes. [task_complete=fail]');
+  });
+
+  it('gives a handoff\'s report to the handoff, and the summary keeps only how the attempt ended', () => {
+    const plan = tasks();
+    plan[1].outputSummary = { reviewReason: 'Verified', report: 'The whole story.', logTail: '', capturedAt: 'x' };
+    plan[1].handoff = {
+      summary: 'Login works; the refresh path does not.',
+      findings: [{ id: 'F1', severity: 'major', title: 'Refresh swallows errors', evidence: [{ kind: 'task', task: 'a', finding: 'F2' }] }],
+      findingCount: 2,
+    };
+
+    const read = readTask(plan, plan[1], ['outputSummary', 'handoff']);
+    const rest = 'Findings F2 to F2 and the report are in the attempt\'s log: read them with task_output.';
+    expect(read.outputSummary).toEqual({ reviewReason: 'Verified' });
+    expect(read.handoff).toMatchObject({ summary: 'Login works; the refresh path does not.', rest });
+    expect(read.handoff?.findings[0].evidence).toEqual([{ kind: 'task', task: '#1', finding: 'F2' }]);
+
+    // The same rule reaches the tool's JSON: the summary carries no report, the handoff's rest points at it.
+    const detail = taskReadDetail(read);
+    expect(detail.outputSummary).toEqual({ reviewReason: 'Verified' });
+    expect(detail.handoff).toMatchObject({ rest });
+
+    const text = renderTaskQueryAnswer({ tasks: ['#2'], fields: ['outputSummary', 'handoff'], catalog: false }, plan, catalog);
+    expect(text).toContain('outputSummary: Verified\nhandoff:');
+    expect(text).not.toContain('The whole story.');
+  });
+
+  it('keeps an unasked field out of the read, and answers an asked-for empty one with null', () => {
+    const plan = tasks();
+    const read = readTask(plan, plan[1], ['description', 'skills']);
+
+    expect(read.description).toBeNull();
+    expect(read.skills).toBeNull();
+    expect(read).not.toHaveProperty('prompt');
+
+    const detail = taskReadDetail(read);
+    expect(detail.description).toBeNull();
+    expect(detail.skills).toBeNull();
+    expect(detail).not.toHaveProperty('prompt');
+    expect(detail).not.toHaveProperty('userSteps');
+  });
+
+  it('reads a script task\'s body in place of a prompt for both channels', () => {
+    const plan = [createTask({ id: 's', order: 1, title: 'Deploy', type: 'script', commands: [['git', 'push']], timeoutMs: 60_000 })];
+    const read = readTask(plan, plan[0], ['prompt']);
+
+    expect(read.body).toEqual({ commands: [['git', 'push']], timeoutMs: 60_000 });
+    expect(taskReadDetail(read)).toMatchObject({ type: 'script', body: { commands: [['git', 'push']], timeoutMs: 60_000 } });
+    expect(taskReadDetail(read)).not.toHaveProperty('prompt');
+
+    const text = renderTaskQueryAnswer({ tasks: ['#1'], fields: ['prompt'], catalog: false }, plan, catalog);
+    expect(text).toContain('commands:\n  $ git push\ntimeoutMs: 60000');
+  });
+});
+
 describe('the protocol as the planner is taught it', () => {
   it('teaches the output read, its paging options, and when to use it', () => {
     const protocol = TASK_QUERY_PROTOCOL.join('\n');
@@ -199,5 +297,14 @@ describe('the protocol as the planner is taught it', () => {
     expect(protocol).toContain('outputSince');
     expect(protocol).toContain('running');
     expect(protocol).toContain('stuck');
+  });
+
+  it('says the plan block comes whole once, then as what changed, never every turn', () => {
+    for (const lines of [TASK_QUERY_PROTOCOL, TASK_READ_TOOLS_PROTOCOL]) {
+      const protocol = lines.join('\n');
+      expect(protocol).toMatch(/The plan block you are shown \(whole once per live context, then what changed\) carries only short fields/);
+      expect(protocol).not.toMatch(/each turn|every turn/);
+    }
+    expect(TASK_READ_TOOLS_PROTOCOL.join('\n')).toContain('the last whole plan block shows you its operations; later turns only say what changed');
   });
 });

@@ -79,7 +79,7 @@ describe('OrchestratorPool.adoptSavedSession', () => {
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
     pool.adoptSavedSession(meta.id, workspace);
 
-    await expect(pool.session(meta.id).execute({ command: 'mark_complete', task: 't2' }, { kind: 'user' })).resolves.toMatchObject({ ok: true });
+    await expect(pool.session(meta.id).execute({ command: 'mark_complete', task: 't2', confirmed: true }, { kind: 'user' })).resolves.toMatchObject({ ok: true });
   });
 
   // persist() derives the filename from goal + createdAt + id, so adopting a
@@ -87,11 +87,13 @@ describe('OrchestratorPool.adoptSavedSession', () => {
   // entry with the same id.
   it('does not fork a second file for the session it adopted', () => {
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
-    const before = readdirSync(join(workspace, '.ordewell', 'sessions'));
+    // Session files only: the session's own directory beside it holds its lease while it is open (ADR-0049).
+    const sessionFiles = () => readdirSync(join(workspace, '.ordewell', 'sessions')).filter((f) => f.endsWith('.json'));
+    const before = sessionFiles();
 
     pool.adoptSavedSession(meta.id, workspace);
 
-    expect(readdirSync(join(workspace, '.ordewell', 'sessions'))).toEqual(before);
+    expect(sessionFiles()).toEqual(before);
   });
 
   it('keeps the saved plan visible to a later listing', () => {
@@ -460,3 +462,23 @@ describe('OrchestratorPool run notices', () => {
   });
 });
 
+describe('OrchestratorPool planning with no enabled runner', () => {
+  it('keeps the live session when the runners a new goal names are not enabled', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'ordewell-pool-'));
+    mkdirSync(join(workspace, '.git'));
+    const pool = new OrchestratorPool();
+    vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue({} as LegacyPlanState);
+    try {
+      await pool.startPlanning('s1', 'first', undefined, workspace);
+      const live = pool.session('s1');
+
+      await expect(pool.startPlanning('s1', 'second', ['no-such-runner'], workspace)).rejects.toThrow('None of the requested runners are enabled');
+
+      expect(pool.session('s1')).toBe(live);
+    } finally {
+      pool.destroyAll();
+      vi.restoreAllMocks();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});

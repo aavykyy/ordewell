@@ -1,37 +1,42 @@
 import React from 'react';
 import type { HandoffDigest, StoredHandoff, TaskRowHandoff } from '@ordewell/core';
-import { handoffReferenceText, REPORT_PREVIEW_LINES, severityLabel, worstSeverity } from '@ordewell/core/plan-utils';
-
-function findingCount(count: number): string {
-  return count === 0 ? 'no findings' : `${count} finding${count === 1 ? '' : 's'}`;
-}
+import { handoffFindingsText, handoffPeekParts, handoffReferenceText, savedPatchViews, severityLabel, worstSeverity } from '@ordewell/core/plan-utils';
+import { useOpenPatch } from '../openPatch';
+import ReportBody from './ReportBody';
 
 export function HandoffPeek({ handoff }: { handoff: TaskRowHandoff | null }) {
   if (!handoff) return null;
   return (
-    <div className="task-handoff-peek" title={handoff.summary}>
-      Handed over · {findingCount(handoff.findingCount)}{handoff.severity ? ` · ${severityLabel(handoff.severity)}` : ''} · {handoff.summary.split('\n')[0]}
+    <div className="task-handoff-peek" title={handoff.commit ? `${handoff.commit.subject}\n\n${handoff.summary}` : handoff.summary}>
+      Handed over · {handoffPeekParts(handoff).join(' · ')}
     </div>
   );
 }
 
 /** The same handoff in a plan card and an attempt log (ADR-0047); only the log carries the report. */
-export default function TaskHandoff({ handoff, expanded = false, taskName, onReadFull }: {
+export default function TaskHandoff({ handoff, taskName, onReadFull }: {
   handoff: HandoffDigest | StoredHandoff;
-  expanded?: boolean;
   taskName?: (id: string) => string | undefined;
   onReadFull?: () => void;
 }) {
   const severity = worstSeverity(handoff.findings);
   const report = 'report' in handoff ? handoff.report : undefined;
-  const lines = report ? report.replace(/\n+$/, '').split('\n') : [];
-  const shown = expanded ? lines : lines.slice(0, REPORT_PREVIEW_LINES);
-  const hidden = lines.length - shown.length;
   const more = handoff.findingCount - handoff.findings.length;
+  // A patch gets its own block below (ADR-0050); the artifacts list keeps the
+  // author's references, which stay one line each.
+  const artifacts = handoff.artifacts?.filter((a) => a.kind !== 'patch') ?? [];
+  const patches = savedPatchViews(handoff);
+  const openPatch = useOpenPatch();
   return (
     <section className="task-handoff" aria-label="Handoff">
-      <div className="task-handoff-heading">Handoff · {findingCount(handoff.findingCount)}{severity ? ` · ${severityLabel(severity)}` : ''}</div>
-      <div className="task-handoff-summary">{handoff.summary}</div>
+      <div className="task-handoff-heading">Handoff · {handoffFindingsText(handoff.findingCount)}{severity ? ` · ${severityLabel(severity)}` : ''}</div>
+      {handoff.commit && (
+        <div className="task-handoff-commit">
+          <div className="task-handoff-commit-subject">Commit: {handoff.commit.subject}</div>
+          {handoff.commit.body && <div className="task-handoff-commit-body">{handoff.commit.body}</div>}
+        </div>
+      )}
+      {handoff.summary && <div className="task-handoff-summary">{handoff.summary}</div>}
       {handoff.findings.map((finding) => (
         <div key={finding.id} className="task-handoff-finding" data-severity={finding.severity}>
           <div className="task-handoff-finding-heading">{finding.id} · {severityLabel(finding.severity)} · {finding.title}</div>
@@ -42,17 +47,25 @@ export default function TaskHandoff({ handoff, expanded = false, taskName, onRea
         </div>
       ))}
       {more > 0 && <div className="task-handoff-more">+{more} more finding{more === 1 ? '' : 's'}, in the attempt's log</div>}
-      {handoff.artifacts?.length ? (
+      {artifacts.length ? (
         <div className="task-handoff-artifacts">
           <div className="task-handoff-heading">Artifacts</div>
-          {handoff.artifacts.map((ref, i) => <div key={i}>{handoffReferenceText(ref, taskName)}</div>)}
+          {artifacts.map((ref, i) => <div key={i}>{handoffReferenceText(ref, taskName)}</div>)}
         </div>
       ) : null}
+      {patches.map((patch) => (
+        <div key={patch.path} className="task-handoff-patch">
+          <div className="task-handoff-heading">Patch · {patch.changes}</div>
+          <div className="task-handoff-patch-saved">{patch.saved}</div>
+          <div className="task-handoff-patch-base">{patch.base}</div>
+          {patch.flags.map((flag) => <div key={flag} className="task-handoff-patch-flag">{flag}</div>)}
+          {openPatch && <button type="button" className="task-log-open-btn" onClick={() => openPatch(patch.path)}>Open patch</button>}
+        </div>
+      ))}
       {report && (
         <div className="chat-report">
           <div className="chat-report-head">Report</div>
-          <pre className="chat-report-body task-handoff-report">{shown.join('\n')}</pre>
-          {hidden > 0 && <span className="cmd-row-more">+{hidden} line{hidden === 1 ? '' : 's'} of the report</span>}
+          <ReportBody lines={report.replace(/\n+$/, '').split('\n')} className="chat-report-body task-handoff-report" />
         </div>
       )}
       {onReadFull && <button type="button" className="task-log-open-btn" onClick={onReadFull}>Read full handoff</button>}

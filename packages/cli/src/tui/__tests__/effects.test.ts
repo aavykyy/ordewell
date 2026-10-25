@@ -19,18 +19,9 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
       executePlan: vi.fn().mockResolvedValue({ status: 'started' }),
       stopExecution: vi.fn().mockResolvedValue({ status: 'stopped' }),
       cancelPlanning: vi.fn().mockResolvedValue({ cancelled: true }),
-      taskControl: vi.fn().mockResolvedValue({ ok: true }),
-      skipTask: vi.fn().mockResolvedValue({ ok: true }),
-      markTaskComplete: vi.fn().mockResolvedValue({ ok: true }),
-      markTaskIncomplete: vi.fn().mockResolvedValue({ ok: true }),
+      execute: vi.fn().mockResolvedValue({ ok: true, message: 'Done.' }),
       getTaskLogAttempts: vi.fn().mockResolvedValue({ attempts: [] }),
       getTaskLog: vi.fn().mockResolvedValue({ attempt: 1, events: [] }),
-      sendTaskMessage: vi.fn().mockResolvedValue({ id: 'm1' }),
-      removeQueuedTaskMessage: vi.fn().mockResolvedValue({ removed: true }),
-      forceSendTaskMessage: vi.fn().mockResolvedValue({ id: 'm2' }),
-      forceSendQueuedTaskMessage: vi.fn().mockResolvedValue({ sent: true }),
-      interruptTask: vi.fn().mockResolvedValue({ ok: true }),
-      continueTask: vi.fn().mockResolvedValue({ ok: true }),
       addTask: vi.fn().mockResolvedValue({ ok: true }),
       updateTask: vi.fn().mockResolvedValue({ ok: true }),
       setMergeAtGatesAutomatically: vi.fn().mockResolvedValue({ ok: true }),
@@ -50,7 +41,7 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
         return Promise.resolve();
       }),
       closeExecutionStream: vi.fn(),
-      followSession: vi.fn().mockReturnValue({ ready: Promise.resolve(), ended: new Promise(() => {}), close: vi.fn() }),
+      followSession: vi.fn().mockReturnValue({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: vi.fn() }),
       ...api,
     } as OrdewellApi,
     workspace: '/ws',
@@ -411,7 +402,7 @@ describe('planning', () => {
   it('dispatches a burst still held when the turn fails, ahead of the failure', async () => {
     const h = streaming(async (emit) => {
       emit({ type: 'planner_text_delta', turnId: 't1', segmentId: 's1', text: 'Half a' });
-      throw new Error('no key');
+      throw new DaemonError('no key', 400);
     });
 
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
@@ -471,9 +462,9 @@ describe('planning', () => {
   });
 
   it('clears the optimistic session id when the very first planning call fails', async () => {
-    // The daemon registers a session only after planning succeeds, so keeping
-    // the id would route every following message to a session that is not there.
-    const h = harness({ startConversation: vi.fn().mockRejectedValue(new Error('no key')) });
+    // A refusal the daemon answered leaves no conversation a reply could
+    // continue, so keeping the id would route every following message to nothing.
+    const h = harness({ startConversation: vi.fn().mockRejectedValue(new DaemonError('no key', 400)) });
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
 
     expect(types(h.actions)).toContain('sessionCleared');
@@ -484,7 +475,7 @@ describe('planning', () => {
     const close = vi.fn();
     const h = harness({
       streamPlanning: vi.fn().mockReturnValue({ close }),
-      startConversation: vi.fn().mockRejectedValue(new Error('no key')),
+      startConversation: vi.fn().mockRejectedValue(new DaemonError('no key', 400)),
     });
 
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
@@ -843,34 +834,21 @@ describe('duplicate run subscriptions', () => {
 });
 
 describe('task control', () => {
+  // Every task action is one command at the seam (core's taskActionCommand), whichever button sent it.
   it.each([
-    ['retry', 'retry'],
-    ['cancel', 'cancel'],
-    ['force-start', 'force-start'],
-  ] as const)('%s goes to the orchestrator', async (action, segment) => {
+    ['retry', { command: 'retry_task', task: 't1', from: 'fresh' }],
+    ['cancel', { command: 'stop_task', task: 't1' }],
+    ['force-start', { command: 'force_start', task: 't1' }],
+    ['resume-now', { command: 'retry_task', task: 't1', from: 'session' }],
+    ['cancel-resume', { command: 'cancel_resume', task: 't1' }],
+    ['complete', { command: 'mark_complete', task: 't1' }],
+    ['uncomplete', { command: 'mark_not_done', task: 't1' }],
+    ['skip', { command: 'skip_task', task: 't1' }],
+  ] as const)('%s sends its command to the seam, and no other', async (action, command) => {
     const h = harness();
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action }, h.deps);
-    expect(h.api.taskControl).toHaveBeenCalledWith('s1', 't1', segment);
-  });
-
-  it('completing a task marks it complete', async () => {
-    const h = harness();
-    await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'complete' }, h.deps);
-    expect(h.api.markTaskComplete).toHaveBeenCalledWith('s1', 't1');
-  });
-
-  it('un-completing a task marks it not done', async () => {
-    const h = harness();
-    await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'uncomplete' }, h.deps);
-    expect(h.api.markTaskIncomplete).toHaveBeenCalledWith('s1', 't1');
-    expect(h.api.markTaskComplete).not.toHaveBeenCalled();
-  });
-
-  it('skipping a task skips it, and never marks it complete: only Mark complete vouches for work', async () => {
-    const h = harness();
-    await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'skip' }, h.deps);
-    expect(h.api.skipTask).toHaveBeenCalledWith('s1', 't1');
-    expect(h.api.markTaskComplete).not.toHaveBeenCalled();
+    expect(h.api.execute).toHaveBeenCalledOnce();
+    expect(h.api.execute).toHaveBeenCalledWith('s1', command);
   });
 
   it('refreshes the plan after a task action so the pane matches the server', async () => {
@@ -888,15 +866,15 @@ describe('task control', () => {
         onEvent({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress' }] });
         return Promise.resolve();
       }),
-      taskControl: vi.fn().mockImplementation(async () => {
-        order.push('taskControl');
-        return { ok: true };
+      execute: vi.fn().mockImplementation(async () => {
+        order.push('execute');
+        return { ok: true, message: 'Done.' };
       }),
     });
 
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'force-start', watch: true }, h.deps);
 
-    expect(order).toEqual(['streamExecution', 'taskControl']);
+    expect(order).toEqual(['streamExecution', 'execute']);
     expect(h.actions).toContainEqual({
       type: 'statusUpdate',
       tasks: [{ id: 't1', status: 'in_progress' }],
@@ -1250,6 +1228,18 @@ describe('catalogs and sessions', () => {
     expect(messageOf(h.actions, 'failed')).toContain('Reload it with /sessions');
   });
 
+  // ADR-0049: the daemon's words name the host that holds it; the advice to
+  // reload with /sessions would be refused the same way.
+  it('reports a session another host runs in the daemon\'s words, naming that host', async () => {
+    const held = 'This session is open in another Ordewell host: a TUI (pid 76271), through its daemon on port 49558 (pid 76279) has held it since 10/24/2026, 1:40:00 AM. Close it there, or stop that process, then open it here.';
+    const h = harness({ adoptSession: vi.fn().mockRejectedValue(new DaemonError(held, 409, 'session_held')) });
+    await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
+
+    const failure = h.actions.find((a) => a.type === 'failed') as Extract<Action, { type: 'failed' }>;
+    expect(failure).toMatchObject({ message: held, code: 'session_held' });
+    expect(types(h.actions)).not.toContain('sessionLoaded');
+  });
+
   it('words a missing session from the daemon\'s code, never from its message', async () => {
     const h = harness({ adoptSession: vi.fn().mockRejectedValue(new Error('Session not found')) });
     await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
@@ -1303,7 +1293,7 @@ describe('failures', () => {
   // Now that loading adopts the session, this only happens when the daemon has
   // restarted underneath us — so the advice is to reload, not to re-plan.
   it('tells the user to reload a session the daemon no longer holds', async () => {
-    const h = harness({ markTaskComplete: vi.fn().mockRejectedValue(new DaemonError('Session not found', 404, 'session_not_found')) });
+    const h = harness({ execute: vi.fn().mockRejectedValue(new DaemonError('Session not found', 404, 'session_not_found')) });
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'complete' }, h.deps);
 
     const failure = h.actions.find((a) => a.type === 'failed') as Extract<Action, { type: 'failed' }>;
@@ -1311,6 +1301,16 @@ describe('failures', () => {
     expect(failure.message).not.toMatch(/re-?plan/i);
     // Another surface may have deleted it: a restart is not the only way a session goes.
     expect(failure.message).toMatch(/deleted/);
+  });
+
+  it('names the host that runs the session when a call\'s re-adoption was refused, not a reload', async () => {
+    const held = 'This session is open in another Ordewell host: the Ordewell daemon on port 3742 (pid 37797) has held it since 10/24/2026, 1:40:00 AM. Close it there, or stop that process, then open it here.';
+    const h = harness({ execute: vi.fn().mockRejectedValue(new DaemonError(held, 409, 'session_held')) });
+    await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'complete' }, h.deps);
+
+    const failure = h.actions.find((a) => a.type === 'failed') as Extract<Action, { type: 'failed' }>;
+    expect(failure.message).toBe(held);
+    expect(failure.message).not.toContain('/sessions');
   });
 
   it('shows why a model edit was refused, without the success notice (#106)', async () => {
@@ -1323,7 +1323,7 @@ describe('failures', () => {
   });
 
   it('leaves an unrelated error message alone', async () => {
-    const h = harness({ markTaskComplete: vi.fn().mockRejectedValue(new Error('disk on fire')) });
+    const h = harness({ execute: vi.fn().mockRejectedValue(new Error('disk on fire')) });
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'complete' }, h.deps);
     expect(h.actions).toContainEqual({ type: 'failed', message: 'disk on fire' });
   });
@@ -1401,7 +1401,7 @@ describe('a daemon that went away mid-session', () => {
   // 404s. That is a different problem with a different fix.
   it('explains a post-revive 404 as a lost session, not as a dead server', async () => {
     const h = harness({
-      markTaskComplete: vi.fn()
+      execute: vi.fn()
         .mockRejectedValueOnce(refused())
         .mockRejectedValue(new DaemonError('Session not found', 404, 'session_not_found')),
     });
@@ -1525,7 +1525,7 @@ describe('loading an in-flight conversation', () => {
     state = { ...state, editor: { ...state.editor, text: 'check tests', cursor: 11 } };
     const sent = reduce(state, { type: 'key', key: { name: 'enter' } });
     state = sent.state;
-    const h = harness({ sendConversationMessage: vi.fn().mockRejectedValue(new Error('planner down')) }, {
+    const h = harness({ sendConversationMessage: vi.fn().mockRejectedValue(new DaemonError('planner down', 500)) }, {
       dispatch: (action) => { state = reduce(state, action).state; },
     });
     await runEffect(sent.effects[0], h.deps);
@@ -1747,7 +1747,7 @@ describe('conversation compact effect', () => {
   });
 
   it('reports a refusal, and a busy planner goes back to idle', async () => {
-    const h = harness({ compactConversation: vi.fn().mockRejectedValue(new Error('The conversation is too short to condense.')) });
+    const h = harness({ compactConversation: vi.fn().mockRejectedValue(new DaemonError('The conversation is too short to condense.', 400)) });
     let state: TuiState = initialState({ sessionId: 'session-1', planner: 'condensing' });
 
     await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
@@ -2097,12 +2097,11 @@ describe('a structured task\'s log, messages and interrupt', () => {
   });
 
   it('sends a message and leaves the queue to the stream', async () => {
-    const sendTaskMessage = vi.fn().mockResolvedValue({ id: 'm1' });
-    const h = harness({ sendTaskMessage } as Partial<OrdewellApi>);
+    const h = harness();
 
     await runEffect({ type: 'sendTaskMessage', sessionId: 's1', taskId: 't1', text: 'use Postgres' }, h.deps);
 
-    expect(sendTaskMessage).toHaveBeenCalledWith('s1', 't1', 'use Postgres');
+    expect(h.api.execute).toHaveBeenCalledWith('s1', { command: 'message_task', task: 't1', text: 'use Postgres' });
     expect(h.actions).toEqual([]);
   });
 
@@ -2111,13 +2110,13 @@ describe('a structured task\'s log, messages and interrupt', () => {
 
     await runEffect({ type: 'removeTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }, h.deps);
 
-    expect(h.api.removeQueuedTaskMessage).toHaveBeenCalledWith('s1', 't1', 'm1');
+    expect(h.api.execute).toHaveBeenCalledWith('s1', { command: 'remove_queued', task: 't1', id: 'm1' });
     expect(h.actions).toEqual([]);
   });
 
   it('shows the daemon\'s words when a message to take back had already gone out', async () => {
     const refusal = new DaemonError('That message to task #1 "Build" was already delivered or taken back.', 400, 'refused');
-    const h = harness({ removeQueuedTaskMessage: vi.fn().mockRejectedValue(refusal) } as Partial<OrdewellApi>);
+    const h = harness({ execute: vi.fn().mockRejectedValue(refusal) });
 
     await runEffect({ type: 'removeTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }, h.deps);
 
@@ -2126,18 +2125,18 @@ describe('a structured task\'s log, messages and interrupt', () => {
 
   it('continues a finished task, holding the execution stream open when asked to watch (ADR-0018, K1)', async () => {
     const order: string[] = [];
-    const continueTask = vi.fn().mockImplementation(async () => { order.push('continueTask'); return { ok: true }; });
+    const execute = vi.fn().mockImplementation(async () => { order.push('execute'); return { ok: true, message: 'Done.' }; });
     const streamExecution = vi.fn().mockImplementation((_id: string, _cb: (e: unknown) => void, onReady?: (error?: Error) => void) => {
       order.push('streamExecution');
       onReady?.();
       return Promise.resolve();
     });
-    const h = harness({ continueTask, streamExecution } as Partial<OrdewellApi>);
+    const h = harness({ execute, streamExecution } as Partial<OrdewellApi>);
 
     await runEffect({ type: 'continueTask', sessionId: 's1', taskId: 't1', text: 'also handle arrays', watch: true }, h.deps);
 
-    expect(continueTask).toHaveBeenCalledWith('s1', 't1', 'also handle arrays');
-    expect(order).toEqual(['streamExecution', 'continueTask']);
+    expect(execute).toHaveBeenCalledWith('s1', { command: 'retry_task', task: 't1', from: 'session', message: 'also handle arrays' });
+    expect(order).toEqual(['streamExecution', 'execute']);
   });
 
   it('continues without a second stream while a run is already watched', async () => {
@@ -2145,17 +2144,16 @@ describe('a structured task\'s log, messages and interrupt', () => {
 
     await runEffect({ type: 'continueTask', sessionId: 's1', taskId: 't1', text: 'go on' }, h.deps);
 
-    expect(h.deps.api.continueTask).toHaveBeenCalledWith('s1', 't1', 'go on');
+    expect(h.deps.api.execute).toHaveBeenCalledWith('s1', { command: 'retry_task', task: 't1', from: 'session', message: 'go on' });
     expect(h.deps.api.streamExecution).not.toHaveBeenCalled();
   });
 
   it('interrupts the task, leaving what it says to the timeline', async () => {
-    const interruptTask = vi.fn().mockResolvedValue({ ok: true });
-    const h = harness({ interruptTask } as Partial<OrdewellApi>);
+    const h = harness();
 
     await runEffect({ type: 'interruptTask', sessionId: 's1', taskId: 't1' }, h.deps);
 
-    expect(interruptTask).toHaveBeenCalledWith('s1', 't1');
+    expect(h.api.execute).toHaveBeenCalledWith('s1', { command: 'interrupt_task', task: 't1' });
     expect(h.actions).toEqual([]);
   });
 
@@ -2189,7 +2187,7 @@ describe('following the session', () => {
         const ended = new Promise<'lost' | void>((resolve) => { end = resolve; });
         const close = vi.fn(() => end());
         follows.push({ sessionId, emit: cb, close, end });
-        return { ready: Promise.resolve(), ended, close };
+        return { ready: Promise.resolve(true), ended, close };
       }),
       ...api,
     });
@@ -2322,7 +2320,7 @@ describe('following the session', () => {
   });
 
   it('drops the follow of a first turn the daemon never registered', async () => {
-    const h = following({ startConversation: vi.fn().mockRejectedValue(new Error('planner down')) });
+    const h = following({ startConversation: vi.fn().mockRejectedValue(new DaemonError('planner down', 500)) });
     await runEffect({ type: 'startConversation', goal: 'ship it' }, h.deps);
 
     expect(h.follows[0].close).toHaveBeenCalled();
@@ -2343,6 +2341,64 @@ describe('following the session', () => {
     await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
     h.follows[0].end('lost');
     await vi.waitFor(() => expect(h.actions).toContainEqual({ type: 'followLost', sessionId: 's1' }));
+  });
+
+  it('reopens a follow that dropped while idle, so a run nobody here started is still seen', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = following();
+      await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
+      h.follows[0].end('lost');
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(h.api.followSession).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(h.api.followSession).toHaveBeenCalledTimes(2);
+      expect(h.follows[1].sessionId).toBe('s1');
+      expect(h.actions).toContainEqual({ type: 'followRestored', sessionId: 's1' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A lost follow leaves no entry, only a pending retry. Closing or deleting
+  // the session must cancel that timer, or it reopens a session the user is done with.
+  it('does not reopen a session the user closed while its follow was down', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = following();
+      await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
+      h.follows[0].end('lost');
+      await Promise.resolve();
+      await Promise.resolve();
+      await runEffect({ type: 'closeSession', sessionId: 's1' }, h.deps);
+
+      await vi.advanceTimersByTimeAsync(9_000);
+
+      expect(h.api.followSession).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not reopen a session the user deleted while its follow was down', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = following();
+      await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
+      h.follows[0].end('lost');
+      await Promise.resolve();
+      await Promise.resolve();
+      await runEffect({ type: 'deleteSession', sessionId: 's1' }, h.deps);
+
+      await vi.advanceTimersByTimeAsync(9_000);
+
+      expect(h.api.followSession).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('leaves a loss to the run\'s own stream while one is open, so it is reported once', async () => {

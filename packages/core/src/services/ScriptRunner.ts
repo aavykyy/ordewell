@@ -1,8 +1,9 @@
 import { spawn as nodeSpawn, type ChildProcess } from 'child_process';
+import * as fs from 'fs';
 import * as path from 'path';
 import { EventEmitter } from 'events';
 import { StringDecoder } from 'string_decoder';
-import type { IRunnerSession, QueuedTaskMessage, ScriptExit, ScriptRun, ScriptStatus, StructuredEvent } from '../interfaces/IRunner';
+import type { IRunnerSession, QueuedTaskMessage, ScriptExit, ScriptFullOutput, ScriptRun, ScriptStatus, StructuredEvent } from '../interfaces/IRunner';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import { commandLine, type ScriptBody } from '../models/ScriptTask';
 import { planDirectLaunch, type LaunchDeps } from '../utils/launch';
@@ -32,6 +33,13 @@ const LOG_TAIL_CHARS = 16_000;
 
 /** The session's own plain output, kept bounded; the task's output source keeps what a reader is shown. */
 const OUTPUT_KEPT_CHARS = 256 * 1024;
+
+/**
+ * The most an attempt's own file keeps. It is a guard against a runaway
+ * command filling the disk, not a budget: the log's ends are what is bounded
+ * for reading, and this is the whole output a failure is looked up in.
+ */
+const FULL_OUTPUT_MAX_CHARS = 64 * 1024 * 1024;
 
 /**
  * How long after a step's 'exit' its pipes get to close: long enough for its
@@ -67,6 +75,15 @@ export interface ScriptRunnerDeps {
   isDirectory?: (dir: string) => boolean;
   /** How the launch seam looks a program up on Windows (ADR-0010); the real filesystem and environment unless set. */
   launch?: Pick<LaunchDeps, 'exists' | 'comSpec' | 'powerShell' | 'pathExt'>;
+  /**
+   * Where an attempt's whole output is streamed, beside its task log: the log
+   * keeps only the ends of a long output, and a failure is often in the
+   * middle. Prepares the file's directory and returns its path; none is kept
+   * without it.
+   */
+  fullOutputFile?: (taskId: string, attempt: number) => string;
+  /** The most characters that file keeps; the {@link FULL_OUTPUT_MAX_CHARS} guard unless a test sets one. */
+  fullOutputMaxChars?: number;
 }
 
 /** What one step is launched as: a program and its arguments, or a script for the host shell. */
@@ -85,6 +102,7 @@ interface ScriptSessionSetup {
   platform: NodeJS.Platform;
   launch: LaunchDeps;
   shell: () => ResearchShell;
+  fullOutput?: { file: string; maxChars: number };
 }
 
 /**
@@ -116,6 +134,7 @@ export class ScriptSession extends AbstractRunnerSession {
   private logged = 0;
   private logTail = '';
   private omitted = 0;
+  private full: { file: string; stream: fs.WriteStream; written: number; dropped: number; failed: boolean } | null = null;
   private markGone!: () => void;
   private readonly gone = new Promise<void>((resolve) => { this.markGone = resolve; });
 
@@ -131,6 +150,7 @@ export class ScriptSession extends AbstractRunnerSession {
   }
 
   private async run(): Promise<void> {
+    this.openFullOutput();
     const limit = setTimeout(() => this.expire(), this.setup.body.timeoutMs);
     limit.unref?.();
     let exit: ScriptExit = { outcome: 'passed' };
@@ -146,6 +166,8 @@ export class ScriptSession extends AbstractRunnerSession {
     clearTimeout(limit);
     this.running = false;
     for (const child of this.children) killTree(child, { platform: this.setup.platform });
+    const fullOutput = await this.closeFullOutput();
+    if (fullOutput) exit = { ...exit, fullOutput };
     for (const listener of this.endListeners) {
       // One listener that throws must not keep the evidence from the rest, or the session from exiting.
       try {
@@ -246,6 +268,7 @@ export class ScriptSession extends AbstractRunnerSession {
     if (!text) return;
     this.output = (this.output + text).slice(-OUTPUT_KEPT_CHARS);
     this.outputEmitter.emit('output', text);
+    this.saveOutput(text);
     this.logOutput(text);
   }
 
@@ -253,6 +276,44 @@ export class ScriptSession extends AbstractRunnerSession {
     if (!text) return;
     this.errorTail = (this.errorTail + text).slice(-ERROR_TAIL_CHARS);
     this.print(text);
+  }
+
+  private openFullOutput(): void {
+    const target = this.setup.fullOutput;
+    if (!target) return;
+    const stream = fs.createWriteStream(target.file);
+    const full = { file: target.file, stream, written: 0, dropped: 0, failed: false };
+    // A full disk or a missing directory loses the file, never the task's run or its verdict.
+    stream.on('error', (err) => {
+      if (!full.failed) console.error(`[ScriptSession] could not save the output of ${this.id} to ${target.file}:`, err);
+      full.failed = true;
+    });
+    this.full = full;
+  }
+
+  private saveOutput(text: string): void {
+    const full = this.full;
+    if (!full || full.failed) return;
+    const kept = text.slice(0, Math.max(0, this.setup.fullOutput!.maxChars - full.written));
+    full.dropped += text.length - kept.length;
+    if (!kept) return;
+    full.written += kept.length;
+    full.stream.write(kept);
+  }
+
+  /** Resolves once the file is on disk, so a reader of the exit finds it whole. */
+  private async closeFullOutput(): Promise<ScriptFullOutput | undefined> {
+    const full = this.full;
+    if (!full) return undefined;
+    this.full = null;
+    if (!full.failed && full.dropped > 0) full.stream.write(`\n[Ordewell stopped saving output here: ${full.dropped} more characters were not saved]\n`);
+    await new Promise<void>((resolve) => {
+      // A stream that failed to open is already closed, and says so only once.
+      if (full.stream.closed) { resolve(); return; }
+      full.stream.once('close', () => resolve());
+      full.stream.end();
+    });
+    return full.failed ? undefined : { file: full.file, droppedChars: full.dropped };
   }
 
   /** Streamed into the log until the step's head is full; past it, only a tail is kept, for {@link flushLogTail}. */
@@ -343,6 +404,7 @@ export class ScriptRunner extends AbstractRunner<ScriptSession> {
     const platform = this.deps.platform ?? process.platform;
     const PATH = await resolvePath();
     this.spawned += 1;
+    const fullOutput = this.fullOutputFor(opts);
     const session = new ScriptSession(`script-${opts.taskId}-${this.spawned}`, opts.taskId, {
       body,
       cwd: opts.cwd,
@@ -351,10 +413,22 @@ export class ScriptRunner extends AbstractRunner<ScriptSession> {
       platform,
       launch: { ...this.deps.launch, platform, resolvePath },
       shell: this.deps.shell ?? (() => resolveResearchShell()),
+      ...(fullOutput ? { fullOutput: { file: fullOutput, maxChars: this.deps.fullOutputMaxChars ?? FULL_OUTPUT_MAX_CHARS } } : {}),
     });
     this.registerSession(session.id, session);
     session.begin();
     return session;
+  }
+
+  /** An attempt with no number has no place to keep a file: a log would not know which attempt it was. */
+  private fullOutputFor(opts: RunnerSpawnOptions): string | undefined {
+    if (!this.deps.fullOutputFile || opts.attempt === undefined) return undefined;
+    try {
+      return this.deps.fullOutputFile(opts.taskId, opts.attempt);
+    } catch (err) {
+      console.error(`[ScriptRunner] could not prepare a file for the output of ${opts.taskId}:`, err);
+      return undefined;
+    }
   }
 }
 

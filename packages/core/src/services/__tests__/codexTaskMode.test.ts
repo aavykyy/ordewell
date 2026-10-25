@@ -8,7 +8,7 @@ import { StructuredRunner } from '../StructuredRunner';
 import type { StructuredEvent } from '../../interfaces/IRunner';
 import { toTaskLogEvent } from '../../models/TaskLog';
 import { replayTaskLog } from '../../conversation/taskLog';
-import { mcpClientConfig } from '../mcp';
+import { mcpClientConfig, TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../mcp';
 import { CODEX_ORDEWELL } from '../harness/codexOrdewell';
 import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from '../ApprovalPolicy';
 import { WebReadPolicy } from '../webReadPolicy';
@@ -359,6 +359,54 @@ describe('CodexAdapter task interrupt', () => {
     await until(() => sentNamed(proc.written, 'turn/interrupt').length > 1);
     proc.emitStdout(line({ id: sentNamed(proc.written, 'turn/interrupt')[1].id, error: { code: -32600, message: 'no active turn' } }));
     expect(await refused).toBe(false);
+    adapter.dispose();
+  });
+
+  it('takes the runner\'s own end for an interrupted turn: a finish that raced the interrupt is a finish', async () => {
+    const { adapter, proc } = await startedTask();
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
+    proc.emitStdout(turnStarted('turn-a'));
+    const acknowledged = adapter.interrupt(1000);
+    await until(() => sentNamed(proc.written, 'turn/interrupt').length > 0);
+    proc.emitStdout(line({ id: sentNamed(proc.written, 'turn/interrupt')[0].id, result: {} }) + turnCompleted('turn-a', 'completed'));
+    await acknowledged;
+    await turn;
+
+    expect(events).toEqual([{ type: 'turn_end' }]);
+    adapter.dispose();
+  });
+
+  it('reports a turn that failed after an interrupt as failed, with the runner\'s error', async () => {
+    const { adapter, proc } = await startedTask();
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
+    proc.emitStdout(turnStarted('turn-a'));
+    const acknowledged = adapter.interrupt(1000);
+    await until(() => sentNamed(proc.written, 'turn/interrupt').length > 0);
+    const error = { message: 'Rate limit reached for gpt-5.5.', codexErrorInfo: 'other', additionalDetails: null };
+    proc.emitStdout(line({ id: sentNamed(proc.written, 'turn/interrupt')[0].id, result: {} })
+      + line({ method: 'turn/completed', params: { threadId: 'thr-task-1', turn: { id: 'turn-a', status: 'failed', error, items: [] } } }));
+    await acknowledged;
+    await turn;
+
+    expect(events).toEqual([expect.objectContaining({ type: 'error', message: 'Rate limit reached for gpt-5.5.' })]);
+    adapter.dispose();
+  });
+
+  it('forgets an interrupt the runner refused, so the turn that follows is not called interrupted', async () => {
+    const { adapter, proc } = await startedTask();
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
+    proc.emitStdout(turnStarted('turn-a'));
+    const refused = adapter.interrupt(1000);
+    await until(() => sentNamed(proc.written, 'turn/interrupt').length > 0);
+    proc.emitStdout(line({ id: sentNamed(proc.written, 'turn/interrupt')[0].id, error: { code: -32600, message: 'no active turn' } }));
+    expect(await refused).toBe(false);
+    proc.emitStdout(turnCompleted('turn-a'));
+    await turn;
+
+    expect(events).toEqual([{ type: 'turn_end' }]);
     adapter.dispose();
   });
 
@@ -1231,6 +1279,22 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       expect(opened.map((msg) => msg.params)).toEqual([expected, { threadId: 'thr-task-1', ...expected }]);
     });
 
+    it('asks a change task thread for its commit, and no other (ADR-0047)', async () => {
+      const { spawned, processDeps } = deps([...handshake(), ...handshake()]);
+      const instructions: string[] = [];
+      for (const commits of [undefined, true] as const) {
+        const adapter = new CodexAdapter(processDeps);
+        await adapter.start(taskStart('agent', { mcp, ...(commits ? { commits } : {}) }));
+        const [thread] = sentNamed(spawned.processes.at(-1)!.written, 'thread/start');
+        instructions.push((thread.params as { developerInstructions: string }).developerInstructions);
+        adapter.dispose();
+      }
+
+      expect(instructions[0]).toBe(CODEX_ORDEWELL.taskInstructions());
+      expect(instructions[0].endsWith(TASK_COMPLETION_CONTRACT)).toBe(true);
+      expect(instructions[1].endsWith(taskCompletionContract({ commits: true }))).toBe(true);
+    });
+
     it('is never live, which opens pages the model chose', () => {
       expect([CODEX_ORDEWELL.plannerWebSearch(true), CODEX_ORDEWELL.plannerWebSearch(false)]).toEqual(['cached', 'disabled']);
     });
@@ -1278,6 +1342,16 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
   });
 
   it('is a runner whose structured tasks are taught the tools', () => {
+    const instructions = CODEX_ORDEWELL.taskInstructions();
+    for (const tool of ['task_complete', 'checkpoint', 'read_task']) expect(instructions).toContain(`\`mcp__ordewell__${tool}\``);
+    expect(instructions).toContain('ALL_TOOLS');
+    expect(instructions.endsWith(TASK_COMPLETION_CONTRACT)).toBe(true);
+
+    // A read-only task is told its one shell is Ordewell's, and a plain task is not (ADR-0046).
+    const readOnly = CODEX_ORDEWELL.taskInstructions({ readOnly: true });
+    expect(readOnly).toContain('`mcp__ordewell__run_command`');
+    expect(readOnly).toContain('It is your only shell');
+    expect(instructions).not.toContain('run_command');
   });
 });
 

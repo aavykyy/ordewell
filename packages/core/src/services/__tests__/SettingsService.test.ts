@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { spawn } from 'child_process';
 import { SettingsService, getSettingsPath } from '../SettingsService';
+import { filterModelsForPrompt } from '../ModelAllowlistResolver';
 
 function tempSettingsDir() {
   const dir = path.join(os.tmpdir(), `ordewell-settings-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -205,6 +206,17 @@ describe('SettingsService', () => {
       const listener = vi.fn();
       const watching = service.watch(listener);
       try {
+        // A directory watcher arms asynchronously, and macOS may report a save
+        // written in the same turn as one event naming the directory, which
+        // the watcher ignores. Space the arming saves out until one is heard,
+        // then forget those calls: the counts below are the saves under test.
+        for (let attempt = 0; attempt < 10 && listener.mock.calls.length === 0; attempt++) {
+          new SettingsService(tempFile).setEnabledRunners(['opencode']);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        expect(listener).toHaveBeenCalled();
+        listener.mockClear();
+
         new SettingsService(tempFile).setEnabledRunners(['codex']);
         await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
         await new Promise((resolve) => setTimeout(resolve, 150));
@@ -311,6 +323,22 @@ describe('SettingsService', () => {
       expect(s2.getModelAllowlist('claude-code')).toEqual(['x', 'y']);
       expect(s2.getModelAllowlist('nonexistent')).toBeUndefined();
     });
+
+    it('reads a hand-edited allowlist of the wrong shape as nothing, instead of handing the planner a string', () => {
+      fs.writeFileSync(tempFile, JSON.stringify({
+        modelAllowlist: { 'claude-code': 'opus', codex: ['gpt-5', 7, '   '], opencode: [' zen/glm-4.6 '] },
+      }));
+      const s2 = new SettingsService(tempFile);
+
+      expect(s2.getModelAllowlist('claude-code')).toBeUndefined();
+      expect(s2.getModelAllowlist('codex')).toEqual(['gpt-5']);
+      expect(s2.getModelAllowlist('opencode')).toEqual(['zen/glm-4.6']);
+      // The real failure was every planner turn throwing on `allowlist.filter`.
+      expect(() => filterModelsForPrompt(
+        { 'claude-code': [{ modelId: 'opus', modelLabel: 'Opus', variants: [] }] },
+        s2.getAll().modelAllowlist ?? {},
+      )).not.toThrow();
+    });
   });
 
   describe('plannerModels', () => {
@@ -361,6 +389,14 @@ describe('SettingsService', () => {
       expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8'))).not.toHaveProperty('plannerModels');
     });
 
+    it('stores a remembered model and effort without the spaces a copy-paste leaves', () => {
+      fs.writeFileSync(tempFile, JSON.stringify({
+        plannerModels: { codex: { model: ' claude-sonnet-5 ', effort: ' high ' } },
+      }));
+
+      expect(new SettingsService(tempFile).getPlannerModel('codex')).toEqual({ model: 'claude-sonnet-5', effort: 'high' });
+    });
+
     it('a plannerModels of the wrong shape does not throw and does not wipe the rest of the file', () => {
       fs.writeFileSync(tempFile, JSON.stringify({
         verification: { enabled: true },
@@ -386,6 +422,43 @@ describe('SettingsService', () => {
     });
   });
 
+  describe('a file it cannot read', () => {
+    it('warns once and keeps a hand-edited file it cannot parse as a backup, rather than resetting it', () => {
+      const corrupt = '{\n  "autonomousMode": false,\n  "modelAllowlist": { "codex": ["gpt-5"] },\n}\n';
+      fs.writeFileSync(tempFile, corrupt);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        expect(service.getAll()).toEqual({});
+
+        service.setEnabledRunners(['claude-code']);
+
+        const saved = JSON.parse(fs.readFileSync(tempFile, 'utf-8'));
+        expect(saved).toEqual({ enabledRunners: ['claude-code'] });
+        const aside = fs.readdirSync(tempDir).filter((f) => f.endsWith('.corrupt'));
+        expect(aside).toHaveLength(1);
+        expect(fs.readFileSync(path.join(tempDir, aside[0]), 'utf-8')).toBe(corrupt);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0][0])).toContain(tempFile);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('refuses to save over a file a read error left unread, keeping what is there', () => {
+      // A directory in the file's place makes readFileSync fail with EISDIR —
+      // an I/O error, not a parse error, and no licence to overwrite it.
+      fs.mkdirSync(tempFile);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        expect(() => service.setEnabledRunners(['codex'])).toThrow(/could not be read/);
+        expect(fs.statSync(tempFile).isDirectory()).toBe(true);
+        expect(warn).toHaveBeenCalledTimes(1);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
   describe('enabledRunners', () => {
     it('is undefined until the user chooses, so hosts can fall back to their defaults', () => {
       expect(service.getEnabledRunners()).toBeUndefined();
@@ -407,6 +480,7 @@ describe('SettingsService', () => {
       expect(service.getRunSettings()).toEqual({
         supervisorLevel: 'watch',
         mergeAtGatesAutomatically: false,
+        plannedWithTrailer: true,
         autorun: false,
         supervisorRetryLimit: 2,
         wakeUpReadBudget: 12,
@@ -419,6 +493,7 @@ describe('SettingsService', () => {
       expect(new SettingsService(tempFile).getRunSettings()).toEqual({
         supervisorLevel: 'act',
         mergeAtGatesAutomatically: true,
+        plannedWithTrailer: true,
         autorun: false,
         supervisorRetryLimit: 2,
         wakeUpReadBudget: 12,
@@ -431,6 +506,32 @@ describe('SettingsService', () => {
       expect(() => service.updateRunSettings({ wakeUpReadBudget: 2.5 })).toThrow(/read budget/i);
 
       expect(service.getRunSettings().supervisorLevel).toBe('watch');
+    });
+
+    it('keeps a hand-supplied read budget through an unrelated save and a reload', () => {
+      fs.writeFileSync(tempFile, JSON.stringify({ supervisorLevel: 'watch', wakeUpReadBudget: 30 }));
+
+      new SettingsService(tempFile).updateRunSettings({ supervisorRetryLimit: 4 });
+
+      expect(JSON.parse(fs.readFileSync(tempFile, 'utf8')).wakeUpReadBudget).toBe(30);
+      expect(new SettingsService(tempFile).getRunSettings().wakeUpReadBudget).toBe(30);
+    });
+
+    it('has the Planned-with line on for a file that never mentioned it, and keeps a choice to turn it off', () => {
+      fs.writeFileSync(tempFile, JSON.stringify({ autorun: true }));
+      expect(new SettingsService(tempFile).getRunSettings().plannedWithTrailer).toBe(true);
+
+      service.updateRunSettings({ plannedWithTrailer: false });
+
+      expect(new SettingsService(tempFile).getRunSettings().plannedWithTrailer).toBe(false);
+      expect(JSON.parse(fs.readFileSync(tempFile, 'utf8')).plannedWithTrailer).toBe(false);
+    });
+
+    it('refuses a Planned-with value that is not on or off, and reads one in a hand-edited file as on', () => {
+      expect(() => service.updateRunSettings({ plannedWithTrailer: 'off' as unknown as boolean })).toThrow(/planned-with/i);
+
+      fs.writeFileSync(tempFile, JSON.stringify({ plannedWithTrailer: 'no' }));
+      expect(new SettingsService(tempFile).getRunSettings().plannedWithTrailer).toBe(true);
     });
 
     it('reads a hand-edited value it cannot use as the default, keeping the rest', () => {
@@ -447,14 +548,24 @@ describe('SettingsService', () => {
       else process.env.ORDEWELL_AUTONOMOUS_MODE = saved;
     });
 
-    it('is Full until the user chooses, and keeps their choice for every later reader', () => {
+    it('is Guarded on a fresh install, and keeps either level the user chooses for every later reader', () => {
       delete process.env.ORDEWELL_AUTONOMOUS_MODE;
-      expect(service.autonomousMode()).toBe(true);
+      expect(service.autonomousMode()).toBe(false);
+
+      service.setAutonomousMode(true);
+      expect(new SettingsService(tempFile).autonomousMode()).toBe(true);
 
       service.setAutonomousMode(false);
-
       expect(new SettingsService(tempFile).autonomousMode()).toBe(false);
       expect(new SettingsService(tempFile).getAll().autonomousMode).toBe(false);
+    });
+
+    it('is Guarded for a file that never chose a level, including one written by an older build', () => {
+      delete process.env.ORDEWELL_AUTONOMOUS_MODE;
+      fs.writeFileSync(tempFile, JSON.stringify({ enabledRunners: ['codex'], supervisorLevel: 'act' }));
+
+      expect(new SettingsService(tempFile).autonomousMode()).toBe(false);
+      expect(new SettingsService(tempFile).getAll().autonomousMode).toBeUndefined();
     });
 
     it.each([['false', false], ['0', false], ['true', true]])('gives way to ORDEWELL_AUTONOMOUS_MODE=%s in the environment', (value, level) => {
@@ -465,11 +576,33 @@ describe('SettingsService', () => {
       expect(service.autonomousModeOverridden()).toBe(true);
     });
 
-    it('reads a hand-edited value it cannot use as Full', () => {
+    it('reads a hand-edited level name it can use, and the Guarded default for one it cannot', () => {
       delete process.env.ORDEWELL_AUTONOMOUS_MODE;
       fs.writeFileSync(tempFile, JSON.stringify({ autonomousMode: 'guarded' }));
+      expect(new SettingsService(tempFile).autonomousMode()).toBe(false);
 
-      expect(new SettingsService(tempFile).autonomousMode()).toBe(true);
+      fs.writeFileSync(tempFile, JSON.stringify({ autonomousMode: 'maybe' }));
+      expect(new SettingsService(tempFile).autonomousMode()).toBe(false);
+    });
+
+    it.each([
+      ['off', false], ['guarded', false], ['auto', false],
+      ['FALSE', false], [' false ', false],
+      ['FULL', true], ['on', true],
+    ])('reads %s as the level the environment names', (value, level) => {
+      service.setAutonomousMode(!level);
+      process.env.ORDEWELL_AUTONOMOUS_MODE = value;
+
+      expect(service.autonomousMode()).toBe(level);
+      expect(service.autonomousModeOverridden()).toBe(true);
+    });
+
+    it.each([['no'], ['maybe'], ['   ']])('leaves the saved level alone when the environment names no level (%s)', (value) => {
+      service.setAutonomousMode(false);
+      process.env.ORDEWELL_AUTONOMOUS_MODE = value;
+
+      expect(service.autonomousMode()).toBe(false);
+      expect(service.autonomousModeOverridden()).toBe(false);
     });
   });
 });

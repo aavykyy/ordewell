@@ -2,7 +2,7 @@ import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 import { realpathSync } from 'fs';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, PlannerStartOptions, TaskStartOptions } from './AgentAdapter';
-import { TASK_COMPLETION_CONTRACT } from '../mcp';
+import { taskCompletionContract } from '../mcp';
 import { OPENCODE_ORDEWELL, plannerPermission, readOnlySessionRules, OPENCODE_SEARCH_OFF, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
 import { hunksOf } from './fileDiff';
 import { heldServersNote } from './projectServers';
@@ -38,6 +38,9 @@ const CODE_MODE_OFF_RULES: SessionRule[] = [{ action: 'execute', resource: '*', 
 function codeModeOnly(version: string | undefined, role: 'planner' | 'task'): string {
   return `OpenCode${version ? ` ${version}` : ''} cannot run the ${role} safely: it can only offer Ordewell's tools inside code mode, which runs code the model writes without asking. `
     + `This ${role} needs an OpenCode version that can list MCP tools outside code mode. Update OpenCode, or choose another runner.`;
+}
+function toolsNotTakenBack(role: 'planner' | 'task'): string {
+  return `OpenCode would not list Ordewell's tools as tools of their own again, and the ${role} may not reach them inside code mode: the message was not sent.`;
 }
 /** Why an approved project server's tools are missing, when this OpenCode cannot list them as tools of their own. */
 const UNUSABLE = 'not usable on this OpenCode version: its tools are only reachable through code mode\'s `execute`, which the planner may not use';
@@ -149,9 +152,10 @@ export interface OpenCodeV2Host {
   nativeShell?: string | null;
   /** The user's MCP servers the server listed, for telling a planner's MCP tool request from a built-in's (ADR-0026). */
   mcpServers?(): readonly string[];
-  request(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Response>;
+  /** `timeoutMs` is how long the server may take to answer, a default when left out and none when null. */
+  request(method: string, path: string, body?: unknown, signal?: AbortSignal, timeoutMs?: number | null): Promise<Response>;
   /** A request whose body is the answer or throws, as `request` + status check. */
-  json<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T | null>;
+  json<T>(method: string, path: string, body?: unknown, signal?: AbortSignal, timeoutMs?: number | null): Promise<T | null>;
   /** The server's event stream, as `data:` frames. */
   openEvents(signal: AbortSignal): Promise<Response | null>;
   /** Resolves when the server process is gone. */
@@ -342,15 +346,40 @@ export class OpenCodeV2 {
    * not started. A project server's tools are then not reachable at all.
    */
   private async exposeServers(): Promise<void> {
-    const mcp = this.opts.mcp;
-    if (mcp && !await this.expose(mcp.name, { type: 'remote', url: mcp.url, headers: mcp.headers }) && (this.role === 'planner' || readOnlyTask(this.opts))) {
-      throw new Error(codeModeOnly(this.host.version, this.role));
-    }
+    if (!await this.exposeOrdewell()) throw new Error(codeModeOnly(this.host.version, this.role));
     const project = this.opts.kind === 'planner' ? this.opts.projectServers ?? [] : [];
     for (const server of project) {
       if (await this.expose(server.name, transportFields(server.definition))) this.exposed.push(server.name);
       else this.unusable.push(server);
     }
+  }
+
+  /**
+   * The same replacements, made again before every turn. 2.x rebuilds a
+   * location from the configuration it was launched with when it evicts or
+   * reloads one, and every server is back in code mode then: still connected,
+   * its tools offered to the model only inside `execute`, which a planner is
+   * denied (checked against 2.1.4). The launch configuration turns eviction
+   * off; this puts the servers back after any rebuild that still happens,
+   * though the model is offered a server put back only a moment later, so the
+   * turn's first step may go without it. A replacement that changes nothing
+   * restarts nothing. False when Ordewell's tools are left where this session
+   * may not reach them (ADR-0022 S4).
+   */
+  private async reexposeServers(): Promise<boolean> {
+    if (!await this.exposeOrdewell()) return false;
+    const project = this.opts.kind === 'planner' ? this.opts.projectServers ?? [] : [];
+    for (const server of project) {
+      if (this.exposed.includes(server.name)) await this.expose(server.name, transportFields(server.definition));
+    }
+    return true;
+  }
+
+  /** Whether Ordewell's tools are listed as tools of their own, or this session can do without that: a task reaches them through `execute`. */
+  private async exposeOrdewell(): Promise<boolean> {
+    const mcp = this.opts.mcp;
+    if (!mcp || await this.expose(mcp.name, { type: 'remote', url: mcp.url, headers: mcp.headers })) return true;
+    return this.role === 'task' && !readOnlyTask(this.opts);
   }
 
   private async expose(name: string, config: Record<string, unknown>): Promise<boolean> {
@@ -371,7 +400,7 @@ export class OpenCodeV2 {
   private async applyInstructions(): Promise<void> {
     if (this.opts.kind === 'task') {
       if (!this.opts.mcp) return;
-      const response = await this.host.request('PUT', `/api/experimental/session/${this.sessionId}/instructions/entries/ordewell-task`, { value: TASK_COMPLETION_CONTRACT });
+      const response = await this.host.request('PUT', `/api/experimental/session/${this.sessionId}/instructions/entries/ordewell-task`, { value: taskCompletionContract(this.opts) });
       if (!response.ok) throw new Error(`OpenCode did not take the task instructions: ${response.status} ${response.statusText}`);
       return;
     }
@@ -383,23 +412,28 @@ export class OpenCodeV2 {
   }
 
   async send(message: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, onActivity?: () => void): Promise<void> {
-    return this.runTurn(() => this.host.json('POST', `/api/session/${this.sessionId}/prompt`, { text: message }, signal), onEvent, signal, onActivity);
+    return this.runTurn(() => this.host.json('POST', `/api/session/${this.sessionId}/prompt`, { text: message }, signal, null), onEvent, signal, onActivity);
   }
 
   async invokeCommand(name: string, args: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, skillId?: string): Promise<void> {
     if (name === 'compact') {
       if (args.trim()) { onEvent({ type: 'error', message: 'OpenCode native compaction does not accept arguments.' }); return; }
-      await this.runTurn(() => this.host.json('POST', `/api/session/${this.sessionId}/compact`, {}, signal), onEvent, signal);
+      await this.runTurn(() => this.host.json('POST', `/api/session/${this.sessionId}/compact`, {}, signal, null), onEvent, signal);
       return;
     }
     return this.runTurn(() => this.host.json('POST', `/api/session/${this.sessionId}/${skillId ? 'prompt' : 'command'}`,
-      skillId ? { text: args, skills: [{ id: skillId }] } : { name, text: args }, signal), onEvent, signal);
+      skillId ? { text: args, skills: [{ id: skillId }] } : { name, text: args }, signal, null), onEvent, signal);
   }
 
   private async runTurn(post: () => Promise<unknown>, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, onActivity?: () => void): Promise<void> {
     if (!this.sessionId) throw new Error(`OpenCode ${this.role} session is not started`);
     if (this.host.isExited()) {
       onEvent({ type: 'error', message: this.host.exitMessage() });
+      return;
+    }
+    // Before the stream, so the location a rebuild leaves is the one it listens to.
+    if (!await this.reexposeServers()) {
+      onEvent({ type: 'error', message: toolsNotTakenBack(this.role) });
       return;
     }
     const state = newTurnState();
@@ -428,7 +462,8 @@ export class OpenCodeV2 {
         readBack: () => this.readBack(state, onEvent),
         permissions: this.permissions,
         outcome: () => {
-          if (turn.outcome === 'interrupted' || this.interruptRequested) return { type: 'turn_end', interrupted: true };
+          // OpenCode's own end decides; the request only stands in where it named none.
+          if (turn.outcome === 'interrupted' || (turn.outcome === null && this.interruptRequested)) return { type: 'turn_end', interrupted: true };
           if (turn.outcome === 'failed' || turn.failure) return { type: 'error', message: turn.failure ?? 'OpenCode reported that the turn failed.' };
           return { type: 'turn_end' };
         },
@@ -464,7 +499,7 @@ export class OpenCodeV2 {
         const messages = await this.messages();
         const idle = [...(messages ?? [])].reverse().find((m) => m.type === 'idle');
         if (idle?.outcome === 'failed' || idle?.outcome === 'interrupted' || idle?.outcome === 'succeeded') turn.outcome ??= idle.outcome;
-        turn.outcome ??= 'succeeded';
+        turn.outcome ??= this.interruptRequested ? 'interrupted' : 'succeeded';
         if (!turn.done) turn.finish();
       }
     }
@@ -505,8 +540,12 @@ export class OpenCodeV2 {
     if (!this.sessionId || this.host.isExited()) return false;
     const turn = this.turn;
     this.interruptRequested = true;
-    const response = await this.host.json<{ interrupted?: boolean }>('POST', `/api/session/${this.sessionId}/interrupt`).catch(() => null);
-    if (!response) return false;
+    const response = await this.host.json<{ interrupted?: boolean }>('POST', `/api/session/${this.sessionId}/interrupt`, undefined, undefined, timeoutMs).catch(() => null);
+    if (!response) {
+      // An interrupt the server did not take stops nothing, so it must not colour the turn's end.
+      this.interruptRequested = false;
+      return false;
+    }
     if (!turn || turn.done) return true;
     return interruptAcknowledged(turn, this.host.processEnded, timeoutMs);
   }

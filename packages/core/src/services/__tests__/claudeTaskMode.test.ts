@@ -955,7 +955,7 @@ describe('ClaudeCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     });
     if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(args.some((arg) => arg.includes('tok-secret'))).toBe(false);
-    expect(args.flatMap((arg, i) => (arg === '--allowedTools' ? [args[i + 1]] : []))).toEqual(['mcp__ordewell__task_complete,mcp__ordewell__checkpoint,mcp__ordewell__read_task']);
+    expect(args.flatMap((arg, i) => (arg === '--allowedTools' ? [args[i + 1]] : []))).toEqual(['mcp__ordewell__task_complete,mcp__ordewell__checkpoint,mcp__ordewell__read_task,mcp__ordewell__apply_patch']);
     adapter.dispose();
   });
 
@@ -973,7 +973,7 @@ describe('ClaudeCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     await until(() => sent(spawned).length === 2);
     const args = spawned.lastArgs();
 
-    expect(args.flatMap((arg, i) => (arg === '--allowedTools' ? [args[i + 1]] : []))).toEqual(['mcp__ordewell__task_complete,mcp__ordewell__checkpoint,mcp__ordewell__read_task']);
+    expect(args.flatMap((arg, i) => (arg === '--allowedTools' ? [args[i + 1]] : []))).toEqual(['mcp__ordewell__task_complete,mcp__ordewell__checkpoint,mcp__ordewell__read_task,mcp__ordewell__apply_patch']);
     expect(args.some((arg) => arg.includes('tok-secret'))).toBe(false);
     expect(JSON.parse(sent(spawned)[1]).response.response.behavior).toBe('allow');
     expect(events.find((e) => e.type === 'permission_request')).toMatchObject({ decided: { decision: 'allow' } });
@@ -1478,6 +1478,64 @@ describe('ClaudeCodeAdapter model switches', () => {
     expect(events.filter((e) => e.type === 'model_switched' || e.type === 'model_drifted')).toEqual([
       { type: 'model_drifted', from: { model: 'haiku', label: 'Haiku 5.5' }, to: { model: 'sonnet', label: 'Sonnet 5.5' } },
     ]);
+    adapter.dispose();
+  });
+});
+
+describe('ClaudeCodeAdapter — an interrupt and the turn it is for', () => {
+  const line = (value: unknown) => `${JSON.stringify(value)}\n`;
+  const ack = (written: string) => line({ type: 'control_response', response: { subtype: 'success', request_id: (JSON.parse(written) as { request_id: string }).request_id, response: {} } });
+  const result = (subtype: string) => line({ type: 'result', subtype, is_error: subtype !== 'success', session_id: 'sess-1', result: subtype === 'success' ? 'done' : 'Usage limit reached' });
+  const background = line({ type: 'system', subtype: 'background_tasks_changed', session_id: 'sess-1', tasks: [{ id: 'bg-1' }] });
+  const speaking = line({ type: 'assistant', session_id: 'sess-1', message: { id: 'msg_wake', role: 'assistant', content: [{ type: 'text', text: 'woken' }] } });
+
+  it('is not an interrupt when no turn is open, and leaves the adapter taking messages', async () => {
+    const { spawned, processDeps } = deps([result('success')]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskStart());
+    await adapter.send('quick', () => {});
+
+    expect(await adapter.interrupt(50)).toBe(false);
+    expect(sent(spawned).some((w) => w.includes('"subtype":"interrupt"'))).toBe(false);
+    expect(await adapter.steer('m1', 'next')).toBe(true);
+    adapter.dispose();
+  });
+
+  it('reports a failure of the turn the runner opens itself, however an earlier interrupt ended', async () => {
+    const { processDeps, spawned } = deps([(written, proc) => { void written; void proc; }, (written, proc) => proc.emitStdout(ack(written) + result('success'))]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskStart());
+    const events: AgentEvent[] = [];
+    const wake: AgentEvent[] = [];
+    adapter.onOutOfTurn(( e) => wake.push(e));
+    const turn = adapter.send('work', (e) => events.push(e));
+    await tick();
+
+    await expect(adapter.interrupt(1000)).resolves.toBe(true);
+    await turn;
+    // The interrupt lost the race: the turn finished on its own.
+    expect(events.at(-1)).toEqual({ type: 'turn_end' });
+    expect(await adapter.steer('m1', 'next')).toBe(true);
+
+    spawned.processes[0].emitStdout(speaking + result('error_during_execution'));
+    expect(wake.filter((e) => e.type === 'turn_end' || e.type === 'error')).toEqual([{ type: 'error', message: 'Usage limit reached' }]);
+    adapter.dispose();
+  });
+
+  it('ends a turn held for background work when interrupted, without killing the work', async () => {
+    const { spawned, processDeps } = deps([background + result('success')]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskStart());
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('wait for it', (e) => events.push(e));
+    await tick();
+    expect(events.some((e) => e.type === 'turn_end')).toBe(false);
+
+    await expect(adapter.interrupt(1000)).resolves.toBe(true);
+    await turn;
+
+    expect(events.at(-1)).toEqual({ type: 'turn_end', interrupted: true });
+    expect(spawned.processes[0].killed).toBe(false);
     adapter.dispose();
   });
 });

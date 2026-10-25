@@ -4,6 +4,7 @@ import { IFileSystem } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { IApproval } from '../interfaces/IApproval';
 import type { RunnerModeInfo } from './ModeResolver';
+import type { PlanIntake } from './PlanChangeCheck';
 import { GeminiService } from './GeminiService';
 import { OpenAiService } from './OpenAiService';
 import { isCliProvider } from './ProviderRegistry';
@@ -36,6 +37,13 @@ export interface ConversationRequest {
   onProgress: (progress: ResearchProgress) => void;
   fetcher?: IWebFetcher;
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
+  /**
+   * What a whole plan is held to now (`PlanChangeCheck.intake`), read on every
+   * turn: an envelope plan is checked against what `submit_plan` checks one
+   * against (ADR-0022 L2, P2). Absent: `runners`, `runnerModes` and
+   * `autonomousDefault` as the conversation opened.
+   */
+  liveScope?: () => PlanIntake;
   autonomousDefault?: boolean;
   /** Where tasks will run (ADR-0013, ADR-0014): in worktrees, the prompt drops file-overlap ordering and describes a repo group. */
   isolatedExecution?: IsolatedExecution;
@@ -176,6 +184,16 @@ export interface IAiService {
   pruneContext?(): number;
 
   /**
+   * Optional: how many times, over this service's life, a conversation's
+   * context was compacted in place — by a harness agent itself, or by
+   * {@link pruneContext} and the proactive pruning of a vendor backend. A
+   * context compacted since a turn was sent the plan may no longer hold it, so
+   * the conversation sends the whole plan again when this moves (ADR-0012
+   * T10). Absent where nothing compacts a context in place.
+   */
+  compactions?(): number;
+
+  /**
    * One-shot research + plan for non-conversational surfaces (CLI `plan --goal`,
    * web REST). Never asks questions — it plans with what it can find.
    */
@@ -215,7 +233,7 @@ export interface IAiService {
  * The single branch point between planner transports. Two of them talk HTTP to
  * an LLM vendor; the third (ADR-0009) drives a coding agent already installed
  * on the machine. Everything downstream — the plan contract, the research-step
- * stream, the four surfaces — is shared.
+ * stream, the three surfaces — is shared.
  */
 export function createAiService(config: IConfig, deps?: CliAgentAiServiceDeps): IAiService {
   if (isCliProvider(config.aiProvider)) {

@@ -38,7 +38,7 @@ export function runnerModesFrom(registry: ManifestLookup, runners: RunnerId[]): 
  */
 export function resolveDefaultMode(
   modes: readonly RunnerModeInfo[] | undefined,
-  autonomousDefault = true,
+  autonomousDefault = false,
 ): string | undefined {
   if (!modes || modes.length === 0) return undefined;
   const tag: 'autonomous' | 'safe' = autonomousDefault ? 'autonomous' : 'safe';
@@ -62,6 +62,20 @@ export function parseAutonomyLevel(arg: string | undefined): boolean | null {
     case 'guarded': case 'auto': case 'off': return false;
     default: return null;
   }
+}
+
+/**
+ * The level a flag or `ORDEWELL_AUTONOMOUS_MODE` names: the level names above,
+ * plus the boolean spellings (`true`/`false`, `1`/`0`), case and surrounding
+ * space aside. Undefined for anything else — a typo must never raise autonomy,
+ * and the `.env` migration and the runtime override must read a value alike.
+ */
+export function parseAutonomyFlag(value: string | undefined): boolean | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === 'true' || normalized === '1') return true;
+  if (normalized === 'false' || normalized === '0') return false;
+  return parseAutonomyLevel(normalized) ?? undefined;
 }
 
 /**
@@ -118,7 +132,7 @@ export function plannedMode(
   runner: RunnerId,
   runnerModes: Partial<Record<RunnerId, readonly RunnerModeInfo[]>> | undefined,
   { readOnly, current }: ModeRequest,
-  autonomousDefault = true,
+  autonomousDefault = false,
 ): PlannedMode {
   if (!runnerModes) return { ok: true, mode: undefined };
   const modes = runnerModes[runner] ?? [];
@@ -158,7 +172,7 @@ export function carryPlannedModes(
     const subtasks = (t.subtasks ?? []).map(carry);
     const was = prior.get(t.id);
     if (t.type !== 'ai' || !was || was.type !== 'ai' || t.taskMode === taggedReadOnlyMode(catalog.runnerModes[t.assignedRunner])) return { ...t, subtasks };
-    const mode = plannedMode(t.assignedRunner, catalog.runnerModes, { readOnly: false, current: was.taskMode }, catalog.autonomousDefault ?? true);
+    const mode = plannedMode(t.assignedRunner, catalog.runnerModes, { readOnly: false, current: was.taskMode }, catalog.autonomousDefault ?? false);
     return { ...t, subtasks, ...(mode.ok && mode.mode !== undefined ? { taskMode: mode.mode } : {}) };
   };
   return rewrite.map(carry);

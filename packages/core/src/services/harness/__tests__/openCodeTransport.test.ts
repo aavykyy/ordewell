@@ -6,7 +6,7 @@ import { mcpClientConfig } from '../../mcp';
 import { sseResponse } from '../../__tests__/harnessTestKit';
 import {
   ChildSessions, PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePermissions, openCodePlannerAsk, openEventStream, permissionReply, plannerSystem, raiseOnce, settleTurn,
-  splitModelId, turnLatch, usageRecord,
+  splitModelId, turnLatch, usageRecord, withDeadline,
 } from '../openCodeTransport';
 import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
 import type { LedgerStance, RaisedRequest } from '../permissionLedger';
@@ -46,6 +46,20 @@ describe('delay', () => {
   });
 });
 
+describe('withDeadline', () => {
+  it('follows a signal that is already aborted, so no request goes out under a turn that ended', () => {
+    const controller = new AbortController();
+    const reason = new Error('turn over');
+    controller.abort(reason);
+
+    const { signal, clear } = withDeadline(controller.signal, 60_000);
+    clear();
+
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).toBe(reason);
+  });
+});
+
 describe('permissionReply', () => {
   it.each([
     [{ decision: 'allow' }, { reply: 'once' }],
@@ -73,6 +87,11 @@ describe('usageRecord', () => {
     expect(usageRecord(undefined, {})).toBeNull();
     expect(usageRecord({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, { cost: 0.1 })).toBeNull();
     expect(usageRecord({ input: 1, output: 1 }, { cost: 0 })).toEqual({ source: 'opencode', inputTokens: 1, outputTokens: 1, contextTokens: 2 });
+  });
+
+  it('counts a side the runner left unreported as nothing, and takes an unreported prompt for an empty one', () => {
+    expect(usageRecord({ input: 2, reasoning: 3 }, {})).toEqual({ source: 'opencode', inputTokens: 2, outputTokens: 3, contextTokens: 5 });
+    expect(usageRecord({ output: 4 }, {})).toEqual({ source: 'opencode', outputTokens: 4, contextTokens: 4 });
   });
 });
 
@@ -108,6 +127,15 @@ describe('PendingSteers', () => {
     steers.hand('msg_b', 'm-2');
     steers.deliveredBy('msg_b');
     expect(steers.forget('m-2')).toBe(false);
+  });
+
+  it('forgets the hand it was asked about and leaves an earlier one owed', () => {
+    const steers = new PendingSteers();
+    steers.hand('msg_a', 'm-1');
+    steers.hand('msg_b', 'm-2');
+
+    expect(steers.forget('m-2')).toBe(true);
+    expect(steers.drain()).toEqual([{ messageId: 'msg_a', id: 'm-1' }]);
   });
 
   it('drains what is still owed, oldest first, and empties itself', () => {
@@ -233,6 +261,25 @@ describe('settleTurn', () => {
     expect(await settled).toBe(true);
     expect(order).toEqual(['readBack', 'outcome']);
     expect(events).toEqual([{ type: 'permission_cancelled', id: 'per_1' }, { type: 'turn_end' }]);
+  });
+
+  it('leaves no listener behind on the caller\'s signal once the turn is settled', async () => {
+    const signal = new AbortController().signal;
+    const listening = new Set<unknown>();
+    const add = signal.addEventListener.bind(signal);
+    const remove = signal.removeEventListener.bind(signal);
+    signal.addEventListener = ((type: string, listener: Parameters<typeof signal.addEventListener>[1], options?: AddEventListenerOptions) => { listening.add(listener); add(type, listener, options); }) as typeof signal.addEventListener;
+    signal.removeEventListener = ((type: string, listener: Parameters<typeof signal.addEventListener>[1]) => { listening.delete(listener); remove(type, listener); }) as typeof signal.removeEventListener;
+
+    for (let i = 0; i < 3; i++) {
+      const turn = turnLatch();
+      const { how, onEvent } = settlement({ signal });
+      const settled = settleTurn(turn, how, onEvent);
+      turn.finish();
+      await settled;
+    }
+
+    expect(listening.size).toBe(0);
   });
 
   it('fails the turn when the server exits first', async () => {
@@ -462,6 +509,7 @@ describe('openCodePlannerAsk', () => {
     expect(openCodePlannerAsk('shell', { patterns: ['for f in *; do echo "$f"; done'] }, servers, true))
       .toEqual({ kind: 'native-shell', tool: 'shell', command: 'for f in *; do echo "$f"; done' });
     expect(openCodePlannerAsk('bash', { patterns: ['ls'] }, servers, true)).toEqual({ kind: 'native-shell', tool: 'bash', command: 'ls' });
+    expect(openCodePlannerAsk('bash', {}, servers, true)).toEqual({ kind: 'native-shell', tool: 'bash' });
     expect(openCodePlannerAsk('shell', { patterns: ['ls'] }, servers)).toEqual({ kind: 'other' });
   });
 });

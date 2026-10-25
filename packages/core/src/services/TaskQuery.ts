@@ -1,15 +1,15 @@
-import type { DiscoveredModel, RunnerId, Task } from '../models/Task';
+import type { DiscoveredModel, RunnerId, Task, Verdict } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_QUERY_ENVELOPE_KEY } from './JsonExtractor';
 import { readOnlyMode, type RunnerModeInfo } from './ModeResolver';
 import type { LiveTail, LiveTailOptions } from '../interfaces/TaskOutputSource';
 import { resolveTaskRef, taskRefOf } from './TaskRefs';
-import { commandLine, scriptBodyOf } from '../models/ScriptTask';
+import { commandLine, scriptBodyOf, type ScriptBody } from '../models/ScriptTask';
 import { betweenRounds, checkOf, loopRoundOf } from '../models/Loop';
-import { handoffLines, type HandoffDigest } from '../models/Handoff';
+import { handoffLines, namedHandoff, type HandoffDigest } from '../models/Handoff';
 
 /**
  * The planner's read channel: a `{"taskQuery":{...}}` reply asking Ordewell to
- * show it what the per-turn plan block deliberately leaves out.
+ * show it what the plan block deliberately leaves out.
  *
  * The plan block carries only short fields, so a planner asked to "add a line
  * to task 3's prompt" would be rewriting text it has never read. Inlining every
@@ -17,9 +17,10 @@ import { handoffLines, type HandoffDigest } from '../models/Handoff';
  * tokens per message — so the planner asks instead, and pays for the detail
  * only on the turns it uses it.
  *
- * This module owns the wire shape and the rendering of the answer; the loop,
- * the budgets and the injection live in the Session, and the classification
- * lives in PlanRepair alongside the plan and task-ops envelopes.
+ * This module owns the wire shape, the one read of a task both channels render,
+ * and the rendering of the answer; the loop, the budgets and the injection
+ * live in the Session, and the classification lives in PlanRepair alongside
+ * the plan and task-ops envelopes.
  */
 
 /** The long fields a query may ask for. Everything else is already in the plan block. */
@@ -193,7 +194,7 @@ export const TASK_READ_ANSWER_OR_EDIT =
  */
 export const TASK_QUERY_PROTOCOL: string[] = [
   'READING A TASK BEFORE YOU EDIT IT:',
-  'The plan block you are shown each turn carries only short fields — it never contains a task\'s prompt, its user steps, or a completed task\'s verdict. Never rewrite a field you have not read. To read one, reply with ONLY this JSON object:',
+  'The plan block you are shown (whole once per live context, then what changed) carries only short fields — it never contains a task\'s prompt, its user steps, or a completed task\'s verdict. Never rewrite a field you have not read. To read one, reply with ONLY this JSON object:',
   `  {"${TASK_QUERY_ENVELOPE_KEY}":{"tasks":["<id or #order>", "..."],"fields":[${TASK_QUERY_FIELDS.map((f) => `"${f}"`).join(', ')}],"catalog":true}}`,
   '- "tasks": one or more task references. Ask for everything you need in ONE query — each query costs a round-trip.',
   '- "fields": optional. Omit it to get every field above.',
@@ -209,15 +210,15 @@ export const TASK_QUERY_PROTOCOL: string[] = [
  */
 export const TASK_READ_TOOLS_PROTOCOL: string[] = [
   'READING A TASK BEFORE YOU EDIT IT:',
-  'The plan block you are shown each turn carries only short fields — it never contains a task\'s prompt, its user steps, or a completed task\'s verdict. Never rewrite a field you have not read. Read with these tools; they change nothing:',
+  'The plan block you are shown (whole once per live context, then what changed) carries only short fields — it never contains a task\'s prompt, its user steps, or a completed task\'s verdict. Never rewrite a field you have not read. Read with these tools; they change nothing:',
   '- task_query: "tasks" are one or more task references ("<id or #order>"). Ask for everything you need in ONE call. "fields" is optional (omit it to get description, prompt, userSteps, verdict, outputSummary, handoff, userStoriesCovered and skills). A handoff is what a task told the tasks after it: a summary, findings F1, F2, … and artifacts. "catalog": true also returns every runner with its models, thinking-effort variants and modes.',
   '- task_output: the recent output of a task that is running right now — the way to diagnose a task that looks stuck mid-execution. "lines" (default 80, at most 400) sets how many; pass an answer\'s "nextOffset" back as "since" to read only what follows. A task that is not running answers with its verdict, output summary, its whole handoff, its findings and report, and a digest of its last attempt. Supply "attempt" (a saved attempt number) or "kinds" (TaskLogEvent types such as tool_call, tool_result, error, text, approval_requested, approval_decided, usage) to read its structured log; attempt defaults to latest. Continue truncated entries with since/nextOffset.',
   '- task_diff: changes since a task started, with repo paths and file stats. Pass "path" for one file patch and "repo" to select a repository. Page with since/nextOffset. Shared runs without task-specific records report not available.',
   'Three reads per user message; after that every answer also tells you to land the turn, and after six they are refused. Do not ask the same question twice.',
-  'Once a plan exists, change it with edit_plan — every turn shows you its operations. Never reply with taskOps or taskQuery JSON.',
+  'Once a plan exists, change it with edit_plan — the last whole plan block shows you its operations; later turns only say what changed. Never reply with taskOps or taskQuery JSON.',
 ];
 
-/** The one-line reminder the per-turn plan block carries, so the protocol has a single owner. */
+/** The one-line reminder the whole plan block carries, so the protocol has a single owner. */
 export const TASK_QUERY_REMINDER =
   `- To READ a task in full (prompt, user steps, verdict, output, handoff, user stories) or the whole model/mode catalog before editing, reply with ONLY {"${TASK_QUERY_ENVELOPE_KEY}":{"tasks":["<id or #order>"],"catalog":true}} — it changes nothing, and you then reply again with your ops.`;
 
@@ -257,6 +258,163 @@ export function fitTail(text: string, budget: number): { text: string; trimmed: 
   return { text: kept.join('\n'), trimmed: true };
 }
 
+// ---------------------------------------------------------------------------
+// One read of a task, and the two channels that render it.
+// ---------------------------------------------------------------------------
+
+/** Where a task stands in a loop (ADR-0045), as a read states it. */
+export type TaskLoopRead =
+  /** A loop's check: the body it repeats with, its round, and whether it is between them. */
+  | { body: string[]; maxRounds: number; round: number; betweenRounds: boolean }
+  /** A task in a loop's body: the check it runs for, its title kept for the text channel. */
+  | { check: string; checkTitle: string };
+
+export interface TaskStepRead {
+  order: number;
+  instruction: string;
+  completed: boolean;
+}
+
+export interface TaskCheckRead {
+  name: string;
+  result: 'pass' | 'fail' | 'skipped';
+}
+
+export interface TaskVerdictRead {
+  outcome: Verdict['outcome'];
+  reason: string;
+  checks: TaskCheckRead[];
+}
+
+/** How an attempt ended, as a read states it: a task with a handoff carries its report there (ADR-0047). */
+export interface TaskOutputSummaryRead {
+  reviewReason: string;
+  report?: string;
+  logTail?: string;
+}
+
+/** A task's handoff: the digest a read shows, and where the findings past it and the report live. */
+export type TaskHandoffRead = HandoffDigest & { rest: string };
+
+/**
+ * One task's read, from live plan state. Every rule that shapes what a read
+ * says lives here — the loop position, and the handoff owning a report the
+ * summary would otherwise repeat (ADR-0047) — so the envelope's text answer
+ * and the JSON tool can only render the same data (ADR-0012 T1, ADR-0022).
+ * `output` is not read here: it is a live capture each channel reads itself.
+ */
+export interface TaskRead {
+  ref: string;
+  id: string;
+  title: string;
+  status: Task['status'];
+  type: Task['type'];
+  /** Where the task stands in a loop; absent for a task in none. */
+  loop?: TaskLoopRead;
+  /** The fields asked for, in the order asked: what each channel renders. */
+  fields: readonly TaskQueryField[];
+  description?: string | null;
+  /** A task's prompt, or null when it has none. */
+  prompt?: string | null;
+  /** A script task's body in place of a prompt (ADR-0035), or null when the plan's rules refuse it. */
+  body?: ScriptBody | null;
+  userSteps?: TaskStepRead[] | null;
+  verdict?: TaskVerdictRead | null;
+  outputSummary?: TaskOutputSummaryRead | null;
+  handoff?: TaskHandoffRead | null;
+  userStoriesCovered?: string[] | null;
+  skills?: string[] | null;
+}
+
+/** One task's read, its rules applied once for both channels. */
+export function readTask(plan: readonly Task[], task: Task, fields: readonly TaskQueryField[]): TaskRead {
+  const wants = (field: TaskQueryField) => fields.includes(field);
+  const loop = loopRead(plan, task);
+  return {
+    ref: taskRefOf(plan, task.id) ?? `#${task.order}`,
+    id: task.id,
+    title: task.title,
+    status: task.status,
+    type: task.type,
+    fields,
+    ...(loop ? { loop } : {}),
+    ...(wants('description') ? { description: task.description || null } : {}),
+    ...(wants('prompt') ? (task.type === 'script' ? { body: scriptBodyOf(task) } : { prompt: task.prompt || null }) : {}),
+    ...(wants('userSteps') ? { userSteps: task.userSteps?.length ? task.userSteps.map((s) => ({ order: s.order, instruction: s.instruction, completed: s.completed === true })) : null } : {}),
+    ...(wants('verdict') ? { verdict: verdictRead(task.verdict) } : {}),
+    ...(wants('outputSummary') ? { outputSummary: outputSummaryRead(task) } : {}),
+    ...(wants('handoff') ? { handoff: handoffRead(plan, task.handoff) } : {}),
+    ...(wants('userStoriesCovered') ? { userStoriesCovered: task.userStoriesCovered?.length ? task.userStoriesCovered : null } : {}),
+    ...(wants('skills') ? { skills: task.skills?.length ? task.skills : null } : {}),
+  };
+}
+
+function loopRead(plan: readonly Task[], task: Task): TaskLoopRead | undefined {
+  if (task.loop) {
+    return {
+      body: task.loop.body.map((id) => taskRefOf(plan, id) ?? id),
+      maxRounds: task.loop.maxRounds,
+      round: loopRoundOf(task),
+      betweenRounds: betweenRounds(task),
+    };
+  }
+  const check = checkOf(plan, task.id);
+  return check ? { check: taskRefOf(plan, check.id) ?? check.id, checkTitle: check.title } : undefined;
+}
+
+/** A verdict as a read states it; null when the task has none. */
+export function verdictRead(verdict: Verdict | undefined): TaskVerdictRead | null {
+  if (!verdict) return null;
+  return {
+    outcome: verdict.outcome,
+    reason: verdict.reason,
+    checks: verdict.checks.map((c) => ({ name: c.name, result: c.skipped ? 'skipped' : c.passed ? 'pass' : 'fail' })),
+  };
+}
+
+/** How an attempt ended, as a read states it; a task with a handoff carries its report there (ADR-0047). */
+export function outputSummaryRead({ outputSummary, handoff }: Pick<Task, 'outputSummary' | 'handoff'>): TaskOutputSummaryRead | null {
+  if (!outputSummary) return null;
+  const { reviewReason, logTail } = outputSummary;
+  const report = handoff ? undefined : outputSummary.report;
+  return { reviewReason, ...(report ? { report } : {}), ...(logTail ? { logTail } : {}) };
+}
+
+/** A handoff's digest, its cited tasks named by the plan's references, and where the rest is. */
+function handoffRead<H extends HandoffDigest>(plan: readonly Task[], handoff: H | undefined): (H & { rest: string }) | null {
+  return handoff ? { ...namedHandoff(plan, handoff), rest: handoffRest(handoff) } : null;
+}
+
+/**
+ * A task read as the JSON tool answers it (ADR-0022): a field asked for and
+ * empty reads `null`, never absent, so a missing answer is never mistaken for
+ * a field not asked for.
+ */
+export function taskReadDetail(read: TaskRead) {
+  const wants = (field: TaskQueryField) => read.fields.includes(field);
+  return {
+    id: read.id,
+    ref: read.ref,
+    title: read.title,
+    status: read.status,
+    type: read.type,
+    ...(read.loop ? { loop: loopDetail(read.loop) } : {}),
+    ...(wants('description') ? { description: read.description ?? null } : {}),
+    // A script task's body is what it runs, as a prompt is what a runner is told (ADR-0035).
+    ...(wants('prompt') ? (read.type === 'script' ? { body: read.body ?? null } : { prompt: read.prompt ?? null }) : {}),
+    ...(wants('userSteps') ? { userSteps: read.userSteps ?? null } : {}),
+    ...(wants('verdict') ? { verdict: read.verdict ?? null } : {}),
+    ...(wants('outputSummary') ? { outputSummary: read.outputSummary ?? null } : {}),
+    ...(wants('handoff') ? { handoff: read.handoff ?? null } : {}),
+    ...(wants('userStoriesCovered') ? { userStoriesCovered: read.userStoriesCovered ?? null } : {}),
+    ...(wants('skills') ? { skills: read.skills ?? null } : {}),
+  };
+}
+
+function loopDetail(loop: TaskLoopRead) {
+  return 'check' in loop ? { check: loop.check } : loop;
+}
+
 function renderLiveOutput(taskId: string, ctx: OutputRenderContext): string[] {
   const tail = ctx.liveOutput?.(taskId, { maxLines: ctx.outputLines, sinceOffset: ctx.outputSince }) ?? null;
   if (!tail) return ['output: (no captured output — the task has not run in this session)'];
@@ -271,78 +429,73 @@ function renderLiveOutput(taskId: string, ctx: OutputRenderContext): string[] {
   ];
 }
 
-function renderField(task: Task, field: TaskQueryField, ctx: OutputRenderContext, tasks: readonly Task[]): string[] {
+function renderField(read: TaskRead, field: TaskQueryField, ctx: OutputRenderContext): string[] {
   switch (field) {
     case 'description':
-      return [`description: ${task.description || '(none)'}`];
+      return [`description: ${read.description ?? '(none)'}`];
     case 'prompt':
-      if (task.type === 'script') return scriptBodyLines(task);
-      return task.prompt ? ['prompt:', task.prompt] : ['prompt: (none)'];
+      if (read.type === 'script') return scriptBodyLines(read.body ?? null);
+      return read.prompt ? ['prompt:', read.prompt] : ['prompt: (none)'];
     case 'userSteps': {
-      const steps = task.userSteps ?? [];
+      const steps = read.userSteps ?? [];
       if (steps.length === 0) return ['userSteps: (none)'];
       return ['userSteps:', ...steps.map((s) => `  ${s.order}. [${s.completed ? 'x' : ' '}] ${s.instruction}`)];
     }
     case 'verdict': {
-      const v = task.verdict;
+      const v = read.verdict;
       if (!v) return ['verdict: (none)'];
-      const checks = v.checks.map((c) => `${c.name}=${c.skipped ? 'skipped' : c.passed ? 'pass' : 'fail'}`).join(', ');
+      const checks = v.checks.map((c) => `${c.name}=${c.result}`).join(', ');
       return [`verdict: ${v.outcome.toUpperCase()} — ${v.reason}${checks ? ` [${checks}]` : ''}`];
     }
     case 'outputSummary': {
-      const o = task.outputSummary;
+      const o = read.outputSummary;
       if (!o) return ['outputSummary: (none)'];
-      // A task with a handoff carries its report there.
-      const report = task.handoff ? undefined : o.report;
-      return [`outputSummary: ${o.reviewReason}`, ...(report ? ['report:', report] : []), ...(o.logTail ? ['log tail:', o.logTail] : [])];
+      return [`outputSummary: ${o.reviewReason}`, ...(o.report ? ['report:', o.report] : []), ...(o.logTail ? ['log tail:', o.logTail] : [])];
     }
-    case 'handoff': {
-      const h = task.handoff;
-      if (!h) return ['handoff: (none)'];
-      return ['handoff:', ...handoffLines(h, (id) => taskRefOf(tasks, id)), '(The whole handoff, report and all, is in the attempt\'s log.)'];
-    }
+    case 'handoff':
+      return read.handoff
+        ? ['handoff:', ...handoffLines(read.handoff), '(The whole handoff, report and all, is in the attempt\'s log.)']
+        : ['handoff: (none)'];
     case 'userStoriesCovered': {
-      const stories = task.userStoriesCovered ?? [];
+      const stories = read.userStoriesCovered ?? [];
       if (stories.length === 0) return ['userStoriesCovered: (none)'];
       return ['userStoriesCovered:', ...stories.map((s) => `  - ${s}`)];
     }
     case 'skills':
-      return [`skills: ${task.skills?.length ? task.skills.join(', ') : '(none)'}`];
+      return [`skills: ${read.skills?.length ? read.skills.join(', ') : '(none)'}`];
     case 'output':
-      return renderLiveOutput(task.id, ctx);
+      return renderLiveOutput(read.id, ctx);
   }
 }
 
 const TYPE_LABELS: Record<Task['type'], string> = { ai: 'AI', user: 'MAN', script: 'SCRIPT' };
 
 /** A script task's body in place of a prompt (ADR-0035): each command as typed, or the script, and its time limit. */
-function scriptBodyLines(task: Task): string[] {
-  const body = scriptBodyOf(task);
+function scriptBodyLines(body: ScriptBody | null): string[] {
   if (!body) return ['body: (none)'];
   const limit = `timeoutMs: ${body.timeoutMs}`;
   return 'commands' in body ? ['commands:', ...body.commands.map((argv) => `  $ ${commandLine(argv)}`), limit] : ['script:', body.script, limit];
 }
 
-/** Where a task stands in a loop (ADR-0045): a check's body and round, or the check a body task runs for. */
-function loopLines(task: Task, tasks: readonly Task[]): string[] {
-  const named = (id: string) => `${taskRefOf(tasks, id) ?? id}`;
-  if (task.loop) {
-    const between = betweenRounds(task) ? `; failed round ${loopRoundOf(task)}, so its body is fixing what it found and it runs again after` : `; round ${loopRoundOf(task)}`;
-    return [`loop: body ${task.loop.body.map(named).join(', ')}; at most ${task.loop.maxRounds} rounds${between}`];
-  }
-  const check = checkOf(tasks, task.id);
-  return check ? [`loop: in the body of ${named(check.id)} "${check.title}", so it runs only when that check fails`] : [];
+/** Where a task stands in a loop (ADR-0045), in the text channel's words. */
+function loopLines(loop: TaskLoopRead | undefined): string[] {
+  if (!loop) return [];
+  if ('check' in loop) return [`loop: in the body of ${loop.check} "${loop.checkTitle}", so it runs only when that check fails`];
+  const between = loop.betweenRounds
+    ? `; failed round ${loop.round}, so its body is fixing what it found and it runs again after`
+    : `; round ${loop.round}`;
+  return [`loop: body ${loop.body.join(', ')}; at most ${loop.maxRounds} rounds${between}`];
 }
 
-function renderTask(task: Task, ref: string, fields: readonly TaskQueryField[], ctx: OutputRenderContext, tasks: readonly Task[]): string[] {
+function renderTask(read: TaskRead, ctx: OutputRenderContext): string[] {
   // The tail renders after the task's other fields and before the closing
   // blank, so its budget is computed against everything already committed —
   // including this task's own bounded fields.
   const lines = [
-    `${ref} id=${task.id} "${task.title}" [${task.status}] type:${TYPE_LABELS[task.type]}`,
-    ...loopLines(task, tasks),
-    ...fields.filter((f) => f !== 'output').flatMap((f) => renderField(task, f, ctx, tasks)),
-    ...(fields.includes('output') ? renderLiveOutput(task.id, ctx) : []),
+    `${read.ref} id=${read.id} "${read.title}" [${read.status}] type:${TYPE_LABELS[read.type]}`,
+    ...loopLines(read.loop),
+    ...read.fields.filter((f) => f !== 'output').flatMap((f) => renderField(read, f, ctx)),
+    ...(read.fields.includes('output') ? renderLiveOutput(read.id, ctx) : []),
     '',
   ];
   ctx.used += lines.reduce((n, l) => n + l.length + 1, 0);
@@ -397,7 +550,7 @@ export function renderTaskQueryAnswer(
         body.push(`${ref}: no task matches this reference in the current plan.`, '');
         continue;
       }
-      body.push(...renderTask(task, taskRefOf(tasks, task.id) ?? `#${task.order}`, fields, ctx, tasks));
+      body.push(...renderTask(readTask(tasks, task, fields), ctx));
     }
     blocks.push(['<task_detail>', ...body, '</task_detail>'].join('\n'));
   }

@@ -48,6 +48,26 @@ export function pastGateConfirmation(unmerged: readonly string[], subject = 'Thi
   return `${subject} waits for Merge all: the work of ${unmerged.join(', ')} is not merged into your branch yet, so it would act without it. Starting it now is kept on the task.`;
 }
 
+/** Which way a manual override moves a task: the direction of Mark complete or Mark not done. */
+export type OverrideDirection = 'complete' | 'uncomplete';
+
+/**
+ * What a user is asked before they override an AI or script task by hand
+ * (ADR-0029), the same words on every surface. `label` names the task. Marking
+ * complete vouches for work no verdict passed; marking not done undoes only the
+ * completion, never the work or what already ran on it.
+ */
+export function manualOverrideConfirmation(direction: OverrideDirection, label: string): string {
+  return direction === 'complete'
+    ? `Mark ${label} complete? You vouch for its work although no passing verdict said it was done. Any changes it kept may land in your run, and the tasks that depend on it are released to start on a future run.`
+    : `Mark ${label} not done? This clears its completion and holds it until you retry or start it. The work it did stays where it is, and tasks that already ran on its result are not undone.`;
+}
+
+/** Why a manual override waits for the run to stop (ADR-0029); `label` names the task. */
+export function manualOverrideStopFirst(direction: OverrideDirection, label: string): string {
+  return `${label.charAt(0).toUpperCase()}${label.slice(1)} cannot be marked ${direction === 'complete' ? 'complete' : 'not done'} while the plan is starting, running or waiting to resume, because the run could still move it on. Stop the run first, and mark it once everything has stopped.`;
+}
+
 export interface NewTaskFields {
   title: string;
   description: string;
@@ -65,4 +85,13 @@ export function newTaskFields(title: string, prompt?: string): NewTaskFields | n
   const name = title.trim();
   if (!name) return null;
   return { title: name, description: name, prompt: prompt?.trim() ? prompt : name, type: 'ai' };
+}
+
+/**
+ * Why a manual or script task offers no executor choice (a runner, model,
+ * effort or mode), worded for whichever of the two it is; a script task runs
+ * no model (ADR-0035). `manual` and `script` finish the sentence for each.
+ */
+export function noExecutorRefusal(type: string, manual: string, script: string): string {
+  return type === 'script' ? `A script task runs no model, so ${script}` : `Manual tasks do not run an executor, so ${manual}`;
 }

@@ -1,9 +1,9 @@
 import type { IsolationLandedTask, IsolationMergeBlock, IsolationMergeResult } from '../interfaces/IWorktreeIsolation';
-import { SELF_REPO } from './isolationRecord';
+import { SELF_REPO } from './repoPath';
 import { capConflictFiles } from './conflictFiles';
 
 /** One repo that kept "Merge all" from touching anything, as part of one line. */
-function blockNotice({ repo, reason, files, expected, actual, rebasing }: IsolationMergeBlock): string {
+export function blockNotice({ repo, reason, files, expected, actual, rebasing }: IsolationMergeBlock): string {
   switch (reason) {
     case 'merge-in-progress': return `${repo} has a merge in progress`;
     case 'conflict': return `${repo} would conflict in ${files.join(', ')}`;
@@ -12,6 +12,11 @@ function blockNotice({ repo, reason, files, expected, actual, rebasing }: Isolat
     case 'wrong-branch': return `${repo === SELF_REPO ? 'your checkout' : repo} is ${actual ? `on ${actual}` : rebasing ? 'in the middle of a rebase' : 'on a detached HEAD'}; this run started on ${expected}`;
     case 'git-error': return `git could not check ${repo}`;
   }
+}
+
+/** Every repo's reason, in the order "Merge all" named them, so a surface can list them or join them. */
+export function blockNotices(blocked: readonly IsolationMergeBlock[]): string[] {
+  return blocked.map(blockNotice);
 }
 
 /** What to do about repos that are off their branch, when that is all that kept the merge back. */
@@ -34,11 +39,23 @@ function landedNotice(landed: string[]): string {
   return landed.length === 1 ? `${landed[0]} was merged already and stays merged.` : `${landed.join(', ')} were merged already and stay merged.`;
 }
 
-/** So the reviewer knows where to look (ADR-0015): which landed tasks only landed after a repair, and their files. */
-function repairedNotice(repaired: IsolationLandedTask[]): string {
-  const named = repaired.map((t) => `${t.title} (${capConflictFiles(t.repairedFiles ?? [])})`);
+/** Landed tasks that only landed after a conflict repair (ADR-0015). */
+export function repairedLanded(handoff: { landed: readonly IsolationLandedTask[] }): IsolationLandedTask[] {
+  return handoff.landed.filter((t) => t.repairedFiles?.length);
+}
+
+/**
+ * So the reviewer knows where to look (ADR-0015): every landed task that only
+ * landed after a repair, with the files it was started for — a leading-space
+ * sentence for appending after a full stop, empty when none did. A landing whose
+ * record names no file is left out, so no empty brackets are ever printed.
+ */
+export function repairedNotice(handoff: { landed: readonly IsolationLandedTask[] }): string {
+  const repaired = repairedLanded(handoff);
+  if (repaired.length === 0) return '';
+  const named = repaired.map((t) => `${t.title}${t.repairedFiles?.length ? ` (${capConflictFiles(t.repairedFiles)})` : ''}`);
   const list = named.length === 1 ? named[0] : `${named.slice(0, -1).join(', ')} and ${named[named.length - 1]}`;
-  return `${list} landed through ${repaired.length === 1 ? 'a conflict repair' : 'conflict repairs'}.`;
+  return ` ${list} landed through ${repaired.length === 1 ? 'a conflict repair' : 'conflict repairs'}.`;
 }
 
 /**
@@ -52,17 +69,18 @@ export function describeMergeResult(
   result: IsolationMergeResult,
   branch: string,
   group: boolean,
-  repaired: IsolationLandedTask[] = [],
+  repaired: readonly IsolationLandedTask[] = [],
 ): { level: 'info' | 'warn' | 'error'; message: string } {
   switch (result.outcome) {
     case 'merged': {
       const base = group
         ? `Merged ${branch} into the checked-out branch of every repository.`
         : `Merged ${branch} into your checked-out branch.`;
-      return { level: 'info', message: repaired.length > 0 ? `${base} ${repairedNotice(repaired)}` : base };
+      const repairedNoticeText = repairedNotice({ landed: repaired });
+      return { level: 'info', message: `${base}${repairedNoticeText}` };
     }
     case 'blocked':
-      return { level: 'warn', message: `Merged nothing, so every tree is as it was: ${result.blocked.map(blockNotice).join('; ')}.${branchFix(result.blocked)}` };
+      return { level: 'warn', message: `Merged nothing, so every tree is as it was: ${blockNotices(result.blocked).join('; ')}.${branchFix(result.blocked)}` };
     case 'conflict':
       return {
         level: 'warn',
@@ -70,12 +88,39 @@ export function describeMergeResult(
           ? `Merging ${branch} conflicted, so it was aborted: your tree is as it was.`
           : `Merging ${branch} conflicted in ${result.repo}${result.files?.length ? ` (${result.files.join(', ')})` : ''}, so it was aborted there. ${landedNotice(result.landed ?? [])}`,
       };
-    case 'failed':
+    case 'failed': {
+      const lone = result.repo === SELF_REPO;
+      const where = lone ? '' : ` in ${result.repo}`;
+      // Without git's words the only cause left is the user's own unfinished merge, the one case that never asks git.
+      if (result.error) {
+        return { level: 'error', message: `Could not merge ${branch}${where}: git said "${result.error}". ${lone ? 'Your tree is as it was.' : landedNotice(result.landed ?? [])}` };
+      }
       return {
         level: 'error',
-        message: result.repo === SELF_REPO
+        message: lone
           ? `Could not merge ${branch}: finish or abort the merge already in progress, then try again.`
-          : `Could not merge ${branch} in ${result.repo}: finish or abort any merge in progress there, then try again. ${landedNotice(result.landed ?? [])}`,
+          : `Could not merge ${branch}${where}: finish or abort any merge in progress there, then try again. ${landedNotice(result.landed ?? [])}`,
       };
+    }
   }
+}
+
+/**
+ * What "Merge all" did and what the user can do next, in words every surface
+ * shares: a group takes the shared wording and, when nothing or not everything
+ * merged, is told the integration branches are plain branches to merge by hand;
+ * a lone repo whose merge conflicted is told to resolve it with git.
+ */
+export function mergeOutcome(
+  result: IsolationMergeResult,
+  branch: string,
+  group: boolean,
+  repaired: readonly IsolationLandedTask[] = [],
+): { ok: boolean; message: string } {
+  const ok = result.outcome === 'merged';
+  if (!group && result.outcome === 'conflict') {
+    return { ok, message: `Merging ${branch} conflicted, so it was aborted: your tree is as it was. Merge it with git and resolve the conflict there.` };
+  }
+  const { message } = describeMergeResult(result, branch, group, repaired);
+  return { ok, message: ok || !group ? message : `${message} Each repository's ${branch} is a plain branch you can merge by hand.` };
 }

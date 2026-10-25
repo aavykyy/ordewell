@@ -136,7 +136,7 @@ describe('keyless first-run entry points at the process boundary', () => {
     const { token, file } = mintDaemonToken(port);
     const admission = { port, token, tokenFile: file };
     vendorBase = `http://127.0.0.1:${port}/vendor`;
-    const daemonListener = createRequestListener(createApp(pool, admission));
+    const daemonListener = createRequestListener(createApp(pool, admission), admission);
     server.on('request', async (req, res) => {
       if (!req.url?.startsWith('/vendor/')) { daemonListener(req, res); return; }
       let body = '';
@@ -346,17 +346,15 @@ describe('keyless first-run entry points at the process boundary', () => {
     expect(runner.spawn).not.toHaveBeenCalled();
   });
 
-  for (const action of ['merge', 'split', 'force-send', 'compact'] as const) {
+  for (const action of ['force-send', 'compact'] as const) {
     it(`${action} is refused by the real route before spawning when the selected vendor has no key`, async () => {
       savePlan('refusal');
       await client.adoptSession('refusal', workspace);
       process.env.AI_PROVIDER = 'openai';
       process.env.ORCHESTRATOR_MODEL = 'gpt-4o';
       process.env.OPENROUTER_API_KEY = 'other-provider-key';
-      const response = action === 'merge' ? await route('refusal', 'tasks/merge', { taskIds: ['t1', 't2'] })
-        : action === 'split' ? await route('refusal', 'tasks/t1/split')
-          : action === 'force-send' ? await route('refusal', 'converse/message/now', { message: 'Use Postgres' })
-            : await route('refusal', 'conversation/compact');
+      const response = action === 'force-send' ? await route('refusal', 'converse/message/now', { message: 'Use Postgres' })
+        : await route('refusal', 'conversation/compact');
 
       expect(response.status).toBe(409);
       expect(await response.json()).toMatchObject({ code: 'planner_not_ready', plannerNotReady: { provider: 'openai', keyEnvVar: 'OPENAI_API_KEY' } });
@@ -365,16 +363,14 @@ describe('keyless first-run entry points at the process boundary', () => {
     });
   }
 
-  for (const action of ['merge', 'split', 'force-send', 'compact'] as const) {
+  for (const action of ['force-send', 'compact'] as const) {
     it(`${action} waits for detection and then reaches the real Claude adapter`, async () => {
       if (action === 'compact') respond = (_chunk, proc) => answer(proc, '<conversation_summary>Build a ledger; database undecided.</conversation_summary>');
       savePlan('waiting');
       await client.adoptSession('waiting', workspace);
       const detection = probe();
-      const response = action === 'merge' ? route('waiting', 'tasks/merge', { taskIds: ['t1', 't2'] })
-        : action === 'split' ? route('waiting', 'tasks/t1/split')
-          : action === 'force-send' ? route('waiting', 'converse/message/now', { message: 'Use Postgres' })
-            : route('waiting', 'conversation/compact');
+      const response = action === 'force-send' ? route('waiting', 'converse/message/now', { message: 'Use Postgres' })
+        : route('waiting', 'conversation/compact');
       await flushMicrotasks(100);
       expect(argvs).toEqual([]);
       detection.answer();

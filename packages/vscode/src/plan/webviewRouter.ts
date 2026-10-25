@@ -5,8 +5,8 @@ import type { SettingsChange, WebviewToHost } from '../shared/protocol';
 import { isKnownSlashCommand } from '../commands/SlashParser';
 import { handleIsolationAction } from './isolation';
 import {
-  handleAddTask, handleCheckpointAnswer, handleResolveApproval, handleMergePlan, handleNewSession, handleRemoveTask,
-  handleSendMessage, handleSendMessageNow, handleSplitPlan, handleStopPlanning, handleSystemCommand, handleTaskControl, handleTaskEdit, type PlanManagerDeps,
+  handleAddTask, handleCheckpointAnswer, handleResolveApproval, handleNewSession, handleRemoveTask,
+  handleSendMessage, handleSendMessageNow, handleStopPlanning, handleSystemCommand, handleTaskControl, handleTaskEdit, type PlanManagerDeps,
 } from './PlanManager';
 
 /** What the extension itself answers: the catalog, the planner choice and the task skills — none of it a plan action. */
@@ -18,8 +18,12 @@ export interface ExtensionHandlers {
   setPlannerModel(modelId: string, effort?: string): Promise<void>;
   /** Open (or focus) the on-demand task-log tab for a structured task (ADR-0018, V1). */
   openTaskLog(taskId: string): void;
+  /** Open a workspace-relative file Ordewell kept, such as a handoff's saved patch (ADR-0050). */
+  openFile(path: string): void;
   setPlanDockHeight(height: number): void;
   changeSettings(change: SettingsChange): Promise<void>;
+  /** Turn on an installed runner the chat header offered; the host re-sends the list when it lands. */
+  enableRunner(runnerId: RunnerId): Promise<void>;
 }
 
 export interface WebviewRouterDeps extends PlanManagerDeps {
@@ -79,7 +83,7 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       await sendHeldPromptNow(msg.index, deps);
       return;
     case 'sendSystemCommand':
-      await handleSystemCommand(msg.command, msg.taskId ?? '', deps);
+      await handleSystemCommand(msg.command, msg.taskId ?? '', deps, msg.requestId);
       return;
     case 'editTask':
       await handleTaskEdit(msg.taskId, msg.edit, deps);
@@ -114,14 +118,6 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
     case 'interruptTask':
       await handleTaskControl({ kind: 'interrupt' }, msg.taskId, deps);
       return;
-    case 'mergeTasks':
-      await handleMergePlan(msg.taskIds, deps);
-      sendNextHeldPrompt(deps);
-      return;
-    case 'splitTask':
-      await handleSplitPlan(msg.taskId, deps);
-      sendNextHeldPrompt(deps);
-      return;
     case 'isolationAction':
       await handleIsolationAction(msg.action, msg.taskId, deps);
       return;
@@ -141,6 +137,9 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
     case 'openTaskLog':
       deps.extension.openTaskLog(msg.taskId);
       return;
+    case 'openFile':
+      deps.extension.openFile(msg.path);
+      return;
     case 'setPlanDockHeight':
       deps.extension.setPlanDockHeight(msg.height);
       return;
@@ -152,6 +151,9 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       return;
     case 'changeSettings':
       await deps.extension.changeSettings(msg.change);
+      return;
+    case 'enableRunner':
+      await deps.extension.enableRunner(msg.runnerId);
       return;
     case 'stopResearch':
       handleStopPlanning(deps);

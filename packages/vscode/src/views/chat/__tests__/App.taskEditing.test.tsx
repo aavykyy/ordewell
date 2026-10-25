@@ -86,6 +86,31 @@ describe('per-task dependency editing', () => {
   });
 });
 
+describe('editing a queued task while another one runs', () => {
+  beforeEach(setup);
+
+  it('posts a runner change from its card', () => {
+    send({
+      type: 'planUpdated',
+      plan: {
+        ...plan,
+        status: 'running',
+        tasks: [{ ...makeTask('t1', 1, 'Setup'), status: 'in_progress' }, makeTask('t2', 2, 'Build', ['t1'])],
+      },
+    });
+    api.postMessage.mockClear();
+
+    act(() => { fireEvent.click(screen.getByText('Build')); });
+    act(() => { fireEvent.change(screen.getByLabelText('Runner'), { target: { value: 'codex' } }); });
+
+    expect(api.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'editTask',
+      taskId: 't2',
+      edit: { kind: 'runner', runner: 'codex' },
+    }));
+  });
+});
+
 describe('adding a task by hand', () => {
   beforeEach(setup);
 

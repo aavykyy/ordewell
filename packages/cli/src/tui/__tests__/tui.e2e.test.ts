@@ -1,10 +1,11 @@
 import { EventEmitter } from 'events';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createApp, type App } from '../app';
+import { DaemonError } from '../../apiClient';
 import { openTerminal, type Terminal } from '../terminal';
 import { runEffect, type OrdewellApi } from '../effects';
 import { stripAnsi, width } from '../ansi';
-import type { AttemptUsage } from '@ordewell/core';
+import type { AttemptUsage, ExecutionCommand } from '@ordewell/core';
 import type { RewindTargetView } from '../state';
 import { messagesOf } from './chat';
 
@@ -82,9 +83,7 @@ function fakeDaemon() {
     }),
     stopExecution: vi.fn(async () => ({ status: 'stopped' })),
     cancelPlanning: vi.fn(async () => ({ cancelled: true })),
-    taskControl: vi.fn(async () => ({ ok: true })),
-    markTaskComplete: vi.fn(async () => ({ ok: true })),
-    markTaskIncomplete: vi.fn(async () => ({ ok: true })),
+    execute: vi.fn(async (_sessionId: string, _command: ExecutionCommand) => ({ ok: true as const, message: 'Done.' })),
     addTask: vi.fn(async () => ({ ok: true })),
     updateTask: vi.fn(async () => ({ ok: true })),
     removeTask: vi.fn(async () => ({ ok: true })),
@@ -132,7 +131,7 @@ function fakeDaemon() {
     followSession: vi.fn((_id: string, onEvent: (event: unknown) => void) => {
       log.push('followSession');
       followListener = onEvent;
-      return { ready: Promise.resolve(), ended: new Promise<void>(() => {}), close: () => { if (followListener === onEvent) followListener = null; } };
+      return { ready: Promise.resolve(true), ended: new Promise<void>(() => {}), close: () => { if (followListener === onEvent) followListener = null; } };
     }),
   };
   let settleExecution: () => void = () => {};
@@ -586,10 +585,10 @@ describe('TUI end to end', () => {
     h.type('\r');
     await vi.waitFor(() => expect(h.screen()).toContain('Add the login route'));
 
-    h.daemon.mocks.taskControl.mockImplementationOnce(async () => {
-      h.daemon.log.push('taskControl');
+    h.daemon.mocks.execute.mockImplementationOnce(async () => {
+      h.daemon.log.push('execute');
       h.daemon.emitExecution({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress' }] });
-      return { ok: true };
+      return { ok: true as const, message: 'Started.' };
     });
 
     h.type('\t');
@@ -600,9 +599,9 @@ describe('TUI end to end', () => {
       expect(h.app.getState().tasks.find((t) => t.id === 't1')?.status).toBe('in_progress');
       expect(h.screen()).toContain('RUN');
     });
-    expect(h.daemon.mocks.taskControl).toHaveBeenCalledWith('session-1', 't1', 'force-start');
+    expect(h.daemon.mocks.execute).toHaveBeenCalledWith('session-1', { command: 'force_start', task: 't1' });
     // The stream was subscribed before the request, so the first update landed.
-    expect(h.daemon.log.indexOf('streamExecution')).toBeLessThan(h.daemon.log.indexOf('taskControl'));
+    expect(h.daemon.log.indexOf('streamExecution')).toBeLessThan(h.daemon.log.indexOf('execute'));
 
     const frame = h.app.getState().spinnerFrame;
     h.app.dispatch({ type: 'spinnerTick' });
@@ -674,19 +673,26 @@ describe('TUI end to end', () => {
     h.type('/complete t1');
     h.type('\r');
 
+    // An AI task's override is asked first; the daemon hears of it only with the user's yes.
+    await vi.waitFor(() => expect(h.app.getState().overlay).toMatchObject({ kind: 'confirm', action: { kind: 'mark-override', direction: 'complete' } }));
+    expect(h.daemon.mocks.execute).not.toHaveBeenCalled();
+    h.type('\r');
+
     await vi.waitFor(() => {
       expect(h.app.getState().tasks.find((t) => t.id === 't1')?.status).toBe('completed');
     });
-    expect(h.daemon.mocks.markTaskComplete).toHaveBeenCalledWith('session-1', 't1');
+    expect(h.daemon.mocks.execute).toHaveBeenCalledWith('session-1', { command: 'mark_complete', task: 't1', confirmed: true, seen: 'pending' });
     expect(h.daemon.mocks.getSession).toHaveBeenCalled();
 
-    // Same key, other direction: `m` on the now-completed task un-marks it.
+    // Same key, other direction: `m` on the now-completed task asks to un-mark it.
     h.type('\t');
     h.type('m');
+    await vi.waitFor(() => expect(h.app.getState().overlay).toMatchObject({ kind: 'confirm', action: { kind: 'mark-override', direction: 'uncomplete' } }));
+    h.type('\r');
     await vi.waitFor(() => {
-      expect(h.daemon.mocks.markTaskIncomplete).toHaveBeenCalledWith('session-1', 't1');
+      expect(h.daemon.mocks.execute).toHaveBeenCalledWith('session-1', { command: 'mark_not_done', task: 't1', confirmed: true, seen: 'completed' });
     });
-    expect(h.daemon.mocks.markTaskComplete).toHaveBeenCalledTimes(1);
+    expect(h.daemon.mocks.execute.mock.calls.filter(([, command]) => command.command === 'mark_complete')).toHaveLength(1);
   });
 
   it('/planner <provider> persists the switch to the env, the daemon, and the header', async () => {
@@ -706,7 +712,7 @@ describe('TUI end to end', () => {
 
   it('a failed planner turn reports in the transcript, clears the session, and the TUI keeps working', async () => {
     const h = harness();
-    h.daemon.mocks.startConversation.mockRejectedValueOnce(new Error('planner exploded'));
+    h.daemon.mocks.startConversation.mockRejectedValueOnce(new DaemonError('planner exploded', 500));
 
     h.type('Build the login flow');
     h.type('\r');
@@ -863,6 +869,61 @@ describe('TUI end to end', () => {
     await vi.waitFor(() => expect(h.app.getState().planScroll).toBe(3));
     expect(h.app.getState().scroll).toBe(3);
     expect(h.screen()).not.toBe(afterChat);
+  });
+
+  it('routes a raw wheel report by the pointer row when a narrow terminal stacks the plan under the chat', async () => {
+    const h = harness(30);
+    await vi.waitFor(() => expect(h.screen()).toContain('deepseek/deepseek-v4-flash'));
+    h.output.columns = 60;
+    h.output.emit('resize');
+    for (let i = 0; i < 40; i++) h.app.dispatch({ type: 'notice', message: `line ${i}` });
+    h.app.dispatch({
+      type: 'planUpdated',
+      plan: {
+        pendingTasks: Array.from({ length: 30 }, (_, i) => ({
+          id: `t${i}`, order: i + 1, title: `Task ${i}`, type: 'ai', status: 'pending', dependencies: [],
+        })),
+      },
+    });
+    await settle();
+    const screen = h.screen().split('\n');
+    const header = screen.findIndex((line) => line.startsWith('Plan 0/30')) + 1;
+    expect(header, 'the plan header is painted under the transcript').toBeGreaterThan(3);
+    expect(screen.some((line) => line.includes('│'))).toBe(false);
+
+    // the same column, a row in the transcript and a row in the plan
+    h.type('\x1b[<64;10;2M');
+    await vi.waitFor(() => expect(h.app.getState().scroll).toBe(3));
+    expect(h.app.getState().planScroll ?? 0).toBe(0);
+
+    h.type(`\x1b[<65;10;${header + 2}M`);
+    await vi.waitFor(() => expect(h.app.getState().planScroll).toBe(3));
+    expect(h.app.getState().scroll).toBe(3);
+  });
+
+  it('copies one pane only from a drag that runs from the stacked transcript into the plan', async () => {
+    const h = harness(30);
+    h.type('Build the login flow');
+    h.type('\r');
+    await vi.waitFor(() => expect(h.screen()).toContain('Add the login route'));
+    h.output.columns = 60;
+    h.output.emit('resize');
+    await vi.waitFor(() => expect(h.screen().split('\n').some((line) => line.startsWith('Plan 0/'))).toBe(true));
+
+    const screen = h.screen().split('\n');
+    const replyRow = screen.findIndex((line) => line.includes('Plan drafted')) + 1;
+    const taskRow = screen.findIndex((line) => line.includes('Add the login route')) + 1;
+    expect(replyRow).toBeGreaterThan(0);
+    expect(taskRow).toBeGreaterThan(replyRow);
+
+    h.type(`\x1b[<0;3;${replyRow}M`);
+    h.type(`\x1b[<32;40;${taskRow}M`);
+    h.type(`\x1b[<0;40;${taskRow}m`);
+
+    await vi.waitFor(() => expect(h.clipboard).toHaveLength(1));
+    expect(h.clipboard[0]).toContain('Plan drafted');
+    expect(h.clipboard[0]).not.toContain('Add the login route');
+    expect(h.app.getState().selection).toBeNull();
   });
 
   it('the wheel still reaches the pane behind an overlay, and stops reaching it once the overlay closes', async () => {

@@ -84,8 +84,10 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
       setPlanner: vi.fn(async () => {}),
       setPlannerModel: vi.fn(async () => {}),
       openTaskLog: vi.fn(),
+      openFile: vi.fn(),
       setPlanDockHeight: vi.fn(),
       changeSettings: vi.fn(async () => {}),
+      enableRunner: vi.fn(async () => {}),
     },
     getPendingRunners: () => pending,
     setPendingRunners: (r) => { pending = r; },
@@ -179,13 +181,28 @@ describe('webview messages reach the session through one entry point each', () =
     it.each([
       ['resumeNow', { command: 'retry_task', task: 't1', from: 'session' }],
       ['cancelResume', { command: 'cancel_resume', task: 't1' }],
-      ['markComplete', { command: 'mark_complete', task: 't1' }],
-      ['markIncomplete', { command: 'mark_not_done', task: 't1' }],
       ['forceStart', { command: 'force_start', task: 't1' }],
     ] as const)('%s reaches the command seam as the user', async (command, expected) => {
       const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
       await h.route({ type: 'sendSystemCommand', command, taskId: 't1' });
 
+      expect(execute).toHaveBeenCalledWith(expected, { kind: 'user' });
+    });
+
+    it.each([
+      ['markComplete', 'Mark complete', { command: 'mark_complete', task: 't1', confirmed: true, seen: 'pending' }],
+      ['markIncomplete', 'Mark not done', { command: 'mark_not_done', task: 't1', confirmed: true, seen: 'pending' }],
+    ] as const)('%s reaches the command seam as the user only once the modal is answered %s', async (command, yes, expected) => {
+      const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
+      showWarningMessage.mockClear();
+      showWarningMessage.mockResolvedValueOnce(undefined);
+      await h.route({ type: 'sendSystemCommand', command, taskId: 't1' });
+      expect(execute).not.toHaveBeenCalled();
+
+      showWarningMessage.mockResolvedValueOnce(yes);
+      await h.route({ type: 'sendSystemCommand', command, taskId: 't1' });
+
+      expect(showWarningMessage).toHaveBeenLastCalledWith(expect.stringContaining('?'), { modal: true }, yes);
       expect(execute).toHaveBeenCalledWith(expected, { kind: 'user' });
     });
 
@@ -497,8 +514,10 @@ describe('webview messages reach the session through one entry point each', () =
     [{ type: 'setPlanner', provider: 'codex' }, 'setPlanner', ['codex']],
     [{ type: 'setPlannerModel', modelId: 'gpt-5', effort: 'high' }, 'setPlannerModel', ['gpt-5', 'high']],
     [{ type: 'openTaskLog', taskId: 't1' }, 'openTaskLog', ['t1']],
+    [{ type: 'openFile', path: '.ordewell/sessions/s1/tasks/t1/1.patch' }, 'openFile', ['.ordewell/sessions/s1/tasks/t1/1.patch']],
     [{ type: 'setPlanDockHeight', height: 320 }, 'setPlanDockHeight', [320]],
     [{ type: 'changeSettings', change: { run: { autorun: true } } }, 'changeSettings', [{ run: { autorun: true } }]],
+    [{ type: 'enableRunner', runnerId: 'codex' }, 'enableRunner', ['codex']],
   ] as const)('hands %o to the extension', async (msg, handler, args) => {
     await h.route(msg as WebviewToHost);
 

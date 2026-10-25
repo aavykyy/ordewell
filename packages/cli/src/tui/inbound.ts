@@ -294,6 +294,15 @@ export function inboundFor(api: object, dispatch: Dispatch, sessionId: string): 
   return inbound;
 }
 
+/**
+ * Drop what one session's sockets counted, for a session the TUI has closed or
+ * deleted. A long-lived TUI browsing `/sessions` would otherwise keep a
+ * window and three dedupe sets for every session it ever opened.
+ */
+export function forgetInbound(api: object, sessionId: string): void {
+  inbounds.get(api)?.delete(sessionId);
+}
+
 function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
   const delivered = new Delivered(256);
   const copies = new Copies(64);
@@ -478,6 +487,7 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
         tasks: event.tasks,
         ...(event.runMerge ? { runMerge: event.runMerge } : {}),
         ...(event.usage ? { usage: event.usage } : {}),
+        ...(event.activity ? { activity: event.activity } : {}),
         sessionId,
       });
       return;

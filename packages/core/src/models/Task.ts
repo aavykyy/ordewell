@@ -9,6 +9,7 @@ import type { TaskLoop } from './Loop';
 import type { HandoffDigest } from './Handoff';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
 import { subtreeIds, walkPlan } from '../services/PlanTree';
+import { migratePlanStateIsolation } from '../services/isolationRecord';
 
 export interface UserStep {
   order: number;
@@ -140,6 +141,54 @@ export function dropRetiredPlanFields(plan: LegacyPlanState): void {
 }
 
 /**
+ * Move a mid-run edit an older build queued for its next batch boundary into
+ * the pending turns: it was never answered, so it waits like any other.
+ */
+function carryOverQueuedEdits(plan: LegacyPlanState): void {
+  const queued = plan.queuedMessages ?? [];
+  delete plan.queuedMessages;
+  if (queued.length === 0) return;
+  const carried = queued.map(({ id, text, timestamp, skills }): PendingPlanTurn => ({ id, source: 'user', text, timestamp, ...(skills ? { skills } : {}) }));
+  plan.pendingTurns = [...(plan.pendingTurns ?? []), ...carried];
+}
+
+/**
+ * Bring a loaded plan to the shape this build reads, in place: every plan-shape
+ * migration lives here, so each can be tested from an old shape without a whole
+ * Session, as {@link migrateLoadedTasks} does for tasks.
+ *
+ * `adopting` is false when a Session reloads the plan it already holds: the
+ * live run's task pauses are fresher than the save, so they stay.
+ */
+export function migrateLoadedPlan(plan: LegacyPlanState, { adopting = true }: { adopting?: boolean } = {}): void {
+  // Saved before approval had its own record: the status said it, and
+  // executing a plan approved every task it held. Read once, here, and never
+  // again — a surface rewrites the status for display.
+  plan.approved ??= plan.status !== 'draft' && plan.status !== 'rejected';
+  if (!plan.approvedTasks && plan.approved) {
+    plan.approvedTasks = flattenTasks(plan.tasks).map((t) => t.id);
+  }
+  // A saved reset time belonged to a run that is gone; loading is not consent
+  // to spend tokens (ADR-0044).
+  if (adopting) {
+    for (const task of flattenTasks(plan.tasks)) delete task.resumeAt;
+  }
+  migratePlanStateIsolation(plan);
+  // Older builds copied the since-removed transport setting onto the plan.
+  // Every plan now runs structured (ADR-0018), so the copy is not carried on.
+  delete (plan as { runnerTransport?: unknown }).runnerTransport;
+  // Run settings are the user's now (ADR-0030); an older plan's own copies
+  // are not read, and go with this save.
+  for (const key of ['supervisorLevel', 'mergeAtGatesAutomatically', 'supervisorRetryLimit', 'wakeUpReadBudget']) {
+    delete (plan as unknown as Record<string, unknown>)[key];
+  }
+  // The per-message research budget is gone (ADR-0037); a plan saved before
+  // its removal is read once and written back without its keys.
+  dropRetiredPlanFields(plan);
+  carryOverQueuedEdits(plan);
+}
+
+/**
  * A task skill as one attempt received it: read from the task's own worktree
  * (or global) at spawn, kept so the user can see what the runner was told
  * even after the skill's file changes.
@@ -238,6 +287,12 @@ export interface Task {
    * counts as approved to run (ADR-0029). Set by the session, never by an op.
    */
   addedBy?: 'supervisor';
+  /**
+   * An attempt of it has started, so its chat exists from then on: kept after
+   * a failure, a cancel, a skip or a completion, and restored with the plan.
+   * Set by the attempt's own start — never by a status or a manual mark.
+   */
+  attempted?: true;
   attemptUsage?: AttemptUsage[];
   /**
    * A script task's body (ADR-0035), exactly one of these two: argument
@@ -804,6 +859,7 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     verdict: overrides.verdict,
     outputSummary: overrides.outputSummary,
     ...(overrides.handoff ? { handoff: structuredClone(overrides.handoff) } : {}),
+    ...(overrides.attempted ? { attempted: true as const } : {}),
     ...(overrides.attemptUsage ? { attemptUsage: structuredClone(overrides.attemptUsage) } : {}),
     assignedModel: overrides.assignedModel,
     assignedRunner: overrides.assignedRunner ?? DEFAULT_RUNNERS[0],
@@ -1001,6 +1057,11 @@ export function renumberTasks(tasks: readonly Task[]): Task[] {
   }));
 }
 
+/** A task waiting on the user with its attempt still live: the runner sits at a checkpoint or for input. */
+export function waitsMidAttempt(task: Pick<Task, 'status' | 'awaitingReason'>): boolean {
+  return task.status === 'awaiting_user' && (task.awaitingReason === 'checkpoint' || task.awaitingReason === 'input');
+}
+
 /** A task paused on its runner's usage limit, whether it resumes on its own or waits for the user (#84). */
 export function pausedOnLimit(task: Readonly<Task>): boolean {
   return task.status === 'awaiting_user' && task.awaitingReason === 'usage-limit';
@@ -1095,6 +1156,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
         runnerSessionOwner: prior?.runnerSessionOwner,
         carriedFrom: prior?.carriedFrom,
         attemptSkills: prior?.attemptSkills,
+        attempted: prior?.attempted,
         attemptUsage: prior?.attemptUsage,
         loopRound: prior?.loopRound,
         // Where a task that has run ran is fixed, like its runner session (ADR-0020).

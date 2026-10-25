@@ -9,7 +9,7 @@ import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF } f
 import { PlannerShellSandbox, plannerShellProfile, sealedShellProfile, type SealedAvailability } from '../../sandbox/plannerSandbox';
 import type { SandboxBackend, SandboxProfile } from '../../sandbox/SandboxBackend';
 import { mapAgentTool } from '../agentTools';
-import { mcpClientConfig } from '../../mcp';
+import { mcpClientConfig, TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../../mcp';
 import type { ProjectMcpServer } from '../repoConfig';
 import type { StructuredEvent } from '../../../interfaces/IRunner';
 import { toTaskLogEvent } from '../../../models/TaskLog';
@@ -53,7 +53,16 @@ function fakeServer(routes: Record<string, (body: unknown) => Reply | Promise<Re
 
     const key = `${method} ${path}`;
     let reply: Reply;
-    if (routes[key]) reply = await routes[key](body);
+    if (routes[key]) {
+      const answering = Promise.resolve(routes[key](body));
+      // A request that is aborted stops waiting on its route, as a real socket does.
+      reply = await (init?.signal
+        ? Promise.race([answering, new Promise<never>((_resolve, reject) => {
+          const abort = () => reject(init.signal?.reason instanceof Error ? init.signal.reason : new Error('The operation was aborted.'));
+          if (init.signal?.aborted) abort(); else init.signal?.addEventListener('abort', abort, { once: true });
+        })])
+        : answering);
+    }
     else if (key === 'GET /api/info') reply = { version: '2.0.22' };
     else if (key === 'POST /api/session') reply = { data: { id: SES } };
     else if (key === 'GET /api/session/active') reply = { data: {} };
@@ -161,7 +170,7 @@ describe('OpenCode 2.x — start', () => {
       expect(created.agent).toBe('build');
       expect(created.model).toEqual({ providerID: 'opencode-go', id: 'deepseek-v4.1-flash' });
       for (const action of ['*', 'external_directory', 'edit', 'write', 'patch', 'apply_patch', 'multiedit', 'bash', 'shell', 'task', 'subagent', 'webfetch', 'websearch', 'execute']) expect(created.permissions).toContainEqual({ action, resource: '*', effect: 'deny' });
-      for (const action of ['read', 'grep', 'glob', 'list', 'ordewell_run_command', 'ordewell_task_complete', 'ordewell_checkpoint']) expect(created.permissions).toContainEqual({ action, resource: '*', effect: 'allow' });
+      for (const action of ['read', 'grep', 'glob', 'list', 'ordewell_run_command', 'ordewell_save_patch', 'ordewell_task_complete', 'ordewell_checkpoint']) expect(created.permissions).toContainEqual({ action, resource: '*', effect: 'allow' });
       expect(created.permissions).toContainEqual({ action: 'external_directory', resource: '/workspace/*', effect: 'allow' });
       expect(server.requests.find((r) => r.path === '/api/experimental/mcp/ordewell')?.body).toMatchObject({ config: { codemode: false } });
       const events: AgentEvent[] = [];
@@ -254,6 +263,20 @@ describe('OpenCode 2.x — start', () => {
     }
   });
 
+  it('asks a change task for its commit in that entry, and no other task (ADR-0047)', async () => {
+    const entry = `/api/experimental/session/${SES}/instructions/entries/ordewell-task`;
+    const mcp = { name: 'ordewell' as const, url: 'http://127.0.0.1:1/mcp', headers: { authorization: 'Bearer tok' } };
+    const values: unknown[] = [];
+    for (const commits of [undefined, true] as const) {
+      const server = fakeServer();
+      const { adapter } = await start(server, taskStart({ mcp, ...(commits ? { commits } : {}) }));
+      values.push((server.requests.find((r) => r.method === 'PUT' && r.path === entry)?.body as { value?: unknown }).value);
+      adapter.dispose();
+    }
+
+    expect(values).toEqual([TASK_COMPLETION_CONTRACT, taskCompletionContract({ commits: true })]);
+  });
+
   it('degrades a stale planner session to a fresh one, and fails a task that cannot resume', async () => {
     const gone = () => ({ status: 404 });
     const planner = await start(fakeServer({ [`GET /api/session/${SES}`]: gone }), plannerStart({ resumeSessionId: SES }));
@@ -270,9 +293,9 @@ const rules = (policy: Record<string, string>) => Object.entries(policy).map(([a
 /** Ordewell's tools, each allowed by its exact name: a pattern would cover a server named `ordewell_<anything>` too. */
 const ordewellAllow = [
   'list_runners', 'list_models', 'submit_plan', 'edit_plan', 'task_query', 'task_output', 'task_diff', 'run_command', 'fetch', 'web_search', 'load_skill',
-  'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'merge_all', 'run_script',
+  'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'answer_checkpoint', 'merge_all', 'run_script',
 ].map((tool) => ({ action: `ordewell_${tool}`, resource: '*', effect: 'allow' }));
-const taskAllow = ['task_complete', 'checkpoint', 'read_task'].map((tool) => ({ action: `ordewell_${tool}`, resource: '*', effect: 'allow' }));
+const taskAllow = ['task_complete', 'checkpoint', 'read_task', 'apply_patch'].map((tool) => ({ action: `ordewell_${tool}`, resource: '*', effect: 'allow' }));
 const document = (info: Record<string, unknown>) => ({ type: 'document', path: '/home/u/.config/opencode/opencode.jsonc', info });
 
 // 2.0.26's `websearch` with no provider chosen asks the user to pick one through `question`, which a planner is denied.
@@ -842,6 +865,90 @@ describe('OpenCode 2.x — MCP servers', () => {
     adapter.dispose();
   });
 
+  it.each([
+    ['planner', () => plannerStart({ mcp: ORDEWELL })],
+    ['task', () => taskStart({ mcp: ORDEWELL })],
+  ])('keeps a %s\'s Ordewell tools out of code mode on a turn after OpenCode rebuilt its services', async (_role, opts) => {
+    // 2.x rebuilds an evicted or reloaded location from the configuration it
+    // was launched with: a server replaced at runtime is back in code mode,
+    // still connected, its tools offered to the model only inside `execute`
+    // (checked against 2.1.4).
+    let outsideCodeMode = false;
+    const offered: boolean[] = [];
+    const server = fakeServer({
+      'PUT /api/experimental/mcp/ordewell': (body) => {
+        outsideCodeMode = (body as { config: { codemode?: boolean } }).config.codemode === false;
+        return { status: 204 };
+      },
+      [`POST /api/session/${SES}/prompt`]: () => {
+        offered.push(outsideCodeMode);
+        return { data: { id: 'msg_user', type: 'user' } };
+      },
+    });
+    const { adapter } = await start(server, opts());
+    const turn = async (n: number) => {
+      const ended = adapter.send('go', () => {});
+      const stream = await server.stream(n);
+      await until(() => offered.length > n);
+      stream.push(started());
+      stream.push(succeeded());
+      await ended;
+    };
+
+    await turn(0);
+    outsideCodeMode = false;
+    await turn(1);
+
+    expect(offered).toEqual([true, true]);
+    adapter.dispose();
+  });
+
+  it('reports Ordewell\'s server connected only once OpenCode offers the model its tools', async () => {
+    // 2.x hands a server's tools to the model 100 ms after they change, debounced, and says
+    // the server is connected before that: a prompt sent at once is offered none (checked against 2.1.4).
+    let connectedAt: number | null = null;
+    const offered: boolean[] = [];
+    const server = fakeServer({
+      'GET /api/mcp': () => {
+        connectedAt ??= Date.now();
+        return { data: [{ name: 'ordewell', status: { status: 'connected' } }] };
+      },
+      [`POST /api/session/${SES}/prompt`]: () => {
+        offered.push(connectedAt !== null && Date.now() - connectedAt >= 100);
+        return { data: { id: 'msg_user', type: 'user' } };
+      },
+    });
+    const { adapter } = await start(server, plannerStart({ mcp: ORDEWELL }));
+    expect(await adapter.mcpAttached()).toBe('connected');
+
+    const ended = adapter.send('go', () => {});
+    const stream = await server.stream();
+    await until(() => offered.length > 0);
+    stream.push(started());
+    stream.push(succeeded());
+    await ended;
+
+    expect(offered).toEqual([true]);
+    adapter.dispose();
+  });
+
+  it('fails a planner\'s turn, sending nothing, when OpenCode will not take Ordewell\'s tools out of code mode again', async () => {
+    let refuse = false;
+    const server = fakeServer({ 'PUT /api/experimental/mcp/ordewell': () => ({ status: refuse ? 500 : 204 }) });
+    const { adapter } = await start(server, plannerStart({ mcp: ORDEWELL }));
+    refuse = true;
+
+    const events: AgentEvent[] = [];
+    await adapter.send('go', (e) => events.push(e));
+
+    expect(events).toEqual([{
+      type: 'error',
+      message: 'OpenCode would not list Ordewell\'s tools as tools of their own again, and the planner may not reach them inside code mode: the message was not sent.',
+    }]);
+    expect(server.requests.some((r) => r.path.endsWith('/prompt'))).toBe(false);
+    adapter.dispose();
+  });
+
   it('denies a planner `execute`, which 2.x never asks about', async () => {
     const server = fakeServer();
     (await start(server, plannerStart({ mcp: ORDEWELL }))).adapter.dispose();
@@ -1019,6 +1126,34 @@ describe('OpenCode 2.x — interrupt', () => {
   });
 });
 
+describe('OpenCode 2.x — an interrupt that raced the turn\'s own end', () => {
+  async function interruptedThen(end: unknown) {
+    const server = fakeServer({ [`POST /api/session/${SES}/interrupt`]: () => ({ interrupted: true }) });
+    const { adapter } = await start(server, taskStart());
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => events.push(e));
+    const stream = await server.stream();
+    await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
+    stream.push(started());
+    const interrupted = adapter.interrupt(5000);
+    await until(() => server.requests.some((r) => r.path.endsWith('/interrupt')));
+    stream.push(end);
+    await interrupted;
+    await turn;
+    adapter.dispose();
+    return events;
+  }
+
+  it('ends a turn OpenCode reports succeeded as completed, so its completion reminder is still owed', async () => {
+    expect(await interruptedThen(succeeded())).toEqual([{ type: 'turn_end' }]);
+  });
+
+  it('ends a turn OpenCode reports failed as failed, with its error', async () => {
+    const events = await interruptedThen(frame('session.execution.failed', { error: { type: 'provider.rate-limit', message: 'Usage limit reached' } }));
+    expect(events).toEqual([{ type: 'error', message: 'Usage limit reached' }]);
+  });
+});
+
 describe('OpenCode 2.x — subagents', () => {
   it('ties a child session to the call that spawned it, and keeps its report out of the reply', async () => {
     const server = fakeServer();
@@ -1102,6 +1237,18 @@ describe('OpenCode 2.x — shared protocol behaviour', () => {
     const { adapter, turn, stream } = await turnOf(server);
 
     expect(await adapter.interrupt(50)).toBe(false);
+    stream.push(succeeded());
+    await turn;
+    adapter.dispose();
+  });
+
+  it('reports an interrupt false when the server never answers the request within the time it was given', async () => {
+    const server = fakeServer({ [`POST /api/session/${SES}/interrupt`]: () => new Promise<Reply>(() => {}) });
+    const { adapter, turn, stream } = await turnOf(server);
+
+    const answer = await Promise.race([adapter.interrupt(50), new Promise<string>((resolve) => setTimeout(() => resolve('hung'), 1500))]);
+
+    expect(answer).toBe(false);
     stream.push(succeeded());
     await turn;
     adapter.dispose();

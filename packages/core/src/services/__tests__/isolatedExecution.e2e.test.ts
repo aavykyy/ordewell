@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { TaskOrchestrator } from '../TaskOrchestrator';
+import { IsolationRunController } from '../IsolationRunController';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
@@ -193,6 +194,54 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     expect(readFileSync(join(root, 'merged.txt'), 'utf8')).toBe('written by m1\n');
   }, 60_000);
 
+  /** The run controller over a real repository, as a plan's session drives it. */
+  function controllerOver(root: string): IsolationRunController {
+    const config = fakeConfig({ worktreeIsolation: true });
+    return new IsolationRunController({
+      isolation: createWorktreeIsolation({ config, resolvePath: async () => process.env.PATH ?? '' }),
+      config,
+      notifications: fakeNotification(),
+      workspaceRoot: () => root,
+      listener: { changed: () => undefined, blocked: () => undefined, handoff: () => undefined, closed: () => undefined, notice: () => undefined },
+      liveTasks: () => new Set(),
+    });
+  }
+
+  it('a run started after a retry dropped the only record of landed work keeps that work for the user', async () => {
+    const root = repo();
+    const runs = controllerOver(root);
+    const t1 = createTask({ id: 't1', order: 1, title: 'Add landed', prompt: 'write landed.txt' });
+    await runs.decide(async () => undefined);
+    const { cwd } = await runs.attemptCwd(t1, 'fresh');
+    writeFileSync(join(cwd, 'landed.txt'), 'landed\n');
+    expect(await runs.integrate(t1)).toBe('merged');
+    const integration = runs.current!.repos[0].integrationBranch;
+    await runs.close();
+    // What retrying the task does: its record, the only one in the run, goes.
+    await runs.release('t1', { keep: false });
+    expect(runs.current!.tasks).toEqual({});
+
+    await runs.decide(async () => undefined);
+
+    expect(runs.current!.repos[0].integrationBranch).not.toBe(integration);
+    expect(git(root, 'show', `${integration}:landed.txt`)).toBe('landed');
+  }, 30_000);
+
+  it('a run started after one that landed nothing replaces it whole', async () => {
+    const root = repo();
+    const runs = controllerOver(root);
+    await runs.decide(async () => undefined);
+    await runs.attemptCwd(createTask({ id: 't1', order: 1, title: 'Idle', prompt: 'do nothing' }), 'fresh');
+    const first = runs.current!.repos[0].integrationBranch;
+    await runs.release('t1', { keep: false });
+    await runs.close();
+
+    await runs.decide(async () => undefined);
+
+    expect(git(root, 'branch', '--list', 'ordewell/*', '--format=%(refname:short)')).toBe(runs.current!.repos[0].integrationBranch);
+    expect(runs.current!.repos[0].integrationBranch).not.toBe(first);
+  }, 30_000);
+
   it('resumes a session 0.4.23 saved mid-run: drops the attempt the crash cut off, continues the run, and hands it off whole', async () => {
     const root = repo();
     const base = git(root, 'rev-parse', 'HEAD');
@@ -292,7 +341,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
           if (hold(opts.taskId, n)) return;
           const job = jobFor(opts.taskId, n);
           if (job?.merge) {
-            const integration = spawns.map((s) => s.prompt.match(/git merge --no-edit ([^`\n\s]+)/)?.[1]).find(Boolean)!;
+            const integration = spawns.map((s) => s.prompt.match(/git merge --no-edit [^`\n]*?(\S+)`/)?.[1]).find(Boolean)!;
             let conflicted = false;
             try { git(opts.cwd, 'merge', '--no-edit', integration); } catch { conflicted = true; }
             // A conflicted merge resolves itself the way the repair is told to: keep both sides' work, commit.

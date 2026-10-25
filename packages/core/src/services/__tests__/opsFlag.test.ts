@@ -49,7 +49,6 @@ function editor(tasks = plan()) {
     scheduler: { tick: async () => undefined, releaseTask: async () => undefined, releaseMovedResume: (_taskId, changes) => changes, planEdited: () => undefined },
     runs: { current: null, linkResolver: () => undefined },
     broadcast: () => undefined,
-    plannerTools: () => false,
     taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [] }),
     notice: () => undefined,
     approve: () => undefined,

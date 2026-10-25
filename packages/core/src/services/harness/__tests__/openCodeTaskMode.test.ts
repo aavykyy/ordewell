@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { OpenCodeAdapter } from '../OpenCodeAdapter';
+import { REQUEST_TIMEOUT_MS } from '../openCodeTransport';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions, TaskModeAgentAdapter } from '../AgentAdapter';
-import { mcpClientConfig } from '../../mcp';
+import { mcpClientConfig, TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../../mcp';
 import { OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
 import { OPENCODE_MANIFEST } from '../../../plugins/builtin/opencode.manifest';
 import { modeIds, fakeSpawn, sseResponse, type FakeEventStream } from '../../__tests__/harnessTestKit';
@@ -52,7 +53,16 @@ function fakeServer(routes: Record<string, (body: unknown) => Reply | Promise<Re
 
     const key = `${method} ${path}`;
     let reply: Reply;
-    if (routes[key]) reply = await routes[key](body);
+    if (routes[key]) {
+      const answering = Promise.resolve(routes[key](body));
+      // A request that is aborted stops waiting on its route, as a real socket does.
+      reply = await (init?.signal
+        ? Promise.race([answering, new Promise<never>((_resolve, reject) => {
+          const abort = () => reject(init.signal?.reason instanceof Error ? init.signal.reason : new Error('The operation was aborted.'));
+          if (init.signal?.aborted) abort(); else init.signal?.addEventListener('abort', abort, { once: true });
+        })])
+        : answering);
+    }
     else if (key === 'GET /session/status') reply = status;
     else if (key === 'POST /session') reply = { id: 'ses_task' };
     else if (key.endsWith('/prompt_async')) reply = { status: 204 };
@@ -97,7 +107,8 @@ function taskStart(overrides: Partial<TaskStartOptions> = {}): TaskStartOptions 
   };
 }
 
-async function startTask(server: ReturnType<typeof fakeServer>, opts: AgentStartOptions = taskStart(), workspaceEnv: Record<string, string> = {}) {
+/** The adapter's start, announced up and not yet awaited — for a test that holds the start itself. */
+async function beginTask(server: ReturnType<typeof fakeServer>, opts: AgentStartOptions = taskStart(), workspaceEnv: Record<string, string> = {}) {
   const spawned = fakeSpawn([]);
   const envs: NodeJS.ProcessEnv[] = [];
   const spawn: SpawnFn = (cmd, argv, options) => {
@@ -117,8 +128,13 @@ async function startTask(server: ReturnType<typeof fakeServer>, opts: AgentStart
   const started = adapter.start(opts);
   for (let i = 0; i < 50 && spawned.processes.length === 0; i++) await Promise.resolve();
   spawned.processes[0].emitStdout(`opencode server listening on ${BASE}\n`);
+  return { adapter, spawned, env: envs[0], started };
+}
+
+async function startTask(server: ReturnType<typeof fakeServer>, opts: AgentStartOptions = taskStart(), workspaceEnv: Record<string, string> = {}) {
+  const { started, ...running } = await beginTask(server, opts, workspaceEnv);
   await started;
-  return { adapter, spawned, env: envs[0] };
+  return running;
 }
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -144,7 +160,7 @@ describe('OpenCodeAdapter task mode — start', () => {
       const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT!) as { lsp: boolean; permission: Record<string, unknown> };
       expect(config.lsp).toBe(false);
       for (const tool of ['*', 'edit', 'write', 'patch', 'apply_patch', 'multiedit', 'bash', 'shell', 'task', 'subagent', 'webfetch', 'websearch', 'codesearch', 'execute']) expect(config.permission[tool]).toBe('deny');
-      for (const tool of ['read', 'grep', 'glob', 'list', 'ordewell_run_command', 'ordewell_checkpoint', 'ordewell_task_complete']) expect(config.permission[tool]).toBe('allow');
+      for (const tool of ['read', 'grep', 'glob', 'list', 'ordewell_run_command', 'ordewell_save_patch', 'ordewell_checkpoint', 'ordewell_task_complete']) expect(config.permission[tool]).toBe('allow');
       expect(config.permission.external_directory).toMatchObject({ '*': 'deny', '/workspace/*': 'allow' });
       const events: AgentEvent[] = [];
       const turn = adapter.send('Review', (e) => events.push(e));
@@ -219,6 +235,24 @@ describe('OpenCodeAdapter task mode — the message', () => {
     });
     expect(server.requests.some((r) => r.path.endsWith('/message') && r.method === 'POST')).toBe(false);
     adapter.dispose();
+  });
+
+  it('carries the completion contract as its system, asking a change task for its commit (ADR-0047)', async () => {
+    const mcp = { name: 'ordewell' as const, url: 'http://127.0.0.1:1/mcp', headers: { authorization: 'Bearer tok' } };
+    const systems: unknown[] = [];
+    for (const commits of [undefined, true] as const) {
+      const server = fakeServer();
+      const { adapter } = await startTask(server, taskStart({ mcp, ...(commits ? { commits } : {}) }));
+      const turn = adapter.send('do the task', () => {});
+      const stream = await server.stream();
+      stream.push(status('busy'));
+      stream.push(status('idle'));
+      await turn;
+      systems.push((server.requests.find((r) => r.path === `/session/${SES}/prompt_async`)?.body as { system?: unknown }).system);
+      adapter.dispose();
+    }
+
+    expect(systems).toEqual([TASK_COMPLETION_CONTRACT, taskCompletionContract({ commits: true })]);
   });
 });
 
@@ -555,6 +589,28 @@ describe('OpenCodeAdapter task mode — interrupt', () => {
     adapter.dispose();
   });
 
+  it('reports a turn that failed for its own reason after an interrupt as failed, and only the abort itself as interrupted', async () => {
+    const server = fakeServer();
+    const { adapter } = await startTask(server);
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('do the task', (e) => events.push(e));
+    const stream = await server.stream();
+    stream.push(status('busy'));
+    await until(() => server.requests.some((r) => r.path === `/session/${SES}/prompt_async`));
+
+    server.status[SES] = { type: 'busy' };
+    const acknowledged = adapter.interrupt(2000);
+    await until(() => server.requests.some((r) => r.method === 'POST' && r.path === `/session/${SES}/abort`));
+    delete server.status[SES];
+    stream.push(assistant('msg_a', { error: { name: 'APIError', data: { message: 'Usage limit reached' } } }));
+    stream.push(status('idle'));
+
+    expect(await acknowledged).toBe(true);
+    await turn;
+    expect(events.at(-1)).toEqual({ type: 'error', message: 'Usage limit reached' });
+    adapter.dispose();
+  });
+
   it('reports false when the session never goes idle, so the caller can kill it', async () => {
     const server = fakeServer();
     const { adapter } = await startTask(server);
@@ -873,6 +929,10 @@ describe('OpenCodeAdapter task mode — shared protocol behaviour', () => {
 });
 
 describe('OpenCodeAdapter planner — still read-only', () => {
+  // A host running inside OpenCode carries its own configuration, which a child rightly keeps.
+  beforeEach(() => { vi.stubEnv('OPENCODE_CONFIG_CONTENT', undefined); });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
   /** A planner turn whose message POST stays open until `release`, as the real one does. */
   function plannerServer(routes: Record<string, (body: unknown) => Reply | Promise<Reply>> = {}) {
     let release: () => void = () => {};
@@ -962,12 +1022,14 @@ describe('OpenCodeAdapter task mode — resume', () => {
 describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
   const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret' });
   const ordewell = { type: 'remote', url: 'http://127.0.0.1:4555/mcp', headers: { Authorization: 'Bearer tok-secret' }, enabled: true };
+  /** What a process given the server is launched with so OpenCode 2.x never rebuilds the services holding it. */
+  const unevicted = { experimental: { location_idle_timeout: false } };
   const configOf = (env: NodeJS.ProcessEnv) => JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? 'null') as unknown;
   // One rule per tool by its exact name: a pattern would cover a repository server named `ordewell_<anything>` too.
-  const taskAllow = { ordewell_task_complete: 'allow', ordewell_checkpoint: 'allow', ordewell_read_task: 'allow' };
+  const taskAllow = { ordewell_task_complete: 'allow', ordewell_checkpoint: 'allow', ordewell_read_task: 'allow', ordewell_apply_patch: 'allow' };
   const plannerAllow = Object.fromEntries([
     'list_runners', 'list_models', 'submit_plan', 'edit_plan', 'task_query', 'task_output', 'task_diff', 'run_command', 'fetch', 'web_search', 'load_skill',
-    'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'merge_all', 'run_script',
+    'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'answer_checkpoint', 'merge_all', 'run_script',
   ].map((tool) => [`ordewell_${tool}`, 'allow']));
 
   // A host running inside OpenCode carries its own configuration, which a child rightly keeps.
@@ -977,7 +1039,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
   it('hands a task the server and an allow rule for its tools through the environment, never the command line', async () => {
     const { adapter, spawned, env } = await startTask(fakeServer(), taskStart({ mcp }));
 
-    expect(configOf(env)).toEqual({ mcp: { ordewell }, permission: taskAllow });
+    expect(configOf(env)).toEqual({ mcp: { ordewell }, ...unevicted, permission: taskAllow });
     expect(spawned.lastArgs().join(' ')).not.toContain('tok-secret');
     adapter.dispose();
   });
@@ -999,7 +1061,17 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
   it('hands the planner the same, beside the read-only agent', async () => {
     const { adapter, env } = await startTask(fakeServer(), { kind: 'planner', cwd: '/repo', systemPrompt: 'plan read-only', mcp });
 
-    expect(configOf(env)).toEqual({ mcp: { ordewell }, lsp: false, permission: { ...OPENCODE_PLANNER_PERMISSION, ...plannerAllow } });
+    expect(configOf(env)).toEqual({ mcp: { ordewell }, lsp: false, ...unevicted, permission: { ...OPENCODE_PLANNER_PERMISSION, ...plannerAllow } });
+    adapter.dispose();
+  });
+
+  it('keeps the services holding the server from being evicted, over the workspace\'s own idle timeout', async () => {
+    // 2.x evicts a location idle past this timeout (an hour unless set) and rebuilds it from the launch configuration,
+    // without the runtime replacement that lists Ordewell's tools as tools of their own (checked against 2.1.4).
+    vi.stubEnv('OPENCODE_CONFIG_CONTENT', JSON.stringify({ experimental: { location_idle_timeout: '5 minutes', batch_tool: true } }));
+    const { adapter, env } = await startTask(fakeServer(), taskStart({ mcp }));
+
+    expect((configOf(env) as { experimental: unknown }).experimental).toEqual({ location_idle_timeout: false, batch_tool: true });
     adapter.dispose();
   });
 
@@ -1075,6 +1147,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
       expect(configOf(env)).toEqual({
         ...unrelated,
         mcp: { ...unrelated.mcp, ordewell },
+        ...unevicted,
         permission: { ...unrelated.permission, ...taskAllow },
       });
       expect(carriesParent(env)).toBe(false);
@@ -1092,7 +1165,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
       bare.adapter.dispose();
 
       const tooled = await startTask(fakeServer(), taskStart({ mcp }), workspace);
-      expect(configOf(tooled.env)).toEqual({ model: 'workspace/model', mcp: { ordewell }, permission: taskAllow });
+      expect(configOf(tooled.env)).toEqual({ model: 'workspace/model', mcp: { ordewell }, ...unevicted, permission: taskAllow });
       expect(carriesParent(tooled.env)).toBe(false);
       tooled.adapter.dispose();
     });
@@ -1118,6 +1191,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     expect(configOf(env)).toEqual({
       model: 'anthropic/claude-sonnet-4',
       mcp: { other: { type: 'local', command: ['x'] }, ordewell },
+      ...unevicted,
       permission: { bash: { '*': 'allow' }, ...taskAllow },
       agent: { build: { permission: { edit: 'ask' } } },
     });
@@ -1128,7 +1202,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     const { adapter, env } = await startTask(fakeServer(), taskStart({ mcp }), { OPENCODE_CONFIG_CONTENT: '{"permission":"ask"}' });
 
     const config = configOf(env) as { permission: Record<string, string> };
-    expect(Object.entries(config.permission)).toEqual([['*', 'ask'], ['ordewell_task_complete', 'allow'], ['ordewell_checkpoint', 'allow'], ['ordewell_read_task', 'allow']]);
+    expect(Object.entries(config.permission)).toEqual([['*', 'ask'], ['ordewell_task_complete', 'allow'], ['ordewell_checkpoint', 'allow'], ['ordewell_read_task', 'allow'], ['ordewell_apply_patch', 'allow']]);
     adapter.dispose();
   });
 
@@ -1270,4 +1344,114 @@ it('reports a refused OpenCode 1.x summarize instead of a successful compaction 
   await adapter.invokeCommand!('compact', '', (e) => events.push(e));
   expect(events.filter((e) => e.type === 'error' || e.type === 'turn_end' || e.type === 'compaction')).toEqual([{ type: 'error', message: 'OpenCode did not compact the session.' }]);
   adapter.dispose();
+});
+
+
+describe('OpenCodeAdapter task mode — request deadlines', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('gives an ordinary request a deadline, so a server that never answers cannot stall the start', async () => {
+    const server = fakeServer({ 'GET /api/info': () => new Promise<Reply>(() => {}) });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { adapter, started } = await beginTask(server);
+
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+    await started;
+
+    expect(adapter.version()).toBeNull();
+    expect(adapter.nativeSessionId()).toBe('ses_task');
+    adapter.dispose();
+  });
+
+  it('bounds an interrupt request by the time it was given, and says it was not acknowledged', async () => {
+    const server = fakeServer({ 'POST /session/ses_task/abort': () => new Promise<Reply>(() => {}) });
+    const { adapter, events, turn, stream } = await turnWith(server, taskStart());
+    stream.push(status('busy'));
+    await tick();
+
+    const acknowledged = await Promise.race([adapter.interrupt(50), new Promise<string>((resolve) => setTimeout(() => resolve('hung'), 1500))]);
+
+    expect(acknowledged).toBe(false);
+    adapter.dispose();
+    await turn;
+    void events;
+  });
+});
+
+describe('OpenCodeAdapter task mode — a command turn whose POST is held open', () => {
+  const commandRoutes = (post: () => Promise<Reply>) => ({
+    'GET /command': () => [{ name: 'hello', description: 'Say hello' }],
+    'POST /session/ses_task/command': post,
+  });
+  const headersTimeout = () => Object.assign(new TypeError('fetch failed'), { cause: { code: 'UND_ERR_HEADERS_TIMEOUT' } });
+
+  it('keeps the turn when the POST dies under it, and ends it on the idle, withdrawing what is still open', async () => {
+    let failPost: (err: Error) => void = () => {};
+    const server = fakeServer(commandRoutes(() => new Promise<Reply>((_resolve, reject) => { failPost = reject; })));
+    const { adapter } = await startTask(server, planMode);
+    const events: AgentEvent[] = [];
+    const turn = adapter.invokeCommand!('hello', 'Bob', (e) => events.push(e));
+    const stream = await server.stream();
+    stream.push(status('busy'));
+    stream.push(ask('per_1'));
+    await until(() => events.some((e) => e.type === 'permission_request'));
+
+    failPost(headersTimeout());
+    await tick();
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    stream.push(status('idle'));
+    await turn;
+
+    expect(events.filter((e) => e.type === 'error')).toEqual([]);
+    expect(events).toContainEqual({ type: 'permission_cancelled', id: 'per_1' });
+    expect(events.at(-1)).toEqual({ type: 'turn_end' });
+    adapter.dispose();
+  });
+
+  it('ends an interrupted command as interrupted, not as the abort error it comes back with, and withdraws what is open', async () => {
+    let answer: (value: Reply) => void = () => {};
+    const server = fakeServer(commandRoutes(() => new Promise<Reply>((resolve) => { answer = resolve; })));
+    const { adapter } = await startTask(server, planMode);
+    const events: AgentEvent[] = [];
+    const turn = adapter.invokeCommand!('hello', 'Bob', (e) => events.push(e));
+    const stream = await server.stream();
+    server.status[SES] = { type: 'busy' };
+    stream.push(status('busy'));
+    stream.push(ask('per_1'));
+    await until(() => events.some((e) => e.type === 'permission_request'));
+
+    const acknowledged = adapter.interrupt(1000);
+    await until(() => server.requests.some((r) => r.path === '/session/ses_task/abort'));
+    answer({ info: { id: 'msg_cmd', role: 'assistant', error: { name: 'MessageAbortedError', data: { message: 'The operation was aborted.' } } }, parts: [] });
+    await tick();
+    delete server.status[SES];
+    stream.push(status('idle'));
+
+    expect(await acknowledged).toBe(true);
+    await turn;
+    expect(events.filter((e) => e.type === 'error')).toEqual([]);
+    expect(events).toContainEqual({ type: 'permission_cancelled', id: 'per_1' });
+    expect(events.at(-1)).toEqual({ type: 'turn_end', interrupted: true });
+    adapter.dispose();
+  });
+
+  it('withdraws what is open when the command ends with its reply', async () => {
+    const reply = { info: { id: 'msg_cmd', role: 'assistant' }, parts: [{ id: 'txt', type: 'text', messageID: 'msg_cmd', text: 'done' }] };
+    let answer: (value: Reply) => void = () => {};
+    const server = fakeServer(commandRoutes(() => new Promise<Reply>((resolve) => { answer = resolve; })));
+    const { adapter } = await startTask(server, planMode);
+    const events: AgentEvent[] = [];
+    const turn = adapter.invokeCommand!('hello', 'Bob', (e) => events.push(e));
+    const stream = await server.stream();
+    stream.push(status('busy'));
+    stream.push(ask('per_1'));
+    await until(() => events.some((e) => e.type === 'permission_request'));
+
+    answer(reply);
+    await turn;
+
+    expect(events).toContainEqual({ type: 'permission_cancelled', id: 'per_1' });
+    expect(events.at(-1)).toEqual({ type: 'turn_end' });
+    adapter.dispose();
+  });
 });

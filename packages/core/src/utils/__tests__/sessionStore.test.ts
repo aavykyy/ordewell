@@ -68,6 +68,38 @@ describe('sessionStore', () => {
       expect(fs.readFileSync(path.join(sessionsDir, original)).equals(bytes)).toBe(true);
     });
 
+    it('replaces the file whole on every save, so a crash mid-write cannot empty it', () => {
+      const plan = { ...createEmptyPlan(), runners: ['claude-code'], tasks: [], generatedAt: '2026-01-01T00:00:00.000Z' };
+      const meta = saveSession(plan, 'Same goal', tmpDir);
+      const sessionsDir = path.join(tmpDir, '.ordewell', 'sessions');
+      const [file] = fs.readdirSync(sessionsDir);
+      const before = fs.statSync(path.join(sessionsDir, file)).ino;
+
+      saveSession({ ...plan, status: 'approved' }, 'Same goal', tmpDir, meta.id);
+
+      // A write in place truncates first; a rename swaps the file in one step.
+      const after = fs.statSync(path.join(sessionsDir, file));
+      expect(after.ino).not.toBe(before);
+      expect(fs.readdirSync(sessionsDir)).toEqual([file]);
+      expect(loadSession(meta.id, tmpDir)!.plan.status).toBe('approved');
+    });
+
+    it('moves a session file it cannot parse aside instead of silently dropping it from every list', () => {
+      const plan = { ...createEmptyPlan(), runners: ['claude-code'], tasks: [], generatedAt: '2026-01-01T00:00:00.000Z' };
+      const kept = saveSession(plan, 'Kept', tmpDir);
+      const sessionsDir = path.join(tmpDir, '.ordewell', 'sessions');
+      fs.writeFileSync(path.join(sessionsDir, '2026-01-02T00-00-00_torn.json'), '{"meta":{"id":"sess');
+
+      const { logger, warns } = fakeLogger();
+      const sessions = listSessions(tmpDir, logger);
+
+      expect(sessions.map((s) => s.id)).toEqual([kept.id]);
+      const files = fs.readdirSync(sessionsDir);
+      expect(files.some((f) => f.endsWith('.json') && f.includes('torn'))).toBe(false);
+      expect(files.filter((f) => f.includes('torn') && f.endsWith('.corrupt'))).toHaveLength(1);
+      expect(warns.some((w) => w.includes('moved aside'))).toBe(true);
+    });
+
     it('rewrites a session saved under the older file name instead of leaving a duplicate', () => {
       const plan = { ...createEmptyPlan(), runners: ['claude-code'], tasks: [], generatedAt: '2026-01-01T00:00:00.000Z' };
       const sessionsDir = path.join(tmpDir, '.ordewell', 'sessions');
@@ -182,6 +214,37 @@ describe('sessionStore', () => {
       expect(sessions).toHaveLength(1);
       expect(sessions[0].runners).toEqual(['opencode']);
       expect(warns).toHaveLength(0);
+    });
+
+    it('leaves a file it could not read alone instead of calling the session corrupt', () => {
+      const plan = createEmptyPlan();
+      plan.runners = ['claude-code'];
+      const kept = saveSession(plan, 'valid', tmpDir);
+      const sessionsDir = path.join(tmpDir, '.ordewell', 'sessions');
+      // A directory named like a session fails readFileSync with EISDIR: an I/O
+      // error, not unparseable content, and no reason to hide the file.
+      fs.mkdirSync(path.join(sessionsDir, 'unreadable.json'));
+
+      const { logger, warns } = fakeLogger();
+      const sessions = listSessions(tmpDir, logger);
+
+      expect(sessions.map((s) => s.id)).toEqual([kept.id]);
+      expect(fs.existsSync(path.join(sessionsDir, 'unreadable.json'))).toBe(true);
+      expect(fs.readdirSync(sessionsDir).some((f) => f.endsWith('.corrupt'))).toBe(false);
+      expect(warns.some((w) => w.includes('unreadable.json') && w.includes('skipping'))).toBe(true);
+    });
+
+    it('never returns an undefined entry for a JSON file that is not a session', () => {
+      const plan = createEmptyPlan();
+      plan.runners = ['claude-code'];
+      const kept = saveSession(plan, 'valid', tmpDir);
+      const sessionsDir = path.join(tmpDir, '.ordewell', 'sessions');
+      fs.writeFileSync(path.join(sessionsDir, 'broken.json'), '{}');
+
+      const sessions = listSessions(tmpDir, fakeLogger().logger);
+
+      expect(sessions.map((s) => s.id)).toEqual([kept.id]);
+      expect(sessions.every((s) => s !== undefined)).toBe(true);
     });
   });
 

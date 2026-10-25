@@ -175,6 +175,19 @@ describe('style', () => {
     expect(style.cyan('hi')).toBe('hi');
     style.enabled = true;
   });
+
+  it('keeps inverse video when colour is off, but drops it when output is not a terminal', () => {
+    style.enabled = false;
+    try {
+      expect(style.inverse('x')).toContain('\x1b[7m');
+      style.attributes = false;
+      expect(style.inverse('x')).toBe('x');
+      expect(style.highlight('x')).toBe('x');
+    } finally {
+      style.attributes = true;
+      style.enabled = true;
+    }
+  });
 });
 
 describe('the band, mixed from the terminal background', () => {

@@ -68,8 +68,11 @@ const REQUIRE_SANDBOX = process.env.ORDEWELL_REQUIRE_SANDBOX === '1';
 describe('sealed runs', async () => {
   const availability = await resolvePlannerSandbox();
   const reason = !availability.available ? availability.notice : !availability.sealed.available ? availability.sealed.notice : undefined;
+  // Named in the title, so a CI log shows which workspace mount the run exercised.
+  const overlayMode = availability.available && availability.sealed.available
+    && (availability.sealed.profile({ workspace: tmpdir() }).throwaway?.length ?? 0) > 0;
   const title = !reason && availability.available
-    ? `on this host (${availability.backend.name})`
+    ? `on this host (${availability.backend.name}, ${overlayMode ? 'throwaway overlay' : 'read-only workspace'})`
     : `${REQUIRE_SANDBOX ? 'required' : 'skipped'}: ${(reason ?? '').split('\n')[0]}`;
 
   describe.skipIf(reason !== undefined && !REQUIRE_SANDBOX)(title, () => {
@@ -303,8 +306,19 @@ describe('sealed runs', async () => {
           expect(tested.output).toContain('test');
 
           const escaped = await shell.run(`echo changed > '${join(repo, 'a.md')}'`);
-          expect(escaped.success).toBe(false);
+          // A throwaway overlay takes the write and drops it with the run; read-only refuses it (S1).
+          const overlaid = availability.available && availability.sealed.available
+            && (availability.sealed.profile({ workspace: repo }).throwaway?.length ?? 0) > 0;
+          if (!overlaid) expect(escaped.success).toBe(false);
           expect(readFileSync(join(repo, 'a.md'), 'utf8')).toBe('one\n');
+          // A file the checkout never had is the sharper canary: no copy-up of an existing one can hide it.
+          const planted = await shell.run(`touch '${join(repo, 'escaped.txt')}'`);
+          if (!overlaid) expect(planted.success).toBe(false);
+          expect(existsSync(join(repo, 'escaped.txt'))).toBe(false);
+          // Nor does a later sealed run see the discarded layer: the checkout is still the base.
+          const reread = await shell.run(`cat '${join(repo, 'a.md')}'`);
+          expect(reread.success).toBe(true);
+          expect(reread.output.endsWith('one\n')).toBe(true);
         } finally {
           shell.end();
         }

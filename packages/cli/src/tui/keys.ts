@@ -158,6 +158,55 @@ function decodeMouse(seq: string): Key | undefined {
 }
 
 /**
+ * The Kitty keyboard protocol's CSI-u form, which terminal.ts asks for with
+ * its "disambiguate" flag: `CSI <unicode code>;<mods> u`. Only a key that
+ * produces no text arrives this way — Escape above all, and every Ctrl
+ * shortcut — and terminals that report text keys as escapes too send Enter,
+ * Tab and Backspace here. Without this decode they all fall through to
+ * `unknown`, which leaves an overlay with no key that cancels it.
+ *
+ * The modifier field is one plus a bit field: shift (1), alt (2), ctrl (4),
+ * with super/hyper/meta/lock bits above those.
+ */
+// eslint-disable-next-line no-control-regex
+const CSI_U = /^\x1b\[(\d+)(?:;(\d+))?u$/;
+const KITTY_SHIFT = 1;
+const KITTY_ALT = 2;
+const KITTY_CTRL = 4;
+
+function decodeKitty(seq: string): Key | undefined {
+  const match = CSI_U.exec(seq);
+  if (!match) return undefined;
+  const code = Number(match[1]);
+  const mods = Number(match[2] ?? 1) - 1;
+  const shift = (mods & KITTY_SHIFT) !== 0;
+  const alt = (mods & KITTY_ALT) !== 0;
+  const ctrl = (mods & KITTY_CTRL) !== 0;
+
+  if (code === 27) return { name: 'escape' };
+  if (code === 13) return { name: shift ? 'shift-enter' : alt ? 'alt-enter' : 'enter' };
+  if (code === 9) return { name: shift ? 'shift-tab' : 'tab' };
+  if (code === 127 || code === 8) return { name: alt ? 'alt-backspace' : 'backspace' };
+
+  if (code >= 97 && code <= 122) {
+    const letter = String.fromCharCode(code);
+    if (ctrl) return { name: `ctrl-${letter}` };
+    if (alt) return { name: `alt-${letter}` };
+    return { name: 'char', char: shift ? letter.toUpperCase() : letter };
+  }
+  // A text key is a Unicode scalar outside the surrogate range, and not one of
+  // the protocol's own functional keys (the BMP private-use block): fromCodePoint
+  // throws above U+10FFFF, and a garbled code would otherwise kill the process
+  // out of the stdin handler.
+  const text = code >= 32 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff)
+    && !(code >= 0xe000 && code <= 0xf8ff);
+  if (text && !ctrl && !alt) return { name: 'char', char: String.fromCodePoint(code) };
+  // Ctrl+Space and the protocol's own functional keys (modifier presses,
+  // keypad) have no binding here; naming them avoids typing their code.
+  return { name: 'unknown' };
+}
+
+/**
  * One raw stdin chunk to one key event. Unrecognised escape sequences become
  * `unknown` rather than `char` so stray terminal reports (bracketed paste,
  * mouse, cursor position) never leak into the input buffer as garbage text.
@@ -169,12 +218,22 @@ export function decodeKey(seq: string): Key {
   const control = CONTROL[seq];
   if (control) return { name: control };
 
+  const kitty = decodeKitty(seq);
+  if (kitty) return kitty;
+
   if (seq.startsWith('\x1b[')) {
     const mouse = decodeMouse(seq);
     if (mouse) return mouse;
   }
 
   if (seq.startsWith('\x1b')) return { name: 'unknown' };
+
+  // A C0 byte with no entry in CONTROL is still a key, not text: as `char` it
+  // is typed invisibly into the editor (sanitize drops it at draw time) and
+  // sent inside the goal. Ctrl-Z is the worst of them — raw mode has no
+  // SIGTSTP, so the suspend key would silently type a byte.
+  // eslint-disable-next-line no-control-regex
+  if (seq.length === 1 && /[\x00-\x1f\x7f]/.test(seq)) return { name: 'unknown' };
 
   return { name: 'char', char: seq };
 }

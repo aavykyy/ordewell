@@ -4,7 +4,7 @@ import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
   createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, pastGateConfirmation, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
-  type ExecutionCommand,
+  taskActionCommand, runHoldsEditors, cardEditNeedsUnstarted, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction, type TaskEditOptions,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit } from '../shared/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -185,32 +185,6 @@ export async function handleSendMessageNow(
 }
 
 /**
- * Planner-driven merge (issue #18): route a merge request through the planner
- * conversation loop so the LLM produces the combined task, validated atomically
- * via applyTaskOps with corrective retries — not a mechanical client-side stub.
- * A pre-flight compatibility failure (canMergeTasks) throws before any LLM call.
- */
-export async function handleMergePlan(taskIds: string[], deps: PlanManagerDeps): Promise<void> {
-  if (taskIds.length < 2) return;
-  await inPlannerTurn(deps, async () => {
-    const prior = JSON.stringify(deps.getCurrentPlan().tasks);
-    adoptTurnPlan(prior, await deps.session.requestMerge(taskIds), deps);
-  });
-}
-
-/**
- * Planner-driven split (issue #18): ask the planner LLM to decompose one task
- * into a sequence of smaller tasks. Same conversation-loop / repair path as
- * merge; the model generates the breakdown (no manual per-task specs).
- */
-export async function handleSplitPlan(taskId: string, deps: PlanManagerDeps): Promise<void> {
-  await inPlannerTurn(deps, async () => {
-    const prior = JSON.stringify(deps.getCurrentPlan().tasks);
-    adoptTurnPlan(prior, await deps.session.requestSplit(taskId), deps);
-  });
-}
-
-/**
  * One execution button's command, run as the user through the command seam
  * (ADR-0029), so it is checked and kept in the timeline with who asked. A
  * refusal is thrown, so the caller's existing catch shows it.
@@ -220,48 +194,46 @@ export async function executeUserCommand(session: Pick<Session, 'execute'>, comm
   if (!outcome.ok) throw new Error(outcome.message);
 }
 
-/** A new run leaves a skipped task skipped, as it leaves a completed one done: running it again is a retry. */
-function approvedTasks(tasks: Task[]): Task[] {
-  return tasks.map((t) => ({
-    ...t,
-    status: t.status === 'completed' || t.status === 'skipped' ? t.status : 'approved',
-    subtasks: approvedTasks(t.subtasks ?? []),
-  }));
-}
-
-export async function handleApprovePlan(deps: PlanManagerDeps): Promise<void> {
+export async function handleApprovePlan(deps: PlanManagerDeps, requestId?: number): Promise<void> {
   deps.log('=== handleApprovePlan START ===');
-  // A run under way keeps going: Execute then approves what waits for approval, and the session says how many (#95).
-  if (deps.session.isExecuting) {
-    try {
-      await executeUserCommand(deps.session, { command: 'run_plan' });
-    } catch (err) {
-      vscode.window.showErrorMessage(`Could not approve the waiting tasks: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    return;
-  }
-  const plan = deps.getCurrentPlan();
-  // The run_plan below is the approval, and the Session records it. New task objects, not edits in place: the plan's tasks are the Session's
-  // snapshot of its store, and the plan object itself must stay the same one
-  // so `loadPlan` keeps the live planner conversation. Saved once, after the
-  // approval is complete — an earlier write would persist approved status over
-  // tasks that have not been approved yet.
-  plan.tasks = approvedTasks(plan.tasks);
-  deps.session.loadPlan(plan, deps.getCurrentGoal(), deps.fsAdapter.getWorkspaceRoot());
-  deps.chatProvider.planApproved();
-  saveState(plan, deps.fsAdapter.getWorkspaceRoot(), deps.session.sessionId);
-  deps.saveCurrentSession();
+  // The session this Execute was asked of: a load or a new session meanwhile
+  // must not make its late answer speak for the one now on screen.
+  const session = deps.session;
   try {
-    deps.log('Running the plan through the command seam...');
-    await executeUserCommand(deps.session, { command: 'run_plan' });
-    // Cleared only once the seam accepts it: a refused Execute replaced no run,
-    // and the Session still holds every mark and the handoff.
-    deps.chatProvider.clearIsolationHandoff();
-    deps.log(`run_plan returned. isRunning=${deps.session.isExecuting}, status=${deps.session.status}`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    deps.log(`Orchestrator start failed: ${msg}`);
-    vscode.window.showErrorMessage(`Failed to start execution: ${msg}`);
+    // A run under way keeps going: Execute then approves what waits for approval, and the session says how many (#95).
+    if (session.isExecuting) {
+      try {
+        await executeUserCommand(session, { command: 'run_plan' });
+      } catch (err) {
+        vscode.window.showErrorMessage(`Could not approve the waiting tasks: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+    const plan = deps.getCurrentPlan();
+    // The run_plan below is the approval, and the Session records it and readies
+    // the tasks; rewriting their statuses here would approve a manual task the
+    // run has not reached. Only a plan the Session does not hold yet is loaded.
+    if (!session.planState) session.loadPlan(plan, deps.getCurrentGoal(), deps.fsAdapter.getWorkspaceRoot());
+    deps.chatProvider.planApproved();
+    saveState(plan, deps.fsAdapter.getWorkspaceRoot(), session.sessionId);
+    deps.saveCurrentSession();
+    try {
+      deps.log('Running the plan through the command seam...');
+      await executeUserCommand(session, { command: 'run_plan' });
+      // Cleared only once the seam accepts it: a refused Execute replaced no run,
+      // and the Session still holds every mark and the handoff.
+      deps.chatProvider.clearIsolationHandoff();
+      deps.log(`run_plan returned. isRunning=${session.isExecuting}, status=${session.status}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      deps.log(`Orchestrator start failed: ${msg}`);
+      vscode.window.showErrorMessage(`Failed to start execution: ${msg}`);
+    }
+  } finally {
+    // The click showed "Starting…" before this ever answered: settle it on the
+    // run's own state, refusal and immediate finish included, so no spinner
+    // outlives the start it was drawn for.
+    deps.chatProvider.showRunActivity(session.activity, requestId);
   }
   deps.log('=== handleApprovePlan END ===');
 }
@@ -317,17 +289,21 @@ function settleDirectEdit(deps: PlanManagerDeps): void {
   deps.saveCurrentSession();
 }
 
-function applyTaskEdit(session: Session, taskId: string, edit: TaskEdit): Promise<unknown> {
+function applyTaskEdit(session: Session, taskId: string, edit: TaskEdit, options?: TaskEditOptions): Promise<unknown> {
+  // An idle plan keeps the call it always made, without the card's condition.
+  const update = (changes: Partial<Task>) => options
+    ? session.updateTask(taskId, changes, options)
+    : session.updateTask(taskId, changes);
   switch (edit.kind) {
     // A runner change re-derives the task's model, effort and mode from the
     // new runner's catalog, which only the session can read.
-    case 'runner': return session.setTaskRunner(taskId, edit.runner);
-    case 'model': return session.updateTask(taskId, { assignedModel: edit.assignment });
-    case 'mode': return session.updateTask(taskId, { taskMode: edit.mode });
-    case 'prompt': return session.updateTask(taskId, { prompt: edit.prompt, description: edit.prompt || undefined });
-    case 'dependencies': return session.setTaskDependencies(taskId, edit.dependencies);
-    case 'skills': return session.updateTask(taskId, { skills: edit.skills });
-    case 'ops': return session.updateTask(taskId, { ops: edit.ops });
+    case 'runner': return options ? session.setTaskRunner(taskId, edit.runner, options) : session.setTaskRunner(taskId, edit.runner);
+    case 'model': return update({ assignedModel: edit.assignment });
+    case 'mode': return update({ taskMode: edit.mode });
+    case 'prompt': return update({ prompt: edit.prompt, description: edit.prompt || undefined });
+    case 'dependencies': return options ? session.setTaskDependencies(taskId, edit.dependencies, options) : session.setTaskDependencies(taskId, edit.dependencies);
+    case 'skills': return update({ skills: edit.skills });
+    case 'ops': return update({ ops: edit.ops });
   }
 }
 
@@ -338,8 +314,18 @@ function applyTaskEdit(session: Session, taskId: string, edit: TaskEdit): Promis
  * attempted.
  */
 export async function handleTaskEdit(taskId: string, edit: TaskEdit, deps: PlanManagerDeps): Promise<void> {
+  // The card's own rule, from the same run fact: a run that could still move
+  // a task on holds its editors to a task that has not started, and the
+  // Session checks that again after its own waits. A task that has not started
+  // is held to it in an idle plan too, as a start can claim it while the edit
+  // waits on discovery. A settled task of an idle plan, a failed one a run
+  // ended on included, keeps the wider direct-edit contract.
+  const { session } = deps;
+  const target = flattenTasks(session.planTasks).find((t) => t.id === taskId);
+  const held = runHoldsEditors(session.isExecuting, session.activity);
+  const options: TaskEditOptions | undefined = (target ? cardEditNeedsUnstarted(held, target) : held) ? { requireUnstarted: true } : undefined;
   try {
-    await applyTaskEdit(deps.session, taskId, edit);
+    await applyTaskEdit(deps.session, taskId, edit, options);
   } catch (err) {
     void vscode.window.showWarningMessage(err instanceof Error ? err.message : String(err));
   }
@@ -490,7 +476,40 @@ export async function confirmPastGate(taskId: string, session: Pick<Session, 'me
  */
 export async function forceStartPastGate(taskId: string, deps: Pick<PlanManagerDeps, 'session' | 'chatProvider'>): Promise<void> {
   if (!(await confirmPastGate(taskId, deps.session))) return;
-  await startTask(deps, { command: 'force_start', task: taskId });
+  await startTask(deps, taskActionCommand('force-start', taskId));
+}
+
+/**
+ * Mark complete and Mark not done, from the card and from the command palette
+ * alike (ADR-0029). An AI or script task's override vouches for work no verdict
+ * passed, so a real modal explains it first and the seam gets the user's yes on
+ * the command; the core refuses it anyway while a run could advance the task,
+ * and the modal is not offered then. A manual task's is the user's own sign-off
+ * and asks nothing. The task is named by id and the status the user was asked
+ * about travels with the yes, so a task that moved on while the modal was open
+ * is refused rather than overridden.
+ */
+export async function markTaskByHand(direction: OverrideDirection, taskId: string, deps: Pick<PlanManagerDeps, 'session'>): Promise<void> {
+  const { session } = deps;
+  const tasks = session.planState?.tasks ?? [];
+  const task = flattenTasks(tasks).find((t) => t.id === taskId);
+  const command = taskActionCommand(direction, taskId);
+  if (!task || !overrideNeedsConfirmation(task)) {
+    await executeUserCommand(session, command);
+    return;
+  }
+  const label = `task ${titledTaskRefOf(tasks, taskId) ?? taskId}`;
+  // The seam's own guard, not a narrower reading of it: a queued force start or
+  // a usage-limit hold refuses an override too, though nothing is starting,
+  // running or scheduled (ADR-0029).
+  if (session.activity.advancesOnItsOwn) {
+    showRefusal(new Error(manualOverrideStopFirst(direction, label)));
+    return;
+  }
+  const yes = direction === 'complete' ? 'Mark complete' : 'Mark not done';
+  const choice = await vscode.window.showWarningMessage(manualOverrideConfirmation(direction, label), { modal: true }, yes);
+  if (choice !== yes) return;
+  await executeUserCommand(session, confirmedOverride(command, task.status));
 }
 
 /**
@@ -503,37 +522,39 @@ async function startTask(deps: Pick<PlanManagerDeps, 'session' | 'chatProvider'>
   deps.chatProvider.clearIsolationHandoff();
 }
 
+/** The webview's names for the task controls that are one command each; Force start and Run go through the merge gate's confirmation instead. */
+const SYSTEM_TASK_ACTIONS = {
+  cancel: 'cancel',
+  cancelResume: 'cancel-resume',
+  resumeNow: 'resume-now',
+  retry: 'retry',
+  skip: 'skip',
+  markComplete: 'complete',
+  markIncomplete: 'uncomplete',
+} as const satisfies Record<string, TaskAction>;
+
 export async function handleSystemCommand(
   command: string,
   taskId: string,
   deps: PlanManagerDeps,
+  requestId?: number,
 ): Promise<void> {
   try {
     switch (command) {
-      case 'cancel':
-        await executeUserCommand(deps.session, { command: 'stop_task', task: taskId });
-        break;
-      case 'cancelResume':
-        await executeUserCommand(deps.session, { command: 'cancel_resume', task: taskId });
-        break;
       case 'cancelPlannerResend':
         deps.session.cancelPlannerResend();
         break;
-      case 'resumeNow':
-        await executeUserCommand(deps.session, { command: 'retry_task', task: taskId, from: 'session' });
-        break;
-      case 'retry':
-        await executeUserCommand(deps.session, { command: 'retry_task', task: taskId, from: 'fresh' });
-        break;
       // Skip lands nothing, so it is never a mark: only Mark complete vouches for work.
+      case 'cancel':
+      case 'cancelResume':
+      case 'resumeNow':
+      case 'retry':
       case 'skip':
-        await executeUserCommand(deps.session, { command: 'skip_task', task: taskId });
+        await executeUserCommand(deps.session, taskActionCommand(SYSTEM_TASK_ACTIONS[command], taskId));
         break;
       case 'markComplete':
-        await executeUserCommand(deps.session, { command: 'mark_complete', task: taskId });
-        break;
       case 'markIncomplete':
-        await executeUserCommand(deps.session, { command: 'mark_not_done', task: taskId });
+        await markTaskByHand(SYSTEM_TASK_ACTIONS[command], taskId, deps);
         break;
       case 'forceStart':
         await forceStartPastGate(taskId, deps);
@@ -545,11 +566,11 @@ export async function handleSystemCommand(
           await forceStartPastGate(taskId, deps);
           break;
         }
-        await startTask(deps, { command: 'run_task', task: taskId });
+        await startTask(deps, taskActionCommand('run', taskId));
         break;
       }
       case 'executePlan':
-        await handleApprovePlan(deps);
+        await handleApprovePlan(deps, requestId);
         break;
       case 'stopExecution':
         // The seam answers a stop with nothing running, and nothing about to start, as an ok no-op; a refusal is a stop that could not be kept.
@@ -608,11 +629,15 @@ export function handleSessionMessage(
     case 'execution_complete': {
       const plan = deps.getCurrentPlan();
       deps.chatProvider.showPlan(plan);
+      deps.chatProvider.showRunActivity(deps.session.activity);
       deps.persistState();
       break;
     }
     case 'execution_stopped': {
       deps.chatProvider.showPlan(deps.getCurrentPlan(), 'draft');
+      // A Stop can come from another surface while this webview still shows a
+      // starting plan: the run's own word clears it.
+      deps.chatProvider.showRunActivity(deps.session.activity);
       deps.persistState();
       break;
     }

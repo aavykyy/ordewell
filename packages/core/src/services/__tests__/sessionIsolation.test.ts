@@ -116,7 +116,7 @@ describe('Session with worktree isolation', () => {
 
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    expect(Object.keys(lastStatus()!.tasks[0]).sort()).toEqual(['attemptUsage', 'id', 'idleSince', 'status', 'type', 'verdict']);
+    expect(Object.keys(lastStatus()!.tasks[0]).sort()).toEqual(['attemptUsage', 'attempted', 'id', 'idleSince', 'status', 'type', 'verdict']);
   });
 
   it('broadcasts the handoff before execution completes and persists the run with the plan', async () => {
@@ -653,7 +653,7 @@ describe('Session with worktree isolation', () => {
 
     const { prompt } = session.planTasks[1];
     expect(prompt).toContain('conflicted in web');
-    expect(prompt).toContain('In each repository the task changed — api, web — run `git merge --no-ff ordewell/run1/1-t1`');
+    expect(prompt).toContain('In each repository the task changed — api, web — run `git merge --no-ff -m \'Merge: Task t1 (resolve conflicts with integration)\' -m \'Planned-with: Ordewell\' ordewell/run1/1-t1`');
   });
 
   it('refuses to resolve a task that did not conflict', async () => {
@@ -880,7 +880,7 @@ describe('Session isolation actions on a landed run', () => {
     const { session, spawn } = await landed();
 
     await session.discardRun();
-    await session.execute({ command: 'mark_not_done', task: 't1' }, { kind: 'user' });
+    await session.execute({ command: 'mark_not_done', task: 't1', confirmed: true }, { kind: 'user' });
     await session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
 
     expect(spawn.mock.calls.at(-1)![0].cwd).toBe('/fake-worktrees/run2/1-t1');

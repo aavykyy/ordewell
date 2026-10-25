@@ -66,23 +66,35 @@ describe('ChatMessage', () => {
       expect(container.querySelector('.chat-msg-wake-up .chat-msg-content')!.textContent).toContain('- task #4 "Fix it" failed: tests red');
     });
 
-    it('folds a long report and counts what it leaves out, until the detail switch opens it', () => {
-      const { container, rerender } = render(<ChatMessage block={message({ role: 'wake_up', text: digest(20) })} />);
+    it('folds a long report and counts what it leaves out, until its own disclosure opens it', () => {
+      const { container } = render(<ChatMessage block={message({ role: 'wake_up', text: digest(20) })} />);
       expect(report(container)).toHaveLength(8);
-      expect(container.querySelector('.cmd-row-more')!.textContent).toBe('+12 lines of the report');
+      const more = container.querySelector('button.cmd-row-more')!;
+      expect(more.textContent).toBe('+12 lines of the report');
+      expect(more.getAttribute('aria-expanded')).toBe('false');
+      expect(container.querySelector(`#${CSS.escape(more.getAttribute('aria-controls')!)}`)).toBe(container.querySelector('.chat-report-body'));
 
-      rerender(<ChatMessage block={message({ role: 'wake_up', text: digest(20) })} expanded />);
+      fireEvent.click(more);
       expect(report(container)).toHaveLength(20);
       expect(report(container).at(-1)).toBe('finding 19');
-      expect(container.querySelector('.cmd-row-more')).toBeNull();
+      expect(more.getAttribute('aria-expanded')).toBe('true');
+      expect(more.textContent).toBe('Show less of the report');
+
+      fireEvent.click(more);
+      expect(report(container)).toHaveLength(8);
     });
 
-    it('is opened by the conversation\'s one detail switch', () => {
-      const blocks = [message({ id: 'w', role: 'wake_up', text: digest(20) })];
-      const { container, rerender } = render(<ConversationBlocks blocks={blocks} detailAll={false} onShowPlan={() => {}} />);
-      expect(container.querySelector('.chat-report-body')!.textContent!.split('\n')).toHaveLength(8);
-      rerender(<ConversationBlocks blocks={blocks} detailAll onShowPlan={() => {}} />);
-      expect(container.querySelector('.chat-report-body')!.textContent!.split('\n')).toHaveLength(20);
+    it('opens each long report on its own', () => {
+      const two = [
+        'Run update:',
+        `- task #3 "Scout", whose result you asked for, has ended. ${Array.from({ length: 20 }, (_, i) => `a${i + 1}`).join('\n  ')}`,
+        `- task #4 "Probe", whose result you asked for, has ended. ${Array.from({ length: 20 }, (_, i) => `b${i + 1}`).join('\n  ')}`,
+      ].join('\n');
+      const { container } = render(<ConversationBlocks blocks={[message({ id: 'w', role: 'wake_up', text: two })]} onShowPlan={() => {}} />);
+      const bodies = () => Array.from(container.querySelectorAll('.chat-report-body')).map((b) => b.textContent!.split('\n').length);
+      expect(bodies()).toEqual([8, 8]);
+      fireEvent.click(container.querySelectorAll('button.cmd-row-more')[1]);
+      expect(bodies()).toEqual([8, 20]);
     });
   });
 
@@ -125,11 +137,15 @@ describe('ThinkingBlock', () => {
     expect(container.querySelector('.activity-think-pre')!.textContent).toBe('First I read the config.\nThen the tests.');
   });
 
-  it('does not open on a click: detail is one switch for the whole conversation', () => {
-    const { container } = render(<ThinkingBlock block={thinking()} expanded={false} />);
-    fireEvent.click(container.querySelector('.activity-think')!);
-    expect(container.querySelector('.activity-think-pre')).toBeNull();
-    expect(container.querySelector('button')).toBeNull();
+  it('opens through its own disclosure button, which says what it controls', () => {
+    const onToggle = vi.fn();
+    const { container } = render(<ThinkingBlock block={thinking()} expanded={false} onToggle={onToggle} />);
+    const button = container.querySelector('button.activity-think-head')!;
+    expect(button.getAttribute('type')).toBe('button');
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(container.querySelector(`#${CSS.escape(button.getAttribute('aria-controls')!)}`)).toBeTruthy();
+    fireEvent.click(button);
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -177,10 +193,30 @@ describe('CommandRow', () => {
     expect(rows[1].querySelector('.cmd-row-outcome')!.textContent).toBe('refused');
   });
 
-  it('does not open on a click', () => {
-    const { container } = render(<CommandRow block={tool()} expanded={false} />);
-    fireEvent.click(container.querySelector('.cmd-row-head')!);
-    expect(container.querySelector('.cmd-row-output')).toBeNull();
+  it('opens through its header, a native button that keeps the outcome and sealed marks beside it', () => {
+    const onToggle = vi.fn();
+    const { container } = render(<CommandRow block={tool({ sealed: true, status: 'error', outcome: 'failure' })} expanded={false} onToggle={onToggle} />);
+    const button = container.querySelector('.cmd-row-header > button')!;
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(button.querySelector('code.cmd-row-head')!.textContent).toBe('Bash(ls -la)');
+    expect(button.querySelector('.cmd-row-sealed, .cmd-row-outcome')).toBeNull();
+    expect(container.querySelector(`#${CSS.escape(button.getAttribute('aria-controls')!)}`)!.contains(container.querySelector('.cmd-row-preview'))).toBe(true);
+    fireEvent.click(button);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not toggle when the click ends a text selection in its header, so the command can be copied', () => {
+    const onToggle = vi.fn();
+    const { container } = render(<CommandRow block={tool()} expanded={false} onToggle={onToggle} />);
+    const range = document.createRange();
+    range.selectNodeContents(container.querySelector('.cmd-row-arg')!);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    fireEvent.click(container.querySelector('.cmd-row-header > button')!);
+    expect(onToggle).not.toHaveBeenCalled();
+    window.getSelection()!.removeAllRanges();
+    fireEvent.click(container.querySelector('.cmd-row-header > button')!);
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 
   it('lets a path argument give way from the left, keeping the whole path in its tooltip', () => {
@@ -258,11 +294,12 @@ describe('SubagentCard', () => {
     expect(container.querySelector('.subagent-card-digest')).toBeNull();
   });
 
-  it('shows its nested steps, themselves expanded, when expanded', () => {
+  it('shows its nested steps as their own collapsed previews when expanded, not opened with it', () => {
     const { container } = render(<SubagentCard block={subagent()} expanded />);
     const steps = container.querySelector('.subagent-card-steps')!;
     expect(steps.querySelector('code.cmd-row-head')!.textContent).toBe('Read(src/auth.ts)');
-    expect(steps.querySelector('.cmd-row-output')!.textContent).toBe('export {}');
+    expect(steps.querySelector('.cmd-row-preview')!.textContent).toBe('export {}');
+    expect(steps.querySelector('.cmd-row-output')).toBeNull();
   });
 });
 
@@ -275,27 +312,130 @@ describe('ConversationBlocks', () => {
     message({ id: 'p', text: 'Done.' }),
   ];
 
-  it('draws every block in order', () => {
-    const { container } = render(<ConversationBlocks blocks={blocks} detailAll={false} onShowPlan={() => {}} />);
+  const draw = (list: readonly DisplayBlock[] = blocks) => render(<ConversationBlocks blocks={list} onShowPlan={() => {}} />);
+  const group = (container: HTMLElement, i = 0) => container.querySelectorAll<HTMLButtonElement>('.activity-group-toggle')[i];
+  const rowToggle = (container: HTMLElement, selector: string, i = 0) => container.querySelectorAll<HTMLButtonElement>(`${selector} button[aria-expanded]`)[i];
+
+  it('draws messages in order with the activity between them folded into one quiet group', () => {
+    const { container } = draw();
     const kinds = Array.from(container.querySelector('.conversation')!.children).map((el) => el.className.split(' ')[0]);
-    expect(kinds).toEqual(['chat-msg', 'activity-think', 'cmd-row', 'subagent-card', 'chat-msg']);
+    expect(kinds).toEqual(['chat-msg', 'activity-group', 'chat-msg']);
+    expect(group(container).textContent).toBe('Ran a command, delegated to an agent');
   });
 
-  it('collapses every thinking, command and subagent block with detail off, and expands them all with it on', () => {
-    const { container, rerender } = render(<ConversationBlocks blocks={blocks} detailAll={false} onShowPlan={() => {}} />);
-    expect(container.querySelectorAll('.activity-think-pre, .cmd-row-output, .subagent-card-steps')).toHaveLength(0);
+  it('starts every group collapsed, drawing none of what it holds', () => {
+    const { container } = draw();
+    const toggle = group(container);
+    expect(toggle.tagName).toBe('BUTTON');
+    expect(toggle.getAttribute('type')).toBe('button');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    const body = container.querySelector(`#${CSS.escape(toggle.getAttribute('aria-controls')!)}`)!;
+    expect(body.hasAttribute('hidden')).toBe(true);
+    expect(body.childElementCount).toBe(0);
+    expect(container.querySelectorAll('.activity-think, .cmd-row, .subagent-card')).toHaveLength(0);
+  });
 
-    rerender(<ConversationBlocks blocks={blocks} detailAll onShowPlan={() => {}} />);
-    expect(container.querySelectorAll('.activity-think-pre')).toHaveLength(1);
+  it('opens a group to exactly the collapsed previews of its rows, each with a disclosure of its own', () => {
+    const { container } = draw();
+    fireEvent.click(group(container));
+    expect(group(container).getAttribute('aria-expanded')).toBe('true');
+    expect(container.querySelector('.activity-think-line')!.textContent).toBe('First I read the config.');
+    expect(container.querySelector('.cmd-row-preview')!.textContent).toBe('one\ntwo\nthree');
+    expect(container.querySelector('.subagent-card-digest')!.textContent).toBe('Auth uses JWT.');
+    expect(container.querySelectorAll('.activity-think-pre, .cmd-row-output, .cmd-row-args, .subagent-card-steps')).toHaveLength(0);
+    const rows = container.querySelectorAll('.activity-group-body button[aria-expanded="false"]');
+    expect(rows).toHaveLength(3);
+  });
+
+  it('opens one row at a time, leaving its neighbours as they were', () => {
+    const two = [tool({ id: 'a' }), tool({ id: 'b', headline: { name: 'Bash', keyArg: 'pwd' }, output: '/repo', outputLineCount: 1 })];
+    const { container } = draw(two);
+    fireEvent.click(group(container));
+    fireEvent.click(rowToggle(container, '.cmd-row', 1));
+    expect(container.querySelectorAll('.cmd-row-output')).toHaveLength(1);
+    expect(container.querySelector('.cmd-row-output')!.textContent).toBe('/repo');
+    expect(container.querySelector('.cmd-row-args')!.textContent).toBe('{\n  "command": "ls -la"\n}');
+    expect(rowToggle(container, '.cmd-row', 0).getAttribute('aria-expanded')).toBe('false');
+    expect(container.querySelector('.cmd-row-preview')!.textContent).toBe('one\ntwo\nthree');
+  });
+
+  it('opens a subagent to its steps as previews, each step opening on its own', () => {
+    const { container } = draw([subagent({ id: 'sa', children: [
+      tool({ id: 'c1', headline: { name: 'Read', keyArg: 'src/auth.ts' }, output: 'export {}', outputLineCount: 1 }),
+      tool({ id: 'c2', headline: { name: 'Grep', keyArg: 'jwt' }, output: 'src/auth.ts:1', outputLineCount: 1 }),
+    ] })]);
+    fireEvent.click(group(container));
+    fireEvent.click(container.querySelector<HTMLButtonElement>('.subagent-card-header')!);
+    expect(container.querySelectorAll('.subagent-card-steps .cmd-row')).toHaveLength(2);
+    expect(container.querySelectorAll('.cmd-row-output')).toHaveLength(0);
+    fireEvent.click(rowToggle(container, '.subagent-card-steps .cmd-row', 1));
+    expect(container.querySelectorAll('.cmd-row-output')).toHaveLength(1);
+    expect(container.querySelector('.cmd-row-output')!.textContent).toBe('src/auth.ts:1');
+    expect(container.querySelector('.subagent-card-header')!.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('keeps what was opened as the live blocks grow, settle and append, and recounts the summary', () => {
+    const live: DisplayBlock[] = [message({ id: 'u', role: 'user' }), tool({ id: 'a' }), tool({ id: 'b', status: 'pending', outcome: undefined, output: '', outputLineCount: 0 })];
+    const { container, rerender } = draw(live);
+    expect(group(container).textContent).toBe('Ran a command (1 more running)');
+    fireEvent.click(group(container));
+    fireEvent.click(rowToggle(container, '.cmd-row', 0));
+
+    const settled: DisplayBlock[] = [...live.slice(0, 2), tool({ id: 'b', output: 'done', outputLineCount: 1 }), thinking({ id: 'th', streaming: true }), tool({ id: 'c', tool: 'fetch', status: 'error', outcome: 'failure' })];
+    rerender(<ConversationBlocks blocks={settled} onShowPlan={() => {}} />);
+    expect(group(container).textContent).toBe('Ran 2 commands, fetched a page (1 failed), thinking…');
+    expect(group(container).getAttribute('aria-expanded')).toBe('true');
+    expect(rowToggle(container, '.cmd-row', 0).getAttribute('aria-expanded')).toBe('true');
+    expect(rowToggle(container, '.cmd-row', 1).getAttribute('aria-expanded')).toBe('false');
+    expect(container.querySelectorAll('.cmd-row-output')).toHaveLength(1);
+    expect(container.querySelectorAll('.cmd-row')).toHaveLength(3);
+  });
+
+  it('keeps a row\'s own choice when its call becomes the subagent it started', () => {
+    const call = tool({ id: 'sp', tool: 'spawn_research_agent', status: 'pending', outcome: undefined, spawns: 'x', headline: { name: 'Agent', keyArg: 'explore auth' }, output: '', outputLineCount: 0 });
+    const { container, rerender } = draw([call]);
+    expect(group(container).textContent).toBe('Delegating to an agent');
+    fireEvent.click(group(container));
+    fireEvent.click(rowToggle(container, '.cmd-row'));
+    rerender(<ConversationBlocks blocks={[subagent({ id: 'sp', status: 'running', digest: '', children: [tool({ id: 'k1' })] })]} onShowPlan={() => {}} />);
+    expect(group(container).textContent).toBe('Delegating to an agent');
+    expect(container.querySelector('.subagent-card-header')!.getAttribute('aria-expanded')).toBe('true');
     expect(container.querySelectorAll('.subagent-card-steps')).toHaveLength(1);
-    // The top-level row and the one nested in the subagent.
-    expect(container.querySelectorAll('.cmd-row-output')).toHaveLength(2);
+  });
+
+  it('never merges across a message, and keeps an open group open when the message between two is taken back', () => {
+    const before: DisplayBlock[] = [tool({ id: 'a' }), message({ id: 'p', text: 'Reading on.' }), tool({ id: 'b' })];
+    const { container, rerender } = draw(before);
+    expect(container.querySelectorAll('.activity-group')).toHaveLength(2);
+    fireEvent.click(group(container, 1));
+    rerender(<ConversationBlocks blocks={[before[0], before[2]]} onShowPlan={() => {}} />);
+    expect(container.querySelectorAll('.activity-group')).toHaveLength(1);
+    expect(group(container).textContent).toBe('Ran 2 commands');
+    expect(group(container).getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(group(container));
+    expect(group(container).getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('keeps a waiting approval outside any group, where it can be answered, and folds it in once answered', () => {
+    const pending: ApprovalBlock = { type: 'approval', id: 'ap', approvalId: 'ap-1', kind: 'shell_command', subject: 'npm test', scope: 'npm', status: 'pending' };
+    const { container, rerender } = draw([tool({ id: 'a' }), pending]);
+    expect(container.querySelector('.conversation > .approval-card .approval-card-allow')).toBeTruthy();
+    rerender(<ConversationBlocks blocks={[tool({ id: 'a' }), { ...pending, status: 'granted', decidedBy: 'asked' }]} onShowPlan={() => {}} />);
+    expect(container.querySelector('.conversation > .approval-card')).toBeNull();
+    expect(group(container).textContent).toBe('Ran a command');
+  });
+
+  it('starts over for another conversation, keyed apart', () => {
+    const { container, rerender } = render(<ConversationBlocks key={1} blocks={blocks} onShowPlan={() => {}} />);
+    fireEvent.click(group(container));
+    rerender(<ConversationBlocks key={2} blocks={blocks} onShowPlan={() => {}} />);
+    expect(group(container).getAttribute('aria-expanded')).toBe('false');
   });
 
   it('opens the plan from a plan marker', () => {
     const onShowPlan = vi.fn();
     const { getByText } = render(
-      <ConversationBlocks blocks={[{ type: 'plan', id: 'pl', status: 'generated', taskCount: 3, text: '' }]} detailAll={false} onShowPlan={onShowPlan} />,
+      <ConversationBlocks blocks={[{ type: 'plan', id: 'pl', status: 'generated', taskCount: 3, text: '' }]} onShowPlan={onShowPlan} />,
     );
     fireEvent.click(getByText('Plan generated · 3 tasks'));
     expect(onShowPlan).toHaveBeenCalled();
@@ -303,14 +443,14 @@ describe('ConversationBlocks', () => {
 
   it('says a plan is being built while it streams', () => {
     const { getByText } = render(
-      <ConversationBlocks blocks={[{ type: 'plan', id: 'pl', status: 'building', text: '{"tasks":' }]} detailAll={false} onShowPlan={() => {}} />,
+      <ConversationBlocks blocks={[{ type: 'plan', id: 'pl', status: 'building', text: '{"tasks":' }]} onShowPlan={() => {}} />,
     );
     expect(getByText('Building plan…')).toBeTruthy();
   });
 
   it('marks an updated plan with its task count', () => {
     const { getByText } = render(
-      <ConversationBlocks blocks={[{ type: 'plan', id: 'pl', status: 'updated', taskCount: 2, text: '' }]} detailAll={false} onShowPlan={() => {}} />,
+      <ConversationBlocks blocks={[{ type: 'plan', id: 'pl', status: 'updated', taskCount: 2, text: '' }]} onShowPlan={() => {}} />,
     );
     expect(getByText('Plan updated · 2 tasks')).toBeTruthy();
   });
@@ -324,8 +464,11 @@ describe('approval cards (ADR-0018, A1)', () => {
   function draw(block: ApprovalBlock) {
     const onAnswerApproval = vi.fn();
     const onResolveApproval = vi.fn();
-    const view = render(<ConversationBlocks blocks={[block]} detailAll={false} onShowPlan={() => {}}
+    const view = render(<ConversationBlocks blocks={[block]} onShowPlan={() => {}}
       onAnswerApproval={onAnswerApproval} onResolveApproval={onResolveApproval} />);
+    // An answered card folds into the activity it belongs to; open it to read the card.
+    const group = view.container.querySelector<HTMLButtonElement>('.activity-group-toggle');
+    if (group) fireEvent.click(group);
     return { ...view, onAnswerApproval, onResolveApproval };
   }
 
@@ -496,5 +639,30 @@ describe('renderMarkdown on planner structure (#82)', () => {
 
     expect(html.querySelector('script')).toBeNull();
     expect(html.textContent).toBe('<script>alert(1)</script>');
+  });
+});
+
+describe('ChatMessage selection retention', () => {
+  const selected = () => window.getSelection()?.toString() ?? '';
+
+  function select(node: Node): string {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return selection.toString();
+  }
+
+  it('keeps the exact selection inside a streaming reply when the next delta arrives', () => {
+    const { container, rerender } = render(<ChatMessage block={message({ text: 'Run `npm test` before you commit.', streaming: true })} />);
+    const code = container.querySelector('.chat-msg-content code')!.firstChild as Text;
+    expect(select(code)).toBe('npm test');
+    const active = document.activeElement;
+
+    rerender(<ChatMessage block={message({ text: 'Run `npm test` before you commit. Then push.', streaming: true })} />);
+
+    expect(selected()).toBe('npm test');
+    expect(document.activeElement).toBe(active);
   });
 });

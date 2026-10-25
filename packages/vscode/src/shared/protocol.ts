@@ -1,5 +1,5 @@
 import type { GlobalRunSettings,
-  AiProvider, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunView, SurfacePlan,
+  AiProvider, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
   TaskModelAssignment,
 } from '@ordewell/core';
 
@@ -90,6 +90,11 @@ export interface ConversationPatch {
   type: 'conversationPatch';
   order: readonly string[];
   changed: readonly DisplayBlock[];
+  /**
+   * The view was replaced (a reset, a reload, a compaction): ids are numbered
+   * afresh, so one the webview kept may name a different block now.
+   */
+  replaced?: true;
 }
 
 export type WebviewToHost =
@@ -103,7 +108,7 @@ export type WebviewToHost =
       /** The user typed it, so the conversation shows it as theirs; a button's message is not echoed. */
       typed?: boolean;
     }
-  | { type: 'sendSystemCommand'; command: SystemCommand; taskId?: string }
+  | { type: 'sendSystemCommand'; command: SystemCommand; taskId?: string; requestId?: number }
   | { type: 'editTask'; taskId: string; edit: TaskEdit }
   /** Asks the host to remove a task; the host confirms first, naming what depends on it. */
   | { type: 'removeTask'; taskId: string }
@@ -120,10 +125,6 @@ export type WebviewToHost =
   | { type: 'sendQueuedTaskMessageNow'; taskId: string; id: string }
   /** Stop a structured task's running turn; the task then waits for input. */
   | { type: 'interruptTask'; taskId: string }
-  /** The planner merges these tasks into one (issue #18). */
-  | { type: 'mergeTasks'; taskIds: string[] }
-  /** The planner splits this task into smaller ones (issue #18). */
-  | { type: 'splitTask'; taskId: string }
   /**
    * The user answered an in-chat approval card. The id is the request's, so the
    * host resolves the same prompt any other surface would.
@@ -153,8 +154,16 @@ export type WebviewToHost =
   | { type: 'addNote'; text: string }
   /** Open (or focus) the on-demand task-log tab for a structured task (ADR-0018, V1). */
   | { type: 'openTaskLog'; taskId: string }
+  /** Open a workspace-relative file Ordewell kept, such as a handoff's saved patch (ADR-0050). */
+  | { type: 'openFile'; path: string }
   /** The plan dock's dragged height in px, saved on release so every later session opens at it. */
   | { type: 'setPlanDockHeight'; height: number }
+  /**
+   * A click on an installed runner that is off: enable it in the settings file
+   * every surface shares and re-send the runner list. Add-only by design, so a
+   * repeated or stale click can never turn a runner off.
+   */
+  | { type: 'enableRunner'; runnerId: RunnerId }
   /** Who plans (ADR-0009) — a vendor provider id or one of the harness planners. */
   | { type: 'setPlanner'; provider: string }
   /** The planner's own model and thinking effort, a pair so neither can outlive the other. */
@@ -196,6 +205,13 @@ export type HostToWebview =
    * same message.
    */
   | { type: 'runView'; view: RunView }
+  /**
+   * What the scheduler is doing after an Execute settled: the authoritative
+   * word that ends the webview's own "Starting…" and starts the run's real
+   * state. `requestId` is the Execute that asked, so a reply that outlives the
+   * session it belonged to is dropped.
+   */
+  | { type: 'runActivity'; activity: RunActivity; requestId?: number }
   | { type: 'taskOutput'; taskId: string; text: string }
   /** The queued prompts the host is holding for the next planner turn, oldest first. */
   | { type: 'heldPrompts'; prompts: PromptHold }

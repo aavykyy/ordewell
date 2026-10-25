@@ -33,6 +33,8 @@ async function run(workspace: string, userData: string): Promise<void> {
     launchArgs: [workspace, `--user-data-dir=${userData}`, '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes'],
     extensionTestsEnv: {
       ORDEWELL_TEST_WORKSPACE: workspace,
+      // Set here too, not only by CI: a bare local run must not ping ordewell.ai or write ~/.ordewell.
+      ORDEWELL_NO_VERSION_CHECK: '1',
       // Desktop shell resolution would overwrite the synthetic runner's PATH.
       VSCODE_CLI: '1',
       // In the host's environment from launch: the PATH Ordewell spawns runners

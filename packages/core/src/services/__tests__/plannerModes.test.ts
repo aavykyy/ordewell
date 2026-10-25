@@ -8,12 +8,12 @@ describe('planner modes', () => {
     expect(sessionRuntimeSettings({ modelAllowlist: { opencode: ['a/b'] }, enabledRunners: ['codex'] })).toEqual({
       modelAllowlist: { opencode: ['a/b'] },
       enabledRunners: ['codex'],
-      run: { supervisorLevel: 'watch', mergeAtGatesAutomatically: false, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12 },
+      run: { supervisorLevel: 'watch', mergeAtGatesAutomatically: false, autorun: false, plannedWithTrailer: true, supervisorRetryLimit: 2, wakeUpReadBudget: 12 },
     });
   });
 
   it('starts from the defaults before the run\'s isolation is known', () => {
-    expect(plannerModesFrom(true)).toEqual(DEFAULT_PLANNER_MODES);
+    expect(plannerModesFrom(false)).toEqual(DEFAULT_PLANNER_MODES);
   });
 });
 

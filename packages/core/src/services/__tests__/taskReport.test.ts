@@ -29,6 +29,15 @@ describe('a run update carrying a task\'s result (ADR-0029, ADR-0047)', () => {
     expect(text).not.toContain('the output tail');
   });
 
+  it('carries a task\'s commit, subject then body, before its summary, and one that is only a commit', () => {
+    const commit = { subject: 'Add a daily version check', body: 'Users ran stale builds.' };
+
+    expect(runUpdateReport({ ...passed, handoff: { ...handoff, commit } }, undefined))
+      .toContain('It passed.\nCommit: Add a daily version check\nUsers ran stale builds.\n\nThe cache key omits the tenant.\n');
+    expect(runUpdateReport({ ...passed, handoff: { commit, summary: '', findings: [], findingCount: 0 } }, 'the output tail'))
+      .toBe('It passed.\nCommit: Add a daily version check\nUsers ran stale builds.\n\nThe report, if the task wrote one, is in the attempt\'s log: read it with task_output.');
+  });
+
   it('says how many findings the wake-up left out, and where they are', () => {
     const many = { ...handoff, findings: [{ ...handoff.findings[0] }, { ...handoff.findings[1] }, { ...handoff.findings[0], id: 'F3', title: 'Third' }, { ...handoff.findings[0], id: 'F4', title: 'Fourth' }], findingCount: 5 };
 

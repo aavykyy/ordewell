@@ -17,9 +17,9 @@ const task = (over: Partial<TaskView> = {}): TaskView => ({
 const plan = (tasks: TaskView[], over: Partial<TuiState> = {}): TuiState =>
   initialState({ sessionId: 's1', rows: 30, cols: 90, focus: 'plan', tasks, ...over });
 
-const active = { state: 'active' as const, branch: 'ordewell/r1/1-t1', worktree: '/ws/.ordewell/worktrees/r1/1-t1' };
-const integrated = { state: 'integrated' as const, branch: 'ordewell/r1/1-t1', worktree: '/ws/.ordewell/worktrees/r1/1-t1' };
-const conflict = { state: 'conflict' as const, branch: 'ordewell/r1/2-t2', worktree: '/ws/.ordewell/worktrees/r1/2-t2' };
+const active = { state: 'active' as const, branch: 'ordewell/r1/1-t1', worktree: '/ws/.ordewell/worktrees/r1/1-t1', repos: [] };
+const integrated = { state: 'integrated' as const, branch: 'ordewell/r1/1-t1', worktree: '/ws/.ordewell/worktrees/r1/1-t1', repos: [] };
+const conflict = { state: 'conflict' as const, branch: 'ordewell/r1/2-t2', worktree: '/ws/.ordewell/worktrees/r1/2-t2', repos: [] };
 
 describe('plan pane — isolation', () => {
   it('marks a conflicted task', () => {
@@ -80,7 +80,7 @@ describe('plan pane — isolation', () => {
     expect(footerHints(plan([task({ isolation: active })]))).not.toContain('x resolve conflict');
   });
 
-  const repairing = { state: 'repairing' as const, branch: 'ordewell/r1/2-t2', worktree: '/ws/.ordewell/worktrees/r1/2-t2', conflictFiles: ['a.ts'], repair: { attempt: 1, limit: 2 } };
+  const repairing = { state: 'repairing' as const, branch: 'ordewell/r1/2-t2', worktree: '/ws/.ordewell/worktrees/r1/2-t2', repos: [], conflictFiles: ['a.ts'], repair: { attempt: 1, limit: 2 } };
 
   it('shows a repairing task as running, naming the files and the repair attempt (ADR-0015)', () => {
     const out = frame(plan([task({ id: 't2', order: 2, status: 'in_progress', isolation: repairing })], { cols: 200 }));
@@ -89,7 +89,7 @@ describe('plan pane — isolation', () => {
   });
 
   it('leaves off the attempt when it is not known yet, but still names the files', () => {
-    const withoutAttempt = { state: 'repairing' as const, branch: repairing.branch, worktree: repairing.worktree, conflictFiles: repairing.conflictFiles };
+    const withoutAttempt = { state: 'repairing' as const, branch: repairing.branch, worktree: repairing.worktree, repos: repairing.repos, conflictFiles: repairing.conflictFiles };
     const out = frame(plan([task({ id: 't2', order: 2, status: 'in_progress', isolation: withoutAttempt })], { cols: 200 }));
 
     expect(out).toContain('repairing conflict in a.ts');

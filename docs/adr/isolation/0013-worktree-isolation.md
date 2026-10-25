@@ -78,11 +78,33 @@ everything below applies per repo of the group.
   module merges one task at a time with `git merge --no-ff` — a merge commit per
   task preserves any commits a Runner made itself, makes attribution visible, and
   makes the task branch an ancestor so it is safe to delete. A landing is atomic
-  across the repos a task changed (ADR-0014). Subjects name the change, not the
-  plan: the merge commit is `Merge: <task title>` and the sweep-up commit (for
-  work a Runner left uncommitted) is the title alone. The plan's task `order` and
-  the run id are Ordewell-internal and never enter a message that can reach the
-  user's branch. Among tasks already waiting, the lowest plan `order` merges
+  across the repos a task changed (ADR-0014). Messages name the change, not the
+  plan, and are written by one function (`landingMessage`): from the commit the
+  task's `done` handoff stated
+  ([ADR-0047](../supervision/0047-structured-task-handoffs.md)), kept on the
+  task's run record, so a conflict repair (whose own handoff states none) and
+  every later landing reuse it. The sweep-up commit (for work a Runner left
+  uncommitted) is that subject and body; the merge commit is `Merge: <subject>`
+  with the same body, the same in every repo the task changed. Without a stated
+  commit, the task title's first line stands in for the subject. A conflict
+  repair is told to merge the integration tip in with
+  `Merge: <subject> (resolve conflicts with integration)`. A continued task's
+  kept work comes back into its branch with
+  `Merge: <subject> (resume its kept work)`, and the rescue commit that kept
+  it is `WIP: <subject>` with a line on why; both land with the task. Merge
+  all's merge into the user's branch is `Merge: <subject>` of the one task it
+  brings there, or of the first in plan order with `and N more` and a line
+  per task. So git's default `Merge branch 'ordewell/…'` or
+  `Merge commit '<sha>' into ordewell/…` never reaches history. A multi-line message goes
+  to git as one `-m` per paragraph, never through a shell, and lands as written
+  whatever the user's `commit.cleanup` (whose `strip` would drop a `#42 …`
+  subject); a commit the Runner made itself is never rewritten. Each message Ordewell writes ends with the
+  git trailer `Planned-with: Ordewell` unless the user turned that off with
+  `ordewell trailer` or in `settings.json` ([ADR-0030](../supervision/0030-global-run-settings.md)); the
+  setting is read as the message is written, so a change reaches the next
+  landing. The plan's task `order`, the run id and
+  Ordewell's branch names are internal and never enter a message that can
+  reach the user's branch. Among tasks already waiting, the lowest plan `order` merges
   first. It never waits for a task that has not finished: a dependent cannot run
   until its predecessor integrates, so blocking on a lower-order task that is
   waiting on the queue would deadlock. Ordering is therefore deterministic for
@@ -172,6 +194,11 @@ everything below applies per repo of the group.
   and excluded from the task's commit; removal unlinks every link inside it
   before anything deletes the worktree, and finds the workspace packages'
   directories again from `package.json` when a crash left no record.
+- **A start over what no record holds.** `prepare` prunes git's stale
+  registrations, then keeps and removes whatever the task's own path and branch
+  still hold when no live record does — a crashed attempt's, or one whose record
+  was lost — by the rules a retry follows, and refuses when that work cannot be
+  kept. A path or branch another record of the run holds is never touched.
 - **Windows needs no privilege (ADR-0010).** Directories become junctions and
   files hard links, copied only when a hard link is impossible (a different
   volume), with a notice. Copies are what make the recorded link list matter
@@ -204,7 +231,10 @@ everything below applies per repo of the group.
   the user's tree untouched, and the gate, or the handoff, waits for the user.
   Merge all is available whenever a run has unmerged landings, including to open
   a merge gate during a run (ADR-0020); it takes turns with the landing queue,
-  so it never reads an integration branch mid-landing.
+  so it never reads an integration branch mid-landing. Preparing a task
+  workspace takes its turn too: a group's integration tips are consistent only
+  between landings, and a branch cut from one a landing had merged into some
+  repos but not yet the others would keep that merge after its rollback.
 - **Integration branches go once their work is merged, never before.** Ordewell
   never deletes landed work the user has not merged, and never touches a branch
   it does not own. A Merge all that answers `merged` on a settled run clears it
@@ -229,8 +259,9 @@ everything below applies per repo of the group.
   `blocked`, `conflict` and `failed` — part-way or not — delete nothing. Clean-up keeps the integration
   branch for a user who has not decided; discard deletes it. `discard` takes
   `integration: 'keep' | 'delete' | 'delete-merged'`; `delete-merged` is the
-  only mode that decides per branch, and is how a replaced run that holds landed
-  work is discarded.
+  only mode that decides per branch, and is how a replaced run is discarded,
+  whatever its records say: a retry drops a landed task's record, and the branch
+  alone still knows what landed.
 - **Every run start sweeps.** Once a run is minted or continued, `sweep` deletes,
   in each repo of the group, every `ordewell/<run-id>/…` branch of another run
   that HEAD contains, after a `git worktree prune`. It never touches the current
@@ -245,7 +276,11 @@ everything below applies per repo of the group.
   directories and branches under the run that no record owns, and stale
   registrations. Kept, failed and conflicted worktrees are what the user may
   want, so they stay. `release(..., { keep: true })` exists so a task whose
-  verification failed is moved off `active` and survives that sweep.
+  verification failed is moved off `active` and survives that sweep. Only the
+  host holding the session's lease adopts it, continues its run or changes it
+  in any way ([ADR-0049](0049-a-session-has-one-live-host.md)): a second host
+  continuing the same run id names the same worktrees, and its prune and
+  `prepare` would remove a live host's.
 - **Persistence.** `LegacyPlanState.isolation` holds `{ run, resolvers }`,
   written from the orchestrator at persist time like `tasks`, and saved on every
   change to it rather than at the end of the run — the record is what lets a
@@ -481,3 +516,10 @@ literal git command lines or private fields.
 - 2026-10-19 — adopting a saved run asks git what the user merged since and clears up a settled run left with nothing to hand over; a gone integration branch counts as merged.
 - 2026-10-21 — a read-only task's worktree lands nothing and is never kept, and removing a worktree follows no link a task put on the way (ADR-0046).
 - 2026-10-22: merge automatically and supervisor Act are set in `/settings`; the one-value slash commands are gone from the TUI and VS Code.
+- 2026-10-23 — landing commits and merges are written from the commit the task's handoff stated, falling back to its title; a conflict repair's merge names the task, not Ordewell's branches.
+- 2026-10-23 — the commits and merges Ordewell writes end with a `Planned-with: Ordewell` trailer, which the user can turn off (ADR-0030).
+- 2026-10-23 — Merge all's merge, a continue's merge of kept work and the rescue commit are named for the tasks and carry the trailer, like the landing.
+- 2026-10-23 — the messages Ordewell writes land as written, whatever the user's `commit.cleanup`.
+- 2026-10-24 — preparing a task workspace takes its turn, and a replaced run's integration branch is deleted only where HEAD contains it, never on the word of its records.
+- 2026-10-24 — only the host holding the session's lease adopts, continues or changes its run (ADR-0049).
+- 2026-10-24 — preparing a task prunes stale worktree registrations and clears an unrecorded leftover at the task's path or branch, keeping its work first.

@@ -37,11 +37,12 @@ Meanwhile paths were not confined at all. `PoolFileSystem.resolve()` was `path.i
 
 Path confinement moved into `BaseFileSystem` as template methods: every public method resolves and authorizes before delegating to an adapter `*Impl`, which therefore only ever receives an absolute, approved path. Out-of-workspace access is an `ask`, scoped to the containing directory.
 
-Both halves have to agree on what the shell will actually do with a string, or the confinement leaks. Three ways it did:
+Both halves have to agree on what the shell will actually do with a string, or the confinement leaks. Four ways it did:
 
 - **Quoting is the shell's, not ours.** Splitting on a bare `/[|;&]/` made `rg "error|warn" src` two segments — so the planner's commonest search asked for approval, scoped to the nonsense binary `warn"` — while leaving quotes on argument tokens hid `cat "/etc/passwd"` from the path check entirely (`looksLikePath('"/etc/passwd"')` is false). One lexer now owns both answers.
 - **`~` is expanded because the shell expands it.** `path.resolve(root, '~/.ssh/id_rsa')` yields `<root>/~/.ssh/id_rsa`, which reads as *inside* the workspace, so an auto-tier `cat ~/.ssh/id_rsa` passed confinement unprompted and then read the real file. `resolveWithin` expands `~` before resolving.
 - **A path is anything that climbs, not only what starts with `../`.** `looksLikePath` recognised a relative path by its first characters, so `cat src/../../etc/passwd` — which the shell resolves through a directory that exists — was a plain name to the check and read the file unprompted. An argument with a `..` segment anywhere is now a path.
+- **A glob can climb too.** bash 3.2 (macOS `/bin/sh`) and dash let a name segment that starts with a dot match `..`, so `cat .?/secret.txt` read a file above the workspace while every path the line spells resolves inside it. An unquoted glob segment that starts with a dot (`.?`, `.*`, `.[.]`) takes a command off `auto`, and it asks under the exact line, as a steered `cd` does, so one approval never covers the next file it names. Patterns are not opened and are left alone.
 
 `ApprovalPolicy` decides and remembers; `PendingApprovals` parks the promise; `Session` announces on the **existing broadcast seam** and exposes `resolveApproval(id, granted)`. Every surface answers through that one call.
 
@@ -226,6 +227,14 @@ How they are read, under the file's rule: when unsure, refuse.
   from a file (`-f`), one the shell rewrites first, and a construct GNU and BSD
   sed, or gawk and the one-true-awk, would end in different places.
   Substitution, regex addresses and field work stay on the prompt tier.
+- **jq and yq programs are read.** They stay `auto`, but a program can read
+  the process environment (`$ENV`, `env`, yq's `strenv` and `envsubst`), which
+  holds provider keys and is why bare `env` asks, or load a file from a
+  directory no argument names (`import … {search: "~"}`, `include`, yq's
+  `load` family). A program that names one, outside a string literal, is
+  refused, as is one read from a file (`-f`) or rewritten by the shell, and
+  yq's `eval`, which would hide the rest from the reading. A field (`.env`)
+  and an object key (`{env: …}`) are not calls.
 - **sed that prints lines by number is `auto`.** `sed -n '10,40p' f`,
   `'$p'`, `'5,+3p'` and `'100q'` read what `head` and `tail` read, and models
   reach for them to read part of a file; on the prompt tier every one was
@@ -414,3 +423,4 @@ model's refusal to write were never security evidence.
 - 2026-10-17 — the Codex planner paragraph reads `approvalPolicy: on-request`, as ADR-0026 made it on 2026-10-10; it still said `never`.
 - 2026-10-21 — where the planner's sandbox runs, a command refused without asking, by the classifier or the approval mode, runs sealed instead, and so does what a research subagent would have asked about ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md), #109).
 - 2026-10-21 — the planner performs an exact effect itself as a script task through `run_script`, outside this envelope, and the refusals and the `allowlist` mode's refusal point there instead of at an ops task alone ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
+- 2026-10-24 — a glob that can match `..` asks under its line; jq and yq programs are read for environment access and module or file loads.

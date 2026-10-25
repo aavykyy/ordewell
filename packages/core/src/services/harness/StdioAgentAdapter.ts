@@ -1,5 +1,4 @@
-import type { ChildProcess } from 'child_process';
-import { RunnerProcess } from './runnerProcess';
+import { ProcessLifecycle } from './ProcessLifecycle';
 import { LineBuffer, type AgentAdapter, type AgentEvent, type AgentProcessDeps, type AgentStartOptions } from './AgentAdapter';
 
 /** An idle agent that chatters must not grow the between-turn buffer without bound. */
@@ -32,16 +31,14 @@ export interface SpawnSpec {
  *
  * Subclasses own their agent's protocol: what to spawn, how to phrase a user
  * turn, and how to read one protocol line. Everything below — line framing,
- * turn lifecycle, abort — is the same for all of them, and the process itself
- * is a {@link RunnerProcess}.
+ * turn lifecycle, abort — is the same for all of them; the process and what it
+ * owns are {@link ProcessLifecycle}'s.
  */
-export abstract class StdioAgentAdapter implements AgentAdapter {
+export abstract class StdioAgentAdapter extends ProcessLifecycle implements AgentAdapter {
   abstract readonly agentId: string;
 
-  protected process: ChildProcess | null = null;
   protected sessionId: string | null = null;
   private readonly stdout = new LineBuffer();
-  private readonly runner: RunnerProcess;
   /** Set for the duration of a turn. Outside one, events are buffered rather than dropped. */
   private turnEmit: ((event: AgentEvent) => void) | null = null;
   /** Set for the duration of a turn. Pinged on every raw line, whether or not `handleLine` turns it into an event. */
@@ -62,12 +59,9 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
   private hadTurn = false;
   /** A task's session, which wants what the agent says on its own after a turn closed; a planner registers none and drops it. */
   private outOfTurnListener: ((event: AgentEvent) => void) | null = null;
-  private disposed = false;
-  /** What this process is to the user — a planner or a task's runner — for the words a failure is reported in. */
-  protected role: 'planner' | 'task' = 'planner';
 
-  constructor(protected deps: AgentProcessDeps) {
-    this.runner = new RunnerProcess(deps);
+  constructor(deps: AgentProcessDeps) {
+    super(deps);
     // One listener for the process lifetime; completed turns retain no exit closure.
     void this.runner.ended.then(() => this.turnEmit?.({ type: 'error', message: this.exitMessage() }));
   }
@@ -92,21 +86,13 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
 
   async start(opts: AgentStartOptions): Promise<void> {
     this.role = opts.kind;
-    try {
-      await this.runner.start(opts.cwd, (workspace) => {
-        const spec = this.spawnSpec(opts, workspace);
-        return { command: spec.command, args: spec.args, env: () => spec.env ?? {}, ...(spec.envDrop ? { envDrop: spec.envDrop } : {}) };
-      }, (child) => {
-        this.process = child;
-        this.readProtocol();
-        return this.handshake(opts);
-      });
-    } catch (err) {
-      // The runner is already down; what goes here is the adapter's own — a
-      // subclass's per-process files among it.
-      this.dispose();
-      throw err;
-    }
+    await this.startProcess(opts.cwd, (workspace) => {
+      const spec = this.spawnSpec(opts, workspace);
+      return { command: spec.command, args: spec.args, env: () => spec.env ?? {}, ...(spec.envDrop ? { envDrop: spec.envDrop } : {}) };
+    }, () => {
+      this.readProtocol();
+      return this.handshake(opts);
+    });
   }
 
   /**
@@ -146,9 +132,6 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
       this.betweenTurns.push(event);
     }
   }
-
-  /** Resolves when the process ends, so a handshake can lose the race instead of waiting out its timeout. */
-  protected get processEnded(): Promise<void> { return this.runner.ended; }
 
   /** The environment the agent was spawned under, for any side process a handshake needs. */
   protected get spawnEnv(): NodeJS.ProcessEnv { return this.runner.env; }
@@ -228,21 +211,11 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
 
   nativeSessionId(): string | null { return this.sessionId; }
 
-  get exited(): boolean { return this.runner.hasExited; }
-
-  onProcessExit(listener: (code: number, lastWords?: string) => void): void {
-    const fire = () => listener(this.runner.exitCode, this.exitMessage());
-    if (this.runner.exit) queueMicrotask(fire);
-    else void this.runner.ended.then(fire);
-  }
-
-  dispose(): void {
-    if (this.disposed) return;
-    this.disposed = true;
+  override dispose(): void {
+    if (this.isDisposed) return;
     this.turnEmit = null;
     this.outOfTurnListener = null;
-    this.process = null;
-    this.runner.dispose();
+    super.dispose();
   }
 
   /** Write one raw protocol line to the agent. */
@@ -250,7 +223,6 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
     this.process?.stdin?.write(`${JSON.stringify(payload)}\n`);
   }
 
-  /** Fail-safe contract: a dead agent reports its own last words, never an empty bubble. */
   protected exitMessage(): string {
     return this.runner.withStderrTail(`The ${this.agentId} ${this.role === 'task' ? 'task runner' : 'planner'} ${this.runner.describeExit()}.`);
   }

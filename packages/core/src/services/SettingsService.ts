@@ -1,15 +1,18 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { randomUUID } from 'crypto';
 import { globalDataDir, migrateOldConfigDir } from '../utils/globalDataDir';
+import { withFileLock } from '../utils/fileLock';
 import type { SupervisorLevel } from '../models/Execution';
 import { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './LoopGuards';
 import { DEFAULT_WAKE_UP_READ_BUDGET } from './Supervisor';
+import { parseAutonomyFlag } from './ModeResolver';
 
 /** How a run is started, watched and merged: the user's, not a plan's (ADR-0030). */
 export interface GlobalRunSettings {
   supervisorLevel: SupervisorLevel;
   mergeAtGatesAutomatically: boolean;
+  /** End the commits Ordewell writes with a `Planned-with: Ordewell` trailer (ADR-0013). */
+  plannedWithTrailer: boolean;
   /** Start a plan when the planner submits it, approved as if the user had pressed Execute. */
   autorun: boolean;
   /** Retries an Act supervisor may make of one task in a run (a loop guard). */
@@ -21,6 +24,7 @@ export interface GlobalRunSettings {
 export const RUN_SETTINGS_DEFAULTS: Readonly<GlobalRunSettings> = {
   supervisorLevel: 'watch',
   mergeAtGatesAutomatically: false,
+  plannedWithTrailer: true,
   autorun: false,
   supervisorRetryLimit: DEFAULT_SUPERVISOR_RETRY_LIMIT,
   wakeUpReadBudget: DEFAULT_WAKE_UP_READ_BUDGET,
@@ -44,6 +48,10 @@ const RUN_SETTING_CHECKS: { [K in keyof GlobalRunSettings]: { valid: (v: unknown
   mergeAtGatesAutomatically: {
     valid: (v): v is boolean => typeof v === 'boolean',
     refusal: 'Merge at gates automatically must be on or off.',
+  },
+  plannedWithTrailer: {
+    valid: (v): v is boolean => typeof v === 'boolean',
+    refusal: 'The Planned-with line must be on or off.',
   },
   autorun: {
     valid: (v): v is boolean => typeof v === 'boolean',
@@ -70,10 +78,11 @@ export interface UserSettings {
    * back to the environment's defaults; `[]` is a deliberate "none of them".
    */
   enabledRunners?: string[];
-  /** Full (true) or Guarded (false), ADR-0001; Full until the user chooses. */
+  /** Full (true) or Guarded (false), ADR-0001; Guarded until the user chooses. */
   autonomousMode?: boolean;
   supervisorLevel?: SupervisorLevel;
   mergeAtGatesAutomatically?: boolean;
+  plannedWithTrailer?: boolean;
   autorun?: boolean;
   supervisorRetryLimit?: number;
   wakeUpReadBudget?: number;
@@ -105,8 +114,28 @@ function readPlannerModels(raw: unknown): Record<string, { model: string; effort
     const { model, effort } = entry as { model?: unknown; effort?: unknown };
     if (typeof model !== 'string' || !model.trim()) continue;
     out[provider] = typeof effort === 'string' && effort.trim()
-      ? { model, effort }
-      : { model };
+      ? { model: model.trim(), effort: effort.trim() }
+      : { model: model.trim() };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * The allowlist is read entry by entry like the planner models above: the
+ * obvious single-model hand edit is `{"claude-code": "opus"}`, and handing
+ * that string on makes every planner turn throw on `allowlist.filter` (or, where
+ * the catalog is not filtered, match model ids by substring). A runner whose
+ * entry is not a list of real ids is left out, so no restriction stands.
+ */
+function readModelAllowlist(raw: unknown): Record<string, string[]> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, string[]> = {};
+  for (const [runner, ids] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(ids)) continue;
+    const usable = ids
+      .filter((id): id is string => typeof id === 'string' && id.trim() !== '')
+      .map((id) => id.trim());
+    if (usable.length > 0) out[runner] = usable;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -123,118 +152,15 @@ export function runSettingsOf(settings: UserSettings): GlobalRunSettings {
 /** How many times a save is made afresh when another process keeps saving under it. */
 const SAVE_TRIES = 5;
 
-/**
- * A lock held this long belongs to a process that died between its check and
- * its swap: no live save holds it for more than a moment.
- */
-const LOCK_STALE_MS = 2_000;
-/** How long a save waits for a lock it cannot take before it gives up and says so. */
-const LOCK_TIMEOUT_MS = 10_000;
-const LOCK_POLL_MS = 5;
-const LOCK_POLL_MAX_MS = 100;
-
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * Runs `swap` holding `<file>.lock`, created exclusively, so no other process
- * that saves the file can swap it in between `swap`'s look at it and its
- * rename. Saves are synchronous, so the wait is too.
- *
- * The lock names its holder. A holder frees only its own lock; a waiter may
- * remove one only when two looks a poll apart agree that it is still the same
- * lock — same token, same mtime — and its age says the process that made it
- * died holding it. A lock another waiter has since taken over is a different
- * lock, with another token and a fresh mtime, and is left to its holder. The
- * wait is bounded: a lock that is never free is raised after
- * {@link LOCK_TIMEOUT_MS}, and one that cannot be removed is raised at once,
- * rather than retried for ever. What that leaves is the known window of a
- * holder that neither dies nor finishes: one stalled past the stale age can
- * still be taken over, and the saves then overlap.
- */
-function withFileLock<T>(file: string, swap: () => T): T {
-  const lock = `${file}.lock`;
-  const token = `${process.pid}:${randomUUID()}`;
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  let last: { token: string; mtimeMs: number } | null = null;
-  let poll = LOCK_POLL_MS;
-  for (;;) {
-    try {
-      const fd = fs.openSync(lock, 'wx');
-      try {
-        fs.writeSync(fd, token);
-      } finally {
-        fs.closeSync(fd);
-      }
-      break;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-    }
-    // Every wait is bounded, whatever it is waiting on: a lock that is never
-    // free is said rather than polled for ever.
-    if (Date.now() >= deadline) {
-      throw new Error(`Cannot save the settings file: ${lock} is still held after ${Math.round(LOCK_TIMEOUT_MS / 1000)} seconds by a process that is not finishing, or it cannot be removed. Check for a process stuck saving there, and delete the file if there is none.`);
-    }
-    let holder: string;
-    let mtimeMs: number;
-    try {
-      holder = fs.readFileSync(lock, 'utf8');
-      mtimeMs = fs.statSync(lock).mtimeMs;
-    } catch (err) {
-      if (gone(err)) {
-        last = null;
-        continue; // released between the calls
-      }
-      throw err;
-    }
-    const stale = Date.now() - mtimeMs > LOCK_STALE_MS;
-    if (last && last.token === holder && last.mtimeMs === mtimeMs && stale) {
-      unlinkLock(lock);
-      last = null;
-      continue;
-    }
-    last = stale ? { token: holder, mtimeMs } : null;
-    sleepSync(poll);
-    poll = Math.min(poll * 2, LOCK_POLL_MAX_MS);
-  }
-  try {
-    return swap();
-  } finally {
-    releaseLock(lock, token);
-  }
-}
-
-/** True for the one error every look at a lock may meet by racing: it is not there any more. */
-function gone(err: unknown): boolean {
-  return (err as NodeJS.ErrnoException).code === 'ENOENT';
-}
-
-/** Frees the lock this save holds, and leaves one another process has taken over. */
-function releaseLock(lock: string, token: string): void {
-  let holder: string;
-  try {
-    holder = fs.readFileSync(lock, 'utf8');
-  } catch (err) {
-    if (gone(err)) return; // already released
-    throw err;
-  }
-  if (holder === token) unlinkLock(lock);
-}
-
-/** Removes a lock, tolerating the race that removed it first and nothing else: a refusal is raised. */
-function unlinkLock(lock: string): void {
-  try {
-    fs.unlinkSync(lock);
-  } catch (err) {
-    if (!gone(err)) throw err;
-  }
-}
+/** A file that cannot be read is reported once per process, not on every look. */
+const warnedSettingsProblems = new Set<string>();
 
 export class SettingsService {
   private filePath: string;
   private cache: UserSettings | null = null;
   private cachedStamp: string | null = null;
+  /** A read failed for a reason other than a missing file; saving would overwrite bytes we never saw. */
+  private unreadable = false;
 
   constructor(filePath: string = getSettingsPath()) {
     this.filePath = filePath;
@@ -286,10 +212,12 @@ export class SettingsService {
     const name = path.basename(this.filePath);
     let seen = this.fileStamp();
     let timer: NodeJS.Timeout | undefined;
+    let dead = false;
     let watcher: fs.FSWatcher;
     try {
       fs.mkdirSync(dir, { recursive: true });
       watcher = fs.watch(dir, (_event, changed) => {
+        if (dead) return;
         if (changed && changed !== name) return;
         // One save is several events; the stamp tells whether the file really moved.
         clearTimeout(timer);
@@ -303,7 +231,23 @@ export class SettingsService {
     } catch {
       return { dispose() {} };
     }
-    return { dispose: () => { clearTimeout(timer); watcher.close(); } };
+    // fs.watch reports a watch it can no longer keep asynchronously (ENOSPC,
+    // EMFILE, the directory being removed), and an 'error' with no listener
+    // takes the whole process down. A lost notification channel is not worth
+    // the user's terminal or extension host: say so once and stop watching.
+    const die = (reason: unknown): void => {
+      if (dead) return;
+      dead = true;
+      clearTimeout(timer);
+      try {
+        watcher.close();
+      } catch {
+        // Already unusable; the failure above is the one worth reporting.
+      }
+      console.warn(`[SettingsService] stopped watching ${dir} for settings changes: ${String(reason)}`);
+    };
+    watcher.on('error', die);
+    return { dispose: () => { dead = true; clearTimeout(timer); watcher.close(); } };
   }
 
   getModelAllowlist(runner: string): string[] | undefined {
@@ -389,18 +333,29 @@ export class SettingsService {
   /**
    * Full or Guarded (ADR-0001), as saved here (ADR-0030). A value set in the
    * environment wins, so a script or CI run can fix its own without touching
-   * the user's file.
+   * the user's file. A fresh install starts Guarded: its first plan runs each
+   * runner's safe mode and asks before risky effects.
    */
   autonomousMode(): boolean {
-    const env = process.env.ORDEWELL_AUTONOMOUS_MODE;
-    if (this.autonomousModeOverridden()) return env !== 'false' && env !== '0';
-    return this.getAll().autonomousMode ?? true;
+    const override = this.autonomyOverride();
+    return override ?? this.getAll().autonomousMode ?? false;
   }
 
   /** Whether `ORDEWELL_AUTONOMOUS_MODE` decides the level, whatever this file says. */
   autonomousModeOverridden(): boolean {
-    const env = process.env.ORDEWELL_AUTONOMOUS_MODE;
-    return env !== undefined && env.trim() !== '';
+    return this.autonomyOverride() !== undefined;
+  }
+
+  /**
+   * The level `ORDEWELL_AUTONOMOUS_MODE` names, or undefined when it names
+   * none. It shares {@link parseAutonomyFlag} with the `.env` migration, so a
+   * value is read the same way whether it is still in `.env` or set in the
+   * shell. Anything else is not an override at all rather than Full: a typo,
+   * `off` in a shell that spells Guarded that way, or a lower-case `false`
+   * must never raise the user's autonomy.
+   */
+  private autonomyOverride(): boolean | undefined {
+    return parseAutonomyFlag(process.env.ORDEWELL_AUTONOMOUS_MODE);
   }
 
   setAutonomousMode(enabled: boolean): void {
@@ -432,34 +387,75 @@ export class SettingsService {
     // A pre-`.ordewell` install keeps its settings in the old config dir; lift
     // them once before reading so the first read already sees the moved file.
     migrateOldConfigDir();
+    this.unreadable = false;
+    let text: string;
     try {
-      if (fs.existsSync(this.filePath)) {
-        const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
-        // Only known keys are lifted, so the removed `tdd` (now a task skill)
-        // and `verification` toggles and the `runnerTransport` setting of older
-        // files are dropped on the next write.
-        const settings: UserSettings = {};
-        if (raw.modelAllowlist !== undefined) {
-          settings.modelAllowlist = raw.modelAllowlist;
-        }
-        const plannerModels = readPlannerModels(raw.plannerModels);
-        if (plannerModels) {
-          settings.plannerModels = plannerModels;
-        }
-        if (Array.isArray(raw.enabledRunners)) {
-          settings.enabledRunners = raw.enabledRunners.map(String);
-        }
-        if (typeof raw.autonomousMode === 'boolean') settings.autonomousMode = raw.autonomousMode;
-        // A value it cannot use is left out, so its default stands.
-        for (const key of RUN_SETTING_KEYS) {
-          if (RUN_SETTING_CHECKS[key].valid(raw[key])) (settings as Record<keyof GlobalRunSettings, unknown>)[key] = raw[key];
-        }
-        return settings;
+      text = fs.readFileSync(this.filePath, 'utf-8');
+    } catch (err: unknown) {
+      // A missing file is simply defaults. Any other read failure (EACCES,
+      // EMFILE, EISDIR) says nothing about the content, so the next save must
+      // refuse rather than replace what was never read.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.unreadable = true;
+        this.warnProblem(`could not be read; changes will not be saved over it: ${String(err)}`);
       }
-    } catch {
-      // corrupted file — use defaults
+      return {};
     }
-    return {};
+    let raw: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      raw = parsed as Record<string, unknown>;
+    } catch {
+      this.moveAsideCorrupt();
+      return {};
+    }
+    // Only known keys are lifted, so the removed `tdd` (now a task skill)
+    // and `verification` toggles and the `runnerTransport` setting of older
+    // files are dropped on the next write.
+    const settings: UserSettings = {};
+    const modelAllowlist = readModelAllowlist(raw.modelAllowlist);
+    if (modelAllowlist) {
+      settings.modelAllowlist = modelAllowlist;
+    }
+    const plannerModels = readPlannerModels(raw.plannerModels);
+    if (plannerModels) {
+      settings.plannerModels = plannerModels;
+    }
+    if (Array.isArray(raw.enabledRunners)) {
+      settings.enabledRunners = raw.enabledRunners.map(String);
+    }
+    if (typeof raw.autonomousMode === 'boolean') {
+      settings.autonomousMode = raw.autonomousMode;
+    } else if (typeof raw.autonomousMode === 'string') {
+      // A hand-typed level name is read the way the flag and `.env` read it;
+      // "guarded" must not fall through to Full. An unknown word still does.
+      const level = parseAutonomyFlag(raw.autonomousMode);
+      if (level !== undefined) settings.autonomousMode = level;
+    }
+    // A value it cannot use is left out, so its default stands.
+    for (const key of RUN_SETTING_KEYS) {
+      if (RUN_SETTING_CHECKS[key].valid(raw[key])) (settings as Record<keyof GlobalRunSettings, unknown>)[key] = raw[key];
+    }
+    return settings;
+  }
+
+  /** Keep the bytes of a hand-edited file we cannot parse, and say so, instead of resetting it on the next save. */
+  private moveAsideCorrupt(): void {
+    const aside = `${this.filePath}.${Date.now()}.corrupt`;
+    try {
+      fs.renameSync(this.filePath, aside);
+      this.warnProblem(`is not valid JSON; kept it as ${aside} and started from defaults`);
+    } catch (err: unknown) {
+      this.unreadable = true;
+      this.warnProblem(`is not valid JSON and could not be moved aside; changes will not be saved over it: ${String(err)}`);
+    }
+  }
+
+  private warnProblem(problem: string): void {
+    if (warnedSettingsProblems.has(this.filePath)) return;
+    warnedSettingsProblems.add(this.filePath);
+    console.warn(`[SettingsService] ${this.filePath} ${problem}`);
   }
 
   /**
@@ -482,6 +478,11 @@ export class SettingsService {
 
   /** False, saving nothing, when the file is no longer the one stamped `expected`. */
   private persist(expected?: string | null): boolean {
+    // The bytes on disk were never read, so replacing them would be a silent
+    // reset to whatever defaults this process happens to hold.
+    if (this.unreadable) {
+      throw new Error(`Cannot save settings: ${this.filePath} could not be read, so it will not be overwritten. Fix or remove it and try again.`);
+    }
     const dir = path.dirname(this.filePath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -497,7 +498,7 @@ export class SettingsService {
       if (expected !== undefined && this.fileStamp() !== expected) return false;
       fs.renameSync(staging, this.filePath);
       return true;
-    });
+    }, 'save the settings file');
     if (!swapped) {
       fs.rmSync(staging, { force: true });
       return false;

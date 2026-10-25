@@ -37,8 +37,8 @@ export interface ResearchToolSpec {
 export const SPAWN_RESEARCH_AGENT = 'spawn_research_agent';
 
 /**
- * Subagent tool (issue #34), opencode-style: one stateless read-only research
- * agent per call. Kept out of RESEARCH_TOOLS since it is projected in
+ * Subagent tool (issue #34, ADR-0005), opencode-style: one stateless read-only
+ * research agent per call. Kept out of RESEARCH_TOOLS since it is projected in
  * separately via withSpawn().
  */
 export const SPAWN_RESEARCH_AGENT_SPEC: ResearchToolSpec = {
@@ -153,8 +153,8 @@ export function subagentToolSpecs(): ResearchToolSpec[] {
   return RESEARCH_TOOLS;
 }
 
-function withSpawn(): ResearchToolSpec[] {
-  return [...RESEARCH_TOOLS, SPAWN_RESEARCH_AGENT_SPEC];
+function withSpawn(subagents: boolean): ResearchToolSpec[] {
+  return subagents ? [...RESEARCH_TOOLS, SPAWN_RESEARCH_AGENT_SPEC] : [...RESEARCH_TOOLS];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -218,8 +218,8 @@ export function isExecutionTool(name: string): boolean {
 }
 
 /** The conversation's tools: the research tools, and the execution tools when the session offers them. */
-function conversationSpecs(execution: boolean): ResearchToolSpec[] {
-  return execution ? [...withSpawn(), ...executionToolSpecs()] : withSpawn();
+function conversationSpecs(execution: boolean, subagents: boolean): ResearchToolSpec[] {
+  return execution ? [...withSpawn(subagents), ...executionToolSpecs()] : withSpawn(subagents);
 }
 
 function projectOpenAi(specs: ResearchToolSpec[]): OpenAI.Chat.Completions.ChatCompletionTool[] {
@@ -244,7 +244,7 @@ function projectOpenAi(specs: ResearchToolSpec[]): OpenAI.Chat.Completions.ChatC
 
 /** Project the canonical tools into OpenAI's chat-completions tool format; `plannerTools` adds the task reads and the execution tools. */
 export function toOpenAiTools(plannerTools = false): OpenAI.Chat.Completions.ChatCompletionTool[] {
-  return [...projectOpenAi(conversationSpecs(plannerTools)), ...(plannerTools ? PLANNER_TASK_READ_TOOLS.map((t): OpenAI.Chat.Completions.ChatCompletionTool => ({
+  return [...projectOpenAi(conversationSpecs(plannerTools, true)), ...(plannerTools ? PLANNER_TASK_READ_TOOLS.map((t): OpenAI.Chat.Completions.ChatCompletionTool => ({
     type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema },
   })) : [])];
 }
@@ -261,9 +261,13 @@ const SCHEMA_TYPE: Record<ParamType, SchemaType> = {
   boolean: SchemaType.BOOLEAN,
 };
 
-/** Project the canonical tools into Gemini's function-declaration format; `plannerTools` adds the task reads and the execution tools. */
-export function toGeminiToolDeclarations(plannerTools = false): FunctionDeclaration[] {
-  const tools = conversationSpecs(plannerTools).map((t) => {
+/**
+ * Project the canonical tools into Gemini's function-declaration format;
+ * `plannerTools` adds the task reads and the execution tools, and `subagents`
+ * withholds the spawn tool, which this backend cannot run (ADR-0005).
+ */
+export function toGeminiToolDeclarations(plannerTools = false, subagents = true): FunctionDeclaration[] {
+  const tools = conversationSpecs(plannerTools, subagents).map((t) => {
     const properties: Record<string, Schema> = {};
     for (const [key, param] of Object.entries(t.properties)) {
       properties[key] = {

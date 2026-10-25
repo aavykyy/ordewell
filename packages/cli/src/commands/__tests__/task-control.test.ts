@@ -38,6 +38,14 @@ const PLAN = {
   plan: { pendingTasks: [{ id: 'task-abc-123', order: 3, title: 'Third', status: 'failed' }] },
 };
 
+/** What a request asked, as one line: a control is its command and task, anything else its method and path. */
+function asked(req: http.IncomingMessage, body: string): string {
+  if (!req.url?.endsWith('/execute-command')) return `${req.method} ${req.url}`;
+  const sent = JSON.parse(body) as { command: string; task: string; from?: string; message?: string };
+  return [sent.command, sent.task, sent.from, sent.message].filter(Boolean).join(' ');
+}
+
+/** A daemon that keeps what it was asked and answers a control in a line of its own. */
 async function serverRecordingHits(hits: string[]) {
   return startServer((req, res) => {
     if (req.url?.includes('/sessions/')) {
@@ -50,27 +58,32 @@ async function serverRecordingHits(hits: string[]) {
       res.end(JSON.stringify({ mergeGate: [] }));
       return;
     }
-    hits.push(`${req.method} ${req.url}`);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true }));
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      const hit = asked(req, Buffer.concat(chunks).toString('utf8'));
+      hits.push(hit);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, message: `Seam: ${hit}` }));
+    });
   });
 }
 
 describe('task control commands', () => {
   it.each([
-    ['handleRunTask', 'run', 'Task started.'],
-    ['handleForceStart', 'force-start', 'Task force-started.'],
-    ['handleRetry', 'retry', 'Task retried.'],
-    ['handleCancel', 'cancel', 'Task cancelled.'],
-  ])('%s posts the %s route with the task as typed', async (handlerName, segment, message) => {
+    ['handleRunTask', 'run_task 3'],
+    ['handleForceStart', 'force_start 3'],
+    ['handleRetry', 'retry_task 3 fresh'],
+    ['handleCancel', 'stop_task 3'],
+  ])('%s sends its command with the task as typed', async (handlerName, sent) => {
     const hits: string[] = [];
     const srv = await serverRecordingHits(hits);
     const mod: unknown = await import('../task-control');
     const { stdout } = await capture(() =>
       (mod as Record<string, (...args: unknown[]) => Promise<void>>)[handlerName](['--session-id', 'session-1', '3'], new ApiClient(srv.port)),
     );
-    expect(hits).toEqual([`POST /api/plans/session-1/tasks/3/${segment}`]);
-    expect(stdout).toContain(message);
+    expect(hits).toEqual([sent]);
+    expect(stdout).toBe(`Seam: ${sent}`);
     srv.close();
   });
 
@@ -80,7 +93,7 @@ describe('task control commands', () => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       if (req.url?.includes('/sessions/')) res.end(JSON.stringify(PLAN));
       else if (req.url?.endsWith('/merge-gate')) res.end(JSON.stringify({ mergeGate: [] }));
-      else res.end(JSON.stringify({ ok: true, queued }));
+      else res.end(JSON.stringify({ ok: true, message: queued, payload: { kind: 'queued', line: queued } }));
     });
     const { handleForceStart } = await import('../task-control');
 
@@ -93,15 +106,18 @@ describe('task control commands', () => {
   it('sends an id as typed and prints the seam\'s line instead of its own', async () => {
     const hits: string[] = [];
     const srv = await startServer((req, res) => {
-      hits.push(`${req.method} ${req.url}`);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, message: 'Retrying task #3 "Third".' }));
+      req.resume();
+      req.on('end', () => {
+        hits.push(`${req.method} ${req.url}`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, message: 'Retrying task #3 "Third".' }));
+      });
     });
     const { handleRetry } = await import('../task-control');
 
     const { stdout } = await capture(() => handleRetry(['--session-id', 'session-1', 'task-abc-123'], new ApiClient(srv.port)));
 
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/task-abc-123/retry']);
+    expect(hits).toEqual(['POST /api/plans/session-1/execute-command']);
     expect(stdout).toBe('Retrying task #3 "Third".');
     srv.close();
   });
@@ -121,7 +137,7 @@ describe('task control commands', () => {
     srv.close();
   });
 
-  it('continue posts the message to the task\'s continue route as typed (ADR-0018, K1)', async () => {
+  it('continue sends the message as a retry from the task\'s saved session (ADR-0018, K1)', async () => {
     let body = '';
     const hits: string[] = [];
     const srv = await startServer((req, res) => {
@@ -130,16 +146,16 @@ describe('task control commands', () => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         if (req.url?.includes('/sessions/')) return res.end(JSON.stringify(PLAN));
         hits.push(`${req.method} ${req.url}`);
-        res.end(JSON.stringify({ ok: true }));
+        res.end(JSON.stringify({ ok: true, message: 'Continuing task #3 "Third" in its saved session with your message.' }));
       });
     });
     const { handleContinue } = await import('../task-control');
     const { stdout } = await capture(() =>
       handleContinue(['--session-id', 'session-1', '3', 'also', 'handle', 'arrays'], new ApiClient(srv.port)),
     );
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/3/continue']);
-    expect(JSON.parse(body)).toEqual({ text: 'also handle arrays' });
-    expect(stdout).toContain('Task continued.');
+    expect(hits).toEqual(['POST /api/plans/session-1/execute-command']);
+    expect(JSON.parse(body)).toEqual({ command: 'retry_task', task: '3', from: 'session', message: 'also handle arrays' });
+    expect(stdout).toBe('Continuing task #3 "Third" in its saved session with your message.');
     srv.close();
   });
 
@@ -186,6 +202,18 @@ describe('handleAddTask', () => {
   it('posts a task with title, type and dependencies', async () => {
     let body = '';
     const srv = await startServer((req, res) => {
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          meta: { id: 'session-1' },
+          plan: {
+            tasks: [
+              { id: 'task-1', order: 1, title: 'One', status: 'pending' },
+              { id: 'task-2', order: 2, title: 'Two', status: 'pending' },
+            ],
+          },
+        }));
+      }
       req.on('data', (c) => { body += c.toString(); });
       req.on('end', () => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -251,8 +279,12 @@ describe('starting a task past its merge gate (ADR-0020)', () => {
       res.writeHead(req.url?.endsWith('/merge-gate') ? gateStatus : 200, { 'Content-Type': 'application/json' });
       if (req.url?.includes('/sessions/')) return res.end(JSON.stringify(GATE_PLAN));
       if (req.url?.endsWith('/merge-gate')) return res.end(JSON.stringify(gate));
-      hits.push(`${req.method} ${req.url}`);
-      res.end(JSON.stringify({ ok: true }));
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        hits.push(asked(req, Buffer.concat(chunks).toString('utf8')));
+        res.end(JSON.stringify({ ok: true, message: 'ok' }));
+      });
     });
   }
 
@@ -283,7 +315,7 @@ describe('starting a task past its merge gate (ADR-0020)', () => {
     await capture(() => handleForceStart(['--session-id', 'session-1', '--yes', '2'], new ApiClient(srv.port), async (q) => { asked.push(q); return false; }));
 
     expect(asked).toHaveLength(1);
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/2/force-start', 'POST /api/plans/session-1/tasks/2/force-start']);
+    expect(hits).toEqual(['force_start 2', 'force_start 2']);
     srv.close();
   });
 
@@ -294,7 +326,7 @@ describe('starting a task past its merge gate (ADR-0020)', () => {
 
     await capture(() => handleForceStart(['--session-id', 'session-1', '2'], new ApiClient(srv.port), async () => { throw new Error('asked'); }));
 
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/2/force-start']);
+    expect(hits).toEqual(['force_start 2']);
     srv.close();
   });
 
@@ -305,7 +337,7 @@ describe('starting a task past its merge gate (ADR-0020)', () => {
 
     await capture(() => handleRetry(['--session-id', 'session-1', '2'], new ApiClient(srv.port), async () => { throw new Error('asked'); }));
 
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/2/retry']);
+    expect(hits).toEqual(['retry_task 2 fresh']);
     srv.close();
   });
 });

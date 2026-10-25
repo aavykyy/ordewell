@@ -23,21 +23,21 @@ async function json(res: Response): Promise<Record<string, unknown>> {
   return (await res.json()) as Record<string, unknown>;
 }
 
-/** Queue a task message through the daemon's own route, answering the id a surface reads. */
+/** Queue a task message through the daemon, answering the id a surface reads. */
 async function queueMessage(h: Harness, taskId: string, text: string): Promise<string> {
-  const body = await json(await h.post(`tasks/${taskId}/messages`, { text }));
-  return String(body.id);
+  const body = await json(await h.command({ command: 'message_task', task: taskId, text }));
+  return String((body.payload as { id: string }).id);
 }
 
 describe('a control from the daemon lands one execution_action line, worded by the seam', () => {
   it('Mark complete and Mark not done answer the seam\'s line', async () => {
     const h = start([task('t1', 1)]);
 
-    const complete = await h.post('tasks/t1/complete');
+    const complete = await h.command({ command: 'mark_complete', task: 't1', confirmed: true });
     expect(await json(complete)).toEqual({ ok: true, message: 'Marked task #1 "Task t1" complete.' });
     expect(h.timeline().map((m) => m.text)).toEqual(['You marked task #1 "Task t1" complete.']);
 
-    const undone = await h.post('tasks/t1/uncomplete');
+    const undone = await h.command({ command: 'mark_not_done', task: 't1', confirmed: true });
     expect(await json(undone)).toEqual({ ok: true, message: 'Marked task #1 "Task t1" not done: it waits until you retry or start it.' });
     expect(h.timeline().map((m) => m.record.command)).toEqual(['mark_complete', 'mark_not_done']);
   });
@@ -45,16 +45,40 @@ describe('a control from the daemon lands one execution_action line, worded by t
   it('names a task by its order too, as the seam resolves it', async () => {
     const h = start([task('t1', 1), task('t2', 2)]);
 
-    const res = await h.post(`tasks/${encodeURIComponent('#2')}/complete`);
+    const res = await h.command({ command: 'mark_complete', task: '#2', confirmed: true });
 
     expect(await json(res)).toEqual({ ok: true, message: 'Marked task #2 "Task t2" complete.' });
     expect(h.timeline()).toHaveLength(1);
   });
 
+  it('refuses an AI task\'s override that carries no yes, and changes nothing', async () => {
+    const h = start([task('t1', 1)]);
+
+    const res = await h.command({ command: 'mark_complete', task: 't1' });
+    const refusal = await json(res) as { error: string; code: string };
+
+    expect(res.status).toBe(400);
+    expect(refusal.code).toBe('refused');
+    expect(refusal.error).toContain('needs the user\'s explicit yes');
+    expect(h.session.planState!.tasks[0].status).toBe('pending');
+    expect(h.timeline().map((m) => m.record.outcome)).toEqual(['refused']);
+  });
+
+  it('refuses an override of a task in a plan that is running, whatever the yes', async () => {
+    const h = start([task('t1', 1)]);
+    await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
+
+    const res = await h.command({ command: 'mark_complete', task: 't1', confirmed: true });
+
+    expect(res.status).toBe(400);
+    expect((await json(res) as { error: string }).error).toContain('Stop the run first');
+    expect(h.session.planState!.tasks[0].status).toBe('in_progress');
+  });
+
   it('answers a refusal as the seam words it, and keeps it once', async () => {
     const h = start([task('t1', 1, { status: 'completed' })]);
 
-    const res = await h.post('tasks/t1/complete');
+    const res = await h.command({ command: 'mark_complete', task: 't1', confirmed: true });
 
     expect(res.status).toBe(400);
     expect(await json(res)).toEqual({ error: 'Task #1 "Task t1" has already completed.', code: 'refused' });
@@ -64,7 +88,7 @@ describe('a control from the daemon lands one execution_action line, worded by t
   it('answers a task the plan lacks as the seam does, not as a bare 404', async () => {
     const h = start([task('t1', 1)]);
 
-    const res = await h.post('tasks/ghost/complete');
+    const res = await h.command({ command: 'mark_complete', task: 'ghost' });
 
     expect(res.status).toBe(400);
     expect(await json(res)).toEqual({ error: 'There is no task "ghost" in this plan.', code: 'refused' });
@@ -75,17 +99,17 @@ describe('a control from the daemon lands one execution_action line, worded by t
     await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
     h.forgetTimeline();
 
-    const res = await h.post('tasks/t2/force-start');
+    const res = await h.command({ command: 'force_start', task: 't2' });
 
     const queued = 'Task "Task t2" is approved and starts once task "Task t1" finishes.';
-    expect(await json(res)).toEqual({ ok: true, queued, message: queued });
+    expect(await json(res)).toEqual({ ok: true, message: queued, payload: { kind: 'queued', line: queued } });
     expect(h.timeline().map((m) => m.record.command)).toEqual(['force_start']);
   });
 
   it('Force start of a free task answers that it started', async () => {
     const h = start([task('t1', 1)]);
 
-    const res = await h.post('tasks/t1/force-start');
+    const res = await h.command({ command: 'force_start', task: 't1' });
 
     expect(await json(res)).toEqual({ ok: true, message: 'Started task #1 "Task t1".' });
     expect(h.timeline().map((m) => m.text)).toEqual(['You force started task #1 "Task t1".']);
@@ -96,7 +120,7 @@ describe('a control from the daemon lands one execution_action line, worded by t
     await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
     h.forgetTimeline();
 
-    const res = await h.post('tasks/t1/interrupt');
+    const res = await h.command({ command: 'interrupt_task', task: 't1' });
 
     expect(await json(res)).toEqual({ ok: true, message: 'Interrupted task #1 "Task t1": it waits for your message.' });
     expect(h.latest('t1').interrupts).toBe(1);
@@ -112,7 +136,7 @@ describe('a control from the daemon lands one execution_action line, worded by t
       runnerSessionId: 'native-t1',
     }]);
 
-    const res = await h.post('tasks/t1/resume/now');
+    const res = await h.command({ command: 'retry_task', task: 't1', from: 'session' });
 
     expect(await json(res)).toEqual({ ok: true, message: 'Resumed task #1 "Task t1" in its saved session.' });
     expect(h.timeline().map((m) => m.record.command)).toEqual(['retry_task']);
@@ -130,10 +154,10 @@ describe('a control from the daemon lands one execution_action line, worded by t
     await vi.waitFor(() => expect(h.session.planTasks[0].resumeAt).toBeDefined());
     h.forgetTimeline();
 
-    const cancelled = await h.post('tasks/t1/resume/cancel');
-    const none = await h.post('tasks/t2/resume/cancel');
+    const cancelled = await h.command({ command: 'cancel_resume', task: 't1' });
+    const none = await h.command({ command: 'cancel_resume', task: 't2' });
 
-    expect(await json(cancelled)).toEqual({ cancelled: true, message: 'Task #1 "Task t1" no longer resumes on its own at its usage limit\'s reset: resume it when you choose.' });
+    expect(await json(cancelled)).toEqual({ ok: true, message: 'Task #1 "Task t1" no longer resumes on its own at its usage limit\'s reset: resume it when you choose.' });
     expect(none.status).toBe(400);
     expect(await json(none)).toEqual({ error: 'Task #2 "Task t2" has no resume scheduled.', code: 'refused' });
     expect(h.timeline().map((m) => [m.record.command, m.record.outcome])).toEqual([['cancel_resume', 'done'], ['cancel_resume', 'refused']]);
@@ -187,18 +211,18 @@ describe('a control from the daemon lands one execution_action line, worded by t
     const h = start([task('t1', 1)]);
     await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    const forced = await h.post('tasks/t1/messages/now', { text: 'stop and use the cache' });
-    expect(await json(forced)).toEqual({ id: 'msg-1' });
+    const forced = await h.command({ command: 'message_task', task: 't1', text: 'stop and use the cache', force: true });
+    expect(await json(forced)).toMatchObject({ ok: true, payload: { kind: 'message', id: 'msg-1' } });
     expect(h.timeline().at(-1)!.text).toBe('You force sent task #1 "Task t1" a message: "stop and use the cache"');
 
     const first = await queueMessage(h, 't1', 'first');
     const second = await queueMessage(h, 't1', 'second');
     h.forgetTimeline();
-    const sent = await h.post(`tasks/t1/messages/${first}/now`);
-    const removed = await h.app.request(`/api/plans/s1/tasks/t1/messages/${second}`, { method: 'DELETE' });
+    const sent = await h.command({ command: 'force_send_queued', task: 't1', id: first });
+    const removed = await h.command({ command: 'remove_queued', task: 't1', id: second });
 
-    expect(await json(sent)).toEqual({ sent: true, message: 'Sent your queued message to task #1 "Task t1" now: its turn is interrupted, and the runner reads it next.' });
-    expect(await json(removed)).toEqual({ removed: true, message: 'Took back your queued message to task #1 "Task t1".' });
+    expect(await json(sent)).toEqual({ ok: true, message: 'Sent your queued message to task #1 "Task t1" now: its turn is interrupted, and the runner reads it next.' });
+    expect(await json(removed)).toEqual({ ok: true, message: 'Took back your queued message to task #1 "Task t1".' });
     expect(h.timeline().map((m) => m.record.command)).toEqual(['force_send_queued', 'remove_queued']);
   });
 
@@ -206,10 +230,10 @@ describe('a control from the daemon lands one execution_action line, worded by t
     const h = start([task('t1', 1)]);
     await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
     const id = await queueMessage(h, 't1', 'first');
-    await h.post(`tasks/t1/messages/${id}/now`);
+    await h.command({ command: 'force_send_queued', task: 't1', id });
     h.forgetTimeline();
 
-    const res = await h.app.request(`/api/plans/s1/tasks/t1/messages/${id}`, { method: 'DELETE' });
+    const res = await h.command({ command: 'remove_queued', task: 't1', id });
 
     expect(res.status).toBe(400);
     expect(await json(res)).toEqual({ error: 'That message to task #1 "Task t1" was already delivered or taken back.', code: 'refused' });

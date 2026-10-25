@@ -68,6 +68,26 @@ describe('runConversationTurn plan commit', () => {
   });
 });
 
+describe('runConversationTurn runner scope', () => {
+  const codexPlan = PLAN_JSON.replace('"claude-code"', '"codex"');
+
+  it('checks an envelope plan against the runners enabled now, not those the conversation opened with', async () => {
+    const chat = new ScriptedChat([proseTurn(codexPlan)]);
+    const ctx: ConversationTurnContext = { ...makeCtx(chat), liveScope: () => ({ runners: ['claude-code', 'codex'] }) };
+    const turn = await new TestService(fakeConfig()).runTurn(ctx, 'go');
+    expect(turn.kind).toBe('plan');
+    expect(chat.sent).toHaveLength(1);
+  });
+
+  it('refuses an envelope plan for a runner switched off since the conversation opened', async () => {
+    const chat = new ScriptedChat([proseTurn(codexPlan), proseTurn('Sorry'), proseTurn('Sorry')]);
+    const ctx: ConversationTurnContext = { ...makeCtx(chat), runners: ['claude-code', 'codex'], liveScope: () => ({ runners: ['claude-code'] }) };
+    const turn = await new TestService(fakeConfig()).runTurn(ctx, 'go');
+    expect(turn.kind).toBe('message');
+    expect(chat.sent[1]).toContain('invalid assignedRunner "codex"');
+  });
+});
+
 describe('runConversationTurn budgets', () => {
   it('appends the budget block to the turn\'s input, and only to the first send', async () => {
     const chat = new ScriptedChat([proseTurn('Which store?')]);

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { DaemonError } from '../../apiClient';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action, type Effect } from '../reducer';
 import { chatActivity } from '../layout';
@@ -18,12 +19,14 @@ const enter = (state: TuiState, text: string): TuiState => reduce(typed(state, t
 const midTurn = (): TuiState => enter(enter(initialState({ sessionId: 's1', rows: 30, cols: 100 }), 'build it'), 'and a README');
 
 const rejects = (): Promise<never> => Promise.reject(new Error('socket hang up'));
+/** What the daemon answers when the turn itself fails. */
+const refusesTurn = (): Promise<never> => Promise.reject(new DaemonError('planner down', 500));
 /** What Node rejects with when nothing is listening on the daemon's port. */
 const refused = (): Promise<never> => Promise.reject(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:3742'), { code: 'ECONNREFUSED' }));
 /** The sockets a turn opens around its call, open at once and never dropping. */
 const turnSockets: Partial<OrdewellApi> = {
   streamPlanning: () => ({ close: () => {}, ready: Promise.resolve() }),
-  followSession: () => ({ ready: Promise.resolve(), ended: new Promise(() => {}), close: () => {} }),
+  followSession: () => ({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: () => {} }),
 };
 
 /** Runs one effect against `api` and folds every action it dispatched into `state`. */
@@ -88,12 +91,27 @@ describe('a failure of the planner turn itself', () => {
   it('ends the turn and sends the held prompt, as before', async () => {
     const { state, effects } = await settle(midTurn(), { type: 'sendMessage', sessionId: 's1', message: 'build it' }, {
       ...turnSockets,
-      sendConversationMessage: rejects,
+      sendConversationMessage: refusesTurn,
     });
 
-    expect(messagesOf(state).some((m) => m.role === 'error' && m.text === 'socket hang up')).toBe(true);
+    expect(messagesOf(state).some((m) => m.role === 'error' && m.text === 'planner down')).toBe(true);
     expect(state.queuedPrompts).toEqual([]);
     expect(effects).toEqual([{ type: 'sendMessage', sessionId: 's1', message: 'and a README' }]);
+  });
+
+  // The request went out and nothing came back: the daemon may be on the turn
+  // still, so it is not over and the queue is not sent into it — even when the
+  // daemon cannot be asked straight away.
+  it('does not end the turn when its reply is lost in transit', async () => {
+    const { state, effects } = await settle(midTurn(), { type: 'sendMessage', sessionId: 's1', message: 'build it' }, {
+      ...turnSockets,
+      sendConversationMessage: rejects,
+      adoptSession: rejects,
+    });
+
+    expect(chatActivity(state)?.label).toBe('Waiting for the planner…');
+    expect(state.queuedPrompts).toEqual(['and a README']);
+    expect(effects).toEqual([]);
   });
 
   it('ends the turn when its connection is refused and the daemon cannot be brought back', async () => {

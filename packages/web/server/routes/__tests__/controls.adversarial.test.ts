@@ -37,11 +37,13 @@ describe('adversarial: a message to a paused task becomes the resume it is', () 
   it('lands one line worded as the resume, with the message as its detail, and no message line', async () => {
     const h = start([paused('t1', 1)]);
 
-    const res = await h.post('tasks/t1/messages', { text: 'the limit has reset, go on' });
+    const res = await h.command({ command: 'message_task', task: 't1', text: 'the limit has reset, go on' });
 
     expect(res.status).toBe(200);
     // A resume starts no queued message, so there is no id for a surface's button.
-    expect(await json(res)).toEqual({ id: '' });
+    const body = await json(res);
+    expect(body).toMatchObject({ ok: true, message: expect.stringContaining('saved session') });
+    expect(body).not.toHaveProperty('payload');
     expect(h.timeline().map((m) => [m.record.command, m.record.outcome])).toEqual([['retry_task', 'done']]);
     expect(h.timeline()[0]?.text).toContain('resumed task #1 "Task t1" in its saved session');
     expect(h.timeline()[0]?.record.detail).toBe('the limit has reset, go on');
@@ -51,7 +53,7 @@ describe('adversarial: a message to a paused task becomes the resume it is', () 
   it('a paused task whose saved session cannot go on is refused in the resume\'s words, once', async () => {
     const h = start([{ ...paused('t1', 1), runnerSessionId: undefined }]);
 
-    const res = await h.post('tasks/t1/messages', { text: 'go on' });
+    const res = await h.command({ command: 'message_task', task: 't1', text: 'go on' });
 
     expect(res.status).toBe(400);
     const body = await json(res);
@@ -65,7 +67,7 @@ describe('adversarial: a reference the CLI URL-encodes', () => {
   it('a control naming a task by its exact title, spaces and a hash, resolves as typed', async () => {
     const h = start([task('t1', 1), task('t2', 2, { title: 'Deploy the #2 parser' })]);
 
-    const res = await h.post(`tasks/${encodeURIComponent('Deploy the #2 parser')}/complete`);
+    const res = await h.command({ command: 'mark_complete', task: 'Deploy the #2 parser', confirmed: true });
 
     expect(res.status).toBe(200);
     expect(await json(res)).toEqual({ ok: true, message: 'Marked task #2 "Deploy the #2 parser" complete.' });

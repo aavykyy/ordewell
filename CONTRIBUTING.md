@@ -177,12 +177,16 @@ matches every `package.json`, builds and tests, then:
 - **npm**: publishes in dependency order — `core`, `web`, `cli`, then
   `cli-alias` (not a workspace — see Layout) — each one's `dependencies` must
   already resolve on the registry when it lands.
-- **VS Code**: packages and uploads the extension to the Marketplace.
+- **VS Code**: packages the extension, publishes it to the Marketplace, then
+  publishes the same `.vsix` to Open VSX so Cursor, VSCodium and Windsurf never
+  lag a release.
 
-Secrets required: `NPM_TOKEN` (npm publish access) and `VSCE_PAT` (Marketplace
-scope). `prepublishOnly` rebuilds each npm package first, so `dist/` can never
-be stale. Versions on npm are immutable — bump carefully, and keep all
-versions in lockstep.
+Secrets required: `NPM_TOKEN` (npm publish access), `VSCE_PAT` (Marketplace
+scope) and `OVSX_PAT` (an Open VSX access token). The Open VSX step fails the
+job when `OVSX_PAT` is unset, after npm and the Marketplace are already
+published — set it before tagging. `prepublishOnly` rebuilds each npm package
+first, so `dist/` can never be stale. Versions on npm are immutable — bump
+carefully, and keep all versions in lockstep.
 
 ## House style
 

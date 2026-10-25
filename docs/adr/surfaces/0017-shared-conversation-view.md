@@ -99,11 +99,35 @@ own presentation; it never re-derives the conversation from raw messages.
   deliberately leaves out thinking and everything that streamed and never settled —
   no `transcriptAt` beyond what the transcript itself records, and no reliance
   on the in-flight view. What reload shows is what was saved, not what was seen.
-- **Expansion is one toggle per surface (X1).** Collapsed is the default: a
-  command row reads `Name(keyArg)`, a subagent is one line, and one detail flag
-  (the TUI's ctrl+o, VS Code's header button) shows arguments, full output,
-  subagent children and digests. The flag is surface state, keyed on block
-  ids that stay stable for as long as the block exists — never stored in core.
+- **Expansion is surface state, collapsed by default (X1).** A command row
+  reads `Name(keyArg)` with a short preview, and a subagent is one line and its
+  digest. The TUI keeps one detail toggle, ctrl+o, that shows every block's
+  arguments, full output, subagent children and digests at once. VS Code folds
+  each run of activity between two messages — thinking, calls, subagents,
+  setup notices, compaction notices, answered approvals — into one line that
+  says what it did (`Ran 4 commands, fetched 2 pages (2 failed)`), counted
+  from the blocks' own facts: a call by its kind and how it ended, and never
+  as run when it was refused, denied or not executed (`1 command denied`,
+  `Ran a command (1 more not run)`); an Ordewell tool the same whichever
+  planner called it; a subagent once, never its steps; a `load_skill` call
+  and its notice once; a granted approval only when no call stands beside it,
+  and a denial once: on the call it stopped when that call stands beside it
+  (a runner's call its denied request names reads `1 command denied`, though
+  its result came back failed), and as the approval otherwise; and work still
+  running as running. A line with a
+  failure, denial or interruption in it is coloured as one. Opening the line
+  draws its rows as the TUI's collapsed previews; each row, each of a
+  subagent's steps and each long report opens on its own. A waiting approval,
+  an error, other notices, the skills a user's own message loaded and every
+  message stay outside any fold. A script task's log folds nothing and opens
+  nothing: it is commands, their output and their exits (ADR-0035), with no
+  prose for a fold to keep in view, so each row is drawn whole, its command
+  once, in its head, with no arguments block repeating it. What is open
+  is surface state, keyed on block ids that stay stable for as long as the
+  block exists — a run by the ids of the blocks it holds — never stored in
+  core, and dropped when the conversation is replaced (a new session, a
+  reload, a compaction, whose blocks are numbered afresh) or another attempt
+  is shown.
 
 ### Queued prompts
 
@@ -153,12 +177,26 @@ the same word.)
   Rejected there per D1; the conversational view strengthens the point — a
   block list is renderable as strings, and that is all the renderer has ever
   needed from a state.
-- **Per-block focus and expansion** — one expanded flag per block, navigated
-  with keys, remembered per block. It is more keys and more state than the use
-  case needs: what a user wants is *all* the detail or *none*, and the user
-  chose a single toggle, as in Claude Code. A per-block flag would also have to
-  live in surface state keyed on block ids, growing with the conversation, for
-  a distinction nobody asked for.
+- **Per-block focus and expansion in the TUI** — one expanded flag per
+  block, navigated with keys, remembered per block. It is more keys and more
+  state than a terminal needs: there a user wants *all* the detail or *none*,
+  and the user chose a single toggle, as in Claude Code. A terminal has no
+  pointer to open one row with, so ctrl+o stays.
+- **One expand-all toggle in VS Code** (the design until 2026-10-25: a header
+  button, the TUI's ctrl+o by another spelling). A long turn drew every row
+  of every call, so the planner's and the agent's words were lost among them;
+  and the toggle could only show everything, which buried the one row a
+  reader opened it for under every other row's full output. A pointer can
+  open one row, so the webview folds each run of activity into a sentence and
+  opens one level at a time. The open choices live in the webview, keyed on
+  block ids, and are dropped with the conversation they belong to.
+- **Every run of activity open, its rows collapsed.** It keeps each call one
+  line, but a fifty-call turn is still fifty lines between two sentences of
+  prose.
+- **Counting what a call ran** (`curl` three times in one script as three
+  pages fetched). A script's contents are free text; a summary that guessed
+  at them would claim work nobody saw done. A call is counted by its tool's
+  kind, as its row is named.
 - **One settled message per reply, replacing its final segment** (the design
   until 2026-10-18). A harness planner's reply joins the text on both sides of
   its tool calls, so one message could not replace one segment: the turn's
@@ -186,3 +224,6 @@ the same word.)
 - 2026-10-19 — the meter counts a call's context as its runner does and resets on a compaction, and a window reported anywhere in the session is known to every later stream (U1). Claude Code states a window only on a turn's last line, so a task, often one long turn, showed no share for its whole run even with the planner on the same model.
 - 2026-10-19 — a turn whose calls did not stream has their tokens taken once from its result (U1). A session billing fact is kept with the source that stated it, so a planner switched before its first cost is not shown as the old one's subscription.
 - 2026-10-19 — the Tasks total names a runner as reporting no cost only once an attempt of it has ended having reported usage (U1). Claude Code states a cost only at a turn's end, so a first Claude Code task read as `claude-code reports no cost` for as long as its turn ran.
+- 2026-10-25 — VS Code folds each run of activity into one summarised line, opened a level at a time, in place of its expand-all button; the TUI keeps ctrl+o (X1). A long turn's rows buried the prose between them, and showing everything was the only way to see one row in full.
+- 2026-10-25 — a script task's log is drawn whole, unfolded; a summary never counts a call that did not run as run and keeps a denied approval; a failed line is coloured; a compaction drops what was open (X1). Found in review: a failing script's output was hidden behind one closed line, and a denied command read `Ran a command`.
+- 2026-10-25 — a denial is counted once, on the call it stopped when that call is in the line, and a script row draws its command once (X1). Found in review: a runner's denied command read `Ran a command (1 failed)` beside its denied approval, and a planner's denial was counted twice.

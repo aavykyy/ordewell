@@ -7,13 +7,15 @@ import type {
   IsolationRun,
   IsolationTaskRecord,
   IsolationTaskStatus,
+  IsolationView,
   PlanIsolation,
+  PreservedWork,
   RepoGroupLayout,
   TaskIsolation,
 } from '../interfaces/IWorktreeIsolation';
+import { SELF_REPO } from './repoPath';
 
-/** The path of the repo in a workspace that is itself the repository. */
-export const SELF_REPO = '.';
+export { SELF_REPO };
 
 export function integrationBranchFor(runId: string): string {
   return `ordewell/${runId}/integration`;
@@ -28,6 +30,20 @@ export function noRemoval(): IsolationRemoval {
   return { preserved: [], refused: [] };
 }
 
+/**
+ * A `prepare` that failed after it had already replaced the last attempt of
+ * the task: that attempt's unlanded work was kept on `preserved` first, and no
+ * record names it any more, so whoever tells the user about the failure has to
+ * tell them where it went. Reads as the failure it wraps.
+ */
+export class PrepareFailedError extends Error {
+  constructor(readonly failure: unknown, readonly preserved: PreservedWork[]) {
+    super(failure instanceof Error ? failure.message : String(failure));
+    this.name = failure instanceof Error ? failure.name : 'Error';
+    this.cause = failure;
+  }
+}
+
 /** Add what `from` kept back to `into`. */
 export function absorbRemoval(into: IsolationRemoval, from: IsolationRemoval): IsolationRemoval {
   into.preserved.push(...from.preserved);
@@ -40,11 +56,6 @@ export function layoutOf(run: IsolationRun): RepoGroupLayout {
   return { repos: run.repos.map((r) => r.path), shared: [...run.shared] };
 }
 
-/** The run's integration branch for a one-line notice: every repo's has the same name. */
-export function integrationBranchNameOf(run: IsolationRun): string {
-  return [...new Set(run.repos.map((r) => r.integrationBranch))].join(', ');
-}
-
 const ISOLATION_STATE: Record<IsolationTaskStatus, Exclude<TaskIsolation['state'], 'none'>> = {
   active: 'active',
   merged: 'integrated',
@@ -54,13 +65,21 @@ const ISOLATION_STATE: Record<IsolationTaskStatus, Exclude<TaskIsolation['state'
   failed: 'kept',
 };
 
+/** Whether a saved record's status is one this build knows; a newer daemon may have written one it does not. */
+const isKnownStatus = (status: string): status is IsolationTaskStatus =>
+  Object.prototype.hasOwnProperty.call(ISOLATION_STATE, status);
+
 /** Paths of the repos a task brought commits to. */
 export function changedReposOf(record: IsolationTaskRecord): string[] {
   return Object.entries(record.repos).filter(([, r]) => r.changed).map(([repoPath]) => repoPath);
 }
 
-/** `repairLimit` is `conflictRepairAttempts` as it stands now, which is what the next repair will be held to. */
-export function taskIsolationOf(record: IsolationTaskRecord, repairLimit: number): TaskIsolation {
+/**
+ * `repairLimit` is `conflictRepairAttempts` as it stands now, which is what the
+ * next repair will be held to. Without one — a saved plan never carries server
+ * config — the repair attempt is left out and a live status update fills it in.
+ */
+export function taskIsolationOf(record: IsolationTaskRecord, repairLimit?: number): TaskIsolation {
   return {
     state: ISOLATION_STATE[record.status],
     branch: record.branch,
@@ -68,7 +87,7 @@ export function taskIsolationOf(record: IsolationTaskRecord, repairLimit: number
     repos: changedReposOf(record),
     ...(record.conflictRepo ? { conflictRepo: record.conflictRepo } : {}),
     ...(record.conflictFiles?.length ? { conflictFiles: record.conflictFiles } : {}),
-    ...(record.repairs ? { repair: { attempt: record.repairs, limit: repairLimit } } : {}),
+    ...(record.repairs && repairLimit !== undefined ? { repair: { attempt: record.repairs, limit: repairLimit } } : {}),
     ...(record.repairedFiles?.length ? { repairedFiles: record.repairedFiles } : {}),
   };
 }
@@ -167,4 +186,52 @@ export function migratePlanIsolation(state: PlanIsolation | Adr0013PlanIsolation
 /** Bring a loaded plan's isolation record, if any, to today's shape in place. */
 export function migratePlanStateIsolation(plan: { isolation?: PlanIsolation | Adr0013PlanIsolation }): void {
   if (plan.isolation?.run) plan.isolation = migratePlanIsolation(plan.isolation);
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isArray = (value: unknown): value is readonly unknown[] => Array.isArray(value);
+
+/**
+ * Whether a payload carries a run this module can read. The check tells today's
+ * record from an ADR-0013 one and stops at the fields both shapes need; the
+ * record's own fields are trusted from there, as `stateStore` trusts the JSON it
+ * loaded. An older daemon still sends the ADR-0013 shape, so the migration runs
+ * on the way in rather than being assumed.
+ */
+function carriesIsolation(plan: unknown): plan is { isolation: PlanIsolation | Adr0013PlanIsolation } {
+  if (!isRecord(plan) || !isRecord(plan.isolation)) return false;
+  const { run } = plan.isolation;
+  if (!isRecord(run) || !isRecord(run.tasks)) return false;
+  if (isArray(run.repos)) {
+    return run.repos.some((repo) => isRecord(repo)
+      && typeof repo.path === 'string'
+      && typeof repo.integrationBranch === 'string'
+      && typeof repo.baseRef === 'string');
+  }
+  return typeof run.integrationBranch === 'string' && typeof run.baseRef === 'string';
+}
+
+/**
+ * What a persisted plan says about its isolated run, as a surface shows it: the
+ * handoff and each task's mark. `null` when the payload carries no record — a
+ * planner reply, or a plan that never isolated — which says nothing either way.
+ *
+ * This is the one reading of a saved record outside the daemon: the migration
+ * from the ADR-0013 shape happens here, so no surface grows its own parser.
+ * `repairLimit` is server config a saved plan never carries; without it the
+ * repair attempt is left for a live status update to fill in.
+ */
+export function isolationViewOfPlan(plan: unknown, repairLimit?: number): IsolationView | null {
+  if (!carriesIsolation(plan)) return null;
+  const { run } = migratePlanIsolation(plan.isolation);
+  const tasks: Record<string, TaskIsolation> = {};
+  for (const [taskId, record] of Object.entries(run.tasks)) {
+    // A status this build does not know is its own mark-less task, not a crash:
+    // a newer daemon may have written one.
+    if (!isKnownStatus(record.status)) continue;
+    tasks[taskId] = taskIsolationOf(record, repairLimit);
+  }
+  return { tasks, handoff: handoffOf(run) };
 }

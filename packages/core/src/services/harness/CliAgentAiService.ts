@@ -23,8 +23,8 @@ import {
   NATIVE_SHELL_GUIDE,
 } from '../PlanPrompts';
 import { repairLoop, resubmitPlanPrompt } from '../PlanRepair';
-import { validatePlanTasks } from '../PlanValidator';
-import { checkPlanSkills, type SkillLookup } from '../taskSkills';
+import { PlanChangeCheck, planChangeErrorText, requestScope } from '../PlanChangeCheck';
+import type { SkillLookup } from '../taskSkills';
 import { PLANNER_TURN_ENDED } from '../plannerTools';
 import { settleReply, type ReplyAttempt } from '../settleReply';
 import { ReplySplitter } from '../replyStream';
@@ -199,8 +199,8 @@ class PlannerSession {
  * which is precisely the part a coding agent replaces. What it reuses instead
  * is everything above the transport — `settleReply` (the empty-reply nudge
  * and the turn's settling), the plan validator, the `ResearchProgress` events the
- * four surfaces already render. That is why this backend reaches VS Code, the
- * web UI, the CLI and the TUI without any of them learning a coding agent is
+ * three surfaces already render. That is why this backend reaches VS Code, the
+ * CLI and the TUI without any of them learning a coding agent is
  * on the other end.
  */
 export class CliAgentAiService implements IAiService {
@@ -216,6 +216,8 @@ export class CliAgentAiService implements IAiService {
   private readonly turnBudgets: TurnBudgets | undefined;
   private readonly projectServerApprovals: ProjectServerApprovals;
   private activeAbort: AbortController | null = null;
+  /** See {@link compactions}. */
+  private compacted = 0;
 
   constructor(private config: IConfig, deps: CliAgentAiServiceDeps = {}) {
     const runner = runnerForProvider(config.aiProvider);
@@ -265,6 +267,9 @@ export class CliAgentAiService implements IAiService {
   /** The agent's own session id, a resumption hint only — Ordewell's transcript is authoritative (T4). */
   nativeSessionId(): string | null { return this.session?.adapter?.nativeSessionId() ?? null; }
 
+  /** The compactions the agents reported of their own context, never a subagent's or another thread's: their adapters drop those (ADR-0012 T10). */
+  compactions(): number { return this.compacted; }
+
   heldSecrets(): readonly string[] { return this.environmentSecrets; }
 
   restart(): void {
@@ -301,7 +306,7 @@ export class CliAgentAiService implements IAiService {
       req.modelsByRunner,
       req.runners,
       req.runnerModes,
-      { harness: true, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun },
+      { harness: true, runner: this.runner, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun },
     );
 
     const fetcher = req.fetcher;
@@ -579,6 +584,10 @@ export class CliAgentAiService implements IAiService {
           backgroundAgents++;
           return;
 
+        case 'compaction':
+          this.compacted++;
+          return;
+
         case 'permission_request': {
           // Announced so the user can see the planner reached for something it
           // may not have — a silently swallowed denial reads as the agent losing interest.
@@ -674,12 +683,23 @@ export class CliAgentAiService implements IAiService {
       nativeShell,
       systemPrompt: nativeShell ? `${opts.systemPrompt}\n\n${NATIVE_SHELL_GUIDE}` : opts.systemPrompt,
     };
+    // A planner that exits before it answers the attach check refused what it was started with, so its words are the failure and no respawn repeats it.
+    let startupExit: string | null = null;
+    let starting: AgentAdapter | null = null;
     const spawned = await spawnAttached({
       runner: this.runner,
       create: () => this.newAdapter(),
       issueToken: () => server.issuePlannerToken({ sessionId: tools.sessionId, hidden: connectorFor(this.runner)?.ordewellTools.plannerHidden(start) }, tools.handler),
       revoke: (token) => server.revoke(token),
-      start: (adapter, credential) => adapter.start({ ...start, mcp: mcpClientConfig(credential) }),
+      start: async (adapter, credential) => {
+        starting = adapter;
+        startupExit = null;
+        await adapter.start({ ...start, mcp: mcpClientConfig(credential) });
+        adapter.onProcessExit?.((code, lastWords) => {
+          if (adapter === starting) startupExit ??= lastWords ?? `${this.runner} exited with code ${code}`;
+        });
+      },
+      startupExit: () => startupExit,
       cancelled: session.discarded,
       failed: (first, second) => `Could not start the ${this.runner} planner with Ordewell's tools. First spawn: ${first}. Respawn: ${second}.`,
     });
@@ -858,18 +878,15 @@ export class CliAgentAiService implements IAiService {
         listRunners: async () => ({ text: JSON.stringify({ runners: catalog.runners.map((id) => ({ id, readOnly: readOnlyMode(catalog.runnerModes?.[id]) !== undefined })) }) }),
         listModels: async ({ runner }) => ({ text: JSON.stringify({ runner, models: catalog.modelsByRunner?.[runner] ?? [] }) }),
         submitPlan: async ({ tasks }) => {
-          const result = validatePlanTasks({ tasks }, catalog.runners, catalog.runnerModes, catalog.autonomousDefault);
-          if (!result.ok) return refuse(result.errors.map((error) => error.message));
-          const skills = catalog.taskSkills ? await checkPlanSkills(result.tasks, catalog.taskSkills) : undefined;
+          const checked = await new PlanChangeCheck(requestScope(catalog)).check({ kind: 'plan', tasks }, 'submit');
           if (ended || signal?.aborted) return { text: PLANNER_TURN_ENDED, isError: true };
-          if (skills && skills.errors.length > 0) return refuse(skills.errors.map((error) => error.message));
-          submitted = result.tasks;
+          if (!checked.ok) return refuse(checked.errors.map(planChangeErrorText));
+          submitted = checked.tasks;
           refused = [];
-          const warnings = [...(result.warnings ?? []), ...(skills?.warnings ?? [])];
           return {
             text: JSON.stringify({
               ok: true,
-              ...(warnings.length > 0 ? { warnings } : {}),
+              ...(checked.warnings.length > 0 ? { warnings: checked.warnings } : {}),
               next: 'Plan recorded. End your turn now.',
             }),
           };

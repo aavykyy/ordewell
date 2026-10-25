@@ -17,7 +17,7 @@ import type { TaskLogState, TaskView, TuiState } from '../state';
  */
 
 const task = (over: Partial<TaskView> = {}): TaskView => ({
-  id: 't1', order: 2, title: 'Refactor PlanStore', type: 'ai', status: 'in_progress', dependencies: [], assignedRunner: 'claude-code',
+  id: 't1', order: 2, title: 'Refactor PlanStore', type: 'ai', status: 'in_progress', dependencies: [], assignedRunner: 'claude-code', attempted: true,
   ...over,
 });
 
@@ -160,22 +160,22 @@ describe('the force send effects', () => {
   }
 
   it('posts the composer text to the daemon', async () => {
-    const forceSendTaskMessage = vi.fn().mockResolvedValue({ id: 'm3' });
-    const { effectDeps, actions } = deps({ forceSendTaskMessage });
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Sent now.', payload: { kind: 'message', id: 'm3' } });
+    const { effectDeps, actions } = deps({ execute });
     await runEffect({ type: 'forceSendTaskMessage', sessionId: 's1', taskId: 't1', text: 'now' }, effectDeps);
-    expect(forceSendTaskMessage).toHaveBeenCalledWith('s1', 't1', 'now');
+    expect(execute).toHaveBeenCalledWith('s1', { command: 'message_task', task: 't1', text: 'now', force: true });
     expect(actions).toEqual([]);
   });
 
   it('leaves what it says to the timeline, and shows the daemon\'s words when the message was delivered before send now reached it', async () => {
-    const forceSendQueuedTaskMessage = vi.fn().mockResolvedValue({ sent: true });
-    const { effectDeps, actions } = deps({ forceSendQueuedTaskMessage });
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Sent.' });
+    const { effectDeps, actions } = deps({ execute });
     await runEffect({ type: 'forceSendQueuedTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }, effectDeps);
-    expect(forceSendQueuedTaskMessage).toHaveBeenCalledWith('s1', 't1', 'm1');
+    expect(execute).toHaveBeenCalledWith('s1', { command: 'force_send_queued', task: 't1', id: 'm1' });
     expect(actions).toEqual([]);
 
     const refusal = new DaemonError('That message to task #1 "Build" was already delivered.', 400, 'refused');
-    const late = deps({ forceSendQueuedTaskMessage: vi.fn().mockRejectedValue(refusal) });
+    const late = deps({ execute: vi.fn().mockRejectedValue(refusal) });
     await runEffect({ type: 'forceSendQueuedTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }, late.effectDeps);
     expect(late.actions).toEqual([{ type: 'failed', message: refusal.message, code: 'refused' }]);
   });

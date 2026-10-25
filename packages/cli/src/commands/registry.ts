@@ -17,7 +17,7 @@ import { handleHandoff } from './handoff';
 import { handlePlanner, handlePlannerEffort } from './planner';
 import { handleModel } from './model';
 import { handleParallel } from './parallel';
-import { handleAutomerge, handleAutorun, handleSupervisor } from './runSettings';
+import { handleAutomerge, handleAutorun, handleSupervisor, handleTrailer } from './runSettings';
 import { handleKey } from './key';
 import { handleAuto, handleRefresh, handleRunners } from './runners';
 import { handleApprove } from './approve';
@@ -30,8 +30,9 @@ import { handleTui } from '../tui';
  * The command surface. Feature-parity contract with the TUI's `SLASH_COMMANDS`:
  * anything reachable from a slash command is reachable from here, under the
  * same name, so `ordewell --help` and `/help` describe one product. The
- * exceptions are the two that only mean something inside a live TUI (`/new`,
- * `/quit`) and starting a plan, which is `plan --goal` here and typing the goal
+ * exceptions are the TUI-only commands listed in `__tests__/parity.test.ts`,
+ * each with the shell command that stands in for it or the reason none does,
+ * and starting a plan, which is `plan --goal` here and typing the goal
  * there. `__tests__/parity.test.ts` holds the two lists to each other.
  */
 export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> = {
@@ -42,7 +43,9 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   approve: handleApprove,
   status: handleStatus,
   stop: handleStop,
-  'stop-server': handleStop,
+  // An alias for `stop --server`: without the injected flag, handleStop takes
+  // its no-argument branch and stops the last session instead of the daemon.
+  'stop-server': (args) => handleStop(['--server', ...args]),
   models: handleModels,
   model: handleModel,
   planner: handlePlanner,
@@ -53,6 +56,7 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   auto: handleAuto,
   supervisor: handleSupervisor,
   automerge: handleAutomerge,
+  trailer: handleTrailer,
   autorun: handleAutorun,
   refresh: handleRefresh,
   setup: handleSetup,

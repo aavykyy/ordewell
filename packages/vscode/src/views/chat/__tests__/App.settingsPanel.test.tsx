@@ -36,6 +36,10 @@ describe('run settings in the Settings panel', () => {
     expect(screen.queryByText(/· 3 parallel/)).toBeNull();
   });
 
+  it('leaves the Planned-with line to `ordewell trailer` and settings.json', () => {
+    expect(screen.queryByText(/Planned-with/)).toBeNull();
+  });
+
   it('keeps the Settings toggle outside the scrolling body', () => {
     const toggle = screen.getByRole('button', { name: /^Settings/ });
     expect(toggle.closest('.setup-panel-body')).toBeNull();
@@ -77,7 +81,6 @@ describe('run settings in the Settings panel', () => {
 
   it.each([
     ['Parallel tasks', '0'],
-    ['Supervisor reads', '0'],
     ['Supervisor retries', '-1'],
     ['Parallel tasks', '2.5'],
     ['Parallel tasks', ''],
@@ -98,12 +101,36 @@ describe('run settings in the Settings panel', () => {
     expect(parallel).not.toHaveAttribute('aria-invalid', 'true');
   });
 
-  it('hides the supervisor limits while the supervisor is Off', () => {
-    expect(screen.getByRole('spinbutton', { name: 'Supervisor reads' })).toHaveValue(RUN_SETTINGS_DEFAULTS.wakeUpReadBudget);
+  it('never offers a Supervisor reads row, at Off, Watch or Act', () => {
+    for (const supervisorLevel of ['off', 'watch', 'act'] as const) {
+      settings({ supervisorLevel });
+      expect(screen.queryByRole('spinbutton', { name: 'Supervisor reads' })).toBeNull();
+      expect(screen.queryByText('Supervisor reads')).toBeNull();
+    }
+  });
+
+  it('keeps Supervisor retries and the rest when the level changes with the panel open, and never brings reads back', () => {
+    settings({ supervisorLevel: 'act' });
+    expect(screen.getByRole('spinbutton', { name: 'Supervisor retries' })).toBeInTheDocument();
+    expect(screen.queryByRole('spinbutton', { name: 'Supervisor reads' })).toBeNull();
+
     settings({ supervisorLevel: 'off' });
     expect(screen.queryByRole('spinbutton', { name: 'Supervisor retries' })).toBeNull();
     expect(screen.queryByRole('spinbutton', { name: 'Supervisor reads' })).toBeNull();
     expect(screen.getByRole('spinbutton', { name: 'Parallel tasks' })).toBeInTheDocument();
+
+    settings({ supervisorLevel: 'watch' });
+    expect(screen.getByRole('spinbutton', { name: 'Supervisor retries' })).toBeInTheDocument();
+    expect(screen.queryByRole('spinbutton', { name: 'Supervisor reads' })).toBeNull();
+  });
+
+  it('saves another setting without mentioning a manually configured read budget', () => {
+    settings({ supervisorLevel: 'watch', wakeUpReadBudget: 30 });
+    expect(screen.queryByRole('spinbutton', { name: 'Supervisor reads' })).toBeNull();
+
+    fireEvent.click(row('Supervisor').getByRole('button', { name: 'Off' }));
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'changeSettings', change: { run: { supervisorLevel: 'off' } } });
+    expect(api.postMessage).not.toHaveBeenCalledWith({ type: 'changeSettings', change: { run: { wakeUpReadBudget: RUN_SETTINGS_DEFAULTS.wakeUpReadBudget } } });
   });
 
   it('/settings opens a collapsed panel and a collapsed Run section, and focuses Run', () => {

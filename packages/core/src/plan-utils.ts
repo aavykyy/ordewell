@@ -7,12 +7,18 @@
 export { canMergeTasks, canSplitTask, canSetDependencies, dependencyCandidates, dependentsOf } from './services/TaskOps';
 export type { TaskRef } from './services/TaskOps';
 export { summarizeToolCall } from './services/researchStepSummary';
-export { truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH } from './services/SessionMessage';
+// Which agent tools write a file, so a surface's summary of a run of calls
+// counts an edit the way a row's diff is decided.
+export { isFileEditTool } from './services/harness/agentTools';
+export { truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, IDLE_ACTIVITY } from './services/SessionMessage';
 export { capConflictFiles } from './services/conflictFiles';
+export { describeMergeResult, mergeOutcome, blockNotice, blockNotices, repairedLanded, repairedNotice } from './services/mergeResultNotice';
+export { handoffBaseLine, handoffBranchName, isRepoGroup, repoBaseLine, repoResultLines } from './services/mergeWording';
+export type { HandoffForkRepo } from './services/mergeWording';
 export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, type PlanBlocks } from './services/blocking';
 // What a loop's rows say (ADR-0045) is read the way the scheduler reads it.
 export { betweenRounds, outOfRounds, loopRoundOf, checkOf, loopRemovalRefusal, type TaskLoop } from './models/Loop';
-export { SUPERVISOR_LEVEL_LABEL, parseCount } from './services/runSettingsText';
+export { PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, parseCount } from './services/runSettingsText';
 // The shared conversation view (#51) is pure too, so every surface — a webview
 // included — draws from the same reducer.
 export * from './conversation';

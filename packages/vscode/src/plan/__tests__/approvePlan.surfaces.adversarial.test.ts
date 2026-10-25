@@ -22,6 +22,7 @@ function deps(workspace: string) {
   const chatProvider = new ChatViewProvider({ toString: () => 'file:///ext' } as unknown as vscode.Uri);
   chatProvider.postMessage = () => {};
   const clear = vi.spyOn(chatProvider, 'clearIsolationHandoff');
+  const activity = vi.spyOn(chatProvider, 'showRunActivity');
 
   let current: LegacyPlanState = {
     tasks: [
@@ -34,6 +35,7 @@ function deps(workspace: string) {
   };
   const session = {
     isExecuting: false,
+    activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false },
     loadPlan: vi.fn(),
     execute: vi.fn().mockResolvedValue({ ok: false, outcome: 'refused', message: REFUSAL }),
   };
@@ -49,7 +51,7 @@ function deps(workspace: string) {
     saveCurrentSession: vi.fn(),
     log: vi.fn(),
   } as unknown as PlanManagerDeps;
-  return { d, clear, session };
+  return { d, clear, activity, session };
 }
 
 describe('adversarial: Execute plan clears the run\'s cards only once the seam accepts', () => {
@@ -66,5 +68,16 @@ describe('adversarial: Execute plan clears the run\'s cards only once the seam a
     await handleApprovePlan(d);
 
     expect(clear).not.toHaveBeenCalled();
+  });
+
+  it('settles the click\'s Starting… on the run\'s own state, even when the seam refuses', async () => {
+    const { d, activity } = deps(workspace);
+
+    await handleApprovePlan(d, 7);
+
+    expect(activity).toHaveBeenLastCalledWith(
+      { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false },
+      7,
+    );
   });
 });

@@ -1,6 +1,6 @@
 import { createInterface } from 'readline';
 import { ensureDaemon, resolvePort } from '../daemon';
-import { ApiClient, DaemonError } from '../apiClient';
+import { ApiClient, DaemonError, deliveryOf } from '../apiClient';
 import { normalizeCatalog, type Catalog } from '../catalog';
 import { findEnvFile, writeEnvVar } from '../utils/env';
 import { allTasksOf } from '../utils/tasks';
@@ -29,6 +29,17 @@ export function fail(...lines: string[]): never {
  */
 export function headlessPlannerRefusal(err: unknown): string | null {
   return err instanceof DaemonError && err.plannerNotReady ? describePlannerNotReady(err.plannerNotReady, HEADLESS_CLI_COMMANDS) : null;
+}
+
+/**
+ * What to tell a user whose planner call died after the request went out, or
+ * null when the daemon answered (or never got it). The daemon runs a turn to
+ * its end whether or not anyone waits, so what the call did is the session's to
+ * say, and doing it again could do it twice.
+ */
+export function lostReplyHint(err: unknown, sessionId: string): string | null {
+  if (deliveryOf(err) !== 'unknown') return null;
+  return `The connection dropped before the planner answered: it may still be running or may have finished. Session ${sessionId} is kept: \`ordewell sessions load ${sessionId}\` shows where it got to, and sending the request again could run it twice.`;
 }
 
 /** A yes/no question on the terminal; no terminal to ask on is a no. */

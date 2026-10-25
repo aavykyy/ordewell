@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -7,7 +7,7 @@ import { createTask, keepExecutionState, skillNames } from '../../models/Task';
 import { createSkillsService } from '../SkillsService';
 import { checkOpSkills, checkPlanSkills, checkTaskSkillsEdit, plannedSkillLookup, resolveTaskSkills, TaskSkillsError } from '../taskSkills';
 import { parsePlanJson } from '../PlanValidator';
-import { applyTaskOps } from '../TaskOps';
+import { applyTaskOps, opRefusalText } from '../TaskOps';
 import { PlanStore } from '../PlanStore';
 import { buildConversationSystemPrompt } from '../PlanPrompts';
 import { serializeTask } from '../SessionMessage';
@@ -36,6 +36,19 @@ vi.mock('../gitExec', async (importOriginal) => {
   return { ...actual, execFileWithTimeout };
 });
 
+// A suite that leaves directories behind fills a machine's temp root within a
+// few runs, and slows every later test that scans it.
+const tempDirs: string[] = [];
+function tempDir(prefix: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 function writeSkill(root: string, name: string, appliesTo: string | null, body: string): string {
   const dir = path.join(root, name);
   fs.mkdirSync(dir, { recursive: true });
@@ -48,10 +61,10 @@ const globalSkills = () => path.join(home, '.ordewell', 'skills');
 const skillsOf = (root: string) => path.join(root, '.ordewell', 'skills');
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-taskskills-home-'));
-  workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-taskskills-ws-'));
-  worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-taskskills-wt-'));
-  h.builtinDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-taskskills-builtin-'));
+  home = tempDir('ordewell-taskskills-home-');
+  workspace = tempDir('ordewell-taskskills-ws-');
+  worktree = tempDir('ordewell-taskskills-wt-');
+  h.builtinDir = tempDir('ordewell-taskskills-builtin-');
   h.gitCalls = [];
 });
 
@@ -192,7 +205,7 @@ describe('checking a plan\'s skills against the catalog', () => {
       { op: 'split', taskId: '#2', parts: [{ title: 'P1' }, { title: 'P2', skills: ['grilling', 'later'] }] },
     ], createSkillsService(workspace));
 
-    expect(result.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^op 2 \(split\): "grilling" is a planner skill/)]);
+    expect(result.errors.map(opRefusalText)).toEqual([expect.stringMatching(/^op 2 \(split\): "grilling" is a planner skill/)]);
     expect(result.warnings).toEqual([expect.stringMatching(/^op 2 \(split\): skill "later" not found/)]);
   });
 });
@@ -204,7 +217,7 @@ describe('checking the subtasks an edit adds', () => {
       { op: 'add', task: { title: 'Parent', subtasks: [{ title: 'Child', skills: ['grilling'], subtasks: [] }] as never } },
     ], createSkillsService(workspace));
 
-    expect(result.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^op 1 \(add\): subtask "Child": "grilling" is a planner skill/)]);
+    expect(result.errors.map(opRefusalText)).toEqual([expect.stringMatching(/^op 1 \(add\): subtask "Child": "grilling" is a planner skill/)]);
   });
 
   it('reaches every depth, and warns about a descendant\'s missing and malformed names as written', async () => {
@@ -221,7 +234,7 @@ describe('checking the subtasks an edit adds', () => {
       },
     ], createSkillsService(workspace));
 
-    expect(result.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^op 1 \(add\): subtask "Child" > #1: "grilling" is a planner skill/)]);
+    expect(result.errors.map(opRefusalText)).toEqual([expect.stringMatching(/^op 1 \(add\): subtask "Child" > #1: "grilling" is a planner skill/)]);
     expect(result.warnings).toEqual([
       'op 1 (add): subtask "Child": "Bad Name!" is not a valid skill name (lowercase letters, digits, "-" and "_", starting with a letter or digit), so it was not attached.',
       expect.stringMatching(/^op 1 \(add\): subtask "Child": skill "later" not found/),
@@ -235,7 +248,7 @@ describe('checking the subtasks an edit adds', () => {
       { op: 'add', task: { title: 'Parent', skills: ['grilling'], subtasks: [{ title: 'Child', skills: ['tdd'] }, { title: 'Bare' }] as never } },
     ], createSkillsService(workspace));
 
-    expect(result.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^op 1 \(add\): "grilling" is a planner skill/)]);
+    expect(result.errors.map(opRefusalText)).toEqual([expect.stringMatching(/^op 1 \(add\): "grilling" is a planner skill/)]);
     expect(result.warnings).toEqual([]);
   });
 });

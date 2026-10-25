@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -13,6 +13,10 @@ vi.mock('os', async (importOriginal) => {
 describe('global data directory', () => {
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-global-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(home, { recursive: true, force: true });
   });
 
   it('points at ~/.ordewell', async () => {
@@ -47,6 +51,27 @@ describe('global data directory', () => {
     // even though the directory-level "new dir exists" gate has already
     // been tripped by settings.json.
     expect(fs.readFileSync(path.join(newDir, '.env'), 'utf8')).toBe('KEY=old\n');
+  });
+
+  it('does not abort startup when a read-only home cannot receive the legacy files', async () => {
+    if (process.platform === 'win32') return;
+    vi.resetModules();
+    const { migrateOldConfigDir, globalDataDir } = await import('../globalDataDir');
+    const oldDir = path.join(home, '.config', 'ordewell');
+    fs.mkdirSync(oldDir, { recursive: true });
+    fs.writeFileSync(path.join(oldDir, 'settings.json'), '{"old":1}');
+    fs.chmodSync(home, 0o555);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(() => migrateOldConfigDir()).not.toThrow();
+
+      expect(fs.existsSync(path.join(globalDataDir(), 'settings.json'))).toBe(false);
+      expect(fs.readFileSync(path.join(oldDir, 'settings.json'), 'utf8')).toBe('{"old":1}');
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      fs.chmodSync(home, 0o700);
+      warn.mockRestore();
+    }
   });
 
   it('copies settings.json but leaves retired runner files at the legacy location', async () => {

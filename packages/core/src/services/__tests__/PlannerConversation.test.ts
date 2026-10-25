@@ -1,11 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createTask, type ConversationMessage, type LegacyPlanState, type ResearchProgress, type SkillLoad } from '../../models/Task';
+import { createTask, type ConversationMessage, type LegacyPlanState, type ResearchProgress, type SkillLoad, type Task } from '../../models/Task';
 import type { SessionMessage } from '../SessionMessage';
 import type { ConversationTurn, IAiService, TurnRun } from '../AiService';
 import type { TaskOp } from '../TaskOps';
-import { ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, type PlannerConversationHost } from '../PlannerConversation';
+import { ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlannerConversationHost } from '../PlannerConversation';
 import type { SkillInfo } from '../SkillsService';
 import type { TurnFailure } from '../runnerExit';
+import { fakePlanChanges, passed, refused } from './planChangesTestKit';
 
 function dialoguePlan(): LegacyPlanState {
   return {
@@ -38,6 +39,7 @@ function fakeAi(overrides: Partial<IAiService> = {}): IAiService {
  */
 function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan()) {
   const state = { plan, persists: 0 };
+  const checks = fakePlanChanges({ tasks: () => state.plan?.tasks ?? [], runners: () => ['claude-code'], catalog: () => ({ modelsByRunner: {} }) });
   const host: PlannerConversationHost = {
     plan: () => state.plan,
     goal: () => 'build me a parser',
@@ -59,8 +61,7 @@ function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan())
     },
     broadcast: vi.fn(),
     broadcastPlan: vi.fn(),
-    validateOps: vi.fn(),
-    taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [] }),
+    planChanges: checks.planChanges,
     notice: vi.fn(),
     usageLimit: vi.fn((said: TurnFailure) => ({ text: said.message, resendAt: null })),
     adoptTasks: vi.fn((tasks) => tasks.length),
@@ -68,7 +69,7 @@ function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan())
     turnAborted: vi.fn(),
   };
   const conversation = new PlannerConversation(host);
-  return { conversation, host, state };
+  return { conversation, host, state, checks };
 }
 
 describe('PlannerConversation transcript', () => {
@@ -425,11 +426,11 @@ describe('PlannerConversation compact', () => {
       researchLog: [{ id: 'x', type: 'user_prompt', content: 'ignored', timestamp: '2026-01-02T00:00:00Z' }],
     };
     const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(ops) });
-    const { conversation, state, host } = fakeHost(ai, threeTurnPlan());
+    const { conversation, state, host, checks } = fakeHost(ai, threeTurnPlan());
 
     await conversation.compact();
 
-    expect(host.validateOps).not.toHaveBeenCalled();
+    expect(checks.rules).not.toHaveBeenCalled();
     expect(host.adoptTasks).not.toHaveBeenCalled();
     expect(state.plan!.researchLog!.map((e) => e.id)).toEqual(['up-1', 'up-2', 'up-3']);
     expect(state.plan!.conversationHistory![0].content).toContain('kept');
@@ -535,6 +536,38 @@ describe('PlannerConversation compact failure', () => {
 
     expect(state.plan!.conversationHistory).toHaveLength(6);
     expect(state.persists).toBe(0);
+  });
+
+  // The daemon answers a stop with 409 only for PlannerTurnStoppedError; anything else is a 500 or a 400.
+  it('settles a stop the backend reports as a thrown error as stopped', async () => {
+    let fail: (err: Error) => void = () => {};
+    const ai = fakeAi({
+      continueConversation: vi.fn(() => new Promise<ConversationTurn>((_resolve, reject) => { fail = reject; })),
+    });
+    const { conversation, state } = fakeHost(ai, threeTurnPlan());
+
+    const compacting = conversation.compact();
+    await vi.waitFor(() => expect(ai.continueConversation).toHaveBeenCalled());
+    conversation.stopTurn();
+    fail(new Error('Request was aborted.'));
+
+    await expect(compacting).rejects.toThrow(PlannerTurnStoppedError);
+    expect(state.plan!.conversationHistory).toHaveLength(6);
+  });
+
+  it('settles a stop the backend reports as an aborted turn as stopped', async () => {
+    let finish: (turn: ConversationTurn) => void = () => {};
+    const ai = fakeAi({
+      continueConversation: vi.fn(() => new Promise<ConversationTurn>((resolve) => { finish = resolve; })),
+    });
+    const { conversation } = fakeHost(ai, threeTurnPlan());
+
+    const compacting = conversation.compact();
+    await vi.waitFor(() => expect(ai.continueConversation).toHaveBeenCalled());
+    conversation.stopTurn();
+    finish({ kind: 'message', text: '', researchLog: [], aborted: true });
+
+    await expect(compacting).rejects.toThrow(PlannerTurnStoppedError);
   });
 
   it('drops the live context after a failed turn, since it now holds the half-done summary exchange', async () => {
@@ -720,14 +753,14 @@ describe('PlannerConversation planner turn', () => {
 
   it('applies no task edit a stale turn settles on', async () => {
     const { ai, calls } = heldBackend();
-    const { conversation, host, state } = fakeHost(ai, threeTurnPlan());
+    const { conversation, host, state, checks } = fakeHost(ai, threeTurnPlan());
 
     const turn = conversation.reply('Rename #1');
     state.plan = dialoguePlan();
     calls[0].finish({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#1' }], text: '', researchLog: [] });
 
     await expect(turn).rejects.toThrow(PlannerTurnDiscardedError);
-    expect(host.validateOps).not.toHaveBeenCalled();
+    expect(checks.rules).not.toHaveBeenCalled();
     expect(host.adoptTasks).not.toHaveBeenCalled();
   });
 
@@ -846,8 +879,8 @@ describe('PlannerConversation planner turn', () => {
 
   it('takes back the edit an abandoned turn showed at once, and tells nothing of it once another turn shows one', async () => {
     const { ai, calls } = heldBackend();
-    const { conversation, host } = fakeHost(ai, threeTurnPlan());
-    vi.mocked(host.validateOps).mockReturnValue({ ok: true, tasks: [], errors: [], summary: ['removed #1'] });
+    const { conversation, host, checks } = fakeHost(ai, threeTurnPlan());
+    checks.rules.mockReturnValue(passed({ summary: ['removed #1'] }));
     const sent = () => vi.mocked(host.broadcast).mock.calls.map(([m]) => m);
     const held = () => sent().flatMap((m) => (m.type === 'plan_edit_held' ? [m.held?.turnId ?? null] : []));
 
@@ -948,21 +981,21 @@ describe('PlannerConversation planner turn', () => {
 
   describe('across the skill check before an edit lands', () => {
     /** A lookup whose git check the test releases, so a stop or plan swap can land while it waits. */
-    function heldSkillCheck(host: PlannerConversationHost) {
+    function heldSkillCheck(checks: ReturnType<typeof fakeHost>['checks']) {
       let release: () => void = () => {};
       const asked = vi.fn();
       const skill: SkillInfo = {
         name: 'tdd', description: 'tdd', metadata: { name: 'tdd', description: 'tdd' }, content: '', path: '/g/tdd/SKILL.md', source: 'global', appliesTo: 'task', modelInvocable: false, userInvocable: true,
       };
-      host.taskSkills = () => ({
-        findSkill: (name) => (name === 'tdd' ? skill : undefined),
+      checks.useSkills({
+        findSkill: (name: string) => (name === 'tdd' ? skill : undefined),
         searchedDirs: () => [],
         uncommitted: () => new Promise((resolve) => {
           asked();
           release = () => resolve(new Map());
         }),
       });
-      vi.mocked(host.validateOps).mockReturnValue({ ok: true, tasks: [], errors: [], summary: ['#1 skills'] });
+      checks.rules.mockReturnValue(passed({ summary: ['#1 skills'] }));
       return { asked, release: () => release() };
     }
 
@@ -972,8 +1005,8 @@ describe('PlannerConversation planner turn', () => {
     for (const [label, reply] of [['task edit', opsTurn], ['whole plan', planTurn]] as const) {
       it(`drops a ${label} whose plan was swapped out while the check ran`, async () => {
         const { ai, calls } = heldBackend();
-        const { conversation, host, state } = fakeHost(ai, threeTurnPlan());
-        const check = heldSkillCheck(host);
+        const { conversation, host, state, checks } = fakeHost(ai, threeTurnPlan());
+        const check = heldSkillCheck(checks);
 
         const turn = conversation.reply('Use tdd');
         await vi.waitFor(() => expect(calls).toHaveLength(1));
@@ -983,7 +1016,6 @@ describe('PlannerConversation planner turn', () => {
         check.release();
 
         await expect(turn).rejects.toThrow(PlannerTurnDiscardedError);
-        expect(host.validateOps).not.toHaveBeenCalled();
         expect(host.adoptTasks).not.toHaveBeenCalled();
         expect(state.persists).toBe(0);
         expect(vi.mocked(host.broadcast).mock.calls.map(([m]) => m.type)).not.toContain('planner_message');
@@ -992,9 +1024,9 @@ describe('PlannerConversation planner turn', () => {
 
       it(`drops a ${label} when the turn is stopped while the check ran`, async () => {
         const { ai, calls } = heldBackend();
-        const { conversation, host, state } = fakeHost(ai, threeTurnPlan());
+        const { conversation, host, state, checks } = fakeHost(ai, threeTurnPlan());
         const before = state.plan!.conversationHistory;
-        const check = heldSkillCheck(host);
+        const check = heldSkillCheck(checks);
 
         const turn = conversation.reply('Use tdd');
         await vi.waitFor(() => expect(calls).toHaveLength(1));
@@ -1010,6 +1042,27 @@ describe('PlannerConversation planner turn', () => {
         expect(ended(host).at(-1)?.outcome).toBe('stopped');
       });
     }
+  });
+});
+
+describe('a whole plan at landing', () => {
+  const planOn = (assignedRunner: string): ConversationTurn => ({
+    kind: 'plan', text: '', researchLog: [],
+    tasks: [createTask({ id: 'n1', order: 1, title: 'New', prompt: 'p', assignedRunner })],
+  });
+
+  // A plan the planner submitted may wait out a long reply; the runner it names can be switched off meanwhile (ADR-0003 V1).
+  it('is refused, with the runners enabled now named back, when it uses one switched off since it was accepted', async () => {
+    const ai = fakeAi({
+      continueConversation: vi.fn().mockResolvedValueOnce(planOn('codex')).mockResolvedValueOnce(planOn('claude-code')),
+    });
+    const { conversation, host } = fakeHost(ai, threeTurnPlan());
+
+    await conversation.reply('Add a codex task');
+
+    expect(vi.mocked(ai.continueConversation).mock.calls[1][0]).toContain('invalid assignedRunner "codex". Expected one of: claude-code');
+    expect(host.adoptTasks).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(host.adoptTasks).mock.calls[0][0].map((t) => t.assignedRunner)).toEqual(['claude-code']);
   });
 });
 
@@ -1052,10 +1105,10 @@ describe('PlannerConversation reply runs', () => {
           return { kind: 'task_ops', ops, text: '{"taskOps":[{"op":"remove","taskId":"#1"}]}', researchLog: [], runs: [] };
         }),
     });
-    const { conversation, state, host } = fakeHost(ai, threeTurnPlan());
-    vi.mocked(host.validateOps)
-      .mockReturnValueOnce({ ok: false, tasks: [], errors: ['#9 does not exist'], summary: [] })
-      .mockReturnValue({ ok: true, tasks: [], errors: [], summary: ['removed #1'] });
+    const { conversation, state, host, checks } = fakeHost(ai, threeTurnPlan());
+    checks.rules
+      .mockReturnValueOnce(refused('#9 does not exist'))
+      .mockReturnValue(passed({ summary: ['removed #1'] }));
 
     await conversation.reply('Drop the parser task');
 
@@ -1088,8 +1141,8 @@ describe('PlannerConversation reply runs', () => {
   ])('saves the narration before %s it submitted with the reply, ahead of what landed', async (_what, submission, marker) => {
     const submitted = run('s2', 'Submitted.', '2026-01-01T00:00:06Z');
     const ai = fakeAi({ continueConversation: vi.fn() });
-    const { conversation, state, host } = fakeHost(ai, threeTurnPlan());
-    vi.mocked(host.validateOps).mockReturnValue({ ok: true, tasks: [], errors: [], summary: ['removed #1'] });
+    const { conversation, state, host, checks } = fakeHost(ai, threeTurnPlan());
+    checks.rules.mockReturnValue(passed({ summary: ['removed #1'] }));
     vi.mocked(ai.continueConversation).mockImplementation(async () => {
       conversation.submit(submission);
       return { kind: 'message', text: 'Let me look at the parser.\n\nSubmitted.', researchLog: [], runs: [looking, submitted] };
@@ -1112,5 +1165,397 @@ describe('PlannerConversation reply runs', () => {
 
     expect(state.plan!.conversationHistory!.at(-1)).toMatchObject({ kind: 'supervisor', runs: [saved(looking), saved(answer)] });
     expect(replies(host)).toEqual([expect.objectContaining({ supervisor: true, runs: [saved(looking), saved(answer)] })]);
+  });
+});
+
+// ADR-0012 T10: the live context holds every message it was sent, so the plan
+// goes whole once per live context, and each later turn says what changed.
+describe('the plan block: whole once per live context, then what changed', () => {
+  const task = (id: string, order: number, over: Partial<Task> = {}): Task =>
+    createTask({ id, order, title: `Task ${id}`, prompt: 'p', assignedRunner: 'claude-code', ...over });
+
+  /** A conversation over a plan of `tasks`, keeping every message the planner is sent. */
+  function planned(tasks: Task[], ai: Partial<IAiService> = {}) {
+    const sent: string[] = [];
+    const made = fakeHost(fakeAi({
+      continueConversation: vi.fn(async (message: string): Promise<ConversationTurn> => {
+        sent.push(message);
+        return { kind: 'message', text: 'ok', researchLog: [] };
+      }),
+      ...ai,
+    }));
+    const live = { tasks, executing: false };
+    made.host.tasks = () => live.tasks;
+    made.host.isExecuting = () => live.executing;
+    return { ...made, sent, live };
+  }
+
+  /** The whole plan block opens on a line of its own. */
+  const WHOLE = /^<current_plan>$/m;
+
+  /** The lines of a message's change block, between its tags. */
+  const changes = (message: string): string[] => {
+    const block = /<plan_changes>\n([\s\S]*?)\n<\/plan_changes>/.exec(message);
+    return block ? block[1].split('\n') : [];
+  };
+
+  it('sends the whole plan on the first turn, and on a second with nothing changed only says so', async () => {
+    const { conversation, sent } = planned([task('a', 1), task('b', 2, { dependencies: ['a'] })]);
+
+    await conversation.reply('what is there?');
+    await conversation.reply('and now?');
+
+    expect(sent[0]).toMatch(WHOLE);
+    expect(sent[0]).toMatch(/^#2 id=b "Task b" \[pending\] .*deps:\[#1\]/m);
+    expect(sent[0]).toContain('"taskOps"');
+    expect(sent[1]).not.toMatch(WHOLE);
+    expect(sent[1]).not.toContain('"taskOps"');
+    expect(sent[1]).not.toMatch(/id=a|id=b/);
+    expect(sent[1]).toMatch(/<plan_changes>[^\n]*unchanged[^\n]*<\/plan_changes>/);
+    expect(sent[1]).toContain('and now?');
+  });
+
+  it.each([true, false])('never starts a turn with the user\'s text, which a CLI planner would run as its own command (tools: %s)', async (tools) => {
+    const { conversation, sent } = planned([], { plannerToolsAttached: () => tools });
+
+    await conversation.reply('JSON and YAML');
+    await conversation.reply('/clear');
+
+    expect(sent).toHaveLength(2);
+    expect(sent[1].startsWith('/')).toBe(false);
+    expect(sent[1]).toContain('/clear');
+  });
+
+  it('names every task when the plan is emptied, so the planner does not keep the ones it last saw', async () => {
+    const [a, b] = [task('a', 1), task('b', 2)];
+    const { conversation, sent, live } = planned([a, b]);
+
+    await conversation.reply('one');
+    live.tasks = [];
+    await conversation.reply('what is left in the plan?');
+
+    expect(sent[1]).not.toMatch(WHOLE);
+    expect(changes(sent[1])).toEqual(['removed: #1 id=a "Task a"', 'removed: #2 id=b "Task b"']);
+    expect(sent[1]).toContain('The plan now has no tasks.');
+
+    live.tasks = [task('c', 1)];
+    await conversation.reply('add one');
+    expect(sent[2]).toMatch(WHOLE);
+  });
+
+  /** Turn one over two tasks, then the plan emptied and a second turn that ends as `second` makes it. */
+  async function emptiedAfter(second: (made: ReturnType<typeof planned>) => Promise<void>) {
+    const [a, b] = [task('a', 1), task('b', 2)];
+    const made = planned([a, b]);
+    await made.conversation.reply('one');
+    made.live.tasks = [];
+    await second(made);
+    return made;
+  }
+
+  it('states the empty plan again after a stopped turn that may not have read it, until a turn that does lands', async () => {
+    const made = await emptiedAfter(async ({ conversation, host }) => {
+      vi.mocked(host.aiService().continueConversation).mockImplementationOnce(async () => {
+        conversation.stopTurn();
+        return { kind: 'message', text: '', researchLog: [], aborted: true };
+      });
+      await conversation.reply('two');
+    });
+
+    await made.conversation.reply('what is left in the plan?');
+    expect(made.sent.at(-1)).toContain('The plan now has no tasks.');
+    expect(made.sent.at(-1)).not.toMatch(WHOLE);
+
+    await made.conversation.reply('and now?');
+    expect(made.sent.at(-1)).not.toContain('The plan now has no tasks.');
+  });
+
+  it('states the empty plan again after a failed turn that may not have read it, until a turn that does lands', async () => {
+    const made = await emptiedAfter(async ({ conversation, host }) => {
+      vi.mocked(host.aiService().continueConversation).mockRejectedValueOnce(new Error('planner transport down'));
+      await expect(conversation.reply('two')).rejects.toThrow('planner transport down');
+    });
+
+    await made.conversation.reply('what is left in the plan?');
+    expect(made.sent.at(-1)).toContain('The plan now has no tasks.');
+
+    await made.conversation.reply('and now?');
+    expect(made.sent.at(-1)).not.toContain('The plan now has no tasks.');
+  });
+
+  it('states the empty plan after the backend compacted the turn that showed its tasks', async () => {
+    let compactions = 0;
+    const made = await emptiedAfter(async ({ conversation, host }) => {
+      host.aiService().compactions = () => compactions;
+      compactions++;
+      await conversation.reply('two');
+    });
+
+    expect(made.sent[1]).toContain('The plan now has no tasks.');
+
+    await made.conversation.reply('and now?');
+    expect(made.sent[2]).not.toContain('The plan now has no tasks.');
+  });
+
+  it('sends the line of a task whose status changed, and no other', async () => {
+    const [a, b] = [task('a', 1), task('b', 2)];
+    const { conversation, sent, live } = planned([a, b]);
+
+    await conversation.reply('one');
+    live.tasks = [{ ...a, status: 'completed' }, b];
+    await conversation.reply('two');
+
+    expect(sent[1]).not.toMatch(WHOLE);
+    expect(changes(sent[1])).toEqual([expect.stringMatching(/^#1 id=a "Task a" \[completed\] type:AI runner:claude-code /)]);
+  });
+
+  it('sends a wake-up turn what changed the same way', async () => {
+    const [a, b] = [task('a', 1), task('b', 2)];
+    const { conversation, sent, live } = planned([a, b]);
+
+    await conversation.reply('one');
+    live.tasks = [a, { ...b, status: 'failed' }];
+    await conversation.reply('', { wakeUps: ['Task 2 failed: tests did not pass.'], wakeUp: { readBudget: 12, refused: () => undefined } });
+
+    expect(sent[1]).not.toMatch(WHOLE);
+    expect(changes(sent[1])).toEqual([expect.stringMatching(/^#2 id=b "Task b" \[failed\]/)]);
+    expect(sent[1]).toContain('Task 2 failed: tests did not pass.');
+  });
+
+  it('sends an added task\'s line, an edited task\'s new line, and names a removed task', async () => {
+    const [a, b, c] = [task('a', 1), task('b', 2), task('c', 3)];
+    const { conversation, sent, live } = planned([a, b, c]);
+
+    await conversation.reply('one');
+    live.tasks = [a, b, c, task('d', 4, { dependencies: ['c'] })];
+    await conversation.reply('add one');
+    live.tasks = [a, { ...b, title: 'Build it all' }, c, task('d', 4, { dependencies: ['c'] })];
+    await conversation.reply('rename one');
+    live.tasks = [a, { ...b, title: 'Build it all' }, c];
+    await conversation.reply('drop one');
+
+    expect(changes(sent[1])).toEqual([expect.stringMatching(/^#4 id=d "Task d" \[pending\] .*deps:\[#3\]/)]);
+    expect(changes(sent[2])).toEqual([expect.stringMatching(/^#2 id=b "Build it all" \[pending\]/)]);
+    expect(changes(sent[3])).toEqual(['removed: #4 id=d "Task d"']);
+    expect(sent.slice(1).some((message) => WHOLE.test(message))).toBe(false);
+  });
+
+  it('says what runs in every change block, since the last whole block may have said otherwise', async () => {
+    const [a, b] = [task('a', 1), task('b', 2)];
+    const { conversation, sent, live } = planned([a, b]);
+
+    await conversation.reply('one');
+    live.executing = true;
+    live.tasks = [{ ...a, status: 'in_progress' }, b];
+    await conversation.reply('two');
+    live.executing = false;
+    live.tasks = [{ ...a, status: 'completed' }, b];
+    await conversation.reply('three');
+
+    expect(sent[0]).not.toMatch(/Execution is/);
+    expect(sent[1]).toMatch(/^Execution is RUNNING — these tasks are locked: #1\. /m);
+    expect(sent[2]).toMatch(/^Execution is not running\.$/m);
+  });
+
+  it.each([
+    ['a reorder', [task('b', 1), task('a', 2)]],
+    ['an insert that renumbers the tasks after it', [task('n', 1), task('a', 2), task('b', 3)]],
+    ['a removal that renumbers the tasks after it', [task('b', 1)]],
+    ['a new task taking a removed one\'s reference', [task('a', 1), task('n', 2)]],
+    ['a task moved under another', [{ ...task('a', 1), subtasks: [task('b', 1)] }]],
+  ])('sends the whole plan again after %s, since its references now name other tasks', async (_change, after) => {
+    const { conversation, sent, live } = planned([task('a', 1), task('b', 2)]);
+
+    await conversation.reply('one');
+    live.tasks = after;
+    await conversation.reply('two');
+
+    expect(sent[1]).toMatch(WHOLE);
+    expect(sent[1]).not.toContain('<plan_changes>');
+  });
+
+  it('sends the whole plan when saying what changed would take longer', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => task(`t${i + 1}`, i + 1, { title: `${'A long title to name the task by. '.repeat(8)}${i + 1}` }));
+    const { conversation, sent, live } = planned(many);
+
+    await conversation.reply('one');
+    live.tasks = many.slice(0, 1);
+    await conversation.reply('keep only the first');
+
+    expect(sent[1]).toMatch(WHOLE);
+    expect(sent[1]).not.toContain('<plan_changes>');
+    expect(sent[1].length).toBeLessThan(sent[0].length);
+  });
+
+  /** Turn one, then a turn that ends as `second` makes it, then turn three after a status change. */
+  async function afterSecond(second: (made: ReturnType<typeof planned>) => Promise<unknown>) {
+    const [a, b] = [task('a', 1), task('b', 2)];
+    const made = planned([a, b]);
+    await made.conversation.reply('one');
+    await second(made);
+    made.live.tasks = [{ ...a, status: 'completed' }, b];
+    await made.conversation.reply('three');
+    return made.sent.at(-1)!;
+  }
+
+  it('sends the whole plan after a turn the user stopped, which may not have read what it was sent', async () => {
+    const third = await afterSecond(async ({ conversation, host, sent }) => {
+      vi.mocked(host.aiService().continueConversation).mockImplementationOnce(async (message) => {
+        sent.push(message);
+        conversation.stopTurn();
+        return { kind: 'message', text: '', researchLog: [], aborted: true };
+      });
+      await conversation.reply('two');
+    });
+
+    expect(third).toMatch(WHOLE);
+  });
+
+  it('sends the whole plan after a turn that failed', async () => {
+    const third = await afterSecond(async ({ conversation, host }) => {
+      vi.mocked(host.aiService().continueConversation).mockRejectedValueOnce(new Error('planner transport down'));
+      await expect(conversation.reply('two')).rejects.toThrow('planner transport down');
+    });
+
+    expect(third).toMatch(WHOLE);
+  });
+
+  // ADR-0044: the inputs go again at the reset, in a turn of their own.
+  it('sends the whole plan in the resend after a turn ended on the planner\'s usage limit', async () => {
+    const third = await afterSecond(async ({ conversation, host }) => {
+      vi.mocked(host.aiService().continueConversation).mockResolvedValueOnce({
+        kind: 'message', text: "You've hit your usage limit · resets 8pm", researchLog: [], failed: true, usageLimit: {},
+      });
+      await expect(conversation.reply('two')).rejects.toThrow(PlannerUsageLimitError);
+    });
+
+    expect(third).toMatch(WHOLE);
+  });
+
+  it('sends the whole plan after a turn that landed only once a corrective retry repaired it', async () => {
+    const third = await afterSecond(async ({ conversation, host, checks }) => {
+      vi.mocked(host.aiService().continueConversation)
+        .mockResolvedValueOnce({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#9' }], text: '', researchLog: [] })
+        .mockResolvedValueOnce({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#2' }], text: '', researchLog: [] });
+      checks.rules
+        .mockReturnValueOnce(refused('#9 does not exist'))
+        .mockReturnValueOnce(passed({ summary: ['removed #2'] }));
+      await conversation.reply('drop the last one');
+    });
+
+    expect(third).toMatch(WHOLE);
+  });
+
+  it.each([
+    ['during a turn that landed', true],
+    ['between turns', false],
+  ])('sends the whole plan after the backend compacted its context %s', async (_when, duringTurn) => {
+    let compactions = 0;
+    const third = await afterSecond(async ({ conversation, host, sent }) => {
+      const ai = host.aiService();
+      ai.compactions = () => compactions;
+      vi.mocked(ai.continueConversation).mockImplementationOnce(async (message) => {
+        sent.push(message);
+        if (duringTurn) compactions++;
+        return { kind: 'message', text: 'ok', researchLog: [] };
+      });
+      await conversation.reply('two');
+      if (!duringTurn) compactions++;
+    });
+
+    expect(third).toMatch(WHOLE);
+  });
+
+  it('says only what changed while the backend reports no compaction', async () => {
+    const third = await afterSecond(async ({ conversation, host }) => {
+      host.aiService().compactions = () => 3;
+      await conversation.reply('two');
+    });
+
+    expect(third).not.toMatch(WHOLE);
+    expect(changes(third)).toHaveLength(1);
+  });
+
+  it('sends the whole plan after Ordewell condensed the conversation, whose live context it dropped', async () => {
+    const third = await afterSecond(async ({ conversation, host }) => {
+      await conversation.reply('two');
+      vi.mocked(host.aiService().continueConversation).mockResolvedValueOnce({ kind: 'message', text: '<conversation_summary>A parser, in two tasks.</conversation_summary>', researchLog: [] });
+      await conversation.compact();
+    });
+
+    expect(third).toMatch(WHOLE);
+  });
+
+  it('sends the whole plan in a turn replayed into a new live context, and what changed after it', async () => {
+    const [a, b] = [task('a', 1), task('b', 2)];
+    let active = true;
+    const { conversation, host, sent, live } = planned([a, b], { hasActiveConversation: () => active });
+
+    await conversation.reply('one');
+    active = false;
+    await conversation.reply('two');
+    active = true;
+    live.tasks = [{ ...a, status: 'completed' }, b];
+    await conversation.reply('three');
+
+    const replayed = vi.mocked(host.aiService().startConversation).mock.calls[0][0];
+    expect(replayed.initialMessage).toMatch(WHOLE);
+    expect(sent).toHaveLength(2);
+    expect(changes(sent[1])).toEqual([expect.stringMatching(/^#1 id=a "Task a" \[completed\]/)]);
+  });
+
+  it('sends the whole plan to a planner switched in, which replays the conversation', async () => {
+    const { conversation, host } = planned([task('a', 1), task('b', 2)]);
+    await conversation.reply('one');
+
+    const switched = fakeAi({ hasActiveConversation: () => false });
+    host.aiService = () => switched;
+    await conversation.reply('two');
+
+    expect(vi.mocked(switched.startConversation).mock.calls[0][0].initialMessage).toMatch(WHOLE);
+  });
+
+  describe('the catalog block', () => {
+    const CATALOG = /^<available_models>$/m;
+
+    it('is sent once, then again only when it changes', async () => {
+      const { conversation, host, sent } = planned([task('a', 1)]);
+
+      await conversation.reply('one');
+      await conversation.reply('two');
+      host.catalog = () => ({ runners: ['claude-code'], models: { 'claude-code': [{ modelId: 'claude-opus-4', modelLabel: 'Opus', variants: [] }] }, modes: {}, autonomousDefault: true });
+      await conversation.reply('three');
+      await conversation.reply('four');
+
+      expect(sent.map((message) => CATALOG.test(message))).toEqual([true, false, true, false]);
+      expect(sent[2]).toContain('claude-code: claude-opus-4');
+    });
+
+    it('is sent again once the live context is dropped, or a turn did not land', async () => {
+      const { conversation, host, sent } = planned([task('a', 1)]);
+
+      await conversation.reply('one');
+      vi.mocked(host.aiService().continueConversation).mockRejectedValueOnce(new Error('planner transport down'));
+      await expect(conversation.reply('two')).rejects.toThrow('planner transport down');
+      await conversation.reply('three');
+      await conversation.reply('four');
+      conversation.reset();
+      await conversation.reply('five');
+
+      expect(sent.map((message) => CATALOG.test(message))).toEqual([true, true, false, true]);
+    });
+
+    // The reminder never changes, and the system prompt tells such a planner
+    // to read the catalog before it submits (ADR-0022, L3).
+    it('stands in as the tools reminder for a planner with Ordewell\'s tools, sent by the same rule', async () => {
+      const { conversation, sent } = planned([task('a', 1)], { plannerToolsAttached: () => true });
+
+      await conversation.reply('one');
+      await conversation.reply('two');
+
+      expect(sent[0]).toContain('call list_runners and list_models just before submit_plan');
+      expect(sent[1]).not.toContain('list_runners');
+      expect(sent[1]).toContain('call task_query before editing');
+    });
   });
 });

@@ -69,6 +69,8 @@ export interface SessionOverrides {
   saveSession?: SaveSession;
   /** Defaults to attempt files held in memory, so a structured run never writes into the repo the suite runs in. */
   openTaskLog?: SessionDeps['openTaskLog'];
+  /** Defaults to none: a session saving through the fake store owns nothing on disk. */
+  leaseHost?: SessionDeps['leaseHost'];
   mcpServer?: SessionDeps['mcpServer'];
 }
 
@@ -134,6 +136,7 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     saveSession: overrides.saveSession ?? save,
     openTaskLog: overrides.openTaskLog ?? memoryTaskLogs(),
     mcpServer: overrides.mcpServer,
+    leaseHost: overrides.leaseHost,
   });
   if (!overrides.saveSession) saveFakes.set(session, save);
   return session;

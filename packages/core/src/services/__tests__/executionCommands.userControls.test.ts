@@ -134,14 +134,12 @@ describe('mark_complete and mark_not_done', () => {
   it('lands a task the user vouches for, and takes the completion back, each kept in the timeline', async () => {
     const env = setup();
     env.load([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
-    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    expect(await env.run({ command: 'mark_complete', task: 't1' })).toEqual({ ok: true, message: 'Marked task #1 "Task t1" complete.' });
+    expect(await env.run({ command: 'mark_complete', task: 't1', confirmed: true })).toEqual({ ok: true, message: 'Marked task #1 "Task t1" complete.' });
     expect(taskOf(env.session, 't1')!.status).toBe('completed');
-    expect(await env.run({ command: 'mark_not_done', task: 't1' })).toEqual({ ok: true, message: 'Marked task #1 "Task t1" not done: it waits until you retry or start it.' });
+    expect(await env.run({ command: 'mark_not_done', task: 't1', confirmed: true })).toEqual({ ok: true, message: 'Marked task #1 "Task t1" not done: it waits until you retry or start it.' });
     expect(taskOf(env.session, 't1')!.status).toBe('pending');
     expect(env.timeline().map((m) => m.text)).toEqual([
-      'You started the plan.',
       'You marked task #1 "Task t1" complete.',
       'You marked task #1 "Task t1" not done.',
     ]);
@@ -159,8 +157,8 @@ describe('mark_complete and mark_not_done', () => {
     const env = setup();
     env.load([task('t1', 1)]);
 
-    await env.session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
-    await env.session.execute({ command: 'mark_not_done', task: 't1' }, { kind: 'user' });
+    await env.session.execute({ command: 'mark_complete', task: 't1', confirmed: true }, { kind: 'user' });
+    await env.session.execute({ command: 'mark_not_done', task: 't1', confirmed: true }, { kind: 'user' });
 
     expect(env.timeline().map((m) => m.record.command)).toEqual(['mark_complete', 'mark_not_done']);
   });
@@ -265,16 +263,17 @@ describe('cancel_resume', () => {
   });
 });
 
-describe('answer_checkpoint', () => {
-  async function atCheckpoint() {
-    const env = setup();
-    env.load([task('t1', 1), task('t2', 2)]);
-    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
-    const answer = env.latest('t1').callCheckpoint('Drop the table?');
-    await vi.waitFor(() => expect(env.session.awaitsCheckpoint('t1')).toBe(true));
-    return { ...env, answer };
-  }
+/** t1 running and waiting at a checkpoint; `answer` is what the runner's call resolves to. */
+async function atCheckpoint() {
+  const env = setup();
+  env.load([task('t1', 1), task('t2', 2)]);
+  await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
+  const answer = env.latest('t1').callCheckpoint('Drop the table?');
+  await vi.waitFor(() => expect(env.session.awaitsCheckpoint('t1')).toBe(true));
+  return { ...env, answer };
+}
 
+describe('answer_checkpoint', () => {
   it('lets the task go on when the user approves', async () => {
     const env = await atCheckpoint();
 
@@ -291,13 +290,116 @@ describe('answer_checkpoint', () => {
     expect(env.timeline().at(-1)!.text).toBe('You rejected the checkpoint of task #1 "Task t1": "not on production"');
   });
 
-  it('refuses a task not waiting at one, and a model', async () => {
+  it('refuses a task not waiting at one', async () => {
     const env = await atCheckpoint();
 
     expect((await env.run({ command: 'answer_checkpoint', task: 't2', answer: 'approve' })).message)
       .toBe('Task #2 "Task t2" is not waiting at a checkpoint: it was answered already, withdrawn, or has no runner left to hear it.');
-    expect((await env.run({ command: 'answer_checkpoint', task: 't1', answer: 'approve' }, ACT)).message).toMatch(/^Answering a checkpoint is the user's own control/);
     expect(env.session.awaitsCheckpoint('t1')).toBe(true);
+  });
+
+  describe('by anyone but the user, and the supervisor at Act', () => {
+    it.each([
+      ['a planner turn', PLANNER as ExecutionActor, /^A checkpoint is the user's to answer in their own turn.*from the task's checkpoint card \(Approve or Reject\).*Only the supervisor at Act answers one, in a wake-up turn\.$/],
+      ['autorun', { kind: 'autorun' } as ExecutionActor, /^A checkpoint is the user's to answer in their own turn.*checkpoint card/],
+      ['the supervisor at Watch', { kind: 'supervisor', level: 'watch' } as ExecutionActor, /^You are the supervisor at Watch.*cannot answer a checkpoint.*checkpoint card/],
+      ['the supervisor with the supervisor off', { kind: 'supervisor', level: 'off' } as ExecutionActor, /^The supervisor is off.*cannot answer a checkpoint.*checkpoint card/],
+    ])('refuses %s, saying who answers instead, and leaves the runner waiting', async (_who, actor, words) => {
+      const env = await atCheckpoint();
+
+      expect(await env.run({ command: 'answer_checkpoint', task: 't1', answer: 'approve' }, actor)).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(words) });
+      expect(await env.run({ command: 'answer_checkpoint', task: 't1', answer: 'reject', reason: 'no' }, actor)).toMatchObject({ ok: false, outcome: 'refused' });
+      expect(env.session.awaitsCheckpoint('t1')).toBe(true);
+      expect(env.timeline().at(-1)!.record).toMatchObject({ command: 'answer_checkpoint', outcome: 'refused' });
+    });
+  });
+
+  describe('by the supervisor at Act', () => {
+    it('refuses a rejection with no reason, which would leave the runner nothing to act on', async () => {
+      const env = await atCheckpoint();
+
+      for (const reason of [undefined, '   ']) {
+        expect((await env.run({ command: 'answer_checkpoint', task: 't1', answer: 'reject', ...(reason !== undefined ? { reason } : {}) }, ACT)).message)
+          .toBe('A rejection needs a reason: the runner is told it, and acts on it. Say what it should do instead.');
+      }
+      expect(env.session.awaitsCheckpoint('t1')).toBe(true);
+    });
+
+    it('refuses a checkpoint already answered, as it does the user', async () => {
+      const env = await atCheckpoint();
+      await env.run({ command: 'answer_checkpoint', task: 't1', answer: 'approve' });
+
+      expect(await env.run({ command: 'answer_checkpoint', task: 't1', answer: 'approve' }, ACT)).toMatchObject({
+        ok: false,
+        outcome: 'refused',
+        message: 'Task #1 "Task t1" is not waiting at a checkpoint: it was answered already, withdrawn, or has no runner left to hear it.',
+      });
+      expect(env.timeline().at(-1)!.text).toBe('The supervisor asked to answer the checkpoint of task #1 "Task t1"; refused: Task #1 "Task t1" is not waiting at a checkpoint: it was answered already, withdrawn, or has no runner left to hear it.');
+    });
+
+    it('lets the task go on when it approves, and the timeline names the supervisor', async () => {
+      const env = await atCheckpoint();
+
+      expect(await env.run({ command: 'answer_checkpoint', task: 't1', answer: 'approve' }, ACT)).toEqual({ ok: true, message: 'Approved the checkpoint of task #1 "Task t1": it goes on.' });
+      await expect(env.answer).resolves.toEqual({ kind: 'continue' });
+      expect(env.timeline().at(-1)).toMatchObject({
+        record: { command: 'answer_checkpoint', actor: 'supervisor', level: 'act', outcome: 'done', task: { id: 't1', ref: '#1' } },
+        text: 'Approved the checkpoint of task #1 "Task t1": by supervisor.',
+      });
+    });
+
+    it('tells the runner its reason when it rejects, and the timeline keeps the reason', async () => {
+      const env = await atCheckpoint();
+
+      expect(await env.run({ command: 'answer_checkpoint', task: 't1', answer: 'reject', reason: 'the table is read by the billing job' }, ACT))
+        .toEqual({ ok: true, message: 'Rejected the checkpoint of task #1 "Task t1": the runner is told the reason.' });
+      await expect(env.answer).resolves.toEqual({ kind: 'rejected', reason: 'the table is read by the billing job' });
+      expect(env.timeline().at(-1)).toMatchObject({
+        record: { actor: 'supervisor', level: 'act', outcome: 'done', detail: 'the table is read by the billing job' },
+        text: 'Rejected the checkpoint of task #1 "Task t1": by supervisor: "the table is read by the billing job"',
+      });
+    });
+  });
+});
+
+describe('message_task to a task at a checkpoint', () => {
+  const message = (env: Awaited<ReturnType<typeof atCheckpoint>>, actor: ExecutionActor) => env.run({ command: 'message_task', task: 't1', text: 'go ahead' }, actor);
+
+  it('tells the user to approve or reject it, as before', async () => {
+    const env = await atCheckpoint();
+
+    expect(await message(env, USER)).toMatchObject({ ok: false, outcome: 'refused', message: 'Task #1 "Task t1" is at a checkpoint: approve or reject it instead.' });
+  });
+
+  it('tells a planner turn that the user answers it from the task\'s checkpoint card', async () => {
+    const env = await atCheckpoint();
+
+    expect(await message(env, PLANNER)).toMatchObject({
+      ok: false,
+      outcome: 'refused',
+      message: 'Task #1 "Task t1" is at a checkpoint, which a message does not answer: the user answers it from the task\'s checkpoint card (Approve or Reject). Tell them what the runner asks and what you would answer, with why.',
+    });
+  });
+
+  it('tells the supervisor at Act to answer it with answer_checkpoint, or leave it to the user', async () => {
+    const env = await atCheckpoint();
+
+    expect(await message(env, ACT)).toMatchObject({
+      ok: false,
+      outcome: 'refused',
+      message: 'Task #1 "Task t1" is at a checkpoint, which a message does not answer: answer it with answer_checkpoint (approve, or reject with a reason), or leave it to the user and tell them why.',
+    });
+  });
+
+  it('delivers nothing, and keeps the refusal in the timeline', async () => {
+    const env = await atCheckpoint();
+
+    await message(env, ACT);
+
+    expect(env.latest('t1').delivered).toEqual([]);
+    expect(env.latest('t1').messages).toEqual([]);
+    expect(env.session.awaitsCheckpoint('t1')).toBe(true);
+    expect(env.timeline().at(-1)!.record).toMatchObject({ command: 'message_task', actor: 'supervisor', outcome: 'refused' });
   });
 });
 
@@ -417,7 +519,6 @@ describe('the user\'s controls are the user\'s', () => {
     ['force_send_queued', { command: 'force_send_queued', task: 't1', id: 'msg-1' }],
     ['remove_queued', { command: 'remove_queued', task: 't1', id: 'msg-1' }],
     ['cancel_resume', { command: 'cancel_resume', task: 't1' }],
-    ['answer_checkpoint', { command: 'answer_checkpoint', task: 't1', answer: 'approve' }],
     ['approve_review', { command: 'approve_review' }],
   ];
   const actors: Array<[string, ExecutionActor]> = [['a planner turn', PLANNER], ['the supervisor at Act', ACT], ['autorun', { kind: 'autorun' }]];
@@ -439,4 +540,46 @@ describe('the user\'s controls are the user\'s', () => {
       expect(env.timeline().at(-1)!.record).toMatchObject({ command: command.command, outcome: 'refused' });
     },
   );
+});
+
+describe('a control on a task while Mark complete lands its work', () => {
+  async function landing(failFirst: boolean) {
+    const isolation = new FakeWorktreeIsolation();
+    const env = setup({ isolation });
+    env.load([task('t1', 1), task('t2', 2)]);
+    await env.run({ command: 'run_task', task: 't1' });
+    if (failFirst) {
+      env.latest('t1').emitExit(1);
+      await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
+    }
+    // Stopped first, as a manual override of a running task must be.
+    if (!failFirst) await env.run({ command: 'stop_run' });
+    const openMerge = isolation.holdIntegration('t1');
+    const marked = env.run({ command: 'mark_complete', task: 't1', confirmed: true });
+    await vi.waitFor(() => expect(isolation.taskIdsFor('integrate')).toEqual(['t1']));
+    return { env, openMerge, marked };
+  }
+
+  const refused = { ok: false, message: 'Task #1 "Task t1" is being marked complete: its work is landing.' };
+
+  it('refuses a retry and a skip of a failed task', async () => {
+    const { env, openMerge, marked } = await landing(true);
+
+    expect(await env.run({ command: 'retry_task', task: 't1', from: 'fresh' })).toMatchObject(refused);
+    expect(await env.run({ command: 'skip_task', task: 't1' })).toMatchObject(refused);
+    openMerge();
+    await marked;
+
+    expect(taskOf(env.session, 't1')!.status).toBe('completed');
+  });
+
+  it('refuses a stop of a task marked complete while it ran', async () => {
+    const { env, openMerge, marked } = await landing(false);
+
+    expect(await env.run({ command: 'stop_task', task: 't1' })).toMatchObject(refused);
+    openMerge();
+    await marked;
+
+    expect(taskOf(env.session, 't1')!.status).toBe('completed');
+  });
 });

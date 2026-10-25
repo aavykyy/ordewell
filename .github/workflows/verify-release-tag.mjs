@@ -32,16 +32,23 @@ for (const pkgPath of packages) {
   }
 }
 
-// cli-alias pins @ordewell/cli exactly so the published `ordewell` bin can
-// never resolve to a mismatched core.
-const cliAlias = JSON.parse(
-  readFileSync(join(process.cwd(), 'packages/cli-alias/package.json'), 'utf8'),
-);
-if (cliAlias.dependencies?.['@ordewell/cli'] !== version) {
-  failures.push(
-    `packages/cli-alias/package.json: @ordewell/cli pinned to ` +
-      `${cliAlias.dependencies?.['@ordewell/cli']} != ${version}`,
-  );
+// Internal packages are released in lockstep. Checking versions alone is not
+// enough: for 0.x, `^0.10.12` excludes 0.11.0, so a minor bump tagged here
+// would still publish a CLI or extension that resolves the previous core (or
+// web). cli-alias pins @ordewell/cli exactly — its bin is the published entry
+// point — while every other internal dependency must be `^<version>`.
+const cliAliasPath = 'packages/cli-alias/package.json';
+for (const pkgPath of packages.slice(1)) {
+  const pkg = JSON.parse(readFileSync(join(process.cwd(), pkgPath), 'utf8'));
+  for (const field of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+    for (const [dep, range] of Object.entries(pkg[field] ?? {})) {
+      if (!dep.startsWith('@ordewell/')) continue;
+      const expected = pkgPath === cliAliasPath ? version : `^${version}`;
+      if (range !== expected) {
+        failures.push(`${pkgPath}: ${dep} is ${range}, expected ${expected}`);
+      }
+    }
+  }
 }
 
 if (failures.length > 0) {

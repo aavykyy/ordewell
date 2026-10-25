@@ -1,4 +1,4 @@
-import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, PlanUsage, PlannerUsage, ResearchLogEntry, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskLogEvent } from '@ordewell/core';
+import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskLogEvent, TaskStatus } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -11,6 +11,8 @@ export type Effect =
   /** `allowInit` is only ever set on the retry after the user confirms the "initialize this as a new workspace?" prompt — see `workspaceNeedsInit`. */
   | { type: 'startConversation'; goal: string; allowInit?: boolean }
   | { type: 'sendMessage'; sessionId: string; message: string }
+  /** Read the session back from the daemon after a planner turn's reply was lost, and settle the turn if the daemon is done with it. */
+  | { type: 'reconcileTurn'; sessionId: string }
   /** Send now in the planner chat (ADR-0023, F5): stop the turn in flight and answer `message` next. */
   | { type: 'forceSendPlannerMessage'; sessionId: string; message: string }
   | { type: 'setPlanner'; provider: string }
@@ -50,7 +52,8 @@ export type Effect =
   /** Schedules the stop-arm expiry; the runtime owns the timer, not the reducer. */
   | { type: 'disarmStop'; afterMs: number; arm: number }
   /** `watch` asks the runtime to hold the execution stream open for this action — see `taskActionEffect`. */
-  | { type: 'taskAction'; sessionId: string; taskId: string; action: TaskAction; watch?: boolean }
+  /** `confirmed`: the user's yes to an override, with the status they were asked about (ADR-0029). */
+  | { type: 'taskAction'; sessionId: string; taskId: string; action: TaskAction; watch?: boolean; confirmed?: { seen: TaskStatus } }
   | { type: 'addTask'; sessionId: string; title: string }
   /** `/settings`: only the changed values, saved the way their headless commands save them, then `message` as one notice. */
   | { type: 'saveSettings'; run: Partial<GlobalRunSettings>; autonomous?: boolean; maxParallel?: number; message: string; sessionId?: string }
@@ -86,7 +89,9 @@ export type Effect =
   | { type: 'loadScope' }
   | { type: 'exit' };
 
-export type TaskAction = 'complete' | 'uncomplete' | 'skip' | 'retry' | 'cancel' | 'force-start' | 'cancel-resume' | 'resume-now';
+export type ChatRestored = { type: 'chatRestored'; history: SerializedConversationMessage[]; researchLog?: ResearchLogEntry[]; plannerUsage?: PlannerUsage; pendingTurns?: SerializedPendingTurn[]; sessionId?: string };
+
+export type { TaskAction };
 
 export type Action =
   | { type: 'key'; key: Key }
@@ -94,7 +99,20 @@ export type Action =
   | { type: 'sessionCleared' }
   | { type: 'sessionDeleted'; sessionId: string }
   /** A saved session's records, which the conversation is rebuilt from as a reload would show it. */
-  | { type: 'chatRestored'; history: SerializedConversationMessage[]; researchLog?: ResearchLogEntry[]; plannerUsage?: PlannerUsage; pendingTurns?: SerializedPendingTurn[]; sessionId?: string }
+  | ChatRestored
+  /**
+   * A planner turn's call died after the request went out (a timeout, a reset):
+   * the daemon may still be running the turn or have finished it, so it is
+   * neither a failure nor an end.
+   */
+  | { type: 'turnLost'; sessionId: string; /** Why the request failed, short and without the request: shown beside the warning. */ reason?: string }
+  /**
+   * The session as the daemon holds it after a lost reply, with the conversation
+   * to redraw from it. `plannerTurnId` is the turn the daemon is running now, if
+   * one is: the gate's turn is over only when the daemon names a different one
+   * or none at all.
+   */
+  | { type: 'turnReconciled'; plan: unknown; plannerTurnId?: string; chat: ChatRestored; sessionId: string; reason?: string }
   /** A planner turn's call returned its plan: the one action that ends the turn. */
   | { type: 'planUpdated'; plan: unknown; sessionId?: string }
   /** The plan as the daemon holds it after a request that is not a planner turn; a turn out stays out. */
@@ -116,7 +134,7 @@ export type Action =
   | { type: 'taskUpdated'; taskId: string; changes: Record<string, unknown>; sessionId?: string }
   | { type: 'taskCheckpoint'; taskId: string; title: string; summary: string; sessionId?: string }
   /** The run's status stream: folded through core's `reduceRun`, status-only fields and all. */
-  | { type: 'statusUpdate'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; sessionId?: string }
+  | { type: 'statusUpdate'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; activity?: RunActivity; sessionId?: string }
   /** The run as the daemon sends it when a socket connects, before the next update. */
   | { type: 'runSnapshot'; view: RunView; approvals?: ApprovalRequestMessage[]; sessionId?: string }
   /** The edit the open planner turn holds, as it would leave the plan; null once it landed or was dropped. */
@@ -134,6 +152,8 @@ export type Action =
   | { type: 'executionLost'; sessionId?: string }
   /** The session's standing subscription went with the daemon (see `follow` in effects). */
   | { type: 'followLost'; sessionId: string }
+  /** A standing subscription opened; on a reconnect this is what reads a lost turn's end back. */
+  | { type: 'followRestored'; sessionId: string }
   | { type: 'settingsLoaded'; settings: Partial<SettingsResponse> }
   | { type: 'modelsLoaded'; models: ModelView[]; orchestratorModels?: ModelView[]; providers?: AiProvider[]; providerErrors?: Record<string, string>; modesByRunner?: Record<string, ModeView[]> }
   | { type: 'sessionsLoaded'; sessions: SessionView[] }
@@ -151,7 +171,12 @@ export type Action =
   | { type: 'failed'; message: string; code?: DaemonErrorCode; turn?: true }
   /** The workspace has no project marker — offer to initialize it rather than just failing. */
   | { type: 'workspaceNeedsInit'; goal: string; workspace: string }
-  | { type: 'notice'; message: string; level?: 'info' | 'warn' | 'error' }
+  /**
+   * `holdPlace` is for a notice that reports on text already on screen rather
+   * than moving the conversation on: it must not take a scrolled-back reader
+   * to the tail. The copy count is the one such notice.
+   */
+  | { type: 'notice'; message: string; level?: 'info' | 'warn' | 'error'; holdPlace?: boolean }
   | { type: 'resize'; rows: number; cols: number }
   | { type: 'spinnerTick'; by?: number };
 
@@ -164,7 +189,29 @@ export function step(state: TuiState, effects: Effect[] = []): Step {
   return { state, effects };
 }
 
-export const fail = (state: TuiState, message: string): Step => step(say(state, 'error', message));
+export const fail = (state: TuiState, message: string): Step => step(reportError(state, message));
+
+/**
+ * A local error, where the user can see it. The chat pane draws a task's own
+ * log while one is open, so the planner transcript would swallow it: the view's
+ * notice row is the one place that is on screen.
+ */
+export function reportError(state: TuiState, message: string): TuiState {
+  return state.taskView
+    ? { ...state, taskView: { ...state.taskView, notice: message } }
+    : say(state, 'error', message);
+}
+
+/**
+ * A notice answers the key that was refused. Any next key that is not just
+ * scrolling dismisses it, so the view's own key hints come back — a script
+ * view has no composer whose next send would clear it.
+ */
+export function clearNotice(state: TuiState): TuiState {
+  return state.taskView?.notice
+    ? { ...state, taskView: { ...state.taskView, notice: undefined } }
+    : state;
+}
 
 /**
  * A planner/execution result carries the session id it was produced for. A

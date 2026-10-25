@@ -3,11 +3,13 @@ import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { FakeRunnerSession, makeSession, testWorkspace, taskOf } from './sessionTestKit';
 import type { IRunner } from '../../interfaces/IRunner';
 
-function recordingRunner(spawned: string[]): IRunner {
+function recordingRunner(spawned: string[], sessions: FakeRunnerSession[] = []): IRunner {
   return {
     spawn: vi.fn(async ({ taskId }: { taskId: string }) => {
       spawned.push(taskId);
-      return new FakeRunnerSession(`s-${taskId}`, taskId);
+      const session = new FakeRunnerSession(`s-${taskId}`, taskId);
+      sessions.push(session);
+      return session;
     }),
     stop: vi.fn(),
     stopAll: vi.fn(),
@@ -40,6 +42,13 @@ function halfDonePlan(): LegacyPlanState {
  * new one. Recorded from a real session — the finished tasks came back
  * `pending` with a placeholder prompt.
  */
+/** The tasks not yet done, depending only on each other. */
+function withoutDone(tasks: readonly Task[]): Task[] {
+  const kept = tasks.filter((t) => t.status !== 'completed');
+  const ids = new Set(kept.map((t) => t.id));
+  return kept.map((t) => ({ ...t, dependencies: t.dependencies.filter((d) => ids.has(d)) }));
+}
+
 function rewrittenWithAddedTask(current: readonly Task[]): Task[] {
   return [
     ...current.map((t) => ({
@@ -111,14 +120,15 @@ describe('a planner rewrite never undoes finished work', () => {
 
   it('keeps a task finished in this run when a paused run takes a whole plan that leaves it out', async () => {
     const spawned: string[] = [];
+    const live: FakeRunnerSession[] = [];
     const session = makeSession({
-      runner: recordingRunner(spawned),
+      runner: recordingRunner(spawned, live),
       aiService: {
         startConversation: vi.fn(),
-        // Asked only for what is still to run, a planner drops the tasks already done.
+        // Asked only for what is still to run, a planner drops the tasks already done, and with them the dependencies on them: a plan naming a task it left out is refused.
         continueConversation: vi.fn(async () => ({
           kind: 'plan' as const,
-          tasks: rewrittenWithAddedTask(session.planTasks.filter((t) => t.status !== 'completed')),
+          tasks: rewrittenWithAddedTask(withoutDone(session.planTasks)),
           text: '',
           researchLog: [],
         })),
@@ -131,7 +141,8 @@ describe('a planner rewrite never undoes finished work', () => {
     plan.tasks.push(createTask({ id: 'e', order: 4, title: 'Lint', prompt: 'lint it', dependencies: ['a'], assignedRunner: 'claude-code' }));
     session.loadPlan(plan, 'build it', testWorkspace, { persist: false });
     await session.execute({ command: 'run_plan' }, { kind: 'user' }); // 'b' and 'e' go live
-    await session.execute({ command: 'mark_complete', task: 'e' }, { kind: 'user' }); // finished in this run, so it is in the execution log
+    live.find((r) => r.taskId === 'e')!.reportComplete({ status: 'done', summary: '' }); // finished in this run, so it is in the execution log
+    await vi.waitFor(() => expect(taskOf(session, 'e')!.status).toBe('completed'));
     await session.execute({ command: 'stop_task', task: 'b' }, { kind: 'user' }); // the run stays armed with nothing live
     expect(session.isExecuting).toBe(false);
 

@@ -2,18 +2,19 @@ import { firstGrapheme, graphemes, pad, stripAnsi, style, truncate, width, wrap 
 import { cursorInLines } from './editor';
 import { activeToken, composerCompletions, runnerCommandFor, skillMatchKind, slashTokens } from './slash';
 import {
-  approvalLayout, bodyRows, chatInputWrap, chatLayout, footerHints, helpLayout, type HelpSheet, packHints, planLayout, planOffset,
+  approvalLayout, bodyPanes, bodyRows, composerView, selectionArea, chatLayout, footerHints, helpLayout, type HelpSheet, packHints, planLayout, planOffset,
   stopHint,
   chatActivity,
   runnerStoppable,
   DOT_TICKS,
   runHint,
+  type BodyPanes,
+  type ComposerView,
 } from './layout';
-import { chatEditorRoomFor, chatPaneWidth, chatPromptLabel, paneColumns, planPaneWidth } from './geometry';
+import { chatEditorRoomFor, chatPromptLabel } from './geometry';
 import { currentHandoff, diffRoom, handoffActions } from './handoff';
-import { handoffBase, handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
-import { capConflictFiles, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
-import { matchingItems, runnerCommands, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
+import { capConflictFiles, handoffBaseLine, handoffBranchName, isRepoGroup, repoResultLines, taskLogCommands, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
+import { matchingItems, scriptTaskView, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
 import type { StepperState } from './reducers/stepper';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 
@@ -28,21 +29,23 @@ import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 export function render(state: TuiState): string[] {
   const { rows, cols } = state;
   const rowsForBody = bodyRows(state);
+  // Measured once per frame: stacked, it costs a pass over both panes' content.
+  const panes = bodyPanes(state);
 
   const body = state.overlay
     ? renderOverlay(state, rowsForBody, cols)
-    : renderBody(state, rowsForBody, cols);
+    : renderBody(state, panes);
 
   const lines = [
     ...body,
-    renderStatus(state, cols),
+    renderStatus(state, cols, panes),
     ...renderInput(state),
     ...renderFooter(state, cols),
   ];
 
   // Chrome is dropped from the top down in a terminal too short to hold it.
   const frame = lines.slice(Math.max(0, lines.length - rows)).map((l) => pad(l, cols));
-  return highlightSelection(frame, state);
+  return highlightSelection(frame, state, panes);
 }
 
 // ── Selection ────────────────────────────────────────────────────────────────
@@ -59,23 +62,27 @@ interface SelectionSpan {
 
 /**
  * The selection as painted rows. Both ends are inclusive, and every row between
- * the first and the last takes the *whole* of its pane — never the whole
- * terminal, which is the splice this exists to prevent.
+ * the first and the last takes the *whole* of its pane's width — never the whole
+ * terminal, which is the splice this exists to prevent. The rows themselves are
+ * pulled into the pane's area too, so a selection a resize or a stale report
+ * left past it paints and copies nothing of the neighbour.
  */
-function selectionSpans(state: TuiState): SelectionSpan[] {
+function selectionSpans(state: TuiState, panes: BodyPanes): SelectionSpan[] {
   const { selection } = state;
   if (!selection) return [];
   const { anchor, head } = selection;
   const forwards = anchor.row < head.row || (anchor.row === head.row && anchor.col <= head.col);
   const [start, end] = forwards ? [anchor, head] : [head, anchor];
-  const { first, last } = paneColumns(state, selection.pane);
+  const area = selectionArea(state, selection.pane, panes);
 
   const spans: SelectionSpan[] = [];
-  for (let row = start.row; row <= end.row; row++) {
+  const firstRow = Math.max(start.row, area.firstRow);
+  const lastRow = Math.min(end.row, area.lastRow);
+  for (let row = firstRow; row <= lastRow; row++) {
     spans.push({
       row,
-      from: row === start.row ? start.col : first,
-      to: row === end.row ? end.col : last,
+      from: row === start.row ? start.col : area.firstCol,
+      to: row === end.row ? end.col : area.lastCol,
     });
   }
   return spans;
@@ -154,10 +161,10 @@ function invertCells(line: string, from: number, to: number): string {
 }
 
 /** The frame with the selected cells inverted. Untouched when nothing is selected. */
-function highlightSelection(frame: string[], state: TuiState): string[] {
+function highlightSelection(frame: string[], state: TuiState, panes: BodyPanes): string[] {
   if (!state.selection || !style.enabled) return frame;
   const painted = [...frame];
-  for (const { row, from, to } of selectionSpans(state)) {
+  for (const { row, from, to } of selectionSpans(state, panes)) {
     const line = painted[row - 1];
     if (line !== undefined) painted[row - 1] = invertCells(line, from, to);
   }
@@ -170,7 +177,7 @@ function highlightSelection(frame: string[], state: TuiState): string[] {
  * trimmed off the end. Empty when nothing is selected.
  */
 export function selectedText(state: TuiState): string {
-  const spans = selectionSpans(state);
+  const spans = selectionSpans(state, bodyPanes(state));
   if (spans.length === 0) return '';
   const frame = render(state);
   return spans
@@ -227,15 +234,15 @@ function scrolledBackMark(state: TuiState): string {
 }
 
 /** The status on the left, the settings badge on the right while both fit; the status wins the row when not. */
-function renderStatus(state: TuiState, cols: number): string {
-  const left = statusText(state, cols);
+function renderStatus(state: TuiState, cols: number, panes: BodyPanes): string {
+  const left = statusText(state, cols, panes);
   const badge = settingsBadge(state);
   if (!badge) return left;
   const gap = cols - width(left) - width(badge);
   return gap >= 2 ? `${left}${' '.repeat(gap)}${badge}` : left;
 }
 
-function statusText(state: TuiState, cols: number): string {
+function statusText(state: TuiState, cols: number, panes: BodyPanes): string {
   const mark = scrolledBackMark(state);
   // A standing stop-arm outranks the activity: with the arm up, the next key
   // decides the turn and that is what the row must say, in red, hard left.
@@ -243,7 +250,7 @@ function statusText(state: TuiState, cols: number): string {
   if (armed) return truncate(style.red(armed), cols);
   const activity = chatActivity(state);
   // Without a plan pane the run has nowhere else to show what it waits on.
-  const hint = planPaneWidth(state) === 0 ? runHint(state) : '';
+  const hint = !panes.plan || panes.plan.rows === 0 ? runHint(state) : '';
   const notes = [mark, activity && !activity.busy ? activity.label : '', hint, state.toast].filter(Boolean).join(' · ');
   if (activity?.busy) {
     const lit = Math.floor(state.spinnerFrame / DOT_TICKS) % 2 === 0;
@@ -316,33 +323,49 @@ function paintSpans(text: string, base: number, spans: Array<{ start: number; en
  * reserves does not depend on the terminal's palette.
  */
 function renderInput(state: TuiState): string[] {
-  const rows = ['', ...composerLines(state), ''];
+  const view = composerView(state);
+  const rows = ['', ...composerLines(state, view), ''];
+  // The last band row carries the count of what the window leaves out, so a
+  // pasted draft never looks complete when it is not.
+  if (view && (view.hiddenBefore > 0 || view.hiddenAfter > 0)) rows[rows.length - 1] = style.bandGrey(hiddenDraftNote(view));
   return style.enabled ? rows.map((row) => style.band(pad(row, state.cols))) : rows;
 }
 
-function composerLines(state: TuiState): string[] {
+function hiddenDraftNote({ hiddenBefore, hiddenAfter }: ComposerView): string {
+  const parts = [
+    ...(hiddenBefore > 0 ? [`${hiddenBefore} earlier`] : []),
+    ...(hiddenAfter > 0 ? [`${hiddenAfter} later`] : []),
+  ];
+  return `… ${parts.join(' and ')} characters not shown`;
+}
+
+function composerLines(state: TuiState, view: ComposerView | null): string[] {
+  // A script's log is output only (ADR-0035): say so where the composer would be.
+  if (scriptTaskView(state)) {
+    return [style.bandGrey(`${chatPromptLabel(state)}  ·  this script task runs no model, so it takes no messages`)];
+  }
   const prompt = state.taskView
     ? style.accent(`${chatPromptLabel(state)} `)
     : state.focus === 'plan' ? style.bandGrey('❯ ') : style.brand('❯ ');
   // The driver hides the hardware cursor, so the frame marks the caret itself —
   // but only while keystrokes actually go to the editor.
-  const lines = chatInputWrap(state);
+  const lines = view?.lines ?? null;
   const room = chatEditorRoomFor(state, lines !== null);
   const { text, cursor } = state.editor;
   const continuation = ' '.repeat(width(prompt));
-  const spans = highlightSpans(text, state.taskView ? runnerCommands(state.taskView) : null);
 
   // A blurred editor never wraps — a literal \n here would push every
   // following row down one line, so newlines/tabs are squashed to one row.
-  if (!lines) {
+  if (!lines || !view) {
     const visible = text.replace(/\n/g, '¶').replace(/\t/g, ' ');
-    const painted = paintSpans(visible, 0, spans);
+    const painted = paintSpans(visible, 0, highlightSpans(text, state.taskView ? taskLogCommands(state.taskView.view) : null));
     return [prompt + painted + suggest(state, room - width(visible))];
   }
 
+  const spans = highlightSpans(view.text, state.taskView ? taskLogCommands(state.taskView.view) : null);
   // The caret is derived from the same wrapped lines rather than re-wrapping,
   // which doubled the cost of every keystroke on a long input.
-  const { line: lineIndex, col } = cursorInLines(lines, cursor, text.length);
+  const { line: lineIndex, col } = cursorInLines(lines, cursor - view.base, view.text.length);
 
   return lines.map(({ line: raw, start: base }, i) => {
     const prefix = i === 0 ? prompt : continuation;
@@ -367,7 +390,7 @@ function suggest(state: TuiState, room: number): string {
   if (state.focus === 'plan' || room <= 2) return '';
   const token = activeToken(state.editor.text, state.editor.cursor);
   if (!token) return '';
-  const matches = composerCompletions(token, state.taskView ? runnerCommands(state.taskView) : null);
+  const matches = composerCompletions(token, state.taskView ? taskLogCommands(state.taskView.view) : null);
   if (matches.length === 0) return '';
   const names = matches.join(' ');
   return style.bandGrey(`  ${truncate(names, Math.max(0, room - 2))}`);
@@ -396,7 +419,7 @@ const ERASE_TO_END = '\x1b[K';
 const atColumn = (col: number): string => `\x1b[${col}G`;
 
 /**
- * The two panes and the divider between them.
+ * The panes and, side by side, the divider between them.
  *
  * The divider is *anchored* to its column rather than assumed to land there.
  * `width()` is this package's best guess at how many columns the terminal will
@@ -410,21 +433,24 @@ const atColumn = (col: number): string => `\x1b[${col}G`;
  * jump to the divider's column, paint from there. An over-running chat row is
  * overwritten, an under-running one leaves no debris, and either way the plan
  * pane starts on the column it owns.
+ *
+ * Stacked panes share no row, so there is no divider and nothing to anchor: the
+ * plan's pinned header is what tells the two apart.
  */
-function renderBody(state: TuiState, rows: number, cols: number): string[] {
-  const planCols = planPaneWidth(state);
-  if (planCols === 0) return renderChat(state, rows, cols);
+function renderBody(state: TuiState, { mode, chat: chatRect, plan: planRect }: BodyPanes): string[] {
+  const chat = renderChat(state, chatRect.rows, chatRect.cols);
+  if (!planRect) return chat;
 
-  const chatCols = chatPaneWidth(state);
-  const chat = renderChat(state, rows, chatCols);
-  const plan = renderPlan(state, rows, planCols);
+  const plan = renderPlan(state, planRect.rows, planRect.cols);
+  if (mode === 'stacked') return [...fit(chat, chatRect.rows, 'top'), ...plan];
+
   // The pane border takes the task view's accent, so the runner's pane is
   // unmistakably not the planner's even at a glance.
   const border = state.taskView ? style.accent('│') : style.grey('│');
-  const divider = `${ERASE_TO_END}${atColumn(chatCols + 1)}${border}`;
+  const divider = `${ERASE_TO_END}${atColumn(chatRect.cols + 1)}${border}`;
 
-  return Array.from({ length: rows }, (_, i) =>
-    `${pad(chat[i] ?? '', chatCols)}${divider}${pad(plan[i] ?? '', planCols)}`,
+  return Array.from({ length: chatRect.rows }, (_, i) =>
+    `${pad(chat[i] ?? '', chatRect.cols)}${divider}${pad(plan[i] ?? '', planRect.cols)}`,
   );
 }
 
@@ -487,7 +513,7 @@ function renderHandoff(
     // line would push the end of the diff and the footer out of the frame.
     const shown = lines.slice(scroll, scroll + room).map((line) => paintDiffLine(truncate(line, Math.max(1, cols - 2))));
     const more = scroll + room < lines.length ? '↑↓ pgup/pgdn scroll · ' : '';
-    return frame(`Diff: ${handoffBranch(handoff)}`, [...shown, '', style.grey(`${more}enter or esc goes back`)], rows, cols);
+    return frame(`Diff: ${handoffBranchName(handoff)}`, [...shown, '', style.grey(`${more}enter or esc goes back`)], rows, cols);
   }
 
   const landed = handoff.landed.length === 0
@@ -511,8 +537,8 @@ function renderHandoff(
   return frame(
     'Run handoff',
     [
-      `Branch  ${style.brand(handoffBranch(handoff))}`,
-      style.grey(`Forked from ${handoffBase(handoff, 12)}`),
+      `Branch  ${style.brand(handoffBranchName(handoff))}`,
+      style.grey(`Forked from ${handoffBaseLine(handoff, 12)}`),
       '',
       ...perRepo,
       'Landed on it, in plan order:',

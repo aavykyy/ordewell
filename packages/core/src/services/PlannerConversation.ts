@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ConversationRequest, ConversationTurn, IAiService, TurnRun } from './AiService';
 import { reEmitPlanPrompt, repairLoop, resubmitEditPrompt, resubmitPlanPrompt, taskOpsRejectedPrompt } from './PlanRepair';
 import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, TASK_READ_TOOLS_REMINDER, type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog } from './TaskQuery';
-import { taskOpsProtocol, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
+import { taskOpsProtocol, type TaskOp } from './TaskOps';
 import { readOnlyMode, readOnlyRunners } from './ModeResolver';
 import type { PlannerTurnOutcome, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { TurnStream } from './replyStream';
@@ -13,12 +13,13 @@ import { flattenTasksWithParents, isUserMessage } from '../models/Task';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
-import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
+import { planChangeErrorText, type PassedChange, type PlanChangeCheck } from './PlanChangeCheck';
 import { heldEditTasks } from './heldEdit';
 import { classifyRunnerStop, type TurnFailure } from './runnerExit';
 import type { PlannerLimit } from './PlannerResend';
 import type { AssignmentScope } from './AssignmentScope';
 import { PlannerBriefing, type TurnBriefing } from './PlannerBriefing';
+import { PromptBlocks, type PlanRow, type PlanView, type TurnBlocks } from './PromptBlocks';
 import { joinRuns, noteRun, writtenOver as writtenOverRuns } from './settleReply';
 import type { StartWait, StartWaitKind } from './readiness';
 import { SubagentRuns } from './SubagentRuns';
@@ -33,6 +34,18 @@ const CATALOG_MODEL_CAP = 100;
 /** Stands in for the catalog block where the planner pulls the catalog itself (ADR-0022, L3). */
 const PLANNER_TOOLS_REMINDER =
   'Runners, models and modes may have changed since you last read them: call list_runners and list_models just before submit_plan.';
+
+/**
+ * A planner message must never open with the user's text. Claude Code reads a
+ * leading `/name` as its own slash command, and before the plan has tasks a
+ * later turn carries neither the catalog nor a plan block to lead with
+ * (ADR-0012 T10), so an unknown `/clear` would run instead of being answered.
+ * The marker keeps the text intact and the command from being read as one.
+ */
+function plannerInput(parts: readonly (string | undefined)[]): string {
+  const message = parts.filter((part): part is string => Boolean(part)).join('\n\n');
+  return message.startsWith('/') ? `The user's message follows:\n\n${message}` : message;
+}
 
 /**
  * Reads a planner gets per user turn before every answer also carries an
@@ -131,7 +144,8 @@ type TurnAdmission = { refuseAs: string } | 'supersede';
 type ClaimedTurn = ConversationTurn & { said?: string };
 /** A turn with every read already drained — what the settle path actually commits. */
 type SettleableTurn = Exclude<ClaimedTurn, { kind: 'task_query' }>;
-type CommitTurn = Exclude<SettleableTurn, { kind: 'task_ops' }>;
+/** A turn that changes nothing in the plan: what it said is all that lands. */
+type CommitTurn = Exclude<SettleableTurn, { kind: 'task_ops' | 'plan' }>;
 
 /** {@link writtenOverRuns} for a turn that reported runs; one that reported none carries none. */
 function writtenOver(runs: readonly TurnRun[] | undefined, text: string): Pick<ConversationTurn, 'runs'> {
@@ -184,6 +198,10 @@ interface UserTurn {
   wakeUp?: WakeUpTurn;
   /** What the turn tells the planner besides its inputs; told only if the turn lands an answer the planner gave. */
   briefing?: TurnBriefing;
+  /** The catalog and plan blocks it sends, held by the live context once it lands normally. */
+  blocks?: TurnBlocks;
+  /** A corrective retry was sent in it: the planner misread something, so its next turn is sent the whole plan again (ADR-0012 T10). */
+  repaired?: boolean;
   /** Its message was force sent. */
   forced?: boolean;
   /** Handed in since the backend last answered; see {@link PlannerConversation.submit}. */
@@ -289,15 +307,14 @@ export interface PlannerConversationHost {
   /** `turnId`: the planner turn whose commit this is, when one is. */
   broadcastPlan(turnId?: string): void;
   /**
-   * Validate a batch against live state; nothing of it is applied. A
+   * The one check a plan change meets, over live state: a whole plan or a
+   * batch as its turn lands it, and the held edit as it is shown. A
    * supervisor's batch that trips the oscillation guard is refused, and the
    * user is told of the trip once, in the supervisor's voice (ADR-0029): a note
    * saved as it is written, like any of Ordewell's own, which a turn in flight
    * holds nothing in.
    */
-  validateOps(ops: TaskOp[]): ApplyTaskOpsResult;
-  /** The workspace's skill catalog under its repo group's layout, which the skills a plan or edit attaches are checked against. */
-  taskSkills(): SkillLookup;
+  planChanges: Pick<PlanChangeCheck, 'check' | 'checkNow'>;
   /** Tell the user something the transcript does not carry. */
   notice(level: SessionNotice['level'], message: string): void;
   /** Load planner-produced tasks: an edit keeps run state, a commit starts over. Returns how many landed. */
@@ -476,6 +493,7 @@ const WHOLE_PLAN_WHILE_RUNNING =
  */
 export class PlannerConversation {
   private readonly briefing: PlannerBriefing;
+  private readonly blocks: PromptBlocks;
   private live: PlannerTurn | null = null;
   private openTurn: UserTurn | null = null;
 
@@ -485,6 +503,11 @@ export class PlannerConversation {
       scope: () => host.assignmentScope(),
       tasks: () => host.tasks(),
       plannerTools: () => host.aiService().plannerToolsAttached?.() ?? false,
+    });
+    this.blocks = new PromptBlocks({
+      catalog: () => this.catalogBlock(),
+      plan: () => this.planView(),
+      compactions: () => host.aiService().compactions?.() ?? 0,
     });
   }
 
@@ -638,7 +661,7 @@ export class PlannerConversation {
    * ends: the backend's reply claims it, but it has not landed by then.
    */
   private showHeld(turn: UserTurn, held: PlannerSubmission | null): void {
-    const result = held?.kind === 'task_ops' ? this.host.validateOps(held.ops) : undefined;
+    const result = held?.kind === 'task_ops' ? this.host.planChanges.checkNow({ kind: 'ops', ops: held.ops }, 'land') : undefined;
     if (!result?.ok) {
       this.clearHeld(turn);
       return;
@@ -711,6 +734,7 @@ export class PlannerConversation {
    */
   reset(): void {
     this.dropContext();
+    this.blocks.restart();
     this.briefing.clear();
   }
 
@@ -722,6 +746,7 @@ export class PlannerConversation {
   /** Drop the live model context alone: the next turn replays from the transcript. */
   private dropContext(): void {
     this.host.aiService().reset();
+    this.blocks.forget();
   }
 
   /**
@@ -780,6 +805,8 @@ export class PlannerConversation {
         this.host.broadcastPlan();
       });
       return { summary, keptMessages: tail.length };
+    } catch (err) {
+      throw interrupted(turn, err);
     } finally {
       // Success and failure alike: the live context either holds the
       // conversation this replaced or a summary exchange nobody kept. An
@@ -792,7 +819,7 @@ export class PlannerConversation {
 
   private async summarize(signal: AbortSignal): Promise<string> {
     const ai = this.host.aiService();
-    const request = summaryRequest(this.currentPlanLines());
+    const request = summaryRequest(this.planRows()?.map(({ line }) => line) ?? null);
     // Only liveness and spend get through: streamed prose or research steps
     // from this turn would land in the chat as if the planner had said them.
     // Its calls are counted like any turn's, but the context they measure is
@@ -808,7 +835,9 @@ export class PlannerConversation {
     } else {
       turn = await this.resume(await this.reopen(), request, [...this.transcript], signal, onProgress);
     }
-    if (signal.aborted) throw new ConversationEditError('Condensing was stopped: the conversation is unchanged.');
+    // Not a ConversationEditError: the caller's catch turns an aborted turn into
+    // the stop or discard it was, which a surface answers differently from a refusal.
+    if (signal.aborted) throw new Error('Condensing was stopped: the conversation is unchanged.');
     const summary = extractSummary(turn.text);
     if (!summary) throw new ConversationEditError('The planner returned no summary, so the conversation is unchanged. Try again.');
     return summary;
@@ -888,12 +917,13 @@ export class PlannerConversation {
       const now = new Date().toISOString();
       this.holdWrites(userTurn, this.userEntries(goal, now), [this.userPrompt(goal.text, now)]);
       this.briefing.opened(opening.autorun ?? false);
+      this.blocks.restart();
       const turn = await this.host.aiService().startConversation({
         ...opening,
         // The system prompt's goal is the text as typed; skill bodies ride the
         // first message alone, so the planner holds each one once.
         goal: goal.text,
-        initialMessage: plannerMessage(goal.text, goal.skills),
+        initialMessage: plannerInput([plannerMessage(goal.text, goal.skills)]),
         onProgress: userTurn.stream.sink(),
         signal: userTurn.signal,
       });
@@ -940,11 +970,13 @@ export class PlannerConversation {
     const reopened = this.canContinueLive() ? null : await this.reopen(userTurn);
     userTurn.briefing = this.briefing.brief();
     // The persisted transcript keeps the raw user message; the model gets the
-    // live catalog (always) and the current plan (tasks, statuses, edit
-    // protocol — once tasks exist) alongside it.
-    const contextBlock = [this.catalogBlock(), this.planContextBlock(), ...userTurn.briefing.blocks].filter(Boolean).join('\n\n');
+    // catalog and the current plan (tasks, statuses, edit protocol — once
+    // tasks exist) alongside it, whole where its live context holds no copy
+    // and as what changed where it does (ADR-0012 T10).
+    userTurn.blocks = this.blocks.next();
+    const contextBlock = [...userTurn.blocks.blocks, ...userTurn.briefing.blocks].join('\n\n');
     const said = fromUser ? plannerMessage(message.text, message.skills) : '';
-    const outgoing = [contextBlock, ...wakeUps, userTurn.wakeUp?.brief, said].filter(Boolean).join('\n\n');
+    const outgoing = plannerInput([contextBlock, ...wakeUps, userTurn.wakeUp?.brief, said]);
 
     const turn = reopened
       ? await this.resume(reopened, outgoing, priorHistory, signal, userTurn.stream.sink())
@@ -1151,7 +1183,10 @@ export class PlannerConversation {
       }
       announce?.();
     });
-    if (!unheard) userTurn.briefing?.heard();
+    if (!unheard) {
+      userTurn.briefing?.heard();
+      if (!userTurn.repaired) userTurn.blocks?.heard();
+    }
     this.warnSkills(skillWarnings);
     return plan!;
   }
@@ -1308,7 +1343,7 @@ export class PlannerConversation {
    * one path, not two.
    */
   private async settle(turn: SettleableTurn, userTurn: UserTurn): Promise<SettledTurn> {
-    type Settled = { plan: LegacyPlanState } | { turn: CommitTurn; skillWarnings?: string[] };
+    type Settled = SettledTurn | { turn: CommitTurn };
     const { signal, stream } = userTurn;
     const ai = this.host.aiService();
     // A planner with tools submits through them alone, so its correctives ask for a tool call, not JSON.
@@ -1326,6 +1361,7 @@ export class PlannerConversation {
       // plan display it streamed, never of the narration before its calls,
       // nor of the calls themselves: the turn lands with their research.
       resend: async (corrective) => {
+        userTurn.repaired = true;
         userTurn.narration.push(...(discarding.runs ?? []).filter((run) => run.narration));
         stream.retract(new Set(userTurn.narration.map((run) => run.segmentId)));
         const retry = await this.drainTaskQueries(await ai.continueConversation(corrective, stream.sink(), signal), userTurn);
@@ -1346,17 +1382,17 @@ export class PlannerConversation {
           return { retry: { errors, corrective: (tools ? resubmitEditPrompt : taskOpsRejectedPrompt)(errors) } };
         }
         if (t.kind === 'plan') {
-          const skills = await checkPlanSkills(t.tasks, this.host.taskSkills());
-          this.assertStillCurrent(userTurn);
-          if (skills.errors.length === 0) return { done: { turn: t, skillWarnings: skills.warnings } };
-          const errors = skills.errors.map((e) => e.message);
+          this.assertCurrent(userTurn);
+          const landed = await this.commitPlan(t, userTurn);
+          if ('plan' in landed) return { done: { plan: landed.plan, outcome: 'plan' } };
+          const { errors } = landed;
           if (!ai.hasActiveConversation() || signal.aborted) return { done: invalidPlan(errors, t) };
           return { retry: { errors, corrective: tools ? resubmitPlanPrompt(errors) : reEmitPlanPrompt(errors.join('; ')) } };
         }
         if (t.kind !== 'task_ops') return { done: { turn: t } };
         this.assertCurrent(userTurn);
         const applied = await this.applyTaskOps(t, userTurn);
-        if ('plan' in applied) return { done: { plan: applied.plan } };
+        if ('plan' in applied) return { done: { plan: applied.plan, outcome: 'task_ops' } };
         // No live conversation (or an abort) means no corrective re-send is
         // possible — surface the failure instead of retrying into the void.
         if (!ai.hasActiveConversation() || signal.aborted) {
@@ -1368,9 +1404,9 @@ export class PlannerConversation {
       onExhausted: ({ reply, errors }) => (reply.kind === 'plan' ? invalidPlan : invalidOps)(errors, reply),
     });
 
-    if ('plan' in settled) return { plan: settled.plan, outcome: 'task_ops' };
+    if ('plan' in settled) return settled;
     this.assertCurrent(userTurn);
-    return { plan: this.commit(settled.turn, userTurn, settled.skillWarnings ?? []), outcome: settled.turn.kind };
+    return { plan: this.commit(settled.turn, userTurn), outcome: settled.turn.kind };
   }
 
   /** A name not found at submit only warns: a task the attaching one depends on may create it. */
@@ -1378,28 +1414,61 @@ export class PlannerConversation {
     for (const warning of warnings) this.host.notice('warn', warning);
   }
 
-  /** Validate + commit a task_ops turn atomically. Returns the errors on rejection (plan untouched). */
+  /**
+   * Check a task_ops turn as it lands and commit it atomically: what passed
+   * lands in the tick the check's rules ran in. Returns the errors on
+   * rejection (plan untouched).
+   */
   private async applyTaskOps(turn: Extract<SettleableTurn, { kind: 'task_ops' }>, userTurn: UserTurn): Promise<{ plan: LegacyPlanState } | { errors: string[] }> {
     this.requirePlan();
-    const skills = await checkOpSkills(turn.ops, this.host.taskSkills());
-    this.assertStillCurrent(userTurn);
-    if (skills.errors.length > 0) return this.refusedHeld(userTurn, skills.errors.map((e) => e.message));
-    const result = this.host.validateOps(turn.ops);
-    if (!result.ok) return this.refusedHeld(userTurn, result.errors);
-
-    const said = this.said(turn, userTurn);
-    const plan = this.land(userTurn, turn.researchLog, () => {
-      this.host.adoptTasks(result.tasks, 'edit');
-      return [...(said ? [said] : []), { content: `Tasks updated:\n- ${result.summary.join('\n- ')}` }];
-    }, {
-      skillWarnings: skills.warnings,
-      announce: () => {
-        this.host.broadcastPlan();
-        // After the plan that carries it, so the edit is never missing from both.
-        this.clearHeld(userTurn);
-      },
+    const landed: { plan?: LegacyPlanState } = {};
+    const checked = await this.host.planChanges.check({ kind: 'ops', ops: turn.ops }, 'land', (passed) => {
+      // The skill check waits on git, which a stop, rewind or session switch may outlast.
+      this.assertStillCurrent(userTurn);
+      const said = this.said(turn, userTurn);
+      landed.plan = this.land(userTurn, turn.researchLog, () => {
+        this.host.adoptTasks(passed.tasks, 'edit');
+        return [...(said ? [said] : []), { content: `Tasks updated:\n- ${passed.summary.join('\n- ')}` }];
+      }, {
+        skillWarnings: passed.warnings,
+        announce: () => {
+          this.host.broadcastPlan();
+          // After the plan that carries it, so the edit is never missing from both.
+          this.clearHeld(userTurn);
+        },
+      });
     });
-    return { plan };
+    this.assertStillCurrent(userTurn);
+    if (landed.plan) return { plan: landed.plan };
+    return this.refusedHeld(userTurn, checked.ok ? [] : checked.errors.map(planChangeErrorText));
+  }
+
+  /**
+   * Check a whole plan as it lands and commit it in the same tick, as an edit
+   * is: it waited out the rest of its reply, so the runners it was accepted
+   * against may be gone (ADR-0003 V1). Returns the errors on rejection.
+   */
+  private async commitPlan(turn: Extract<SettleableTurn, { kind: 'plan' }>, userTurn: UserTurn): Promise<{ plan: LegacyPlanState } | { errors: string[] }> {
+    const landed: { plan?: LegacyPlanState } = {};
+    const checked = await this.host.planChanges.check({ kind: 'plan', tasks: turn.tasks }, 'land', (passed) => {
+      this.assertStillCurrent(userTurn);
+      landed.plan = this.landPlan(turn, userTurn, passed);
+    });
+    this.assertStillCurrent(userTurn);
+    if (landed.plan) return { plan: landed.plan };
+    return { errors: checked.ok ? [] : checked.errors.map(planChangeErrorText) };
+  }
+
+  private landPlan(turn: Extract<SettleableTurn, { kind: 'plan' }>, userTurn: UserTurn, passed: PassedChange): LegacyPlanState {
+    this.requirePlan();
+    const said = this.said(turn, userTurn);
+    return this.land(userTurn, turn.researchLog, () => {
+      // A cheap model may emit the PRD block and the plan JSON in one turn —
+      // capture the PRD here too so it isn't dropped with the plan preamble.
+      this.host.capturePrd(turn.text);
+      const count = this.host.adoptTasks(passed.tasks, 'commit');
+      return [...(said ? [said] : []), { content: `Plan generated with ${count} task${count === 1 ? '' : 's'}.`, kind: 'plan_generated' }];
+    }, { skillWarnings: passed.warnings, announce: () => this.host.broadcastPlan(userTurn.stream.turnId) });
   }
 
   /** The edit was refused as it landed: what it showed is not coming. */
@@ -1408,20 +1477,9 @@ export class PlannerConversation {
     return { errors };
   }
 
-  /** Commit a settled (non-task_ops) turn: a whole plan, or what it said. */
-  private commit(turn: CommitTurn, userTurn: UserTurn, skillWarnings: readonly string[]): LegacyPlanState {
+  /** Commit a settled turn that changes nothing in the plan: what it said. */
+  private commit(turn: CommitTurn, userTurn: UserTurn): LegacyPlanState {
     this.requirePlan();
-
-    if (turn.kind === 'plan') {
-      const said = this.said(turn, userTurn);
-      return this.land(userTurn, turn.researchLog, () => {
-        // A cheap model may emit the PRD block and the plan JSON in one turn —
-        // capture the PRD here too so it isn't dropped with the plan preamble.
-        this.host.capturePrd(turn.text);
-        const count = this.host.adoptTasks(turn.tasks, 'commit');
-        return [...(said ? [said] : []), { content: `Plan generated with ${count} task${count === 1 ? '' : 's'}.`, kind: 'plan_generated' }];
-      }, { skillWarnings, announce: () => this.host.broadcastPlan(userTurn.stream.turnId) });
-    }
 
     // Budget models occasionally return an empty content turn after tool use —
     // surface that visibly instead of rendering a blank bubble. A stopped turn
@@ -1459,10 +1517,10 @@ export class PlannerConversation {
 
   /**
    * The catalog the planner may actually draw from — model ids and task-mode
-   * ids, per runner in the plan — emitted on EVERY turn, before any plan exists
-   * or after. The system prompt shows this once at conversation start; a long
-   * clarifying conversation outlives that single showing and the planner
-   * starts misquoting it, so this re-states it per turn instead.
+   * ids, per runner in the plan — before any plan exists or after. The system
+   * prompt shows it in another shape, which the planner starts misquoting once
+   * a long conversation has outlived it, so it is stated in a turn's message
+   * as well: once per live context, and again when it changes (ADR-0012 T10).
    *
    * The host's catalog is allowlist-filtered, so a restricted allowlist stays a
    * hard bound on every turn, and reads the plan's runners live, so a runner
@@ -1493,41 +1551,42 @@ export class PlannerConversation {
   }
 
   /**
-   * The "you are here" block for post-plan chat: current tasks with stable
-   * references, plus the read and edit protocols. Injected per turn (never
-   * persisted) so the model always sees live statuses — including which tasks
-   * are locked by a running execution.
+   * The "you are here" view for post-plan chat: current tasks with stable
+   * references, plus the read and edit protocols. Never persisted, and built
+   * fresh for every turn so the model sees live statuses — including which
+   * tasks are locked by a running execution — whether its turn sends the
+   * whole block or what changed (ADR-0012 T10).
    */
-  private planContextBlock(): string | null {
-    const tasks = this.host.tasks();
-    const lines = this.currentPlanLines();
-    if (!lines) return null;
+  private planView(): PlanView | null {
+    if (!this.host.plan()) return null;
+    const rows = this.planRows() ?? [];
     const tools = this.host.aiService().plannerToolsAttached?.() ?? false;
     // Gated on live runners, not on an armed scheduler: a paused-but-armed run
     // has nothing running to lock, and takes a whole plan as well as an edit.
-    const locked = flattenTasksWithParents(tasks).filter(({ task }) => task.status === 'in_progress');
-    const execNote = this.host.isExecuting()
-      ? `\nExecution is RUNNING${locked.length ? ` — these tasks are locked: ${locked.map(({ ref }) => ref).join(', ')}` : ''}. No new task starts until your reply ends; your task edits apply then, to tasks that have not started. An edit aimed at a running task is refused — the user can stop it first, or you can change it after it finishes. Do not submit a whole new plan while tasks run.`
+    const locked = flattenTasksWithParents(this.host.tasks()).filter(({ task }) => task.status === 'in_progress');
+    const running = this.host.isExecuting()
+      ? `Execution is RUNNING${locked.length ? ` — these tasks are locked: ${locked.map(({ ref }) => ref).join(', ')}` : ''}. No new task starts until your reply ends; your task edits apply then, to tasks that have not started. An edit aimed at a running task is refused — the user can stop it first, or you can change it after it finishes. Do not submit a whole new plan while tasks run.`
       : '';
-    return [
+    const full = [
       '<current_plan>',
-      ...lines,
+      ...rows.map(({ line }) => line),
       '</current_plan>',
       'The block above is the CURRENT task plan — short fields only. Choose how to respond:',
       '- To answer a question or discuss, reply in plain prose (no JSON).',
       tools ? TASK_READ_TOOLS_REMINDER : TASK_QUERY_REMINDER,
-      ...taskOpsProtocol(execNote, tools),
+      ...taskOpsProtocol(running && `\n${running}`, tools),
     ].filter(Boolean).join('\n');
+    return { rows, full, running, tools };
   }
 
   /** One line per task, subtasks indented under their parent, with stable references — null until the plan has tasks. */
-  private currentPlanLines(): string[] | null {
+  private planRows(): PlanRow[] | null {
     const tasks = this.host.tasks();
     if (!this.host.plan() || tasks.length === 0) return null;
     const rows = flattenTasksWithParents(tasks);
     const refOf = new Map(rows.map(({ task, ref }) => [task.id, ref]));
     const { modes } = this.host.catalog();
-    return rows.map(({ task: t, parent }) => {
+    const lineOf = ({ task: t, parent }: (typeof rows)[number]): string => {
       const refs = (ids: readonly string[]) => `[${ids.map((d) => refOf.get(d) ?? d).join(', ')}]`;
       // A script task runs on no runner, model or mode (ADR-0035): what it runs is its line.
       if (t.type === 'script') {
@@ -1541,8 +1600,9 @@ export class PlannerConversation {
       const runFields = isMan
         ? `steps:${t.userSteps?.length ?? 0}`
         : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}${readOnly ? 'read-only ' : ''}effort:${t.assignedModel?.thinkingEffort ?? '-'}`;
-      return `${parent ? '  ' : ''}${refOf.get(t.id)} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:${refs(t.dependencies)}${t.skills?.length ? ` skills:[${t.skills.join(', ')}]` : ''}${waitNote(this.host.startWaits(t), refs)}`;
-    });
+      return `${parent ? '  ' : ''}${refOf.get(t.id)} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} ${isMan ? '' : `runner:${t.assignedRunner} `}${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:${refs(t.dependencies)}${t.skills?.length ? ` skills:[${t.skills.join(', ')}]` : ''}${waitNote(this.host.startWaits(t), refs)}`;
+    };
+    return rows.map((row) => ({ id: row.task.id, ref: row.ref, title: row.task.title, line: lineOf(row) }));
   }
 }
 

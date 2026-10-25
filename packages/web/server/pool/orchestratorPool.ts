@@ -55,6 +55,7 @@ import {
   PlannerNotReadyError,
   PlannerTurnDiscardedError,
   PlannerTurnStoppedError,
+  type LeaseHost,
 } from '@ordewell/core';
 import { WebConfig, type PlannerPick } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
@@ -92,6 +93,11 @@ export interface OrchestratorPoolDeps {
   codexSandbox?: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
   /** Overrides the pool's installation checks; tests inject one so no real agent binary is asked. */
   runnerInstallation?: RunnerInstall;
+  /**
+   * The host whose leases the pool's sessions hold (ADR-0049); this process's
+   * unless a test runs two pools as two hosts.
+   */
+  leaseHost?: LeaseHost;
 }
 
 export class OrchestratorPool {
@@ -120,6 +126,7 @@ export class OrchestratorPool {
   private runner: IRunner;
   /** One probe per daemon, asked again whenever the runner list is refreshed (ADR-0033). */
   private codexSandbox: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
+  private readonly leaseHost: LeaseHost | undefined;
 
   constructor(deps: OrchestratorPoolDeps = {}) {
     const pluginNotice = removedPluginNotice();
@@ -129,6 +136,7 @@ export class OrchestratorPool {
     this.modelResolver = deps.modelResolver ?? new ModelResolver(this.registry, new WebConfig());
     this.codexSandbox = deps.codexSandbox
       ?? new CodexSandboxAvailability(this.registry, { spawn: nodeSpawn, fetch: globalThis.fetch }, { cwd: process.cwd(), env: process.env });
+    this.leaseHost = deps.leaseHost;
   }
 
   /**
@@ -215,6 +223,8 @@ export class OrchestratorPool {
   getGoal(sessionId: string): string { return this.sessions.get(sessionId)?.currentGoal ?? ''; }
   /** Null for a session this process is not holding: there is no run to describe. */
   runSnapshot(sessionId: string): RunView | null { return this.sessions.get(sessionId)?.runSnapshot() ?? null; }
+  /** The planner turn answering in a session this process holds, if one is. */
+  plannerTurnId(sessionId: string): string | undefined { return this.sessions.get(sessionId)?.plannerTurnId; }
   /** The planner's approval requests still waiting, as they were announced. */
   announcedApprovals(sessionId: string): ApprovalRequestMessage[] { return this.sessions.get(sessionId)?.announcedApprovals() ?? []; }
   /** The last broadcast of the session so far: a snapshot taken now accounts for it and everything before. */
@@ -260,6 +270,7 @@ export class OrchestratorPool {
       modelResolver: this.modelResolver,
       settings: () => this.runtimeSettings(),
       sessionId,
+      ...(this.leaseHost ? { leaseHost: this.leaseHost } : {}),
     });
   }
 
@@ -569,7 +580,7 @@ export class OrchestratorPool {
   }
 
   async generatePlan(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<PlanState> {
-    const session = this.openPlanningSession(sessionId, workspace, modelOverride, options);
+    const session = this.openPlanningSession(sessionId, runners, workspace, modelOverride, options);
     return migratePlanState(await this.firstTurn(sessionId, session, () => session.generatePlan(goal, runners)));
   }
 
@@ -577,15 +588,19 @@ export class OrchestratorPool {
    * Build the session a new planning conversation runs in and register it in
    * place of any live one, for {@link firstTurn} to run its first turn on.
    */
-  private openPlanningSession(sessionId: string, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Session {
+  private openPlanningSession(sessionId: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Session {
     const session = this.createSessionFor(sessionId, workspace, modelOverride, options);
     // Judged on the new session's config (which carries the request's model)
     // and before the old session is destroyed, so a refusal leaves it alone.
     // Not while the installed-planner probe is out: its answer can be the
     // planner, and judging the openrouter fallback now would refuse the very
     // keyless first run the probe exists for, so that judgement is the first
-    // turn's own gate.
-    if (installedPlannerAnswered()) session.assertPlannerReady();
+    // turn's own gate. The runners are judged on the same terms: before the
+    // probe answers, the enabled set is a guess a refusal must not rest on.
+    if (installedPlannerAnswered()) {
+      session.assertPlannerReady();
+      session.assertRunnersEnabled(runners);
+    }
     // After the new session is built, so a refusal above leaves the live one
     // alone; before the set, so its runners and planner turn stop broadcasting.
     this.destroy(sessionId);
@@ -606,7 +621,7 @@ export class OrchestratorPool {
    * assistant message lives in conversationHistory).
    */
   async startPlanning(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<LegacyPlanState> {
-    const session = this.openPlanningSession(sessionId, workspace, modelOverride, options);
+    const session = this.openPlanningSession(sessionId, runners, workspace, modelOverride, options);
     return this.firstTurn(sessionId, session, () => session.startPlanning(goal, runners));
   }
 
@@ -658,8 +673,15 @@ export class OrchestratorPool {
 
     const session = this.createSessionFor(sessionId, workspace);
     // The saved id is adopted too, so later persists rewrite the same file
-    // instead of forking the session under a fresh identity.
-    session.loadPlan(saved.plan, saved.meta.goal, workspace, { sessionId: saved.meta.id });
+    // instead of forking the session under a fresh identity. Refused while
+    // another live host runs the session (ADR-0049); the session built for
+    // it is let go, and the one live here, if any, keeps running.
+    try {
+      session.loadPlan(saved.plan, saved.meta.goal, workspace, { sessionId: saved.meta.id });
+    } catch (err) {
+      session.destroy();
+      throw err;
+    }
     // A live session with no plan yet is mid-planning; replacing it must stop that turn.
     this.destroy(sessionId);
     this.sessions.set(sessionId, session);
@@ -697,9 +719,24 @@ export class OrchestratorPool {
     return session;
   }
 
-  destroy(sessionId: string): void {
+  /**
+   * Stop a session and drop it. A replacement under the same id (re-planning,
+   * adopting) keeps its subscribers: they are watching the id, and the new
+   * session's broadcasts continue on the same socket. An explicit delete or
+   * close is different — the surface must stop drawing a session that no
+   * longer exists — so those pass `notifyClients`.
+   */
+  destroy(sessionId: string, options?: { notifyClients?: boolean }): void {
     this.sessions.get(sessionId)?.destroy();
     this.sessions.delete(sessionId);
+    if (!options?.notifyClients) return;
+    const clients = this.clients.get(sessionId);
+    if (!clients) return;
+    this.broadcast(sessionId, { type: 'notice', level: 'info', message: 'Session closed.' });
+    for (const ws of clients) {
+      if (ws.readyState === ws.OPEN) ws.close(1001, 'Session closed');
+    }
+    this.clients.delete(sessionId);
   }
 
   destroyAll(): void { for (const id of this.sessions.keys()) this.destroy(id); }

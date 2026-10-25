@@ -1,8 +1,10 @@
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { devNull } from 'os';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { git, tryGit, type GitInvoker } from './gitExec';
+import type { HandoffPatch } from '../models/Handoff';
 
 export interface TaskDiffRead {
   repo?: string;
@@ -36,6 +38,99 @@ function stats(raw: string): Array<{ path: string; added: string; removed: strin
 function inside(root: string, target: string): boolean {
   const rel = path.relative(root, target);
   return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
+}
+
+/** A C-quoted path as git writes one with special characters (`"a\tb"`, `"caf\303\251"`), read back. */
+export function unquoted(quoted: string): string {
+  const bytes: number[] = [];
+  const escapes: Record<string, number> = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11, '"': 34, '\\': 92 };
+  for (let i = 1; i < quoted.length - 1; i++) {
+    const ch = quoted[i];
+    if (ch !== '\\') {
+      bytes.push(...Buffer.from(ch, 'utf8'));
+    } else if (/[0-7]/.test(quoted[i + 1] ?? '')) {
+      bytes.push(parseInt(quoted.slice(i + 1, i + 4), 8));
+      i += 3;
+    } else {
+      bytes.push(escapes[quoted[i + 1]] ?? quoted.charCodeAt(i + 1));
+      i += 1;
+    }
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
+/** The path one `diff --git` section of a patch changes: where a rename goes, else the path it names twice. */
+function sectionPath(section: string): string {
+  const renamed = /^rename to (.*)$/m.exec(section)?.[1];
+  if (renamed !== undefined) return renamed.startsWith('"') ? unquoted(renamed) : renamed;
+  const header = section.slice('diff --git '.length, section.indexOf('\n') === -1 ? undefined : section.indexOf('\n'));
+  if (header.startsWith('"')) {
+    const second = header.slice(header.indexOf('" ') + 2);
+    return (second.startsWith('"') ? unquoted(second) : second).replace(/^b\//, '');
+  }
+  return header.slice(2, 2 + (header.length - 5) / 2);
+}
+
+/** Lines a section adds and removes, or `-` for a binary one, as `--numstat` writes them. */
+function sectionStats(section: string): { added: string; removed: string } {
+  if (/^GIT binary patch$/m.test(section) || /^Binary files /m.test(section)) return { added: '-', removed: '-' };
+  let added = 0;
+  let removed = 0;
+  let inHunk = false;
+  for (const line of section.split('\n')) {
+    if (line.startsWith('@@')) inHunk = true;
+    else if (inHunk && line.startsWith('+')) added += 1;
+    else if (inHunk && line.startsWith('-')) removed += 1;
+  }
+  return { added: String(added), removed: String(removed) };
+}
+
+/** The sum of two sections' counts for one path, or `-` when either change is binary. */
+function summed(a: string, b: string): string {
+  return a === '-' || b === '-' ? '-' : String(Number(a) + Number(b));
+}
+
+/**
+ * The files a patch changes, each with its own part and line counts (`-` for
+ * a binary change). A file whose type changes is two sections of a patch, a
+ * removal and an addition, and one file: its parts are joined.
+ */
+export function patchFiles(patch: Buffer): Array<{ path: string; section: string; added: string; removed: string }> {
+  // A section starts at the beginning of a line: only a newline ends one for git, where `^` also takes a carriage return.
+  const sections = patch.toString('utf8').split(/(?<![^\n])(?=diff --git )/).filter((section) => section.startsWith('diff --git '));
+  const files = new Map<string, { path: string; section: string; added: string; removed: string }>();
+  for (const section of sections) {
+    const path = sectionPath(section);
+    const counts = sectionStats(section);
+    const earlier = files.get(path);
+    files.set(path, earlier
+      ? { path, section: earlier.section + section, added: summed(earlier.added, counts.added), removed: summed(earlier.removed, counts.removed) }
+      : { path, section, ...counts });
+  }
+  return [...files.values()];
+}
+
+/**
+ * A read-only task's saved patch as `task_diff` reads it (ADR-0050): its
+ * worktree is gone and Ordewell ran no git in it, so the patch it saved is
+ * what it changed. The file list with stats, or one file's part, in the
+ * shape a change task's diff has.
+ */
+export function readSavedPatch(patch: Buffer | undefined, saved: Pick<HandoffPatch, 'attempt' | 'base' | 'bytes' | 'sha256'>, options: TaskDiffRead): TaskDiffResult {
+  if (!patch) return { available: false, reason: `Task diff is not available: the patch attempt ${saved.attempt} saved is no longer in this session's task logs.` };
+  // A change task's commands can write the session's directory, so the file is the task's work only while it is the bytes its artifact records, as apply_patch checks.
+  if (patch.length !== saved.bytes || createHash('sha256').update(patch).digest('hex') !== saved.sha256) {
+    return { available: false, reason: `Task diff is not available: the patch file has changed since attempt ${saved.attempt} saved it: its size or hash is not the one its artifact records. It is not that task's work, and apply_patch refuses it too.` };
+  }
+  if (options.repo !== undefined && options.repo !== '.') return { available: false, reason: `No repository matches "${options.repo}" in this task's saved patch: it has one, ".".` };
+  const files = patchFiles(patch);
+  if (options.path !== undefined) {
+    const selected = files.filter((f) => f.path === options.path);
+    if (selected.length === 0) return { available: false, reason: `No changed file matches "${options.path}" in this task's saved patch. Read the file list first.` };
+    return { available: true, text: selected.map((f) => `[repo .] ${f.path}\n${f.section}`).join('\n') };
+  }
+  const head = `The patch attempt ${saved.attempt} saved, against commit ${saved.base.slice(0, 12)}; the task's worktree is gone.\n`;
+  return { available: true, text: head + files.map((f) => `[repo .] ${f.path}: ${f.added === '-' ? 'binary change' : `+${f.added} -${f.removed}`}\n`).join('') };
 }
 
 export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskId: string, options: TaskDiffRead): Promise<TaskDiffResult> {

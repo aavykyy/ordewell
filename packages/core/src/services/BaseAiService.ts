@@ -9,6 +9,7 @@ import { generatePlanWithRepair, classifyPlannerReply } from './PlanRepair';
 import { settleReply, type ReplyAttempt } from './settleReply';
 import { compactResearchResults, withProactiveCompaction } from './contextCompaction';
 import type { RunnerModeInfo } from './ModeResolver';
+import type { PlanIntake } from './PlanChangeCheck';
 import { collectResearchContext } from './ContextCollector';
 import { PLANNER_EXECUTION_TOOLS, PLANNER_TASK_READ_TOOLS, type PlannerToolHandler } from './mcp/tools';
 import { redactSecrets } from '../utils/redactSecrets';
@@ -101,6 +102,8 @@ export interface ConversationTurnContext {
   fs: IFileSystem;
   runners: RunnerId[];
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
+  /** See {@link ConversationRequest.liveScope}. */
+  liveScope?: () => PlanIntake;
   autonomousDefault?: boolean;
   fetcher?: IWebFetcher;
   /** The session's planner tools; the conversation offers their task reads and execution tools (ADR-0029) when set. */
@@ -110,6 +113,8 @@ export interface ConversationTurnContext {
 export abstract class BaseAiService {
   protected conversation: { ctx: ConversationTurnContext; setProgress: (fn: (p: ResearchProgress) => void) => void } | null = null;
   protected activeAbort: AbortController | null = null;
+  /** See {@link compactions}. */
+  private pruned = 0;
 
   constructor(protected config: IConfig, protected turnBudgets?: TurnBudgets) {}
 
@@ -118,7 +123,19 @@ export abstract class BaseAiService {
 
   hasActiveConversation(): boolean { return this.conversation !== null; }
 
-  pruneContext(): number { return this.conversation?.ctx.chat.compactHistory?.() ?? 0; }
+  pruneContext(): number {
+    const removed = this.conversation?.ctx.chat.compactHistory?.() ?? 0;
+    if (removed > 0) this.pruned++;
+    return removed;
+  }
+
+  /**
+   * The prunings of a conversation's history that removed something. A
+   * pruning stubs tool output alone, never the user messages a plan block
+   * rides in, but it counts all the same: the conversation would rather send
+   * the plan whole again than trust a context changed under it (ADR-0012 T10).
+   */
+  compactions(): number { return this.pruned; }
 
   protected startAbortScope(callerSignal?: AbortSignal): AbortSignal {
     this.activeAbort = abortScope(callerSignal);
@@ -364,12 +381,12 @@ export abstract class BaseAiService {
     // Turns reporting prompt-token pressure compact the underlying history
     // before the next call — the plan emission should never be the first
     // moment the context problem surfaces.
-    const chat = withProactiveCompaction(ctx.chat);
+    const chat = withProactiveCompaction(ctx.chat, () => this.pruned++);
     return settleReply({
       // The turn's own input carries the budgets, not the system prompt, which stays cacheable.
       message: withTurnBudgets(this.turnBudgets, message),
       send: (text) => this.runToolRounds(chat, ctx, text, onProgress, signal),
-      classify: { runners: ctx.runners, runnerModes: ctx.runnerModes, autonomousDefault: ctx.autonomousDefault },
+      classify: { autonomousDefault: ctx.autonomousDefault, ...(ctx.liveScope?.() ?? { runners: ctx.runners, runnerModes: ctx.runnerModes }) },
       onProgress,
       signal,
       compactHistory: chat.compactHistory,
@@ -549,7 +566,7 @@ export abstract class BaseAiService {
     onProgress: (progress: ResearchProgress) => void,
     researchLog: ResearchLogEntry[] = [],
     runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-    autonomousDefault = true,
+    autonomousDefault = false,
     signal?: AbortSignal,
     modes: PlannerModes = DEFAULT_PLANNER_MODES,
   ): Promise<{ tasks: Task[]; researchLog: ResearchLogEntry[] }> {

@@ -63,8 +63,15 @@ describe('TaskCard — runner selector', () => {
     expect(labels).toEqual(['Runner', 'Model', 'Mode']);
   });
 
-  it('hides the runner selector while the plan is executing', () => {
+  it('keeps the runner selector on a queued task while the plan executes', () => {
     render(<TaskCard task={makeTask()} models={emptyModels} runners={RUNNERS} onRunnerChange={vi.fn()} isExecuting />);
+    expand();
+
+    expect(screen.getByLabelText('Runner')).toBeTruthy();
+  });
+
+  it('hides the runner selector once that task has started', () => {
+    render(<TaskCard task={makeTask({ status: 'in_progress' })} models={emptyModels} runners={RUNNERS} onRunnerChange={vi.fn()} isExecuting />);
     expand();
 
     expect(screen.queryByLabelText('Runner')).toBeNull();

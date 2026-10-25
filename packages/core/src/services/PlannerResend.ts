@@ -1,6 +1,6 @@
 import type { LegacyPlanState, PlannerResendState, RunnerId } from '../models/Task';
 import { readUsageLimitReset, type TurnFailure } from './runnerExit';
-import { RELAPSE_MS, RESUME_MARGIN_MS, UsageLimitWaits } from './UsageLimitWaits';
+import { RELAPSE_MS, RESUME_MARGIN_MS, ResetWaits } from './LimitPauses';
 import { resumeTime } from '../taskRow/status';
 
 export interface PlannerResendHost {
@@ -44,7 +44,7 @@ const WAIT = 'planner';
  * one asked for since.
  */
 export class PlannerResend {
-  private readonly waits = new UsageLimitWaits(() => this.due());
+  private readonly waits = new ResetWaits(() => this.due());
   /** When the last resend at a reset went out, until a turn lands: a limit in that window is a relapse. */
   private resentAt: number | null = null;
 

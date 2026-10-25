@@ -14,7 +14,7 @@
     "directory": "packages/web"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.3"
   },
   "publishConfig": {
     "access": "public"
@@ -23,14 +23,16 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE",
+    "AUTHORS.md"
   ],
   "scripts": {
-    "build": "tsup server/main.ts --format cjs --clean --external hono --external @hono/node-server --external ws --external @ordewell/core --tsconfig tsconfig.json",
+    "build": "tsup server/main.ts --format cjs --clean --external hono --external ws --external @ordewell/core --tsconfig tsconfig.json",
     "prepublishOnly": "npm run build",
     "lint": "eslint server --ext .ts",
-    "build:server": "tsup server/main.ts --format cjs --clean --external hono --external @hono/node-server --external ws --external @ordewell/core --tsconfig tsconfig.json",
-    "dev": "tsup server/main.ts --format cjs --clean --external hono --external @hono/node-server --external ws --external @ordewell/core --tsconfig tsconfig.json --watch",
+    "build:server": "tsup server/main.ts --format cjs --clean --external hono --external ws --external @ordewell/core --tsconfig tsconfig.json",
+    "dev": "tsup server/main.ts --format cjs --clean --external hono --external ws --external @ordewell/core --tsconfig tsconfig.json --watch",
     "serve": "node dist/server/main.js",
     "test": "vitest run",
     "test:quick": "vitest run",
@@ -41,7 +43,6 @@
   "dependencies": {
     "@ordewell/core": "^0.10.12",
     "hono": "^4.6.0",
-    "@hono/node-server": "^1.13.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

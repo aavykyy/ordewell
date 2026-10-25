@@ -154,7 +154,7 @@ describe('a plan row, pinned before its rules move to core', () => {
       [task({ status: 'completed' }), deploy({ status: 'awaiting_user', taskMode: 'yolo', forcedPastGate: ['Fix the parser'], dependencies: ['t1', 'ghost'] })],
       { expandedTaskId: 'o2', modesByRunner: modes },
     );
-    expect(out).toContain('    awaiting user');
+    expect(out).toContain('    Awaiting');
     expect(out).toContain('Runs in your checkout, not a worktree, once the work it depends on is merged. O makes it a change task.');
     expect(out).toContain('Started before the work of Fix the parser was merged into your branch.');
     expect(out).toContain('Runs without permission prompts (Full). Change the level with /settings.');
@@ -192,8 +192,10 @@ describe('task texts and actions, pinned before their rules move to core', () =>
     ['pending', 'complete'],
     ['awaiting_user', 'complete'],
     ['failed', 'complete'],
-  ])('m on a %s task asks to %s it', (status, action) => {
-    expect(press(state([task({ status })], { focus: 'plan' }), 'm').effects).toMatchObject([{ type: 'taskAction', action }]);
+  ])('m on a %s task asks to %s it, and sends nothing yet', (status, direction) => {
+    const asked = press(state([task({ status })], { focus: 'plan' }), 'm');
+    expect(asked.effects).toEqual([]);
+    expect(asked.state.overlay).toMatchObject({ kind: 'confirm', action: { kind: 'mark-override', direction, seen: status } });
   });
 
   it('adds a task with its title as description and prompt', async () => {

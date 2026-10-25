@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -7,7 +7,20 @@ import { createSkillsService, workspaceSkillRoots } from '../SkillsService';
 let home = '';
 let workspaceRoot = '';
 
-const h = vi.hoisted(() => ({ builtinDir: '', caseInsensitive: false }));
+const h = vi.hoisted(() => ({ builtinDir: '', caseInsensitive: false, seedFails: false }));
+
+// A suite that leaves one directory per test behind fills a machine's temp root
+// within a few runs, and slows every later test that scans it.
+const tempDirs: string[] = [];
+function tempDir(prefix: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 // What macOS and Windows do by default, switched on per test: a path opens a
 // folder whatever the case it is written in.
@@ -27,7 +40,22 @@ vi.mock('fs', async (importOriginal) => {
   };
   const readFileSync = (file: Parameters<typeof actual.readFileSync>[0], ...rest: unknown[]): unknown =>
     (actual.readFileSync as (...args: unknown[]) => unknown)(fold(file), ...rest);
-  return { ...actual, existsSync: (p: fs.PathLike) => actual.existsSync(fold(p)), readFileSync };
+  // A home that refuses writes (EACCES on a read-only home, ENOSPC on a full
+  // disk) is what the seeding fallback must survive; mkdir/copy are its I/O.
+  const refuses = (p: unknown): boolean =>
+    h.seedFails && typeof p === 'string' && p.startsWith(path.join(home, '.ordewell', 'skills'));
+  const denied = (): never => {
+    throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+  };
+  return {
+    ...actual,
+    existsSync: (p: fs.PathLike) => actual.existsSync(fold(p)),
+    readFileSync,
+    mkdirSync: (p: Parameters<typeof actual.mkdirSync>[0], ...rest: unknown[]) =>
+      refuses(p) ? denied() : (actual.mkdirSync as (...args: unknown[]) => unknown)(p, ...rest),
+    copyFileSync: (src: Parameters<typeof actual.copyFileSync>[0], dest: Parameters<typeof actual.copyFileSync>[1], ...rest: unknown[]) =>
+      refuses(dest) ? denied() : (actual.copyFileSync as (...args: unknown[]) => unknown)(src, dest, ...rest),
+  };
 });
 
 vi.mock('os', async (importOriginal) => {
@@ -51,7 +79,7 @@ function writeSkill(sourceDir: string, name: string, frontmatter: Record<string,
 }
 
 function builtinFixture(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-builtin-'));
+  const dir = tempDir('ordewell-builtin-');
   writeSkill(dir, 'grilling', { name: 'grilling', description: 'Builtin G' }, 'Builtin grilling body.');
   writeSkill(dir, 'to-spec', { name: 'to-spec', description: 'Builtin S' }, 'Builtin spec body.');
   writeSkill(dir, 'improve-codebase-architecture', { name: 'improve-codebase-architecture', description: 'Builtin A' }, 'Builtin architecture body.');
@@ -96,8 +124,8 @@ The session is done when the frontier is empty: every branch of the design tree 
 `;
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-skills-global-'));
-  workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-skills-workspace-'));
+  home = tempDir('ordewell-skills-global-');
+  workspaceRoot = tempDir('ordewell-skills-workspace-');
   h.builtinDir = builtinFixture();
 });
 
@@ -285,6 +313,43 @@ describe('SkillsService', () => {
       expect(names).toEqual(['diagnose', 'explore', 'grilling', 'improve-codebase-architecture', 'tdd', 'to-spec']);
     });
 
+    it('still lists and reads the built-ins when the global skills dir cannot be written', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      h.seedFails = true;
+      try {
+        const svc = createSkillsService(workspaceRoot);
+
+        expect(svc.listSkills().map((s) => s.name).sort()).toEqual(['diagnose', 'explore', 'grilling', 'improve-codebase-architecture', 'tdd', 'to-spec']);
+        expect(svc.findSkill('tdd')?.content).toContain('Builtin tdd body.');
+        // Read from the package, never seeded anywhere the home could not hold.
+        expect(fs.existsSync(path.join(home, '.ordewell', 'skills', 'tdd'))).toBe(false);
+
+        // Every read retries the seed; the warning is said once, not per turn.
+        svc.listSkills();
+        const grillingWarnings = warn.mock.calls.filter((call) => String(call[0]).includes('grilling'));
+        expect(grillingWarnings).toHaveLength(1);
+      } finally {
+        h.seedFails = false;
+        warn.mockRestore();
+      }
+    });
+
+    it('catalogs the packaged built-ins a read-only home could not seed, as the planner lists them', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      h.seedFails = true;
+      try {
+        const svc = createSkillsService(workspaceRoot);
+
+        expect(svc.readCatalog().skills.map((s) => s.name).sort())
+          .toEqual(['diagnose', 'explore', 'grilling', 'improve-codebase-architecture', 'tdd', 'to-spec']);
+        expect(svc.readCatalog().skills.every((s) => s.source === 'global')).toBe(true);
+        expect(fs.existsSync(path.join(home, '.ordewell', 'skills'))).toBe(false);
+      } finally {
+        h.seedFails = false;
+        warn.mockRestore();
+      }
+    });
+
     it('prunes a stale grill-me seed left by an older build', () => {
       writeSkill(path.join(home, '.ordewell', 'skills'), 'grill-me', {
         name: 'grill-me',
@@ -346,7 +411,7 @@ describe('SkillsService', () => {
 
   describe('forRoot', () => {
     it('reads workspace skills from the given root, keeping the global ones', () => {
-      const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-skills-worktree-'));
+      const worktree = tempDir('ordewell-skills-worktree-');
       writeSkill(path.join(home, '.ordewell', 'skills'), 'shared', { name: 'shared' }, 'Global.');
       writeSkill(path.join(workspaceRoot, '.ordewell', 'skills'), 'main-only', { name: 'main-only' }, 'Main.');
       const worktreeFile = writeSkill(path.join(worktree, '.ordewell', 'skills'), 'task-only', { name: 'task-only', 'applies-to': 'task' }, 'Task.');
@@ -559,6 +624,17 @@ describe('SkillsService', () => {
       expect(svc.seedBuiltinSkill('grilling')).toBe(false);
       expect(warn).toHaveBeenCalled();
       warn.mockRestore();
+    });
+
+    it('returns false rather than throwing when the global dir refuses the copy', () => {
+      h.seedFails = true;
+      try {
+        const svc = createSkillsService(workspaceRoot);
+        expect(() => svc.seedBuiltinSkill('grilling')).not.toThrow();
+        expect(svc.seedBuiltinSkill('grilling')).toBe(false);
+      } finally {
+        h.seedFails = false;
+      }
     });
   });
 

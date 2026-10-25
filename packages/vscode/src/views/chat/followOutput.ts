@@ -34,12 +34,24 @@ export function useFollowOutput<T extends HTMLElement>(...content: unknown[]): (
       pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < PIN_SLACK_PX;
     };
     el.addEventListener('scroll', onScroll, { passive: true });
+    // A disclosure opened at the bottom grows the log below the reader without
+    // a scroll event; re-read where they are once it has drawn, so the next
+    // output does not carry them past what they opened.
+    let disclosed: ReturnType<typeof setTimeout> | undefined;
+    const onClick = (event: MouseEvent): void => {
+      if (!(event.target instanceof Element) || !event.target.closest('[aria-expanded]')) return;
+      clearTimeout(disclosed);
+      disclosed = setTimeout(onScroll, 0);
+    };
+    el.addEventListener('click', onClick);
     // What shares the view with the log (a composer, a dock, a banner) takes
     // height from it without a scroll event, pushing the newest lines out.
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(stick);
     observer?.observe(el);
     detachRef.current = () => {
       el.removeEventListener('scroll', onScroll);
+      el.removeEventListener('click', onClick);
+      clearTimeout(disclosed);
       observer?.disconnect();
     };
     stick();

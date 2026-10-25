@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
-import type { HandoffDigest, HandoffEvidence } from '../models/Handoff';
+import type { HandoffArtifact, HandoffDigest, HandoffEvidence } from '../models/Handoff';
 import { cleanEnv } from './gitExec';
 
 /** Resolve claims at the read, never on acceptance or in the saved handoff (ADR-0047). */
@@ -46,6 +46,7 @@ export function resolveHandoffReferences<H extends HandoffDigest>(handoff: H, wo
   return {
     ...handoff,
     findings: handoff.findings.map((f) => ({ ...f, ...(f.evidence ? { evidence: f.evidence.map(resolve) } : {}) })),
-    ...(handoff.artifacts ? { artifacts: handoff.artifacts.map(resolve) } : {}),
+    // A saved patch is Ordewell's own record, not a claim about a tree (ADR-0050).
+    ...(handoff.artifacts ? { artifacts: handoff.artifacts.map((a): HandoffArtifact => (a.kind === 'patch' ? a : resolve(a))) } : {}),
   };
 }

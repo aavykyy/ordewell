@@ -6,6 +6,7 @@ import {
   ExecutableNotFoundError,
   CommandLineTooLongError,
   EmbeddedNewlineError,
+  BatchQuoteError,
   CMD_EXE_MAX_COMMAND_LINE,
   WINDOWS_MAX_COMMAND_LINE,
   type LaunchDeps,
@@ -184,6 +185,21 @@ describe('planDirectLaunch on Windows', () => {
     const err = await planDirectLaunch('opencode', ['a\nb'], win(['C:\\tools\\opencode.cmd'])).catch((e) => e);
     expect(err.message).toContain('native executable');
     expect(err.message).toContain('opencode.ps1');
+  });
+
+  // cmd.exe toggles its quote state at every `"`, backslash or not, so a quote
+  // in an argument ends the quoting early and what follows runs as commands.
+  it('refuses a batch-only install rather than let a quote in an argument end its quoting', async () => {
+    const hostile = ['--model', 'x" & calc & "y'];
+    const err = await planDirectLaunch('claude', hostile, win(['C:\\tools\\claude.cmd'])).catch((e) => e);
+    expect(err).toBeInstanceOf(BatchQuoteError);
+    expect(err.message).toContain('claude.cmd');
+  });
+
+  it('takes the .ps1 beside a .cmd for an argument holding a quote, and passes it whole', async () => {
+    const plan = await planDirectLaunch('claude', ['--model', 'say "hi"'], win(['C:\\tools\\claude.cmd', 'C:\\tools\\claude.ps1']));
+    expect(plan.file).toContain('powershell.exe');
+    expect(plan.args[plan.args.length - 1]).toBe('say "hi"');
   });
 
   it('leaves a single-line invocation on the batch route', async () => {

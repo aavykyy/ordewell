@@ -1,16 +1,16 @@
 import { execSync } from 'child_process';
 import {
-  clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, markRequestFor, newTaskFields, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
+  clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, mergeOutcome, confirmedOverride, newTaskFields, taskActionCommand, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
   type PlannerModelRecall,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
-import { DaemonError, WorkspaceInitNeededError, type ApiClient, type SessionFollow } from '../apiClient';
+import { DaemonError, RequestTimeoutError, UnreadableResponseError, WorkspaceInitNeededError, deliveryOf, type ApiClient, type SessionFollow } from '../apiClient';
 import { normalizeCatalog } from '../catalog';
 import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
+import type { ChatRestored } from './reducers/shared';
 import type { SessionView } from './state';
-import { mergeOutcome } from '../isolation';
-import { inboundFor } from './inbound';
+import { inboundFor, forgetInbound } from './inbound';
 
 /**
  * The slice of the daemon client the TUI needs. Derived from `ApiClient` rather
@@ -19,10 +19,9 @@ import { inboundFor } from './inbound';
  */
 export type OrdewellApi = Pick<ApiClient,
   | 'startConversation' | 'sendConversationMessage' | 'forceSendPlannerMessage' | 'executePlan' | 'stopExecution' | 'cancelPlanning'
-  | 'taskControl' | 'markTaskComplete' | 'markTaskIncomplete' | 'skipTask' | 'cancelResume' | 'resumeNow' | 'cancelPlannerResend'
+  | 'execute' | 'cancelPlannerResend'
   | 'getTaskLogAttempts' | 'getTaskLog'
-  | 'sendTaskMessage' | 'invokeTaskCommand' | 'removeQueuedTaskMessage' | 'forceSendTaskMessage' | 'forceSendQueuedTaskMessage'
-  | 'interruptTask' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint' | 'continueTask'
+  | 'invokeTaskCommand' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint'
   | 'addTask' | 'updateTask' | 'removeTask'
   | 'getSessions' | 'getSession' | 'adoptSession' | 'deleteSession' | 'closeSession'
   | 'forkConversation' | 'rewindTargets' | 'rewindConversation' | 'compactConversation'
@@ -173,15 +172,16 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       const sessionId = deps.newSessionId();
       dispatch({ type: 'sessionStarted', sessionId, goal: effect.goal });
       try {
-        await converse(deps, sessionId, () => api.startConversation(sessionId, effect.goal, undefined, workspace, effect.allowInit));
+        await converse(deps, sessionId, () => api.startConversation(sessionId, effect.goal, undefined, workspace, effect.allowInit), true);
       } catch (err) {
         // The daemon registers a session before the opening turn runs, so a
         // stopped one — by a force send, whose forced turn carries on — leaves
         // a session the next reply belongs to.
         if (err instanceof DaemonError && err.code === 'planner_turn_stopped') throw err;
-        // Any other failure means planning never completed and the daemon
-        // dropped it, so this id points at nothing — keeping it would 404
-        // every following message.
+        // What reaches here is a refusal the daemon answered, or a request that
+        // never went out (a lost reply is settled inside `converse`, the
+        // session kept). Neither leaves a conversation a reply could continue,
+        // so the id is let go: keeping it would 404 every following message.
         unfollow(deps, sessionId);
         dispatch({ type: 'sessionCleared' });
         // Offer to initialize instead of just reporting failure — but only
@@ -196,6 +196,11 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       }
       return;
     }
+
+    // The stream said a turn whose reply was lost has ended: read it back.
+    case 'reconcileTurn':
+      await readBackSession(deps, effect.sessionId, { opening: false, turnEnded: true });
+      return;
 
     case 'sendMessage':
       await converse(deps, effect.sessionId, () => api.sendConversationMessage(effect.sessionId, effect.message));
@@ -238,22 +243,9 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
 
     case 'taskAction': {
       const { sessionId, taskId, action } = effect;
-      if (action === 'cancel-resume') {
-        // A task with no resume scheduled is refused in the daemon's words.
-        await api.cancelResume(sessionId, taskId);
-        await refreshPlan(deps, sessionId);
-        return;
-      }
-      const request =
-        action === 'cancel' || action === 'retry' || action === 'force-start'
-          ? () => api.taskControl(sessionId, taskId, action)
-          : action === 'resume-now'
-            ? () => api.resumeNow(sessionId, taskId)
-            : action === 'skip'
-              ? () => api.skipTask(sessionId, taskId)
-              : markRequestFor(action) === 'uncomplete'
-                ? () => api.markTaskIncomplete(sessionId, taskId)
-                : () => api.markTaskComplete(sessionId, taskId);
+      // A refusal comes back in the seam's words, a task with no resume scheduled included.
+      const command = taskActionCommand(action, taskId);
+      const request = () => api.execute(sessionId, effect.confirmed ? confirmedOverride(command, effect.confirmed.seen) : command);
       // A spawning action (see `taskActionEffect`) reports its progress the same
       // way a whole run does, so it needs the same stream open around it.
       await (effect.watch ? withExecutionStream(deps, sessionId, request) : request());
@@ -334,7 +326,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     // The daemon queues the message (or delivers it to a waiting task) and
     // broadcasts the `task_log` event that shows it; nothing to dispatch here.
     case 'sendTaskMessage':
-      await api.sendTaskMessage(effect.sessionId, effect.taskId, effect.text);
+      await api.execute(effect.sessionId, { command: 'message_task', task: effect.taskId, text: effect.text });
       return;
     case 'invokeTaskCommand':
       await api.invokeTaskCommand(effect.sessionId, effect.taskId, effect.name, effect.args);
@@ -344,7 +336,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     // the execution stream, which a TUI not already watching a run holds open.
     case 'continueTask': {
       const { sessionId, taskId, text } = effect;
-      const request = () => api.continueTask(sessionId, taskId, text);
+      const request = () => api.execute(sessionId, { command: 'retry_task', task: taskId, from: 'session', message: text });
       await (effect.watch ? withExecutionStream(deps, sessionId, request) : request());
       await refreshPlan(deps, sessionId);
       return;
@@ -352,21 +344,21 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
 
     // One already delivered is refused in the daemon's words.
     case 'removeTaskMessage':
-      await api.removeQueuedTaskMessage(effect.sessionId, effect.taskId, effect.messageId);
+      await api.execute(effect.sessionId, { command: 'remove_queued', task: effect.taskId, id: effect.messageId });
       return;
 
     // The task log shows the forced message at the head of the queue, then
     // the interrupt, then the turn it opens; nothing to dispatch here.
     case 'forceSendTaskMessage':
-      await api.forceSendTaskMessage(effect.sessionId, effect.taskId, effect.text);
+      await api.execute(effect.sessionId, { command: 'message_task', task: effect.taskId, text: effect.text, force: true });
       return;
 
     case 'forceSendQueuedTaskMessage':
-      await api.forceSendQueuedTaskMessage(effect.sessionId, effect.taskId, effect.messageId);
+      await api.execute(effect.sessionId, { command: 'force_send_queued', task: effect.taskId, id: effect.messageId });
       return;
 
     case 'interruptTask':
-      await api.interruptTask(effect.sessionId, effect.taskId);
+      await api.execute(effect.sessionId, { command: 'interrupt_task', task: effect.taskId });
       return;
 
     case 'setPlanner': {
@@ -584,7 +576,15 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       return;
     }
     case 'compactConversation': {
-      const { plan } = await api.compactConversation(effect.sessionId);
+      let plan: unknown;
+      const sentAt = Date.now();
+      try {
+        ({ plan } = await api.compactConversation(effect.sessionId));
+      } catch (err) {
+        if (deliveryOf(err) !== 'unknown') throw err;
+        await settleLostReply(deps, effect.sessionId, { opening: false, reason: describeLoss(err, Date.now() - sentAt) });
+        return;
+      }
       const inbound = inboundFor(deps.api, deps.dispatch, effect.sessionId);
       dispatch(restoredChat(plan, effect.sessionId));
       const summary = compactionSummary(plan);
@@ -637,6 +637,9 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     case 'deleteSession': {
       const { ok } = await api.deleteSession(effect.sessionId, workspace);
       await loadSessions(deps);
+      // The session is gone: a reconnect would open a socket on nothing.
+      if (ok) unfollow(deps, effect.sessionId);
+      forgetInbound(deps.api, effect.sessionId);
       if (ok) dispatch({ type: 'sessionDeleted', sessionId: effect.sessionId });
       dispatch(ok
         ? { type: 'notice', message: `Deleted ${effect.sessionId}.` }
@@ -651,6 +654,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
 
     case 'closeSession':
       unfollow(deps, effect.sessionId);
+      forgetInbound(deps.api, effect.sessionId);
       // Local state already moved on; a failure here must not surface as an
       // error in the new session's transcript.
       try {
@@ -713,7 +717,7 @@ function copySelection(deps: EffectDeps, text: string): void {
   if (command) {
     try {
       (deps.pipeToClipboard ?? pipeToClipboardDefault)(command, text);
-      deps.dispatch({ type: 'notice', message: `Copied ${lines} ${lines === 1 ? 'line' : 'lines'}.` });
+      deps.dispatch({ type: 'notice', message: `Copied ${lines} ${lines === 1 ? 'line' : 'lines'}.`, holdPlace: true });
       return;
     } catch {
       // fall through to OSC 52
@@ -723,6 +727,7 @@ function copySelection(deps: EffectDeps, text: string): void {
   deps.writeTerminal(osc52(text));
   deps.dispatch({
     type: 'notice',
+    holdPlace: true,
     message: `Copied ${lines} ${lines === 1 ? 'line' : 'lines'} through the terminal: no clipboard tool here (pbcopy, xclip, xsel or wl-copy), so it only lands if your terminal supports OSC 52.`,
   });
 }
@@ -780,8 +785,13 @@ async function streamRun(
 
 // ── Following the session ────────────────────────────────────────────────────
 
-const follows = new WeakMap<object, { sessionId: string; follow: SessionFollow }>();
+const follows = new WeakMap<object, { sessionId: string; follow: SessionFollow; opened: boolean }>();
 const runStreams = new WeakMap<object, Map<string, number>>();
+/** Consecutive reconnects that failed before opening, for the backoff. */
+const followFailures = new WeakMap<object, number>();
+const followRetryTimers = new WeakMap<object, { sessionId: string; timer: ReturnType<typeof setTimeout> }>();
+const FOLLOW_RETRY_MS = 500;
+const FOLLOW_RETRY_MAX_MS = 8_000;
 
 function runStreamsOf(api: object): Map<string, number> {
   let open = runStreams.get(api);
@@ -790,6 +800,35 @@ function runStreamsOf(api: object): Map<string, number> {
     runStreams.set(api, open);
   }
   return open;
+}
+
+/** Drop a pending reconnect — the api's own, or only the one for `sessionId`. Says whether one went. */
+function cancelFollowRetry(api: object, sessionId?: string): boolean {
+  const pending = followRetryTimers.get(api);
+  if (pending === undefined || (sessionId !== undefined && pending.sessionId !== sessionId)) return false;
+  clearTimeout(pending.timer);
+  followRetryTimers.delete(api);
+  return true;
+}
+
+/**
+ * Reopen a follow the daemon dropped, backing off while it stays down. The
+ * session the TUI shows must keep following it: a run started by the daemon's
+ * own timer or by another client broadcasts to sockets only, so an idle TUI
+ * that gave up would never see it. Timers are unref'd, so a pending reconnect
+ * does not hold the process open.
+ */
+function scheduleFollowRetry(deps: EffectDeps, sessionId: string, failures: number): void {
+  cancelFollowRetry(deps.api);
+  const delay = Math.min(FOLLOW_RETRY_MS * 2 ** Math.min(failures, 4), FOLLOW_RETRY_MAX_MS);
+  const timer = setTimeout(() => {
+    followRetryTimers.delete(deps.api);
+    // A send, a load or a new session reopened it meanwhile: that follow owns the session now.
+    if (follows.get(deps.api) !== undefined) return;
+    void follow(deps, sessionId, true).catch(() => {});
+  }, delay);
+  timer.unref?.();
+  followRetryTimers.set(deps.api, { sessionId, timer });
 }
 
 /**
@@ -801,26 +840,49 @@ function runStreamsOf(api: object): Map<string, number> {
  * `withExecutionStream` subscribes first; anchored to the client, like
  * `inboundFor`, so a new daemon connection starts clean.
  */
-async function follow(deps: EffectDeps, sessionId: string): Promise<void> {
+async function follow(deps: EffectDeps, sessionId: string, restored = false): Promise<void> {
   const current = follows.get(deps.api);
-  if (current?.sessionId === sessionId) return current.follow.ready;
+  if (current?.sessionId === sessionId) {
+    await current.follow.ready;
+    return;
+  }
   current?.follow.close();
+  cancelFollowRetry(deps.api);
   const inbound = inboundFor(deps.api, deps.dispatch, sessionId);
-  const entry = { sessionId, follow: deps.api.followSession(sessionId, inbound.execution()) };
+  const entry = { sessionId, follow: deps.api.followSession(sessionId, inbound.execution()), opened: false };
   follows.set(deps.api, entry);
   void entry.follow.ended.then((outcome) => {
     if (follows.get(deps.api) !== entry) return;
     follows.delete(deps.api);
-    // A run's own stream says so itself when it goes with the daemon; two notices for one loss is noise.
-    if (outcome === 'lost' && !runStreamsOf(deps.api).has(sessionId)) deps.dispatch({ type: 'followLost', sessionId });
+    if (outcome !== 'lost') return;
+    const failures = followFailures.get(deps.api) ?? 0;
+    // One notice per outage: a daemon that stays down would otherwise add a
+    // line every backoff interval. A run's own stream says so itself when it
+    // goes with the daemon; two notices for one loss is noise.
+    if (failures === 0 && !runStreamsOf(deps.api).has(sessionId)) deps.dispatch({ type: 'followLost', sessionId });
+    followFailures.set(deps.api, failures + 1);
+    scheduleFollowRetry(deps, sessionId, failures);
   });
-  await entry.follow.ready;
+  entry.opened = await entry.follow.ready;
+  if (!entry.opened) return;
+  followFailures.delete(deps.api);
+  // A turn whose reply was lost has no `planner_turn_ended` to settle it; a
+  // reconnect is the moment the session can be read back for its end.
+  if (restored) deps.dispatch({ type: 'followRestored', sessionId });
 }
 
 function unfollow(deps: EffectDeps, sessionId: string): void {
+  // A follow that was already lost leaves no entry behind, only its retry. That
+  // timer must not reopen a session the user is closing, so it is cancelled
+  // whether or not there is still a socket to close.
+  const retried = cancelFollowRetry(deps.api, sessionId);
   const current = follows.get(deps.api);
-  if (current?.sessionId !== sessionId) return;
+  if (current?.sessionId !== sessionId) {
+    if (retried) followFailures.delete(deps.api);
+    return;
+  }
   follows.delete(deps.api);
+  followFailures.delete(deps.api);
   current.follow.close();
 }
 
@@ -828,28 +890,110 @@ function unfollow(deps: EffectDeps, sessionId: string): void {
  * One planner turn: its messages stream over the websocket while the REST call
  * is in flight, and the reply is either a question or a plan.
  */
-async function converse(deps: EffectDeps, sessionId: string, call: () => Promise<unknown>): Promise<void> {
+async function converse(deps: EffectDeps, sessionId: string, call: () => Promise<unknown>, opening = false): Promise<void> {
   const inbound = inboundFor(deps.api, deps.dispatch, sessionId);
   const stream = deps.api.streamPlanning(sessionId, inbound.planning());
+  let lost: string | null = null;
+  // A reply that arrived but could not be used or shown. The daemon took the
+  // turn and answered it, so it is its own error, not a loss: the session stays.
+  let unusable: { err: unknown; shown: boolean } | null = null;
 
   try {
     await Promise.all([stream.ready, follow(deps, sessionId)]);
-    const plan = await call();
-    inbound.flush();
-    // Speak the turn before `planUpdated` settles it: the settle is also what
-    // drains the next queued prompt, so the reply would otherwise land after
-    // the prompt that queue sent, in the wrong order. The socket usually
-    // delivered the same words; the backfill is dropped when it did.
-    for (const reply of turnReplies(plan)) inbound.backfill(reply.content, reply.timestamp, reply.runs);
-    deps.dispatch({ type: 'planUpdated', plan, sessionId });
+    const sentAt = Date.now();
+    let plan: unknown;
+    try {
+      plan = await call();
+    } catch (err) {
+      // Only a failure of the call itself can leave the turn running: one
+      // before it went out, or one the daemon answered, is the turn's own end.
+      if (err instanceof UnreadableResponseError) unusable = { err, shown: false };
+      else if (deliveryOf(err) === 'unknown') lost = describeLoss(err, Date.now() - sentAt);
+      else throw err;
+    }
+    if (lost === null && unusable === null) {
+      try {
+        inbound.flush();
+        // Speak the turn before `planUpdated` settles it: the settle is also what
+        // drains the next queued prompt, so the reply would otherwise land after
+        // the prompt that queue sent, in the wrong order. The socket usually
+        // delivered the same words; the backfill is dropped when it did.
+        for (const reply of turnReplies(plan)) inbound.backfill(reply.content, reply.timestamp, reply.runs);
+        deps.dispatch({ type: 'planUpdated', plan, sessionId });
+      } catch (err) {
+        unusable = { err, shown: true };
+      }
+    }
   } finally {
     inbound.flush();
     stream.close();
   }
+  if (unusable) {
+    const { err, shown } = unusable;
+    deps.dispatch({ ...failedFrom(shown ? new Error(`The planner's reply arrived but could not be shown: ${explain(err)}`) : err), turn: true });
+  } else if (lost !== null) {
+    await settleLostReply(deps, sessionId, { opening, reason: lost });
+  }
+}
+
+/**
+ * Why a request that went out got no answer, in a few words and without the
+ * request: the error's name or code, how long it waited and, for a timeout, the
+ * bound it hit. What the user needs to tell a configured bound from a reset.
+ */
+function describeLoss(err: unknown, elapsedMs: number): string {
+  const waited = `after ${formatElapsed(elapsedMs)}`;
+  if (err instanceof RequestTimeoutError) {
+    const bound = `${formatElapsed(err.timeoutMs)}${err.viaEnv ? ' from ORDEWELL_HTTP_TIMEOUT_MS' : ''}`;
+    return `timed out ${waited}, limit ${bound}`;
+  }
+  const code = (err as { code?: unknown } | null)?.code;
+  const message = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, ' ').slice(0, 80);
+  const named = typeof code === 'string' && !message.includes(code) ? `${code}: ${message}` : message;
+  return `${named} ${waited}`;
+}
+
+function formatElapsed(ms: number): string {
+  return ms < 10_000 ? `${Math.round(ms)} ms` : `${Math.round(ms / 1000)} s`;
+}
+
+/**
+ * The reply to a planner turn's call never came back, so whether the turn is
+ * running, finished or never arrived is the daemon's to say. The session and
+ * the queue stay as they are, nothing is sent again, and the session is read
+ * back to show what the daemon holds. Cleared only when the daemon holds none.
+ */
+async function settleLostReply(deps: EffectDeps, sessionId: string, how: { opening: boolean; reason: string }): Promise<void> {
+  deps.dispatch({ type: 'turnLost', sessionId, reason: how.reason });
+  await readBackSession(deps, sessionId, { opening: how.opening, turnEnded: false, reason: how.reason });
+}
+
+/**
+ * Adopting a live session returns the daemon's current state without
+ * disturbing it. `turnEnded` is whether the stream has already said the turn is
+ * over: only then is a failure to read back one that ends it.
+ */
+async function readBackSession(deps: EffectDeps, sessionId: string, how: { opening: boolean; turnEnded: boolean; reason?: string }): Promise<void> {
+  try {
+    const { plan, plannerTurnId } = await deps.api.adoptSession(sessionId, deps.workspace);
+    deps.dispatch({ type: 'turnReconciled', plan, plannerTurnId, chat: restoredChat(plan, sessionId), sessionId, ...(how.reason ? { reason: how.reason } : {}) });
+  } catch (err) {
+    if (err instanceof DaemonError && err.code === 'session_not_found' && how.opening) {
+      unfollow(deps, sessionId);
+      deps.dispatch({ type: 'sessionCleared' });
+      deps.dispatch({ type: 'failed', message: 'The reply was lost and the server holds no session for it. Send your goal again to start over.', code: err.code, turn: true });
+      return;
+    }
+    if (how.turnEnded || (err instanceof DaemonError && err.code === 'session_not_found')) {
+      deps.dispatch({ ...failedFrom(err), turn: true });
+      return;
+    }
+    deps.dispatch({ type: 'notice', level: 'error', message: `Could not read the session back from the server: ${explain(err)}` });
+  }
 }
 
 /** The conversation a saved plan reopens with: its transcript, research log and token line. */
-function restoredChat(plan: unknown, sessionId: string): Action {
+function restoredChat(plan: unknown, sessionId: string): ChatRestored {
   const saved = plan as Pick<SurfacePlan, 'conversationHistory' | 'researchLog' | 'plannerUsage' | 'pendingTurns'> | null;
   return {
     type: 'chatRestored',

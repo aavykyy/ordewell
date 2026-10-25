@@ -1,14 +1,14 @@
 import { taskUsageSummary, type AttemptUsage, type TaskUsageSummary } from '../models/Usage';
 import type { AwaitingReason, TaskType } from '../models/Task';
-import type { FindingSeverity, HandoffDigest } from '../models/Handoff';
-import { worstSeverity } from '../models/Handoff';
+import type { FindingSeverity, HandoffCommit, HandoffDigest } from '../models/Handoff';
+import { savedPatchView, worstSeverity, type PatchView } from '../models/Handoff';
 import type { TaskLoop } from '../models/Loop';
 import type { TaskIsolationState } from '../interfaces/IWorktreeIsolation';
 import { taskOrderLabel, taskRefOf } from '../services/TaskRefs';
 import { capConflictFiles } from '../services/conflictFiles';
 import { planBlocks, type BlockingSubject, type PlanBlocks } from '../services/blocking';
 import { checkOf, type LoopSubject } from '../models/Loop';
-import { assignmentConsequence, assignmentIssue, assignmentIssueText, type AssignmentScope } from '../services/AssignmentScope';
+import { assignedRunnerOf, assignmentConsequence, assignmentIssue, assignmentIssueText, type AssignmentScope } from '../services/AssignmentScope';
 import { approvalLabel, awaitingLabel, isTaskRunning, NOT_STARTED, resumeLabel, taskStatusKind, WAITS_FOR_APPROVAL_LABEL, type TaskStatusKind } from './status';
 import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskRowPlacement } from './actions';
 import { loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, type LoopCheckState } from './loop';
@@ -43,6 +43,8 @@ export interface TaskRowSubject {
   isolation?: TaskRowIsolation | null;
   mergeGate?: readonly string[];
   forcedPastGate?: readonly string[];
+  /** An attempt of it has started, so its chat exists from then on. */
+  attempted?: boolean;
   attemptUsage?: readonly AttemptUsage[];
   assignedRunner?: string;
   assignedModel?: { modelId: string; modelLabel?: string };
@@ -115,9 +117,13 @@ export interface TaskRowUsage extends Pick<TaskUsageSummary, 'totals' | 'context
  * with every finding and the report, is in the attempt's log.
  */
 export interface TaskRowHandoff {
+  /** The commit message the task stated, when it did. */
+  commit?: HandoffCommit;
   summary: string;
   findingCount: number;
   severity: FindingSeverity | null;
+  /** The patch its attempt saved (ADR-0050), when it saved one. */
+  patch?: PatchView;
 }
 
 /**
@@ -152,6 +158,8 @@ export interface TaskRowView {
   status: TaskStatusKind;
   /** A runner is live behind it — `quiet` included. */
   running: boolean;
+  /** An attempt has started, so its chat exists: the one fact the open control reads, never its status. */
+  chatAvailable: boolean;
   /** What an awaiting task waits on, in sentence case; null when nothing was saved. */
   awaiting: string | null;
   /** "Resumes at 8:10pm" while a task paused on a usage limit resumes on its own; null otherwise. */
@@ -162,6 +170,8 @@ export interface TaskRowView {
   waitsForApproval: string | null;
   /** Why it is held out of the scheduler, in sentence case; null when it is not held. */
   holdReason: string | null;
+  /** The runner an AI task is assigned; null for any other task, which has none. */
+  runner: string | null;
   /** Why the task's runner or model is one the user has since moved away from, in sentence case; null when it is not. The task still runs. */
   assignmentFlag: string | null;
   /** What the flag means for this task as it stands (a failed one runs again only if retried); set exactly when `assignmentFlag` is. */
@@ -199,6 +209,17 @@ export interface TaskRowView {
   /** The one mark its toggle sets. */
   mark: 'complete' | 'uncomplete';
   opsEditable: boolean;
+}
+
+/**
+ * Whether a task's chat exists: only once an attempt of it has started. A
+ * manual task runs nothing, so it has none however it was marked. The attempt
+ * ledger of a plan saved before the mark stands in for an AI task; a script's
+ * attempt has no ledger, so neither gains one from a status alone.
+ */
+export function taskChatAvailable(task: { type?: string; attempted?: boolean; attemptUsage?: readonly AttemptUsage[] }): boolean {
+  if (task.type === 'user') return false;
+  return task.attempted === true || (task.attemptUsage?.length ?? 0) > 0;
 }
 
 const refsOf = (ids: readonly string[], tasks: readonly PlanRefTask[] | undefined): string[] =>
@@ -259,10 +280,13 @@ function loopOf(task: TaskRowSubject, reading: PlanReading | null): TaskRowLoop 
 /** The compact handoff a row shows: a summary, its finding count and the worst severity the digest still holds. */
 function handoffOf(task: TaskRowSubject): TaskRowHandoff | null {
   if (!task.handoff) return null;
+  const patch = savedPatchView(task.handoff);
   return {
+    ...(task.handoff.commit ? { commit: task.handoff.commit } : {}),
     summary: task.handoff.summary,
     findingCount: task.handoff.findingCount,
     severity: worstSeverity(task.handoff.findings),
+    ...(patch ? { patch } : {}),
   };
 }
 
@@ -294,12 +318,14 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     // Between rounds a check waits for its fix as a task waits for its dependencies, and is no failure (ADR-0045 L3).
     status: blocked.length > 0 ? 'blocked' : loop?.role === 'check' && loop.state === 'repeating' ? 'todo' : taskStatusKind(task),
     running: isTaskRunning(task),
+    chatAvailable: taskChatAvailable(task),
     awaiting: awaitingLabel(task),
     resumes: resumeLabel(task, context.now),
     approvals: approvalLabel(task.awaitingApproval),
     waitsForApproval: task.waitsForApproval && NOT_STARTED.has(task.status) ? WAITS_FOR_APPROVAL_LABEL : null,
     holdReason: task.holdReason?.trim() || null,
     research: task.type === 'ai' && task.research === true,
+    runner: assignedRunnerOf(task) ?? null,
     ...flagOf(task, context.runnerScope),
     autonomous: task.type === 'ai' && context.modes?.find((m) => m.id === task.taskMode)?.autonomous === true,
     repos: namedRepos(isolation?.repos),
