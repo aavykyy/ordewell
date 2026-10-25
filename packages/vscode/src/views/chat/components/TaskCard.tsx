@@ -51,6 +51,8 @@ interface TaskCardProps {
   configuredProviders?: ('openrouter' | 'google' | 'openai_compatible')[];
   modelApiMapping?: Record<string, ('openrouter' | 'google' | 'openai_compatible')[]>;
   isExecuting?: boolean;
+  /** Anything that could still move a task on without being asked: a queued start or usage-limit hold too, not only a live attempt. Defaults to `isExecuting`. */
+  runActive?: boolean;
   /** Tail of this task's live runner output, if any has arrived. */
   output?: string;
   /**
@@ -208,7 +210,7 @@ export function TaskCheck({ row }: { row: Pick<TaskRowView, 'status'> }) {
 export function TaskMarkControl({ taskId, row, runActive, hint, onMarkComplete, onMarkIncomplete }: {
   taskId: string;
   row: Pick<TaskRowView, 'status' | 'mark' | 'kind'>;
-  /** A run is starting, running or waiting to resume the plan. */
+  /** The run could still move this task on without being asked — a queued start or a usage-limit hold included. */
   runActive: boolean;
   /** Why a manual task cannot be signed off yet; the button waits for it. */
   hint?: string;
@@ -412,7 +414,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -786,7 +788,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
                     <SubTaskCard key={sub.id} task={sub} parentTask={task} tasks={siblings} models={subModels}
                       modes={subModes} runners={runners} runnerScope={runnerScope} effectiveRunner={subRunner}
                       configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
-                      isExecuting={isExecuting} run={runsByTask?.get(sub.id)}
+                      isExecuting={isExecuting} runActive={runActive} run={runsByTask?.get(sub.id)}
                       onRunnerChange={onRunnerChange}
                       onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
                       taskSkills={taskSkills} onSkillsChange={onSkillsChange}
@@ -809,7 +811,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
                 handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart }} />
             )}
 
-            <TaskMarkControl taskId={task.id} row={row} runActive={!!isExecuting}
+            <TaskMarkControl taskId={task.id} row={row} runActive={runActive ?? !!isExecuting}
               hint={isExecuting && isUserTask && task.userSteps && task.userSteps.length > 0 && !allStepsComplete ? 'Complete all steps above first' : undefined}
               onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
           </div>

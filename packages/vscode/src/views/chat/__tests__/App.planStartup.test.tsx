@@ -20,8 +20,8 @@ const plan = {
   lastUpdated: new Date().toISOString(),
 };
 
-const activity = (over: Partial<Record<'starting' | 'running' | 'scheduled' | 'resumable', boolean>> = {}) => ({
-  starting: false, running: false, scheduled: false, resumable: false, ...over,
+const activity = (over: Partial<Record<'starting' | 'running' | 'scheduled' | 'resumable' | 'advancesOnItsOwn', boolean>> = {}) => ({
+  starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false, ...over,
 });
 
 const show = (msg: HostToWebview) => act(() => { post(msg); });

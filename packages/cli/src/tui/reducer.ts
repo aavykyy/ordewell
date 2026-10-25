@@ -5,7 +5,7 @@ import { activeToken, composerCompletions, findCommand, parseRunnerCommand, pars
 import { applyKey, commit } from './editor';
 import { say, wiped } from './transcript';
 import { blockedPicker, handoffArrived, showDiff } from './handoff';
-import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, scriptTaskView, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { syncApprovals } from './reducers/approvals';
@@ -19,7 +19,7 @@ import { refreshStepper } from './reducers/stepper';
 import {
   handleMouseSelect, isMouseSelect, isWheel, scrollChat, scrollDelta, scrollPointed, settlePanes, settlePlan, toggleDetail,
 } from './reducers/pointer';
-import { clamp, clampSelection, stale, step, type Action, type Effect, type Step } from './reducers/shared';
+import { clamp, clampSelection, reportError, stale, step, type Action, type Effect, type Step } from './reducers/shared';
 
 export { initialState } from './state';
 export { resolveTaskId } from './reducers/taskEdits';
@@ -422,7 +422,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       // A failed call may have been the task view's log read; the view falls
       // back to whatever the live stream sent rather than waiting forever.
       if (!action.turn) {
-        const abandoned = say(taskLogAbandoned(state), 'error', action.message);
+        const abandoned = reportError(taskLogAbandoned(state), action.message);
         // A whole-plan start answered nothing but this failure: no run is on
         // its way, so the start indicator must not outlive it.
         return step(state.status === 'starting' ? { ...abandoned, status: 'idle' } : abandoned);
@@ -438,7 +438,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       }
       const quiet = plannerInFlight(state) && state.stopRequested;
       const reported = {
-        ...(quiet ? state : say(state, 'error', action.message)),
+        ...(quiet ? state : reportError(state, action.message)),
         planner: 'idle' as const,
         // A start that never reached the daemon has no run to wait for: the
         // spinner must not outlive the failure that answered it.
@@ -619,6 +619,12 @@ function handleKey(state: TuiState, key: Key): Step {
   if (state.taskView) {
     const handled = handleTaskViewKey(state, key);
     if (handled) return handled;
+    // A script's log is read-only output (ADR-0035): attempts and scrolling
+    // still read it, but nothing types, sends, interrupts or answers there.
+    if (scriptTaskView(state)) {
+      const scroll = scrollDelta(key, state, 'chat');
+      return scroll !== null ? scrollChat(state, scroll) : step(state);
+    }
   }
 
   if (key.name === 'enter') return submit(state);

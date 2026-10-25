@@ -14,7 +14,7 @@ import {
 import { chatEditorRoomFor, chatPromptLabel } from './geometry';
 import { currentHandoff, diffRoom, handoffActions } from './handoff';
 import { capConflictFiles, handoffBaseLine, handoffBranchName, isRepoGroup, repoResultLines, taskLogCommands, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
-import { matchingItems, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
+import { matchingItems, scriptTaskView, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
 import type { StepperState } from './reducers/stepper';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 
@@ -340,6 +340,10 @@ function hiddenDraftNote({ hiddenBefore, hiddenAfter }: ComposerView): string {
 }
 
 function composerLines(state: TuiState, view: ComposerView | null): string[] {
+  // A script's log is output only (ADR-0035): say so where the composer would be.
+  if (scriptTaskView(state)) {
+    return [style.bandGrey(`${chatPromptLabel(state)}  ·  this script task runs no model, so it takes no messages`)];
+  }
   const prompt = state.taskView
     ? style.accent(`${chatPromptLabel(state)} `)
     : state.focus === 'plan' ? style.bandGrey('❯ ') : style.brand('❯ ');

@@ -166,6 +166,18 @@ describe('TaskCard — Run Task button', () => {
     expect(onMarkComplete).not.toHaveBeenCalled();
   });
 
+  it('holds an AI task\'s override back for a queued start or a usage-limit hold, though nothing executes', () => {
+    const onMarkComplete = vi.fn();
+    render(<TaskCard task={makeTask({ status: 'pending' })} models={emptyModels} isExecuting={false} runActive onMarkComplete={onMarkComplete} />);
+    fireEvent.click(screen.getByText('Test task'));
+
+    const button = screen.getByText('Mark complete') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText(/Stop the run first/)).toBeTruthy();
+    fireEvent.click(button);
+    expect(onMarkComplete).not.toHaveBeenCalled();
+  });
+
   it('lets a manual task be signed off during a run', () => {
     const onMarkComplete = vi.fn();
     render(<TaskCard task={makeTask({ status: 'pending', type: 'user', assignedRunner: undefined })} models={emptyModels} isExecuting onMarkComplete={onMarkComplete} />);

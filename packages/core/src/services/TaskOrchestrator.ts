@@ -650,7 +650,8 @@ export class TaskOrchestrator {
    * work running, a scheduler driving the plan, or a run that resumes by
    * itself. `starting` is the async window between a start being admitted and
    * its first claim — the window a surface must not draw as execution and a
-   * manual override must not race.
+   * manual override must not race. `advancesOnItsOwn` is the override guard's
+   * own predicate, so a surface asks only what the seam would accept.
    */
   get activity(): RunActivity {
     return {
@@ -658,6 +659,7 @@ export class TaskOrchestrator {
       running: this.attempts.size > 0,
       scheduled: this.isScheduling,
       resumable: this.awaitsResume,
+      advancesOnItsOwn: this.advancesOnItsOwn,
     };
   }
 

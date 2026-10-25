@@ -623,6 +623,15 @@ export function findTask(tasks: TaskView[], id: string): TaskView | undefined {
 }
 
 /**
+ * Whether the chat pane is showing a script task's log. A script runs no model,
+ * so its log is output only: nothing queues, sends, interrupts or answers there
+ * (ADR-0035).
+ */
+export function scriptTaskView(state: TuiState): boolean {
+  return state.taskView ? findTask(state.tasks, state.taskView.taskId)?.type === 'script' : false;
+}
+
+/**
  * The reference the plan renders for a task: "#2", or the dotted "#2.1" for a
  * subtask. Looked up against the tree, so a subtask is not named by the order
  * it has under its parent.

@@ -5,7 +5,7 @@ import { markTaskByHand } from '../PlanManager';
 
 const showWarningMessage = vscode.window.showWarningMessage as unknown as ReturnType<typeof vi.fn>;
 
-const IDLE = { starting: false, running: false, scheduled: false, resumable: false };
+const IDLE = { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false };
 
 function deps(tasks: Task[], activity = IDLE, outcome: { ok: boolean; message: string } = { ok: true, message: 'done' }) {
   const session = {
@@ -60,7 +60,13 @@ describe('Mark complete and Mark not done from the host', () => {
     expect(session.execute).toHaveBeenCalledWith({ command: 'mark_not_done', task: 't1', confirmed: true, seen: 'completed' }, { kind: 'user' });
   });
 
-  it.each([['starting', { ...IDLE, starting: true }], ['running', { ...IDLE, running: true }], ['scheduled', { ...IDLE, scheduled: true }]])(
+  it.each([
+    ['starting', { ...IDLE, starting: true, advancesOnItsOwn: true }],
+    ['running', { ...IDLE, running: true, advancesOnItsOwn: true }],
+    ['scheduled', { ...IDLE, scheduled: true, advancesOnItsOwn: true }],
+    ['holding a queued force start', { ...IDLE, advancesOnItsOwn: true }],
+    ['waiting out a usage limit', { ...IDLE, resumable: true, advancesOnItsOwn: true }],
+  ])(
     'tells the user to Stop the run first, and asks nothing, while the run is %s',
     async (_name, activity) => {
       const { session } = deps([ai()], activity);
@@ -73,6 +79,16 @@ describe('Mark complete and Mark not done from the host', () => {
       expect(session.execute).not.toHaveBeenCalled();
     },
   );
+
+  it('asks for a run that ended on a failure, since overriding the failed task is the way out', async () => {
+    const { session } = deps([ai('failed')], { ...IDLE, resumable: false });
+    showWarningMessage.mockResolvedValue('Mark complete');
+
+    await markTaskByHand('complete', 't1', { session: session as never });
+
+    expect(showWarningMessage.mock.calls[0][0]).toContain('You vouch for its work');
+    expect(session.execute).toHaveBeenCalledWith({ command: 'mark_complete', task: 't1', confirmed: true, seen: 'failed' }, { kind: 'user' });
+  });
 
   it('signs off a manual task without a question, during a run too', async () => {
     const { session } = deps([manual()], { ...IDLE, running: true });

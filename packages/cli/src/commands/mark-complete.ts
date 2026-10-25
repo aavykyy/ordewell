@@ -1,4 +1,4 @@
-import { confirmedOverride, manualOverrideConfirmation, overrideNeedsConfirmation, resolveUserTaskRef, taskActionCommand, titledTaskRefOf, type ExecutionCommand, type OverrideDirection } from '@ordewell/core';
+import { confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, overrideNeedsConfirmation, resolveUserTaskRef, taskActionCommand, titledTaskRefOf, type ExecutionCommand, type OverrideDirection } from '@ordewell/core';
 import { ApiClient } from '../apiClient';
 import { flag, hasFlag } from '../utils';
 import { allTasksOf } from '../utils/tasks';
@@ -11,7 +11,9 @@ import { withTaskRef } from './task-control';
  * gets their yes on the command. `--yes` is the scriptable way to have asked
  * already; with no terminal to ask on, the answer is no. A manual task is the
  * user's own sign-off and asks nothing. A daemon that cannot say what the task
- * is gets the command without a yes, and refuses it in its own words.
+ * is gets the command without a yes, and refuses it in its own words. One that
+ * says the run could still advance the task is not asked: it says to Stop the
+ * run first, as the seam would.
  */
 async function overrideCommand(
   direction: OverrideDirection,
@@ -23,11 +25,16 @@ async function overrideCommand(
 ): Promise<ExecutionCommand> {
   const command = taskActionCommand(direction, ref);
   if (hasFlag(subArgs, '--yes')) return confirmedOverride(command);
-  const plan = await api.getSession(sessionId, flag(subArgs, '--workspace') || process.cwd()).then((s) => s.plan, () => null);
-  const tasks = plan ? allTasksOf(plan as unknown as Record<string, unknown>) : [];
+  const live = await api.getSession(sessionId, flag(subArgs, '--workspace') || process.cwd()).catch(() => null);
+  const tasks = live ? allTasksOf(live.plan as unknown as Record<string, unknown>) : [];
   const task = resolveUserTaskRef(tasks, ref);
   if (!task || !overrideNeedsConfirmation(task)) return command;
-  const question = `${manualOverrideConfirmation(direction, `task ${titledTaskRefOf(tasks, task.id) ?? ref}`)} Go ahead?`;
+  const label = `task ${titledTaskRefOf(tasks, task.id) ?? ref}`;
+  // The seam's own guard: a queued start or a usage-limit hold refuses too,
+  // although nothing is starting, running or scheduled. Do not ask a question
+  // the daemon would answer with "Stop the run first".
+  if (live?.run?.activity?.advancesOnItsOwn) fail(manualOverrideStopFirst(direction, label));
+  const question = `${manualOverrideConfirmation(direction, label)} Go ahead?`;
   if (!(await confirm(question))) fail('Nothing was changed. Pass --yes to confirm without a prompt.');
   return confirmedOverride(command, task.status);
 }

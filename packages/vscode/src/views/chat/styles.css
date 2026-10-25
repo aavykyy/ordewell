@@ -3336,17 +3336,6 @@ body.vscode-high-contrast-light .task-card.expanded {
   animation: task-check-draw 240ms ease-out 100ms forwards;
 }
 
-/* Un-marking is the inverse gesture, so a done ring must not hover green on
-   green — it dims toward the empty state the click returns it to. */
-.task-check.done.clickable:hover {
-  background: var(--bg-tertiary);
-  border-color: var(--text-secondary);
-}
-
-.task-check.done.clickable:hover svg {
-  stroke: var(--text-secondary);
-}
-
 @keyframes task-check-pop {
   0% { transform: scale(0.6); }
   60% { transform: scale(1.18); }
@@ -5476,6 +5465,16 @@ body.vscode-high-contrast-light .pending-message {
   padding: 8px 14px;
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-primary);
+}
+
+.task-log-readonly {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .task-log-input {

@@ -13,8 +13,8 @@ const task = (over: Partial<TaskView> = {}): TaskView => ({
 });
 
 const planned: Partial<TuiState> = { sessionId: 's1', tasks: [task()] };
-const activity = (over: Partial<Record<'starting' | 'running' | 'scheduled' | 'resumable', boolean>> = {}) => ({
-  starting: false, running: false, scheduled: false, resumable: false, ...over,
+const activity = (over: Partial<Record<'starting' | 'running' | 'scheduled' | 'resumable' | 'advancesOnItsOwn', boolean>> = {}) => ({
+  starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false, ...over,
 });
 
 const planKey = () => reduce(initialState({ ...planned, focus: 'plan' }), { type: 'key', key: { name: 'char', char: 'E' } });

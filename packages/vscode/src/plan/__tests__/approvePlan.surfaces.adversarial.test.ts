@@ -35,7 +35,7 @@ function deps(workspace: string) {
   };
   const session = {
     isExecuting: false,
-    activity: { starting: false, running: false, scheduled: false, resumable: false },
+    activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false },
     loadPlan: vi.fn(),
     execute: vi.fn().mockResolvedValue({ ok: false, outcome: 'refused', message: REFUSAL }),
   };
@@ -76,7 +76,7 @@ describe('adversarial: Execute plan clears the run\'s cards only once the seam a
     await handleApprovePlan(d, 7);
 
     expect(activity).toHaveBeenLastCalledWith(
-      { starting: false, running: false, scheduled: false, resumable: false },
+      { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false },
       7,
     );
   });

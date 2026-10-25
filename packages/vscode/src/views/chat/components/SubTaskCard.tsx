@@ -23,6 +23,8 @@ interface SubTaskCardProps {
   configuredProviders?: ('openrouter' | 'google' | 'openai_compatible')[];
   modelApiMapping?: Record<string, ('openrouter' | 'google' | 'openai_compatible')[]>;
   isExecuting?: boolean;
+  /** Anything that could still move a task on without being asked; defaults to `isExecuting`. */
+  runActive?: boolean;
   /** This subtask's own run entry: what its status badges read, as a task's do. */
   run?: TaskCardRun;
   onRunnerChange?: (taskId: string, runner: string) => void;
@@ -55,7 +57,7 @@ const DEFAULT_MODES: RunnerMode[] = [
   { id: 'plan', label: 'Read-only', description: 'Ordewell commands; lands nothing' },
 ];
 
-export default function SubTaskCard({ task, parentTask, tasks, models, modes, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, run, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {
+export default function SubTaskCard({ task, parentTask, tasks, models, modes, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, run, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
 
@@ -236,7 +238,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
                 handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart }} />
             )}
 
-            <TaskMarkControl taskId={task.id} row={row} runActive={!!isExecuting}
+            <TaskMarkControl taskId={task.id} row={row} runActive={runActive ?? !!isExecuting}
               onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
           </div>
         )}
