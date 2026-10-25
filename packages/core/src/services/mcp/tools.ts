@@ -330,6 +330,9 @@ export interface TaskToolHandler {
   savePatch?: Run<SavePatchArgs>;
   /** A saved patch applied into the task's own worktree (ADR-0050); a read-only task's token does not list `apply_patch`. */
   applyPatch?: Run<ApplyPatchArgs>;
+  /** A read-only task's web reads, decided by the session's web-read policy (ADR-0046, ADR-0027); only its token lists `fetch` and `web_search`. */
+  fetch?: Run<FetchArgs>;
+  webSearch?: Run<WebSearchArgs>;
 }
 
 export interface PlannerToolHandler {
@@ -541,16 +544,22 @@ const PLANNER_READ_ONLY = { readOnlyHint: true };
 
 /**
  * A read-only task's tools (ADR-0046): the task tools, `run_command`, its
- * only shell, and `save_patch`, which keeps what that shell changed as a
- * patch (ADR-0050). Their hints describe their landing effects: nothing either
- * changes reaches the plan's branches.
+ * only shell, `save_patch`, which keeps what that shell changed as a patch
+ * (ADR-0050), and `fetch` and `web_search`, its only web reads, which the
+ * host carries under the session's web-read policy (ADR-0027). Their hints
+ * describe their landing effects: nothing any of them changes reaches the
+ * plan's branches.
  */
 export const READ_ONLY_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   ...SHARED_TASK_TOOLS,
-  tool('run_command', "Run a shell command: git, the project's tests and scripts, anything you need to look at or try. Nothing you change lands: this task's own worktree, when it has one, is thrown away when the task ends, and only your task_complete handoff comes back, with the patch save_patch kept if you saved one. Read-only commands, and those the user's allowlist covers, run at once; anything else runs sealed instead, and nobody is ever asked: no network, no home directory or credentials, nothing writable but $TMPDIR (which is also $HOME) and the task's own worktree, so you can try a fix or add a failing test and run the suite there. Once one command has run sealed, every later one does too, so run what needs the network first. git can read the repository but not record anything in it. Where this machine has no sandbox, a command that would run sealed is refused. Use it instead of a shell of your own.",
+  tool('run_command', "Run a shell command: git, the project's tests and scripts, anything you need to look at or try. Nothing you change lands: this task's own worktree, when it has one, is thrown away when the task ends, and only your task_complete handoff comes back, with the patch save_patch kept if you saved one. Read-only commands, and those the user's allowlist covers, run at once; anything else runs sealed instead, and nobody is ever asked: no network, no home directory or credentials, nothing writable but $TMPDIR (which is also $HOME) and the task's own worktree, so you can try a fix or add a failing test and run the suite there. Once one command has run sealed, every later one does too, so run a network command such as gh first; web pages and searches go through fetch and web_search, which work either way. git can read the repository but not record anything in it. Where this machine has no sandbox, a command that would run sealed is refused. Use it instead of a shell of your own.",
     taskRunCommandInput, (h) => h.runCommand?.bind(h), PLANNER_READ_ONLY),
   tool('save_patch', "Keep what your commands changed in this task's worktree as a patch, so a later task can apply your prototype after the worktree is thrown away. Ordewell takes every change against the commit the worktree was cut from (new, changed, deleted, renamed and binary files and modes), runs the capture sealed, checks that the patch replays to the same tree, keeps it with this attempt and names it in your handoff as a patch artifact. Nothing of it lands. Not carried: links, submodules, ignored files, empty directories, and what Ordewell linked in. A file over the size cap is dropped and named; one git normalizes on the way in (its text, eol or filter attributes) is carried as git stores it, and named; a case-only rename, or an unreadable file, refuses the whole save. Saving again replaces the patch. Save once your prototype is as you want it handed on, before task_complete.",
     savePatchInput, (h) => h.savePatch?.bind(h), PLANNER_READ_ONLY),
+  tool('fetch', "Read a web page over http or https: documentation, a changelog, an API reference. Your runner's own web fetch and search are off on a read-only task; this is how you read the web, and it works whether or not your commands have started running sealed. Ordewell reads the page for you under the user's web-read settings, and nobody is asked: a page those settings would only allow after asking is refused, as are private and local addresses and URLs that carry a credential, and this task attempt has a limited number of web reads. A refusal says why: do not retry it, report what you could not read in your task_complete handoff.",
+    fetchInput, (h) => h.fetch?.bind(h), PLANNER_READ_ONLY),
+  tool('web_search', 'Search the web for result titles, URLs and snippets, then read the most promising result with fetch. Decided like fetch, without asking anyone: a search the user\'s web-read settings would only allow after asking is refused, a query that carries a credential is refused, and searches count toward this attempt\'s web reads. A refusal says why: do not retry it, report the gap in your task_complete handoff.',
+    webSearchInput, (h) => h.webSearch?.bind(h), PLANNER_READ_ONLY),
 ];
 
 /**

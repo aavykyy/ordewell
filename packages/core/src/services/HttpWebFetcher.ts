@@ -4,14 +4,14 @@ import type { IncomingMessage } from 'node:http';
 import type { LookupFunction } from 'node:net';
 import { pipeline, type Readable } from 'node:stream';
 import * as zlib from 'node:zlib';
-import type { IWebFetcher } from '../interfaces/IWebFetcher';
+import type { IWebFetcher, WebReadOptions } from '../interfaces/IWebFetcher';
 import type { SearchHit, SearchPage } from '../interfaces/ISearchProvider';
 import type { ISearchProvider } from '../interfaces/ISearchProvider';
 import type { ToolOutcome } from '../interfaces/IFileSystem';
 import { guardedLookup, resolveAll, type ResolveAll } from './egressGuard';
 import { DuckDuckGoSearchProvider } from './DuckDuckGoSearchProvider';
 import { WebResponseCache } from './WebResponseCache';
-import type { WebRead, WebReadDecision, WebReadPolicy } from './webReadPolicy';
+import type { DecideOptions, DecisionRecord, WebRead, WebReadDecision, WebReadPolicy } from './webReadPolicy';
 
 /**
  * The concrete `fetch`/`web_search` implementation, in core so the web server
@@ -53,7 +53,7 @@ export interface HttpWebFetcherOptions {
   cache?: WebResponseCache;
   /** Shared across sessions so the search cooldown is process-wide. */
   searchProvider?: ISearchProvider;
-  /** False for a research subagent, which must never prompt (see {@link forSubagent}). */
+  /** False for a research subagent or a read-only task, which must never prompt (see {@link forSubagent}, {@link forTask}). */
   prompting?: boolean;
 }
 
@@ -63,6 +63,8 @@ const MAX_BODY_BYTES = 2_000_000;
 const MAX_REDIRECTS = 5;
 /** A default UA gets refused by enough sites that it is not worth the confusing failures. */
 const USER_AGENT = 'Mozilla/5.0 (compatible; Ordewell-Planner/1.0; +https://github.com/ordewell)';
+
+const CANCELLED = 'cancelled before it finished';
 
 const SEARCH_COOLDOWN_OUTPUT =
   'Web search is temporarily unavailable: the search provider backed off after pushing back on automated queries. Do not retry now; fetch a documentation URL you already know instead.';
@@ -128,7 +130,7 @@ function sharedLifetime(cacheControl: string, setCookie: string | null): number 
   return ages.length ? Math.min(...ages) : Infinity;
 }
 
-type WebReadDecider = Pick<WebReadPolicy, 'decide'> & Partial<Pick<WebReadPolicy, 'searchesUnasked'>>;
+type WebReadDecider = Pick<WebReadPolicy, 'decide'> & Partial<Pick<WebReadPolicy, 'searchesUnasked' | 'remaining' | 'forTask'>>;
 
 export class HttpWebFetcher implements IWebFetcher {
   private readonly policy: WebReadDecider;
@@ -155,13 +157,32 @@ export class HttpWebFetcher implements IWebFetcher {
     return this.policy.decide(read, this.decideOptions);
   }
 
-  private get decideOptions(): { prompting: boolean } {
+  private get decideOptions(): DecideOptions {
     return { prompting: this.prompting };
   }
 
+  private optionsOf(record: DecisionRecord | undefined): DecideOptions {
+    return record ? { ...this.decideOptions, record } : this.decideOptions;
+  }
+
   forSubagent(): IWebFetcher {
+    return this.nonPrompting(this.policy);
+  }
+
+  /**
+   * The fetcher for one read-only task attempt (ADR-0046): a subagent's, never
+   * prompting, over the policy's {@link WebReadPolicy.forTask}, so the attempt
+   * has a budget of its own while the cache, transport and search provider,
+   * and with them the search cooldown, stay the session's.
+   */
+  forTask(task: string): IWebFetcher | undefined {
+    const policy = this.policy.forTask?.(task);
+    return policy ? this.nonPrompting(policy) : undefined;
+  }
+
+  private nonPrompting(policy: WebReadDecider): HttpWebFetcher {
     return new HttpWebFetcher({
-      policy: this.policy,
+      policy,
       fetchImpl: this.fetchImpl,
       maxChars: this.maxChars,
       timeoutMs: this.timeoutMs,
@@ -176,13 +197,23 @@ export class HttpWebFetcher implements IWebFetcher {
     return this.policy.searchesUnasked?.(provider) ?? false;
   }
 
-  async fetch(url: string): Promise<ToolOutcome> {
-    const decision = await this.policy.decide({ kind: 'fetch', url }, this.decideOptions);
-    if (!decision.allowed) return { success: false, output: decision.reason, truncated: false };
-    return this.get(url, 'Fetch');
+  remaining(): number | undefined {
+    return this.policy.remaining?.();
   }
 
-  async search(query: string): Promise<ToolOutcome> {
+  async fetch(url: string, opts: WebReadOptions = {}): Promise<ToolOutcome> {
+    const { signal, record } = opts;
+    if (signal?.aborted) return cancelled('Fetch');
+    const decision = await this.policy.decide({ kind: 'fetch', url }, this.optionsOf(record));
+    if (!decision.allowed) return { success: false, output: decision.reason, truncated: false };
+    // Decided while the caller may have gone: nothing leaves for a read nobody waits on.
+    if (signal?.aborted) return cancelled('Fetch');
+    return this.get(url, 'Fetch', opts);
+  }
+
+  async search(query: string, opts: WebReadOptions = {}): Promise<ToolOutcome> {
+    const { signal, record } = opts;
+    if (signal?.aborted) return cancelled('Web search');
     const provider = this.searchProvider;
 
     // Before the policy: a search that would only answer "temporarily
@@ -191,8 +222,9 @@ export class HttpWebFetcher implements IWebFetcher {
     // already knows.
     if (provider.coolingDown()) return { success: false, output: SEARCH_COOLDOWN_OUTPUT, truncated: false };
 
-    const decision = await this.policy.decide({ kind: 'search', query, provider: provider.id }, this.decideOptions);
+    const decision = await this.policy.decide({ kind: 'search', query, provider: provider.id }, this.optionsOf(record));
     if (!decision.allowed) return { success: false, output: decision.reason, truncated: false };
+    if (signal?.aborted) return cancelled('Web search');
 
     // The cache saves the network, never the decision: the policy ran first, so
     // a hit is refused by an exclusion, the secret check, a Guarded approval or
@@ -201,7 +233,7 @@ export class HttpWebFetcher implements IWebFetcher {
     const cached = this.cache.getSearch(cacheKey);
     if (cached) return formatHits(cached);
 
-    const outcome = await provider.search(query, (url) => this.getSearchPage(url));
+    const outcome = await provider.search(query, (url) => this.getSearchPage(url, opts));
     switch (outcome.kind) {
       case 'hits':
         this.cache.setSearch(cacheKey, outcome.hits);
@@ -219,11 +251,11 @@ export class HttpWebFetcher implements IWebFetcher {
     }
   }
 
-  private async get(url: string, label: string): Promise<ToolOutcome> {
+  private async get(url: string, label: string, opts: WebReadOptions): Promise<ToolOutcome> {
     const cached = this.cache.getFetch(url);
     if (cached) return this.render(label, cached.body, cached.isHtml, false);
 
-    const page = await this.request(url);
+    const page = await this.request(url, opts);
     if (!page.ok) return { success: false, output: `${label} failed: ${page.error}`, truncated: false };
     // Keyed by the URL asked for, so a body another origin answered would reach
     // later sessions that were never decided for that origin.
@@ -246,20 +278,21 @@ export class HttpWebFetcher implements IWebFetcher {
     return { success: true, output: text, truncated: false };
   }
 
-  private async getSearchPage(url: string): Promise<SearchPage> {
-    const page = await this.request(url);
+  private async getSearchPage(url: string, opts: WebReadOptions): Promise<SearchPage> {
+    const page = await this.request(url, opts);
     return page.ok
       ? { ok: true, status: page.status, body: page.body }
       : { ok: false, status: page.status, error: page.error };
   }
 
-  private async request(url: string): Promise<FetchedPage> {
+  private async request(url: string, { signal, record }: WebReadOptions): Promise<FetchedPage> {
     let current = new URL(url);
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-      const result = await this.hop(current);
+      if (signal?.aborted) return { ok: false, error: CANCELLED };
+      const result = await this.hop(current, signal);
       if (!('redirect' in result)) return result;
       // Decided outside the hop's timer: in Guarded it may wait on a person.
-      const refused = await this.refuseRedirect(current, result.redirect);
+      const refused = await this.refuseRedirect(current, result.redirect, record);
       if (refused) return { ok: false, status: result.status, error: refused };
       current = result.redirect;
     }
@@ -272,18 +305,20 @@ export class HttpWebFetcher implements IWebFetcher {
    * the same decision; otherwise a redirect would carry the fetch past an
    * exclusion, a Guarded grant or the budget.
    */
-  private async refuseRedirect(from: URL, to: URL): Promise<string | undefined> {
+  private async refuseRedirect(from: URL, to: URL, record: DecisionRecord | undefined): Promise<string | undefined> {
     if (to.protocol !== 'https:' && to.protocol !== 'http:') return 'redirect to a non-HTTP scheme';
     if (from.protocol === 'https:' && to.protocol === 'http:') return 'redirect from https to plain http';
     if (to.origin === from.origin) return undefined;
-    const decision = await this.policy.decide({ kind: 'fetch', url: to.href }, this.decideOptions);
+    const decision = await this.policy.decide({ kind: 'fetch', url: to.href }, this.optionsOf(record));
     // The new URL is left out: the policy's reason already names what it may.
     return decision.allowed ? undefined : `the page redirected to another origin, which was refused. ${decision.reason}`;
   }
 
-  private async hop(url: URL): Promise<FetchedPage | { redirect: URL; status: number }> {
+  private async hop(url: URL, signal: AbortSignal | undefined): Promise<FetchedPage | { redirect: URL; status: number }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const abandon = () => controller.abort();
+    signal?.addEventListener('abort', abandon, { once: true });
     try {
       const res = await this.fetchImpl(url.href, {
         signal: controller.signal,
@@ -302,14 +337,19 @@ export class HttpWebFetcher implements IWebFetcher {
       const { body, truncated } = await readBounded(res, MAX_BODY_BYTES);
       return { ok: true, status: res.status, origin: url.origin, body, isHtml: /html|xml/i.test(contentType), truncated, cacheFor };
     } catch (err) {
-      return { ok: false, error: sanitizeError(err) };
+      return { ok: false, error: signal?.aborted ? CANCELLED : sanitizeError(err) };
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', abandon);
       // Releases the socket of a redirect or error response whose body was
       // never read; a no-op once the body has been consumed.
       controller.abort();
     }
   }
+}
+
+function cancelled(label: string): ToolOutcome {
+  return { success: false, output: `${label} ${CANCELLED}.`, truncated: false };
 }
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<Uint8Array> {

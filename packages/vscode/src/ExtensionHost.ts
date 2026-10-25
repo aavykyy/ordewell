@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import {
-  createSession, createSkillsService, detectInstalledPlanner, createEmptyPlan, flattenTasks, parseMaxParallel, sessionRuntimeSettings, taskRefOf,
+  AccountLimitMonitor, assignedRunnerOf, createSession, createSkillsService, detectInstalledPlanner, createEmptyPlan, flattenTasks, parseMaxParallel, sessionRuntimeSettings, taskRefOf,
   type PlannerBackendId, type GlobalRunSettings, type LegacyPlanState, type RunnerId, type Session, type SessionDeps,
 } from '@ordewell/core';
 import { registerCommands, type CommandDeps } from './commands/CommandRegistry';
@@ -62,6 +62,12 @@ export interface ExtensionServices {
   modelResolver: ModelResolver;
   chatProvider: ChatViewProvider;
   sessionFactory?: (deps: SessionDeps) => Session;
+  /**
+   * The one owner of every runner account's limits in this window, read by the
+   * planner footer and each task log alike; absent, the host watches none.
+   * The host starts, focuses and disposes it.
+   */
+  accountLimits?: AccountLimitMonitor;
 }
 
 export interface ExtensionHost {
@@ -150,6 +156,9 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     log,
   };
 
+  const accountLimits = services.accountLimits ?? new AccountLimitMonitor({ collectors: [] });
+  const findTask = (taskId: string) => flattenTasks(requireSession().planTasks).find((t) => t.id === taskId);
+
   // The open task-log tabs (ADR-0018, V1), keyed by task. Built before the
   // session so the broadcast handler below can hand it every event; the
   // session getter is filled before anything can broadcast. A task is read
@@ -157,7 +166,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   const taskLogs = new TaskLogRegistry({
     extensionUri: services.context.extensionUri,
     session: () => requireSession(),
-    getTask: (taskId) => flattenTasks(requireSession().planTasks).find((t) => t.id === taskId),
+    getTask: findTask,
+    accountLimits: () => accountLimits.snapshots(),
     orderLabel: (taskId) => taskRefOf(requireSession().planTasks, taskId)?.replace(/^#/, ''),
     openFile: (path) => { void openWorkspaceFile(path); },
     log,
@@ -175,6 +185,14 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     broadcast: (msg) => {
       taskLogs.receive(msg);
       handleSessionMessage(msg, managerDeps);
+      // A model call spent from some account — the planner's, or the task's
+      // runner's — so the monitor's next poll reads it, however many calls.
+      if (msg.type === 'planner_usage') accountLimits.invalidate();
+      else if (msg.type === 'task_log' && msg.events.some((event) => event.type === 'turn_end')) {
+        const task = findTask(msg.taskId);
+        const runner = task && assignedRunnerOf(task);
+        if (runner) accountLimits.invalidate(runner);
+      }
     },
     modelResolver: services.modelResolver,
     settings: () => sessionRuntimeSettings(services.settingsService.getAll()),
@@ -313,6 +331,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     services.chatProvider.setPlanDockHeight(services.context.globalState.get<number>(PLAN_DOCK_HEIGHT_KEY));
     sendRunSettings();
     sendSkills();
+    accountLimits.surfaceConnected();
     // Activation-time discovery can catch a runner CLI cold (server spawn,
     // catalog fetch, auth store still loading) and cache a degraded model
     // list. Re-discover in the background whenever a webview (re)connects
@@ -370,6 +389,19 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   }
 
   async function start(): Promise<void> {
+    // Read before the planner's first call, whichever runner plans: every
+    // installed account, enabled for tasks or not. Polling follows the
+    // window's focus; a focused start reads at once through it.
+    services.context.subscriptions.push(
+      { dispose: accountLimits.subscribe((limits) => {
+        services.chatProvider.setAccountLimits(limits);
+        taskLogs.accountLimitsChanged();
+      }) },
+      vscodeApi.window.onDidChangeWindowState((windowState) => accountLimits.setForeground(windowState.focused)),
+    );
+    if (vscodeApi.window.state.focused) accountLimits.setForeground(true);
+    else accountLimits.refresh();
+
     // Who plans when no planner is chosen and no key is held (ADR-0009). Not
     // awaited: the preflight and every planner turn wait on it instead, and
     // the pills are drawn again once it answers.
@@ -410,6 +442,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       // lets the backend go only once the planner turn in flight has ended.
       managerDeps.session.plannerSettingsChanged();
       services.modelResolver.invalidate();
+      // The monitor drops what it read when the auth scope moved.
+      accountLimits.refresh();
       discovery.refresh().catch((err) => log(`Model discovery refresh failed: ${err instanceof Error ? err.message : String(err)}`));
       log('Configuration changed, reset services');
     }));
@@ -444,6 +478,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     // turns once the host has stopped its runners.
     sessionCell.current?.abortPlannerTurn();
     taskLogs.dispose();
+    accountLimits.dispose();
     persistState(persistenceDeps());
     services.runner.stopAll();
     // The session closes with the window, and with it its lease (ADR-0049).

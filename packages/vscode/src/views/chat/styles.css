@@ -438,7 +438,7 @@ body {
   word-break: break-word;
 }
 
-/* ---- ChatMessage: inline working indicator ---- */
+/* ---- Planner working indicator: spinner, and the row pinned above the composer ---- */
 
 .chat-msg-spinner {
   display: inline-block;
@@ -458,7 +458,8 @@ body {
 }
 
 .chat-msg-working {
-  padding: 6px 14px;
+  flex-shrink: 0;
+  padding: 4px 14px;
   font-size: 12px;
   color: var(--text-muted);
   display: flex;
@@ -5421,6 +5422,46 @@ body.vscode-high-contrast-light .pending-message {
    has one rule above it. */
 .usage-line.usage-line-total {
   border-top: none;
+}
+
+/* Account limits: one row per runner, wrapping rather than clipping in a
+   narrow sidebar. Under a usage line they share its rule. */
+.usage-line.account-limits {
+  flex-wrap: wrap;
+  row-gap: 1px;
+}
+
+.usage-line + .usage-line.account-limits {
+  border-top: none;
+}
+
+.account-limit {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.account-limit.stale {
+  font-style: italic;
+}
+
+.account-limit:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, var(--accent));
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+/* Hidden until its row is focused or tapped, yet still the row's description:
+   then it takes a line of its own, so a narrow view wraps it rather than clip. */
+.account-limit-details {
+  display: none;
+}
+
+.account-limit:focus + .account-limit-details {
+  display: flex;
+  flex-direction: column;
+  flex-basis: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* ---- Task log tab (ADR-0018, V1) ---- */

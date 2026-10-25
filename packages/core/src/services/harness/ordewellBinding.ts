@@ -44,7 +44,7 @@ export class RunnerStartupExit extends Error {
   }
 }
 
-/** Which token's tools a runner is handed (ADR-0022, A1); a read-only task's add `run_command` (ADR-0046). */
+/** Which token's tools a runner is handed (ADR-0022, A1); a read-only task's add `run_command`, `fetch` and `web_search` (ADR-0046). */
 export type OrdewellToolRole = 'task' | 'readOnlyTask' | 'planner';
 
 /** A runner's report on the Ordewell server's connection, in one vocabulary for every runner. */

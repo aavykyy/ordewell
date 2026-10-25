@@ -937,7 +937,8 @@ token decides the role), "MCP bridge", "plugin".
 *Ordewell MCP server*: one session, one task, one attempt generation (the
 generations `VerdictEngine` tracks). It lists `task_complete`, `checkpoint`
 and `read_task`, and `apply_patch` for a change task; a read-only task gets
-`run_command`, its only shell, and `save_patch` instead of `apply_patch`.
+`run_command`, its only shell, and `save_patch` instead of `apply_patch`,
+and `fetch` and `web_search`, its only web reads.
 It is revoked when the attempt ends, and a call carrying it after
 that is refused. It reaches the runner only in the injected MCP configuration,
 as an HTTP header — never in a prompt and never on a command line.
@@ -1000,7 +1001,9 @@ through, on every runner, whichever path carries the bytes (ADR-0027,
 that receives the query (`web_search:anthropic`, `openai`, `opencode`,
 `duckduckgo`). It runs the secret check, the *planner allowlist*'s
 exclusions, the *web-read budget* and the *approval mode*, and resolves a
-fetch's host only after all of them. Planner-only: tasks never pass through it.
+fetch's host only after all of them. Besides the planner's reads, it decides
+a *read-only task*'s `fetch` and `web_search`, which never ask anyone; change
+and ops tasks never pass through it.
 *Avoid:* "SSRF check" for the whole decision (the guard is its last step).
 
 **Project MCP server** — an MCP server the repository declares for its
@@ -1016,6 +1019,9 @@ unasked), "trusted server" (no runner's trust setting decides it).
 **Web-read budget** — how many web reads one planner turn may make in a
 session, the planner's and its research subagents' together
 (`plannerWebReadBudget`, `ORDEWELL_WEB_READ_BUDGET`); 0 turns web reads off.
+Each *read-only task* attempt has the same number on a count of its own,
+which no planner turn resets and no other attempt shares; a retry or a
+continue starts a fresh one.
 *Avoid:* "per-planner budget" (it is per session and turn, shared with
 subagents), "query budget" (that is the *Task query* read budget).
 
@@ -2245,7 +2251,11 @@ nobody, where what would ask or be refused is a *sealed run* with the
 worktree writable, so it can try a fix or add a failing test and run the
 suite; git there reads and records nothing. From the attempt's first sealed
 run on, every command of its shell runs sealed, what the allowlist covers
-included, since a sealed run may have rewritten what a later command runs. It stays read-only through a
+included, since a sealed run may have rewritten what a later command runs.
+Its only web reads are Ordewell's `fetch` and `web_search`, also on its token
+alone, which the host carries apart from the shell under the *web-read
+policy*, asking nobody, within a *web-read budget* of its own per attempt;
+its runner's own web tools are refused. It stays read-only through a
 planner's move or split unless the planner lifts it with `readOnly: false`.
 Its AI subtasks are read-only too unless one says otherwise; a manual task
 and an ops task cannot be one. The planner's only say over a task's mode; a
@@ -2598,6 +2608,45 @@ Continue starts from the window its session was last measured against. Never
 from a table kept in Ordewell: neither known leaves the fill unknown.
 *Avoid:* calling it a percentage when either half is unknown; *Avoid:* a window
 table in Ordewell; *Avoid:* "the last prompt" for what it counts.
+
+**Account limits** (`AccountLimitSnapshot`, `AccountLimitMonitor`,
+`AccountLimitCollector`) — what a runner's own account has used of its plan's
+windows (Codex's five-hour and weekly, say), read from the runner's account
+protocol, never from usage records: Codex's over a short-lived `app-server`
+(`account/read` with `refreshToken: false`, then `account/rateLimits/read`),
+which opens no thread and no turn; Claude Code's over the `initialize` and
+`get_usage` control requests, on a short-lived process of its own that keeps
+the CLI's login but loads no settings, hooks, plugins, tools or MCP servers
+and is never sent a message; OpenCode Go's with no process at all, from the
+one login OpenCode would pay for a Go model with, read in place from
+OpenCode's own store and sent only to OpenCode's fixed quota addresses
+(ADR-0051). All run with the workspace's environment, as the planner and its
+tasks do, so the account a workspace chooses (its own `CODEX_HOME`,
+`CLAUDE_CONFIG_DIR` or OpenCode data directory) is the one read. One monitor per host owns every installed
+runner's — enabled for tasks or not — and decides when each collector reads:
+before the planner's first call, on a surface connecting when its last read
+is over a minute old, on focus and on a configuration change, about once a
+minute while the window has focus, and again when a reported window resets;
+never two reads of one account at once. Model calls and task turns are folded
+into the next poll, so without focus they read nothing.
+A full read replaces what was known, every bucket and window; a sparse update
+only asks for another read. A failure keeps the last read, marked `stale`,
+only when the same account was seen signed in; an account or auth-scope change
+drops it, and an answer that arrives after one is ignored. `signed_out`,
+`unsupported`, `not_installed` and `unknown` carry no limits and draw nothing;
+a window's share is drawn only as reported, so 0% is a reported 0, and a
+service's throttle on the read is a failed read, never an exhausted window.
+Each window keeps its own length (`5h`, `Weekly`, `90m`; `Monthly` for a plan
+month, which has no one length; `Primary`/`Secondary` when none is reported)
+and each per-model bucket stays apart. An account that meters one provider
+only (OpenCode Go meters `opencode-go/…`) names it. The planner footer draws
+every account's row beside *Context fill* (`Planner ctx 61k (6%)`); a task log
+draws only its assigned runner's, live whichever attempt is on screen, and of
+an account that meters one provider only while that provider serves the task. Never
+saved, never restored as current, and never a reason to pause or resume work —
+that stays with the *In-flight rule*.
+*Avoid:* "usage" or "rate limit" for it; *Avoid:* summing buckets, or reading a
+limit from token or cost totals.
 
 **Subagent lifecycle** — a research subagent as a first-class block: announced
 by `subagent_started` (brief and model), running its calls tagged with its

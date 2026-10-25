@@ -78,6 +78,35 @@ describe('reduceHost gates', () => {
   });
 });
 
+describe('reduceHost after the watchdog', () => {
+  const busy = { ...INITIAL_HOST_STATE, isResearchActive: true };
+  const alive = msg({ type: 'plannerTurnAlive' });
+
+  it('re-locks the input when the host says the turn it gave up on is still out', () => {
+    const lost = reduceHost(busy, { type: 'turnLost' });
+    expect(lost.isResearchActive).toBe(false);
+    expect(reduceHost(lost, alive).isResearchActive).toBe(true);
+  });
+
+  it('ignores the turn being alive when the watchdog never fired: a stop or an end freed the input', () => {
+    expect(reduceHost(INITIAL_HOST_STATE, alive)).toBe(INITIAL_HOST_STATE);
+    const stopped = reduceHost(busy, { type: 'turnStopped' });
+    expect(reduceHost(stopped, alive)).toBe(stopped);
+  });
+
+  it('stops waiting on the lost turn once the host or the user has spoken since', () => {
+    const lost = reduceHost(busy, { type: 'turnLost' });
+    for (const after of [
+      reduceHost(lost, msg({ type: 'plannerTurn', active: false })),
+      reduceHost(lost, { type: 'turnStopped' }),
+      reduceHost(lost, { type: 'resetSession', kind: 'new' }),
+      reduceHost(lost, msg({ type: 'showError', error: 'planner down' })),
+    ]) {
+      expect(reduceHost(after, alive).isResearchActive).toBe(false);
+    }
+  });
+});
+
 describe('reduceHost runView', () => {
   const checkpointTask = { id: 't1', title: 'Add rate limiting', status: 'awaiting_user' as const, awaitingReason: 'checkpoint' as const, checkpoint: 'ready for review' };
 

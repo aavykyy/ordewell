@@ -1,4 +1,4 @@
-import type { ApprovalDecision, DisplayBlock, TaskLogHeaderView } from '@ordewell/core';
+import type { AccountLimitSnapshot, ApprovalDecision, DisplayBlock, TaskLogHeaderView } from '@ordewell/core';
 
 /*
  * The messages between the extension host and a task-log panel (ADR-0018, V1).
@@ -50,6 +50,13 @@ export type HostToTaskLog =
   | { type: 'patch'; order: readonly string[]; changed: readonly DisplayBlock[] }
   /** The header or queue changed; the blocks did not. */
   | { type: 'status'; status: TaskLogStatus }
+  /**
+   * The account limits of the runner the task is assigned to now — live,
+   * whichever attempt is on screen — or none when that runner has no
+   * monitored account. Sent apart from the status so a poll does not redraw
+   * the header.
+   */
+  | { type: 'accountLimits'; limits: readonly AccountLimitSnapshot[] }
   | { type: 'showError'; error: string };
 
 export type TaskLogToHost =

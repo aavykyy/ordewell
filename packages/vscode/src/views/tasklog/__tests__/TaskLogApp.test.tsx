@@ -667,6 +667,25 @@ describe('a message the runner reads mid-turn (ADR-0023)', () => {
     expect(read.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText('then add tests')).toBeTruthy();
   });
+
+  it('draws its runner\'s account limits under the task\'s own spend, and keeps them across an attempt switch', () => {
+    render(<TaskLogApp />);
+    init({ usage: { totals: { inputTokens: 10, reportedCost: { USD: 1.5 } }, contextFill: { usedTokens: 50_000, windowTokens: 200_000 } } });
+    send({ type: 'accountLimits', limits: [{
+      harness: 'claude-code', label: 'Claude Code', status: 'fresh',
+      buckets: [{ id: 'claude', windows: [{ slot: 'primary', usedPercent: 24, durationMinutes: 300, resetsAt: null }, { slot: 'secondary', usedPercent: 61, durationMinutes: 10080, resetsAt: null }] }],
+      readAt: '2026-03-02T10:00:00.000Z',
+    }] });
+
+    expect(document.querySelector('.usage-line')!.textContent).toBe('ctx 50k (25%) · $1.50');
+    expect(document.querySelector('.account-limit')!.textContent).toBe('Claude Code 5h 24% used · Weekly 61% used');
+
+    init({ attempt: 1, attempts: [1, 2] });
+    expect(document.querySelector('.account-limit')!.textContent).toBe('Claude Code 5h 24% used · Weekly 61% used');
+
+    send({ type: 'accountLimits', limits: [] });
+    expect(document.querySelector('.account-limits')).toBeNull();
+  });
 });
 
 describe('the runner\'s activity, folded (ADR-0017, X1)', () => {

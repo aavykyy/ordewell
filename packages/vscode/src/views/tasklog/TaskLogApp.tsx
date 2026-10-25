@@ -6,8 +6,9 @@ import { contextMeterTitle } from '@ordewell/core/plan-utils';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type PatchedView } from '../../shared/conversationPatch';
 import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../../shared/taskLogProtocol';
 import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
+import AccountLimitRows from '../chat/components/AccountLimitRows';
 import PendingMessages, { QUEUE_TITLE, SendKeyHint, isSendNowKey, type PendingMessage } from '../chat/components/PendingMessages';
-import type { TaskLogHeaderView } from '@ordewell/core';
+import type { AccountLimitSnapshot, TaskLogHeaderView } from '@ordewell/core';
 
 declare function acquireVsCodeApi(): { postMessage(message: TaskLogToHost): void; setState(state: unknown): void };
 
@@ -44,6 +45,7 @@ export default function TaskLogApp() {
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   const [stopArmed, setStopArmed] = useState(false);
+  const [limits, setLimits] = useState<readonly AccountLimitSnapshot[]>([]);
 
   const blocks = useMemo(() => patchedBlocks(view), [view]);
   const followRef = useFollowOutput<HTMLDivElement>(blocks);
@@ -78,6 +80,9 @@ export default function TaskLogApp() {
           break;
         case 'status':
           setStatus(msg.status);
+          break;
+        case 'accountLimits':
+          setLimits(msg.limits);
           break;
         case 'showError':
           setError(msg.error);
@@ -221,6 +226,8 @@ export default function TaskLogApp() {
           <span title={row.contextFill ? contextMeterTitle(row.contextFill) : undefined}>{row.text}</span>
         </div>
       ))}
+
+      <AccountLimitRows limits={limits} />
 
       {stopArmed && <div className="stop-hint" role="status">Press Esc again to stop</div>}
 

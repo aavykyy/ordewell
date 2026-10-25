@@ -3,6 +3,7 @@ import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, QueuedTaskMessage } from '../interfaces/IRunner';
 import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
+import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { RunnerModelRef } from '../models/RunnerCommand';
 import { summarizeOutput } from './promptAugment';
 import { BufferedTaskOutputSource } from './BufferedTaskOutputSource';
@@ -206,6 +207,8 @@ export interface TaskOrchestratorDeps {
   isApproved: (taskId: string) => boolean;
   /** A read-only attempt's shell (ADR-0046); absent, its runner is given no `run_command`. */
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
+  /** The session's web fetcher for one read-only attempt (ADR-0046); absent, its `fetch` and `web_search` are not available. */
+  taskWebFetcher?: (task: string) => IWebFetcher | undefined;
   /** Keep a read-only attempt's saved patch beside its log (ADR-0050); absent, `save_patch` is not available. */
   keepPatch?: (taskId: string, attempt: number, patch: Buffer) => string;
   /**
@@ -245,6 +248,7 @@ export interface TaskOrchestratorOptions {
   /** Every task is approved unless a Session supplies its record: an orchestrator on its own has no user to ask. */
   isApproved?: (taskId: string) => boolean;
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
+  taskWebFetcher?: (task: string) => IWebFetcher | undefined;
   keepPatch?: (taskId: string, attempt: number, patch: Buffer) => string;
   recordHandoff?: (sessionId: string | undefined, taskId: string, handoff: StoredHandoff) => void;
   taskLog?: TaskLogReader;
@@ -366,6 +370,7 @@ export class TaskOrchestrator {
       previousHandoffFromLog: deps.previousHandoffFromLog,
       lastLoggedAttempt: deps.lastLoggedAttempt,
       ...(deps.taskShell ? { taskShell: deps.taskShell } : {}),
+      ...(deps.taskWebFetcher ? { taskWebFetcher: deps.taskWebFetcher } : {}),
       ...(deps.keepPatch ? { keepPatch: deps.keepPatch } : {}),
       recordHandoff: deps.recordHandoff,
       taskLog: deps.taskLog,
@@ -449,6 +454,7 @@ export class TaskOrchestrator {
       isApproved: options.isApproved ?? (() => true),
       research: options.research,
       ...(options.taskShell ? { taskShell: options.taskShell } : {}),
+      ...(options.taskWebFetcher ? { taskWebFetcher: options.taskWebFetcher } : {}),
       ...(options.keepPatch ? { keepPatch: options.keepPatch } : {}),
       recordHandoff: options.recordHandoff ?? (() => undefined),
       taskLog: options.taskLog ?? { attempts: () => [], events: () => [] },

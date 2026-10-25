@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { createTask, type AttemptUsage, type CommandOutcome, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { createTask, type AccountLimitSnapshot, type AttemptUsage, type CommandOutcome, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { TASK_LOG_VIEW_TYPE, TaskLogRegistry } from '../providers/TaskLogRegistry';
 import type { HostToTaskLog } from '../shared/taskLogProtocol';
 import { __panels, __resetPanels, createFakeWebviewPanel, window } from '../test/vscode.mock';
@@ -20,7 +20,7 @@ const attemptTwo: TaskLogEvent[] = [
   { type: 'text', text: 'second try' },
 ];
 
-function harness(attempts: Record<number, TaskLogEvent[]> = { 1: attemptOne }) {
+function harness(attempts: Record<number, TaskLogEvent[]> = { 1: attemptOne }, limits: { current: readonly AccountLimitSnapshot[] } = { current: [] }) {
   const task = createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'claude-code', status: 'in_progress', attempted: true });
   const session = {
     taskLogAttempts: vi.fn(() => Object.keys(attempts).map(Number).sort((a, b) => a - b)),
@@ -34,10 +34,11 @@ function harness(attempts: Record<number, TaskLogEvent[]> = { 1: attemptOne }) {
     extensionUri: vscode.Uri.file('/ext'),
     session: () => session,
     getTask: () => task as Task,
+    accountLimits: () => limits.current,
     openFile: vi.fn(),
     log: vi.fn(),
   });
-  return { registry, session, task };
+  return { registry, session, task, limits };
 }
 
 /** The messages one panel's webview has been sent, oldest first. */
@@ -633,5 +634,167 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf8')) as { activationEvents?: string[] };
 
     expect(manifest.activationEvents).toContain(`onWebviewPanel:${TASK_LOG_VIEW_TYPE}`);
+  });
+
+  describe('account limits', () => {
+    const snapshot = (harness: string, label: string, used: number): AccountLimitSnapshot => ({
+      harness, label, status: 'fresh', buckets: [{ id: harness, windows: [{ slot: 'primary', usedPercent: used, durationMinutes: 300, resetsAt: null }] }], readAt: '2026-03-02T10:00:00.000Z',
+    });
+    const codex = snapshot('codex', 'Codex', 24);
+    const claude = snapshot('claude-code', 'Claude Code', 40);
+    const limitsSent = (panel: (typeof __panels)[number]) => posted(panel).flatMap((m) => (m.type === 'accountLimits' ? [m.limits] : []));
+
+    it('sends a task only its assigned runner\'s account limits, once the panel is ready', () => {
+      const h = harness(undefined, { current: [codex, claude] });
+      h.registry.open('t1');
+      expect(limitsSent(__panels[0])).toEqual([]);
+
+      __panels[0].__receive({ type: 'ready' });
+
+      expect(limitsSent(__panels[0])).toEqual([[claude]]);
+    });
+
+    it('sends the new limits when the monitor reads again, and nothing when its runner\'s are unchanged', () => {
+      const h = harness(undefined, { current: [codex, claude] });
+      h.registry.open('t1');
+      __panels[0].__receive({ type: 'ready' });
+
+      h.limits.current = [snapshot('codex', 'Codex', 30), claude];
+      h.registry.accountLimitsChanged();
+      expect(limitsSent(__panels[0])).toEqual([[claude]]);
+
+      const later = snapshot('claude-code', 'Claude Code', 41);
+      h.limits.current = [codex, later];
+      h.registry.accountLimitsChanged();
+      expect(limitsSent(__panels[0])).toEqual([[claude], [later]]);
+    });
+
+    it('follows the task to another runner when its assignment changes', () => {
+      const h = harness(undefined, { current: [codex, claude] });
+      h.registry.open('t1');
+      __panels[0].__receive({ type: 'ready' });
+
+      h.task.assignedRunner = 'codex';
+      h.registry.receive({ type: 'task_updated', taskId: 't1', changes: { assignedRunner: 'codex' } });
+
+      expect(limitsSent(__panels[0]).at(-1)).toEqual([codex]);
+    });
+
+    it('sends none for a runner with no monitored account, and clears them when the task moves to one', () => {
+      const h = harness(undefined, { current: [codex] });
+      h.registry.open('t1');
+      __panels[0].__receive({ type: 'ready' });
+      expect(limitsSent(__panels[0])).toEqual([]);
+
+      h.task.assignedRunner = 'codex';
+      h.registry.receive({ type: 'task_updated', taskId: 't1', changes: { assignedRunner: 'codex' } });
+      h.task.assignedRunner = 'opencode';
+      h.registry.receive({ type: 'task_updated', taskId: 't1', changes: { assignedRunner: 'opencode' } });
+
+      expect(limitsSent(__panels[0])).toEqual([[codex], []]);
+    });
+
+    it('sends them again to a webview that reconnects, and to a tab a window reload restores', () => {
+      const h = harness(undefined, { current: [claude] });
+      h.registry.open('t1');
+      __panels[0].__receive({ type: 'ready' });
+      __panels[0].__receive({ type: 'ready' });
+      expect(limitsSent(__panels[0])).toEqual([[claude], [claude]]);
+
+      const restored = harness(undefined, { current: [claude] });
+      const panel = createFakeWebviewPanel('ordewellTaskLog', 'Task log');
+      restored.registry.restore(panel as unknown as vscode.WebviewPanel, { taskId: 't1' });
+      panel.__receive({ type: 'ready' });
+      expect(limitsSent(panel)).toEqual([[claude]]);
+    });
+
+    describe('of an account that meters one provider', () => {
+      const go: AccountLimitSnapshot = { ...snapshot('opencode', 'OpenCode Go', 7), provider: 'opencode-go' };
+      const served = (model: string, subagentId?: string): TaskLogEvent => ({ type: 'usage', record: { source: 'opencode', model, inputTokens: 1, ...(subagentId ? { subagentId } : {}) } });
+      const onOpenCode = (h: ReturnType<typeof harness>, modelId: string) => {
+        h.task.assignedRunner = 'opencode';
+        h.task.assignedModel = { modelId, modelLabel: modelId };
+      };
+
+      it('shows Go only to a task assigned a Go model, never to one on Zen or a third party', () => {
+        for (const [modelId, shown] of [['opencode-go/kimi-k2.6', [go]], ['opencode/kimi-k2.6', []], ['openrouter/moonshot/kimi', []]] as const) {
+          __resetPanels();
+          const h = harness(undefined, { current: [go] });
+          onOpenCode(h, modelId);
+          h.registry.open('t1');
+          __panels[0].__receive({ type: 'ready' });
+          expect(limitsSent(__panels[0]).at(-1) ?? []).toEqual(shown);
+        }
+      });
+
+      it('shows none to a task with no model named: no provider known is no binding', () => {
+        const h = harness(undefined, { current: [go] });
+        h.task.assignedRunner = 'opencode';
+        h.registry.open('t1');
+        __panels[0].__receive({ type: 'ready' });
+
+        expect(limitsSent(__panels[0])).toEqual([]);
+      });
+
+      it('follows the provider the latest attempt is served by, as its own usage says, not a subagent\'s', () => {
+        const h = harness({ 1: [{ type: 'turn_start', message: 'go' }, served('openrouter/x/y')] }, { current: [go] });
+        onOpenCode(h, 'opencode-go/kimi-k2.6');
+        h.registry.open('t1');
+        __panels[0].__receive({ type: 'ready' });
+        // The saved attempt says it ran on another provider than planned.
+        expect(limitsSent(__panels[0])).toEqual([]);
+
+        h.registry.receive({ type: 'task_log', taskId: 't1', attempt: 1, events: [served('opencode-go/glm-5')] });
+        expect(limitsSent(__panels[0]).at(-1)).toEqual([go]);
+        h.registry.receive({ type: 'task_log', taskId: 't1', attempt: 1, events: [served('openrouter/x/y', 'sub-1')] });
+        expect(limitsSent(__panels[0]).at(-1)).toEqual([go]);
+        h.registry.receive({ type: 'task_log', taskId: 't1', attempt: 1, events: [served('opencode/zen-model')] });
+        expect(limitsSent(__panels[0]).at(-1)).toEqual([]);
+      });
+
+      it('learns what served the saved attempt from the one read that draws it, and reads nothing more when the webview reconnects', () => {
+        const h = harness({ 1: [served('opencode-go/glm-5')] }, { current: [go] });
+        onOpenCode(h, 'openrouter/x/y');
+        h.registry.open('t1');
+        __panels[0].__receive({ type: 'ready' });
+        expect(limitsSent(__panels[0])).toEqual([[go]]);
+        expect(h.session.taskLog).toHaveBeenCalledTimes(1);
+
+        __panels[0].__receive({ type: 'ready' });
+        expect(limitsSent(__panels[0])).toEqual([[go], [go]]);
+        expect(h.session.taskLog).toHaveBeenCalledTimes(1);
+      });
+
+      it('forgets what an earlier attempt or an earlier assignment was served by', () => {
+        const h = harness({ 1: [served('openrouter/x/y')] }, { current: [go] });
+        onOpenCode(h, 'opencode-go/kimi-k2.6');
+        h.registry.open('t1');
+        __panels[0].__receive({ type: 'ready' });
+        expect(limitsSent(__panels[0])).toEqual([]);
+
+        // A new attempt starts on its assignment until its own usage says otherwise.
+        h.registry.receive({ type: 'task_log', taskId: 't1', attempt: 2, events: [{ type: 'turn_start', message: 'again' }] });
+        expect(limitsSent(__panels[0]).at(-1)).toEqual([go]);
+        h.registry.receive({ type: 'task_log', taskId: 't1', attempt: 2, events: [served('openrouter/x/y')] });
+        expect(limitsSent(__panels[0]).at(-1)).toEqual([]);
+
+        // A reassigned model is a new binding: the old attempt's provider no longer speaks for it.
+        h.task.assignedModel = { modelId: 'opencode-go/glm-5', modelLabel: 'glm-5' };
+        h.registry.receive({ type: 'task_updated', taskId: 't1', changes: { assignedModel: h.task.assignedModel } });
+        expect(limitsSent(__panels[0]).at(-1)).toEqual([go]);
+      });
+    });
+
+    it('keeps showing the live limits while an earlier attempt is on screen', () => {
+      const h = harness({ 1: attemptOne, 2: attemptTwo }, { current: [claude] });
+      h.registry.open('t1');
+      __panels[0].__receive({ type: 'ready' });
+      __panels[0].__receive({ type: 'selectAttempt', attempt: 1 });
+
+      const later = snapshot('claude-code', 'Claude Code', 55);
+      h.limits.current = [later];
+      h.registry.accountLimitsChanged();
+      expect(limitsSent(__panels[0]).at(-1)).toEqual([later]);
+    });
   });
 });

@@ -35,45 +35,58 @@ function parseRpcLine(line: string): RpcMessage | null {
   }
 }
 
+/** A running `app-server`: its RPC client, a way to notify it, and the moment it can answer nothing more. */
+export interface AppServerConnection {
+  rpc: CodexRpc;
+  /** A notification: no id, so no answer. */
+  notify(method: string, params: Record<string, unknown>): void;
+  /** Resolves when the process ends or stops reading its input: no answer will come after it. */
+  gone: Promise<void>;
+  /** Takes the process down tree-wide; safe to call twice. */
+  dispose(): void;
+}
+
+export interface AppServerLaunch {
+  /** Where it runs. Neither caller has a workspace of its own, so neither pays a direnv round trip. */
+  cwd: string;
+  /** What the server sends that is not an answer: its notifications and its own requests. */
+  onMessage?: (message: RpcMessage) => void;
+  deps?: Partial<AgentProcessDeps>;
+}
+
 /**
- * The live model catalog of a runner that speaks Codex's `app-server`
- * protocol: spawn it, run `initialize` → `model/list`, and take the list —
- * null on any failure (missing binary, an early exit, no answer before the
- * deadline, a malformed response) so the caller falls through to its cache.
- *
- * This is the adapter path's process and RPC client, not a second copy of
- * them: {@link RunnerProcess} owns the group kill, the EPIPE-safe stdin, the
- * stderr tail and UTF-8 decoding across chunk boundaries, and {@link CodexRpc}
- * owns the ids and the pending-response map. The process is always taken down
- * tree-wide, so a `codex` shim's interpreter cannot outlive the call.
+ * Spawn a runner that speaks Codex's `app-server` protocol and wire its
+ * stdout to a {@link CodexRpc}; null when it cannot be launched (a missing
+ * binary, a vanished cwd). This is the adapter path's process and RPC
+ * client, not a second copy of them: {@link RunnerProcess} owns the group
+ * kill, the EPIPE-safe stdin, the stderr tail and UTF-8 decoding across chunk
+ * boundaries, and {@link CodexRpc} owns the ids and the pending-response map.
  */
-export async function discoverAppServerModels(
-  command: string,
-  args: string[],
-  options: AppServerModelsOptions = {},
-): Promise<AppServerModel[] | null> {
+export async function openAppServer(command: string, args: string[], launch: AppServerLaunch): Promise<AppServerConnection | null> {
   const runner = new RunnerProcess({
     spawn: nodeSpawn,
     fetch: globalThis.fetch,
-    // Discovery has no workspace of its own: it asks the CLI for its catalog
-    // before any workspace is chosen, so it must not pay a direnv round trip
-    // (or inherit a project's variables) before a spawn that has a deadline.
+    // The cwd is no workspace: discovery asks for the catalog before one is
+    // chosen, so it pays no direnv round trip before a spawn with a deadline.
+    // The account monitor passes the workspace's environment itself, since
+    // that can choose whose account is read.
     workspaceEnv: async () => ({}),
-    ...options.deps,
+    ...launch.deps,
   });
 
   let child: ChildProcess | null = null;
-  const rpc = new CodexRpc((payload) => {
+  const write = (payload: unknown) => {
     try {
       child?.stdin?.write(`${JSON.stringify(payload)}\n`);
     } catch {
-      // The process is gone; `ended` is what answers the call.
+      // The process is gone; `gone` is what answers the caller.
     }
-  });
+  };
+  const rpc = new CodexRpc(write);
   const lines = new LineBuffer();
   const deliver = (line: string) => {
     const message = parseRpcLine(line);
-    if (message) rpc.dispatch(message, () => {});
+    if (message && !rpc.dispatch(message, () => {})) launch.onMessage?.(message);
   };
 
   // A server that stopped reading its input can keep running forever; the
@@ -83,7 +96,7 @@ export async function discoverAppServerModels(
   const broken = new Promise<void>((resolve) => { inputBroken = resolve; });
 
   try {
-    await runner.start(process.cwd(), () => ({ command, args }), (started) => {
+    await runner.start(launch.cwd, () => ({ command, args }), (started) => {
       child = started;
       started.stdin?.on('error', () => inputBroken());
       runner.readStdout(
@@ -101,13 +114,42 @@ export async function discoverAppServerModels(
   }
 
   // A request still waiting when the process ends fails at once instead of
-  // sitting out the deadline, and a late `model/list` write is dropped.
+  // sitting out the deadline, and a late write is dropped.
   void runner.ended.then(() => rpc.close('The app-server process ended.'));
 
+  return {
+    rpc,
+    notify: (method, params) => write({ jsonrpc: '2.0', method, params }),
+    gone: Promise.race([runner.ended, broken]),
+    dispose: () => {
+      rpc.close('The app-server connection was closed.');
+      runner.dispose();
+    },
+  };
+}
+
+/** What Ordewell calls itself in `initialize`. */
+export const APP_SERVER_CLIENT_INFO = { name: 'ordewell', title: 'Ordewell', version: '0.1.0' };
+
+/**
+ * The live model catalog of a runner that speaks Codex's `app-server`
+ * protocol: spawn it, run `initialize` → `model/list`, and take the list —
+ * null on any failure (missing binary, an early exit, no answer before the
+ * deadline, a malformed response) so the caller falls through to its cache.
+ * The process is always taken down tree-wide, so a `codex` shim's
+ * interpreter cannot outlive the call.
+ */
+export async function discoverAppServerModels(
+  command: string,
+  args: string[],
+  options: AppServerModelsOptions = {},
+): Promise<AppServerModel[] | null> {
+  const server = await openAppServer(command, args, { cwd: process.cwd(), deps: options.deps });
+  if (!server) return null;
+  const { rpc } = server;
+
   const asked = (async (): Promise<AppServerModel[] | null> => {
-    const initialized = await rpc.call('initialize', {
-      clientInfo: { name: 'ordewell', title: 'Ordewell', version: '0.1.0' },
-    });
+    const initialized = await rpc.call('initialize', { clientInfo: APP_SERVER_CLIENT_INFO });
     if (!initialized.ok) return null;
     const listed = await rpc.call('model/list', {});
     if (!listed.ok) return null;
@@ -119,10 +161,10 @@ export async function discoverAppServerModels(
     return await settleWithin(asked, {
       timeoutMs: options.timeout ?? DEFAULT_TIMEOUT_MS,
       onTimeout: () => null,
-      ended: Promise.race([runner.ended, broken]),
+      ended: server.gone,
       onEnded: () => null,
     });
   } finally {
-    runner.dispose();
+    server.dispose();
   }
 }

@@ -72,6 +72,8 @@ export interface SessionOverrides {
   /** Defaults to none: a session saving through the fake store owns nothing on disk. */
   leaseHost?: SessionDeps['leaseHost'];
   mcpServer?: SessionDeps['mcpServer'];
+  /** A fake network for web reads (ADR-0027); the real transport, DNS, cache and search provider unless given. */
+  web?: SessionDeps['web'];
 }
 
 /** Task-log files that live in memory, numbered per task as the real store numbers them. */
@@ -137,6 +139,7 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     openTaskLog: overrides.openTaskLog ?? memoryTaskLogs(),
     mcpServer: overrides.mcpServer,
     leaseHost: overrides.leaseHost,
+    web: overrides.web,
   });
   if (!overrides.saveSession) saveFakes.set(session, save);
   return session;

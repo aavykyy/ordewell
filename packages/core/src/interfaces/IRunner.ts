@@ -8,6 +8,7 @@ import type { RunnerSessionCost } from '../models/Usage';
 import type { ScriptBody } from '../models/ScriptTask';
 import type { TaskShell } from './IFileSystem';
 import type { HandoffCheck } from '../models/Handoff';
+import type { TaskWebReads } from '../services/taskWebReads';
 /** How a structured turn ended. `failed` carries the agent's own words in the preceding `error` event. */
 export type StructuredTurnEnd = 'completed' | 'interrupted' | 'failed';
 /**
@@ -284,6 +285,13 @@ export interface IRunner {
      * says it is not available.
      */
     applyPatch?: (args: ApplyPatchArgs) => Promise<McpToolReply>;
+    /**
+     * Answers a read-only attempt's `fetch` and `web_search` calls (ADR-0046)
+     * through the session's web-read policy, apart from its shell. Only a
+     * read-only attempt's token lists them; without one they say they are
+     * not available.
+     */
+    webReads?: TaskWebReads;
   }): Promise<IRunnerSession>;
 
   /** Wind one session down ({@link IRunnerSession.stop}); resolves once its process is gone. */

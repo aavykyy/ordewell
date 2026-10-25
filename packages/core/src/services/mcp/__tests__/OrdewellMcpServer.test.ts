@@ -72,7 +72,7 @@ describe('OrdewellMcpServer', () => {
     expect(writer.readOnly).toBeUndefined();
     expect(mcpClientConfig(writer).readOnly).toBeUndefined();
     const tools = (await readOnly.listTools()).tools;
-    expect(tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'read_task', 'run_command', 'save_patch', 'task_complete']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'fetch', 'read_task', 'run_command', 'save_patch', 'task_complete', 'web_search']);
     // The hint names what lands, even when a command changes its disposable worktree.
     expect(tools.find((t) => t.name === 'run_command')?.annotations?.readOnlyHint).toBe(true);
     expect((await change.listTools()).tools.map((t) => t.name).sort()).toEqual(['apply_patch', 'checkpoint', 'read_task', 'task_complete']);
@@ -253,6 +253,30 @@ describe('OrdewellMcpServer', () => {
     server.revoke(credential.token);
 
     expect((await call).content).toEqual([{ type: 'text', text: 'The attempt ended before the checkpoint was answered.' }]);
+  });
+
+  // Stateless: the cancellation is a request of its own, which reaches the call only through its token.
+  it('aborts a call its caller cancels, and no call of another token', async () => {
+    const server = newServer();
+    const aborted: string[] = [];
+    const entered: string[] = [];
+    const fetch = async ({ url }: { url: string }, { signal }: McpToolContext): Promise<McpToolReply> => {
+      entered.push(url);
+      await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+      aborted.push(url);
+      return { text: 'cancelled', isError: true };
+    };
+    const mine = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1, readOnly: true }, { fetch }));
+    const other = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't2', attempt: 1, readOnly: true }, { fetch }));
+
+    const cancel = new AbortController();
+    const call = mine.callTool({ name: 'fetch', arguments: { url: 'https://a.example/' } }, undefined, { signal: cancel.signal });
+    void other.callTool({ name: 'fetch', arguments: { url: 'https://b.example/' } }).catch(() => undefined);
+    await vi.waitFor(() => expect(entered).toHaveLength(2));
+    cancel.abort();
+
+    await expect(call).rejects.toThrow();
+    await vi.waitFor(() => expect(aborted).toEqual(['https://a.example/']));
   });
 
   // Claude Code aborts an HTTP tool call that goes silent for its idle timeout;

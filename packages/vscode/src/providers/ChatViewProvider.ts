@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { type GlobalRunSettings, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type PlanStatus, type RunnerId, type RunActivity, type RunView } from '@ordewell/core';
+import { type AccountLimitSnapshot, type GlobalRunSettings, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type PlanStatus, type RunnerId, type RunActivity, type RunView } from '@ordewell/core';
 import { ConversationViewHost, type SavedConversation } from '../ConversationViewHost';
 import { RunViewHost } from '../RunViewHost';
 import { renderWebviewHtml } from './webviewHtml';
@@ -166,6 +166,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._modelDiscoveryErrors = errors;
     this.postMessage({ type: 'setModelDiscoveryErrors', errors });
   }
+  /** Every runner account's limits as the host's monitor last published them; kept to replay to a webview that loads later. */
+  setAccountLimits(limits: readonly AccountLimitSnapshot[]): void {
+    this._accountLimits = limits;
+    this.postMessage({ type: 'accountLimits', limits });
+  }
   /** Who can plan, who does plan, and that planner's effort — one message, so the webview never renders a half-switched planner. */
   setPlannerBackends(backends: PlannerBackend[], provider: string, runner?: string, effort?: string): void {
     this._plannerState = { backends, provider, runner, effort };
@@ -184,6 +189,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _configuredProviders: ApiProvider[] = [];
   private _modelDiscoveryErrors: Record<string, string> = {};
   private _plannerState: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string } | null = null;
+  private _accountLimits: readonly AccountLimitSnapshot[] | null = null;
 
   /**
    * Re-send every cached piece of state to the webview. Safe to call once the
@@ -229,6 +235,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     if (this._plannerState) {
       this.postMessage({ type: 'setPlannerBackends', ...this._plannerState });
+    }
+    if (this._accountLimits) {
+      this.postMessage({ type: 'accountLimits', limits: this._accountLimits });
     }
     this._emitConsolidatedRunners();
   }

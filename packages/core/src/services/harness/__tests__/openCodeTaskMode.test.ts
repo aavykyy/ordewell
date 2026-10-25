@@ -160,7 +160,7 @@ describe('OpenCodeAdapter task mode — start', () => {
       const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT!) as { lsp: boolean; permission: Record<string, unknown> };
       expect(config.lsp).toBe(false);
       for (const tool of ['*', 'edit', 'write', 'patch', 'apply_patch', 'multiedit', 'bash', 'shell', 'task', 'subagent', 'webfetch', 'websearch', 'codesearch', 'execute']) expect(config.permission[tool]).toBe('deny');
-      for (const tool of ['read', 'grep', 'glob', 'list', 'ordewell_run_command', 'ordewell_save_patch', 'ordewell_checkpoint', 'ordewell_task_complete']) expect(config.permission[tool]).toBe('allow');
+      for (const tool of ['read', 'grep', 'glob', 'list', 'ordewell_run_command', 'ordewell_save_patch', 'ordewell_checkpoint', 'ordewell_task_complete', 'ordewell_fetch', 'ordewell_web_search']) expect(config.permission[tool]).toBe('allow');
       expect(config.permission.external_directory).toMatchObject({ '*': 'deny', '/workspace/*': 'allow' });
       const events: AgentEvent[] = [];
       const turn = adapter.send('Review', (e) => events.push(e));

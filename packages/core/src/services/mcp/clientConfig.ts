@@ -13,7 +13,7 @@ export interface McpClientConfig {
   headers: Record<string, string>;
   /** Planner tools the token hides: a runner must neither pre-allow nor mention them. */
   hidden?: readonly string[];
-  /** A read-only task's token (ADR-0046): `run_command` is among its tools, for the runner to pre-allow and name. */
+  /** A read-only task's token (ADR-0046): `run_command`, `fetch` and `web_search` are among its tools, for the runner to pre-allow and name. */
   readOnly?: true;
 }
 

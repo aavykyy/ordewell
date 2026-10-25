@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { taskChatAvailable, type SessionMessage, type Task } from '@ordewell/core';
+import { taskChatAvailable, type AccountLimitSnapshot, type SessionMessage, type Task } from '@ordewell/core';
 import { TaskLogPanel, taskTabTitle, type TaskLogSession } from './TaskLogPanel';
 
 /** The editor tab's view type; one panel per task is keyed by task id, not by this. */
@@ -11,6 +11,8 @@ export interface TaskLogRegistryDeps {
   getTask: (taskId: string) => Task | undefined;
   /** The task's dotted reference ("2", "2.1"): a subtask's own order restarts at 1. */
   orderLabel?: (taskId: string) => string | undefined;
+  /** Every runner's account limits as the host's monitor last read them; each panel picks its task's runner. */
+  accountLimits?: () => readonly AccountLimitSnapshot[];
   /** Open a workspace-relative file the log's handoff saved, from the panel's own link (ADR-0050). */
   openFile: (path: string) => void;
   log: (msg: string) => void;
@@ -89,6 +91,11 @@ export class TaskLogRegistry {
     for (const panel of this.panels.values()) panel.receive(msg);
   }
 
+  /** The monitor read an account again. */
+  accountLimitsChanged(): void {
+    for (const panel of this.panels.values()) panel.pushAccountLimits();
+  }
+
   dispose(): void {
     for (const panel of [...this.panels.values()]) panel.dispose();
     this.panels.clear();
@@ -98,7 +105,7 @@ export class TaskLogRegistry {
     const controller = new TaskLogPanel(
       panel,
       taskId,
-      { session: this.deps.session(), getTask: this.deps.getTask, orderLabel: this.deps.orderLabel, openFile: this.deps.openFile, log: this.deps.log },
+      { session: this.deps.session(), getTask: this.deps.getTask, orderLabel: this.deps.orderLabel, accountLimits: this.deps.accountLimits, openFile: this.deps.openFile, log: this.deps.log },
       this.deps.extensionUri,
       () => { this.panels.delete(taskId); },
     );

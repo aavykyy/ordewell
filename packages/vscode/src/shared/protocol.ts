@@ -1,4 +1,4 @@
-import type { GlobalRunSettings,
+import type { AccountLimitSnapshot, GlobalRunSettings,
   AiProvider, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
   TaskModelAssignment,
 } from '@ordewell/core';
@@ -196,6 +196,12 @@ export type HostToWebview =
   | { type: 'plannerTurn'; active: boolean }
   /** The planner is working without producing anything visible; keeps the webview's watchdog quiet. */
   | { type: 'plannerLiveness' }
+  /**
+   * The open turn itself produced something: an event carrying its turn id.
+   * Unlike liveness, which names no turn, this says the turn is still out, so
+   * a webview whose watchdog gave up on it locks the composer again.
+   */
+  | { type: 'plannerTurnAlive' }
   | { type: 'planUpdated'; plan: SurfacePlan }
   /**
    * The run as the host folded every session event: each task's plan fields and
@@ -246,4 +252,10 @@ export type HostToWebview =
    * arrives as a `conversationPatch`.
    */
   | { type: 'restoreChat' }
-  | { type: 'conversationBusy'; busy: boolean };
+  | { type: 'conversationBusy'; busy: boolean }
+  /**
+   * Every installed runner's account limits as the host's monitor last read
+   * them, sent on each change and on ready. Live account data: it outlives a
+   * restored or new session, and is never part of the planner's usage.
+   */
+  | { type: 'accountLimits'; limits: readonly AccountLimitSnapshot[] };

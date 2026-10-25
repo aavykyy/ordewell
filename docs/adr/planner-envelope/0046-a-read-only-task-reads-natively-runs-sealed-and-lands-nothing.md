@@ -28,7 +28,9 @@ without approval only once read-only means one thing on every runner (R4).
 its runner's native read tools; its only shell is Ordewell's `run_command`,
 which runs sealed whatever the planner's envelope would ask about or refuse,
 and every command once one has run sealed, with the task's own worktree
-writable and nobody asked; and it lands nothing:
+writable and nobody asked; its only web reads are Ordewell's `fetch` and
+`web_search`, which the host carries under the planner's web-read policy
+without asking anyone; and it lands nothing:
 its worktree is thrown away when it ends, and its `task_complete` handoff is
 its result ([ADR-0047](../supervision/0047-structured-task-handoffs.md)), with
 the patch it saved of its worktree, if it saved one
@@ -185,13 +187,70 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   `run_command`. The profile needs no native sandbox probe, so it
   stays available on hosts where Guarded is unavailable. Project config is
   untrusted, as for the planner. No model is replaced.
-- **Native web tools are refused.** ADR-0027's unasked web reads require the
-  web policy's outbound-secret checks, exclusions, budget and decision log.
-  A task has no planner web-policy channel, and nobody to approve an
-  unchecked native fetch or search. Claude's `WebFetch` and `WebSearch` are
-  denied at the permission gate, OpenCode's fetch and searches in its policy,
-  and Codex's `web_search` is disabled. A task may still run an allowlisted
-  network command through its task shell under the existing command rules.
+- **Native web tools are refused.** A runner's own fetch and search run
+  outside Ordewell's pinned transport, and a provider-side search outside its
+  secret check and budget too, with nobody there to approve one. Claude's
+  `WebFetch` and `WebSearch` are denied at the permission gate, OpenCode's
+  fetch and searches in its policy, and Codex's `web_search` is disabled; the
+  denial names Ordewell's `fetch` and `web_search` instead. A task may still
+  run an allowlisted network command through its task shell under the
+  existing command rules, until its first sealed run.
+
+### Its web reads
+
+- **Ordewell's `fetch` and `web_search`, on its token alone.** A read-only
+  task's token lists them beside `run_command`
+  ([ADR-0022](../runners/0022-ordewell-mcp-server.md)), and every runner
+  pre-allows them by exact name, as it does the other task tools: Claude Code
+  as `mcp__ordewell__fetch` and `mcp__ordewell__web_search`, Codex under the
+  same names through its tool discovery, OpenCode as `ordewell_fetch` and
+  `ordewell_web_search`. A change or ops task's token lists neither.
+- **Decided by the planner's web-read policy, never by a person.** Each read
+  goes through the session's one `WebReadPolicy` and `HttpWebFetcher`
+  ([ADR-0027](0027-web-reads-in-the-planner-envelope.md)): the outbound-secret
+  check against the credentials the session holds at that moment (the
+  config's provider keys, every live MCP token, the planner service's own)
+  and credential-named environment values, before any lookup; the planner
+  allowlist's `!` exclusions; the scheme and SSRF guard, every DNS answer
+  vetted and the connection pinned; a cross-origin redirect decided again;
+  the body, content and time bounds; and the process-wide response cache and
+  search provider, a cache hit decided as a live read is. It reads as a
+  research subagent does (`prompting: false`): only what already stands — an
+  allowlist entry, a grant the user gave in this session, or a mode that
+  allows without asking — lets a read through. One that would ask is refused
+  at once, before any lookup or request, and the refusal tells the task to
+  report the gap in its handoff. The task asks nobody and adds no grant. The
+  policy is read from the user's settings and the session, never from
+  anything in the task's worktree.
+- **A budget per attempt.** Each attempt counts its reads against the
+  configured web-read budget on a count of its own
+  (`WebReadPolicy.forTask`, one per attempt): no planner turn resets or
+  spends it and no other attempt shares it. A read is counted before it is
+  decided, so reads made in parallel cannot overspend it. A retry and a
+  continue are new attempts with a fresh count; a respawn of the runner
+  within an attempt (ADR-0025) keeps it. A cross-origin redirect hop counts,
+  as the planner's does, and so does a read its caller cancels once it was
+  allowed: by then its host may already have been looked up.
+- **Carried by the host, apart from the shell.** The reads leave from
+  Ordewell's process, not the task shell: they work before and after the
+  shell's first sealed run, and they neither unseal it nor give its commands
+  the network.
+- **Ended with the attempt.** The attempt's reader (`TaskWebReader`) ends
+  when the attempt ends or its spawn is abandoned: a read in flight is
+  aborted through to its connection, none starts after, and one whose
+  transport answers anyway hands the runner nothing. The token is
+  revoked with the attempt (ADR-0022, A2), and a call its caller cancels is
+  aborted too.
+- **Recorded in the attempt's log, not the planner's conversation.** Each
+  decision is the call's own result: a refusal's reason, or, for an allowed
+  read, a closing line naming each origin or search provider decided and what
+  allowed it (the approval mode, the planner allowlist or a grant given in
+  this session), a cross-origin redirect hop's included, and how many reads
+  the attempt has left. The attempt's log keeps it as the tool's result. None
+  becomes an approval card in the planner's conversation, as a task runner's
+  approval request does not (ADR-0018, A1): the reads are the task's, and a
+  budget's worth of them per attempt would bury the planner's own. A refused
+  credential is recorded without the URL or query.
 
 ### Nothing lands
 
@@ -233,6 +292,13 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   worktree root, the throwaway overlay at a group's root and the read-only
   binds of `.git` entries are proven by the Linux CI job that runs the same
   suite under real bubblewrap.
+- Web reads are tested end to end in `taskWebReads.test.ts`: a session built
+  by `createSession` with a structured runner, the attempt's token used by an
+  MCP client, and a fake transport and DNS. It covers what the token lists,
+  refusals before any lookup or request, the per-attempt budget under
+  parallel calls, the cache, a sealed shell, and the read's end at a stop, a
+  caller's cancellation and a retry. `readOnlyRunners.test.ts` and the
+  OpenCode task tests check each runner's pre-allowed names.
 - Landing and release go through `FakeWorktreeIsolation` for the scheduler's
   side, and real git in `GitWorktreeIsolation.test.ts` for what is removed, what
   is never preserved, and where git runs.
@@ -284,6 +350,20 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   sealed run controls, or running more git in the repository; a read-only task
   lands nothing, so its diff is not work to inspect, and refusing it is the
   smaller change that holds.
+- **No web reads.** The design until 2026-10-25, when native web tools were
+  refused for want of a task web-policy channel. Rejected: a research task
+  could not read the public documentation it was sent to check.
+- **The runner's native web tools under the web-read policy, as a planner's
+  are.** Rejected: a provider-side search runs where neither the secret
+  check nor the budget reaches it, Claude's `WebFetch` resolves the host
+  itself, and nobody is there to approve one; one host-carried route keeps
+  every read under the same guards on every runner.
+- **The network for the shell after a sealed run, for `curl` and the like.**
+  Rejected for the reason every later command runs sealed: a sealed run may
+  have rewritten what a networked command runs or reads.
+- **Spending the open planner turn's web-read budget.** Rejected: a task
+  outlives planner turns, so a new turn would reset what it had spent, and
+  parallel tasks and the planner would drain one count.
 - **Pinning `GIT_DIR`/`GIT_WORK_TREE` in the read-only runner's environment, so
   its own git ignores a planted `.git`.** Rejected: one pair cannot serve a
   repo group's several worktrees, the admin directory name is not recorded, and
@@ -307,7 +387,12 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - Once a task has run anything sealed, it has no network command left for the
   rest of its attempt: an allowlisted `gh` it runs after that fails, and an
   allowlisted `npm test` runs under the sealed profile's limits, without the
-  user's home directory. A task that needs both fetches first.
+  user's home directory. A task that needs both runs the network command
+  first. Its `fetch` and `web_search` are unaffected.
+- A read-only task reads only the web the user's settings already allow
+  without asking. Under `ask` or an explicit `allowlist` mode, an origin
+  nobody granted is a gap the task reports, and the planner, which can ask,
+  reads it.
 - A sealed `python -m venv` in the worktree fails on macOS, because a venv's
   links point outside it. A native read at the same moment as a sealed run
   could follow a link in the instant before it is removed: any link on Linux,
@@ -353,3 +438,5 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-10-22 — the group-root consequence names the refusal where the root is bound read-only, and the testing decisions say which host proves which rule: macOS for Seatbelt, Linux CI for the bind mount, the group-root overlay and the read-only binds.
 - 2026-10-22 — handoffs carry read-only results and `read_task` joins the allowed task tools (ADR-0047, #120).
 - 2026-10-24 — a task's saved patch comes back with its handoff, captured by Ordewell's git only inside the task's seal (ADR-0050).
+- 2026-10-25 — a read-only task reads the web through Ordewell's `fetch` and `web_search`, under the planner's web-read policy without prompting and with a budget per attempt; native web tools stay refused.
+- 2026-10-25 — a task's web-read decisions are recorded in its attempt's log, an allowed read's naming what allowed it, and never in the planner's conversation; a read answered after its attempt ended hands the runner nothing; a cancelled allowed read keeps its count.
