@@ -238,6 +238,19 @@ export function toTaskLogEvent(event: StructuredEvent): TaskLogEvent | null {
   }
 }
 
+/**
+ * The model the task's own thread last ran a call on, as its usage reports it
+ * (`provider/model` for OpenCode); a subagent's calls and session totals do
+ * not say what the task runs on. Undefined when no call in `events` names one.
+ */
+export function lastServedModel(events: readonly TaskLogEvent[]): string | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event.type === 'usage' && event.record.model && !event.record.subagentId && !event.record.aggregate) return event.record.model;
+  }
+  return undefined;
+}
+
 /** A log as a surface is sent it, live or read back: everything but the skills' bodies. */
 export function taskLogForSurface(events: readonly TaskLogEvent[]): TaskLogEvent[] {
   return events.map((event): TaskLogEvent => event.type === 'task_skills'

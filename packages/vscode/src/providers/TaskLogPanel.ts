@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { accountLimitsOf, assignedRunnerOf, taskActionCommand, canContinue, taskLogHeaderView, type AccountLimitSnapshot, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { accountLimitsOf, assignedRunnerOf, lastServedModel, taskActionCommand, canContinue, taskLogHeaderView, type AccountLimitSnapshot, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG_FOLLOW, followTaskLog } from '@ordewell/core/plan-utils';
 import { diffConversation } from '../shared/conversationPatch';
 import { renderWebviewHtml } from './webviewHtml';
@@ -58,6 +58,12 @@ export class TaskLogPanel {
   private lastLimits = NO_LIMITS;
   /** When the runner last went quiet, as the status stream says it: the Session keeps no per-task answer to ask for. */
   private idleSince: string | null = null;
+  /**
+   * The task's latest attempt, the model its own calls last ran on there, and
+   * the assignment that was current when it was seen: an account that meters
+   * one provider is drawn by what serves the task, not only by what was planned.
+   */
+  private served: { attempt: number; model?: string; assignment?: string } = { attempt: 0 };
 
   constructor(
     private readonly panel: vscode.WebviewPanel,
@@ -92,6 +98,7 @@ export class TaskLogPanel {
   receive(msg: SessionMessage): void {
     if (msg.type === 'task_log') {
       if (msg.taskId !== this.taskId) return;
+      if (this.observeServed(msg.attempt, msg.events)) this.pushAccountLimits();
       const previous = this.follow.attempt;
       this.follow = followTaskLog(this.follow, { type: 'live', attempt: msg.attempt, events: msg.events, position: this.position(++this.sequence) });
       if (this.ready && this.follow.attempt > previous) this.load(this.follow.attempt);
@@ -115,11 +122,27 @@ export class TaskLogPanel {
   pushAccountLimits(): void {
     if (!this.ready) return;
     const task = this.deps.getTask(this.taskId);
-    const limits = accountLimitsOf(this.deps.accountLimits?.() ?? [], task && assignedRunnerOf(task));
+    const limits = accountLimitsOf(this.deps.accountLimits?.() ?? [], task && assignedRunnerOf(task), task && this.servedModel(task));
     const key = JSON.stringify(limits);
     if (key === this.lastLimits) return;
     this.lastLimits = key;
     this.panel.webview.postMessage({ type: 'accountLimits', limits } satisfies HostToTaskLog);
+  }
+
+  /** Whether the latest attempt's own calls now name another model than before. */
+  private observeServed(attempt: number, events: readonly TaskLogEvent[]): boolean {
+    const before = this.served;
+    if (attempt > this.served.attempt) this.served = { attempt };
+    const model = attempt === this.served.attempt ? lastServedModel(events) : undefined;
+    const task = model ? this.deps.getTask(this.taskId) : undefined;
+    if (model && task) this.served = { attempt, model, assignment: assignmentKey(task) };
+    return this.served.model !== before.model || this.served.assignment !== before.assignment;
+  }
+
+  /** What serves the task now: its latest attempt's model, while the assignment it ran under stands; else the assignment's. */
+  private servedModel(task: Task): string | undefined {
+    if (this.served.model && this.served.assignment === assignmentKey(task)) return this.served.model;
+    return task.assignedModel?.modelId;
   }
 
   private handle(msg: TaskLogToHost): void {
@@ -131,6 +154,7 @@ export class TaskLogPanel {
         else this.postInit();
         // A reloaded webview holds nothing, so it is sent them whatever was sent before.
         this.lastLimits = NO_LIMITS;
+        this.readServed();
         this.pushAccountLimits();
         return;
       case 'selectAttempt':
@@ -180,6 +204,13 @@ export class TaskLogPanel {
         }));
         return;
     }
+  }
+
+  /** What the saved latest attempt was served by, for a panel that did not hear it live. */
+  private readServed(): void {
+    const latest = this.deps.session.taskLogAttempts(this.taskId).at(-1) ?? 0;
+    this.served = { attempt: latest };
+    if (latest > 0) this.observeServed(latest, this.deps.session.taskLog(this.taskId, latest));
   }
 
   private selectAttempt(attempt: number): void {
@@ -284,6 +315,11 @@ export class TaskLogPanel {
     this.deps.log(`Task log control failed: ${error}`);
     this.panel.webview.postMessage({ type: 'showError', error } satisfies HostToTaskLog);
   }
+}
+
+/** A reassignment of runner or model is a new binding: what the old one was seen running on no longer speaks for it. */
+function assignmentKey(task: Task): string {
+  return `${task.assignedRunner}\0${task.assignedModel?.modelId ?? ''}`;
 }
 
 /** The tab title ADR-0018 asks for: `Task N · <title>`, with a subtask's dotted reference. */

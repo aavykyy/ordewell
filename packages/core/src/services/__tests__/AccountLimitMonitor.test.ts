@@ -135,6 +135,50 @@ describe('the account-limit monitor', () => {
     expect(codex.calls).toHaveLength(3);
   });
 
+  it('waits as long as a throttled read was told to, whoever asks meanwhile, then returns to the minute', async () => {
+    const codex = fakeCollector();
+    const m = start(codex.collector);
+    m.setForeground(true);
+    codex.last().answer(limits(10));
+    await settle();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(codex.calls).toHaveLength(2);
+
+    codex.last().answer({ kind: 'failed', owner: 'alice', retryAfterMs: 600_000 });
+    await settle();
+    // The last read stays, stale, while the wait runs: a throttled read is not an empty account.
+    expect(m.snapshots()[0]).toMatchObject({ status: 'stale', buckets: [bucket(10)] });
+    await vi.advanceTimersByTimeAsync(30_000);
+    m.refresh();
+    m.setForeground(false);
+    m.setForeground(true);
+    await vi.advanceTimersByTimeAsync(569_000);
+    expect(codex.calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(codex.calls).toHaveLength(3);
+
+    codex.last().answer(limits(12));
+    await settle();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(codex.calls).toHaveLength(4);
+  });
+
+  it('files the provider a collector meters on every snapshot it publishes', async () => {
+    const go = fakeCollector('opencode', 'OpenCode Go');
+    const m = start({ ...go.collector, provider: 'opencode-go' });
+    expect(m.snapshots()[0]).toMatchObject({ provider: 'opencode-go', status: 'unknown' });
+
+    m.refresh();
+    go.last().answer(limits(5));
+    await settle();
+    expect(m.snapshots()[0]).toMatchObject({ provider: 'opencode-go', status: 'fresh' });
+    m.refresh();
+    await vi.advanceTimersByTimeAsync(10_000);
+    go.last().answer({ kind: 'signed_out' });
+    await settle();
+    expect(m.snapshots()[0]).toMatchObject({ provider: 'opencode-go', status: 'signed_out' });
+  });
+
   it('reads again once more when a read reports a sparse update arrived during it', async () => {
     const codex = fakeCollector();
     const m = start(codex.collector);

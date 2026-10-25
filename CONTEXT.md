@@ -2584,9 +2584,12 @@ protocol, never from usage records: Codex's over a short-lived `app-server`
 which opens no thread and no turn; Claude Code's over the `initialize` and
 `get_usage` control requests, on a short-lived process of its own that keeps
 the CLI's login but loads no settings, hooks, plugins, tools or MCP servers
-and is never sent a message. Both run with the workspace's environment, as
-the planner and its tasks do, so the account a workspace chooses (its own
-`CODEX_HOME` or `CLAUDE_CONFIG_DIR`) is the one read. One monitor per host owns every installed
+and is never sent a message; OpenCode Go's with no process at all, from the
+one login OpenCode would pay for a Go model with, read in place from
+OpenCode's own store and sent only to OpenCode's fixed quota addresses
+(ADR-0051). All run with the workspace's environment, as the planner and its
+tasks do, so the account a workspace chooses (its own `CODEX_HOME`,
+`CLAUDE_CONFIG_DIR` or OpenCode data directory) is the one read. One monitor per host owns every installed
 runner's — enabled for tasks or not — and decides when each collector reads:
 before the planner's first call, on a surface connecting, on focus and on a
 configuration change, about once a minute while the window has focus, and
@@ -2596,11 +2599,15 @@ only asks for another read. A failure keeps the last read, marked `stale`,
 only when the same account was seen signed in; an account or auth-scope change
 drops it, and an answer that arrives after one is ignored. `signed_out`,
 `unsupported`, `not_installed` and `unknown` carry no limits and draw nothing;
-a window's share is drawn only as reported, so 0% is a reported 0. Each window
-keeps its own length (`5h`, `Weekly`, `90m`; `Primary`/`Secondary` when none
-is reported) and each per-model bucket stays apart. The planner footer draws
+a window's share is drawn only as reported, so 0% is a reported 0, and a
+service's throttle on the read is a failed read, never an exhausted window.
+Each window keeps its own length (`5h`, `Weekly`, `90m`; `Monthly` for a plan
+month, which has no one length; `Primary`/`Secondary` when none is reported)
+and each per-model bucket stays apart. An account that meters one provider
+only (OpenCode Go meters `opencode-go/…`) names it. The planner footer draws
 every account's row beside *Context fill* (`Planner ctx 61k (6%)`); a task log
-draws only its assigned runner's, live whichever attempt is on screen. Never
+draws only its assigned runner's, live whichever attempt is on screen, and of
+an account that meters one provider only while that provider serves the task. Never
 saved, never restored as current, and never a reason to pause or resume work —
 that stays with the *In-flight rule*.
 *Avoid:* "usage" or "rate limit" for it; *Avoid:* summing buckets, or reading a
