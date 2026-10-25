@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { spawn as nodeSpawn } from 'child_process';
-import { createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider, processLeaseHost } from '@ordewell/core';
+import { AccountLimitMonitor, codexAccountLimitCollector, createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider, processLeaseHost } from '@ordewell/core';
 import { ChatViewProvider } from './providers/ChatViewProvider';
 import { VsCodeConfig, moveAutonomyFromVsCodeSetting, moveEnabledRunnersFromVsCodeSetting } from './adapters/VsCodeConfig';
 import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
@@ -45,13 +45,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await moveAutonomyFromVsCodeSetting(settingsService);
     await moveEnabledRunnersFromVsCodeSetting(settingsService);
 
+    const runnerInstallation = new RunnerInstallation(runnerRegistry);
+    const codexServer = runnerRegistry.getManifest('codex')?.modelDiscovery.appServer;
+
     activeHost = createExtension({
       context,
       outputChannel,
       secretStore,
       config,
       runnerRegistry,
-      runnerInstallation: new RunnerInstallation(runnerRegistry),
+      runnerInstallation,
       codexSandbox: new CodexSandboxAvailability(
         runnerRegistry,
         { spawn: nodeSpawn, fetch: globalThis.fetch },
@@ -66,6 +69,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       modelResolver,
       chatProvider: new ChatViewProvider(context.extensionUri),
       sessionFactory: createSession,
+      // Codex's account is read over the same app-server its model discovery uses (ADR-0004).
+      accountLimits: new AccountLimitMonitor({
+        collectors: [codexAccountLimitCollector({
+          command: codexServer?.command,
+          args: codexServer?.args,
+          isInstalled: () => runnerInstallation.isInstalled('codex'),
+        })],
+      }),
     }, vscode);
 
     await activeHost.start();
