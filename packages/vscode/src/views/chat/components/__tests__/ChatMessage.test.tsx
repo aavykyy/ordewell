@@ -498,3 +498,28 @@ describe('renderMarkdown on planner structure (#82)', () => {
     expect(html.textContent).toBe('<script>alert(1)</script>');
   });
 });
+
+describe('ChatMessage selection retention', () => {
+  const selected = () => window.getSelection()?.toString() ?? '';
+
+  function select(node: Node): string {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return selection.toString();
+  }
+
+  it('keeps the exact selection inside a streaming reply when the next delta arrives', () => {
+    const { container, rerender } = render(<ChatMessage block={message({ text: 'Run `npm test` before you commit.', streaming: true })} />);
+    const code = container.querySelector('.chat-msg-content code')!.firstChild as Text;
+    expect(select(code)).toBe('npm test');
+    const active = document.activeElement;
+
+    rerender(<ChatMessage block={message({ text: 'Run `npm test` before you commit. Then push.', streaming: true })} />);
+
+    expect(selected()).toBe('npm test');
+    expect(document.activeElement).toBe(active);
+  });
+});
