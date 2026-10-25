@@ -44,6 +44,8 @@ const MIN_SPACING_MS = 10_000;
 const MAX_BACKOFF_MS = 15 * 60_000;
 /** A collector that ignores its own deadline is abandoned after this. */
 const DEADLINE_MS = 30_000;
+/** The longest a platform timer waits: past it, `setTimeout` fires at once instead. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /** `soon` is the spacing between reads; `later` waits for the next poll, or the backoff. */
 type Pace = 'soon' | 'later';
@@ -305,12 +307,18 @@ export class AccountLimitMonitor {
       .filter((at) => Number.isFinite(at) && at > now);
     if (resets.length === 0) return;
     const generation = entry.generation;
+    const delay = Math.min(...resets) - now;
     entry.resetTimer = setTimeout(() => {
       entry.resetTimer = undefined;
       if (this.disposed || generation !== entry.generation) return;
+      // A reset further off than one timer can wait: wait again from here.
+      if (delay > MAX_TIMER_MS) {
+        this.watchResets(entry);
+        return;
+      }
       if (entry.snapshot.status === 'fresh') this.show(entry, { ...entry.snapshot, status: 'stale' });
       this.request(entry, 'soon');
-    }, Math.min(...resets) - now);
+    }, Math.min(delay, MAX_TIMER_MS));
     entry.resetTimer.unref?.();
   }
 

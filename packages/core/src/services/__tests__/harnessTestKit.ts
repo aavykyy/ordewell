@@ -350,6 +350,17 @@ export function respondingSpawn(
 }
 
 /**
+ * A fake spawn that answers nothing on its own: every write goes to `onWrite`,
+ * `initialize` included, for a scenario about the control channel itself.
+ */
+export function silentSpawn(
+  onWrite: (written: string, proc: FakeAgentProcess, args: string[]) => void,
+  options: FakeSpawnOptions = {},
+): FakeSpawnResult {
+  return spawner(onWrite, options);
+}
+
+/**
  * Read a recorded agent transcript. One fixture per agent per scenario;
  * re-recording one against a newer CLI is how schema drift becomes a
  * reviewable diff.
