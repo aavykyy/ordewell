@@ -84,6 +84,15 @@ describe('a whole-plan start', () => {
     expect(api.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendSystemCommand', command: 'executePlan' }));
   });
 
+  it('holds Mark back as soon as the status says running, before the run activity lands', () => {
+    show({ type: 'planUpdated', plan: { ...plan, status: 'running' as const } });
+    fireEvent.click(screen.getByText('Only task'));
+
+    const button = screen.getByText('Mark complete') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText(/Stop the run first/)).toBeTruthy();
+  });
+
   it('becomes the run\'s Stop when execution state arrives', () => {
     fireEvent.click(screen.getByText('Execute Plan'));
 

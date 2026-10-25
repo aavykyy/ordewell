@@ -17,9 +17,9 @@ import { applySettings, foldRun, followSession, planSnapshot, withRun } from './
 import { refillPicker, reseedRunnerChoice } from './reducers/pickers';
 import { refreshStepper } from './reducers/stepper';
 import {
-  handleMouseSelect, isMouseSelect, isWheel, scrollChat, scrollDelta, scrollPointed, settlePanes, settlePlan, toggleDetail,
+  handleMouseSelect, isMouseSelect, isScrollKey, isWheel, scrollChat, scrollDelta, scrollPointed, settlePanes, settlePlan, toggleDetail,
 } from './reducers/pointer';
-import { clamp, clampSelection, reportError, stale, step, type Action, type Effect, type Step } from './reducers/shared';
+import { clamp, clampSelection, clearNotice, reportError, stale, step, type Action, type Effect, type Step } from './reducers/shared';
 
 export { initialState } from './state';
 export { resolveTaskId } from './reducers/taskEdits';
@@ -566,6 +566,9 @@ function handleKey(state: TuiState, key: Key): Step {
   // arm is dropped and the key goes on to whatever it normally does — a press
   // that arrives after the arm must not be swallowed by the arming itself.
   if (state.stopArmed && key.name !== 'escape') state = disarmStop(state);
+  // A notice answers the key that was refused: the next key that is not a
+  // scroll dismisses it, so the view's key hints come back.
+  if (state.taskView?.notice && !isScrollKey(key)) state = clearNotice(state);
   if (key.name === 'ctrl-c') return interrupt(state);
   if (key.name === 'ctrl-d' && !state.editor.text && !state.overlay) {
     return step({ ...state, exiting: true }, [{ type: 'exit' }]);

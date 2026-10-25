@@ -182,6 +182,21 @@ describe('a refusal while a task view is open', () => {
     expect(state.taskView?.notice).toContain('Stop the run first');
     expect(plain(state)).toContain('cannot be mark');
   });
+
+  it('dismisses the notice on the next key that is not a scroll, bringing the key hints back', () => {
+    const done = task({ status: 'completed' });
+    const activity = { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: true };
+    const before = viewing({ tasks: [done, second], selectedTask: 0, run: { ...EMPTY_RUN, activity } });
+    const refused = reduce(before, { type: 'key', key: key('char', 'm') }).state;
+    expect(plain(refused)).not.toContain('ctrl-r remove queued');
+
+    const scrolled = reduce(refused, { type: 'key', key: key('pagedown') }).state;
+    expect(scrolled.taskView?.notice).toContain('Stop the run first');
+
+    const next = reduce(scrolled, { type: 'key', key: key('tab') }).state;
+    expect(next.taskView?.notice).toBeUndefined();
+    expect(plain(next)).toContain('ctrl-r remove queued');
+  });
 });
 
 describe('a script task\'s view', () => {
@@ -209,6 +224,19 @@ describe('a script task\'s view', () => {
     expect(typed.state.editor.text).toBe('');
     expect(reduce(before, { type: 'key', key: key('enter') }).effects).toEqual([]);
     expect(reduce(before, { type: 'key', key: key('ctrl-s') }).effects).toEqual([]);
+  });
+
+  it('dismisses a refusal notice on the next key, since it has no composer to send', () => {
+    const base = scriptOpened();
+    const refused = { ...base, taskView: { ...base.taskView!, notice: 'This task hasn’t started yet.' } };
+    expect(plain(refused)).toContain('This task hasn’t started yet.');
+
+    const scrolled = reduce(refused, { type: 'key', key: key('pagedown') }).state;
+    expect(scrolled.taskView?.notice).toBe('This task hasn’t started yet.');
+
+    const cleared = reduce(scrolled, { type: 'key', key: key('char', 'h') }).state;
+    expect(cleared.taskView?.notice).toBeUndefined();
+    expect(plain(cleared)).toContain('read-only output');
   });
 });
 
