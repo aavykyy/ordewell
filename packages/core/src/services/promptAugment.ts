@@ -215,8 +215,10 @@ export function renderPlanMap(planTasks: readonly Task[], currentTaskId: string,
 /** What a read-only task is told it may do beyond reading (ADR-0050): the tool that keeps its prototype past its worktree. */
 export const READ_ONLY_PATCH_NOTE = 'This task is read-only and its worktree is thrown away when it ends. If you build a prototype there, keep it with the `save_patch` tool before you finish: a later task can then apply it.';
 
+export const READ_ONLY_WEB_NOTE = 'Read the web with the `fetch` and `web_search` tools: your runner\'s own web tools are off on this task, and these work whether or not your commands run sealed. Nobody is asked: a read the user\'s web-read settings do not already allow is refused, saying why. Do not retry a refusal; report what you could not read in your handoff.';
+
 export interface ComposeOptions {
-  /** A read-only task: told of `save_patch` (ADR-0050). */
+  /** A read-only task: told of `save_patch` (ADR-0050) and of its web reads (ADR-0046). */
   readOnly?: boolean;
   planMapEnabled?: boolean;
   planMapMaxEntries?: number;
@@ -346,7 +348,7 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
 
   if (opts?.skills?.length) blocks.push(renderTaskSkills(opts.skills));
 
-  if (opts?.readOnly) blocks.push(READ_ONLY_PATCH_NOTE);
+  if (opts?.readOnly) blocks.push(READ_ONLY_PATCH_NOTE, READ_ONLY_WEB_NOTE);
 
   if (isHitlTask(task)) blocks.push(CHECKPOINT_INSTRUCTION);
 

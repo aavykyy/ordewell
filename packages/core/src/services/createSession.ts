@@ -26,9 +26,11 @@ import { effectRuleFor, parseEffectAllowlist } from './effectAllowlist';
 import { PendingApprovals, type PendingApproval } from './PendingApprovals';
 import { RunnerApprovals } from './RunnerApprovals';
 import { approvalScopes, isRunnerApproval, type ApprovalAnswer, type ApprovalRequest } from '../interfaces/IApproval';
-import { HttpWebFetcher } from './HttpWebFetcher';
+import { HttpWebFetcher, type WebTransport } from './HttpWebFetcher';
+import type { ResolveAll } from './egressGuard';
+import type { ISearchProvider } from '../interfaces/ISearchProvider';
 import { WebReadPolicy } from './webReadPolicy';
-import { sharedWebResponseCache } from './WebResponseCache';
+import { sharedWebResponseCache, type WebResponseCache } from './WebResponseCache';
 import { sharedSearchProvider } from './DuckDuckGoSearchProvider';
 import { PROVIDER_PRIORITY, runnerForProvider } from './ProviderRegistry';
 import { ModelResolver } from './ModelResolver';
@@ -208,6 +210,11 @@ export interface SessionDeps {
   openTaskLog?: (location: TaskLogLocation, taskId: string, attempt?: number) => TaskLogFile;
   /** The Ordewell MCP server a harness planner's tools are served from (ADR-0022). Defaults to the process's one. */
   mcpServer?: OrdewellMcpServer;
+  /**
+   * What carries web reads (ADR-0027): the pinned transport, real DNS and the
+   * process-wide cache and search provider unless a test fakes the network.
+   */
+  web?: { transport?: WebTransport; resolveHost?: ResolveAll; cache?: WebResponseCache; searchProvider?: ISearchProvider };
 }
 
 /**
@@ -325,6 +332,8 @@ export function createSession(deps: SessionDeps): Session {
     },
     // The planner's command rules, at the read-only task's own working directory (ADR-0046).
     taskShell: (site) => deps.fsAdapter.taskShell?.(site),
+    // The planner's web-read policy with a budget per attempt, never prompting (ADR-0046).
+    taskWebFetcher: (task) => fetcher.forTask(task),
     // Beside the attempt's log, as a script's whole output is, and by the same rule: a swapped log store keeps the disk untouched (ADR-0050).
     ...(deps.openTaskLog ? {} : {
       keepPatch: (taskId: string, attempt: number, patch: Buffer) => {
@@ -374,6 +383,19 @@ export function createSession(deps: SessionDeps): Session {
     secrets: outboundSecrets,
     budget: () => deps.config.webReadBudget,
     turn: () => conversation?.currentTurnId,
+    ...(deps.web?.resolveHost ? { resolveHost: deps.web.resolveHost } : {}),
+  });
+  // Every planner's web reads, carried here or natively, and every read-only
+  // task's, are decided by the one policy, which asks through the same channel
+  // as paths and commands. The response cache and search provider are
+  // process-wide, so parallel sessions, their subagents and their tasks share
+  // bytes and the search cooldown.
+  const fetcher = new HttpWebFetcher({
+    policy: webReads,
+    cache: deps.web?.cache ?? sharedWebResponseCache,
+    searchProvider: deps.web?.searchProvider ?? sharedSearchProvider,
+    ...(deps.web?.transport ? { fetchImpl: deps.web.transport } : {}),
+    ...(deps.web?.resolveHost ? { resolveHost: deps.web.resolveHost } : {}),
   });
 
   const catalog = new SessionCatalog({
@@ -408,11 +430,7 @@ export function createSession(deps: SessionDeps): Session {
     approvals,
     approvalPolicy,
     taskLogs,
-    // Every planner's web reads, carried here or natively, are decided by the
-    // one policy, which asks through the same channel as paths and commands.
-    // The response cache and search provider are process-wide, so parallel
-    // sessions and their subagents share bytes and the search cooldown.
-    fetcher: new HttpWebFetcher({ policy: webReads, cache: sharedWebResponseCache, searchProvider: sharedSearchProvider }),
+    fetcher,
     skillsService: deps.skillsService ?? new SkillsService(deps.workspaceRoot()),
     saveSession: deps.saveSession ?? saveSession,
     lease: (onLost) => {

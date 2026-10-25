@@ -46,6 +46,13 @@ describe('read-only runner profiles (ADR-0046)', () => {
     }
   });
 
+  it('refuses a native web read and points at Ordewell\'s fetch and web_search, never at a person', () => {
+    const site = { cwd: '/task', workspaceRoot: '/workspace' };
+    for (const ask of [{ kind: 'fetch', url: 'https://example.test' }, { kind: 'search', query: 'docs', provider: 'anthropic' }] as const) {
+      expect(decideReadOnlyTaskPermission(ask, site)).toEqual({ decision: 'deny', note: 'This native tool is unavailable on a read-only task. Use Ordewell run_command for commands, and Ordewell fetch and web_search for the web; nobody can approve native tools here.' });
+    }
+  });
+
   it('allows real paths in either root and refuses links escaping both', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-read-roots-'));
     dirs.push(dir);
@@ -74,7 +81,7 @@ describe('read-only runner profiles (ADR-0046)', () => {
       expect(args[args.indexOf('--disallowedTools') + 1].split(',')).toEqual(expect.arrayContaining(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'PowerShell', 'KillShell', 'EnterPlanMode', 'ExitPlanMode']));
       expect(args[args.indexOf('--setting-sources') + 1]).toBe('user');
       expect(JSON.parse(args[args.indexOf('--settings') + 1])).toMatchObject({ disableAllHooks: true });
-      expect(args[args.indexOf('--allowedTools') + 1].split(',')).toEqual(['mcp__ordewell__task_complete', 'mcp__ordewell__checkpoint', 'mcp__ordewell__read_task', 'mcp__ordewell__run_command', 'mcp__ordewell__save_patch']);
+      expect(args[args.indexOf('--allowedTools') + 1].split(',')).toEqual(['mcp__ordewell__task_complete', 'mcp__ordewell__checkpoint', 'mcp__ordewell__read_task', 'mcp__ordewell__run_command', 'mcp__ordewell__save_patch', 'mcp__ordewell__fetch', 'mcp__ordewell__web_search']);
       const events: AgentEvent[] = [];
       void adapter.send('Review', (e) => events.push(e));
       const requests: Array<[string, Record<string, unknown>, string]> = [
@@ -84,6 +91,9 @@ describe('read-only runner profiles (ADR-0046)', () => {
         ['WebFetch', { url: 'https://example.test' }, 'deny'], ['WebSearch', { query: 'docs' }, 'deny'],
         ['mcp__other__write', {}, 'deny'], ['mcp__ordewell__run_command', { command: 'npm test' }, 'allow'],
         ['mcp__ordewell__save_patch', {}, 'allow'],
+        // Ordewell's web reads are its own tools, decided by the session's policy at the call (ADR-0046).
+        ['mcp__ordewell__fetch', { url: 'https://example.test' }, 'allow'], ['mcp__ordewell__web_search', { query: 'docs' }, 'allow'],
+        ['mcp__ordewellx__fetch', { url: 'https://example.test' }, 'deny'],
       ];
       const proc = spawned.processes[0];
       for (const [i, [tool_name, input, behavior]] of requests.entries()) {
@@ -107,6 +117,8 @@ describe('read-only runner profiles (ADR-0046)', () => {
       expect(thread?.params?.developerInstructions).toContain('ALL_TOOLS');
       expect(thread?.params?.developerInstructions).toContain('mcp__ordewell__run_command');
       expect(thread?.params?.developerInstructions).toContain('mcp__ordewell__save_patch');
+      expect(thread?.params?.developerInstructions).toContain('`mcp__ordewell__fetch`');
+      expect(thread?.params?.developerInstructions).toContain('Read web pages with `mcp__ordewell__fetch` and search with `mcp__ordewell__web_search`: your own web search is off on this task.');
       expect(spawned.probeArgs()).toEqual([]);
       const events: AgentEvent[] = [];
       void adapter.send('Review', (e) => events.push(e));

@@ -38,13 +38,48 @@ export interface WebReadPolicyOptions {
   turn?: () => string | undefined;
   /** Override DNS resolution (every answer for a name) in tests. */
   resolveHost?: ResolveAll;
+  /**
+   * The read-only task whose attempt reads (ADR-0046), by title, set by
+   * {@link WebReadPolicy.forTask}: named in approvals and refusals, and its
+   * budget is the policy's own for its whole life, whatever `turn` says.
+   */
+  task?: string;
 }
 
 export const DEFAULT_WEB_READ_BUDGET = 40;
 
 const ALLOWED: WebReadDecision = { allowed: true };
 
+/** Who reads, as an approval and a refusal name it. */
+interface Reader {
+  who: string;
+  /** Whose budget a read over it spent, and where to say so. */
+  budget: { spent: string; tell: string };
+  /** What a reader that may not prompt is told to do with a read it was refused. */
+  gap: string;
+  /** Where it runs, as a refusal for want of a channel says. */
+  background: string;
+}
+
+const PLANNER_READER: Reader = {
+  who: 'Planner research',
+  budget: { spent: 'this planner turn has used its web-read budget', tell: 'tell the user' },
+  gap: 'Note the gap in your digest',
+  background: 'research agents run in the background',
+};
+
+function taskReader(task: string): Reader {
+  return {
+    who: `Read-only task "${task}"`,
+    budget: { spent: 'this task attempt has used its web-read budget', tell: 'say in your handoff' },
+    gap: 'Report the gap in your task_complete handoff',
+    background: 'a read-only task runs in the background',
+  };
+}
+
 export class WebReadPolicy {
+  private readonly options: WebReadPolicyOptions;
+  private readonly reader: Reader;
   private readonly approval: IApproval;
   private readonly resolveHost: ResolveAll;
   private readonly secrets: () => Iterable<string>;
@@ -54,12 +89,24 @@ export class WebReadPolicy {
   private spent: { turn: string | undefined; reads: number } = { turn: undefined, reads: 0 };
 
   constructor(opts: WebReadPolicyOptions) {
+    this.options = opts;
+    this.reader = opts.task === undefined ? PLANNER_READER : taskReader(opts.task);
     this.approval = opts.approval;
     this.secrets = opts.secrets ?? (() => []);
     this.env = opts.env ?? (() => process.env);
     this.budget = opts.budget ?? (() => DEFAULT_WEB_READ_BUDGET);
-    this.turn = opts.turn ?? (() => undefined);
+    this.turn = opts.task === undefined ? opts.turn ?? (() => undefined) : () => undefined;
     this.resolveHost = opts.resolveHost ?? resolveAll;
+  }
+
+  /**
+   * The same policy for one read-only task attempt (ADR-0046): the same
+   * approval, allowlist, live secrets and budget setting, with a count of its
+   * own that no planner turn resets and no other attempt spends. One per
+   * attempt, so a retry or a continue starts a fresh count.
+   */
+  forTask(task: string): WebReadPolicy {
+    return new WebReadPolicy({ ...this.options, task });
   }
 
   /**
@@ -83,7 +130,7 @@ export class WebReadPolicy {
     // all pass the check at once; given back if the read does not happen.
     const spent = this.spend();
     if (!spent) {
-      return this.refuse(request, 'budget', `${label} refused: this planner turn has used its web-read budget (${this.budget()}). Continue with what you have, and tell the user that more reading would need a higher budget.`);
+      return this.refuse(request, 'budget', `${label} refused: ${this.reader.budget.spent} (${this.budget()}). Continue with what you have, and ${this.reader.budget.tell} that more reading would need a higher budget.`);
     }
     if (opts.prompting === false) {
       // A subagent may never prompt: only what is already standing — a grant,
@@ -105,16 +152,17 @@ export class WebReadPolicy {
 
   private subagentRefusal(read: WebRead, request: ApprovalRequest, source: ApprovalSource): WebReadDecision {
     const label = read.kind === 'fetch' ? 'Fetch' : 'Web search';
+    const { gap, background } = this.reader;
     if (source === 'mode') {
-      return this.refuse(request, source, `${label} refused: ${request.scope} is not covered by the planner allowlist in allowlist mode. Note the gap in your digest; the user must add a standing approval or change the approval mode.`);
+      return this.refuse(request, source, `${label} refused: ${request.scope} is not covered by the planner allowlist in allowlist mode. ${gap}; the user must add a standing approval or change the approval mode.`);
     }
     if (source === 'remembered') {
-      return this.refuse(request, source, `${label} refused: ${request.scope} was previously refused in this session. Note the gap in your digest; the user must add a standing approval or start a new session.`);
+      return this.refuse(request, source, `${label} refused: ${request.scope} was previously refused in this session. ${gap}; the user must add a standing approval or start a new session.`);
     }
     this.approval.record?.(request, false, source);
     return { allowed: false, reason: read.kind === 'fetch'
-      ? `Fetch refused: ${request.scope} is not approved in this session, and research agents run in the background where nothing can be approved. Note the gap in your digest; the planner can fetch it directly.`
-      : 'Web search refused: research agents run in the background where nothing can be approved. Note the gap in your digest; the planner can search directly.' };
+      ? `Fetch refused: ${request.scope} is not approved in this session, and ${background} where nothing can be approved. ${gap}; the planner can fetch it directly.`
+      : `Web search refused: ${background} where nothing can be approved. ${gap}; the planner can search directly.` };
   }
 
   /**
@@ -148,7 +196,7 @@ export class WebReadPolicy {
   private vetFetch(raw: string): Target {
     const label = 'Fetch';
     const request = (subject: string, scope: string, origin = scope): ApprovalRequest =>
-      ({ kind: 'url_fetch', subject, scope, detail: `Planner research wants to fetch ${origin}` });
+      ({ kind: 'url_fetch', subject, scope, detail: `${this.reader.who} wants to fetch ${origin}` });
     // First, on the text as given: resolving a host is itself a request, and
     // a secret in a subdomain would leave through DNS. Recorded without the
     // URL, the origin included, for the same reason.
@@ -178,7 +226,7 @@ export class WebReadPolicy {
     // A bare id is one of Ordewell's own backends, so the prompt says plainly
     // that the query leaves for a third party; a labelled runner-native search
     // points at the provider's own request instead, where `note` explains it.
-    const detail = `Planner research wants to search the web with ${providerLabel ?? provider}${providerLabel ? '' : ', a third party that receives the query'}${note ? `. ${note}` : ''}`;
+    const detail = `${this.reader.who} wants to search the web with ${providerLabel ?? provider}${providerLabel ? '' : ', a third party that receives the query'}${note ? `. ${note}` : ''}`;
     const request = (subject: string): ApprovalRequest =>
       ({ kind: 'web_search', subject, scope: searchScope(provider), detail });
     if (this.carriesSecret([query])) {
@@ -187,7 +235,7 @@ export class WebReadPolicy {
     return { label, request: request(query) };
   }
 
-  /** Reads the current planner turn may still make, for the planner to see. */
+  /** Reads the current planner turn, or the task attempt, may still make, for the reader to see. */
   remaining(): number {
     const used = this.spent.turn === this.turn() ? this.spent.reads : 0;
     return Math.max(0, this.budget() - used);

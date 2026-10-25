@@ -60,7 +60,7 @@ export function decideReadOnlyTaskPermission(ask: PlannerAsk | undefined, site: 
     if ([site.cwd, site.workspaceRoot].some((root) => root !== undefined && readTarget(root, target).inside)) return ALLOW;
     return deny('This read is outside the task worktree and workspace. Nobody can approve it here.');
   }
-  return deny('This native tool is unavailable on a read-only task. Use Ordewell run_command for commands; nobody can approve native tools here.');
+  return deny('This native tool is unavailable on a read-only task. Use Ordewell run_command for commands, and Ordewell fetch and web_search for the web; nobody can approve native tools here.');
 }
 
 export function readOnlyTaskPolicy(opts: AgentStartOptions | null | undefined): ((request: { ask?: PlannerAsk }) => ApprovalDecision) | undefined {

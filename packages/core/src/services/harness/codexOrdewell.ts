@@ -90,7 +90,8 @@ export const CODEX_ORDEWELL: CodexOrdewellBinding = {
       `They are not in your tool list up front. Find them with the tool discovery you have (the \`exec\` tool's \`ALL_TOOLS\` list) and call them by their full names, ${quoted(this.toolNames(role))}.`,
       `Look for them before you finish; the task is reported complete through \`${TASK_COMPLETE_TOOL}\`.`,
     ].join(' ');
-    return `${discovery}${readOnly ? ` You have no native shell: read files, search the repository and run tests with \`${this.toolName('run_command')}\`. It is your only shell (ADR-0046).` : ''}\n\n${taskCompletionContract(commits ? { commits } : {})}`;
+    const readOnlyNote = ` You have no native shell: read files, search the repository and run tests with \`${this.toolName('run_command')}\`. It is your only shell (ADR-0046). Read web pages with \`${this.toolName('fetch')}\` and search with \`${this.toolName('web_search')}\`: your own web search is off on this task.`;
+    return `${discovery}${readOnly ? readOnlyNote : ''}\n\n${taskCompletionContract(commits ? { commits } : {})}`;
   },
 
   /**

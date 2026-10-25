@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { randomBytes } from 'crypto';
 import { Server as McpProtocolServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, CancelledNotificationSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { extractPresentedToken } from '../../utils/daemonToken';
 import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, type McpTool, type PlannerToolHandler, type TaskToolHandler } from './tools';
 
@@ -35,7 +35,7 @@ export interface TaskTokenScope {
   taskId: string;
   /** The attempt generation the token is good for; a later attempt gets a new token. */
   attempt: number;
-  /** A read-only task's attempt (ADR-0046): its token lists `run_command` too, and no other task's does. */
+  /** A read-only task's attempt (ADR-0046): its token lists `run_command`, `fetch` and `web_search` too, and no other task's does. */
   readOnly?: boolean;
 }
 
@@ -55,13 +55,20 @@ export interface McpCredential {
   token: string;
   /** The planner tools the token hides ({@link PlannerTokenScope.hidden}), so the runner is told of and pre-allows only what it is served. */
   hidden?: readonly string[];
-  /** The token serves a read-only task's tools ({@link TaskTokenScope.readOnly}), so the runner is told of and pre-allows `run_command`. */
+  /** The token serves a read-only task's tools ({@link TaskTokenScope.readOnly}), so the runner is told of and pre-allows `run_command`, `fetch` and `web_search`. */
   readOnly?: true;
 }
 
+/**
+ * A token's calls in flight, by request id. Stateless, a caller's
+ * cancellation arrives as a request of its own, which finds the call it names
+ * only here; a reused id cancels every call of the token that carries it.
+ */
+type InFlight = Map<string, Set<AbortController>>;
+
 type Grant =
-  | { role: 'task'; scope: TaskTokenScope; handler: TaskToolHandler; revoked: AbortController }
-  | { role: 'planner'; scope: PlannerTokenScope; handler: PlannerToolHandler; revoked: AbortController };
+  | { role: 'task'; scope: TaskTokenScope; handler: TaskToolHandler; revoked: AbortController; calls: InFlight }
+  | { role: 'planner'; scope: PlannerTokenScope; handler: PlannerToolHandler; revoked: AbortController; calls: InFlight };
 
 export class OrdewellMcpServer {
   private readonly grants = new Map<string, Grant>();
@@ -81,13 +88,13 @@ export class OrdewellMcpServer {
   }
 
   async issueTaskToken(scope: TaskTokenScope, handler: TaskToolHandler = {}): Promise<McpCredential> {
-    const credential = await this.issue({ role: 'task', scope: { ...scope }, handler, revoked: new AbortController() });
+    const credential = await this.issue({ role: 'task', scope: { ...scope }, handler, revoked: new AbortController(), calls: new Map() });
     return scope.readOnly ? { ...credential, readOnly: true } : credential;
   }
 
   async issuePlannerToken(scope: PlannerTokenScope, handler: PlannerToolHandler = {}): Promise<McpCredential> {
     const hidden = [...(scope.hidden ?? [])];
-    const credential = await this.issue({ role: 'planner', scope: { ...scope, hidden }, handler, revoked: new AbortController() });
+    const credential = await this.issue({ role: 'planner', scope: { ...scope, hidden }, handler, revoked: new AbortController(), calls: new Map() });
     return hidden.length > 0 ? { ...credential, hidden } : credential;
   }
 
@@ -176,8 +183,8 @@ export class OrdewellMcpServer {
     // Stateless: a fresh server per request, built from the grant, so the tool
     // list and every call are fixed by the token on that very request.
     const mcp = new McpProtocolServer({ name: 'ordewell', version: '1' }, { capabilities: { tools: {} } });
-    if (grant.role === 'task') serveTools(mcp, grant.scope.readOnly ? READ_ONLY_TASK_TOOLS : TASK_TOOLS, grant.handler, grant.revoked.signal, this.heartbeatMs);
-    else serveTools(mcp, PLANNER_TOOLS.filter((tool) => !grant.scope.hidden?.includes(tool.name)), grant.handler, grant.revoked.signal, this.heartbeatMs);
+    if (grant.role === 'task') serveTools(mcp, grant.scope.readOnly ? READ_ONLY_TASK_TOOLS : TASK_TOOLS, grant.handler, grant, this.heartbeatMs);
+    else serveTools(mcp, PLANNER_TOOLS.filter((tool) => !grant.scope.hidden?.includes(tool.name)), grant.handler, grant, this.heartbeatMs);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       void transport.close();
@@ -188,7 +195,11 @@ export class OrdewellMcpServer {
   }
 }
 
-function serveTools<H>(mcp: McpProtocolServer, tools: readonly McpTool<H>[], handler: H, revoked: AbortSignal, heartbeatMs: number): void {
+function serveTools<H>(mcp: McpProtocolServer, tools: readonly McpTool<H>[], handler: H, { revoked, calls }: Pick<Grant, 'revoked' | 'calls'>, heartbeatMs: number): void {
+  mcp.setNotificationHandler(CancelledNotificationSchema, ({ params }) => {
+    if (params.requestId === undefined) return;
+    for (const call of calls.get(String(params.requestId)) ?? []) call.abort();
+  });
   mcp.setRequestHandler(ListToolsRequestSchema, () => ({
     tools: tools.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, ...(annotations ? { annotations } : {}) })),
   }));
@@ -196,18 +207,24 @@ function serveTools<H>(mcp: McpProtocolServer, tools: readonly McpTool<H>[], han
     const tool = tools.find((t) => t.name === request.params.name);
     if (!tool) throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${request.params.name}`);
     const progressToken = request.params._meta?.progressToken;
+    const id = String(extra.requestId);
+    const cancelled = new AbortController();
+    const same = calls.get(id) ?? new Set();
+    calls.set(id, same.add(cancelled));
     let beats = 0;
     const heartbeat = progressToken === undefined ? undefined : setInterval(() => {
       beats += 1;
       extra.sendNotification({ method: 'notifications/progress', params: { progressToken, progress: beats } }).catch(() => undefined);
     }, heartbeatMs);
     try {
-      const result = await tool.call(handler, request.params.arguments, { signal: AbortSignal.any([revoked, extra.signal]) });
+      const result = await tool.call(handler, request.params.arguments, { signal: AbortSignal.any([revoked.signal, extra.signal, cancelled.signal]) });
       return { content: [{ type: 'text', text: result.text }], isError: result.isError ?? false };
     } catch (err) {
       return { content: [{ type: 'text', text: err instanceof Error ? err.message : String(err) }], isError: true };
     } finally {
       clearInterval(heartbeat);
+      same.delete(cancelled);
+      if (same.size === 0 && calls.get(id) === same) calls.delete(id);
     }
   });
 }

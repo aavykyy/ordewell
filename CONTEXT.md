@@ -937,7 +937,8 @@ token decides the role), "MCP bridge", "plugin".
 *Ordewell MCP server*: one session, one task, one attempt generation (the
 generations `VerdictEngine` tracks). It lists `task_complete`, `checkpoint`
 and `read_task`, and `apply_patch` for a change task; a read-only task gets
-`run_command`, its only shell, and `save_patch` instead of `apply_patch`.
+`run_command`, its only shell, and `save_patch` instead of `apply_patch`,
+and `fetch` and `web_search`, its only web reads.
 It is revoked when the attempt ends, and a call carrying it after
 that is refused. It reaches the runner only in the injected MCP configuration,
 as an HTTP header — never in a prompt and never on a command line.
@@ -1000,7 +1001,9 @@ through, on every runner, whichever path carries the bytes (ADR-0027,
 that receives the query (`web_search:anthropic`, `openai`, `opencode`,
 `duckduckgo`). It runs the secret check, the *planner allowlist*'s
 exclusions, the *web-read budget* and the *approval mode*, and resolves a
-fetch's host only after all of them. Planner-only: tasks never pass through it.
+fetch's host only after all of them. Besides the planner's reads, it decides
+a *read-only task*'s `fetch` and `web_search`, which never ask anyone; change
+and ops tasks never pass through it.
 *Avoid:* "SSRF check" for the whole decision (the guard is its last step).
 
 **Project MCP server** — an MCP server the repository declares for its
@@ -1016,6 +1019,9 @@ unasked), "trusted server" (no runner's trust setting decides it).
 **Web-read budget** — how many web reads one planner turn may make in a
 session, the planner's and its research subagents' together
 (`plannerWebReadBudget`, `ORDEWELL_WEB_READ_BUDGET`); 0 turns web reads off.
+Each *read-only task* attempt has the same number on a count of its own,
+which no planner turn resets and no other attempt shares; a retry or a
+continue starts a fresh one.
 *Avoid:* "per-planner budget" (it is per session and turn, shared with
 subagents), "query budget" (that is the *Task query* read budget).
 
@@ -2243,7 +2249,11 @@ nobody, where what would ask or be refused is a *sealed run* with the
 worktree writable, so it can try a fix or add a failing test and run the
 suite; git there reads and records nothing. From the attempt's first sealed
 run on, every command of its shell runs sealed, what the allowlist covers
-included, since a sealed run may have rewritten what a later command runs. It stays read-only through a
+included, since a sealed run may have rewritten what a later command runs.
+Its only web reads are Ordewell's `fetch` and `web_search`, also on its token
+alone, which the host carries apart from the shell under the *web-read
+policy*, asking nobody, within a *web-read budget* of its own per attempt;
+its runner's own web tools are refused. It stays read-only through a
 planner's move or split unless the planner lifts it with `readOnly: false`.
 Its AI subtasks are read-only too unless one says otherwise; a manual task
 and an ops task cannot be one. The planner's only say over a task's mode; a

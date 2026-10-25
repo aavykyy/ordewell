@@ -231,7 +231,9 @@ what guards it has to hold without one:
   counted before its approval resolves, so reads raised in parallel cannot
   all pass at once, and given back if it does not happen. Past the budget,
   reads are refused with a message the planner can report. A budget of 0
-  turns web reads off.
+  turns web reads off. A read-only task's attempt counts its own reads
+  against the same setting, apart from every planner turn and every other
+  attempt (ADR-0046).
 - **Every decision is recorded in the research log**: what was asked, the path
   that carried it, and why it was allowed or refused (mode, grant, allowlist,
   exclusion, SSRF guard, secret check, budget), so the timeline shows it in
@@ -389,8 +391,9 @@ filed as its own issue.
   through the web-read policy, the budget or `run_command`'s `curl`/`wget`
   rules. How an ops task is authorized beyond plan approval — the mandate,
   issue #23 — is deliberately out of scope here. Read-only tasks withhold
-  native web tools: they have no task web-policy channel to apply the checks
-  above (ADR-0046).
+  native web tools and read through Ordewell's `fetch` and `web_search` under
+  this policy, as a research subagent does: never asking, with a budget per
+  attempt (ADR-0046).
 - **Absent is denial (T5).** An `ask` web read with no approval channel, a
   dismissed card or a timeout is refused, as before.
 - **The secret check narrows, it does not close.** A Full planner that read
@@ -471,3 +474,4 @@ filed as its own issue.
   about them per origin.
 
 - 2026-10-21 — read-only tasks withhold native web tools because they have no task web-policy channel (ADR-0046).
+- 2026-10-25 — read-only tasks read through Ordewell's `fetch` and `web_search` under this policy, never prompting, each attempt with a budget of its own (ADR-0046).
