@@ -8,7 +8,7 @@
 // CI-only with the reason: a step added to the workflow and not here fails
 // this script before anything runs, so the two cannot drift apart unnoticed.
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -81,6 +81,31 @@ function integrationTest() {
 }
 
 /**
+ * CI installs exactly the lockfile with `npm ci`; a local run uses whatever
+ * node_modules holds, which can drift from it without npm noticing (its own
+ * node_modules/.package-lock.json may still claim the locked version). A
+ * stale @vscode/test-electron 2.x, for one, fails the integration test minutes
+ * in with `spawn .../Contents/MacOS/Electron ENOENT`. A package absent from
+ * disk is an optional or other-platform one and is not checked.
+ */
+function installedMatchesLockfile() {
+  const { packages } = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+  const drifted = [];
+  for (const [dir, locked] of Object.entries(packages)) {
+    if (!dir.includes('node_modules/') || locked.link || !locked.version) continue;
+    const manifest = join(dir, 'package.json');
+    if (!existsSync(manifest)) continue;
+    const { version } = JSON.parse(readFileSync(manifest, 'utf8'));
+    if (version !== locked.version) drifted.push(`${dir}: installed ${version}, locked ${locked.version}`);
+  }
+  if (!drifted.length) return true;
+  console.error('node_modules does not match package-lock.json, so this run would not test what CI installs:');
+  for (const d of drifted) console.error(`  ${d}`);
+  console.error('Reinstall them: `npm ci`, or off Linux, where ci.yml explains why that fails, delete each directory above and run `npm install`.');
+  return false;
+}
+
+/**
  * `npm run test:coverage` runs every workspace and exits 1 without saying which
  * one failed, and the middle of its output is what a saved log loses. So run
  * the workspaces one by one, in the order it would, and name each that fails.
@@ -136,6 +161,7 @@ if (unknown.length || stale.length) {
   for (const n of stale) console.error(`scripts/ci.mjs names a step ci.yml no longer has: "${n}"`);
   process.exit(1);
 }
+if (!installedMatchesLockfile()) process.exit(1);
 
 for (const name of named.filter((n) => n in STEPS)) {
   console.log(`\n=== ${name}`);
