@@ -236,8 +236,11 @@ export class AccountLimitMonitor {
   }
 
   private schedule(entry: Entry, requested: number): void {
-    // The service's wait is held to its cap from now, for the same reason as {@link lastStart}.
-    const at = Math.max(requested, entry.notBefore === null ? requested : Math.min(entry.notBefore, this.now() + MAX_BACKOFF_MS));
+    // The service's wait is held to its cap from now, for the same reason as
+    // {@link lastStart}, and kept held: capped afresh on every call, a timer a
+    // blur clears would be re-armed a whole cap later on each return.
+    if (entry.notBefore !== null) entry.notBefore = Math.min(entry.notBefore, this.now() + MAX_BACKOFF_MS);
+    const at = Math.max(requested, entry.notBefore ?? requested);
     if (entry.timer && entry.dueAt !== undefined && entry.dueAt <= at) return;
     this.clearTimer(entry);
     const delay = at - this.now();

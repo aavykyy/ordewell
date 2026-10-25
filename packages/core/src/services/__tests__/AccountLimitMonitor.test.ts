@@ -396,6 +396,34 @@ describe('the account-limit monitor', () => {
     expect(codex.calls).toHaveLength(4);
   });
 
+  it('still reads within its cap when the wall clock is set back during a service\'s wait and focus keeps coming and going', async () => {
+    const codex = fakeCollector();
+    const m = start(codex.collector);
+    m.setForeground(true);
+    codex.last().answer(limits(1));
+    await settle();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(codex.calls).toHaveLength(2);
+
+    codex.last().answer({ kind: 'failed', owner: 'alice', retryAfterMs: 5 * 60_000 });
+    await settle();
+    vi.setSystemTime(Date.now() - 24 * 3_600_000);
+    const stepped = Date.now();
+
+    // Away for a minute and a half in every ten: each return re-asks, and no timer survives the next blur.
+    let minute = 0;
+    while (codex.calls.length === 2 && minute < 60) {
+      if (minute % 10 === 0) m.setForeground(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+      if (minute % 10 === 1) m.setForeground(true);
+      await vi.advanceTimersByTimeAsync(30_000);
+      minute++;
+    }
+    // Capped at 15 min from the first return, 1.5 min after the step.
+    expect(codex.calls).toHaveLength(3);
+    expect((Date.now() - stepped) / 60_000).toBeLessThanOrEqual(17);
+  });
+
   it('backs off after failures, up to a bound, and returns to the minute once a read succeeds', async () => {
     const codex = fakeCollector();
     const m = start(codex.collector);
