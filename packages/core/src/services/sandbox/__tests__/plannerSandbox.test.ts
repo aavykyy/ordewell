@@ -196,6 +196,17 @@ describe('sealedShellProfile (ADR-0036 S1)', () => {
     expect(sealedShellProfile({ ...host, overlay: true }, { workspace: '/work/repo' }).throwaway).toEqual(['/work/repo']);
   });
 
+  it('leaves a nested worktree the only host-writable path under an overlaid checkout (ADR-0046)', () => {
+    const overlaid = { ...host, overlay: true };
+    const single = sealedShellProfile(overlaid, { scratch: '/tmp/s', workspace: '/work/repo', writable: '/work/repo/wt' });
+    expect(single.throwaway).toEqual(['/work/repo']);
+    expect(single.write).toEqual(['/tmp/s', '/work/repo/wt']);
+    // A repo group's root stays inside the overlay: only its worktrees are writable on the host.
+    const group = sealedShellProfile(overlaid, { scratch: '/tmp/s', workspace: '/work/repo', writable: '/ws', worktrees: ['/ws/alpha', '/ws/beta'] });
+    expect(group.throwaway).toEqual(['/work/repo']);
+    expect(group.write).toEqual(['/tmp/s', '/ws/alpha', '/ws/beta']);
+  });
+
   it('writes one more directory when it is given one, and only then', () => {
     expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/work/repo', writable: '/work/tree' }).write).toEqual(['/tmp/s', '/work/tree']);
     expect(sealedShellProfile(host, { workspace: '/work/repo' }).write).toEqual([]);
