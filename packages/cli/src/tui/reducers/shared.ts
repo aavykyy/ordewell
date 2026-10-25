@@ -170,7 +170,12 @@ export type Action =
   | { type: 'failed'; message: string; code?: DaemonErrorCode; turn?: true }
   /** The workspace has no project marker — offer to initialize it rather than just failing. */
   | { type: 'workspaceNeedsInit'; goal: string; workspace: string }
-  | { type: 'notice'; message: string; level?: 'info' | 'warn' | 'error' }
+  /**
+   * `holdPlace` is for a notice that reports on text already on screen rather
+   * than moving the conversation on: it must not take a scrolled-back reader
+   * to the tail. The copy count is the one such notice.
+   */
+  | { type: 'notice'; message: string; level?: 'info' | 'warn' | 'error'; holdPlace?: boolean }
   | { type: 'resize'; rows: number; cols: number }
   | { type: 'spinnerTick'; by?: number };
 

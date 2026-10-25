@@ -715,7 +715,7 @@ function copySelection(deps: EffectDeps, text: string): void {
   if (command) {
     try {
       (deps.pipeToClipboard ?? pipeToClipboardDefault)(command, text);
-      deps.dispatch({ type: 'notice', message: `Copied ${lines} ${lines === 1 ? 'line' : 'lines'}.` });
+      deps.dispatch({ type: 'notice', message: `Copied ${lines} ${lines === 1 ? 'line' : 'lines'}.`, holdPlace: true });
       return;
     } catch {
       // fall through to OSC 52
@@ -725,6 +725,7 @@ function copySelection(deps: EffectDeps, text: string): void {
   deps.writeTerminal(osc52(text));
   deps.dispatch({
     type: 'notice',
+    holdPlace: true,
     message: `Copied ${lines} ${lines === 1 ? 'line' : 'lines'} through the terminal: no clipboard tool here (pbcopy, xclip, xsel or wl-copy), so it only lands if your terminal supports OSC 52.`,
   });
 }

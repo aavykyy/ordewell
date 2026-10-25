@@ -135,6 +135,10 @@ export function nextBoundary(text: string, offset: number): number {
   return offset + firstGrapheme(text.slice(offset)).length;
 }
 
+/** SGR paint: the only escapes a row may carry through a cut. */
+// eslint-disable-next-line no-control-regex
+const SGR = /^\x1b\[([0-9;]*)m$/;
+
 /** Cut to `max` visible columns, marking the cut with an ellipsis. */
 export function truncate(text: string, max: number): string {
   if (max <= 0) return '';
@@ -142,13 +146,26 @@ export function truncate(text: string, max: number): string {
 
   let out = '';
   let used = 0;
-  for (const char of graphemes(stripAnsi(text))) {
-    const w = stringWidth(char);
-    if (used + w > max - 1) break;
-    out += char;
-    used += w;
+  // Whether the retained text ends inside a style. The cut closes it, so a
+  // caller appending to the row does not inherit the colour of what was cut.
+  let painted = false;
+  for (const part of text.split(ESCAPE_SPLIT)) {
+    if (part.startsWith('\x1b')) {
+      const sgr = SGR.exec(part);
+      if (!sgr) continue;
+      out += part;
+      const codes = sgr[1].split(';').filter(Boolean);
+      painted = !(codes.length === 0 || codes.includes('0'));
+      continue;
+    }
+    for (const char of graphemes(part)) {
+      const w = stringWidth(char);
+      if (used + w > max - 1) return `${out}…${painted ? '\x1b[0m' : ''}`;
+      out += char;
+      used += w;
+    }
   }
-  return out + '…';
+  return `${out}…${painted ? '\x1b[0m' : ''}`;
 }
 
 export function pad(text: string, target: number): string {
@@ -299,8 +316,20 @@ export function wrap(text: string, max: number): string[] {
   return wrapLines(text, max).map((l) => l.line);
 }
 
+/**
+ * `text` inside `seq`, with the style re-opened after every reset inside it, so
+ * a nested colour or attribute ends only itself and the outer text keeps its
+ * own paint. The final reset closes the style once.
+ */
+function restoring(seq: string, text: string): string {
+  return `${seq}${text.split('\x1b[0m').join(`\x1b[0m${seq}`)}\x1b[0m`;
+}
+
 function colour(open: string | (() => string)): (text: string) => string {
-  return (text: string) => (style.enabled ? `\x1b[${typeof open === 'string' ? open : open()}m${text}\x1b[0m` : text);
+  return (text: string) => {
+    if (!style.enabled) return text;
+    return restoring(`\x1b[${typeof open === 'string' ? open : open()}m`, text);
+  };
 }
 
 /**
@@ -310,7 +339,7 @@ function colour(open: string | (() => string)): (text: string) => string {
  * insertion point. They are off only when the output is not a terminal at all.
  */
 function attribute(open: string): (text: string) => string {
-  return (text: string) => (style.attributes ? `\x1b[${open}m${text}\x1b[0m` : text);
+  return (text: string) => (style.attributes ? restoring(`\x1b[${open}m`, text) : text);
 }
 
 export interface Rgb { r: number; g: number; b: number }
