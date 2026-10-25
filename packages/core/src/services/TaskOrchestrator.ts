@@ -637,11 +637,12 @@ export class TaskOrchestrator {
   /**
    * Something can still start that nobody has to ask for again: a start
    * admitted and not yet claimed, a force start queued behind its
-   * dependencies, or a task that resumes on its own at its usage limit's
-   * reset. A Stop is owed to it, whether or not anything runs.
+   * dependencies, a task that resumes on its own at its usage limit's
+   * reset, or a start a dirty checkout parked for Stash and continue to
+   * replay. A Stop is owed to it, whether or not anything runs.
    */
   get startsPending(): boolean {
-    return this.admissions > 0 || this.queuedStarts.size > 0 || this.store.allTasks.some(waitsForReset);
+    return this.admissions > 0 || this.queuedStarts.size > 0 || this.runs.blocked || this.store.allTasks.some(waitsForReset);
   }
 
   /**

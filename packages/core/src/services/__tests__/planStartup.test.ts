@@ -110,6 +110,32 @@ describe('the run activity while a plan start is admitted', () => {
     expect(session.activity).toEqual({ starting: false, running: false, scheduled: false, resumable: false });
   });
 
+  it('starts a fresh run when Execute follows a Stop that came while the first was still opening', async () => {
+    const gates: Array<ReturnType<typeof deferred>> = [];
+    const spawn = vi.fn(async ({ taskId }: Parameters<IRunner['spawn']>[0]) => {
+      const gate = deferred();
+      gates.push(gate);
+      await gate.promise;
+      return new FakeRunnerSession(`s-${taskId}-${gates.length}`, taskId);
+    });
+    const session = sessionWith({ spawn, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } satisfies IRunner);
+
+    const first = session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
+    await session.execute({ command: 'stop_run' }, { kind: 'user' });
+
+    // The stopped opening is still awaiting its spawn; the new Execute must not join it.
+    const second = session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
+    gates.forEach((gate) => gate.resolve());
+    const [stopped, restarted] = await Promise.all([first, second]);
+
+    expect(stopped.ok).toBe(false);
+    expect(restarted).toMatchObject({ ok: true, message: expect.stringMatching(/task #1 .*started/i) });
+    expect(session.activity.running).toBe(true);
+    session.stopExecution();
+  });
+
   it('settles the start window when an admitted start is let go without claiming', () => {
     const held = heldRunner();
     const orchestrator = TaskOrchestrator.compose({

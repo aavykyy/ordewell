@@ -314,10 +314,14 @@ function applyTaskEdit(session: Session, taskId: string, edit: TaskEdit, options
  * attempted.
  */
 export async function handleTaskEdit(taskId: string, edit: TaskEdit, deps: PlanManagerDeps): Promise<void> {
-  // A live run means the card offered this only on a task that had not
+  // A run under way means the card offered this only on a task that had not
   // started; the Session checks that again after its own waits. With no run,
   // the card keeps the wider direct-edit contract, settled tasks included.
-  const options: TaskEditOptions | undefined = deps.session.isExecuting ? { requireUnstarted: true } : undefined;
+  // A run is under way before and between its tasks too: the scheduler waiting
+  // on a manual task or a hold claims the next one with nothing live to say so.
+  const { starting, scheduled, resumable } = deps.session.activity;
+  const underWay = deps.session.isExecuting || starting || scheduled || resumable;
+  const options: TaskEditOptions | undefined = underWay ? { requireUnstarted: true } : undefined;
   try {
     await applyTaskEdit(deps.session, taskId, edit, options);
   } catch (err) {
