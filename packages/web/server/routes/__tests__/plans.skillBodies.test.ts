@@ -41,8 +41,6 @@ describe('plan routes keep skill bodies off the wire', () => {
   const session = {
     planState: planWithBodies(),
     execute: async () => ({ ok: true, message: 'Approved the plan.' }),
-    requestMerge: async () => planWithBodies(),
-    requestSplit: async () => planWithBodies(),
     resolveConflictAsTask: async () => planWithBodies(),
   };
   const pool = {
@@ -61,8 +59,6 @@ describe('plan routes keep skill bodies off the wire', () => {
 
   it.each([
     ['review/approve', {}],
-    ['tasks/merge', { taskIds: ['a', 'b'] }],
-    ['tasks/t1/split', {}],
     ['tasks/t1/resolve-conflict', {}],
     ['converse/start', { goal: 'g', runners: ['claude-code'], workspace: '/ws' }],
     ['converse/message', { message: 'hi' }],

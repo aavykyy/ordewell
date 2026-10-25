@@ -490,22 +490,6 @@ export default function App() {
     dispatch({ type: 'checkpointAnswered' });
   }, [checkpoint]);
 
-  const handleMergeTasks = useCallback((taskIds: string[]) => {
-    const current = planRef.current;
-    if (!current) return;
-    const titles = taskIds.map((id) => current.tasks.find((t) => t.id === id)?.title ?? id);
-    pushSystem(`Requesting merge of: ${titles.join(' + ')}.`);
-    vscode.postMessage({ type: 'mergeTasks', taskIds });
-  }, [pushSystem]);
-
-  const handleSplitTask = useCallback((taskId: string) => {
-    const current = planRef.current;
-    if (!current) return;
-    const task = current.tasks.find((t) => t.id === taskId);
-    pushSystem(`Requesting split of: ${task?.title ?? taskId}.`);
-    vscode.postMessage({ type: 'splitTask', taskId });
-  }, [pushSystem]);
-
   // The host owns every isolation action: opening the diff, and the merge,
   // discard and cleanup that touch the user's real branches.
   const handleIsolationAction = useCallback((action: 'reviewDiff' | 'merge' | 'discard' | 'cleanup' | 'resolveConflict', taskId?: string) => {
@@ -732,8 +716,6 @@ export default function App() {
               onForceStart={handleForceStart}
               onMarkComplete={handleMarkComplete}
               onMarkIncomplete={handleMarkIncomplete}
-              onMerge={handleMergeTasks}
-              onSplit={handleSplitTask}
               onExecutePlan={handleExecutePlan}
               onStopExecution={handleStopExecution}
               onApproveAll={handleApproveAll}

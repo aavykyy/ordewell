@@ -1,4 +1,3 @@
-import { buildMergePrompt, buildSplitPrompt } from '../PlanPrompts';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
@@ -13,7 +12,7 @@ import { surfacePlan, type SessionMessage, type SessionNotice } from '../Session
 import type { SkillInfo, SkillsService } from '../SkillsService';
 import type { SkillLookup } from '../taskSkills';
 import { PlanChangeCheck, requestScope } from '../PlanChangeCheck';
-import { createTask, flattenTasks, type DiscoveredModel, type Task } from '../../models/Task';
+import { createTask, flattenTasks, type DiscoveredModel } from '../../models/Task';
 import { execFileSync } from 'child_process';
 import { writeFileSync } from 'fs';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
@@ -892,15 +891,6 @@ describe('what the planner is told', () => {
       expect(perTurn).toMatch(/call edit_plan/);
       expect(perTurn).toMatch(/call task_query, task_output or task_diff/);
       expect(perTurn).not.toMatch(/"taskOps"|"taskQuery"|reply with ONLY/);
-    });
-
-    it('merge and split ask for an edit_plan call with the tools, and for the envelope without', () => {
-      const tasks = TWO_TASKS as unknown as Task[];
-
-      expect(buildMergePrompt(['a', 'b'], tasks, true)).toMatch(/Call edit_plan with a single "merge" op:\n {2}\{"ops":\[/);
-      expect(buildSplitPrompt('a', tasks, true)).toMatch(/Call edit_plan with a single "split" op:\n {2}\{"ops":\[/);
-      expect(buildMergePrompt(['a', 'b'], tasks)).toMatch(/Reply with ONLY a taskOps JSON object using a single "merge" op:\n {2}\{"taskOps":\[/);
-      expect(buildSplitPrompt('a', tasks)).toMatch(/Reply with ONLY a taskOps JSON object using a single "split" op:\n {2}\{"taskOps":\[/);
     });
 
   });

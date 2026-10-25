@@ -69,7 +69,6 @@ function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Recor
     planEdited: vi.fn(),
   };
   const runs = { current: opts.run ?? null, linkResolver: vi.fn() };
-  const plannerTools = vi.fn(() => false);
   const notice = vi.fn();
   const approve = vi.fn<(ids: readonly string[]) => void>();
   const editor = new PlanEditor({
@@ -80,14 +79,13 @@ function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Recor
     scheduler,
     runs,
     broadcast: (m) => { sent.push(m); events.push(m.type); },
-    plannerTools,
     taskSkills: () => ({ findSkill: (name) => opts.skills?.find((s) => s.name === name), searchedDirs: () => [], uncommitted: opts.uncommitted }),
     notice,
     approve,
     ...(opts.plannedWith ? { plannedWith: opts.plannedWith } : {}),
   });
   const task = (id: string) => store.get(id);
-  return { editor, store, plan, events, sent, catalog, remembered, mutate, scheduler, runs, plannerTools, notice, approve, task };
+  return { editor, store, plan, events, sent, catalog, remembered, mutate, scheduler, runs, notice, approve, task };
 }
 
 describe('PlanEditor.updateTask', () => {
@@ -478,39 +476,6 @@ describe('PlanEditor.addConflictResolver', () => {
 
   it('answers null without a plan', async () => {
     expect(await setup({ plan: false, run: conflicted }).editor.addConflictResolver('t1')).toBeNull();
-  });
-});
-
-describe('PlanEditor merge and split requests', () => {
-  it('words a merge of compatible tasks for the planner', () => {
-    const { editor, plannerTools } = setup();
-
-    const prompt = editor.mergeRequest(['t1', 't2']);
-
-    expect(prompt).toContain('id=t1');
-    expect(prompt).toContain('id=t2');
-    expect(plannerTools).toHaveBeenCalled();
-  });
-
-  it('words a split for the planner', () => {
-    const { editor } = setup();
-
-    expect(editor.splitRequest('t2')).toContain('Split task #2 "Build"');
-  });
-
-  it('refuses before the planner is consulted at all', () => {
-    const { editor, plannerTools } = setup();
-
-    expect(() => editor.mergeRequest(['t1'])).toThrow(/at least two/i);
-    expect(() => editor.splitRequest('ghost')).toThrow('Task not found');
-    expect(plannerTools).not.toHaveBeenCalled();
-  });
-
-  it('refuses without a plan', () => {
-    const { editor } = setup({ plan: false });
-
-    expect(() => editor.mergeRequest(['t1', 't2'])).toThrow('No active plan state');
-    expect(() => editor.splitRequest('t1')).toThrow('No active plan state');
   });
 });
 

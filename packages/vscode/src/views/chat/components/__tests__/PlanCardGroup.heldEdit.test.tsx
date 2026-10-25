@@ -38,8 +38,6 @@ function plan(run: RunView) {
       onRetry={vi.fn()}
       onSkip={vi.fn()}
       onRemoveTask={vi.fn()}
-      onSplit={vi.fn()}
-      onMerge={vi.fn()}
     />,
   );
 }

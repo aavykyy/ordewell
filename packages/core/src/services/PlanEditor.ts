@@ -1,9 +1,8 @@
-import { canMergeTasks, canSplitTask, UPDATABLE_FIELDS } from './TaskOps';
+import { UPDATABLE_FIELDS } from './TaskOps';
 import { subtreeIds } from './PlanTree';
 import { validateTaskEdit } from './TaskEditValidator';
 import { liveRunnerRefusal, resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog, type RunnerCatalog } from './TaskAssignment';
 import { clampThinkingEffort } from './ModelAllowlistResolver';
-import { buildMergePrompt, buildSplitPrompt } from './PlanPrompts';
 import { conflictResolverTask } from './Landing';
 import { checkPlanInvariants, type PlanTaskError } from './PlannedTask';
 import { PlanEditError } from './PlanEditError';
@@ -39,8 +38,6 @@ export interface PlanEditorDeps {
   scheduler: Pick<TaskOrchestrator, 'tick' | 'releaseTask' | 'releaseMovedResume' | 'planEdited'>;
   runs: Pick<IsolationRunController, 'current' | 'linkResolver'>;
   broadcast: SessionBroadcaster;
-  /** Whether the planner has Ordewell's tools, which changes how a merge or split is asked of it. */
-  plannerTools: () => boolean;
   /** The workspace's skill catalog under its repo group's layout, which a hand-set skill list is checked against. */
   taskSkills: () => SkillLookup;
   notice: (level: SessionNotice['level'], message: string) => void;
@@ -53,11 +50,11 @@ export interface PlanEditorDeps {
 /**
  * The user's own edits to the plan: the direct side of a direct edit vs a
  * planner edit. Each one is checked by the same rules the planner's task ops
- * meet ({@link validateTaskEdit}, {@link canMergeTasks}, {@link canSplitTask}),
- * derives whatever a runner change or an added task leaves unset from that
- * runner's catalog, and lands through the session's mutation seam followed by
- * the reschedule a direct edit owes an armed scheduler. A merge or split is
- * the planner's to carry out; the editor only checks it and words the request.
+ * meet ({@link validateTaskEdit} and TaskOps' own refusals), derives whatever a
+ * runner change or an added task leaves unset from that runner's catalog, and
+ * lands through the session's mutation seam followed by the reschedule a direct
+ * edit owes an armed scheduler. A merge or split is the planner's to carry out
+ * when the user asks for one in its chat.
  */
 export class PlanEditor {
   private readonly store: PlanStore;
@@ -67,7 +64,6 @@ export class PlanEditor {
   private readonly scheduler: PlanEditorDeps['scheduler'];
   private readonly runs: PlanEditorDeps['runs'];
   private readonly broadcast: SessionBroadcaster;
-  private readonly plannerTools: () => boolean;
   private readonly taskSkills: () => SkillLookup;
   private readonly notice: PlanEditorDeps['notice'];
   private readonly approve: PlanEditorDeps['approve'];
@@ -83,7 +79,6 @@ export class PlanEditor {
     this.scheduler = deps.scheduler;
     this.runs = deps.runs;
     this.broadcast = deps.broadcast;
-    this.plannerTools = deps.plannerTools;
     this.taskSkills = deps.taskSkills;
     this.notice = deps.notice;
     this.approve = deps.approve;
@@ -382,26 +377,6 @@ export class PlanEditor {
       this.runs.linkResolver(resolver.id, taskId);
       return true;
     });
-  }
-
-  /**
-   * What to ask the planner to merge `taskIds` into one task with (ADR-0002),
-   * once they are compatible. Throws on a pre-flight failure, so the host
-   * surfaces an inline error before any LLM call.
-   */
-  mergeRequest(taskIds: string[]): string {
-    if (!this.plan()) throw new Error('No active plan state');
-    const check = canMergeTasks(this.store.planTasks, taskIds);
-    if (!check.ok) throw new Error(check.error ?? 'These tasks cannot be merged');
-    return buildMergePrompt(taskIds, this.store.planTasks, this.plannerTools());
-  }
-
-  /** What to ask the planner to decompose one task with; the model generates the breakdown. Throws like {@link mergeRequest}. */
-  splitRequest(taskId: string): string {
-    if (!this.plan()) throw new Error('No active plan state');
-    const check = canSplitTask(this.store.planTasks, taskId);
-    if (!check.ok) throw new Error(check.error ?? 'This task cannot be split');
-    return buildSplitPrompt(taskId, this.store.planTasks, this.plannerTools());
   }
 
   /**

@@ -5,8 +5,8 @@ import type { SettingsChange, WebviewToHost } from '../shared/protocol';
 import { isKnownSlashCommand } from '../commands/SlashParser';
 import { handleIsolationAction } from './isolation';
 import {
-  handleAddTask, handleCheckpointAnswer, handleResolveApproval, handleMergePlan, handleNewSession, handleRemoveTask,
-  handleSendMessage, handleSendMessageNow, handleSplitPlan, handleStopPlanning, handleSystemCommand, handleTaskControl, handleTaskEdit, type PlanManagerDeps,
+  handleAddTask, handleCheckpointAnswer, handleResolveApproval, handleNewSession, handleRemoveTask,
+  handleSendMessage, handleSendMessageNow, handleStopPlanning, handleSystemCommand, handleTaskControl, handleTaskEdit, type PlanManagerDeps,
 } from './PlanManager';
 
 /** What the extension itself answers: the catalog, the planner choice and the task skills — none of it a plan action. */
@@ -117,14 +117,6 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       return;
     case 'interruptTask':
       await handleTaskControl({ kind: 'interrupt' }, msg.taskId, deps);
-      return;
-    case 'mergeTasks':
-      await handleMergePlan(msg.taskIds, deps);
-      sendNextHeldPrompt(deps);
-      return;
-    case 'splitTask':
-      await handleSplitPlan(msg.taskId, deps);
-      sendNextHeldPrompt(deps);
       return;
     case 'isolationAction':
       await handleIsolationAction(msg.action, msg.taskId, deps);

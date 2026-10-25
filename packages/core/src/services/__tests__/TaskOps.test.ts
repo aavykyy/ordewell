@@ -788,6 +788,26 @@ describe('applyTaskOps — split', () => {
   });
 });
 
+describe('a planner edit keeps its structural merge and split ops', () => {
+  // Removing the dedicated Merge and Split controls leaves the planner's
+  // natural-language edit path as the way to reshape a plan.
+  it('applies one batch that merges two tasks and splits a third', () => {
+    const res = applyTaskOps(samplePlan(), [
+      { op: 'merge', taskIds: ['a', 'b'], merged: { title: 'Setup + Build' } },
+      { op: 'split', taskId: 'c', parts: [{ title: 'Test core' }, { title: 'Test UI' }] },
+    ], ['claude-code']);
+
+    expect(res.errors).toEqual([]);
+    const merged = res.tasks.find((t) => t.title === 'Setup + Build')!;
+    expect(merged.dependencies).toEqual([]);
+    const first = res.tasks.find((t) => t.title === 'Test core')!;
+    const last = res.tasks.find((t) => t.title === 'Test UI')!;
+    expect(first.dependencies).toEqual([merged.id]);
+    expect(last.dependencies).toEqual([first.id]);
+    expect(res.tasks).toHaveLength(3);
+  });
+});
+
 describe('applyTaskOps — order repair', () => {
   function independentPlan(): Task[] {
     return [

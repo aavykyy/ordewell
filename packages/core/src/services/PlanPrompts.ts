@@ -858,47 +858,6 @@ export function modelContextBlock(
 }
 
 /**
- * User-message prompt for a planner-driven merge: asks the model to combine the
- * selected tasks into one. Routed through the conversation loop, beside the
- * plan block; it spells out the merge op itself, since a turn that sends only
- * what changed in the plan restates none of the task-ops protocol (ADR-0012
- * T10). The model emits a single taskOps merge op.
- */
-export function buildMergePrompt(taskIds: string[], tasks: readonly Task[], tools = false): string {
-  const idSet = new Set(taskIds);
-  const selected = tasks.filter((t) => idSet.has(t.id)).sort((a, b) => a.order - b.order);
-  const refs = selected.map((t) => `${taskRefOf(tasks, t.id) ?? `#${t.order}`} "${t.title}" (id=${t.id})`).join(', ');
-  return [
-    `Merge these tasks into ONE combined task: ${refs}.`,
-    'Write a clear combined title, description, and prompt that cover all of their work.',
-    'The merged task takes the union of their dependencies (excluding the merged tasks themselves) and preserves their user stories.',
-    `Set "assignedRunner" and "assignedModel" on the merged task — use one of the runners and models ${tools ? 'list_runners and list_models return' : 'listed in <available_models> above'}. Prefer the strongest model if the merged work is complex.`,
-    tools ? 'Call edit_plan with a single "merge" op:' : 'Reply with ONLY a taskOps JSON object using a single "merge" op:',
-    `  {"${tools ? 'ops' : 'taskOps'}":[{"op":"merge","taskIds":[${selected.map((t) => `"${t.id}"`).join(', ')}],"merged":{"title":"...","description":"...","prompt":"...","assignedRunner":"...","assignedModel":{"modelId":"...","modelLabel":"..."}}}]}`,
-    'If this merge needs a companion op in the same batch (e.g. an added task that should depend on the merge result), give the merge op a "handle" (any unused name) and reference it from the later op\'s taskId/dependencies.',
-  ].join('\n');
-}
-
-/**
- * User-message prompt for a planner-driven split: asks the model to decompose
- * one task into a sequence of smaller tasks. The model decides the breakdown —
- * the user does not hand-type the parts.
- */
-export function buildSplitPrompt(taskId: string, tasks: readonly Task[], tools = false): string {
-  const task = tasks.find((t) => t.id === taskId);
-  if (!task) return `Split task ${taskId} into smaller tasks.`;
-  return [
-    `Split task ${taskRefOf(tasks, task.id) ?? `#${task.order}`} "${task.title}" (id=${task.id}) into multiple smaller tasks that together accomplish the same work.`,
-    'Decompose it into a sensible ordered sequence. Write a clear title, description, and prompt for each part.',
-    'The first part inherits the original task\'s dependencies. Each later part depends on the previous part. Tasks that depended on the original now depend on the LAST part.',
-    `Set "assignedRunner" and "assignedModel" on each part — use the runners and models ${tools ? 'list_runners and list_models return' : 'listed in <available_models> above'}. You may assign different models to different parts (e.g. a stronger model for a complex part, a faster one for a simple part).`,
-    tools ? 'Call edit_plan with a single "split" op:' : 'Reply with ONLY a taskOps JSON object using a single "split" op:',
-    `  {"${tools ? 'ops' : 'taskOps'}":[{"op":"split","taskId":"${task.id}","parts":[{"title":"...","description":"...","prompt":"...","assignedRunner":"...","assignedModel":{"modelId":"...","modelLabel":"..."}},...]}]}`,
-    'If this split needs a companion op in the same batch (e.g. another task that should depend on the last part), give the split op a "handle" (any unused name) — it names the last part — and reference it from the later op\'s taskId/dependencies.',
-  ].join('\n');
-}
-
-/**
  * Runner prompt for the opt-in task that resolves an integration conflict
  * (ADR-0013). The resolver's own worktree starts at the integration tip, so the
  * merge it performs is exactly the one that conflicted; the conflicted task

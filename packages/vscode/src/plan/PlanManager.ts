@@ -185,32 +185,6 @@ export async function handleSendMessageNow(
 }
 
 /**
- * Planner-driven merge (issue #18): route a merge request through the planner
- * conversation loop so the LLM produces the combined task, validated atomically
- * via applyTaskOps with corrective retries — not a mechanical client-side stub.
- * A pre-flight compatibility failure (canMergeTasks) throws before any LLM call.
- */
-export async function handleMergePlan(taskIds: string[], deps: PlanManagerDeps): Promise<void> {
-  if (taskIds.length < 2) return;
-  await inPlannerTurn(deps, async () => {
-    const prior = JSON.stringify(deps.getCurrentPlan().tasks);
-    adoptTurnPlan(prior, await deps.session.requestMerge(taskIds), deps);
-  });
-}
-
-/**
- * Planner-driven split (issue #18): ask the planner LLM to decompose one task
- * into a sequence of smaller tasks. Same conversation-loop / repair path as
- * merge; the model generates the breakdown (no manual per-task specs).
- */
-export async function handleSplitPlan(taskId: string, deps: PlanManagerDeps): Promise<void> {
-  await inPlannerTurn(deps, async () => {
-    const prior = JSON.stringify(deps.getCurrentPlan().tasks);
-    adoptTurnPlan(prior, await deps.session.requestSplit(taskId), deps);
-  });
-}
-
-/**
  * One execution button's command, run as the user through the command seam
  * (ADR-0029), so it is checked and kept in the timeline with who asked. A
  * refusal is thrown, so the caller's existing catch shows it.

@@ -859,27 +859,4 @@ describe('plan edits on a session with no plan', () => {
     expect(broadcast).not.toHaveBeenCalled();
     expect(session.planTasks).toEqual([]);
   });
-
-  it('refuses a merge or a split before the planner, or whether it has tools, is asked', async () => {
-    const continueConversation = vi.fn();
-    const plannerToolsAttached = vi.fn(() => true);
-    const session = makeSession({ aiService: { continueConversation, plannerToolsAttached } });
-
-    await expect(session.requestMerge(['a', 'b'])).rejects.toThrow('No active plan state');
-    await expect(session.requestSplit('a')).rejects.toThrow('No active plan state');
-
-    expect(continueConversation).not.toHaveBeenCalled();
-    expect(plannerToolsAttached).not.toHaveBeenCalled();
-  });
-});
-
-describe('Session.requestSplit of a task not in the plan', () => {
-  it('refuses before any model call', async () => {
-    const continueConversation = vi.fn();
-    const session = makeSession({ aiService: { continueConversation } });
-    session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
-
-    await expect(session.requestSplit('ghost')).rejects.toThrow('Task not found');
-    expect(continueConversation).not.toHaveBeenCalled();
-  });
 });

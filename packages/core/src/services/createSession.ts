@@ -751,7 +751,6 @@ export class Session {
       scheduler: this.orchestrator,
       runs: this.runs,
       broadcast: (msg) => this.broadcast(msg),
-      plannerTools: () => this.backend.current().plannerToolsAttached?.() ?? false,
       taskSkills: () => this.workspaceSkills(),
       notice: (level, message) => this.notice(level, message),
       approve: (taskIds) => this.record.approve(taskIds),
@@ -2278,27 +2277,6 @@ export class Session {
   /** Add one task, deriving what the caller left unset; see {@link PlanEditor.addTask}. */
   async addTask(draft: Partial<Task>): Promise<LegacyPlanState | null> {
     return this.editor.addTask(draft);
-  }
-
-  /**
-   * Planner-driven merge: validate compatibility up front, then ask the planner
-   * LLM to produce a single "merge" taskOps op combining the selected tasks.
-   * Goes through the same conversation loop + validated-atomic-edit + corrective
-   * retry flow as every other task_ops edit (ADR-0002). Throws on a
-   * pre-flight compatibility failure so the host surfaces an inline error
-   * before any LLM call.
-   */
-  async requestMerge(taskIds: string[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
-    return this.continueConversation(this.editor.mergeRequest(taskIds), options);
-  }
-
-  /**
-   * Planner-driven split: ask the planner LLM to decompose one task into a
-   * sequence of smaller tasks. The model generates the breakdown (no manual
-   * per-task specs from the user). Same conversation-loop/repair path as merge.
-   */
-  async requestSplit(taskId: string, options?: GeneratePlanOptions): Promise<LegacyPlanState> {
-    return this.continueConversation(this.editor.splitRequest(taskId), options);
   }
 
   loadPlan(plan: LegacyPlanState, goal: string, workspace: string, opts?: { sessionId?: string; persist?: boolean }): void {

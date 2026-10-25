@@ -147,6 +147,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **Merge and Split are planner requests, not task-card buttons.** VS Code's
+  task cards no longer carry the Merge/Split controls, `Session` and the daemon
+  no longer expose the matching request methods and routes, and the planner
+  applies the edit when you ask for it in chat.
 - **A read-only task is defined by Ordewell, the same on every runner.** It
   keeps its runner's own read and search tools, and its shell is Ordewell's
   `run_command`: what the planner would have to ask about runs sealed, with the

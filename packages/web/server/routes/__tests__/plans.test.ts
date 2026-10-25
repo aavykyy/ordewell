@@ -195,21 +195,33 @@ describe('the execute-command route', () => {
     expect(res.status).toBe(404);
   });
 
-  it('does not shadow the tasks/merge route', async () => {
-    const requestMerge = vi.fn().mockResolvedValue({ tasks: [] });
-    const pool = fakePool({ session: vi.fn().mockReturnValue({ requestMerge }) } as never);
+  it('does not expose the retired task merge or split endpoints', async () => {
+    const requestMerge = vi.fn();
+    const requestSplit = vi.fn();
+    const continuePlanning = vi.fn();
+    const pool = fakePool({
+      session: vi.fn().mockReturnValue({ requestMerge, requestSplit }),
+      continuePlanning,
+    } as never);
     const { plansRoute } = await import('../../routes/plans');
     const app = new Hono();
     app.route('/api/plans', plansRoute(pool));
 
-    const res = await app.request('/api/plans/s1/tasks/merge', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ taskIds: ['a', 'b'] }),
-    });
+    for (const [path, body] of [
+      ['/api/plans/s1/tasks/merge', { taskIds: ['a', 'b'] }],
+      ['/api/plans/s1/tasks/t1/split', {}],
+    ] as const) {
+      const res = await app.request(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(404);
+    }
 
-    expect(res.status).toBe(200);
-    expect(requestMerge).toHaveBeenCalledWith(['a', 'b']);
+    expect(requestMerge).not.toHaveBeenCalled();
+    expect(requestSplit).not.toHaveBeenCalled();
+    expect(continuePlanning).not.toHaveBeenCalled();
   });
 });
 
