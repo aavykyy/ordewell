@@ -220,6 +220,12 @@ export class PlanStore {
     this.setStatus(id, 'in_progress');
   }
 
+  /** Its first attempt is starting: from now on its chat exists, whatever becomes of the attempt. */
+  markAttempted(id: string): void {
+    const task = this._taskMap.get(id);
+    if (task) task.attempted = true;
+  }
+
   markAwaitingUser(id: string, reason?: AwaitingReason): void {
     const task = this._taskMap.get(id);
     if (!task) return;

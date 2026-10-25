@@ -106,7 +106,7 @@ describe('a task card, pinned before its rules move to core', () => {
   });
 
   it('counts approvals beyond one', () => {
-    render(<TaskCard task={makeTask({ status: 'in_progress' })} models={[]} isExecuting run={{ awaitingApproval: 3 }} />);
+    render(<TaskCard task={makeTask({ status: 'in_progress', attempted: true })} models={[]} isExecuting run={{ awaitingApproval: 3 }} />);
     expect(document.querySelector('.task-approval-badge')?.textContent).toBe('Waiting for approval (3)');
   });
 

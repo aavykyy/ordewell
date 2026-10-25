@@ -61,6 +61,8 @@ export type SerializedTaskStatus = {
   research?: true;
   /** The latest attempt's handoff, as the plan keeps it (ADR-0047); absent when the attempt left none. */
   handoff?: HandoffDigest;
+  /** An attempt has started: its chat exists from then on. Absent on a task never run. */
+  attempted?: true;
   attemptUsage?: AttemptUsage[];
   /** Set only on a loop's check, so a stream of statuses alone can say which task is one (ADR-0045). */
   loop?: TaskLoop;
@@ -111,6 +113,8 @@ export type SerializedTask = {
   skills?: string[];
   /** Set only on a task an Act supervisor added (ADR-0029). */
   addedBy?: 'supervisor';
+  /** An attempt has started: its chat exists from then on. Absent on a task never run. */
+  attempted?: true;
   attemptUsage?: AttemptUsage[];
   /** A script task's body and time limit (ADR-0035); absent on any other task. */
   commands?: string[][];
@@ -373,7 +377,7 @@ export type PlanSnapshot = { type: 'plan_snapshot'; plan: SurfacePlan | SurfaceP
 /** What only the status stream says about a task; a plan refresh keeps these as they were. */
 export type RunTaskStatus = Partial<Pick<
   SerializedTaskStatus,
-  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'handoff'
+  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'attempted'
 >>;
 
 /** A task in the run view: the plan's fields, then the status stream's. */
@@ -454,6 +458,7 @@ export function serializeTask(t: SurfaceTask): SerializedTask {
     ...(t.ops ? { ops: true as const } : {}),
     ...(t.research !== undefined ? { research: t.research } : {}),
     ...(t.handoff ? { handoff: structuredClone(t.handoff) } : {}),
+    ...(t.attempted ? { attempted: true as const } : {}),
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(t.skills?.length ? { skills: [...t.skills] } : {}),
     ...(t.addedBy ? { addedBy: t.addedBy } : {}),
@@ -484,6 +489,7 @@ export function serializeTaskStatus(
       ? { outcome: t.verdict.outcome, reason: t.verdict.reason, checks: t.verdict.checks || [], ...(t.verdict.reported ? { reported: t.verdict.reported } : {}) }
       : null,
     idleSince,
+    ...(t.attempted ? { attempted: true as const } : {}),
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(isolation ? { isolation } : {}),
     ...(t.status === 'awaiting_user' && t.awaitingReason ? { awaitingReason: t.awaitingReason } : {}),

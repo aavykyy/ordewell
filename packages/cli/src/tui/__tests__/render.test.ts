@@ -39,8 +39,8 @@ const reply = (content: string): Action => ({
 });
 
 const tasks: TaskView[] = [
-  { id: 'a', order: 1, title: 'Add the login route', type: 'ai', status: 'completed', dependencies: [] },
-  { id: 'b', order: 2, title: 'Write the tests', type: 'ai', status: 'running', dependencies: ['a'] },
+  { id: 'a', order: 1, title: 'Add the login route', type: 'ai', status: 'completed', dependencies: [], attempted: true },
+  { id: 'b', order: 2, title: 'Write the tests', type: 'ai', status: 'running', dependencies: ['a'], attempted: true },
   { id: 'c', order: 3, title: 'Review by hand', type: 'user', status: 'pending', dependencies: ['b'] },
 ];
 
@@ -830,15 +830,15 @@ describe('footer', () => {
     expect(out).not.toMatch(/f start/);
   });
 
-  it('advertises opening the log on the selected task', () => {
-    expect(text({ tasks, focus: 'plan', cols: 140 })).toMatch(/enter log/);
+  it('advertises opening the chat on the selected task', () => {
+    expect(text({ tasks, focus: 'plan', cols: 140 })).toMatch(/enter chat/);
   });
 
   it('wraps the plan hints instead of truncating the tail off a narrow terminal', () => {
     // A single truncated line hid the keys the footer exists to teach.
     const out = render(initialState({ tasks, focus: 'plan', rows: 40, cols: 60 }));
 
-    expect(out.join('\n')).toMatch(/enter log/);
+    expect(out.join('\n')).toMatch(/enter chat/);
     expect(out.every((line) => line.length <= 60)).toBe(true);
   });
 

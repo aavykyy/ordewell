@@ -43,6 +43,8 @@ export interface TaskRowSubject {
   isolation?: TaskRowIsolation | null;
   mergeGate?: readonly string[];
   forcedPastGate?: readonly string[];
+  /** An attempt of it has started, so its chat exists from then on. */
+  attempted?: boolean;
   attemptUsage?: readonly AttemptUsage[];
   assignedRunner?: string;
   assignedModel?: { modelId: string; modelLabel?: string };
@@ -156,6 +158,8 @@ export interface TaskRowView {
   status: TaskStatusKind;
   /** A runner is live behind it — `quiet` included. */
   running: boolean;
+  /** An attempt has started, so its chat exists: the one fact the open control reads, never its status. */
+  chatAvailable: boolean;
   /** What an awaiting task waits on, in sentence case; null when nothing was saved. */
   awaiting: string | null;
   /** "Resumes at 8:10pm" while a task paused on a usage limit resumes on its own; null otherwise. */
@@ -205,6 +209,17 @@ export interface TaskRowView {
   /** The one mark its toggle sets. */
   mark: 'complete' | 'uncomplete';
   opsEditable: boolean;
+}
+
+/**
+ * Whether a task's chat exists: only once an attempt of it has started. A
+ * manual task runs nothing, so it has none however it was marked. The attempt
+ * ledger of a plan saved before the mark stands in for an AI task; a script's
+ * attempt has no ledger, so neither gains one from a status alone.
+ */
+export function taskChatAvailable(task: { type?: string; attempted?: boolean; attemptUsage?: readonly AttemptUsage[] }): boolean {
+  if (task.type === 'user') return false;
+  return task.attempted === true || (task.attemptUsage?.length ?? 0) > 0;
 }
 
 const refsOf = (ids: readonly string[], tasks: readonly PlanRefTask[] | undefined): string[] =>
@@ -303,6 +318,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     // Between rounds a check waits for its fix as a task waits for its dependencies, and is no failure (ADR-0045 L3).
     status: blocked.length > 0 ? 'blocked' : loop?.role === 'check' && loop.state === 'repeating' ? 'todo' : taskStatusKind(task),
     running: isTaskRunning(task),
+    chatAvailable: taskChatAvailable(task),
     awaiting: awaitingLabel(task),
     resumes: resumeLabel(task, context.now),
     approvals: approvalLabel(task.awaitingApproval),

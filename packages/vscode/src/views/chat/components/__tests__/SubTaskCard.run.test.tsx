@@ -12,6 +12,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     description: 'A subtask',
     type: 'ai',
     status: 'in_progress',
+    attempted: true,
     dependencies: [],
     subtasks: [],
     assignedRunner: 'claude-code',

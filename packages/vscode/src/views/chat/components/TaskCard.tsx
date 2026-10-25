@@ -51,7 +51,7 @@ interface TaskCardProps {
    * runner approvals, isolation and merge gate. Absent before the host has
    * folded the run, in which case the plan's own fields are all there is.
    */
-  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound'>;
+  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage'>;
   /** Every task's run entry, keyed by id, so a subtask card can read its own hold. */
   runsByTask?: ReadonlyMap<string, RunTask>;
   /** Opt in to resolving this task's merge conflict as an AI task. */
@@ -406,7 +406,22 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
   const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
   // The run's verdict and round are the newer word on a loop's check: they say whether it is between rounds (ADR-0045).
-  const row = taskRowView({ ...task, handoff, idleSince, awaitingApproval, isolation, mergeGate, holdReason: run?.holdReason, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true, ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}) }, { tasks: siblings, modes: activeModes, runnerScope });
+  const row = taskRowView({
+    ...task,
+    handoff,
+    idleSince,
+    awaitingApproval,
+    isolation,
+    mergeGate,
+    holdReason: run?.holdReason,
+    continuable: run?.continuable === true,
+    waitsForApproval: run?.waitsForApproval === true,
+    attempted: run?.attempted ?? task.attempted,
+    ...(run?.attemptUsage ? { attemptUsage: run.attemptUsage } : {}),
+    ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
+  }, { tasks: siblings, modes: activeModes, runnerScope });
+  // Its chat exists only once an attempt has started; status alone never says so.
+  const chatAvailable = row.chatAvailable;
   const conflictFiles = isolatedWork?.conflictFiles ?? [];
   const repair = isolatedWork?.repair ?? null;
 
@@ -470,21 +485,21 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
               <span className="task-type-badge ops" title="An ops task: it changes no repository files and runs in your checkout, once the work it depends on is merged">Ops</span>
             )}
           </span>
-          <div className={`task-heading-block${onOpenLog ? ' task-heading-block-with-log' : ''}`}>
+          <div className={`task-heading-block${onOpenLog && chatAvailable ? ' task-heading-block-with-log' : ''}`}>
             <button type="button" className="task-heading" aria-expanded={expanded}
               title={expanded ? 'Collapse task details' : 'Expand task details'}
               onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}>
               <span className="task-title-text">{task.title}</span>
             </button>
-            {/* Outside the heading button, so Open log can share its line without nesting a button in a button. */}
+            {/* Outside the heading button, so Open chat can share its line without nesting a button in a button. */}
             <TaskAssignment task={task} />
-            {onOpenLog && (
+            {onOpenLog && chatAvailable && (
               <button type="button" className="task-log-open-btn task-log-open-btn-stacked"
-                aria-label="Open log"
+                aria-label="Open chat"
                 onClick={(e) => { e.stopPropagation(); onOpenLog(task.id); }}
-                title="Open this task's log in an editor tab">
+                title="Open this task's chat in an editor tab">
                 <span>Open</span>
-                <span>log</span>
+                <span>chat</span>
               </button>
             )}
           </div>
@@ -505,7 +520,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             <p className="task-description">{task.description}</p>
 
             {handoff && <TaskHandoff handoff={handoff} taskName={(id) => taskRefOf(siblings ?? [], id)}
-              onReadFull={onOpenLog ? () => onOpenLog(task.id) : undefined} />}
+              onReadFull={onOpenLog && chatAvailable ? () => onOpenLog(task.id) : undefined} />}
 
             {/* Worktrees are an implementation detail unless something needs the
                 user's attention (US34) — so the branch and path live in the
@@ -791,10 +806,10 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
         {/* Approvals arrive mid-turn and leave the status alone (ADR-0018,
             A1), so waiting on one is a badge beside it, which opens the log
             where the request is answered. */}
-        {row.approvals && (
+        {row.approvals && chatAvailable && (
           <button type="button" className="task-approval-badge"
             onClick={(e) => { e.stopPropagation(); onOpenLog?.(task.id); }}
-            title="The runner is waiting for you to allow or deny a tool call: open the log to answer">
+            title="The runner is waiting for you to allow or deny a tool call: open the chat to answer">
             {row.approvals}
           </button>
         )}

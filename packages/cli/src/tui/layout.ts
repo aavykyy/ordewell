@@ -1337,7 +1337,7 @@ function commandSheetBody(cols: number): string[] {
   // view's keys run far past any width on a single one.
   body.push(
     '',
-    style.bold('In a task view (enter on a task)'),
+    style.bold('In a task chat (enter on a started task)'),
     style.grey('  ctrl-s sends now: interrupts the running step, then delivers the composer text or, with it empty, the highlighted pending message'),
     style.grey('  ctrl-n/ctrl-p pick a pending message (the newest until you do) · ctrl-r removes a queued one'),
     style.grey('  ctrl-x stops the runner\'s running turn, and it then waits for your next message: on a task paused on a usage limit, it keeps it from resuming'),

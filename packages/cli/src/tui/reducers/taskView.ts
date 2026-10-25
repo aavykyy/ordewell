@@ -1,4 +1,4 @@
-import { EMPTY_TASK_LOG_FOLLOW, followTaskLog, resumeLabel, runnerToolSubject, truncateCheckpointSummary, type ApprovalDecision } from '@ordewell/core';
+import { EMPTY_TASK_LOG_FOLLOW, followTaskLog, resumeLabel, runnerToolSubject, taskRowView, truncateCheckpointSummary, type ApprovalDecision } from '@ordewell/core';
 import { commit } from '../editor';
 import type { Key } from '../keys';
 import { continuesTask, findTask, refFor, queuedTarget, resumesTask, waitingApproval, waitingCheckpoint, type TaskLogState, type TuiState } from '../state';
@@ -16,6 +16,11 @@ import { step, type Step, type Action } from './shared';
 export function openTaskView(state: TuiState, sessionId: string, taskId: string): Step {
   const task = findTask(state.tasks, taskId);
   if (!task) return step(say(state, 'system', `No task ${taskId} in this plan.`));
+  // Enter and /open reach a chat only once an attempt exists: a status or a
+  // manual mark is not an attempt. Staying put is the point — no empty view.
+  if (!taskRowView(task).chatAvailable) {
+    return step(say(state, 'error', 'This task hasn’t started yet. Its chat becomes available when it starts.'));
+  }
   const taskView: TaskLogState = {
     taskId,
     ...EMPTY_TASK_LOG_FOLLOW,

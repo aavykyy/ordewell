@@ -116,7 +116,7 @@ describe('Session with worktree isolation', () => {
 
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    expect(Object.keys(lastStatus()!.tasks[0]).sort()).toEqual(['attemptUsage', 'id', 'idleSince', 'status', 'type', 'verdict']);
+    expect(Object.keys(lastStatus()!.tasks[0]).sort()).toEqual(['attemptUsage', 'attempted', 'id', 'idleSince', 'status', 'type', 'verdict']);
   });
 
   it('broadcasts the handoff before execution completes and persists the run with the plan', async () => {

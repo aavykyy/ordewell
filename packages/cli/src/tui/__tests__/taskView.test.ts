@@ -17,7 +17,8 @@ function run(text: string, overrides: Partial<TuiState> = {}) {
 }
 
 const task = (over: Partial<TaskView> = {}): TaskView => ({
-  id: 't1', order: 1, title: 'Refactor PlanStore', type: 'ai', status: 'in_progress', dependencies: [], assignedRunner: 'claude-code', ...over,
+  id: 't1', order: 1, title: 'Refactor PlanStore', type: 'ai', status: 'in_progress', dependencies: [], assignedRunner: 'claude-code',
+  attempted: true, ...over,
 });
 
 const planned = (over: Partial<TuiState> = {}): TuiState =>
@@ -70,6 +71,68 @@ describe('opening and closing the task view', () => {
     const { state, effects } = reduce(base, { type: 'key', key: key('enter') });
     expect(state.taskView?.taskId).toBe('child');
     expect(effects).toEqual([{ type: 'openTaskLog', sessionId: 's1', taskId: 'child' }]);
+  });
+
+  it('does not open a chat for a task that never started, and says why in the planner chat', () => {
+    const { state, effects } = reduce(planned({ tasks: [task({ status: 'pending', attempted: undefined })] }), { type: 'key', key: key('enter') });
+    expect(state.taskView).toBeNull();
+    expect(state.focus).toBe('plan');
+    expect(effects).toEqual([]);
+    expect(messagesOf(state).at(-1)).toMatchObject({
+      role: 'error',
+      text: 'This task hasn’t started yet. Its chat becomes available when it starts.',
+    });
+  });
+
+  it.each(['completed', 'skipped'] as const)('does not open an empty chat for a never-run %s task', (status) => {
+    const before = planned({ tasks: [task({ status, attempted: undefined })] });
+    const { state, effects } = reduce(before, { type: 'key', key: key('enter') });
+    expect(state.taskView).toBeNull();
+    expect(effects).toEqual([]);
+    expect(messagesOf(state).at(-1)?.text).toBe('This task hasn’t started yet. Its chat becomes available when it starts.');
+  });
+
+  it('opens a script task\'s own chat once it started, though it has no usage ledger', () => {
+    const { state, effects } = reduce(planned({ tasks: [task({ type: 'script', status: 'in_progress', attempted: true, attemptUsage: undefined })] }), { type: 'key', key: key('enter') });
+    expect(state.taskView?.taskId).toBe('t1');
+    expect(effects).toEqual([{ type: 'openTaskLog', sessionId: 's1', taskId: 't1' }]);
+  });
+
+  it('keeps the chat reachable after a cancel returned it to pending', () => {
+    const { state, effects } = reduce(planned({ tasks: [task({ status: 'pending', attempted: true })] }), { type: 'key', key: key('enter') });
+    expect(state.taskView?.taskId).toBe('t1');
+    expect(effects).toEqual([{ type: 'openTaskLog', sessionId: 's1', taskId: 't1' }]);
+  });
+
+  it('refuses /open for a task that never started, with the same error', () => {
+    const base = planned({ focus: 'chat', tasks: [task({ status: 'pending', attempted: undefined })] });
+    const { state, effects } = run('/open 1', base);
+    expect(state.taskView).toBeNull();
+    expect(effects).toEqual([]);
+    expect(messagesOf(state).at(-1)?.text).toBe('This task hasn’t started yet. Its chat becomes available when it starts.');
+  });
+
+  it('takes a live status update\'s attempted mark before any output or usage arrives', () => {
+    const base = planned({ tasks: [task({ status: 'pending', attempted: undefined })] });
+    const live = reduce(base, {
+      type: 'statusUpdate', sessionId: 's1',
+      tasks: [{ id: 't1', status: 'in_progress', verdict: null, attempted: true }],
+    }).state;
+    expect(live.tasks[0].attempted).toBe(true);
+    expect(reduce(live, { type: 'key', key: key('enter') }).effects).toEqual([
+      { type: 'openTaskLog', sessionId: 's1', taskId: 't1' },
+    ]);
+  });
+
+  it('keeps a subtask\'s chat its own', () => {
+    const base = planned({
+      expandedTaskId: 'parent', selectedTask: 1,
+      tasks: [task({ id: 'parent', attempted: true, subtasks: [task({ id: 'child', status: 'pending', attempted: undefined })] })],
+    });
+    const { state, effects } = reduce(base, { type: 'key', key: key('enter') });
+    expect(state.taskView).toBeNull();
+    expect(effects).toEqual([]);
+    expect(messagesOf(state).at(-1)?.text).toBe('This task hasn’t started yet. Its chat becomes available when it starts.');
   });
 
   it('t is no longer a plan shortcut', () => {

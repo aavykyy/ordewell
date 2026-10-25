@@ -24,7 +24,7 @@ interface SubTaskCardProps {
   modelApiMapping?: Record<string, ('openrouter' | 'google' | 'openai_compatible')[]>;
   isExecuting?: boolean;
   /** This subtask's own run entry: what its status badges read, as a task's do. */
-  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound'>;
+  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage'>;
   onRunnerChange?: (taskId: string, runner: string) => void;
   onModelChange?: (taskId: string, assignment: TaskModelAssignment) => void;
   onModelsRefreshNeeded?: () => void;
@@ -75,9 +75,13 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
     holdReason: run?.holdReason,
     continuable: run?.continuable === true,
     waitsForApproval: run?.waitsForApproval === true,
+    attempted: run?.attempted ?? task.attempted,
+    ...(run?.attemptUsage ? { attemptUsage: run.attemptUsage } : {}),
     ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
   }, { parent: parentTask, placement: 'subtask', tasks, runnerScope });
   const status = statusBadge(row);
+  // Its own attempt history, never its parent's.
+  const chatAvailable = row.chatAvailable;
 
   const handlePromptSave = () => {
     if (editingPrompt !== null && editingPrompt !== task.prompt) {
@@ -121,7 +125,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
         {expanded && (
           <div className="subtask-card-body">
             {handoff && <TaskHandoff handoff={handoff} taskName={(id) => taskRefOf(tasks ?? [], id)}
-              onReadFull={onOpenLog ? () => onOpenLog(task.id) : undefined} />}
+              onReadFull={onOpenLog && chatAvailable ? () => onOpenLog(task.id) : undefined} />}
 
             {!isExecuting && task.type === 'ai' && task.prompt && (
               editingPrompt === null ? (
@@ -224,11 +228,11 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
         )}
       </div>
       <div className="task-footer-controls">
-        {onOpenLog && (
+        {onOpenLog && chatAvailable && (
           <button type="button" className="task-log-open-btn"
             onClick={(e) => { e.stopPropagation(); onOpenLog(task.id); }}
-            title="Open this task's log in an editor tab">
-            Open log
+            title="Open this task's chat in an editor tab">
+            Open chat
           </button>
         )}
 
@@ -249,10 +253,10 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
 
         <IsolationBadges row={row} />
 
-        {row.approvals && (
+        {row.approvals && chatAvailable && (
           <button type="button" className="task-approval-badge"
             onClick={(e) => { e.stopPropagation(); onOpenLog?.(task.id); }}
-            title="The runner is waiting for you to allow or deny a tool call: open the log to answer">
+            title="The runner is waiting for you to allow or deny a tool call: open the chat to answer">
             {row.approvals}
           </button>
         )}

@@ -1117,6 +1117,18 @@ export class Session {
     return listTaskLogAttempts(this.taskLogLocation, taskId);
   }
 
+  /**
+   * Mark tasks a saved plan has no attempted flag for but whose logs prove an
+   * attempt ran. Only AI and script tasks: a manual task's completion wrote a
+   * handoff log, which is not a chat.
+   */
+  private creditLoggedAttempts(tasks: readonly Task[]): void {
+    for (const task of flattenTasks(tasks)) {
+      if (task.attempted || task.type === 'user') continue;
+      if (this.taskLogAttempts(task.id).length > 0) task.attempted = true;
+    }
+  }
+
   /** One attempt's saved log, for `replayTaskLog` — what a reopened task view shows. */
   taskLog(taskId: string, attempt: number): TaskLogEvent[] {
     return readTaskLog(this.taskLogLocation, taskId, attempt).map((event) => event.type === 'handoff'
@@ -2333,6 +2345,10 @@ export class Session {
     // Adopting the saved session's id keeps subsequent persists writing to the
     // same file instead of forking the session under a fresh identity.
     if (opts?.sessionId) this.currentSessionId = opts.sessionId;
+    // A plan saved before a task kept its attempted mark is read against the
+    // attempt logs it left, so upgrading keeps the chats it already had. A
+    // manual task's handoff log is not an attempt, and stays no chat.
+    if (adopting) this.creditLoggedAttempts(plan.tasks);
     this.orchestrator.loadPlan(plan.tasks, plan.runners);
     // Loading normalizes statuses (a failed task gets a fresh chance) on the
     // store's copy; the adopted plan shows that result, not the caller's input.

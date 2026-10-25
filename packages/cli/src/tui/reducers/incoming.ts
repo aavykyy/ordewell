@@ -80,6 +80,7 @@ function runTaskToView(t: RunTask): TaskView {
     description: planText(t.description ?? t.title),
     prompt: typeof t.prompt === 'string' ? sanitize(t.prompt) : undefined,
     type: t.type === 'user' || t.type === 'script' ? t.type : 'ai',
+    ...(t.attempted === true ? { attempted: true } : {}),
     attemptUsage: Array.isArray(t.attemptUsage) ? t.attemptUsage : undefined,
     status: planLabel(t.status, 'pending'),
     idleSince: t.idleSince ?? null,

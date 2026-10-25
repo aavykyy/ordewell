@@ -92,6 +92,21 @@ function setup(opts: { tasks?: Task[]; spawn?: Spawn; repairs?: string[]; landPa
 }
 
 describe('Attempts: a claim', () => {
+  it('marks a task attempted before it is in progress, so a chat known to exist needs no output or usage yet', async () => {
+    const env = setup();
+    const spawned = env.start();
+    expect(env.task().attempted).toBe(true);
+    expect(env.task().attemptUsage?.length).toBe(1);
+    await spawned;
+  });
+
+  it('marks a script task attempted though its ledger counts nothing', async () => {
+    const env = setup({ tasks: [createTask({ id: 't1', order: 1, title: 'One', type: 'script', script: 'echo hi' })] });
+    await env.start();
+    expect(env.task().attempted).toBe(true);
+    expect(env.task().attemptUsage).toBeUndefined();
+  });
+
   it('is live, numbered past every attempt the task has run and in progress before its spawn settles', async () => {
     const env = setup({ tasks: [createTask({ id: 't1', order: 1, title: 'One', prompt: 'Do it', attemptUsage: [{ attempt: 2, runner: 'claude-code', startedAt: '2026-10-01T00:00:00Z', wallTimeMs: 0, totals: {}, byModel: [] }] })] });
 

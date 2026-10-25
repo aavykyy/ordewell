@@ -246,6 +246,7 @@ describe('reduceRun', () => {
       ['mergeGate', { mergeGate: ['t0'] }],
       ['forcedPastGate', { forcedPastGate: ['Add the limiter'] }],
       ['handoff', { handoff: { summary: 'Done.', findings: [], findingCount: 0 } }],
+      ['attempted', { attempted: true }],
     ];
 
     it.each(statusOnly)('keeps %s from the last status update', (_field, status) => {
