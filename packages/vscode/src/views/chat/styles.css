@@ -5273,6 +5273,26 @@ body.vscode-high-contrast-light .pending-message {
   border-top: none;
 }
 
+/* Account limits: one row per runner, wrapping rather than clipping in a
+   narrow sidebar. Under a usage line they share its rule. */
+.usage-line.account-limits {
+  flex-wrap: wrap;
+  row-gap: 1px;
+}
+
+.usage-line + .usage-line.account-limits {
+  border-top: none;
+}
+
+.account-limit {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.account-limit.stale {
+  font-style: italic;
+}
+
 /* ---- Task log tab (ADR-0018, V1) ---- */
 /* The on-demand editor tab a structured task opens. It reuses the chat's
    ConversationBlocks classes above; these are only what a task adds: the

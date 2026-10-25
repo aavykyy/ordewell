@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { assignedRunnerOf, taskActionCommand, canContinue, taskLogHeaderView, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { accountLimitsOf, assignedRunnerOf, taskActionCommand, canContinue, taskLogHeaderView, type AccountLimitSnapshot, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG_FOLLOW, followTaskLog } from '@ordewell/core/plan-utils';
 import { diffConversation } from '../shared/conversationPatch';
 import { renderWebviewHtml } from './webviewHtml';
@@ -24,10 +24,14 @@ export interface TaskLogPanelDeps {
   getTask: (taskId: string) => Task | undefined;
   /** The task's dotted reference ("2", "2.1"): a subtask's own order restarts at 1. */
   orderLabel?: (taskId: string) => string | undefined;
+  /** Every runner's account limits; the panel shows only those of the runner its task is assigned to. */
+  accountLimits?: () => readonly AccountLimitSnapshot[];
   /** Open a workspace-relative file the handoff saved, such as its patch (ADR-0050). */
   openFile: (path: string) => void;
   log: (msg: string) => void;
 }
+
+const NO_LIMITS = JSON.stringify([]);
 
 // A plan event that can change the task the header describes. Everything else
 // the panel hears is ignored, so a planner's text deltas cost it nothing.
@@ -50,6 +54,8 @@ export class TaskLogPanel {
   private sequence = 0;
   private ready = false;
   private lastStatus = '';
+  /** What the webview holds; a new one starts with none. */
+  private lastLimits = NO_LIMITS;
   /** When the runner last went quiet, as the status stream says it: the Session keeps no per-task answer to ask for. */
   private idleSince: string | null = null;
 
@@ -93,7 +99,27 @@ export class TaskLogPanel {
       return;
     }
     if (msg.type === 'status_update') this.idleSince = msg.tasks.find((t) => t.id === this.taskId)?.idleSince ?? null;
-    if (TASK_STATE_EVENTS.has(msg.type)) this.pushStatus();
+    if (TASK_STATE_EVENTS.has(msg.type)) {
+      this.pushStatus();
+      // A reassigned task draws its new runner's account.
+      this.pushAccountLimits();
+    }
+  }
+
+  /**
+   * The limits of the account the task's runner uses now, when they differ
+   * from what the panel was last sent. Never the planner's or another
+   * runner's, and never from the attempt on screen: they are the account's
+   * live state.
+   */
+  pushAccountLimits(): void {
+    if (!this.ready) return;
+    const task = this.deps.getTask(this.taskId);
+    const limits = accountLimitsOf(this.deps.accountLimits?.() ?? [], task && assignedRunnerOf(task));
+    const key = JSON.stringify(limits);
+    if (key === this.lastLimits) return;
+    this.lastLimits = key;
+    this.panel.webview.postMessage({ type: 'accountLimits', limits } satisfies HostToTaskLog);
   }
 
   private handle(msg: TaskLogToHost): void {
@@ -103,6 +129,9 @@ export class TaskLogPanel {
         // The first attempt may not have existed when the panel was built.
         if (this.follow.attempt === 0) this.loadLatest();
         else this.postInit();
+        // A reloaded webview holds nothing, so it is sent them whatever was sent before.
+        this.lastLimits = NO_LIMITS;
+        this.pushAccountLimits();
         return;
       case 'selectAttempt':
         this.selectAttempt(msg.attempt);

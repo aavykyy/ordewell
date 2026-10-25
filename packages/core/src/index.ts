@@ -43,6 +43,7 @@ export type {
 } from './models/Task';
 export * from './models/Session';
 export * from './models/Usage';
+export * from './models/AccountLimits';
 export * from './models/TaskLog';
 export * from './models/Handoff';
 export { commandLine, scriptBodyOf, scriptBodyText, scriptTaskText, timeLimitText, DEFAULT_SCRIPT_TIMEOUT_MS, type ScriptBody } from './models/ScriptTask';
@@ -111,6 +112,10 @@ export type { ExecImpl } from './services/ModelDiscovery';
 export { ModelResolver } from './services/ModelResolver';
 export type { ModelResolverDeps } from './services/ModelResolver';
 export { RunnerInstallation } from './services/RunnerInstallation';
+export { AccountLimitMonitor } from './services/AccountLimitMonitor';
+export type { AccountLimitCollector, AccountLimitReading, AccountLimitListener, AccountLimitMonitorOptions } from './services/AccountLimitMonitor';
+export { codexAccountLimitCollector } from './services/harness/codexAccountLimits';
+export type { CodexAccountLimitOptions } from './services/harness/codexAccountLimits';
 export { defaultEnabledRunners, detectInstalledPlanner, findInstalledPlanner, installedPlannerAnswered, installedPlannerDetected, recordInstalledPlanner, recordedInstalledPlanner, resetInstalledPlanner } from './services/InstalledPlanner';
 export { ModelCatalog } from './services/ModelCatalog';
 export type { CatalogModel } from './services/ModelCatalog';

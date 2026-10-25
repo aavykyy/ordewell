@@ -2566,6 +2566,31 @@ from a table kept in Ordewell: neither known leaves the fill unknown.
 *Avoid:* calling it a percentage when either half is unknown; *Avoid:* a window
 table in Ordewell; *Avoid:* "the last prompt" for what it counts.
 
+**Account limits** (`AccountLimitSnapshot`, `AccountLimitMonitor`,
+`AccountLimitCollector`) — what a runner's own account has used of its plan's
+windows (Codex's five-hour and weekly, say), read from the runner's account
+protocol, never from usage records: Codex's over a short-lived `app-server`
+(`account/read` with `refreshToken: false`, then `account/rateLimits/read`),
+which opens no thread and no turn. One monitor per host owns every installed
+runner's — enabled for tasks or not — and decides when each collector reads:
+before the planner's first call, on a surface connecting, on focus and on a
+configuration change, about once a minute while the window has focus, and
+again when a reported window resets; never two reads of one account at once.
+A full read replaces what was known, every bucket and window; a sparse update
+only asks for another read. A failure keeps the last read, marked `stale`,
+only when the same account was seen signed in; an account or auth-scope change
+drops it, and an answer that arrives after one is ignored. `signed_out`,
+`unsupported`, `not_installed` and `unknown` carry no limits and draw nothing;
+a window's share is drawn only as reported, so 0% is a reported 0. Each window
+keeps its own length (`5h`, `Weekly`, `90m`; `Primary`/`Secondary` when none
+is reported) and each per-model bucket stays apart. The planner footer draws
+every account's row beside *Context fill* (`Planner ctx 61k (6%)`); a task log
+draws only its assigned runner's, live whichever attempt is on screen. Never
+saved, never restored as current, and never a reason to pause or resume work —
+that stays with the *In-flight rule*.
+*Avoid:* "usage" or "rate limit" for it; *Avoid:* summing buckets, or reading a
+limit from token or cost totals.
+
 **Subagent lifecycle** — a research subagent as a first-class block: announced
 by `subagent_started` (brief and model), running its calls tagged with its
 `subagentId`, ended by `subagent_finished` with an outcome

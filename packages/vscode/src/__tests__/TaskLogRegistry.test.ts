@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { createTask, type AttemptUsage, type CommandOutcome, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { createTask, type AccountLimitSnapshot, type AttemptUsage, type CommandOutcome, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { TASK_LOG_VIEW_TYPE, TaskLogRegistry } from '../providers/TaskLogRegistry';
 import type { HostToTaskLog } from '../shared/taskLogProtocol';
 import { __panels, __resetPanels, createFakeWebviewPanel, window } from '../test/vscode.mock';
@@ -20,7 +20,7 @@ const attemptTwo: TaskLogEvent[] = [
   { type: 'text', text: 'second try' },
 ];
 
-function harness(attempts: Record<number, TaskLogEvent[]> = { 1: attemptOne }) {
+function harness(attempts: Record<number, TaskLogEvent[]> = { 1: attemptOne }, limits: { current: readonly AccountLimitSnapshot[] } = { current: [] }) {
   const task = createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'claude-code', status: 'in_progress' });
   const session = {
     taskLogAttempts: vi.fn(() => Object.keys(attempts).map(Number).sort((a, b) => a - b)),
@@ -34,10 +34,11 @@ function harness(attempts: Record<number, TaskLogEvent[]> = { 1: attemptOne }) {
     extensionUri: vscode.Uri.file('/ext'),
     session: () => session,
     getTask: () => task as Task,
+    accountLimits: () => limits.current,
     openFile: vi.fn(),
     log: vi.fn(),
   });
-  return { registry, session, task };
+  return { registry, session, task, limits };
 }
 
 /** The messages one panel's webview has been sent, oldest first. */
@@ -576,5 +577,90 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf8')) as { activationEvents?: string[] };
 
     expect(manifest.activationEvents).toContain(`onWebviewPanel:${TASK_LOG_VIEW_TYPE}`);
+  });
+
+  describe('account limits', () => {
+    const snapshot = (harness: string, label: string, used: number): AccountLimitSnapshot => ({
+      harness, label, status: 'fresh', buckets: [{ id: harness, windows: [{ slot: 'primary', usedPercent: used, durationMinutes: 300, resetsAt: null }] }], readAt: '2026-03-02T10:00:00.000Z',
+    });
+    const codex = snapshot('codex', 'Codex', 24);
+    const claude = snapshot('claude-code', 'Claude Code', 40);
+    const limitsSent = (panel: (typeof __panels)[number]) => posted(panel).flatMap((m) => (m.type === 'accountLimits' ? [m.limits] : []));
+
+    it('sends a task only its assigned runner\'s account limits, once the panel is ready', () => {
+      const h = harness(undefined, { current: [codex, claude] });
+      h.registry.open('t1');
+      expect(limitsSent(__panels[0])).toEqual([]);
+
+      __panels[0].__receive({ type: 'ready' });
+
+      expect(limitsSent(__panels[0])).toEqual([[claude]]);
+    });
+
+    it('sends the new limits when the monitor reads again, and nothing when its runner\'s are unchanged', () => {
+      const h = harness(undefined, { current: [codex, claude] });
+      h.registry.open('t1');
+      __panels[0].__receive({ type: 'ready' });
+
+      h.limits.current = [snapshot('codex', 'Codex', 30), claude];
+      h.registry.accountLimitsChanged();
+      expect(limitsSent(__panels[0])).toEqual([[claude]]);
+
+      const later = snapshot('claude-code', 'Claude Code', 41);
+      h.limits.current = [codex, later];
+      h.registry.accountLimitsChanged();
+      expect(limitsSent(__panels[0])).toEqual([[claude], [later]]);
+    });
+
+    it('follows the task to another runner when its assignment changes', () => {
+      const h = harness(undefined, { current: [codex, claude] });
+      h.registry.open('t1');
+      __panels[0].__receive({ type: 'ready' });
+
+      h.task.assignedRunner = 'codex';
+      h.registry.receive({ type: 'task_updated', taskId: 't1', changes: { assignedRunner: 'codex' } });
+
+      expect(limitsSent(__panels[0]).at(-1)).toEqual([codex]);
+    });
+
+    it('sends none for a runner with no monitored account, and clears them when the task moves to one', () => {
+      const h = harness(undefined, { current: [codex] });
+      h.registry.open('t1');
+      __panels[0].__receive({ type: 'ready' });
+      expect(limitsSent(__panels[0])).toEqual([]);
+
+      h.task.assignedRunner = 'codex';
+      h.registry.receive({ type: 'task_updated', taskId: 't1', changes: { assignedRunner: 'codex' } });
+      h.task.assignedRunner = 'opencode';
+      h.registry.receive({ type: 'task_updated', taskId: 't1', changes: { assignedRunner: 'opencode' } });
+
+      expect(limitsSent(__panels[0])).toEqual([[codex], []]);
+    });
+
+    it('sends them again to a webview that reconnects, and to a tab a window reload restores', () => {
+      const h = harness(undefined, { current: [claude] });
+      h.registry.open('t1');
+      __panels[0].__receive({ type: 'ready' });
+      __panels[0].__receive({ type: 'ready' });
+      expect(limitsSent(__panels[0])).toEqual([[claude], [claude]]);
+
+      const restored = harness(undefined, { current: [claude] });
+      const panel = createFakeWebviewPanel('ordewellTaskLog', 'Task log');
+      restored.registry.restore(panel as unknown as vscode.WebviewPanel, { taskId: 't1' });
+      panel.__receive({ type: 'ready' });
+      expect(limitsSent(panel)).toEqual([[claude]]);
+    });
+
+    it('keeps showing the live limits while an earlier attempt is on screen', () => {
+      const h = harness({ 1: attemptOne, 2: attemptTwo }, { current: [claude] });
+      h.registry.open('t1');
+      __panels[0].__receive({ type: 'ready' });
+      __panels[0].__receive({ type: 'selectAttempt', attempt: 1 });
+
+      const later = snapshot('claude-code', 'Claude Code', 55);
+      h.limits.current = [later];
+      h.registry.accountLimitsChanged();
+      expect(limitsSent(__panels[0]).at(-1)).toEqual([later]);
+    });
   });
 });

@@ -6,13 +6,13 @@ export interface RpcMessage {
   method?: string;
   params?: Record<string, unknown>;
   result?: Record<string, unknown>;
-  error?: { message?: string };
+  error?: { message?: string; code?: number };
 }
 
 export type RpcResponse =
   | { ok: true; result: Record<string, unknown> }
-  /** `closed` is the connection ending before any answer; otherwise `message` is the server's own refusal. */
-  | { ok: false; closed: boolean; message?: string };
+  /** `closed` is the connection ending before any answer; otherwise `message` and `code` are the server's own refusal. */
+  | { ok: false; closed: boolean; message?: string; code?: number };
 
 type Emit = (event: AgentEvent) => void;
 
@@ -65,7 +65,7 @@ export class CodexRpc {
     if (msg.method || typeof msg.id !== 'number') return false;
     const handler = this.pending.get(msg.id);
     this.pending.delete(msg.id);
-    handler?.(msg.error ? { ok: false, closed: false, message: msg.error.message } : { ok: true, result: msg.result ?? {} }, emit);
+    handler?.(msg.error ? refusal(msg.error) : { ok: true, result: msg.result ?? {} }, emit);
     return true;
   }
 
@@ -101,4 +101,8 @@ export class CodexRpc {
     }
     return { jsonrpc: '2.0', id, method, params };
   }
+}
+
+function refusal(error: { message?: string; code?: number }): RpcResponse {
+  return { ok: false, closed: false, message: error.message, ...(typeof error.code === 'number' ? { code: error.code } : {}) };
 }

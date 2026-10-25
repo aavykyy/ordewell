@@ -38,6 +38,8 @@ export { scriptTaskText } from './models/ScriptTask';
 export { EMPTY_RUN } from './services/runView';
 
 export * from './models/Usage';
+// An account's limits are worded once too, for the planner footer and each task log alike.
+export * from './models/AccountLimits';
 
 export { walkPlan, taskPlacement, subtreeIds } from './services/PlanTree';
 export type { TreeTask, TaskPlacement } from './services/PlanTree';

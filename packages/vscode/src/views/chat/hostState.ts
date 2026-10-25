@@ -1,4 +1,4 @@
-import type { GlobalRunSettings } from '@ordewell/core';
+import type { AccountLimitSnapshot, GlobalRunSettings } from '@ordewell/core';
 import { type SurfacePlan, type DiscoveredModel, type RunnerId, type RunView, type RunTask, type AiProvider } from '@ordewell/core';
 import { DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, type PromptHold } from '@ordewell/core/plan-utils';
 import type { HostToWebview, PlannerBackend, RunnerMeta } from '../../shared/protocol';
@@ -93,6 +93,8 @@ export interface HostState {
   stopped: boolean;
   /** The user started a new session: errors from the old one's turn are dropped. */
   sessionCleared: boolean;
+  /** Every installed runner's account limits: live account data, kept across a session reset. */
+  accountLimits: readonly AccountLimitSnapshot[];
 }
 
 export const INITIAL_HOST_STATE: HostState = {
@@ -133,6 +135,7 @@ export const INITIAL_HOST_STATE: HostState = {
   dockHeight: undefined,
   stopped: false,
   sessionCleared: false,
+  accountLimits: [],
 };
 
 export type SessionResetKind = 'empty' | 'restore' | 'new';
@@ -394,6 +397,9 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'planDockHeight':
       return { ...state, dockHeight: action.height };
+
+    case 'accountLimits':
+      return { ...state, accountLimits: action.limits };
 
     case 'setRunSettings':
       return { ...state, runSettings: { autonomous: action.autonomous, run: action.run, maxParallel: action.maxParallel } };

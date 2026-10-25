@@ -9,6 +9,7 @@ import { RUN_SETTINGS_DEFAULTS,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
   type RunView, type Session, type SessionDeps, type SettingsService,
   PendingApprovals, approvalScopes, type ApprovalRequestMessage,
+  AccountLimitMonitor, type AccountLimitCollector, type AccountLimitReading,
 } from '@ordewell/core';
 import { ChatViewProvider as RealChatViewProvider } from '../providers/ChatViewProvider';
 import { createExtension, type ExtensionServices } from '../ExtensionHost';
@@ -70,14 +71,21 @@ function fakeChat() {
     clearIsolationHandoff: vi.fn(),
     sendTaskOutput: vi.fn(),
     reveal: vi.fn(),
+    setAccountLimits: vi.fn(),
   };
   return { messages, provider };
 }
 
 function fakeVscodeApi() {
   const showWarningMessage = vi.fn();
+  const windowStateListeners: Array<(state: { focused: boolean }) => void> = [];
   const api = {
     window: {
+      state: { focused: true },
+      onDidChangeWindowState: vi.fn((listener: (state: { focused: boolean }) => void) => {
+        windowStateListeners.push(listener);
+        return { dispose: vi.fn() };
+      }),
       registerWebviewViewProvider: vi.fn(() => ({ dispose: vi.fn() })),
       registerWebviewPanelSerializer: vi.fn(() => ({ dispose: vi.fn() })),
       showWarningMessage,
@@ -95,7 +103,12 @@ function fakeVscodeApi() {
     QuickInputButtons: { Back: {} },
     ProgressLocation: { Notification: 15 },
   };
-  return { api: api as unknown as typeof vscode, showWarningMessage };
+  return {
+    api: api as unknown as typeof vscode,
+    showWarningMessage,
+    /** The window gained or lost focus. */
+    focus: (focused: boolean) => { for (const listener of windowStateListeners) listener({ focused }); },
+  };
 }
 
 function fakeConfig() {
@@ -218,6 +231,7 @@ function harness(overrides: {
   modelResolver?: ReturnType<typeof fakeResolver>;
   runnerInstallation?: ReturnType<typeof fakeRunnerInstallation>;
   chatProvider?: ChatViewProvider;
+  accountLimits?: AccountLimitMonitor;
 } = {}) {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-host-'));
   const vscodeApi = fakeVscodeApi();
@@ -250,6 +264,7 @@ function harness(overrides: {
     modelResolver: resolver as unknown as ModelResolver,
     chatProvider: overrides.chatProvider ?? chat.provider as unknown as ChatViewProvider,
     sessionFactory: (deps) => { sessionDeps.current = deps; return session.session; },
+    ...(overrides.accountLimits ? { accountLimits: overrides.accountLimits } : {}),
   };
 
   return {
@@ -800,5 +815,92 @@ describe('a chat webview reloaded while the planner waits for an answer', () => 
     await expect(answer).resolves.toBe(false);
     expect(resolveApproval).toHaveReturnedWith(false);
     expect(chat.cards()).toEqual([]);
+  });
+});
+
+describe('the host\'s one account-limit monitor', () => {
+  let h: ReturnType<typeof harness>;
+  let reads: number;
+  let monitor: AccountLimitMonitor;
+  const reading: AccountLimitReading = {
+    kind: 'limits', owner: 'alice', plan: 'plus',
+    buckets: [{ id: 'codex', windows: [{ slot: 'primary', usedPercent: 24, durationMinutes: 300, resetsAt: null }] }],
+  };
+
+  beforeEach(() => {
+    reads = 0;
+    const codex: AccountLimitCollector = {
+      harness: 'codex', label: 'Codex', scope: () => 'home',
+      acquire: async () => { reads++; return reading; },
+    };
+    monitor = new AccountLimitMonitor({ collectors: [codex] });
+    h = harness({ accountLimits: monitor });
+  });
+  afterEach(() => {
+    h.host.dispose();
+    fs.rmSync(h.workspace, { recursive: true, force: true });
+  });
+
+  it('reads the account at start, before any planner call, and draws it in the planner footer', async () => {
+    await h.host.start();
+
+    await vi.waitFor(() => expect(h.chat.provider.setAccountLimits).toHaveBeenCalledWith([
+      expect.objectContaining({ harness: 'codex', status: 'fresh', plan: 'plus' }),
+    ]));
+    expect(reads).toBe(1);
+    expect(h.session.spies.startPlanning).not.toHaveBeenCalled();
+  });
+
+  it('asks again when the webview connects, the configuration changes and the window regains focus, and folds model calls into the next poll', async () => {
+    const refresh = vi.spyOn(monitor, 'refresh');
+    const invalidate = vi.spyOn(monitor, 'invalidate');
+    const foreground = vi.spyOn(monitor, 'setForeground');
+    await h.host.start();
+    refresh.mockClear();
+
+    h.chat.messages.fire({ type: 'ready' });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    for (const listener of h.config.listeners) listener();
+    expect(refresh).toHaveBeenCalledTimes(2);
+    h.sessionDeps.current?.broadcast({ type: 'planner_usage', turnId: 't', totals: { inputTokens: 1 } });
+    expect(invalidate).toHaveBeenLastCalledWith();
+    Object.assign(h.session.spies, { planTasks: [createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'codex' })] });
+    h.sessionDeps.current?.broadcast({ type: 'task_log', taskId: 't1', attempt: 1, events: [{ type: 'turn_end', reason: 'completed' }] });
+    expect(invalidate).toHaveBeenLastCalledWith('codex');
+    expect(refresh).toHaveBeenCalledTimes(2);
+
+    h.vscodeApi.focus(false);
+    expect(foreground).toHaveBeenLastCalledWith(false);
+    h.vscodeApi.focus(true);
+    expect(foreground).toHaveBeenLastCalledWith(true);
+  });
+
+  it('gives an open task log only its runner\'s limits, from the same monitor', async () => {
+    await h.host.start();
+    await vi.waitFor(() => expect(monitor.snapshots()[0].status).toBe('fresh'));
+    __resetPanels();
+    const task = createTask({ id: 't1', order: 1, title: 'Parse JSON', assignedRunner: 'codex' });
+    Object.assign(h.session.spies, { planTasks: [task], taskLogAttempts: () => [], taskLog: () => [], outstandingApprovals: () => [] });
+
+    h.chat.messages.fire({ type: 'openTaskLog', taskId: 't1' });
+    await vi.waitFor(() => expect(__panels).toHaveLength(1));
+    __panels[0].__receive({ type: 'ready' });
+
+    const sent = __panels[0].webview.postMessage.mock.calls.map((call) => call[0] as { type: string; limits?: unknown });
+    expect(sent.filter((m) => m.type === 'accountLimits')).toEqual([
+      { type: 'accountLimits', limits: [expect.objectContaining({ harness: 'codex', status: 'fresh' })] },
+    ]);
+  });
+
+  it('closes the monitor with the host, so nothing reads or draws after', async () => {
+    await h.host.start();
+    await vi.waitFor(() => expect(h.chat.provider.setAccountLimits).toHaveBeenCalled());
+    const dispose = vi.spyOn(monitor, 'dispose');
+
+    h.host.dispose();
+    monitor.refresh();
+
+    expect(dispose).toHaveBeenCalled();
+    expect(reads).toBe(1);
   });
 });

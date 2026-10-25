@@ -11,6 +11,7 @@ import { reduceHost, INITIAL_HOST_STATE, type HostState } from './hostState';
 import ModelSelector, { API_PROVIDER_LABELS } from './components/ModelSelector';
 import PlanCardGroup from './components/PlanCardGroup';
 import UsageLine from './components/UsageLine';
+import AccountLimitRows from './components/AccountLimitRows';
 import PendingMessages, { type PendingMessage } from './components/PendingMessages';
 import HandoffCard from './components/HandoffCard';
 import CheckpointPanel from './components/CheckpointPanel';
@@ -71,7 +72,7 @@ export default function App() {
     conversation, plan, isExecuting, isResearchActive, conversationBusy, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, modelAllowlist, runners, held, unsent, modesByRunner, runnerNotice, modelConfig,
     modelOptions, configuredProviders, planner, plannerKnown, runnersKnown, isReady, modelDiscoveryErrors,
-    skills, taskSkills, checkpoint, taskOutput, run, dockExpanded, dockHeight, settingsRequest,
+    skills, taskSkills, checkpoint, taskOutput, run, dockExpanded, dockHeight, settingsRequest, accountLimits,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
   const setIsResearchActive = useCallback((v: boolean) => dispatch({ type: 'patchResearchActive', active: v }), []);
@@ -974,6 +975,8 @@ export default function App() {
       {renderPlanDock()}
 
       {usageBlock && <UsageLine block={usageBlock} />}
+      {/* Not inside the usage line: limits are known before the planner's first call, and with a planner that reports none. */}
+      <AccountLimitRows limits={accountLimits} />
 
       {stopArmed && <div className="stop-hint" role="status">Press Esc again to stop</div>}
 

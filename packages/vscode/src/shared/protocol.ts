@@ -1,4 +1,4 @@
-import type { GlobalRunSettings,
+import type { AccountLimitSnapshot, GlobalRunSettings,
   AiProvider, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunView, SurfacePlan,
   TaskModelAssignment,
 } from '@ordewell/core';
@@ -234,4 +234,10 @@ export type HostToWebview =
    * arrives as a `conversationPatch`.
    */
   | { type: 'restoreChat' }
-  | { type: 'conversationBusy'; busy: boolean };
+  | { type: 'conversationBusy'; busy: boolean }
+  /**
+   * Every installed runner's account limits as the host's monitor last read
+   * them, sent on each change and on ready. Live account data: it outlives a
+   * restored or new session, and is never part of the planner's usage.
+   */
+  | { type: 'accountLimits'; limits: readonly AccountLimitSnapshot[] };

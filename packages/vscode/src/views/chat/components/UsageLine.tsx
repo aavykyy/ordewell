@@ -4,7 +4,9 @@ import type { UsageBlock } from '@ordewell/core';
 
 /*
  * The planner's usage line (#53): the main model's context and the cost its
- * runner reported, pinned below the conversation. Core words both, so the
+ * runner reported, pinned below the conversation. "Planner" is this footer's
+ * own word — a task's footer draws the same meter without it — so it is added
+ * here rather than to core's meter. Core words both, so the
  * surfaces agree; token counts stay in the ledger and are not drawn. The hovers
  * are the second question: exact counts, and which model cost what.
  */
@@ -19,7 +21,7 @@ export default function UsageLine({ block }: { block: UsageBlock }) {
     <div className="usage-line" role="status">
       {(meter || cost) && (
         <span className="usage-line-measures">
-          {meter && block.contextFill && <span className="usage-line-context" title={contextMeterTitle(block.contextFill)}>{meter}</span>}
+          {meter && block.contextFill && <span className="usage-line-context" title={contextMeterTitle(block.contextFill)}>Planner {meter}</span>}
           {meter && cost && ' · '}
           {cost && <span className="usage-line-cost" title={block.byModel && modelCostTitle(block.byModel)}>{cost}</span>}
         </span>
