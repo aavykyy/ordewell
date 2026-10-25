@@ -29,7 +29,6 @@ import { BaseAiService, ResearchChat, ResearchTurn, ToolResult, ConversationTurn
 import { toOpenAiTools, toOpenAiSubagentTools } from './researchTools';
 import { getProviderMeta, isApiProvider, stripModelPrefix } from './ProviderRegistry';
 import { PLANNER_ESCAPE_HINT } from './plannerReadiness';
-import { messageChars } from './contextCompaction';
 import { BudgetedChat, condenseConversation, type CallInput, type ChatCompaction, type ContextSummarizer } from './budgetedChat';
 import type { SummaryCall } from './contextSummary';
 import { CONTEXT_BUDGET, TokenGauge, callBudget, replyTokens, type ChatBudget, type ModelLimits, type PlannerContextDeps, type PlannerContextStatus } from './plannerContextBudget';
@@ -148,7 +147,7 @@ class OpenAiResearchChat extends BudgetedChat<Message> {
 
   protected async callApi(input: CallInput<Message>, model: string, maxTokens: number, signal?: AbortSignal): Promise<ResearchTurn> {
     const messages = [...this.history.view(), ...input.messages];
-    const sentChars = this.history.chars + this.toolsChars + input.messages.reduce((n, m) => n + messageChars(m), 0);
+    const sentChars = this.history.chars + this.toolsChars + this.history.charsOf(input.messages);
     // Stream the turn so reasoning surfaces live. A non-streamed completion blocks
     // for the model's entire think time with no signal — the "0 steps / nothing for
     // a long time" symptom on reasoning models. Tool-call deltas are reassembled by

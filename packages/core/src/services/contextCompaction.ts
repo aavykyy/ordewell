@@ -97,8 +97,17 @@ export class ChatHistory<M extends CompactableMessage> {
   private lastUser = -1;
   private changes = 0;
 
-  constructor(initial: readonly M[] = []) {
+  constructor(
+    initial: readonly M[] = [],
+    /** What one message adds to a request, as its provider sends it. */
+    readonly sizeOf: (m: M) => number = messageChars,
+  ) {
     this.append(...initial);
+  }
+
+  /** What `messages` add to a request, sized as the history sizes its own. */
+  charsOf(messages: readonly M[]): number {
+    return messages.reduce((n, m) => n + this.sizeOf(m), 0);
   }
 
   get chars(): number { return this.total; }
@@ -119,7 +128,7 @@ export class ChatHistory<M extends CompactableMessage> {
     this.changes++;
     for (const m of added) {
       if (m.role === 'user') this.lastUser = this.messages.length;
-      const size = messageChars(m);
+      const size = this.sizeOf(m);
       this.messages.push(m);
       this.sizes.push(size);
       this.total += size;
@@ -168,7 +177,7 @@ export class ChatHistory<M extends CompactableMessage> {
       const stub = m.content.slice(0, COMPACTION_LIMITS.keepHeadChars)
         + `\n[... ${name} output pruned (${m.content.length} chars) to free context: read it again if you need it]`;
       const next = { ...m, content: stub };
-      const size = messageChars(next);
+      const size = this.sizeOf(next);
       pruned.removedChars += this.sizes[i] - size;
       pruned.outputs++;
       this.changes++;

@@ -115,6 +115,8 @@ export type Action =
    * has no turn: the planner is busy with it, not lost.
    */
   | { type: 'turnReconciled'; plan: unknown; plannerTurnId?: string; plannerCompaction?: Extract<SessionMessage, { type: 'planner_compaction' }>; chat: ChatRestored; sessionId: string; reason?: string }
+  /** A session was adopted while the daemon runs planner turn `turnId`, which no call here will settle. */
+  | { type: 'turnJoined'; turnId: string; sessionId: string }
   /** A planner turn's call returned its plan: the one action that ends the turn. */
   | { type: 'planUpdated'; plan: unknown; sessionId?: string }
   /**

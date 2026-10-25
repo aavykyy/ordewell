@@ -23,11 +23,16 @@ interface SentRequest {
   promptTokens: number;
 }
 
-/** Why `contents` breaks Gemini's function-calling rules, or null: a call is answered by the very next turn, one response per call, by name and in order. */
+/**
+ * Why `contents` breaks Gemini's turn rules, or null: no two turns in a row
+ * are of one role, and a call is answered by the very next turn, one response
+ * per call, by name and in order.
+ */
 function pairingProblem(contents: Content[]): string | null {
   if (contents[0]?.role !== 'user') return 'the first turn is not the user\'s';
   for (const [i, c] of contents.entries()) {
     if (c.parts.length === 0) return `turn ${i} has no parts`;
+    if (i > 0 && c.role === contents[i - 1].role) return `turn ${i} has the role of turn ${i - 1}`;
     const calls = c.role === 'model' ? c.parts.filter((p) => p.functionCall).map((p) => p.functionCall!.name) : [];
     const next = contents[i + 1];
     if (calls.length > 0 && next) {
@@ -205,8 +210,11 @@ describe('a Gemini planner that cannot prune enough room', () => {
     expect(provider.summaries.length).toBeGreaterThanOrEqual(1);
     for (const req of provider.requests.slice(2)) expect(req.promptTokens).toBeLessThanOrEqual(limit);
     const last = provider.requests.at(-1)!;
-    const note = last.contents.map(textOf).find((t) => t.startsWith('[Context note from Ordewell]'))!;
-    expect(note).toMatch(/^- bash\(\{"command":"make step0"\}\) → s+/m);
+    // The note joins the user's turn as a part of its own: the user's message is its own part, unchanged.
+    const turn = last.contents.find((c) => c.parts.some((p) => p.text?.startsWith('[Context note from Ordewell]')))!;
+    expect(turn.role).toBe('user');
+    expect(turn.parts.map((p) => p.text?.slice(0, 28))).toEqual([expect.stringContaining('run all the steps'), '[Context note from Ordewell]']);
+    expect(turn.parts[1].text).toMatch(/^- bash\(\{"command":"make step0"\}\) → s+/m);
     expect(history(session).some((m) => m.kind === 'compaction')).toBe(false);
   });
 

@@ -765,6 +765,8 @@ describe('session id stability (persist seam)', () => {
       const broadcast = vi.fn();
       const session = makeSession({
         broadcast,
+        // A backend that says nothing of automatic compaction, as a harness planner's: the meter is these records' alone.
+        aiService: {},
         planner: {
           generate: vi.fn(async (req: { onProgress?: (p: import('../../models/Task').ResearchProgress) => void }) => {
             for (const p of progress) req.onProgress?.(p);
@@ -916,7 +918,7 @@ describe('session id stability (persist seam)', () => {
 
     it('restores saved totals and re-broadcasts them when a session loads', async () => {
       const broadcast = vi.fn();
-      const session = makeSession({ broadcast });
+      const session = makeSession({ broadcast, aiService: {} });
       const saved = smallPlan();
       saved.plannerUsage = {
         totals: { inputTokens: 1500, outputTokens: 200 },
@@ -959,7 +961,7 @@ describe('session id stability (persist seam)', () => {
         model: 'claude-opus-5-5',
         lastPromptTokens: 22_000,
       }];
-      const session = makeSession({ broadcast });
+      const session = makeSession({ broadcast, aiService: {} });
       session.loadPlan(saved, 'old', '/repo', { persist: false });
 
       const line = broadcast.mock.calls.map(([m]) => m as SessionMessage).filter((m) => m.type === 'planner_usage').at(-1);

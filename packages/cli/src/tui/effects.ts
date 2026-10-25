@@ -527,6 +527,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       dispatch({ type: 'planUpdated', plan, sessionId: effect.sessionId });
       if (run) dispatch({ type: 'runSnapshot', view: run, sessionId: effect.sessionId });
       // After the turn-settling `planUpdated`, which would otherwise read the planner as free.
+      if (adopted.plannerTurnId) dispatch({ type: 'turnJoined', turnId: adopted.plannerTurnId, sessionId: effect.sessionId });
       if (adopted.plannerCompaction) dispatch({ type: 'sessionMessage', message: adopted.plannerCompaction, sessionId: effect.sessionId });
       dispatch({ type: 'notice', message: `Loaded "${goal || effect.sessionId}".` });
       return;

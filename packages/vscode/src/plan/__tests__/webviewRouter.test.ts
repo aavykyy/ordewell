@@ -412,6 +412,37 @@ describe('webview messages reach the session through one entry point each', () =
     });
   });
 
+  // The context-pause bar's Retry is a planner turn the chat did not send, so
+  // nothing in sendChat drains the prompt typed while it ran.
+  describe('a prompt held during a Retry compaction', () => {
+    it.each([
+      ['it lands', () => Promise.resolve(h.session.planState!)],
+      ['it fails', () => Promise.reject(new Error('rate limited'))],
+    ])('is sent once when %s', async (_case, retry) => {
+      vi.spyOn(h.session, 'retryPlannerCompaction').mockImplementation(retry);
+      const converse = vi.spyOn(h.session, 'continueConversation').mockResolvedValue(h.session.planState!);
+      h.deps.chatProvider.conversation.holdPrompt('typed during the retry');
+
+      await h.route({ type: 'sendSystemCommand', command: 'retryPlannerCompaction' });
+
+      expect(converse).toHaveBeenCalledTimes(1);
+      expect(converse).toHaveBeenCalledWith('typed during the retry');
+    });
+
+    it('stays held while the planner is still busy', async () => {
+      vi.spyOn(h.session, 'retryPlannerCompaction').mockResolvedValue(h.session.planState!);
+      const converse = vi.spyOn(h.session, 'continueConversation').mockResolvedValue(h.session.planState!);
+      h.deps.isGeneratingPlan = () => true;
+      h.deps.chatProvider.conversation.holdPrompt('typed during the retry');
+
+      await h.route({ type: 'sendSystemCommand', command: 'retryPlannerCompaction' });
+
+      expect(converse).not.toHaveBeenCalled();
+      const holds = h.posts.filter((m): m is Extract<HostToWebview, { type: 'heldPrompts' }> => m.type === 'heldPrompts');
+      expect(holds.at(-1)?.prompts).toEqual(['typed during the retry']);
+    });
+  });
+
   describe('chat', () => {
     it('sends a known slash command to the extension, and anything else to the planner', async () => {
       const converse = vi.spyOn(h.session, 'continueConversation').mockResolvedValue(h.session.planState!);

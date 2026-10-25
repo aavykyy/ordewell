@@ -5,6 +5,7 @@ import { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { IApproval } from '../interfaces/IApproval';
 import type { RunnerModeInfo } from './ModeResolver';
 import type { PlanIntake } from './PlanChangeCheck';
+import type { PlannerContextStatus } from './plannerContextBudget';
 import { GeminiService } from './GeminiService';
 import { OpenAiService } from './OpenAiService';
 import { isCliProvider } from './ProviderRegistry';
@@ -213,6 +214,14 @@ export interface IAiService {
    * T10). Absent where nothing compacts a context in place.
    */
   compactions?(): number;
+
+  /**
+   * Optional: what automatic compaction does for the planner's model now
+   * (ADR-0002) — on, off in the settings file, or off for want of a known
+   * window — read from catalogs already held. Absent on a harness planner,
+   * whose agent compacts its own context.
+   */
+  plannerContextStatus?(): PlannerContextStatus;
 
   /**
    * Optional: a summary of the planner's context for `/compact`, written by

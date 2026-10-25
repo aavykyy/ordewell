@@ -19,7 +19,7 @@ import type { VsCodeConfig } from '../adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from '../adapters/VsCodeNotification';
 import type { WebviewToHost } from '../shared/protocol';
-import { __panels, __resetPanels, createFakeWebviewPanel, window } from '../test/vscode.mock';
+import { __panels, __resetPanels, commands, createFakeWebviewPanel, window } from '../test/vscode.mock';
 
 const models: DiscoveredModel[] = [
   { modelId: 'claude-sonnet-4-5', modelLabel: 'Claude Sonnet 4.5', variants: [], runnerProvider: 'anthropic' },
@@ -178,6 +178,7 @@ function fakeSession() {
     stopExecution: vi.fn(),
     startPlanning: vi.fn(async (goal: string) => planWithOneTask(goal)),
     continueConversation: vi.fn(async () => planWithOneTask('continued')),
+    compactConversation: vi.fn(async (): Promise<unknown> => ({ summary: 'the summary', keptMessages: 4 })),
     cancelTask: vi.fn(async () => {}),
     retryTask: vi.fn(async () => {}),
     markTaskComplete: vi.fn(async () => {}),
@@ -513,6 +514,59 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
 
     h.chat.messages.fire({ type: 'sendSystemCommand', command: 'cancel', taskId: 't1' });
     await vi.waitFor(() => expect(h.session.spies.execute).toHaveBeenCalledWith({ command: 'stop_task', task: 't1' }, { kind: 'user' }));
+  });
+
+  describe('a prompt held during a compaction from the Command Palette', () => {
+    const registered = (id: string) => (commands.registerCommand as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([name]) => name === id).at(-1)![1] as () => Promise<void>;
+    const nextPrompt = () => h.chat.provider.conversation.nextPrompt as unknown as ReturnType<typeof vi.fn>;
+    /** The planner takes the turn a released prompt opens, and is busy with it from then on. */
+    const plannerTakesTheTurn = () => h.session.spies.startPlanning.mockImplementation(() => {
+      h.session.spies.isPlannerBusy = true;
+      return new Promise(() => {});
+    });
+
+    it.each([
+      ['it lands', () => Promise.resolve({ summary: 'the summary', keptMessages: 4 })],
+      ['it fails', () => Promise.reject(new Error('rate limited'))],
+    ])('is sent once when %s', async (_case, compact) => {
+      h.session.spies.compactConversation.mockImplementation(compact);
+      await h.host.start();
+      nextPrompt().mockReturnValueOnce('typed during the compaction');
+
+      await registered('ordewell.compactConversation')();
+
+      expect(h.session.spies.startPlanning).toHaveBeenCalledTimes(1);
+      expect(h.session.spies.startPlanning).toHaveBeenCalledWith('typed during the compaction', ['claude-code']);
+    });
+
+    it('stays held while the planner is still busy', async () => {
+      await h.host.start();
+      h.session.spies.isPlannerBusy = true;
+      nextPrompt().mockReturnValueOnce('typed during the compaction');
+
+      await registered('ordewell.compactConversation')();
+
+      expect(nextPrompt()).not.toHaveBeenCalled();
+      expect(h.session.spies.startPlanning).not.toHaveBeenCalled();
+    });
+
+    // `/compact` runs the same command, then the chat's own drain runs after it:
+    // the second finds the planner busy with the first prompt and sends nothing.
+    it('sends one prompt, not two, when /compact releases it from both the command and the chat', async () => {
+      await h.host.start();
+      (commands.executeCommand as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce((id: string) => registered(id)());
+      plannerTakesTheTurn();
+      nextPrompt().mockReturnValueOnce('first').mockReturnValueOnce('second');
+
+      h.chat.messages.fire({ type: 'sendMessage', text: '/compact', typed: true });
+
+      await vi.waitFor(() => expect(h.session.spies.compactConversation).toHaveBeenCalled());
+      await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalledWith('first', ['claude-code']));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(h.session.spies.startPlanning).toHaveBeenCalledTimes(1);
+      expect(nextPrompt()).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('persists and stops runners on dispose', async () => {

@@ -17,6 +17,8 @@ vi.mock('openai', () => ({
 import { OpenAiService } from '../OpenAiService';
 import { PlannerContextExhaustedError, type ModelLimits } from '../plannerContextBudget';
 import type { ConversationTurnContext } from '../BaseAiService';
+import type { SessionMessage } from '../SessionMessage';
+import { contextMeterText, contextMeterTitle } from '../../models/Usage';
 import { makeSession, testWorkspace } from './sessionTestKit';
 
 interface SentMessage {
@@ -227,6 +229,31 @@ describe('a model switched in the middle of a planner turn', () => {
     const records = progress.filter((p) => p.type === 'usage').map((p) => p.record!);
     expect(records.map((r) => [r.model, r.inputTokens])).toEqual(provider.requests.map((r) => [r.model, r.promptTokens]));
   });
+
+  it('refuses no message on the old model\'s tokenizer: a model nothing has measured is sent to, the provider being its judge', async () => {
+    // Two tokenizers: the first model's two characters to a token, the second's five.
+    const perToken: Record<string, number> = { 'dense-model': 2, 'sparse-model': 5 };
+    const sent: SentRequest[] = [];
+    createSpy.mockImplementation((req: SentRequest) => {
+      sent.push(req);
+      const chars = req.messages.reduce((n, m) => n + (m.content ?? '').length, 0) + JSON.stringify(req.tools).length;
+      return (async function* () {
+        yield { choices: [{ delta: { content: 'Noted.' }, finish_reason: 'stop' }] };
+        yield { choices: [], usage: { prompt_tokens: Math.ceil(chars / perToken[req.model]), completion_tokens: 2 } };
+      })();
+    });
+    const config = cfg({ orchestratorModel: 'openai:dense-model' } as Partial<IConfig>);
+    const svc = service(config, { 'dense-model': { contextWindow: 200_000 }, 'sparse-model': { contextWindow: 200_000 } });
+    await start(svc, fakeFileSystem({}));
+    (config as { orchestratorModel: string }).orchestratorModel = 'openai:sparse-model';
+
+    // 400,000 characters: 200,000 tokens on the first model's tokenizer, 80,000 on this one's.
+    const message = 'y'.repeat(400_000);
+    await svc.continueConversation(message, () => {});
+
+    expect(sent.at(-1)!.model).toBe('sparse-model');
+    expect(sent.at(-1)!.messages.at(-1)!.content).toContain(message);
+  });
 });
 
 describe('what an API planner never prunes, and what it does when that cannot fit', () => {
@@ -385,5 +412,43 @@ describe('a session\'s API planner', () => {
     auto = true;
     await session.continueConversation('and now?');
     expect(toolOutputs(provider.requests.at(-1)!)[0].content).toContain('read_file output pruned');
+  });
+  it('says on the planner\'s meter when automatic compaction is not running, and why, as it stood at the last call', async () => {
+    const provider = new FakeProvider({}, [says('Hi.'), says('Noted.'), says('Noted.')]);
+    createSpy.mockImplementation(provider.create);
+    const catalog: { contextWindow?: number } = {};
+    let auto = true;
+    const events: SessionMessage[] = [];
+    const session = makeSession({
+      config: fakeConfig({ aiProvider: 'openrouter', orchestratorModel: 'vendor/model' }),
+      fsAdapter: fakeFileSystem({}),
+      broadcast: (m) => events.push(m),
+      modelResolver: {
+        modelsForRunners: vi.fn().mockResolvedValue({}),
+        contextWindowFor: (source, model) => (source === 'openrouter' && model === 'vendor/model' ? catalog.contextWindow : undefined),
+        maxOutputTokensFor: () => undefined,
+        warmPickerOptions: vi.fn(),
+      },
+      settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' }, plannerAutoCompaction: auto }),
+    });
+    session.loadPlan({ ...createEmptyPlan(), conversationHistory: [{ role: 'user', content: 'map the cache', timestamp: '2026-10-25T09:00:00Z' }] }, 'map the cache', testWorkspace, { persist: false });
+    const meter = () => {
+      const fill = events.filter((m): m is Extract<SessionMessage, { type: 'planner_usage' }> => m.type === 'planner_usage').at(-1)!.contextFill!;
+      return { text: contextMeterText(fill), title: contextMeterTitle(fill) };
+    };
+
+    await session.continueConversation('hello');
+    expect(meter().text).toMatch(/^ctx \S+ · no auto-compact$/);
+    expect(meter().title).toMatch(/no catalog Ordewell holds states vendor\/model's window.*\/compact/);
+
+    catalog.contextWindow = 200_000;
+    auto = false;
+    await session.continueConversation('anything else?');
+    expect(meter().text).toMatch(/^ctx \S+ \(\d+%\) · no auto-compact$/);
+    expect(meter().title).toMatch(/off in the settings file.*\/compact/);
+
+    auto = true;
+    await session.continueConversation('and now?');
+    expect(meter().text).toMatch(/^ctx \S+ \(\d+%\)$/);
   });
 });

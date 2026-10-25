@@ -187,22 +187,36 @@ function reduceAction(state: TuiState, action: Action): Step {
       }
       const redrawn = reduceAction({ ...state, turnGate: NO_TURN }, action.chat).state;
       const settled = reduceAction(redrawn, { type: 'planUpdated', plan: action.plan, sessionId: action.sessionId });
+      // A joined turn's end went with the socket: no reply of this surface's was lost.
+      if (state.planner === 'joined') return settled;
       // The redraw replaced the line `turnLost` spoke, and with it the reason a message may be missing.
       return { ...settled, state: say(settled.state, 'system', `The reply to your last message was lost on the way${because(action.reason)}; this is what the server holds.`) };
     }
 
+    // Dispatched after the load's `planUpdated`, which reads the planner as
+    // free: the turn is the daemon's, and its end is what frees it.
+    case 'turnJoined':
+      if (stale(state, action.sessionId)) return step(state);
+      return step({ ...state, planner: 'joined', turnGate: { open: action.turnId, stopped: null } });
+
     // A message never ends a turn: `planUpdated` does (see `converse`), so a
     // queued prompt drains onto a settled state. Until then the status only
-    // says whether a call is out. The exception is a turn whose call was lost:
-    // there is no `planUpdated` coming, so the stream's end of it sends for the
-    // session to be read back.
+    // says whether a call is out. The exceptions are turns with no call here:
+    // a joined turn's end settles it, as a compaction's end does; the end of a
+    // turn whose call was lost sends for the session to be read back.
     case 'sessionMessage': {
       if (stale(state, action.sessionId)) return step(state);
       if (action.message.type === 'planner_compaction') return followCompaction(state, action.message);
       const next = followSession(state, action.message);
       const { sessionId } = state;
-      const lostTurnEnded = action.message.type === 'planner_turn_ended' && state.planner === 'awaiting'
-        && next.turnGate.open === null && !state.forceSendPending;
+      const gateClosed = action.message.type === 'planner_turn_ended' && next.turnGate.open === null;
+      if (gateClosed && state.planner === 'joined') {
+        // A send-now interrupted the joined turn: its own call is out now, and its reply settles it.
+        return state.forceSendPending
+          ? step({ ...next, planner: 'planning', forceSendPending: null })
+          : drainQueue(state, { ...next, planner: 'idle' });
+      }
+      const lostTurnEnded = gateClosed && state.planner === 'awaiting' && !state.forceSendPending;
       return step(next, lostTurnEnded && sessionId ? [{ type: 'reconcileTurn', sessionId }] : []);
     }
 
@@ -351,9 +365,9 @@ function reduceAction(state: TuiState, action: Action): Step {
     }
 
     // A follow that opens again may be the only way a lost reply's turn end
-    // arrives: its socket was gone when the daemon broadcast it.
+    // arrives, or a joined turn's: its socket was gone when the daemon broadcast it.
     case 'followRestored':
-      if (stale(state, action.sessionId) || (state.planner !== 'awaiting' && state.planner !== 'compacting')) return step(state);
+      if (stale(state, action.sessionId) || (state.planner !== 'awaiting' && state.planner !== 'compacting' && state.planner !== 'joined')) return step(state);
       return step(state, [{ type: 'reconcileTurn', sessionId: action.sessionId }]);
 
     case 'executionLost': {

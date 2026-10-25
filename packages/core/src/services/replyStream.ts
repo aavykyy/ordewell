@@ -1,5 +1,5 @@
 import { opensWithJsonObject } from './JsonExtractor';
-import type { ResearchProgress } from '../models/Task';
+import type { PlannerCompaction, ResearchProgress } from '../models/Task';
 
 /** Where one segment of a planner reply streams: the chat, or the "building plan" display. */
 export type SegmentRoute = 'text' | 'plan';
@@ -51,20 +51,33 @@ export class TurnStream {
    */
   private readonly shown = new Map<string, object>();
   private muted = false;
+  /** A compaction whose start went out and whose end has not: its end must follow, whatever becomes of the turn. */
+  private compacting: Extract<PlannerCompaction, { phase: 'started' }> | undefined;
 
   constructor(readonly turnId: string, private readonly sendOn: (progress: ResearchProgress) => void) {}
 
   /**
-   * Send nothing more: the turn was abandoned, and its end already announced.
+   * Send nothing more: the turn was abandoned, and its end is announced next.
    * A call that does not end when stopped streams on whenever it settles, and
    * what it says would draw in, or cut, the turn that has the conversation now.
+   * A compaction it started ends now, as stopped — its own end would come
+   * muted, and the session would go on telling every surface it runs.
    */
   mute(): void {
+    const running = this.compacting;
+    if (running) {
+      const { id, origin, trigger } = running;
+      this.emit({ type: 'compaction', compaction: { phase: 'ended', id, origin, trigger, outcome: 'stopped', at: new Date().toISOString() }, turnId: this.turnId });
+    }
     this.muted = true;
   }
 
   private emit(progress: ResearchProgress): void {
-    if (!this.muted) this.sendOn(progress);
+    if (this.muted) return;
+    const compaction = progress.type === 'compaction' ? progress.compaction : undefined;
+    if (compaction?.phase === 'started') this.compacting = compaction;
+    else if (compaction && compaction.id === this.compacting?.id) this.compacting = undefined;
+    this.sendOn(progress);
   }
 
   /**

@@ -52,6 +52,15 @@ describe('the context meter', () => {
     expect(contextMeterTitle({ usedTokens: 61_143, windowTokens: 1_000_000 })).toBe('61,143 of 1,000,000 tokens');
     expect(contextMeterTitle({ usedTokens: 61_143 })).toBe('61,143 tokens');
   });
+
+  it('says quietly when an API planner\'s automatic compaction is not running, and why on hover', () => {
+    const unknown = { usedTokens: 61_143, autoCompaction: { off: 'unknown_window' as const, model: 'vendor/model' } };
+    expect(contextMeterText(unknown)).toBe('ctx 61k · no auto-compact');
+    expect(contextMeterTitle(unknown)).toBe('61,143 tokens. Automatic compaction is off: no catalog Ordewell holds states vendor/model\'s window; /compact still condenses the conversation.');
+    const off = { usedTokens: 61_143, windowTokens: 1_000_000, autoCompaction: { off: 'settings' as const } };
+    expect(contextMeterText(off)).toBe('ctx 61k (6%) · no auto-compact');
+    expect(contextMeterTitle(off)).toBe('61,143 of 1,000,000 tokens. Automatic compaction is off in the settings file; /compact still condenses the conversation.');
+  });
 });
 
 describe('the usage line', () => {

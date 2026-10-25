@@ -279,7 +279,11 @@ describe('a provider refusal of a planner call as too long', () => {
     expect(refused.refused).toBe(true);
     expect(trailingResults(refused)).toHaveLength(8);
     for (const m of refused.messages.filter((m) => m.role === 'tool')) expect(m.content).toHaveLength(49_000);
-    expect(session.planState!.plannerContextPause!.reason).toMatch(/^What the planner's last tool calls returned is too long for vendor\/model's window by itself/);
+    const { reason } = session.planState!.plannerContextPause!;
+    expect(reason).toMatch(/^What the planner's last tool calls returned is too long for vendor\/model's window by itself/);
+    // No compaction makes room for what is too long by itself: Retry on this model would only pause again.
+    expect(reason).toMatch(/switch it to a model with a larger window, then Retry compaction, or stop it to drop the turn\.$/);
+    expect(reason).not.toMatch(/carries the turn on/);
     expect(reads()).toHaveLength(8);
   });
 });
@@ -483,6 +487,36 @@ describe('a Stop of a planner paused on its context', () => {
     expect(history(session).slice(before).some((m) => m.kind === 'compaction')).toBe(false);
     expect(session.planState!.plannerContextPause).toBeUndefined();
     expect(session.planState!.pendingTurns).toEqual([]);
+    expect(ran(bash)).toEqual(commands);
+  });
+  it('stops a /compact run while paused: the pause ends with the paused turn, the late summary commits nothing', async () => {
+    const provider = new FakeProvider([says('Hi.'), says('Noted.'), says('Sure.'), ...steps()]);
+    const bash = vi.fn(async () => out(20_000, 's'));
+    const env = plannerSession(provider, fakeFileSystem({ bash }));
+    const { session } = env;
+    // Exchanges enough for /compact to have something to condense.
+    for (const text of ['hello', 'keep it small', 'and quick']) await session.continueConversation(text);
+    env.catalog.windows[MODEL] = provider.requests[0].promptTokens * 2;
+    env.catalog.maxOutput = 4_096;
+    provider.summariesOk = false;
+    await session.continueConversation('run all the steps');
+    expect(session.planState!.plannerContextPause).toBeDefined();
+    provider.summariesOk = true;
+    const commands = ran(bash);
+    const before = history(session).length;
+    let open!: () => void;
+    provider.summaryGate = new Promise((resolve) => { open = resolve; });
+    const summaries = provider.summaries.length;
+
+    const compact = session.compactConversation();
+    await vi.waitFor(() => expect(provider.summaries.length).toBeGreaterThan(summaries));
+    expect(session.abortPlannerTurn()).toBe(true);
+    open();
+
+    await expect(compact).rejects.toBeInstanceOf(PlannerTurnStoppedError);
+    expect(session.planState!.plannerContextPause).toBeUndefined();
+    expect(session.planState!.pendingTurns).toEqual([]);
+    expect(history(session).slice(before).some((m) => m.kind === 'compaction')).toBe(false);
     expect(ran(bash)).toEqual(commands);
   });
 });

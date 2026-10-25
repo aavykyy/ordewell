@@ -51,11 +51,21 @@ describe('TokenGauge', () => {
     gauge.record('a', 44_000, 10_000);
     expect(gauge.charsPerToken('a')).toBeCloseTo(4.4 / 1.1);
     expect(gauge.charsPerToken('b')).toBeCloseTo(4.4 / 1.25);
-    expect(gauge.plainCharsPerToken('b')).toBeCloseTo(4.4);
+    // Another tokenizer's ratio estimates; it never refuses a call outright.
+    expect(gauge.plainCharsPerToken('b')).toBeUndefined();
 
     gauge.record('b', 30_000, 10_000);
     expect(gauge.charsPerToken('b')).toBeCloseTo(3 / 1.1);
     expect(gauge.charsPerToken('a')).toBeCloseTo(4.4 / 1.1);
+  });
+
+  it('takes a refusal of a model never measured as no sparser than any tokenizer', () => {
+    const gauge = new TokenGauge();
+    // 330,000 characters refused as more than 10,000 tokens: true of every tokenizer, so it says nothing past six to a token.
+    gauge.refused('a', 330_000, 10_000);
+    expect(gauge.plainCharsPerToken('a')).toBe(6);
+    gauge.refused('a', 20_000, 10_000);
+    expect(gauge.plainCharsPerToken('a')).toBe(2);
   });
 
   it('ignores a report of no tokens, and caps a ratio no tokenizer produces', () => {

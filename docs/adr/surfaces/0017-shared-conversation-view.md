@@ -142,7 +142,9 @@ own presentation; it never re-derives the conversation from raw messages.
   by that id, so a phase heard twice, or the transcript first, draws one
   block; an end that changed nothing draws nothing in a view that never saw it
   start, one that had nothing to do takes its block back, and a turn cut short
-  closes one still running. While it runs a surface says so (`Compacting
+  closes one still running. A turn let go while it compacts announces that
+  compaction's end, as stopped, before its own, so a surface joining later is
+  not told it still runs. While it runs a surface says so (`Compacting
   context…`) where it says a turn is working, and the planner is held as in a
   turn: Stop stops it and a message waits for it. Once over it is a quiet line
   of its own, outside any fold (`Context compacted`, with sizes only when both
@@ -271,3 +273,4 @@ the same word.)
 - 2026-10-25 — a planner compaction is one quiet block folded in by id where it happened, with its start and end announced, Stop and queued messages as in a turn, and nothing rebuilt (C1). Before it, `/compact` rebuilt the whole VS Code conversation, collapsing what was open, behind a progress notification and a success popup, and a harness planner's own compaction was not shown at all.
 - 2026-10-25 — the daemon carries a running planner compaction in its read, adoption and socket-join answers, and the TUI folds the lifecycle without a redraw, holding the planner and its queue until the end (C1). Before it, `/compact` redrew the TUI conversation and reset its scroll, a surface that joined mid-compaction saw a silent planner, and a lost reply was read back as a lost turn.
 - 2026-10-25 — C1: an API planner's automatic compaction is announced in its turn, a pruning by its end alone, and one that condensed only the turn's own rounds is never written ([ADR-0002](../planner/0002-planner-as-conversation-loop.md)).
+- 2026-10-25 — C1, found in review: a turn let go mid-compaction ends it as stopped, and the TUI keeps a session loaded mid-turn held until that turn ends, whatever compacts inside it. Before it, the session reported the compaction running for good, and an in-turn compaction's end freed the TUI's planner and sent a held prompt while the turn ran.
