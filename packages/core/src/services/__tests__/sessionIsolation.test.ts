@@ -707,7 +707,7 @@ describe('Session with worktree isolation', () => {
       expect(session.planState!.isolation).toEqual(record);
 
       await session.compactConversation();
-      expect(saved(session)!.conversationHistory![0].kind).toBe('compaction');
+      expect(saved(session)!.conversationHistory!.at(-1)!.kind).toBe('compaction');
       expect(saved(session)!.isolation).toEqual(record);
       expect(lastStatus()!.tasks.map((t) => [t.id, t.status, t.isolation])).toEqual(marks);
     });

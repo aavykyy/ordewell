@@ -1788,6 +1788,37 @@ describe('conversation compact effect', () => {
     expect(messages.filter((m) => m.role === 'planner')).toHaveLength(0);
     expect(messages.filter((m) => m.role === 'system' && m.text === 'Conversation condensed: …')).toHaveLength(1);
   });
+
+  it('keeps the late copy of the newest summary out once the transcript holds an earlier one too', async () => {
+    const twice = [
+      { role: 'user' as const, content: 'build me a parser', timestamp: '2026-01-01T00:00:00Z' },
+      { role: 'assistant' as const, content: 'Conversation condensed: first', timestamp: '2026-01-01T00:01:00Z', kind: 'compaction' as const },
+      { role: 'user' as const, content: 'add CSV', timestamp: '2026-01-01T00:02:00Z' },
+      { role: 'assistant' as const, content: 'Conversation condensed: second', timestamp: '2026-01-02T00:00:00Z', kind: 'compaction' as const },
+    ];
+    let onExecution: (event: unknown) => void = () => {};
+    let finishExecution: () => void = () => {};
+    const h = harness({
+      compactConversation: vi.fn().mockResolvedValue({ plan: { tasks: [], conversationHistory: twice }, summary: 'second', keptMessages: 2 }),
+      streamExecution: vi.fn().mockImplementation((_id: string, cb: (event: unknown) => void, onReady?: (error?: Error) => void) => {
+        onExecution = cb;
+        onReady?.();
+        return new Promise<void>((resolve) => { finishExecution = resolve; });
+      }),
+    });
+
+    const running = runEffect({ type: 'execute', sessionId: 'session-1' }, h.deps);
+    await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
+    onExecution({ type: 'planner_message', content: 'Conversation condensed: second', timestamp: '2026-01-02T00:00:00Z' });
+    finishExecution();
+    await running;
+
+    let state: TuiState = initialState({ sessionId: 'session-1' });
+    for (const action of h.actions) ({ state } = reduce(state, action));
+    const messages = messagesOf(state);
+    expect(messages.filter((m) => m.role === 'planner')).toHaveLength(0);
+    expect(messages.filter((m) => m.text === 'Conversation condensed: second')).toHaveLength(1);
+  });
 });
 
 describe('worktree isolation', () => {

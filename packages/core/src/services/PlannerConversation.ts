@@ -7,8 +7,8 @@ import { readOnlyMode, readOnlyRunners } from './ModeResolver';
 import type { PlannerTurnOutcome, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { TurnStream } from './replyStream';
 import type { ForkedDialogue } from './conversationFork';
-import { condensedNotice, extractSummary, keptTail, summaryRequest } from './conversationSummary';
-import type { ConversationMessage, LegacyPlanState, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
+import { compactionCut, condensedNotice, contextFloor, extractSummary, modelContext, summaryRequest } from './conversationSummary';
+import type { ContextCheckpoint, ConversationMessage, LegacyPlanState, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
 import { flattenTasksWithParents, isUserMessage } from '../models/Task';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
@@ -449,7 +449,7 @@ export interface RewoundDialogue {
 /** What a compaction left behind. */
 export interface ConversationCompaction {
   summary: string;
-  /** Transcript entries kept verbatim after the summary entry. */
+  /** Transcript entries the planner's context keeps verbatim after the summary. */
   keptMessages: number;
 }
 
@@ -487,9 +487,10 @@ const WHOLE_PLAN_WHILE_RUNNING =
  *
  * The live model context (a vendor service's message list, a harness planner's
  * process and native session id) is disposable: {@link reset} drops it and the
- * next turn is replayed from the transcript. That is what lets the transcript
- * be replaced by a summary, or copied into a fork, without the model's memory
- * drifting from it.
+ * next turn is replayed from the transcript — as {@link modelContext} projects
+ * it past the newest compaction. That is what lets a summary stand in for the
+ * earlier messages, or the transcript be copied into a fork, without the
+ * model's memory drifting from it.
  */
 export class PlannerConversation {
   private readonly briefing: PlannerBriefing;
@@ -720,12 +721,6 @@ export class PlannerConversation {
     if (plan) plan.conversationHistory = [...(plan.conversationHistory ?? []), ...entries];
   }
 
-  /** Swap the whole transcript. The live context no longer matches it, so pair with {@link reset}. */
-  replace(messages: readonly ConversationMessage[]): void {
-    const plan = this.host.plan();
-    if (plan) plan.conversationHistory = [...messages];
-  }
-
   /**
    * The plan scope this conversation served is gone: drop the live model
    * context, and what the planner was told outside the transcript in it (see
@@ -752,9 +747,9 @@ export class PlannerConversation {
   /**
    * The user messages a rewind may land before. The opening message is the
    * goal: cutting it leaves a conversation about nothing, which is a new
-   * session, not a rewind. After a compaction the summary entry, always
-   * first, plays the goal's part: what it replaced is gone, so a rewind stops
-   * at it.
+   * session, not a rewind. A compaction keeps what it condensed, so a rewind
+   * reaches past it; only a legacy summary, first in the transcript, plays
+   * the goal's part, since what it replaced is gone.
    */
   rewindTargets(): RewindTarget[] {
     // An opening that hit the planner's usage limit left its failure ahead of the goal.
@@ -768,9 +763,10 @@ export class PlannerConversation {
   }
 
   /**
-   * Replace the transcript with a summary of it, keeping the last two
-   * exchanges as they were, and drop the live context so the next message
-   * replays from the shorter record.
+   * Condense the planner's context: a summary stands in for all but the last
+   * two exchanges from now on, the transcript keeping every message, and the
+   * live context is dropped so the next message replays the shorter
+   * projection ({@link modelContext}).
    *
    * The summary is one hidden turn through whichever planner is configured —
    * on the live context when it still matches, replayed from the transcript
@@ -784,8 +780,9 @@ export class PlannerConversation {
     this.assertIdle('condense the conversation');
     const plan = this.host.plan();
     if (!plan) throw new ConversationEditError('No planning conversation to condense');
-    if (!keptTail(this.transcript)) {
-      throw new ConversationEditError('The conversation is too short to condense: it takes more than two exchanges before a summary saves anything.');
+    const cut = compactionCut(this.transcript);
+    if (cut === null) {
+      throw new ConversationEditError('The conversation is too short to condense: it takes more than two exchanges since the last summary before a new one saves anything.');
     }
     // A planner turn, so a message sent while it runs is refused: the reply
     // would share the summary turn's live context, which the compaction resets
@@ -793,18 +790,9 @@ export class PlannerConversation {
     const { turn, release } = this.claim({ refuseAs: 'condense the conversation' }, signal);
     try {
       const summary = await this.summarize(turn.signal);
-      const tail = keptTail(this.transcript);
-      if (this.host.plan() !== plan || !tail) throw new ConversationEditError('The conversation changed while it was being condensed: nothing was replaced.');
-      const now = new Date().toISOString();
-      const content = condensedNotice(summary);
-      this.host.mutate(() => {
-        plan.conversationHistory = [{ role: 'assistant', content, timestamp: now, kind: 'compaction' }, ...tail];
-        return true;
-      }, () => {
-        this.host.broadcast({ type: 'planner_message', content, timestamp: now });
-        this.host.broadcastPlan();
-      });
-      return { summary, keptMessages: tail.length };
+      if (this.host.plan() !== plan || compactionCut(this.transcript) !== cut) throw new ConversationEditError('The conversation changed while it was being condensed: nothing was condensed.');
+      this.commitCheckpoint(condensedNotice(summary), cut, 'manual');
+      return { summary, keptMessages: modelContext(this.transcript).length - 1 };
     } catch (err) {
       throw interrupted(turn, err);
     } finally {
@@ -815,6 +803,29 @@ export class PlannerConversation {
       if (!turn.abandoned) this.dropContext();
       release();
     }
+  }
+
+  /**
+   * Append a summary checkpoint whose context resumes verbatim at `keptFrom`,
+   * in a save of its own — so a turn that holds inputs and later fails, stops
+   * or is abandoned leaves it valid. Its cut is never before the newest
+   * checkpoint's, nor past an input the open turn holds: that lands at its
+   * held position, at or after the cut, and is replayed (ADR-0002).
+   */
+  private commitCheckpoint(content: string, keptFrom: number, trigger: ContextCheckpoint['trigger']): void {
+    const held = this.openTurn?.writes.entries.map(({ at }) => at) ?? [];
+    if (keptFrom < contextFloor(this.transcript) || keptFrom > Math.min(this.transcript.length, ...held)) {
+      throw new Error(`A compaction cannot cut the conversation at ${keptFrom}: that is behind its last summary or past an input not yet answered.`);
+    }
+    const timestamp = new Date().toISOString();
+    const entry: ConversationMessage = { role: 'assistant', content, timestamp, kind: 'compaction', checkpoint: { id: uuidv4(), keptFrom, trigger } };
+    this.host.mutate(() => {
+      this.appendEntries([entry]);
+      return true;
+    }, () => {
+      this.host.broadcast({ type: 'planner_message', content, timestamp });
+      this.host.broadcastPlan();
+    });
   }
 
   private async summarize(signal: AbortSignal): Promise<string> {
@@ -833,7 +844,7 @@ export class PlannerConversation {
       ai.pruneContext?.();
       turn = await ai.continueConversation(request, onProgress, signal);
     } else {
-      turn = await this.resume(await this.reopen(), request, [...this.transcript], signal, onProgress);
+      turn = await this.resume(await this.reopen(), request, modelContext(this.transcript), signal, onProgress);
     }
     // Not a ConversationEditError: the caller's catch turns an aborted turn into
     // the stop or discard it was, which a surface answers differently from a refusal.
@@ -952,7 +963,7 @@ export class PlannerConversation {
   private async replyTurn(message: SkillInvocation, wakeUps: readonly string[], userTurn: UserTurn): Promise<SettledTurn> {
     const { signal } = userTurn;
     const plan = this.requirePlan();
-    const priorHistory = plan.conversationHistory ?? [];
+    const priorHistory = modelContext(plan.conversationHistory ?? []);
     const now = new Date().toISOString();
     const fromUser = wakeUps.length === 0 || message.text !== '' || message.skills.length > 0;
     // Held, not written: a save mid-turn must never land these in the
@@ -1195,6 +1206,8 @@ export class PlannerConversation {
     const plan = this.requirePlan();
     const { entries, research, subagents } = userTurn.writes;
     const history = [...(plan.conversationHistory ?? [])];
+    // A checkpoint written while the turn ran cut at or before its inputs (see commitCheckpoint), so none lands behind it.
+    if (entries.some(({ at }) => at < contextFloor(history))) throw new Error('A held input would land behind the conversation\'s last summary.');
     // Past the held entries already placed, which all belong at or before it.
     entries.forEach(({ at, entry }, placed) => history.splice(Math.min(at + placed, history.length), 0, entry));
     plan.conversationHistory = history;

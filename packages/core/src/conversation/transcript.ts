@@ -124,8 +124,10 @@ function research(log: readonly ResearchLogEntry[]): Placed[] {
  * each subagent's calls nested under it, and the token line. Reasoning and
  * streamed text that never settled were never saved, so a reload has none.
  *
- * The research log interleaves with the transcript by time. Entries older than
- * a compaction's first kept message went with the turns it condensed.
+ * The research log interleaves with the transcript by time, and a compaction
+ * stands where it was made: the transcript keeps what it condensed. Only a
+ * legacy compaction, which replaced what it condensed and stands first, drops
+ * the research older than its first kept message with the turns it took.
  * Pending inputs follow the landed records in arrival order; they are not
  * transcript entries until their turn lands.
  */

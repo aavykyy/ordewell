@@ -76,7 +76,7 @@ function sessionWith(planner: PlannerFake, broadcast: (msg: SessionMessage) => v
 }
 
 describe('Session.compactConversation', () => {
-  it('leaves the summary entry and the last two exchanges, persisted and broadcast, with every task untouched', async () => {
+  it('appends the summary entry, keeping every message, persisted and broadcast, with every task untouched', async () => {
     const { planner, state } = apiStylePlanner();
     const broadcast = vi.fn<(msg: SessionMessage) => void>();
     const session = sessionWith(planner, broadcast);
@@ -86,18 +86,17 @@ describe('Session.compactConversation', () => {
     await session.compactConversation();
 
     const history = session.planState!.conversationHistory!;
-    expect(history.map((m) => m.kind ?? m.role)).toEqual(['compaction', 'user', 'assistant', 'user', 'assistant']);
-    expect(history[0].content).toContain(SUMMARY_TEXT);
-    expect(history.slice(1).map((m) => m.content)).toEqual(['add streaming', 'Tasks updated:\n- added #2', 'and keep it dependency-free', 'Noted.']);
+    expect(history.slice(0, -1)).toEqual(plannedDialogue().conversationHistory);
+    expect(history.at(-1)).toMatchObject({ kind: 'compaction', checkpoint: { keptFrom: 2 }, content: expect.stringContaining(SUMMARY_TEXT) });
     expect(session.planTasks).toEqual(tasksBefore);
 
     const saved = saves(session).mock.calls.at(-1)![0];
-    expect(saved.conversationHistory).toHaveLength(5);
+    expect(saved.conversationHistory).toHaveLength(7);
     expect(saved.tasks.map((t) => t.id)).toEqual(['t1', 't2']);
     const notice = broadcast.mock.calls.map(([m]) => m).find((m) => m.type === 'planner_message');
     expect(notice).toMatchObject({ type: 'planner_message', content: expect.stringContaining(SUMMARY_TEXT) });
     const planEvent = broadcast.mock.calls.map(([m]) => m).filter((m) => m.type === 'plan_generated').at(-1);
-    expect(planEvent?.type === 'plan_generated' && planEvent.plan.conversationHistory).toHaveLength(5);
+    expect(planEvent?.type === 'plan_generated' && planEvent.plan.conversationHistory).toHaveLength(7);
   });
 
   it('clears the planner\'s context meter when the conversation is condensed', async () => {
@@ -202,7 +201,7 @@ describe('Session.compactConversation', () => {
     await session.compactConversation();
 
     expect(session.planTasks.map((t) => t.id)).toEqual(['t1', 't2']);
-    expect(session.planState!.conversationHistory![0].content).toContain(SUMMARY_TEXT);
+    expect(session.planState!.conversationHistory!.at(-1)!.content).toContain(SUMMARY_TEXT);
   });
 
   it('continues from the condensed transcript on the next message for an API planner', async () => {
@@ -241,7 +240,7 @@ describe('Session.compactConversation', () => {
     await session.compactConversation();
 
     expect(state.starts[0].replayed).toEqual(plannedDialogue().conversationHistory!.map((m) => m.content));
-    expect(session.planState!.conversationHistory![0].kind).toBe('compaction');
+    expect(session.planState!.conversationHistory!.at(-1)!.kind).toBe('compaction');
   });
 
   it('leaves the transcript, the saved session and the chat alone when the summary turn fails', async () => {
@@ -376,13 +375,13 @@ describe('Session.compactConversation', () => {
     await expect(makeSession().compactConversation()).rejects.toThrow(ConversationEditError);
   });
 
-  it('offers only messages after the summary as rewind targets', async () => {
+  it('offers the same rewind targets as before it, the goal still excepted', async () => {
     const { planner } = apiStylePlanner();
     const session = sessionWith(planner);
 
     await session.compactConversation();
 
-    expect(session.rewindTargets().map((t) => t.preview)).toEqual(['add streaming', 'and keep it dependency-free']);
-    expect(() => session.rewindConversation(0)).toThrow(/condensed/);
+    expect(session.rewindTargets().map((t) => [t.index, t.preview])).toEqual([[2, 'add streaming'], [4, 'and keep it dependency-free']]);
+    expect(() => session.rewindConversation(0)).toThrow(/goal/);
   });
 });
