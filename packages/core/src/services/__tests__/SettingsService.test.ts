@@ -539,14 +539,24 @@ describe('SettingsService', () => {
       else process.env.ORDEWELL_AUTONOMOUS_MODE = saved;
     });
 
-    it('is Full until the user chooses, and keeps their choice for every later reader', () => {
+    it('is Guarded on a fresh install, and keeps either level the user chooses for every later reader', () => {
       delete process.env.ORDEWELL_AUTONOMOUS_MODE;
-      expect(service.autonomousMode()).toBe(true);
+      expect(service.autonomousMode()).toBe(false);
+
+      service.setAutonomousMode(true);
+      expect(new SettingsService(tempFile).autonomousMode()).toBe(true);
 
       service.setAutonomousMode(false);
-
       expect(new SettingsService(tempFile).autonomousMode()).toBe(false);
       expect(new SettingsService(tempFile).getAll().autonomousMode).toBe(false);
+    });
+
+    it('is Guarded for a file that never chose a level, including one written by an older build', () => {
+      delete process.env.ORDEWELL_AUTONOMOUS_MODE;
+      fs.writeFileSync(tempFile, JSON.stringify({ enabledRunners: ['codex'], supervisorLevel: 'act' }));
+
+      expect(new SettingsService(tempFile).autonomousMode()).toBe(false);
+      expect(new SettingsService(tempFile).getAll().autonomousMode).toBeUndefined();
     });
 
     it.each([['false', false], ['0', false], ['true', true]])('gives way to ORDEWELL_AUTONOMOUS_MODE=%s in the environment', (value, level) => {
@@ -557,13 +567,13 @@ describe('SettingsService', () => {
       expect(service.autonomousModeOverridden()).toBe(true);
     });
 
-    it('reads a hand-edited level name it can use, and Full for one it cannot', () => {
+    it('reads a hand-edited level name it can use, and the Guarded default for one it cannot', () => {
       delete process.env.ORDEWELL_AUTONOMOUS_MODE;
       fs.writeFileSync(tempFile, JSON.stringify({ autonomousMode: 'guarded' }));
       expect(new SettingsService(tempFile).autonomousMode()).toBe(false);
 
       fs.writeFileSync(tempFile, JSON.stringify({ autonomousMode: 'maybe' }));
-      expect(new SettingsService(tempFile).autonomousMode()).toBe(true);
+      expect(new SettingsService(tempFile).autonomousMode()).toBe(false);
     });
 
     it.each([

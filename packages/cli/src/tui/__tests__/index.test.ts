@@ -199,6 +199,14 @@ describe('handleTui', () => {
       // eslint-disable-next-line no-control-regex
       (fakeTerminal.draw.mock.calls[0][0] as string[]).join('\n').replace(/\x1b\[[0-9;]*m/g, '');
 
+    it('shows Guarded on the first frame of a fresh install', async () => {
+      void handleTui([]);
+
+      await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
+      expect(firstFrame()).toMatch(/Autonomy\s+Guarded/);
+      expect(firstFrame()).not.toMatch(/Autonomy\s+Full/);
+    });
+
     it('warns, and does not promise approval, when the saved settings have autorun on', async () => {
       fs.writeFileSync(path.join(home, '.ordewell', 'settings.json'), JSON.stringify({ autorun: true }));
       void handleTui([]);

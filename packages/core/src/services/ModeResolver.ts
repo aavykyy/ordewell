@@ -38,7 +38,7 @@ export function runnerModesFrom(registry: ManifestLookup, runners: RunnerId[]): 
  */
 export function resolveDefaultMode(
   modes: readonly RunnerModeInfo[] | undefined,
-  autonomousDefault = true,
+  autonomousDefault = false,
 ): string | undefined {
   if (!modes || modes.length === 0) return undefined;
   const tag: 'autonomous' | 'safe' = autonomousDefault ? 'autonomous' : 'safe';
@@ -132,7 +132,7 @@ export function plannedMode(
   runner: RunnerId,
   runnerModes: Partial<Record<RunnerId, readonly RunnerModeInfo[]>> | undefined,
   { readOnly, current }: ModeRequest,
-  autonomousDefault = true,
+  autonomousDefault = false,
 ): PlannedMode {
   if (!runnerModes) return { ok: true, mode: undefined };
   const modes = runnerModes[runner] ?? [];
@@ -172,7 +172,7 @@ export function carryPlannedModes(
     const subtasks = (t.subtasks ?? []).map(carry);
     const was = prior.get(t.id);
     if (t.type !== 'ai' || !was || was.type !== 'ai' || t.taskMode === taggedReadOnlyMode(catalog.runnerModes[t.assignedRunner])) return { ...t, subtasks };
-    const mode = plannedMode(t.assignedRunner, catalog.runnerModes, { readOnly: false, current: was.taskMode }, catalog.autonomousDefault ?? true);
+    const mode = plannedMode(t.assignedRunner, catalog.runnerModes, { readOnly: false, current: was.taskMode }, catalog.autonomousDefault ?? false);
     return { ...t, subtasks, ...(mode.ok && mode.mode !== undefined ? { taskMode: mode.mode } : {}) };
   };
   return rewrite.map(carry);

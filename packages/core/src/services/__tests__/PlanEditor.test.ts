@@ -386,7 +386,7 @@ describe('PlanEditor.addTask', () => {
 
     await editor.addTask({ title: 'Docs', prompt: 'write docs' });
 
-    expect(store.planTasks.at(-1)).toMatchObject({ title: 'Docs', assignedRunner: 'claude-code', assignedModel: { modelId: 'claude-sonnet-4-5' }, taskMode: 'build' });
+    expect(store.planTasks.at(-1)).toMatchObject({ title: 'Docs', assignedRunner: 'claude-code', assignedModel: { modelId: 'claude-sonnet-4-5' }, taskMode: 'acceptEdits' });
   });
 
   it('keeps what the caller chose where the runner offers it, and drops dependencies on tasks that are gone', async () => {

@@ -76,7 +76,7 @@ There is no per-plan value and no per-workspace override.
 
 | setting | values | default |
 |---|---|---|
-| autonomy level | Full, Guarded | Full |
+| autonomy level | Full, Guarded | **Guarded** |
 | supervisor level | Off, Watch, Act | **Watch** |
 | merge at gates automatically | on, off | off |
 | autorun | on, off | off |
@@ -302,7 +302,7 @@ the daemon reads it from there at generation.
   revisit, not as safe.
 - **Rejected: Guarded turns autorun into an approval card.** One setting would
   silently switch another off.
-- **Rejected: autorun on by default.** With Full also the default, a new user's
+- **Rejected: autorun on by default.** A new user's
   first goal would run agents without permission prompts from a plan they never
   saw, and the README's "review the plan" would describe a product that is not
   there out of the box.
@@ -373,3 +373,5 @@ the daemon reads it from there at generation.
   planner's judgement, bounded by the run's Parallel limit ([ADR-0037](0037-research-tasks-wake-the-planner.md) R4).
 - 2026-10-23 — the Planned-with line, a seventh value: whether Ordewell's own commits end with `Planned-with: Ordewell` (ADR-0013). On by default, read as each message is written, not copied onto the run.
 - 2026-10-23 — the Planned-with line is not in the `/settings` panels or VS Code's Run block: it is set with `ordewell trailer` or in `settings.json`.
+- 2026-10-25 — the autonomy level starts Guarded on a fresh install; an
+  explicit Full, or one already saved, is kept.

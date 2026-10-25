@@ -237,11 +237,11 @@ describe('BaseConfig', () => {
 
     it('reads the level the user saved, as it stands now', () => {
       const config = new TestConfig();
-      expect(config.autonomousMode).toBe(true);
-
-      new SettingsService().setAutonomousMode(false);
-
       expect(config.autonomousMode).toBe(false);
+
+      new SettingsService().setAutonomousMode(true);
+
+      expect(config.autonomousMode).toBe(true);
     });
   });
 });

@@ -566,7 +566,7 @@ export abstract class BaseAiService {
     onProgress: (progress: ResearchProgress) => void,
     researchLog: ResearchLogEntry[] = [],
     runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-    autonomousDefault = true,
+    autonomousDefault = false,
     signal?: AbortSignal,
     modes: PlannerModes = DEFAULT_PLANNER_MODES,
   ): Promise<{ tasks: Task[]; researchLog: ResearchLogEntry[] }> {

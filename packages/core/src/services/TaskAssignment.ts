@@ -155,7 +155,7 @@ function modeFor(write: AssignmentWrite, task: Task, moved: boolean): { ok: true
       error: `"${task.title}" is read-only, and runner "${runner}" has no read-only mode${reason ? ' available on this host' : ''}: give it another mode first${able.length > 0 ? `, or move it to one of: ${able.join(', ')}` : ''}${reason ? `. ${reason}` : ''}`,
     };
   }
-  const mode = plannedMode(runner, catalog.runnerModes, { readOnly, current: task.taskMode }, catalog.autonomousDefault ?? true);
+  const mode = plannedMode(runner, catalog.runnerModes, { readOnly, current: task.taskMode }, catalog.autonomousDefault ?? false);
   return mode.ok ? { ok: true, mode: mode.mode ?? task.taskMode } : mode;
 }
 
