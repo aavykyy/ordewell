@@ -326,8 +326,8 @@ no verdict passed, so the seam holds the call to two rules whichever surface
 sent it, and the surfaces only explain them. First, it is refused while
 anything could still move the task on without being asked: the plan starting,
 a scheduler driving it, an attempt starting, running or integrating, a start
-admitted and not yet claimed, a force start queued, or a usage-limit hold or
-scheduled resume. That holds for a task that has not started, failed, waits,
+admitted and not yet claimed, a force start queued, a start a dirty checkout
+parked for Stash and continue, or a usage-limit hold or scheduled resume. That holds for a task that has not started, failed, waits,
 or already completed. The refusal tells the user to Stop the run first, and
 the Stop makes the override possible once its attempts have settled. A run that
 ended on a failure is not in the way, since nothing advances until a retry or a
@@ -341,8 +341,9 @@ vouches for the work although no passing verdict said it was done, may land
 what the task kept, and releases its dependents on a future run; Mark not done
 clears the completion and holds the task until it is retried or started, and
 undoes neither the work nor what already ran on it. While an override lands,
-nothing starts and no second override is taken, so a run requested under it is
-refused until it has landed. A manual task's sign-off is the user's own work:
+nothing starts and no second override is taken, so a run or a script requested
+under it, and a skip that would start the run again, are refused until it has
+landed. A manual task's sign-off is the user's own work:
 it is never held up by a run and asks no yes of the seam, so it can release the
 tasks that wait on it mid-run. The VS Code card puts the two controls last in
 a task's expanded details, never on its status circle; the TUI's `m` and the

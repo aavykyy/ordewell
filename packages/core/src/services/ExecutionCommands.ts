@@ -285,6 +285,12 @@ export interface ExecutionCommandsDeps {
 /** Commands that start work: they need the user's approval of what they start, and ask in Guarded. */
 const STARTS: ReadonlySet<ExecutionCommandName> = new Set(['run_plan', 'run_task', 'retry_task', 'force_start', 'approve_review', 'run_script']);
 
+/**
+ * What waits for a landing override, besides the starts: a skip restarts a run
+ * that ended on a failure, so it would start work under the landing task.
+ */
+const HELD_BY_LANDING_OVERRIDE: ReadonlySet<ExecutionCommandName> = new Set([...STARTS, 'skip_task']);
+
 /** The user's own controls, by the names they press them by: a model asking for one is refused. */
 const USERS_ONLY: Partial<Record<ExecutionCommandName, string>> = {
   force_start: 'Force start',
@@ -438,7 +444,7 @@ export class ExecutionCommands {
     if ('refusal' in first) return this.refuse(command, actor, located, first.refusal);
     if ('nothing' in first) return { ok: true, message: first.nothing };
     // After the call's own refusals, which name the task an override is landing.
-    if (this.overriding.size > 0 && STARTS.has(command.command)) return this.refuse(command, actor, located, OVERRIDE_LANDING);
+    if (this.overriding.size > 0 && HELD_BY_LANDING_OVERRIDE.has(command.command)) return this.refuse(command, actor, located, OVERRIDE_LANDING);
     const tripped = this.tripped(command, actor, located);
     if (tripped) return tripped;
 
@@ -510,6 +516,7 @@ export class ExecutionCommands {
     if (!draft.ok) return this.refuse(command, actor, undefined, `The script task was not added: ${draft.errors.join('; ')}`);
     const unready = this.scriptUnready(draft.task);
     if (unready) return this.refuse(command, actor, undefined, unready);
+    if (this.overriding.size > 0) return this.refuse(command, actor, undefined, OVERRIDE_LANDING);
     const tripped = this.tripped(command, actor, undefined);
     if (tripped) return tripped;
 

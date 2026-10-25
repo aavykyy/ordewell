@@ -13,7 +13,7 @@ describe('a task card model edit the session refuses', () => {
   it('shows the session\'s reason and re-shows the plan as it stands', async () => {
     const reason = '"Build" has a live runner, so its model and effort cannot change now: stop the task first, or use the runner\'s own /model';
     const plan = { status: 'running', tasks: [] };
-    const session = { updateTask: vi.fn().mockRejectedValue(new PlanEditError(reason)), planState: plan };
+    const session = { activity: { starting: false, running: false, scheduled: false, resumable: false }, updateTask: vi.fn().mockRejectedValue(new PlanEditError(reason)), planState: plan };
     const chatProvider = { showPlan: vi.fn() };
     const d = {
       session, chatProvider, getCurrentPlan: () => plan, setCurrentPlan: vi.fn(), persistState: vi.fn(), saveCurrentSession: vi.fn(),
@@ -44,7 +44,7 @@ describe('a card edit while the plan runs', () => {
     ['skills', { kind: 'skills' as const, skills: ['tdd'] }, 'updateTask', ['t1', { skills: ['tdd'] }, { requireUnstarted: true }]],
     ['ops', { kind: 'ops' as const, ops: true }, 'updateTask', ['t1', { ops: true }, { requireUnstarted: true }]],
   ])('guards a %s edit', async (_kind, edit, method, expected) => {
-    const session = { isExecuting: true, updateTask: vi.fn(), setTaskRunner: vi.fn(), setTaskDependencies: vi.fn(), planState: plan };
+    const session = { isExecuting: true, activity: { starting: false, running: true, scheduled: true, resumable: false }, updateTask: vi.fn(), setTaskRunner: vi.fn(), setTaskDependencies: vi.fn(), planState: plan };
     const chatProvider = { showPlan: vi.fn() };
     const d = {
       session, chatProvider, getCurrentPlan: () => plan, setCurrentPlan: vi.fn(), persistState: vi.fn(), saveCurrentSession: vi.fn(),
@@ -56,8 +56,26 @@ describe('a card edit while the plan runs', () => {
     expect(chatProvider.showPlan).toHaveBeenCalledWith(plan);
   });
 
+  // Nothing is live while the scheduler waits on a manual task, a gate or a
+  // hold, or while a start is opening the run, yet the next claim can land on
+  // the task mid-edit: the card already holds back its editors then.
+  it.each([
+    ['scheduled', { starting: false, running: false, scheduled: true, resumable: false }],
+    ['starting', { starting: true, running: false, scheduled: false, resumable: false }],
+    ['resumable', { starting: false, running: false, scheduled: false, resumable: true }],
+  ])('guards an edit while the run is %s with nothing live', async (_name, activity) => {
+    const session = { isExecuting: false, activity, updateTask: vi.fn(), planState: plan };
+    const d = {
+      session, chatProvider: { showPlan: vi.fn() }, getCurrentPlan: () => plan, setCurrentPlan: vi.fn(), persistState: vi.fn(), saveCurrentSession: vi.fn(),
+    } as unknown as PlanManagerDeps;
+
+    await handleTaskEdit('t2', { kind: 'skills', skills: ['cache'] }, d);
+
+    expect(session.updateTask).toHaveBeenCalledWith('t2', { skills: ['cache'] }, { requireUnstarted: true });
+  });
+
   it('leaves the wider direct edit alone when no run is live', async () => {
-    const session = { isExecuting: false, updateTask: vi.fn(), planState: plan };
+    const session = { isExecuting: false, activity: { starting: false, running: false, scheduled: false, resumable: false }, updateTask: vi.fn(), planState: plan };
     const d = {
       session, chatProvider: { showPlan: vi.fn() }, getCurrentPlan: () => plan, setCurrentPlan: vi.fn(), persistState: vi.fn(), saveCurrentSession: vi.fn(),
     } as unknown as PlanManagerDeps;

@@ -2192,6 +2192,9 @@ export class Session {
    * answers as stopped rather than waiting on a question that no longer stands.
    */
   stopExecution(): void {
+    // The opening stopped here may still be awaiting a spawn; an Execute after
+    // this Stop starts afresh instead of joining a run that no longer stands.
+    this.runOpening = null;
     this.saved(() => this.orchestrator.stop());
     this.approvals.clear((request) => request.kind === 'task_start');
     this.broadcast({ type: 'execution_stopped' });

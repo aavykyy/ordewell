@@ -36,7 +36,7 @@ function plan(tasks: Task[]): LegacyPlanState {
 
 function setup(opts: { isolation?: FakeWorktreeIsolation } = {}) {
   const r = runner();
-  const session = makeSession({ runner: r.runner, isolation: opts.isolation, config: fakeConfig({ autonomousMode: true, maxParallelSessions: 3 }) });
+  const session = makeSession({ runner: r.runner, scriptRunner: r.runner, isolation: opts.isolation, config: fakeConfig({ autonomousMode: true, maxParallelSessions: 3 }) });
   const latest = (taskId: string) => r.sessions.filter((s) => s.taskId === taskId).at(-1)!;
   const run = (command: ExecutionCommand, actor: ExecutionActor = USER) => session.execute(command, actor);
   const load = (tasks: Task[]) => session.loadPlan(plan(tasks), 'goal', testWorkspace, { persist: false });
@@ -289,6 +289,31 @@ describe('a manual task during a run', () => {
   });
 });
 
+describe('a start a dirty checkout parked', () => {
+  for (const command of ['run_task', 'force_start'] as const) {
+    it(`refuses an override after ${command} until a Stop, so the parked start cannot replay over it`, async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.availability = { active: false, reason: 'dirty' };
+      const env = setup({ isolation });
+      env.load([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
+      await env.run({ command, task: 't1' });
+      expect(env.spawn).not.toHaveBeenCalled();
+
+      const outcome = await env.run(confirmed('t1'));
+
+      expect(outcome).toMatchObject({ ok: false, outcome: 'refused' });
+      expect(outcome.message).toContain('Stop the run first');
+
+      await env.run({ command: 'stop_run' });
+      expect(await env.run(confirmed('t1'))).toMatchObject({ ok: true });
+      isolation.availability = { active: true };
+      await env.session.continueWithStash();
+      expect(env.spawn.mock.calls.filter(([o]) => o.taskId === 't1')).toEqual([]);
+      expect(env.status('t1')).toBe('completed');
+    });
+  }
+});
+
 describe('overrides that race each other and the run', () => {
   it('lands one override at a time: the second, made in the same moment, is refused', async () => {
     const env = setup();
@@ -313,6 +338,60 @@ describe('overrides that race each other and the run', () => {
     expect(started.message).toContain('Another manual override is landing');
     expect(env.spawn).not.toHaveBeenCalled();
     expect(await env.run({ command: 'run_plan' })).toMatchObject({ ok: true });
+  });
+});
+
+describe('what a landing override holds back besides starts', () => {
+  /** t1 failed and is being marked complete with its integration held; returns what lands it. */
+  async function landingOverrideOfT1(env: ReturnType<typeof setup>, isolation: FakeWorktreeIsolation) {
+    await env.run({ command: 'run_plan' });
+    env.latest('t1').reportComplete({ status: 'failed', summary: 'nope' });
+    await vi.waitFor(() => expect(env.status('t1')).toBe('failed'));
+    await vi.waitFor(() => expect(env.session.activity.running).toBe(false));
+    const release = isolation.holdIntegration('t1');
+    const landing = env.run(confirmed('t1'));
+    await vi.waitFor(() => expect(isolation.taskIdsFor('integrate')).toEqual(['t1']));
+    return { release, landing };
+  }
+
+  it('refuses a skip, which would start the failed run again under the landing override', async () => {
+    const isolation = new FakeWorktreeIsolation();
+    const env = setup({ isolation });
+    env.load([task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3), task('t4', 4, { dependencies: ['t3'] })]);
+    await env.run({ command: 'run_plan' });
+    env.latest('t1').reportComplete({ status: 'failed', summary: 'nope' });
+    env.latest('t3').reportComplete({ status: 'failed', summary: 'nope' });
+    await vi.waitFor(() => expect(env.status('t3')).toBe('failed'));
+    await vi.waitFor(() => expect(env.session.activity.running).toBe(false));
+    const release = isolation.holdIntegration('t1');
+    const landing = env.run(confirmed('t1'));
+    await vi.waitFor(() => expect(isolation.taskIdsFor('integrate')).toEqual(['t1']));
+
+    const skipped = await env.run({ command: 'skip_task', task: 't3' });
+
+    expect(skipped).toMatchObject({ ok: false, outcome: 'refused' });
+    expect(skipped.message).toContain('Another manual override is landing');
+    expect(env.status('t3')).toBe('failed');
+    expect(env.spawn.mock.calls.some(([o]) => o.taskId === 't4')).toBe(false);
+    release();
+    expect(await landing).toMatchObject({ ok: true });
+  });
+
+  it('refuses run_script, a start like any other', async () => {
+    const isolation = new FakeWorktreeIsolation();
+    const env = setup({ isolation });
+    env.load([task('t1', 1)]);
+    const { release, landing } = await landingOverrideOfT1(env, isolation);
+    const spawned = env.spawn.mock.calls.length;
+
+    const ran = await env.run({ command: 'run_script', title: 'Echo', commands: [['echo', 'hi']] }, { kind: 'supervisor', level: 'act' });
+
+    expect(ran).toMatchObject({ ok: false, outcome: 'refused' });
+    expect(ran.message).toContain('Another manual override is landing');
+    expect(env.spawn.mock.calls.length).toBe(spawned);
+    expect(env.session.planTasks.some((t) => t.type === 'script')).toBe(false);
+    release();
+    expect(await landing).toMatchObject({ ok: true });
   });
 });
 
