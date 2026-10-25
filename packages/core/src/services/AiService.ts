@@ -13,6 +13,7 @@ import type { IsolatedExecution, PlannerModes } from './plannerModes';
 import type { PlannerToolHandler } from './mcp';
 import type { SkillInfo } from './SkillsService';
 import type { UsageLimitSignal } from './harness/AgentAdapter';
+import type { PlannerContextDeps } from './plannerContextBudget';
 
 /**
  * The planner tools a session offers its conversation (ADR-0022). A backend
@@ -235,12 +236,12 @@ export interface IAiService {
  * on the machine. Everything downstream — the plan contract, the research-step
  * stream, the three surfaces — is shared.
  */
-export function createAiService(config: IConfig, deps?: CliAgentAiServiceDeps): IAiService {
+export function createAiService(config: IConfig, deps?: CliAgentAiServiceDeps & PlannerContextDeps): IAiService {
   if (isCliProvider(config.aiProvider)) {
     return new CliAgentAiService(config, deps);
   }
   if (config.aiProvider === 'google') {
     return new GeminiService(config, deps?.turnBudgets);
   }
-  return new OpenAiService(config, deps?.turnBudgets);
+  return new OpenAiService(config, { turnBudgets: deps?.turnBudgets, modelLimits: deps?.modelLimits, autoCompaction: deps?.autoCompaction });
 }

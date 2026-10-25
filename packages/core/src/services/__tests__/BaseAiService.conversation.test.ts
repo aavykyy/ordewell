@@ -322,29 +322,17 @@ describe('runConversationTurn JSON repair', () => {
   });
 });
 
-describe('runConversationTurn proactive compaction', () => {
-  it('compacts once a research turn reports prompt-token pressure, before the plan emission', async () => {
+// The fixed 100k-token trigger is gone: what fits is the chat's to decide,
+// before each of its calls, against its own model's window.
+describe('runConversationTurn and context pressure', () => {
+  it('prunes nothing on a reported prompt count by itself', async () => {
     const chat = new ScriptedChat([
       { text: '', toolCalls: [{ name: 'read_file', args: { path: 'x.ts' }, id: 'c1' }], hasToolCalls: true, promptTokens: 150_000 },
-      { ...proseTurn(PLAN_JSON), promptTokens: 90_000 },
+      { ...proseTurn(PLAN_JSON), promptTokens: 190_000 },
     ]);
     let compactions = 0;
     chat.compactHistory = () => { compactions++; return 500; };
-    const svc = new TestService(fakeConfig());
-    const turn = await svc.runTurn(makeCtx(chat), 'go');
-    expect(turn.kind).toBe('plan');
-    expect(compactions).toBe(1);
-  });
-
-  it('never compacts while usage stays under the threshold', async () => {
-    const chat = new ScriptedChat([
-      { text: '', toolCalls: [{ name: 'read_file', args: { path: 'x.ts' }, id: 'c1' }], hasToolCalls: true, promptTokens: 20_000 },
-      { ...proseTurn(PLAN_JSON), promptTokens: 25_000 },
-    ]);
-    let compactions = 0;
-    chat.compactHistory = () => { compactions++; return 0; };
-    const svc = new TestService(fakeConfig());
-    const turn = await svc.runTurn(makeCtx(chat), 'go');
+    const turn = await new TestService(fakeConfig()).runTurn(makeCtx(chat), 'go');
     expect(turn.kind).toBe('plan');
     expect(compactions).toBe(0);
   });

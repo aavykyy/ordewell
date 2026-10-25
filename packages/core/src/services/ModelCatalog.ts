@@ -7,6 +7,8 @@ export interface CatalogModel {
   description: string;
   pricing: { prompt: string; completion: string };
   contextLength: number;
+  /** The longest reply the catalog says the model is served with, when it says. */
+  maxOutputTokens?: number;
 }
 
 interface OpenRouterModel {
@@ -15,6 +17,8 @@ interface OpenRouterModel {
   description?: string;
   pricing?: { prompt: string; completion: string };
   context_length?: number;
+  /** The provider OpenRouter routes to by default, and the reply cap it serves. */
+  top_provider?: { max_completion_tokens?: number | null };
 }
 
 const CACHE_KEY = 'model-catalog';
@@ -63,6 +67,9 @@ export class ModelCatalog {
         completion: m.pricing?.completion ?? '?',
       },
       contextLength: m.context_length ?? 0,
+      ...(typeof m.top_provider?.max_completion_tokens === 'number' && m.top_provider.max_completion_tokens > 0
+        ? { maxOutputTokens: m.top_provider.max_completion_tokens }
+        : {}),
     }));
 
     if (useFileCache) this.writeCache(storageKey(url), models);

@@ -7,7 +7,7 @@ import { buildPlanWithResults } from './PlanPrompts';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { generatePlanWithRepair, classifyPlannerReply } from './PlanRepair';
 import { settleReply, type ReplyAttempt } from './settleReply';
-import { compactResearchResults, withProactiveCompaction } from './contextCompaction';
+import { compactResearchResults, type CompactableMessage } from './contextCompaction';
 import type { RunnerModeInfo } from './ModeResolver';
 import type { PlanIntake } from './PlanChangeCheck';
 import { collectResearchContext } from './ContextCollector';
@@ -78,7 +78,7 @@ export interface ResearchTurn {
   reasoning?: string;
   /** Provider finish reason, normalized: 'length' means the output-token limit cut the reply mid-stream. */
   finishReason?: string;
-  /** Exact prompt tokens this turn consumed, when the provider reports usage — drives proactive compaction. */
+  /** Exact prompt tokens this turn consumed, when the provider reports usage. */
   promptTokens?: number;
   /** The segment `text` streamed under, where the provider streams it. */
   segmentId?: string;
@@ -88,12 +88,27 @@ export interface ResearchChat {
   sendMessage(text: string, signal?: AbortSignal): Promise<ResearchTurn>;
   sendToolResults(results: ToolResult[], signal?: AbortSignal): Promise<ResearchTurn>;
   /**
-   * Optional: prune bulky raw tool outputs from the history in place (subagent
-   * digests are kept) so a follow-up emission has context to spend on output.
-   * Returns the number of characters removed. Providers whose SDK owns the
-   * history (Gemini) may not support it.
+   * Optional: prune older workspace reads from the history (everything else,
+   * and the newest rounds, are kept) so a follow-up emission has context to
+   * spend on output. Returns the number of characters removed. Providers
+   * whose SDK owns the history (Gemini) may not support it.
    */
   compactHistory?(): number;
+  /**
+   * Whether a call's input is held: the call could not fit the model's window
+   * (`PlannerContextExhaustedError`), so its user message or tool results were
+   * kept out of the history. The next message drops a held message and files
+   * held results as a turn before it.
+   */
+  holdsInput?(): boolean;
+  /** Send the held input again, once room is made: no tool runs a second time. */
+  resend?(signal?: AbortSignal): Promise<ResearchTurn>;
+  /**
+   * Take `history` in place of the whole message list in one step — a summary
+   * swapped in for what it condensed. Refused, changing nothing, unless each
+   * tool result answers a call of the assistant message just before it, once.
+   */
+  reseed?(history: readonly CompactableMessage[]): void;
 }
 
 /** Everything one conversation turn needs beyond the user message itself. */
@@ -114,7 +129,7 @@ export abstract class BaseAiService {
   protected conversation: { ctx: ConversationTurnContext; setProgress: (fn: (p: ResearchProgress) => void) => void } | null = null;
   protected activeAbort: AbortController | null = null;
   /** See {@link compactions}. */
-  private pruned = 0;
+  private compacted = 0;
 
   constructor(protected config: IConfig, protected turnBudgets?: TurnBudgets) {}
 
@@ -124,18 +139,19 @@ export abstract class BaseAiService {
   hasActiveConversation(): boolean { return this.conversation !== null; }
 
   pruneContext(): number {
-    const removed = this.conversation?.ctx.chat.compactHistory?.() ?? 0;
-    if (removed > 0) this.pruned++;
-    return removed;
+    return this.conversation?.ctx.chat.compactHistory?.() ?? 0;
   }
 
   /**
-   * The prunings of a conversation's history that removed something. A
-   * pruning stubs tool output alone, never the user messages a plan block
-   * rides in, but it counts all the same: the conversation would rather send
-   * the plan whole again than trust a context changed under it (ADR-0012 T10).
+   * The compactions of a conversation's history that changed something, which
+   * the chat reports through {@link countCompaction}. A pruning stubs tool
+   * output alone, never the user messages a plan block rides in, but it counts
+   * all the same: the conversation would rather send the plan whole again than
+   * trust a context changed under it (ADR-0012 T10).
    */
-  compactions(): number { return this.pruned; }
+  compactions(): number { return this.compacted; }
+
+  protected countCompaction(): void { this.compacted++; }
 
   protected startAbortScope(callerSignal?: AbortSignal): AbortSignal {
     this.activeAbort = abortScope(callerSignal);
@@ -378,10 +394,8 @@ export abstract class BaseAiService {
     onProgress: (progress: ResearchProgress) => void,
     signal?: AbortSignal,
   ): Promise<ConversationTurn> {
-    // Turns reporting prompt-token pressure compact the underlying history
-    // before the next call — the plan emission should never be the first
-    // moment the context problem surfaces.
-    const chat = withProactiveCompaction(ctx.chat, () => this.pruned++);
+    // Context pressure is the chat's to handle, before each of its calls.
+    const { chat } = ctx;
     return settleReply({
       // The turn's own input carries the budgets, not the system prompt, which stays cacheable.
       message: withTurnBudgets(this.turnBudgets, message),
@@ -389,7 +403,7 @@ export abstract class BaseAiService {
       classify: { autonomousDefault: ctx.autonomousDefault, ...(ctx.liveScope?.() ?? { runners: ctx.runners, runnerModes: ctx.runnerModes }) },
       onProgress,
       signal,
-      compactHistory: chat.compactHistory,
+      compactHistory: chat.compactHistory?.bind(chat),
     });
   }
 
@@ -517,7 +531,6 @@ export abstract class BaseAiService {
     let researchResults = '';
     const MAX_STEPS = this.config.researchMaxSteps;
 
-    chat = withProactiveCompaction(chat);
     let turn = await chat.sendMessage(firstMessage, signal);
 
     for (let step = 0; step < MAX_STEPS; step++) {

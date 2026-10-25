@@ -86,6 +86,12 @@ export interface UserSettings {
   autorun?: boolean;
   supervisorRetryLimit?: number;
   wakeUpReadBudget?: number;
+  /**
+   * Whether an API planner prunes its own context ahead of a call that would
+   * pass 90% of its model's window. Absent means on. Set in the file only:
+   * no surface offers it.
+   */
+  plannerAutoCompaction?: boolean;
 }
 
 /**
@@ -432,6 +438,9 @@ export class SettingsService {
       // "guarded" must not fall through to Full. An unknown word still does.
       const level = parseAutonomyFlag(raw.autonomousMode);
       if (level !== undefined) settings.autonomousMode = level;
+    }
+    if (typeof raw.plannerAutoCompaction === 'boolean') {
+      settings.plannerAutoCompaction = raw.plannerAutoCompaction;
     }
     // A value it cannot use is left out, so its default stands.
     for (const key of RUN_SETTING_KEYS) {

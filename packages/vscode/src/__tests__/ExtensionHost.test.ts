@@ -204,6 +204,8 @@ function fakeResolver(modelsByRunner: Partial<Record<string, DiscoveredModel[]>>
     getCachedRunnerModels: vi.fn((runner: string) => modelsByRunner[runner] ?? []),
     getCachedPickerOptions: vi.fn(() => []),
     contextWindowFor: vi.fn(() => undefined),
+    maxOutputTokensFor: vi.fn(() => undefined),
+    warmPickerOptions: vi.fn(),
   } satisfies Record<keyof ModelResolver, unknown>;
 }
 
