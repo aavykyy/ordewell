@@ -192,8 +192,10 @@ describe('task texts and actions, pinned before their rules move to core', () =>
     ['pending', 'complete'],
     ['awaiting_user', 'complete'],
     ['failed', 'complete'],
-  ])('m on a %s task asks to %s it', (status, action) => {
-    expect(press(state([task({ status })], { focus: 'plan' }), 'm').effects).toMatchObject([{ type: 'taskAction', action }]);
+  ])('m on a %s task asks to %s it, and sends nothing yet', (status, direction) => {
+    const asked = press(state([task({ status })], { focus: 'plan' }), 'm');
+    expect(asked.effects).toEqual([]);
+    expect(asked.state.overlay).toMatchObject({ kind: 'confirm', action: { kind: 'mark-override', direction, seen: status } });
   });
 
   it('adds a task with its title as description and prompt', async () => {

@@ -20,6 +20,8 @@ interface PlanCardGroupProps {
   /** The enabled runners and allowlist each task is flagged against; absent until the host has sent them. */
   runnerScope?: AssignmentScope;
   isExecuting?: boolean;
+  /** A whole-plan start is on its way: show it, and refuse a second one. */
+  isStarting?: boolean;
   runnerLabels?: Record<string, string>;
   /** Tail of each running task's runner output, keyed by task id. */
   taskOutput?: Record<string, string>;
@@ -70,6 +72,7 @@ export default function PlanCardGroup({
   runners,
   runnerScope,
   isExecuting,
+  isStarting,
   runnerLabels: _runnerLabels,
   taskOutput,
   onResolveConflict,
@@ -139,9 +142,13 @@ export default function PlanCardGroup({
   return (
     <div className="plan-card-group">
       {totalUsage && <div className="plan-usage">{totalUsage}</div>}
-      {(onExecutePlan || onStopExecution || (onApproveAll && anyWaitsForApproval)) && (
+      {(onExecutePlan || onStopExecution || isStarting || (onApproveAll && anyWaitsForApproval)) && (
         <div className="plan-action-bar">
-          {isExecuting ? (
+          {isStarting ? (
+            <button className="plan-action-btn starting" type="button" disabled aria-busy="true">
+              <span className="plan-action-spinner" /> Starting&hellip;
+            </button>
+          ) : isExecuting ? (
             onStopExecution && (
               <button className="plan-action-btn stop" onClick={onStopExecution}>Stop</button>
             )
@@ -150,7 +157,7 @@ export default function PlanCardGroup({
               <button className="plan-action-btn execute" onClick={onExecutePlan}>Execute Plan</button>
             )
           )}
-          {onApproveAll && anyWaitsForApproval && (
+          {onApproveAll && anyWaitsForApproval && !isStarting && (
             <button className="plan-action-btn approve" onClick={onApproveAll}
               title="Approve every task that waits for your approval: each starts once its dependencies finish">
               Approve all

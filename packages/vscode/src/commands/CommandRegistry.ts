@@ -15,7 +15,7 @@ import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import { SecretStore, type ApiProvider } from '../adapters/SecretStore';
 import { configureModelAllowlist } from './configureModelAllowlist';
 import { toggleRunner } from './enabledRunners';
-import { executeUserCommand, forceStartPastGate, handleNewSession } from '../plan/PlanManager';
+import { executeUserCommand, forceStartPastGate, handleNewSession, markTaskByHand } from '../plan/PlanManager';
 
 export interface CommandDeps {
   session: Session;
@@ -253,7 +253,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         if (!picked) return;
         taskId = picked.description;
       }
-      await userCommand(taskActionCommand('complete', taskId));
+      await userCommand(() => markTaskByHand('complete', taskId!, deps));
     }),
   );
   context.subscriptions.push(
@@ -275,7 +275,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         if (!picked) return;
         taskId = picked.description;
       }
-      await userCommand(taskActionCommand('uncomplete', taskId));
+      await userCommand(() => markTaskByHand('uncomplete', taskId!, deps));
     }),
   );
   context.subscriptions.push(

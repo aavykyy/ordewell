@@ -5,7 +5,7 @@ import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import TaskHandoff, { HandoffPeek } from './TaskHandoff';
 import { editableWhileRunning, pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope } from '@ordewell/core';
-import { AssignmentFlag, IsolationBadges, StatusBadge, TaskActions, TaskCheck, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
+import { AssignmentFlag, IsolationBadges, StatusBadge, TaskActions, TaskCheck, TaskMarkControl, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
 import type { RunnerMode, RunnerOption, TaskCardRun } from './TaskCard';
 import { checkLabel } from '../checkLabel';
 
@@ -75,6 +75,8 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
     holdReason: run?.holdReason,
     continuable: run?.continuable === true,
     waitsForApproval: run?.waitsForApproval === true,
+    attempted: run?.attempted ?? task.attempted,
+    ...(run?.attemptUsage ? { attemptUsage: run.attemptUsage } : {}),
     ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
   }, { parent: parentTask, placement: 'subtask', tasks, runnerScope });
   const status = statusBadge(row);
@@ -88,6 +90,9 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
   useEffect(() => {
     if (!canEdit) setEditingPrompt(null);
   }, [canEdit]);
+
+  // Its own attempt history, never its parent's.
+  const chatAvailable = row.chatAvailable;
 
   const handlePromptSave = () => {
     if (editingPrompt !== null && editingPrompt !== task.prompt) {
@@ -108,7 +113,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
     <div className="task-with-controls subtask-with-controls">
       <div className={`subtask-card ${expanded ? 'expanded' : ''}`}>
         <div className="subtask-card-header" onClick={() => setExpanded(!expanded)}>
-          <TaskCheck row={row} taskId={task.id} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
+          <TaskCheck row={row} />
           <span className="subtask-order">{row.orderLabel}.</span>
           <span className={`task-type-badge small ${task.type}`}>
             {task.type === 'ai' ? 'AI' : 'Manual'}
@@ -131,7 +136,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
         {expanded && (
           <div className="subtask-card-body">
             {handoff && <TaskHandoff handoff={handoff} taskName={(id) => taskRefOf(tasks ?? [], id)}
-              onReadFull={onOpenLog ? () => onOpenLog(task.id) : undefined} />}
+              onReadFull={onOpenLog && chatAvailable ? () => onOpenLog(task.id) : undefined} />}
 
             {canEdit && task.type === 'ai' && task.prompt && (
               editingPrompt === null ? (
@@ -227,18 +232,21 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
             {/* A usage-limit pause holds the run, which then reads as not executing. */}
             {(isExecuting || pausedOnLimit(task)) && (
               <TaskActions taskId={task.id} actions={row.actions}
-                labels={row.status === 'awaiting' ? { ...ACTION_LABELS, complete: 'Verify / Mark Complete' } : ACTION_LABELS}
-                handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart, complete: onMarkComplete, uncomplete: onMarkIncomplete }} />
+                labels={ACTION_LABELS}
+                handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart }} />
             )}
+
+            <TaskMarkControl taskId={task.id} row={row} runActive={!!isExecuting}
+              onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
           </div>
         )}
       </div>
       <div className="task-footer-controls">
-        {onOpenLog && (
+        {onOpenLog && chatAvailable && (
           <button type="button" className="task-log-open-btn"
             onClick={(e) => { e.stopPropagation(); onOpenLog(task.id); }}
-            title="Open this task's log in an editor tab">
-            Open log
+            title="Open this task's chat in an editor tab">
+            Open chat
           </button>
         )}
 
@@ -259,10 +267,10 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
 
         <IsolationBadges row={row} />
 
-        {row.approvals && (
+        {row.approvals && chatAvailable && (
           <button type="button" className="task-approval-badge"
             onClick={(e) => { e.stopPropagation(); onOpenLog?.(task.id); }}
-            title="The runner is waiting for you to allow or deny a tool call: open the log to answer">
+            title="The runner is waiting for you to allow or deny a tool call: open the chat to answer">
             {row.approvals}
           </button>
         )}

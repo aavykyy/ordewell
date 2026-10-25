@@ -365,6 +365,7 @@ export interface ChatActivity {
 export function chatActivity(state: TuiState): ChatActivity | null {
   const tv = state.taskView;
   if (!tv) {
+    if (state.status === 'starting') return { label: 'Starting the plan…', busy: true };
     if (!plannerInFlight(state)) return null;
     const label = state.planner === 'condensing' ? 'Condensing…' : state.planner === 'awaiting' ? 'Waiting for the planner…' : 'Planning…';
     return { label, busy: true };
@@ -384,6 +385,7 @@ export function chatActivity(state: TuiState): ChatActivity | null {
  * plan pane's title takes the longest one that fits its width.
  */
 export function runHints(state: TuiState): string[] {
+  if (state.status === 'starting') return ['starting…', 'starting'];
   const waiting = state.tasks.filter((t) => t.status === 'awaiting_user').length;
   if (waiting > 0) return [waiting === 1 ? '1 task waits for you' : `${waiting} tasks wait for you`, `${waiting} waiting`];
   // As plain as a task that waits on the user: the run waits on a merge (ADR-0020).
@@ -1335,7 +1337,7 @@ function commandSheetBody(cols: number): string[] {
   // view's keys run far past any width on a single one.
   body.push(
     '',
-    style.bold('In a task view (enter on a task)'),
+    style.bold('In a task chat (enter on a started task)'),
     style.grey('  ctrl-s sends now: interrupts the running step, then delivers the composer text or, with it empty, the highlighted pending message'),
     style.grey('  ctrl-n/ctrl-p pick a pending message (the newest until you do) · ctrl-r removes a queued one'),
     style.grey('  ctrl-x stops the runner\'s running turn, and it then waits for your next message: on a task paused on a usage limit, it keeps it from resuming'),

@@ -33,7 +33,7 @@ export interface RunnerOption {
  * streams — `task_started` reaches it before the plan refresh does — so the
  * card's editability reads it when present.
  */
-export type TaskCardRun = Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound'> & { status?: Task['status'] };
+export type TaskCardRun = Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage'> & { status?: Task['status'] };
 
 interface TaskCardProps {
   task: Task;
@@ -171,39 +171,63 @@ const CHECK_STATE: Record<TaskStatusKind, 'done' | 'running' | 'stalled' | 'fail
 };
 
 /** Minimal to-do / done indicator: empty ring → sweeping ring → filled check.
- *  The ring is a toggle: clicking an unfinished task marks it executed, clicking
- *  a done one takes it back to not-executed. */
-export function TaskCheck({ row, taskId, onMarkComplete, onMarkIncomplete }: { row: Pick<TaskRowView, 'status' | 'mark'>; taskId?: string; onMarkComplete?: (taskId: string) => void; onMarkIncomplete?: (taskId: string) => void }) {
+ *  It only reports the task's status. Completion is changed deliberately, from
+ *  Mark complete / Mark not done at the bottom of the expanded details. */
+export function TaskCheck({ row }: { row: Pick<TaskRowView, 'status'> }) {
   const state = CHECK_STATE[row.status];
-  const toggle = row.mark === 'uncomplete' ? onMarkIncomplete : onMarkComplete;
-  const clickable = !!toggle && !!taskId;
   const title = state === 'done'
-    ? (clickable ? 'Executed: click to mark not done' : 'Executed')
+    ? 'Executed'
     : state === 'running'
       ? 'Running'
       : state === 'stalled'
         ? 'Stalled: no output recently'
         : state === 'skipped'
-          ? (clickable ? 'Skipped: click to mark complete, which lands its kept work' : 'Skipped: nothing of it landed')
+          ? 'Skipped: nothing of it landed'
           : state === 'failed'
-            ? (clickable ? 'Failed: click to mark executed' : 'Failed')
-            : (clickable ? 'Click to mark executed' : 'To do');
+            ? 'Failed'
+            : 'To do';
   return (
-    <span
-      className={`task-check ${state} ${clickable ? 'clickable' : ''}`}
-      title={title}
-      onClick={(e) => {
-        if (!clickable) return;
-        e.stopPropagation();
-        toggle!(taskId!);
-      }}
-    >
+    <span className={`task-check ${state}`} role="img" aria-label={title} title={title}>
       {state === 'done' && (
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path d="M4.2 8.6l2.4 2.4 5.2-5.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )}
     </span>
+  );
+}
+
+/**
+ * Mark complete / Mark not done, at the bottom of a task's expanded details and
+ * nowhere else. The host asks the user to confirm an AI or script task's
+ * override, and the core refuses it while a run could advance the task
+ * (ADR-0029); the button is held back here as well so the refusal is explained
+ * before the click. A manual task is the user's own sign-off, so a run never
+ * holds it up.
+ */
+export function TaskMarkControl({ taskId, row, runActive, hint, onMarkComplete, onMarkIncomplete }: {
+  taskId: string;
+  row: Pick<TaskRowView, 'status' | 'mark' | 'kind'>;
+  /** A run is starting, running or waiting to resume the plan. */
+  runActive: boolean;
+  /** Why a manual task cannot be signed off yet; the button waits for it. */
+  hint?: string;
+  onMarkComplete?: (taskId: string) => void;
+  onMarkIncomplete?: (taskId: string) => void;
+}) {
+  const handler = row.mark === 'uncomplete' ? onMarkIncomplete : onMarkComplete;
+  if (!handler || row.status === 'running' || row.status === 'quiet') return null;
+  const stopFirst = runActive && row.kind !== 'user';
+  const label = row.mark === 'uncomplete' ? 'Mark not done' : 'Mark complete';
+  const why = stopFirst ? 'Stop the run first: the run could still move this task on' : hint;
+  return (
+    <div className="task-mark-control">
+      <button type="button" className="task-mark-btn" disabled={!!why} title={why ?? label}
+        onClick={(e) => { e.stopPropagation(); handler(taskId); }}>
+        {label}
+      </button>
+      {why && <span className="task-mark-hint">{why}</span>}
+    </div>
   );
 }
 
@@ -302,7 +326,7 @@ export function TaskActions({ taskId, actions, labels, handlers }: {
 }) {
   return (
     <div className="task-actions">
-      {actions.map((action) => {
+      {actions.filter((action) => action !== 'complete' && action !== 'uncomplete').map((action) => {
         const handler = handlers[action];
         return handler && (
           <button key={action} className={`task-action-btn ${ACTION_CLASS[action]}`} onClick={(e) => { e.stopPropagation(); handler(taskId); }}>
@@ -413,7 +437,22 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
   const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
   // The run's verdict and round are the newer word on a loop's check: they say whether it is between rounds (ADR-0045).
-  const row = taskRowView({ ...task, handoff, idleSince, awaitingApproval, isolation, mergeGate, holdReason: run?.holdReason, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true, ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}) }, { tasks: siblings, modes: activeModes, runnerScope });
+  const row = taskRowView({
+    ...task,
+    handoff,
+    idleSince,
+    awaitingApproval,
+    isolation,
+    mergeGate,
+    holdReason: run?.holdReason,
+    continuable: run?.continuable === true,
+    waitsForApproval: run?.waitsForApproval === true,
+    attempted: run?.attempted ?? task.attempted,
+    ...(run?.attemptUsage ? { attemptUsage: run.attemptUsage } : {}),
+    ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
+  }, { tasks: siblings, modes: activeModes, runnerScope });
+  // Its chat exists only once an attempt has started; status alone never says so.
+  const chatAvailable = row.chatAvailable;
   const conflictFiles = isolatedWork?.conflictFiles ?? [];
   const repair = isolatedWork?.repair ?? null;
 
@@ -479,7 +518,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
       <div className={`task-card task-${task.type} ${expanded ? 'expanded' : ''}`}>
         <div className="task-card-header" onClick={() => setExpanded(!expanded)}>
           <span className="task-card-lead">
-            <TaskCheck row={row} taskId={task.id} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
+            <TaskCheck row={row} />
             <span className="task-order">{row.orderLabel}</span>
             <span className={`task-type-badge ${task.type}`}>
               {isUserTask ? 'Manual' : row.kind === 'script' ? 'Script' : 'AI'}
@@ -491,21 +530,21 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
               <span className="task-type-badge ops" title="An ops task: it changes no repository files and runs in your checkout, once the work it depends on is merged">Ops</span>
             )}
           </span>
-          <div className={`task-heading-block${onOpenLog ? ' task-heading-block-with-log' : ''}`}>
+          <div className={`task-heading-block${onOpenLog && chatAvailable ? ' task-heading-block-with-log' : ''}`}>
             <button type="button" className="task-heading" aria-expanded={expanded}
               title={expanded ? 'Collapse task details' : 'Expand task details'}
               onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}>
               <span className="task-title-text">{task.title}</span>
             </button>
-            {/* Outside the heading button, so Open log can share its line without nesting a button in a button. */}
+            {/* Outside the heading button, so Open chat can share its line without nesting a button in a button. */}
             <TaskAssignment task={task} />
-            {onOpenLog && (
+            {onOpenLog && chatAvailable && (
               <button type="button" className="task-log-open-btn task-log-open-btn-stacked"
-                aria-label="Open log"
+                aria-label="Open chat"
                 onClick={(e) => { e.stopPropagation(); onOpenLog(task.id); }}
-                title="Open this task's log in an editor tab">
+                title="Open this task's chat in an editor tab">
                 <span>Open</span>
-                <span>log</span>
+                <span>chat</span>
               </button>
             )}
           </div>
@@ -526,7 +565,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             <p className="task-description">{task.description}</p>
 
             {handoff && <TaskHandoff handoff={handoff} taskName={(id) => taskRefOf(siblings ?? [], id)}
-              onReadFull={onOpenLog ? () => onOpenLog(task.id) : undefined} />}
+              onReadFull={onOpenLog && chatAvailable ? () => onOpenLog(task.id) : undefined} />}
 
             {/* Worktrees are an implementation detail unless something needs the
                 user's attention (US34) — so the branch and path live in the
@@ -640,17 +679,6 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
                     </li>
                   ))}
                 </ol>
-                {onMarkComplete && (
-                  <div className="step-actions">
-                    <button className="step-complete-btn" disabled={!allStepsComplete && task.userSteps!.length > 0}
-                      onClick={(e) => { e.stopPropagation(); onMarkComplete(task.id); }}>
-                      Mark Complete
-                    </button>
-                    {!allStepsComplete && task.userSteps!.length > 0 && (
-                      <span className="step-hint">Complete all steps above first</span>
-                    )}
-                  </div>
-                )}
               </div>
             )}
 
@@ -778,8 +806,12 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             {/* A usage-limit pause holds the run, which then reads as not executing. */}
             {(isExecuting || paused) && (
               <TaskActions taskId={task.id} actions={row.actions} labels={ACTION_LABELS}
-                handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart, complete: onMarkComplete, uncomplete: onMarkIncomplete }} />
+                handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart }} />
             )}
+
+            <TaskMarkControl taskId={task.id} row={row} runActive={!!isExecuting}
+              hint={isExecuting && isUserTask && task.userSteps && task.userSteps.length > 0 && !allStepsComplete ? 'Complete all steps above first' : undefined}
+              onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
           </div>
         )}
       </div>
@@ -812,10 +844,10 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
         {/* Approvals arrive mid-turn and leave the status alone (ADR-0018,
             A1), so waiting on one is a badge beside it, which opens the log
             where the request is answered. */}
-        {row.approvals && (
+        {row.approvals && chatAvailable && (
           <button type="button" className="task-approval-badge"
             onClick={(e) => { e.stopPropagation(); onOpenLog?.(task.id); }}
-            title="The runner is waiting for you to allow or deny a tool call: open the log to answer">
+            title="The runner is waiting for you to allow or deny a tool call: open the chat to answer">
             {row.approvals}
           </button>
         )}

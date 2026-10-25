@@ -1,6 +1,6 @@
 import type { GlobalRunSettings } from '@ordewell/core';
-import { type SurfacePlan, type DiscoveredModel, type RunnerId, type RunView, type RunTask, type AiProvider } from '@ordewell/core';
-import { DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, type PromptHold } from '@ordewell/core/plan-utils';
+import type { SurfacePlan, DiscoveredModel, RunnerId, RunActivity, RunView, RunTask, AiProvider } from '@ordewell/core';
+import { DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, IDLE_ACTIVITY, type PromptHold } from '@ordewell/core/plan-utils';
 import type { HostToWebview, PlannerBackend, RunnerMeta } from '../../shared/protocol';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, type PatchedView } from '../../shared/conversationPatch';
 import { appendTaskOutput, type TaskOutputMap } from './taskOutput';
@@ -85,6 +85,20 @@ export interface HostState {
    * Merge all result. The per-task badges and the isolation cards read here.
    */
   run: RunView;
+  /**
+   * The run's own state, as a `runView` or an Execute's answer last said:
+   * starting, running, scheduled or resumable. The plan's status is the
+   * execution flag; this is the start's.
+   */
+  activity: RunActivity;
+  /**
+   * The user pressed Execute (or Approve all) and the host has not answered
+   * yet: the button shows "Starting…" at once. Cleared by the matching
+   * `runActivity`, a refusal, or a session change — never by a run's own ticks.
+   */
+  starting: boolean;
+  /** The Execute request `starting` belongs to; a reply for another is stale. */
+  startRequestId: number | null;
   /** Is the plan dock open? See planDock.ts for when this flips. */
   dockExpanded: boolean;
   /** The dock's dragged cap in px, remembered by the host; undefined keeps the stylesheet's default. */
@@ -129,6 +143,9 @@ export const INITIAL_HOST_STATE: HostState = {
   answeredCheckpoint: null,
   taskOutput: {},
   run: EMPTY_RUN,
+  activity: IDLE_ACTIVITY,
+  starting: false,
+  startRequestId: null,
   dockExpanded: false,
   dockHeight: undefined,
   stopped: false,
@@ -147,6 +164,7 @@ export type HostAction =
   | { type: 'resetSession'; kind: SessionResetKind }
   | { type: 'turnStopped' }
   | { type: 'turnRequested' }
+  | { type: 'startRequested'; requestId: number }
   | { type: 'patchPlan'; plan: Updatable<SurfacePlan | null> }
   | { type: 'patchResearchActive'; active: boolean }
   | { type: 'patchError'; error: string }
@@ -180,6 +198,9 @@ export function resetSession(state: HostState, kind: SessionResetKind): HostStat
     answeredCheckpoint: null,
     taskOutput: {},
     run: EMPTY_RUN,
+    activity: IDLE_ACTIVITY,
+    starting: false,
+    startRequestId: null,
     dockExpanded: nextDock(state.dockExpanded, 'session-reset'),
   };
   if (kind === 'empty') return next;
@@ -205,6 +226,12 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'turnRequested':
       return { ...state, stopped: false, sessionCleared: false, error: '', isResearchActive: true };
+
+    case 'startRequested':
+      // A second click while the first is still with the host is the same
+      // start, not another: the host and core coalesce it too.
+      if (state.starting || state.activity.starting) return state;
+      return { ...state, starting: true, startRequestId: action.requestId, error: '' };
 
     case 'patchPlan':
       return { ...state, plan: resolve(action.plan, state.plan) };
@@ -253,7 +280,10 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'setState': {
       const base = action.state === 'empty' ? resetSession(state, 'empty') : state;
-      return { ...base, isExecuting: action.state === 'approved' };
+      // `approved` is the plan's approval, not a run: a task's own status is
+      // what says work is executing. The click's own "Starting…" covers the
+      // gap, so forcing `isExecuting` here made a start read as a run.
+      return { ...base, isExecuting: action.state === 'empty' ? false : base.isExecuting };
     }
 
     case 'planUpdated': {
@@ -262,7 +292,12 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       let next: HostState = { ...state, plan: incoming };
       // Not a turn's end: a run's status tick arrives mid-turn too, and the
       // host's `plannerTurn` is what says a turn is over.
-      if (incoming) next.isExecuting = incoming.status === 'running';
+      if (incoming) {
+        next.isExecuting = incoming.status === 'running';
+        // A run is executing now: the click's start has arrived, and its
+        // button must be the run's Stop, not a spinner for a finished start.
+        if (next.isExecuting) next.starting = false;
+      }
       if (incoming && incoming.tasks && incoming.tasks.length > 0) {
         // One `planUpdated` carries two different events. A revision opens
         // the dock; a status tick during execution must not, or a running
@@ -292,7 +327,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'showError':
       if (state.sessionCleared) return state;
-      return { ...state, error: action.error, isResearchActive: false };
+      return { ...state, error: action.error, isResearchActive: false, starting: false, startRequestId: null };
 
     case 'taskOutput':
       return { ...state, taskOutput: appendTaskOutput(state.taskOutput, action.taskId, action.text ?? '') };
@@ -312,7 +347,29 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
           ? { ...question, pausedAt: state.checkpoint.pausedAt }
           : { ...question, pausedAt: action.now }
         : null;
-      return { ...state, run: action.view, checkpoint, answeredCheckpoint: answered ? state.answeredCheckpoint : null };
+      const activity = action.view.activity ?? state.activity;
+      return {
+        ...state,
+        run: action.view,
+        activity,
+        checkpoint,
+        answeredCheckpoint: answered ? state.answeredCheckpoint : null,
+        // Work is live: whatever start was waiting is over, and Stop is the
+        // control now. A view that only says "starting" leaves the spinner be.
+        starting: activity.running ? false : state.starting,
+      };
+    }
+
+    case 'runActivity': {
+      // A reply for an Execute this webview is no longer waiting on is another
+      // session's (or an already-settled one): it must not light a spinner.
+      if (action.requestId !== undefined && action.requestId !== state.startRequestId) return state;
+      return {
+        ...state,
+        activity: action.activity,
+        starting: false,
+        startRequestId: action.requestId !== undefined ? null : state.startRequestId,
+      };
     }
 
     case 'setModels':

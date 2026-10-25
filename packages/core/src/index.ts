@@ -201,10 +201,12 @@ export type {
   RunTask,
   RunTaskStatus,
   RunView,
+  RunActivity,
   HeldEdit,
   HeldEditMark,
 } from './services/SessionMessage';
 export { EMPTY_RUN, reduceRun } from './services/runView';
+export { IDLE_ACTIVITY } from './services/SessionMessage';
 export { serializeTask, serializeTaskStatus, serializePlan, surfacePlan, surfacePlanState, executionSummary, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, type ExecutionSummary } from './services/SessionMessage';
 export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, type PlanBlocks } from './services/blocking';
 export { summarizeToolCall, classifyOutcome, ranSealed, withoutSealedMark } from './services/researchStepSummary';

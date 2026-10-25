@@ -74,7 +74,7 @@ export class TaskLogPanel {
     panel.onDidDispose(() => onDisposed());
   }
 
-  /** Bring the tab to the front; used when "Open log" is clicked on an open panel. */
+  /** Bring the tab to the front; used when "Open chat" is clicked on an open panel. */
   reveal(): void { this.panel.reveal(); }
 
   dispose(): void { this.panel.dispose(); }

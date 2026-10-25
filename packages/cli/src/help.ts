@@ -29,8 +29,8 @@ Planning:
 Tasks (<id> is an order number or a task ID):
   ordewell add-task --title "..."  Add a task to the current plan
   ordewell remove-task <id>       Remove a task from the current plan
-  ordewell complete <id>          Mark a task complete (alias: mark-complete)
-  ordewell uncomplete <id>        Mark a completed task not done
+  ordewell complete <id>          Mark a task complete (alias: mark-complete; asks first, --yes skips the question)
+  ordewell uncomplete <id>        Mark a completed task not done (asks first, --yes skips the question)
   ordewell skip <id>              Skip a task: nothing it did lands, dependents go ahead
   ordewell force-start <id>       Approve a task and start it now, or once its dependencies finish (asks past a merge gate)
   ordewell run-task <id>          Run only one task
@@ -57,7 +57,8 @@ Planner, models and runners:
   ordewell allowlist set|clear|show       Limit which models a runner may use
   ordewell auto [full|guarded]    (headless) Autonomy level for new plans, Full or Guarded; /settings covers it
   ordewell supervisor [off|watch|act]  (headless) Whether the planner watches or acts on your runs;
-                                  also: supervisor retries <n>, supervisor reads <n>; /settings covers it
+                                  /settings covers it; also: supervisor retries <n>
+  ordewell supervisor reads <n>   (headless) Reads the supervisor may make each wake-up; set only here or in settings.json
   ordewell automerge [on|off]     (headless) Merge at merge gates and at the end of a run; /settings covers it
   ordewell trailer [on|off]       (headless) End Ordewell's commits with "Planned-with: Ordewell"; set only here or in settings.json
   ordewell autorun [on|off]       (headless) Start each plan the planner submits, without review; /settings covers it

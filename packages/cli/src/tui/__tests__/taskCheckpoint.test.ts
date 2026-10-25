@@ -19,7 +19,7 @@ const QUESTION = 'Drop the users table?\nIt holds 40k rows and no backup exists,
 
 const task = (over: Partial<TaskView> = {}): TaskView => ({
   id: 't1', order: 2, title: 'Migrate the schema', type: 'ai', status: 'awaiting_user', awaitingReason: 'checkpoint', checkpoint: QUESTION,
-  dependencies: [], assignedRunner: 'claude-code', ...over,
+  dependencies: [], assignedRunner: 'claude-code', attempted: true, ...over,
 });
 
 const asked = (approvalId: string): TaskLogEvent => ({

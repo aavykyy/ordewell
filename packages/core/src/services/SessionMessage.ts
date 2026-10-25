@@ -61,6 +61,8 @@ export type SerializedTaskStatus = {
   research?: true;
   /** The latest attempt's handoff, as the plan keeps it (ADR-0047); absent when the attempt left none. */
   handoff?: HandoffDigest;
+  /** An attempt has started: its chat exists from then on. Absent on a task never run. */
+  attempted?: true;
   attemptUsage?: AttemptUsage[];
   /** Set only on a loop's check, so a stream of statuses alone can say which task is one (ADR-0045). */
   loop?: TaskLoop;
@@ -111,6 +113,8 @@ export type SerializedTask = {
   skills?: string[];
   /** Set only on a task an Act supervisor added (ADR-0029). */
   addedBy?: 'supervisor';
+  /** An attempt has started: its chat exists from then on. Absent on a task never run. */
+  attempted?: true;
   attemptUsage?: AttemptUsage[];
   /** A script task's body and time limit (ADR-0035); absent on any other task. */
   commands?: string[][];
@@ -287,7 +291,7 @@ export type SessionMessage =
    * planner; `usage` is its own share, already counted in `planner_usage`.
    */
   | { type: 'subagent_finished'; turnId?: string; subagentId: string; outcome: SubagentOutcome; digest: string; usage?: UsageTotals }
-  | { type: 'status_update'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage }
+  | { type: 'status_update'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; activity?: RunActivity }
   | { type: 'review_needed'; tasks: SerializedTask[] }
   | { type: 'review_approved' }
   | { type: 'checkpoint'; taskId: string; taskTitle: string; summary: string }
@@ -373,11 +377,31 @@ export type PlanSnapshot = { type: 'plan_snapshot'; plan: SurfacePlan | SurfaceP
 /** What only the status stream says about a task; a plan refresh keeps these as they were. */
 export type RunTaskStatus = Partial<Pick<
   SerializedTaskStatus,
-  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'handoff'
+  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'attempted'
 >>;
 
 /** A task in the run view: the plan's fields, then the status stream's. */
 export type RunTask = Omit<SerializedTask, 'subtasks'> & RunTaskStatus & { subtasks: RunTask[] };
+
+/**
+ * What the scheduler is doing with the plan, independent of any one task:
+ * the authoritative word a surface shows a start by, and a guard reads before
+ * acting on the plan. Kept apart from a task's status so a start that has not
+ * claimed anything yet is never drawn as work in progress.
+ */
+export interface RunActivity {
+  /** A start is admitted and has not claimed a task: work is on its way. */
+  starting: boolean;
+  /** At least one attempt is live. */
+  running: boolean;
+  /** The scheduler is driving the plan: ready tasks start as slots free. */
+  scheduled: boolean;
+  /** A run with nothing starting that something still resumes by itself (a usage limit's reset, a retry). */
+  resumable: boolean;
+}
+
+/** A run with nothing at work and nothing on its way. */
+export const IDLE_ACTIVITY: RunActivity = { starting: false, running: false, scheduled: false, resumable: false };
 
 /**
  * A session's run as every surface draws it (the [run view](../../../../CONTEXT.md)):
@@ -394,6 +418,8 @@ export interface RunView {
   mergeResult: IsolationMergeResult | null;
   /** The edit the open planner turn holds, as it would leave the plan; absent when it holds none. */
   heldEdit?: HeldEdit;
+  /** What the scheduler is doing with the plan, as {@link RunActivity}. */
+  activity?: RunActivity;
 }
 
 export type RunInput = SessionMessage | PlanSnapshot;
@@ -432,6 +458,7 @@ export function serializeTask(t: SurfaceTask): SerializedTask {
     ...(t.ops ? { ops: true as const } : {}),
     ...(t.research !== undefined ? { research: t.research } : {}),
     ...(t.handoff ? { handoff: structuredClone(t.handoff) } : {}),
+    ...(t.attempted ? { attempted: true as const } : {}),
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(t.skills?.length ? { skills: [...t.skills] } : {}),
     ...(t.addedBy ? { addedBy: t.addedBy } : {}),
@@ -462,6 +489,7 @@ export function serializeTaskStatus(
       ? { outcome: t.verdict.outcome, reason: t.verdict.reason, checks: t.verdict.checks || [], ...(t.verdict.reported ? { reported: t.verdict.reported } : {}) }
       : null,
     idleSince,
+    ...(t.attempted ? { attempted: true as const } : {}),
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(isolation ? { isolation } : {}),
     ...(t.status === 'awaiting_user' && t.awaitingReason ? { awaitingReason: t.awaitingReason } : {}),

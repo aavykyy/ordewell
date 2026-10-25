@@ -1,5 +1,5 @@
 import { NOT_STARTED } from './status';
-import type { TaskType } from '../models/Task';
+import type { TaskStatus, TaskType } from '../models/Task';
 import type { ExecutionCommand } from '../services/ExecutionCommands';
 
 /**
@@ -96,6 +96,25 @@ export function taskActionCommand(action: TaskAction, task: string, reason?: str
     case 'complete': return { command: 'mark_complete', task };
     case 'uncomplete': return { command: 'mark_not_done', task };
   }
+}
+
+/**
+ * Whether Mark complete or Mark not done on this task needs the user's explicit
+ * yes (ADR-0029): an AI or script task's override vouches for work no verdict
+ * passed. A manual task's is the user's own sign-off, and is asked of no one.
+ */
+export function overrideNeedsConfirmation(task: { type: TaskType }): boolean {
+  return task.type !== 'user';
+}
+
+/**
+ * An override command carrying the user's yes. `seen` is the status they were
+ * asked about: a task that moved on meanwhile is refused, not overridden. A
+ * caller that never looked, like a scripted `--yes`, leaves it out. Any other
+ * command is returned as it was.
+ */
+export function confirmedOverride(command: ExecutionCommand, seen?: TaskStatus): ExecutionCommand {
+  return command.command === 'mark_complete' || command.command === 'mark_not_done' ? { ...command, confirmed: true, ...(seen ? { seen } : {}) } : command;
 }
 
 /** Change versus ops can still be flipped (ADR-0020): an AI task that has not started. */

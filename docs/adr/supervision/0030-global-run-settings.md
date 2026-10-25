@@ -45,13 +45,16 @@ on one machine can disagree.
 
 **Full/Guarded, the supervisor level, merge at gates automatically, autorun,
 the retry limit and the wake-up read budget are machine-wide user settings,
-saved in `settings.json` and changed through `/settings` (or the headless
-commands behind it). The Planned-with line is saved there too but is not in the
-panels: only `ordewell trailer` or an edit of the file sets it. A change applies
-at once to the session it is made in, and to every other session from its next
-run, except the Planned-with line, which every session reads as it writes a
-commit, so a change reaches the next landing in any session. Autorun, a new
-setting, starts the plan when the planner submits it.**
+saved in `settings.json`.** Full/Guarded, the supervisor level, the merge
+setting, autorun and the retry limit are changed through `/settings` (or the
+headless commands behind it). The wake-up read budget and the Planned-with line
+have no panel row: only `ordewell supervisor reads <n>` or an edit of the file
+sets the budget, and only `ordewell trailer` or an edit of the file sets the
+line. A change made through `/settings` applies at once to the session it is
+made in, and to every other session from its next run, except the Planned-with
+line, which every session reads as it writes a commit, so a change reaches the
+next landing in any session. Autorun, a new setting, starts the plan when the
+planner submits it.**
 
 ### One store, machine-wide
 
@@ -82,7 +85,7 @@ There is no per-plan value and no per-workspace override.
 | autorun | on, off | off |
 | Planned-with line in commits Ordewell writes (not in the panels) | on, off | **on** |
 | supervisor retry limit | whole number ≥ 0 | 2 |
-| wake-up read budget | whole number ≥ 1 | 12 |
+| wake-up read budget (not in the panels) | whole number ≥ 1 | 12 |
 
 Watch becomes the default because it only reads and writes notes to the user:
 it never acts, and it makes the planner's watching of a run something a new
@@ -95,14 +98,15 @@ The settings change in the planner chat, through `/settings`: a stepped panel in
 the TUI and the Run block of the chat's Settings panel in VS Code. A change is
 saved as it is made; there is no one-slash-command-per-setting on either surface.
 The headless CLI keeps one command per value for scripts, where no panel exists.
-The Planned-with line has the command and no panel row.
+The Planned-with line and the wake-up read budget have the command and no panel
+row.
 
 | headless command | sets |
 |---|---|
 | `ordewell auto [full\|guarded]` | autonomy level |
 | `ordewell supervisor [off\|watch\|act]` | supervisor level |
 | `ordewell supervisor retries <n>` | retry limit |
-| `ordewell supervisor reads <n>` | wake-up read budget |
+| `ordewell supervisor reads <n>` | wake-up read budget (no panel row) |
 | `ordewell automerge [on\|off]` | merge at gates automatically |
 | `ordewell trailer [on\|off]` | Planned-with line in commits Ordewell writes |
 | `ordewell autorun [on\|off]` | autorun |
@@ -316,6 +320,10 @@ the daemon reads it from there at generation.
   settings menu beside the values that change how a run is supervised. The
   headless command and the file are enough, as with the daily version check
   (ADR-0048).
+- **Rejected: a row in the /settings panels for the wake-up read budget.** It is
+  an advanced loop limit, not a run control a user tunes from the chat; a row
+  beside Autonomy and Supervisor would suggest it is safe to change without
+  knowing how the supervisor wakes. The headless command and the file stay.
 - **Rejected: keep the old routes as aliases.** One in-repo client, before 1.0.
 
 ## Consequences
@@ -375,3 +383,6 @@ the daemon reads it from there at generation.
 - 2026-10-23 — the Planned-with line is not in the `/settings` panels or VS Code's Run block: it is set with `ordewell trailer` or in `settings.json`.
 - 2026-10-25 — the autonomy level starts Guarded on a fresh install; an
   explicit Full, or one already saved, is kept.
+- 2026-10-25 — the wake-up read budget leaves the `/settings` panels in the TUI
+  and VS Code: it has no panel row and is set with `ordewell supervisor reads
+  <n>` or in `settings.json`, which the headless command still writes.

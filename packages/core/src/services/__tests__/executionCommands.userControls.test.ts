@@ -134,14 +134,12 @@ describe('mark_complete and mark_not_done', () => {
   it('lands a task the user vouches for, and takes the completion back, each kept in the timeline', async () => {
     const env = setup();
     env.load([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
-    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    expect(await env.run({ command: 'mark_complete', task: 't1' })).toEqual({ ok: true, message: 'Marked task #1 "Task t1" complete.' });
+    expect(await env.run({ command: 'mark_complete', task: 't1', confirmed: true })).toEqual({ ok: true, message: 'Marked task #1 "Task t1" complete.' });
     expect(taskOf(env.session, 't1')!.status).toBe('completed');
-    expect(await env.run({ command: 'mark_not_done', task: 't1' })).toEqual({ ok: true, message: 'Marked task #1 "Task t1" not done: it waits until you retry or start it.' });
+    expect(await env.run({ command: 'mark_not_done', task: 't1', confirmed: true })).toEqual({ ok: true, message: 'Marked task #1 "Task t1" not done: it waits until you retry or start it.' });
     expect(taskOf(env.session, 't1')!.status).toBe('pending');
     expect(env.timeline().map((m) => m.text)).toEqual([
-      'You started the plan.',
       'You marked task #1 "Task t1" complete.',
       'You marked task #1 "Task t1" not done.',
     ]);
@@ -159,8 +157,8 @@ describe('mark_complete and mark_not_done', () => {
     const env = setup();
     env.load([task('t1', 1)]);
 
-    await env.session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
-    await env.session.execute({ command: 'mark_not_done', task: 't1' }, { kind: 'user' });
+    await env.session.execute({ command: 'mark_complete', task: 't1', confirmed: true }, { kind: 'user' });
+    await env.session.execute({ command: 'mark_not_done', task: 't1', confirmed: true }, { kind: 'user' });
 
     expect(env.timeline().map((m) => m.record.command)).toEqual(['mark_complete', 'mark_not_done']);
   });
@@ -554,8 +552,10 @@ describe('a control on a task while Mark complete lands its work', () => {
       env.latest('t1').emitExit(1);
       await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
     }
+    // Stopped first, as a manual override of a running task must be.
+    if (!failFirst) await env.run({ command: 'stop_run' });
     const openMerge = isolation.holdIntegration('t1');
-    const marked = env.run({ command: 'mark_complete', task: 't1' });
+    const marked = env.run({ command: 'mark_complete', task: 't1', confirmed: true });
     await vi.waitFor(() => expect(isolation.taskIdsFor('integrate')).toEqual(['t1']));
     return { env, openMerge, marked };
   }

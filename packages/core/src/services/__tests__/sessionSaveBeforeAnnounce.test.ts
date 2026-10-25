@@ -136,7 +136,8 @@ describe('every user control saves before it announces', () => {
   });
 
   it('mark complete, which starts the dependent', async () => {
-    const env = setup([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
+    // A manual task: the user's sign-off is the one completion a running plan takes by hand.
+    const env = setup([task('t1', 1, { type: 'user' }), task('t2', 2, { dependencies: ['t1'] })]);
     await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     await expectSavedBeforeAnnounced(env, (s) => s.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' }));
@@ -145,10 +146,9 @@ describe('every user control saves before it announces', () => {
 
   it('mark not done', async () => {
     const env = setup([task('t1', 1)]);
-    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
-    await env.session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
+    await env.session.execute({ command: 'mark_complete', task: 't1', confirmed: true }, { kind: 'user' });
 
-    await expectSavedBeforeAnnounced(env, (s) => s.execute({ command: 'mark_not_done', task: 't1' }, { kind: 'user' }));
+    await expectSavedBeforeAnnounced(env, (s) => s.execute({ command: 'mark_not_done', task: 't1', confirmed: true }, { kind: 'user' }));
     expect(env.session.planTasks[0].status).not.toBe('completed');
   });
 

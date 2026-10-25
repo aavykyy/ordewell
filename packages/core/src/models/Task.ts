@@ -287,6 +287,12 @@ export interface Task {
    * counts as approved to run (ADR-0029). Set by the session, never by an op.
    */
   addedBy?: 'supervisor';
+  /**
+   * An attempt of it has started, so its chat exists from then on: kept after
+   * a failure, a cancel, a skip or a completion, and restored with the plan.
+   * Set by the attempt's own start — never by a status or a manual mark.
+   */
+  attempted?: true;
   attemptUsage?: AttemptUsage[];
   /**
    * A script task's body (ADR-0035), exactly one of these two: argument
@@ -853,6 +859,7 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     verdict: overrides.verdict,
     outputSummary: overrides.outputSummary,
     ...(overrides.handoff ? { handoff: structuredClone(overrides.handoff) } : {}),
+    ...(overrides.attempted ? { attempted: true as const } : {}),
     ...(overrides.attemptUsage ? { attemptUsage: structuredClone(overrides.attemptUsage) } : {}),
     assignedModel: overrides.assignedModel,
     assignedRunner: overrides.assignedRunner ?? DEFAULT_RUNNERS[0],
@@ -1149,6 +1156,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
         runnerSessionOwner: prior?.runnerSessionOwner,
         carriedFrom: prior?.carriedFrom,
         attemptSkills: prior?.attemptSkills,
+        attempted: prior?.attempted,
         attemptUsage: prior?.attemptUsage,
         loopRound: prior?.loopRound,
         // Where a task that has run ran is fixed, like its runner session (ADR-0020).

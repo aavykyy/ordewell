@@ -1,4 +1,4 @@
-import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, PlanUsage, PlannerUsage, ResearchLogEntry, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskLogEvent } from '@ordewell/core';
+import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskLogEvent, TaskStatus } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -52,7 +52,8 @@ export type Effect =
   /** Schedules the stop-arm expiry; the runtime owns the timer, not the reducer. */
   | { type: 'disarmStop'; afterMs: number; arm: number }
   /** `watch` asks the runtime to hold the execution stream open for this action — see `taskActionEffect`. */
-  | { type: 'taskAction'; sessionId: string; taskId: string; action: TaskAction; watch?: boolean }
+  /** `confirmed`: the user's yes to an override, with the status they were asked about (ADR-0029). */
+  | { type: 'taskAction'; sessionId: string; taskId: string; action: TaskAction; watch?: boolean; confirmed?: { seen: TaskStatus } }
   | { type: 'addTask'; sessionId: string; title: string }
   /** `/settings`: only the changed values, saved the way their headless commands save them, then `message` as one notice. */
   | { type: 'saveSettings'; run: Partial<GlobalRunSettings>; autonomous?: boolean; maxParallel?: number; message: string; sessionId?: string }
@@ -133,7 +134,7 @@ export type Action =
   | { type: 'taskUpdated'; taskId: string; changes: Record<string, unknown>; sessionId?: string }
   | { type: 'taskCheckpoint'; taskId: string; title: string; summary: string; sessionId?: string }
   /** The run's status stream: folded through core's `reduceRun`, status-only fields and all. */
-  | { type: 'statusUpdate'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; sessionId?: string }
+  | { type: 'statusUpdate'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; activity?: RunActivity; sessionId?: string }
   /** The run as the daemon sends it when a socket connects, before the next update. */
   | { type: 'runSnapshot'; view: RunView; approvals?: ApprovalRequestMessage[]; sessionId?: string }
   /** The edit the open planner turn holds, as it would leave the plan; null once it landed or was dropped. */
