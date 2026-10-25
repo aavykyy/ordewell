@@ -132,7 +132,9 @@ own presentation; it never re-derives the conversation from raw messages.
   compaction reaches a surface as `planner_compaction`, one phase at a time
   under one stable id. Ordewell's own announces `started`, then `ended` with
   its outcome (condensed, pruned, unchanged, stopped, failed or paused), and
-  the checkpoint a condensed one writes carries the same id (ADR-0002). A
+  the checkpoint a condensed one writes carries the same id (ADR-0002); an API
+  planner's automatic one is announced in the turn it happens in, and a
+  pruning, over as it begins, reports only its end. A
   harness planner's native compaction is reported only as `ended`, with the
   sizes it stated, because that is all its protocol says: no start, summary or
   size is invented, and a subagent's never reaches the planner's view. The
@@ -149,8 +151,9 @@ own presentation; it never re-derives the conversation from raw messages.
   success. The transcript keeps every message (ADR-0002), so nothing is
   rebuilt: the draft, the scroll position, task output and what was open stay.
   A reload draws the same block from the transcript, a legacy summary first as
-  before. A native or pruning compaction is display-only: never written, so it
-  never touches what the planner replays. A surface that joins while one runs
+  before. A native or pruning compaction, and one that condensed only a
+  turn's own rounds, is display-only: never written, so it never touches what
+  the planner replays. A surface that joins while one runs
   is owed its start, which `Session.plannerCompaction()` holds until its end,
   as announced approvals are held. The TUI draws the block from the transcript
   it redraws once `/compact` answers.
@@ -254,3 +257,4 @@ the same word.)
 - 2026-10-25 — a script task's log is drawn whole, unfolded; a summary never counts a call that did not run as run and keeps a denied approval; a failed line is coloured; a compaction drops what was open (X1). Found in review: a failing script's output was hidden behind one closed line, and a denied command read `Ran a command`.
 - 2026-10-25 — a denial is counted once, on the call it stopped when that call is in the line, and a script row draws its command once (X1). Found in review: a runner's denied command read `Ran a command (1 failed)` beside its denied approval, and a planner's denial was counted twice.
 - 2026-10-25 — a planner compaction is one quiet block folded in by id where it happened, with its start and end announced, Stop and queued messages as in a turn, and nothing rebuilt (C1). Before it, `/compact` rebuilt the whole VS Code conversation, collapsing what was open, behind a progress notification and a success popup, and a harness planner's own compaction was not shown at all.
+- 2026-10-25 — C1: an API planner's automatic compaction is announced in its turn, a pruning by its end alone, and one that condensed only the turn's own rounds is never written ([ADR-0002](../planner/0002-planner-as-conversation-loop.md)).

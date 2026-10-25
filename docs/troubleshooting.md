@@ -205,6 +205,26 @@ when the limit resets, or hit it again right after a resend, or you moved the
 planner to another runner, nothing is resent on its own: send a message once
 the limit has reset.
 
+## The planner's context no longer fits its model
+
+A turn of an API planner (OpenAI, OpenRouter, an OpenAI-compatible server,
+Gemini) ends on **The planner's context no longer fits … window**.
+
+Before every call, such a planner keeps its prompt inside 90% of the model's
+window: it trims older file reads first, then condenses the conversation into a
+summary written by the same model, which shows as **Context compacted
+automatically** in the chat. It ends the turn only when even that leaves the
+call too large, or the summary could not be written; what the call was to send
+is kept, so no command runs twice
+([ADR-0002](adr/planner/0002-planner-as-conversation-loop.md)). Switch the
+planner to a model with a larger window, or narrow the request, and send again.
+
+This needs the model's window: a model whose catalog states none gets no
+automatic compaction, and `/compact` still condenses on request. To turn it off,
+set `"plannerAutoCompaction": false` in the global `settings.json`
+(`~/.ordewell/settings.json`). A harness planner (Claude Code, Codex, OpenCode)
+compacts its own context, and is not affected.
+
 ## A task waits for your approval
 
 A row reads **waits for your approval** and the scheduler skips it.

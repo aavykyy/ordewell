@@ -9,6 +9,7 @@ import { makeSession, testWorkspace } from './sessionTestKit';
 import { GeminiService } from '../GeminiService';
 import { PlannerContextExhaustedError, type ModelLimits } from '../plannerContextBudget';
 import type { ConversationTurnContext } from '../BaseAiService';
+import { STOPPED_TOOL_RESULT } from '../executeTool';
 
 interface Part {
   text?: string;
@@ -177,15 +178,17 @@ describe('a stopped Gemini planner turn', () => {
     expect(functionResponses(next)[0].response.output).toHaveLength(49_000);
   });
 
-  it('answers calls a Stop left unrun as never run, so the next message is a request Gemini accepts', async () => {
+  it('keeps what a Stop let run and says which call it stopped, so the next message never reports a call that ran as unrun', async () => {
     const provider = serve({}, [callsTools(['read_file', { path: 'a.ts' }], ['bash', { command: 'npm test' }])]);
     const svc = service(config());
     const caller = new AbortController();
+    const bash = vi.fn(async () => file(10));
     const fs = fakeFileSystem({
       readFile: async (path: string) => {
         if (path.endsWith('.ts')) caller.abort();
         return file(100);
       },
+      bash,
     });
 
     await start(svc, fs, () => {}, caller.signal).catch(() => {});
@@ -194,9 +197,10 @@ describe('a stopped Gemini planner turn', () => {
 
     const next = provider.requests[1];
     expect(next.contents.map((c) => c.role)).toEqual(['user', 'user', 'model', 'function', 'user']);
+    expect(bash).not.toHaveBeenCalled();
     expect(functionResponses(next).map((r) => [r.name, r.response.output])).toEqual([
-      ['read_file', 'Not executed: the turn that asked for this ended first.'],
-      ['bash', 'Not executed: the turn that asked for this ended first.'],
+      ['read_file', 'x'.repeat(100)],
+      ['bash', STOPPED_TOOL_RESULT],
     ]);
   });
 });

@@ -23,6 +23,8 @@ import { PromptBlocks, type PlanRow, type PlanView, type TurnBlocks } from './Pr
 import { joinRuns, noteRun, writtenOver as writtenOverRuns } from './settleReply';
 import type { StartWait, StartWaitKind } from './readiness';
 import { SubagentRuns } from './SubagentRuns';
+import type { ConversationCompactionHost, LandedHistory } from './budgetedChat';
+import { ContextSummaryError } from './contextSummary';
 
 /**
  * Per-runner model cap for the always-on catalog block. Generous enough that
@@ -497,6 +499,17 @@ export class PlannerConversation {
   private readonly blocks: PromptBlocks;
   private live: PlannerTurn | null = null;
   private openTurn: UserTurn | null = null;
+  /**
+   * What an API planner's chat condenses its context through during a turn
+   * (ADR-0002): the open turn, the history that landed before it, and the
+   * checkpoint a summary of that history becomes.
+   */
+  private readonly compaction: ConversationCompactionHost = {
+    turnId: () => this.openTurn?.stream.turnId,
+    landed: () => this.landedHistory(),
+    checkpoint: (content, keptFrom, id) => this.commitAutoCheckpoint(content, keptFrom, id),
+    planLines: () => this.planRows()?.map(({ line }) => line) ?? null,
+  };
 
   constructor(private readonly host: PlannerConversationHost) {
     this.briefing = new PlannerBriefing({
@@ -768,11 +781,11 @@ export class PlannerConversation {
    * live context is dropped so the next message replays the shorter
    * projection ({@link modelContext}).
    *
-   * The summary is one hidden turn through whichever planner is configured —
-   * on the live context when it still matches, replayed from the transcript
-   * when not — so the compaction is the same for a vendor API and a harness
-   * agent. Whatever the turn emits besides the summary is discarded, ops
-   * included: it condenses the conversation, never the plan. Nothing is
+   * The summary is of the live context when it still matches, replayed from
+   * the transcript when not. An API planner writes it in calls that offer no
+   * tools, as its automatic compaction does; a harness planner in one hidden
+   * turn of its agent, whatever else that turn emits — ops included — being
+   * discarded: it condenses the conversation, never the plan. Nothing is
    * written until the summary is in hand, so a failed or stopped turn leaves
    * the transcript exactly as it was.
    */
@@ -833,9 +846,46 @@ export class PlannerConversation {
     }, () => this.host.broadcastPlan());
   }
 
+  /**
+   * A checkpoint an API planner's chat wrote of the history that landed before
+   * the open turn, committed only while that turn is still the one open and
+   * still answering this plan: a summary that comes back after the turn was
+   * stopped, abandoned or superseded writes nothing.
+   */
+  private commitAutoCheckpoint(content: string, keptFrom: number, id: string): void {
+    const turn = this.openTurn;
+    if (!turn || turn.signal.aborted || turn.planner.abandoned || this.host.plan() !== turn.plan) {
+      throw new PlannerTurnDiscardedError();
+    }
+    this.commitCheckpoint(content, keptFrom, 'auto', id);
+  }
+
+  /**
+   * What landed before the open turn, from the last checkpoint's cut up to
+   * where the turn's inputs will land, split at each user message — where a
+   * checkpoint may cut — into what replaying it from there sends, as
+   * {@link resume} replays the model context.
+   */
+  private landedHistory(): LandedHistory | null {
+    const turn = this.openTurn;
+    if (!turn || turn.signal.aborted) return null;
+    const transcript = this.transcript;
+    const heldFrom = Math.min(transcript.length, ...turn.writes.entries.map(({ at }) => at));
+    const groups: { from: number; entries: ConversationMessage[] }[] = [];
+    for (let i = contextFloor(transcript); i < heldFrom; i++) {
+      const entry = transcript[i];
+      if (isUserMessage(entry)) groups.push({ from: i, entries: [] });
+      if (entry.kind !== 'compaction') groups.at(-1)?.entries.push(entry);
+    }
+    return {
+      heldFrom,
+      exchanges: groups.map(({ from, entries }) => ({ from, messages: plannerTranscript(entries).map(({ role, content }) => ({ role, content })) })),
+    };
+  }
+
   private async summarize(signal: AbortSignal): Promise<string> {
     const ai = this.host.aiService();
-    const request = summaryRequest(this.planRows()?.map(({ line }) => line) ?? null);
+    const planLines = this.planRows()?.map(({ line }) => line) ?? null;
     // Only liveness and spend get through: streamed prose or research steps
     // from this turn would land in the chat as if the planner had said them.
     // Its calls are counted like any turn's, but the context they measure is
@@ -844,9 +894,20 @@ export class PlannerConversation {
       if (p.type === 'liveness') this.host.onProgress(p);
       else if (p.type === 'usage' && p.record) this.host.onProgress({ ...p, record: { ...p.record, aggregate: true } });
     };
+    // An API planner writes it in calls that offer no tools, as it does an
+    // automatic one; a harness planner's agent has only its own turn to give.
+    if (ai.condenseContext) {
+      const replay = this.canContinueLive() ? undefined : plannerTranscript(modelContext(this.transcript));
+      try {
+        return await ai.condenseContext({ replay, planLines, onProgress, signal });
+      } catch (err) {
+        if (err instanceof ContextSummaryError) throw new ConversationEditError(`${err.message} The conversation is unchanged.`);
+        throw err;
+      }
+    }
+    const request = summaryRequest(planLines);
     let turn: ConversationTurn;
     if (this.canContinueLive()) {
-      ai.pruneContext?.();
       turn = await ai.continueConversation(request, onProgress, signal);
     } else {
       turn = await this.resume(await this.reopen(), request, modelContext(this.transcript), signal, onProgress);
@@ -942,6 +1003,7 @@ export class PlannerConversation {
         initialMessage: plannerInput([plannerMessage(goal.text, goal.skills)]),
         onProgress: userTurn.stream.sink(),
         signal: userTurn.signal,
+        compaction: this.compaction,
       });
       const settleable = await this.drainTaskQueries(turn, userTurn);
       this.assertNotLimited(settleable, userTurn);
@@ -1271,6 +1333,7 @@ export class PlannerConversation {
       signal,
       priorHistory: replayed,
       initialMessage: message,
+      compaction: this.compaction,
     });
   }
 

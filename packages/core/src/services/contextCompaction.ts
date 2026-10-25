@@ -95,6 +95,7 @@ export class ChatHistory<M extends CompactableMessage> {
   private sizes: number[] = [];
   private total = 0;
   private lastUser = -1;
+  private changes = 0;
 
   constructor(initial: readonly M[] = []) {
     this.append(...initial);
@@ -107,11 +108,15 @@ export class ChatHistory<M extends CompactableMessage> {
   /** Where the newest user message stands; -1 before any. */
   get lastUserIndex(): number { return this.lastUser; }
 
+  /** Moves on every change: what was read before an await still holds only if it has not moved. */
+  get version(): number { return this.changes; }
+
   view(): readonly M[] { return this.messages; }
 
   last(): M | undefined { return this.messages[this.messages.length - 1]; }
 
   append(...added: M[]): void {
+    this.changes++;
     for (const m of added) {
       if (m.role === 'user') this.lastUser = this.messages.length;
       const size = messageChars(m);
@@ -166,6 +171,7 @@ export class ChatHistory<M extends CompactableMessage> {
       const size = messageChars(next);
       pruned.removedChars += this.sizes[i] - size;
       pruned.outputs++;
+      this.changes++;
       this.total += size - this.sizes[i];
       this.sizes[i] = size;
       this.messages[i] = next;

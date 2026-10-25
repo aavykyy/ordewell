@@ -6,7 +6,7 @@ import {
   type Content,
   type Tool,
 } from '@google/generative-ai';
-import { Task, DiscoveredModel, ResearchLogEntry, ResearchProgress, RunnerId, DEFAULT_RUNNERS } from '../models/Task';
+import { Task, ConversationMessage, DiscoveredModel, ResearchLogEntry, ResearchProgress, RunnerId, DEFAULT_RUNNERS } from '../models/Task';
 import type { UsageRecord } from '../models/Usage';
 import { IConfig } from '../interfaces/IConfig';
 import { normalizeGeminiModel } from '../interfaces/BaseConfig';
@@ -23,12 +23,14 @@ import { PLANNER_ESCAPE_HINT } from './plannerReadiness';
 import type { RunnerModeInfo } from './ModeResolver';
 import { ContextCollector } from './ContextCollector';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
-import { IAiService, ConversationRequest, ConversationTurn } from './AiService';
+import { IAiService, ConversationRequest, ConversationTurn, type ContextCondenseRequest } from './AiService';
 import type { TurnBudgets } from './PlannerBudgets';
 import { BaseAiService, ResearchChat, ResearchTurn, ToolResult, ConversationTurnContext } from './BaseAiService';
 import { toGeminiToolDeclarations } from './researchTools';
-import { ChatHistory, messageChars, type CompactableMessage } from './contextCompaction';
-import { PlannerContextExhaustedError, TokenGauge, callBudget, replyTokens, type ChatBudget, type ModelLimits, type PlannerContextDeps, type PlannerContextStatus } from './plannerContextBudget';
+import { messageChars, type CompactableMessage } from './contextCompaction';
+import { BudgetedChat, condenseConversation, type CallInput, type ChatCompaction, type ContextSummarizer } from './budgetedChat';
+import type { SummaryCall } from './contextSummary';
+import { TokenGauge, callBudget, replyTokens, type ChatBudget, type ModelLimits, type PlannerContextDeps, type PlannerContextStatus } from './plannerContextBudget';
 
 /** No spawn tool (ADR-0005): this service has no `createSubagentChat`, so a spawn would fail on every call. */
 const TOOL_DEFINITIONS = toGeminiToolDeclarations(false, false);
@@ -112,12 +114,6 @@ interface GeminiMessage extends CompactableMessage {
   response?: { name: string; truncated: boolean; totalChars: number };
 }
 
-/** What one call sends after the history: a user message, or the responses to the last turn's calls. */
-interface CallInput {
-  kind: 'message' | 'results';
-  messages: GeminiMessage[];
-}
-
 /**
  * Gemini's refusal of a prompt past the model's input limit. The wording is
  * the API's (not checked live against every model); any other refusal is not
@@ -127,10 +123,6 @@ function isContextOverflow(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
   const { status, message } = err as { status?: unknown; message?: unknown };
   return status === 400 && typeof message === 'string' && /input token count.*exceeds the maximum number of tokens/i.test(message);
-}
-
-function inputChars(input: CallInput): number {
-  return input.messages.reduce((n, m) => n + messageChars(m), 0);
 }
 
 /**
@@ -191,6 +183,7 @@ interface GeminiChatOptions {
   onContent?: (text: string, segmentId: string) => void;
   onUsage?: (record: UsageRecord) => void;
   budget?: ChatBudget;
+  compaction?: ChatCompaction;
 }
 
 /**
@@ -200,50 +193,25 @@ interface GeminiChatOptions {
  * that a call is answered in the very next turn. Here a call's input joins the
  * history once, whatever became of the call, unless it is held to be sent
  * again; and each call is budgeted on its model's input limit as the OpenAI
- * chat budgets on its window (`plannerContextBudget`).
+ * chat budgets on its window (`BudgetedChat`).
  */
-class GeminiResearchChat implements ResearchChat {
-  private readonly history: ChatHistory<GeminiMessage>;
-  /** What the function declarations add to every request: they never change within a chat. */
-  private readonly toolsChars: number;
-  /** See OpenAiResearchChat: the input of a call that could not fit, held out of the history and sent again whole. */
-  private held: CallInput | null = null;
-
+class GeminiResearchChat extends BudgetedChat<GeminiMessage> {
   constructor(seed: GeminiMessage[], private readonly opts: GeminiChatOptions) {
-    this.history = new ChatHistory(seed);
-    this.toolsChars = JSON.stringify(opts.tools).length;
+    super(seed, JSON.stringify(opts.tools).length, GEMINI_REPLY_TOKENS, {
+      model: opts.model,
+      source: () => 'google',
+      onUsage: opts.onUsage,
+      budget: opts.budget,
+      compaction: opts.compaction,
+    });
   }
 
-  async sendMessage(text: string, signal?: AbortSignal): Promise<ResearchTurn> {
-    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    this.supersedeHeld();
-    this.answerAbandonedCalls();
-    return this.send({ kind: 'message', messages: [{ role: 'user', content: text }] }, signal);
-  }
-
-  async sendToolResults(results: ToolResult[], signal?: AbortSignal): Promise<ResearchTurn> {
-    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    return this.send({ kind: 'results', messages: this.responsesTo(results) }, signal);
-  }
-
-  holdsInput(): boolean { return this.held !== null; }
-
-  async resend(signal?: AbortSignal): Promise<ResearchTurn> {
-    if (!this.held) throw new Error('No planner input is held to send again.');
-    return this.send(this.held, signal);
-  }
-
-  reseed(next: readonly CompactableMessage[]): void {
-    this.history.replace(next as GeminiMessage[]);
-    this.opts.budget?.onCompacted();
-  }
-
-  compactHistory(): number {
-    return this.prune(Infinity, 0);
+  protected userMessage(text: string): GeminiMessage {
+    return { role: 'user', content: text };
   }
 
   /** Each result answers the open call of its id, or failing that the one in its place. */
-  private responsesTo(results: ToolResult[]): GeminiMessage[] {
+  protected resultMessages(results: ToolResult[]): GeminiMessage[] {
     const calls = this.history.last()?.tool_calls ?? [];
     return results.map((r, i) => ({
       role: 'tool',
@@ -253,85 +221,28 @@ class GeminiResearchChat implements ResearchChat {
     }));
   }
 
-  /** A new message takes the place of a held one; held responses answer their calls as a turn before it. */
-  private supersedeHeld(): void {
-    if (this.held?.kind === 'results') this.history.append(...this.held.messages);
-    this.held = null;
+  protected notExecuted(callId: string, name: string, text: string): GeminiMessage {
+    return { role: 'tool', tool_call_id: callId, content: text, response: { name, truncated: false, totalChars: 0 } };
   }
 
-  /** Calls a stopped or budget-ended turn left unanswered are answered as never run: Gemini refuses a message after them. */
-  private answerAbandonedCalls(): void {
-    const calls = this.history.last()?.tool_calls ?? [];
-    this.history.append(...calls.map((call): GeminiMessage => ({
-      role: 'tool',
-      tool_call_id: call.id,
-      content: 'Not executed: the turn that asked for this ended first.',
-      response: { name: call.function.name, truncated: false, totalChars: 0 },
-    })));
-  }
-
-  private async send(input: CallInput, signal?: AbortSignal): Promise<ResearchTurn> {
-    this.held = null;
-    const model = this.opts.model();
-    const limits = this.opts.budget?.limits(model);
-    const auto = this.opts.budget?.autoCompaction() ?? false;
-    if (auto) this.fit(input, model, limits);
-    const call = (): Promise<ResearchTurn> => this.callApi(input, model, replyTokens(limits, GEMINI_REPLY_TOKENS), signal);
-    try {
-      return await call();
-    } catch (err) {
-      if (!isContextOverflow(err)) throw this.committed(input, err);
-      if (!auto || this.prune(Infinity, this.turnStart(input)) === 0) throw this.exhausted(input, model, err);
-      try {
-        return await call();
-      } catch (again) {
-        throw isContextOverflow(again) ? this.exhausted(input, model, again) : this.committed(input, again);
-      }
+  /** As the conversation is seeded from a replay: consecutive entries of one role become one turn. */
+  protected replayed(messages: ReadonlyArray<Pick<ConversationMessage, 'role' | 'content'>>): GeminiMessage[] {
+    const turns: GeminiMessage[] = [];
+    for (const m of messages) {
+      const last = turns[turns.length - 1];
+      if (last?.role === m.role) turns[turns.length - 1] = { ...last, content: `${last.content}\n\n${m.content}` };
+      else turns.push({ role: m.role, content: m.content });
     }
+    return turns;
   }
 
-  /** As OpenAiResearchChat's: prune to low water when over the ceiling, and hold the input when what is left cannot fit. */
-  private fit(input: CallInput, model: string, limits: ModelLimits | undefined): void {
-    const budget = callBudget(limits, GEMINI_REPLY_TOKENS);
-    const gauge = this.opts.budget?.gauge;
-    if (!budget || !gauge) return;
-    const perToken = gauge.charsPerToken(model);
-    const chars = (): number => this.history.chars + inputChars(input) + this.toolsChars;
-    if (chars() / perToken <= budget.ceiling) return;
-    const toLowWater = (): number => chars() - budget.lowWater * perToken;
-    this.prune(toLowWater(), 0);
-    if (chars() / perToken > budget.ceiling) this.prune(toLowWater(), this.turnStart(input));
-    const plain = gauge.plainCharsPerToken(model);
-    if (plain !== undefined && chars() / plain > budget.promptLimit) {
-      this.held = input;
-      throw new PlannerContextExhaustedError(model, false);
-    }
+  protected isContextOverflow(err: unknown): boolean {
+    return isContextOverflow(err);
   }
 
-  private prune(charsToFree: number, protectFrom: number): number {
-    const { removedChars } = this.history.prune(charsToFree, protectFrom);
-    if (removedChars > 0) this.opts.budget?.onCompacted();
-    return removedChars;
-  }
-
-  private turnStart(input: CallInput): number {
-    return input.kind === 'message' ? this.history.length : Math.max(0, this.history.lastUserIndex);
-  }
-
-  /** A call that failed for another reason keeps its input, so its calls stay answered. */
-  private committed(input: CallInput, err: unknown): unknown {
-    this.history.append(...input.messages);
-    return err;
-  }
-
-  private exhausted(input: CallInput, model: string, cause: unknown): PlannerContextExhaustedError {
-    this.held = input;
-    return new PlannerContextExhaustedError(model, true, { cause });
-  }
-
-  private async callApi(input: CallInput, model: string, maxOutputTokens: number, signal?: AbortSignal): Promise<ResearchTurn> {
+  protected async callApi(input: CallInput<GeminiMessage>, model: string, maxOutputTokens: number, signal?: AbortSignal): Promise<ResearchTurn> {
     const contents = toContents([...this.history.view(), ...input.messages]);
-    const sentChars = this.history.chars + this.toolsChars + inputChars(input);
+    const sentChars = this.history.chars + this.toolsChars + input.messages.reduce((n, m) => n + messageChars(m), 0);
     // The SDK's request options carry the signal onto the HTTP call, which is
     // the only way a Stop (or a reset) ends a stream already under way.
     const result = await this.opts.client(model).generateContentStream({
@@ -501,7 +412,7 @@ export class GeminiService extends BaseAiService implements IAiService {
   }
 
   /** A chat on the planner model, whichever it is at each call. */
-  private chat(seed: GeminiMessage[], tools: Tool[], hooks: Pick<GeminiChatOptions, 'onReasoning' | 'onContent' | 'onUsage'>): GeminiResearchChat {
+  private chat(seed: GeminiMessage[], tools: Tool[], hooks: Pick<GeminiChatOptions, 'onReasoning' | 'onContent' | 'onUsage' | 'compaction'>): GeminiResearchChat {
     return new GeminiResearchChat(seed, {
       model: () => this.plannerModel(),
       client: (model) => this.getPlanningModel(model),
@@ -509,6 +420,42 @@ export class GeminiService extends BaseAiService implements IAiService {
       ...hooks,
       budget: this.plannerBudget(),
     });
+  }
+
+  /**
+   * One call on the planner's own model and key that declares no functions:
+   * what a summary of its context is written by. Its usage is reported like
+   * any call's, for the caller to mark as measuring no context.
+   */
+  private readonly summaryCall: SummaryCall = async ({ model, instructions, input, maxOutputTokens, signal }, onUsage) => {
+    const result = await this.getPlanningModel(model).generateContentStream({
+      contents: [{ role: 'user', parts: [{ text: `${instructions}\n\n${input}` }] }],
+      generationConfig: { ...GENERATION, maxOutputTokens },
+    }, { signal });
+    let text = '';
+    let finishReason: string | undefined;
+    let usage: GeminiStreamChunk['usageMetadata'];
+    for await (const chunkRaw of result.stream) {
+      const chunk = chunkRaw as GeminiStreamChunk;
+      const candidate = chunk.candidates?.[0];
+      if (candidate?.finishReason) finishReason = candidate.finishReason;
+      if (chunk.usageMetadata) usage = chunk.usageMetadata;
+      // A thought is not the summary: only the reply's text is.
+      for (const part of candidate?.content?.parts ?? []) if (part.text && !part.thought) text += part.text;
+    }
+    const record = usageRecordFrom(usage, model);
+    if (record) onUsage(record);
+    return { text, finishReason: finishReason === 'MAX_TOKENS' ? 'length' : finishReason };
+  };
+
+  private summarizer(): ContextSummarizer {
+    const model = this.plannerModel();
+    return { model, limits: this.limitsOf(model), wantedReply: GEMINI_REPLY_TOKENS, charsPerToken: this.gauge.charsPerToken(model), call: this.summaryCall };
+  }
+
+  async condenseContext(request: ContextCondenseRequest): Promise<string> {
+    this.ensureInit();
+    return condenseConversation(this.conversation?.ctx.chat, request, () => this.summarizer());
   }
 
   ensureInit(): void {
@@ -552,10 +499,12 @@ export class GeminiService extends BaseAiService implements IAiService {
     }
 
     let currentProgress = req.onProgress;
+    const host = req.compaction;
     const researchChat = this.chat(seed, [{ functionDeclarations: req.plannerTools ? CONVERSATION_TOOL_DEFINITIONS : TOOL_DEFINITIONS }], {
       onReasoning: (text, segmentId) => currentProgress({ type: 'thinking', text, segmentId }),
       onContent: (text, segmentId) => currentProgress({ type: 'text_delta', text, segmentId }),
       onUsage: (record) => currentProgress({ type: 'usage', record }),
+      compaction: host && { host, summarize: this.summaryCall, onCompaction: (compaction) => currentProgress({ type: 'compaction', compaction }) },
     });
 
     const ctx: ConversationTurnContext = {

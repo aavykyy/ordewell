@@ -14,6 +14,7 @@ import type { PlannerToolHandler } from './mcp';
 import type { SkillInfo } from './SkillsService';
 import type { UsageLimitSignal } from './harness/AgentAdapter';
 import type { PlannerContextDeps } from './plannerContextBudget';
+import type { ConversationCompactionHost } from './budgetedChat';
 
 /**
  * The planner tools a session offers its conversation (ADR-0022). A backend
@@ -82,6 +83,24 @@ export interface ConversationRequest {
    * through `load_skill` alone (ADR-0024).
    */
   skills?: readonly SkillInfo[];
+  /**
+   * The conversation an API planner may condense its context through during a
+   * turn (ADR-0002): where its turn's messages begin, what landed before them,
+   * and the checkpoint a summary of that becomes. A harness planner's agent
+   * compacts its own context, and ignores it.
+   */
+  compaction?: ConversationCompactionHost;
+}
+
+/** What `/compact` asks of a planner that condenses its context itself. */
+export interface ContextCondenseRequest {
+  /** The model context to condense; absent: the live context the backend holds. */
+  replay?: ConversationMessage[];
+  /** The current plan's lines, which the summary is told outrank its own account of task state. */
+  planLines: readonly string[] | null;
+  /** Liveness and spend: each summary call's usage, which measures nothing of the planner's context. */
+  onProgress: (progress: ResearchProgress) => void;
+  signal?: AbortSignal;
 }
 
 /**
@@ -187,12 +206,21 @@ export interface IAiService {
   /**
    * Optional: how many times, over this service's life, a conversation's
    * context was compacted in place — by a harness agent itself, or by
-   * {@link pruneContext} and the proactive pruning of a vendor backend. A
+   * {@link pruneContext} and the pruning and condensing a vendor backend does
+   * before its calls (ADR-0002). A
    * context compacted since a turn was sent the plan may no longer hold it, so
    * the conversation sends the whole plan again when this moves (ADR-0012
    * T10). Absent where nothing compacts a context in place.
    */
   compactions?(): number;
+
+  /**
+   * Optional: a summary of the planner's context for `/compact`, written by
+   * the planner's own model and credentials in calls that offer no tools, so
+   * nothing the summary turn says can run one or change the plan. Absent on a
+   * harness planner, whose summary is a hidden turn of its own agent.
+   */
+  condenseContext?(request: ContextCondenseRequest): Promise<string>;
 
   /**
    * One-shot research + plan for non-conversational surfaces (CLI `plan --goal`,
