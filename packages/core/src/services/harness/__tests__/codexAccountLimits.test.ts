@@ -22,6 +22,8 @@ interface StubAnswers {
   afterInitialized?: unknown[];
   /** Raw lines written when `account/read` arrives, before its answer. */
   beforeAccount?: unknown[];
+  /** Raw lines written in the same write as the `account/read` answer, after it. */
+  afterAccount?: unknown[];
   /** Raw lines written before the rate-limit answer. */
   before?: unknown[];
   hang?: 'initialize' | 'limits';
@@ -43,7 +45,7 @@ lines.on('line', (line) => {
   if (msg.method === 'initialize') { if (answers.hang !== 'initialize') send({ id: msg.id, result: { userAgent: 'stub' } }); return; }
   if (msg.method === 'initialized') { for (const extra of answers.afterInitialized ?? []) send(extra); return; }
   if (msg.method === 'account/read') for (const extra of answers.beforeAccount ?? []) send(extra);
-  if (msg.method === 'account/read') return send({ id: msg.id, result: answers.account ?? { account: null, requiresOpenaiAuth: true } });
+  if (msg.method === 'account/read') return process.stdout.write([{ id: msg.id, result: answers.account ?? { account: null, requiresOpenaiAuth: true } }, ...(answers.afterAccount ?? [])].map((v) => JSON.stringify(v) + '\\n').join(''));
   if (msg.method === 'account/rateLimits/read') {
     for (const extra of answers.before ?? []) send(extra);
     if (answers.hang === 'limits') return;
@@ -217,6 +219,16 @@ describe('the Codex account-limit collector', () => {
       const reading = await read(collector({
         account: SIGNED_IN,
         before: [{ method: 'account/updated', params: { authMode: 'chatgpt', planType: 'plus' } }],
+        limits: LIMITS,
+      }));
+
+      expect(reading).toEqual({ kind: 'account_changed' });
+    });
+
+    it('does not hide a change announced right after the account/read answer, in the same output chunk', async () => {
+      const reading = await read(collector({
+        account: SIGNED_IN,
+        afterAccount: [{ method: 'account/updated', params: { authMode: null, planType: null } }],
         limits: LIMITS,
       }));
 
