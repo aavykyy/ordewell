@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as vscode from 'vscode';
 import { detectInstalledPlanner, resetInstalledPlanner, RunnerRegistry, type RunnerInstallation } from '@ordewell/core';
 import { registerCommands, type CommandDeps } from '../CommandRegistry';
-import { enableRunner, type EnableRunnerDeps } from '../enabledRunners';
+import { setRunnerEnabled, type EnableRunnerDeps } from '../enabledRunners';
 
 const registerCommand = vscode.commands.registerCommand as unknown as ReturnType<typeof vi.fn>;
 
@@ -69,7 +69,12 @@ function enableOver(saved: string[] | undefined, defaults: string[]) {
     config: { enabledRunners: defaults },
     sendRunnerAndModels,
   };
-  return { enable: (runnerId: string) => enableRunner(deps, runnerId), settingsService, sendRunnerAndModels };
+  return {
+    enable: (runnerId: string) => setRunnerEnabled(deps, runnerId, true),
+    disable: (runnerId: string) => setRunnerEnabled(deps, runnerId, false),
+    settingsService,
+    sendRunnerAndModels,
+  };
 }
 
 describe('enabling an installed runner from the chat header', () => {
@@ -100,6 +105,36 @@ describe('enabling an installed runner from the chat header', () => {
     const saved = await enable('no-such-agent');
 
     expect(saved).toBeNull();
+    expect(settingsService.updateEnabledRunners).not.toHaveBeenCalled();
+    expect(sendRunnerAndModels).not.toHaveBeenCalled();
+  });
+});
+
+describe('switching a runner off from the chat header', () => {
+  afterEach(() => resetInstalledPlanner());
+
+  it('takes it out of the saved enabled runners', async () => {
+    const { disable } = enableOver(['claude-code', 'codex', 'opencode'], ['claude-code']);
+
+    expect(await disable('codex')).toEqual(['claude-code', 'opencode']);
+  });
+
+  it('never turns one on: a repeated or stale click leaves the saved list as it is', async () => {
+    const { disable } = enableOver(['claude-code', 'opencode'], ['claude-code']);
+
+    expect(await disable('codex')).toEqual(['claude-code', 'opencode']);
+  });
+
+  it('keeps the last runner the saved list holds, whatever the clicker thought it held', async () => {
+    const { disable } = enableOver(['opencode'], ['claude-code', 'opencode']);
+
+    expect(await disable('opencode')).toEqual(['opencode']);
+  });
+
+  it('refuses an id no manifest names, saving and sending nothing', async () => {
+    const { disable, settingsService, sendRunnerAndModels } = enableOver(['claude-code'], ['claude-code']);
+
+    expect(await disable('no-such-agent')).toBeNull();
     expect(settingsService.updateEnabledRunners).not.toHaveBeenCalled();
     expect(sendRunnerAndModels).not.toHaveBeenCalled();
   });

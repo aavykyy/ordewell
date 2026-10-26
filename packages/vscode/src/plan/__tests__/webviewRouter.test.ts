@@ -87,7 +87,7 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
       openFile: vi.fn(),
       setPlanDockHeight: vi.fn(),
       changeSettings: vi.fn(async () => {}),
-      enableRunner: vi.fn(async () => {}),
+      setRunnerEnabled: vi.fn(async () => {}),
     },
     getPendingRunners: () => pending,
     setPendingRunners: (r) => { pending = r; },
@@ -548,7 +548,7 @@ describe('webview messages reach the session through one entry point each', () =
     [{ type: 'openFile', path: '.ordewell/sessions/s1/tasks/t1/1.patch' }, 'openFile', ['.ordewell/sessions/s1/tasks/t1/1.patch']],
     [{ type: 'setPlanDockHeight', height: 320 }, 'setPlanDockHeight', [320]],
     [{ type: 'changeSettings', change: { run: { autorun: true } } }, 'changeSettings', [{ run: { autorun: true } }]],
-    [{ type: 'enableRunner', runnerId: 'codex' }, 'enableRunner', ['codex']],
+    [{ type: 'setRunnerEnabled', runnerId: 'codex', enabled: false }, 'setRunnerEnabled', ['codex', false]],
   ] as const)('hands %o to the extension', async (msg, handler, args) => {
     await h.route(msg as WebviewToHost);
 

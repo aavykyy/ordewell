@@ -103,6 +103,11 @@
 
 ### Fixed
 
+- **A Runners pill click is saved.** Switching a runner off or on in the chat
+  header now saves it in the enabled runners every surface shares, so the
+  planner stops offering it on the next turn of a conversation already under
+  way, and on supervisor wake-ups too. The pills show that saved list after a
+  reload, and the last runner on cannot be switched off from them.
 - **A task log's header follows the attempt on screen.** Its usage is that
   attempt's, with the task total beneath it, its `/` commands come from that
   attempt, and a runner that has gone quiet reads Stalled after the next status

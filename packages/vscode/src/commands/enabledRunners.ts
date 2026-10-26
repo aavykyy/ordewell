@@ -11,7 +11,7 @@ export interface EnabledRunnerDeps {
   sendRunnerAndModels: () => Promise<void>;
 }
 
-/** Enabling from a message also has to know which ids are runners at all. */
+/** A change from a message also has to know which ids are runners at all. */
 export interface EnableRunnerDeps extends EnabledRunnerDeps {
   runnerRegistry: Pick<RunnerRegistry, 'get'>;
 }
@@ -29,14 +29,20 @@ async function updateEnabled(
 }
 
 /**
- * Add an installed runner to the enabled set, from the chat header's Runners
- * block. It only ever adds: a repeated or stale click must not switch a runner
- * off, and an id no manifest names is refused so a message cannot write one
- * into the shared file.
+ * Set one runner on or off, from the chat header's Runners block. The request
+ * names the state it wants rather than flipping one, so a repeated or stale
+ * click cannot undo a newer choice, and an id no manifest names is refused so a
+ * message cannot write one into the shared file. Switching off the last runner
+ * left in the saved list keeps it: an empty list leaves every surface with no
+ * runner to assign (ADR-0043), and only the list as saved now can say which is last.
  */
-export async function enableRunner(deps: EnableRunnerDeps, runnerId: RunnerId): Promise<string[] | null> {
+export async function setRunnerEnabled(deps: EnableRunnerDeps, runnerId: RunnerId, on: boolean): Promise<string[] | null> {
   if (!deps.runnerRegistry.get(runnerId)) return null;
-  return updateEnabled(deps, (enabled) => (enabled.includes(runnerId) ? enabled : [...enabled, runnerId]));
+  return updateEnabled(deps, (enabled) => {
+    if (on) return enabled.includes(runnerId) ? enabled : [...enabled, runnerId];
+    const rest = enabled.filter((r) => r !== runnerId);
+    return rest.length > 0 ? rest : enabled;
+  });
 }
 
 /** Turn a runner on or off, from the command palette. */

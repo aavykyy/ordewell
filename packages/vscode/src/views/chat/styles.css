@@ -1129,8 +1129,9 @@ body.vscode-high-contrast-light .disclosure:hover {
   background: var(--cyan);
 }
 
-.runner-pill.off {
-  opacity: 0.5;
+/* Clicked, until the host's runner list says what it saved. */
+.runner-pill.pending {
+  opacity: 0.7;
 }
 
 /* Installed but off: dashed rather than filled, so it reads as offered rather than chosen. */

@@ -22,8 +22,8 @@ export interface ExtensionHandlers {
   openFile(path: string): void;
   setPlanDockHeight(height: number): void;
   changeSettings(change: SettingsChange): Promise<void>;
-  /** Turn on an installed runner the chat header offered; the host re-sends the list when it lands. */
-  enableRunner(runnerId: RunnerId): Promise<void>;
+  /** Save a Runners pill's choice; the host re-sends the runner list whether or not the save lands. */
+  setRunnerEnabled(runnerId: RunnerId, enabled: boolean): Promise<void>;
 }
 
 export interface WebviewRouterDeps extends PlanManagerDeps {
@@ -155,8 +155,8 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
     case 'changeSettings':
       await deps.extension.changeSettings(msg.change);
       return;
-    case 'enableRunner':
-      await deps.extension.enableRunner(msg.runnerId);
+    case 'setRunnerEnabled':
+      await deps.extension.setRunnerEnabled(msg.runnerId, msg.enabled);
       return;
     case 'stopResearch':
       handleStopPlanning(deps);

@@ -1065,9 +1065,9 @@ describe('a runner pill click persists to the one saved list', () => {
       /** What another process reading the same file would find. */
       saved: () => new SettingsService(path.join(dir, 'settings.json')).getEnabledRunners(),
       settingsPath: path.join(dir, 'settings.json'),
-      /** The webview asks for `runnerId` on or off. The message type is the fix's to define, so it is built here. */
+      /** The webview asks for `runnerId` on or off. */
       setRunnerEnabled: (runnerId: string, enabled: boolean) => {
-        chat.send({ type: 'setRunnerEnabled', runnerId, enabled } as unknown as WebviewToHost);
+        chat.send({ type: 'setRunnerEnabled', runnerId, enabled });
       },
       send: (text: string, runners: string[]) => chat.send({ type: 'sendMessage', text, runners, typed: true }),
     };

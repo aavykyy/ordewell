@@ -5,7 +5,7 @@ import {
   type PlannerBackendId, type GlobalRunSettings, type LegacyPlanState, type RunnerId, type Session, type SessionDeps,
 } from '@ordewell/core';
 import { registerCommands, type CommandDeps } from './commands/CommandRegistry';
-import { enableRunner } from './commands/enabledRunners';
+import { setRunnerEnabled } from './commands/enabledRunners';
 import { handleSlashCommand, type SlashDeps } from './commands/SlashParser';
 import { confirmRisks } from './commands/runSettings';
 import { handleApprovePlan, handleSessionMessage, handleStartPlanning, type PlanManagerDeps } from './plan/PlanManager';
@@ -250,19 +250,31 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       openFile: (path) => { void openWorkspaceFile(path); },
       setPlanDockHeight: (height) => { void services.context.globalState.update(PLAN_DOCK_HEIGHT_KEY, height); },
       changeSettings,
-      enableRunner: async (runnerId) => {
-        const saved = await enableRunner(
-          {
-            runnerRegistry: services.runnerRegistry,
-            settingsService: services.settingsService,
-            config: services.config,
-            sendRunnerAndModels: () => discovery.refresh(),
-          },
-          runnerId,
-        );
-        // An id nothing names is a stale click or a hand-made message: no
-        // manifest owns it, so there is nothing to save.
-        if (!saved) log(`Ignored a request to enable the unknown runner "${runnerId}".`);
+      setRunnerEnabled: async (runnerId, enabled) => {
+        try {
+          const saved = await setRunnerEnabled(
+            {
+              runnerRegistry: services.runnerRegistry,
+              settingsService: services.settingsService,
+              config: services.config,
+              // Not awaited: the pill waits on the list sent below, and a cold
+              // runner CLI can hold discovery up for tens of seconds.
+              sendRunnerAndModels: async () => {
+                discovery.refresh().catch((err) => log(`Model discovery refresh failed: ${err instanceof Error ? err.message : String(err)}`));
+              },
+            },
+            runnerId,
+            enabled,
+          );
+          // An id nothing names is a stale click or a hand-made message: no
+          // manifest owns it, so there is nothing to save.
+          if (!saved) log(`Ignored a request to switch the unknown runner "${runnerId}" ${enabled ? 'on' : 'off'}.`);
+        } finally {
+          // The pill shows the click until a runner list answers it, so one
+          // goes out whatever happened: the list as saved now, which after a
+          // refused or failed save puts the pill back.
+          services.chatProvider.setEnabledRunnerIds(services.config.enabledRunners);
+        }
       },
     },
     getPendingRunners: () => state.pendingRunners,

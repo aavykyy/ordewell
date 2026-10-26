@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { EMPTY_RUN, type LegacyPlanState, type RunTask, type RunView } from '@ordewell/core';
-import { reduceHost, resetSession, INITIAL_HOST_STATE, type HostState, type HostMessage } from '../hostState';
+import { reduceHost, resetSession, runnersOn, INITIAL_HOST_STATE, type HostState, type HostMessage } from '../hostState';
 
 const NOW = 1_000;
 const msg = (m: { type: HostMessage['type'] } & Record<string, unknown>): HostMessage => ({ now: NOW, ...m }) as HostMessage;
@@ -164,27 +164,32 @@ describe('reduceHost runView isolation', () => {
   });
 });
 
-describe('a runner enabled from the Runners block', () => {
+describe('a Runners pill clicked', () => {
   const installed = (enabled: string[]) => [
     { id: 'claude-code', displayName: 'Claude Code', enabled: enabled.includes('claude-code') },
     { id: 'codex', displayName: 'Codex', enabled: enabled.includes('codex') },
   ];
 
-  it('joins the plan\'s runner set at once, and an older runner list cannot drop it again', () => {
+  it('shows the click at once, and the host\'s next list settles it as saved', () => {
     const known = reduceHost(INITIAL_HOST_STATE, msg({ type: 'setRunners', runners: installed(['claude-code']) }));
 
-    const enabling = reduceHost(known, { type: 'enableRunnerRequested', runnerId: 'codex' });
-    expect(enabling.runners).toEqual(['claude-code', 'codex']);
+    const enabling = reduceHost(known, { type: 'runnerChoiceRequested', runnerId: 'codex', enabled: true });
+    expect(runnersOn(enabling)).toEqual(['claude-code', 'codex']);
+    expect(enabling.enabledRunnerIds).toEqual(['claude-code']);
 
-    // Discovery started before the host saved the choice: its list still says Codex is off.
-    const stale = reduceHost(enabling, msg({ type: 'setRunners', runners: installed(['claude-code']) }));
-    expect(stale.runners).toEqual(['claude-code', 'codex']);
-    expect(stale.enabledRunnerIds).toEqual(['claude-code', 'codex']);
+    const saved = reduceHost(enabling, msg({ type: 'setRunners', runners: installed(['claude-code', 'codex']) }));
+    expect(runnersOn(saved)).toEqual(['claude-code', 'codex']);
+    expect(saved.pendingRunners).toEqual({});
+  });
 
-    // The list for the saved choice settles it.
-    const saved = reduceHost(stale, msg({ type: 'setRunners', runners: installed(['claude-code', 'codex']) }));
-    expect(saved.runners).toEqual(['claude-code', 'codex']);
-    expect(saved.pendingRunnerEnables).toEqual([]);
+  it('goes back to the saved list when the host answers without the change', () => {
+    const known = reduceHost(INITIAL_HOST_STATE, msg({ type: 'setRunners', runners: installed(['claude-code', 'codex']) }));
+
+    const disabling = reduceHost(known, { type: 'runnerChoiceRequested', runnerId: 'codex', enabled: false });
+    expect(runnersOn(disabling)).toEqual(['claude-code']);
+
+    const refused = reduceHost(disabling, msg({ type: 'setRunners', runners: installed(['claude-code', 'codex']) }));
+    expect(runnersOn(refused)).toEqual(['claude-code', 'codex']);
   });
 });
 

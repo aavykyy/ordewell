@@ -107,7 +107,7 @@ describe('a first goal waiting for the installed-agent probe', () => {
         openFile: vi.fn(),
         setPlanDockHeight: vi.fn(),
         changeSettings: vi.fn(async () => {}),
-        enableRunner: vi.fn(async () => {}),
+        setRunnerEnabled: vi.fn(async () => {}),
       },
       getPendingRunners: () => pending,
       setPendingRunners: (r) => { pending = r; },
