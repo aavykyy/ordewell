@@ -2742,10 +2742,16 @@ service's throttle on the read is a failed read, never an exhausted window.
 Each window keeps its own length (`5h`, `Weekly`, `90m`; `Monthly` for a plan
 month, which has no one length; `Primary`/`Secondary` when none is reported)
 and each per-model bucket stays apart. An account that meters one provider
-only (OpenCode Go meters `opencode-go/…`) names it. The planner footer draws
-every account's row beside *Context fill* (`Planner ctx 61k (6%)`); a task log
-draws only its assigned runner's, live whichever attempt is on screen, and of
-an account that meters one provider only while that provider serves the task. Never
+only (OpenCode Go meters `opencode-go/…`) names it. The VS Code planner footer
+draws only the confirmed planner runner's limits inline beside *Context fill*
+(`Planner ctx 61k (6%)`) and its reported cost; an API or unknown planner draws
+none. A provider-restricted account appears only for that provider's effective
+planner model. A task log draws only its assigned runner's, live whichever
+attempt is on screen, and of an account that meters one provider only while
+that provider serves the task. Limits can stand alone before a context or
+cost is reported. The footer stays on one line, clipping narrow labels; full
+reset, plan and read-time details remain in hover and keyboard descriptions,
+without expanding the footer or announcing passive reads. Never
 saved, never restored as current, and never a reason to pause or resume work —
 that stays with the *In-flight rule*.
 *Avoid:* "usage" or "rate limit" for it; *Avoid:* summing buckets, or reading a
