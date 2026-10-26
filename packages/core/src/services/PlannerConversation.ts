@@ -424,20 +424,36 @@ export class PlannerContextPausedError extends PlannerTurnFailedError {
   }
 }
 
-/** The calls a pause keeps for a retry that cannot continue the live context: a bound, so a long turn saves no second copy of itself. */
+/** The calls a pause keeps, to show the user what already ran: a bound, so a long turn saves no second copy of itself. */
 const PAUSE_DONE_LIMIT = 40;
 
+/** How many of the calls that ran a refused retry names, each cut to one short line. */
+const REFUSAL_LISTED = 5;
+const REFUSAL_LINE_CHARS = 120;
+
 /**
- * Told to the planner when a paused turn is taken up again from the
- * transcript, its live context gone: what it already did that a second call
- * could do again, read off its own calls and never asked of a model.
+ * Why a paused turn whose calls changed something is not started again from
+ * the transcript, and the way on. Such a turn's live context is the only
+ * record the planner has of those calls: a replay would ask a model that no
+ * longer sees them, and nothing but its compliance would keep one from running
+ * twice (ADR-0002).
  */
-function recoveryNote(done: readonly string[]): string | undefined {
-  if (done.length === 0) return undefined;
+function unsafeReplay(pause: PlannerContextPause, liveContext: boolean): string {
+  const done = pause.done ?? [];
+  const more = done.length - Math.min(done.length, REFUSAL_LISTED);
+  const listed = [
+    ...done.slice(0, REFUSAL_LISTED).map((line) => (line.length > REFUSAL_LINE_CHARS ? `${line.slice(0, REFUSAL_LINE_CHARS - 1)}…` : line)),
+    ...(more > 0 || pause.doneTruncated ? [`- (${pause.doneTruncated ? 'more' : `${more} more`})`] : []),
+  ];
+  const why = liveContext ? 'it cannot be carried on where it paused' : 'its live context is gone';
+  // The live context still holds the turn: a window to compact it against is what a retry on it may lack.
+  const window = liveContext
+    ? ' If the planner model is one whose window Ordewell does not know, switch it to one it knows: Retry compaction then carries the turn on where it paused.'
+    : '';
   return [
-    '[Context note from Ordewell] Your last turn on the message below paused when your context no longer fit its window, and is taken up again from the conversation: what that turn read is no longer in your context.',
-    'Already done in that turn — do not make these calls again; what each returned is as shown:',
-    ...done,
+    `The paused turn already ran calls that changed something, and ${why}: starting it again from the conversation could make one of them twice, so Ordewell keeps the planner paused. Stop it to drop the turn, then tell the planner what already ran and where to pick up.${window}`,
+    'Already ran:',
+    ...listed,
   ].join('\n');
 }
 
@@ -1113,8 +1129,7 @@ export class PlannerConversation {
     userTurn.blocks = this.blocks.next();
     const contextBlock = [...userTurn.blocks.blocks, ...userTurn.briefing.blocks].join('\n\n');
     const said = fromUser ? plannerMessage(message.text, message.skills) : '';
-    const note = userTurn.recovery && recoveryNote(userTurn.recovery.pause.done ?? []);
-    const outgoing = plannerInput([contextBlock, note, ...wakeUps, userTurn.wakeUp?.brief, said]);
+    const outgoing = plannerInput([contextBlock, ...wakeUps, userTurn.wakeUp?.brief, said]);
     return reopened
       ? this.resume(reopened, outgoing, priorHistory, signal, userTurn.stream.sink())
       : this.host.aiService().continueConversation(outgoing, userTurn.stream.sink(), signal);
@@ -1122,9 +1137,11 @@ export class PlannerConversation {
 
   /**
    * How a paused turn can be retried now: on the live context, which still
-   * holds the input it could not send; or from the transcript, told what the
-   * pause listed. Neither when the live context is gone and the pause could
-   * not list every call that changed something: the reason why, for the user.
+   * holds the input it could not send and every call the turn made; or, for a
+   * turn whose calls changed nothing, from the transcript, its reads made
+   * again. A turn whose calls changed something is never started again from
+   * the transcript, whatever the planner would be told (ADR-0002): the reason
+   * why, and the way on, for the user.
    */
   retryPlan(pause: PlannerContextPause): { live: boolean } | { refused: string } {
     this.assertIdle('retry compaction');
@@ -1134,24 +1151,21 @@ export class PlannerConversation {
   private retryWay(pause: PlannerContextPause): { live: boolean } | { refused: string } {
     const ai = this.host.aiService();
     if (this.canContinueLive() && (ai.heldInputRetryable?.() ?? false) && ai.retryHeldInput) return { live: true };
-    if (pause.doneTruncated) {
-      return { refused: `The paused turn made more calls that changed something than Ordewell keeps a list of, and its live context is gone, so it cannot be taken up again without risking one twice. Stop it to drop the turn, then tell the planner where to pick up.` };
-    }
+    if ((pause.done?.length ?? 0) > 0 || pause.doneTruncated) return { refused: unsafeReplay(pause, ai.hasActiveConversation()) };
     return { live: false };
   }
 
   /**
    * A turn whose call could not fit its model's window pauses the planner
    * (ADR-0002): nothing it held lands, its failure is kept in its place, and
-   * the pause is armed on its inputs in the same save. A retry carries the
-   * calls listed before on: one from the transcript lists only what it made
-   * itself, one on the live context everything since the turn began.
+   * the pause is armed on its inputs in the same save. The calls it lists are
+   * every one since the turn began: a retry on the live context carries the
+   * chat's whole record of them, and one from the transcript is only ever
+   * made for a turn that changed nothing.
    */
   private pauseOnContext(err: PlannerContextExhaustedError, userTurn: UserTurn): PlannerContextPausedError {
     this.assertCurrent(userTurn);
-    const recovery = userTurn.recovery;
-    const carried = recovery && !recovery.live ? recovery.pause.done ?? [] : [];
-    const listed = [...carried, ...err.done];
+    const listed = err.done;
     // What is too long by itself takes a larger window: a Retry on this model compacts what is beside it and pauses again.
     const action = err.tooLong !== undefined
       ? `The planner is paused: switch it to a model with a larger window, then Retry compaction, or stop it to drop the ${err.tooLong === 'message' ? 'message' : 'turn'}.`
@@ -1160,7 +1174,7 @@ export class PlannerConversation {
       model: err.model,
       reason: `${err.message} ${action}`,
       ...(listed.length > 0 ? { done: listed.slice(0, PAUSE_DONE_LIMIT) } : {}),
-      ...(listed.length > PAUSE_DONE_LIMIT || recovery?.pause.doneTruncated ? { doneTruncated: true } : {}),
+      ...(listed.length > PAUSE_DONE_LIMIT ? { doneTruncated: true } : {}),
     });
     this.host.mutate(() => {
       this.recordFailure(pause.reason);

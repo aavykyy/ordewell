@@ -218,6 +218,31 @@ describe('a Gemini planner that cannot prune enough room', () => {
     expect(history(session).some((m) => m.kind === 'compaction')).toBe(false);
   });
 
+  it('answers a command its condensed rounds already ran with what it returned, never running it again', async () => {
+    const steps = 6;
+    const provider = new FakeGemini([
+      says('Hi.'),
+      ...Array.from({ length: steps }, (_, i) => callsTools(['bash', { command: `make step${i}` }])),
+      // A model that asks for the first command again, whatever the note tells it.
+      callsTools(['bash', { command: 'make step0' }]),
+      says('All steps done.'),
+    ]);
+    const bash = vi.fn(async (command: string) => out(20_000, command === 'make step0' ? 'a' : 's'));
+    const { session, limits } = plannerSession(provider, fakeFileSystem({ bash }));
+    await session.continueConversation('hello');
+    limits.input['big-model'] = provider.requests.at(-1)!.promptTokens * 2;
+    limits.output = 8_192;
+    await session.continueConversation('run all the steps');
+
+    expect(bash.mock.calls.map(([command]) => command)).toEqual(Array.from({ length: steps }, (_, i) => `make step${i}`));
+    const answered = provider.requests.at(-1)!;
+    const answer = responses(answered).at(-1)!;
+    expect(answer.name).toBe('bash');
+    expect(answer.response.output).toMatch(/^Not run again: this exact call already ran earlier in this turn/);
+    expect(answer.response.output).toMatch(/a{100}/);
+    expect(history(session).at(-1)).toMatchObject({ content: 'All steps done.' });
+  });
+
   it('refuses a summary that is not a whole one, writes nothing, and holds the call that cannot fit', async () => {
     const provider = new FakeGemini(twoBuilds(), [says('<conversation_summary>The user is mapping the cache and', 'MAX_TOKENS')]);
     const { session, limits, bash, compactions } = await afterOneBuild(provider);

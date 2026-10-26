@@ -221,7 +221,7 @@ was written, past those 90%), the summary could not be written, or your message
 is too long by itself
 ([ADR-0002](adr/planner/0002-planner-as-conversation-loop.md)). Only the planner
 pauses: running tasks carry on and finish. What the call was to send is kept,
-and so is your message, so no command runs twice and nothing is cut to fit.
+and so is your message, so nothing is cut to fit and no command runs twice.
 
 - **Retry compaction** condenses again and sends the call once, whatever the
   estimate, carrying the turn on. Switch the
@@ -230,9 +230,14 @@ and so is your message, so no command runs twice and nothing is cut to fit.
   `ordewell compact retry`, and in VS Code the button above the composer.
 - **Stop** drops the paused turn and its message; send a shorter one.
 
-Messages you send while it is paused wait behind it. After a reload the turn
-starts again from the conversation, and the planner is told which of its
-commands already ran.
+Messages you send while it is paused wait behind it. After a reload, a switch
+of provider or a switch to a model whose window Ordewell does not know, the
+planner no longer holds what the paused turn did. A turn that only read files
+starts again from the conversation. One that ran a command, read the web or
+started a task is not started again, since that could do it twice: Retry
+compaction stays paused and lists what already ran. Switch to a model whose
+window is known if you only switched models, or **Stop** and tell the planner
+where to pick up.
 
 This needs the model's window: a model whose catalog states none gets no
 automatic compaction. A refusal pauses it at once, and Retry compaction uses the

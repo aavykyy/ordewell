@@ -112,6 +112,12 @@ export interface ResearchChat {
    * tool result answers a call of the assistant message just before it, once.
    */
   reseed?(history: readonly CompactableMessage[]): void;
+  /**
+   * Optional: the answer to a call the open turn already made in rounds
+   * condensed out of the model's sight, in place of running it again
+   * (ADR-0002). Undefined for a call that runs.
+   */
+  answered?(call: ToolCall): string | undefined;
 }
 
 /** Everything one conversation turn needs beyond the user message itself. */
@@ -504,9 +510,7 @@ export abstract class BaseAiService {
         continue;
       }
       const thinking = turn.reasoning ? turn.reasoning.slice(-200) : '';
-      const { toolResults, logEntries } = await this.executeToolCalls(
-        turn.toolCalls, ctx.fs, onProgress, ctx.fetcher, step, thinking, signal, ctx.plannerTools,
-      );
+      const { toolResults, logEntries } = await this.runRound(chat, turn.toolCalls, ctx, onProgress, step, thinking, signal);
       researchLog.push(...logEntries);
       BaseAiService.appendBudgetCountdown(toolResults, MAX_STEPS - step - 1, 'reply to the user (summary, question, or plan JSON)');
       turn = await call(() => chat.sendToolResults(toolResults, signal));
@@ -530,6 +534,52 @@ export abstract class BaseAiService {
     }
 
     return { text: turn.text, researchLog, cutOff: turn.finishReason === 'length', runs: runs() };
+  }
+
+  /**
+   * One round's calls run, except those the chat answers as already made in
+   * the turn's condensed rounds (ADR-0002): each of those is answered with
+   * what it returned and shown as not executed, before anything runs.
+   * Results and steps stay in call order.
+   */
+  private async runRound(
+    chat: ResearchChat,
+    calls: ToolCall[],
+    ctx: ConversationTurnContext,
+    onProgress: (progress: ResearchProgress) => void,
+    stepIndex: number,
+    thinking: string,
+    signal?: AbortSignal,
+  ): Promise<{ toolResults: ToolResult[]; logEntries: ResearchStep[] }> {
+    const answers = calls.map((tc) => chat.answered?.(tc));
+    if (answers.every((a) => a === undefined)) return this.executeToolCalls(calls, ctx.fs, onProgress, ctx.fetcher, stepIndex, thinking, signal, ctx.plannerTools);
+    const answered = new Map<number, { result: ToolResult; step: ResearchStep }>();
+    for (const [i, tc] of calls.entries()) {
+      const output = answers[i];
+      if (output === undefined) continue;
+      const named = stepTool(tc.name, ctx.plannerTools);
+      const step: ResearchStep = {
+        id: `rs-${Date.now()}-${stepIndex}-answered-${i}`,
+        tool: named.tool as ResearchStep['tool'],
+        ...(named.toolLabel ? { toolLabel: named.toolLabel } : {}),
+        args: JSON.stringify(tc.args),
+        result: output,
+        success: false,
+        outcome: 'not_executed',
+        toolCallId: tc.id,
+        timestamp: new Date().toISOString(),
+      };
+      onProgress({ type: 'tool_call', ...named, toolArgs: step.args, toolCallId: tc.id });
+      onProgress({ type: 'tool_result', toolResult: output, step, toolCallId: tc.id });
+      answered.set(i, { result: { name: tc.name, output, truncated: false, totalChars: output.length, id: tc.id }, step });
+    }
+    const fresh = calls.filter((_, i) => !answered.has(i));
+    const ran = fresh.length > 0
+      ? await this.executeToolCalls(fresh, ctx.fs, onProgress, ctx.fetcher, stepIndex, thinking, signal, ctx.plannerTools)
+      : { toolResults: [], logEntries: [] };
+    let next = 0;
+    const merged = calls.map((_, i) => answered.get(i) ?? { result: ran.toolResults[next], step: ran.logEntries[next++] });
+    return { toolResults: merged.map((m) => m.result), logEntries: merged.map((m) => m.step) };
   }
 
   /**

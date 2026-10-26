@@ -2411,7 +2411,10 @@ describe('following the session', () => {
     const order = types(h.actions);
     expect(h.actions).toContainEqual({ type: 'runSnapshot', view, sessionId: 's9' });
     expect(order.indexOf('runSnapshot')).toBeGreaterThan(order.indexOf('sessionLoaded'));
-    expect(order.indexOf('runSnapshot')).toBeLessThan(order.indexOf('planUpdated'));
+    // Held while the load was answered, it goes on top of the plan the load read.
+    expect(order.indexOf('runSnapshot')).toBeGreaterThan(order.indexOf('planUpdated'));
+    const state = h.actions.reduce((s, a) => reduce(s, a).state, initialState({ sessionId: 's1' }));
+    expect(state.run.tasks.map((t) => [t.id, t.status])).toEqual([['a', 'in_progress']]);
   });
 
   it('delivers a connect snapshot arriving after the load as it does any other', async () => {

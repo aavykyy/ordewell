@@ -323,7 +323,7 @@ describe('Retry compaction of a planner paused on its context', () => {
     expect(session.planState!.pendingTurns).toEqual([]);
   });
 
-  it('after a reload starts the turn again from the transcript, told every command that ran, and sends its message once', async () => {
+  it('after a reload stays paused rather than start again from the transcript a turn whose commands ran: no call is made, so none runs twice', async () => {
     const provider = new FakeProvider([says('Hi.'), ...steps()]);
     const bash = vi.fn(async () => out(20_000, 's'));
     const { session } = await pausedOnSummaries(provider, fakeFileSystem({ bash }));
@@ -331,23 +331,72 @@ describe('Retry compaction of a planner paused on its context', () => {
     const commands = ran(bash);
     expect(commands.length).toBeGreaterThan(0);
 
-    const later = new FakeProvider([says('The remaining steps are next.')]);
+    // A model that asks for the first command again, whatever it is told.
+    const later = new FakeProvider([callsTool('bash_again', 'bash', { command: 'make step0' }), says('Carried on.')]);
     const reloaded = plannerSession(later, fakeFileSystem({ bash }), { plan: saved });
     reloaded.catalog.windows[MODEL] = 1_000_000;
     expect(reloaded.session.planState!.plannerContextPause).toEqual(saved.plannerContextPause);
 
+    await expect(reloaded.session.retryPlannerCompaction()).rejects.toMatchObject({ name: 'ConversationEditError', message: expect.stringMatching(/already ran .*Stop/s) });
+
+    expect(later.requests).toHaveLength(0);
+    expect(later.summaries).toHaveLength(0);
+    expect(ran(bash)).toEqual(commands);
+    expect(reloaded.session.planState!.plannerContextPause).toEqual(saved.plannerContextPause);
+    expect(reloaded.session.planState!.pendingTurns!.map((t) => t.text)).toEqual(['run all the steps']);
+    expect(userSaid(reloaded.session, 'run all the steps')).toHaveLength(0);
+
+    // Stop is the way on: the pause goes with its turn, and the next message is sent.
+    later.replies = [says('Where should I pick up?')];
+    expect(reloaded.session.abortPlannerTurn()).toBe(true);
+    await reloaded.session.continueConversation('steps 0 to 2 ran; carry on from step 3');
+    expect(reloaded.session.planState!.plannerContextPause).toBeUndefined();
+    expect(history(reloaded.session).at(-1)).toMatchObject({ content: 'Where should I pick up?' });
+    expect(ran(bash)).toEqual(commands);
+  });
+
+  it('after a reload stays paused on a saved pause whose list of what ran was cut short, whatever of it is kept', async () => {
+    const provider = new FakeProvider([says('Hi.'), ...steps()]);
+    const bash = vi.fn(async () => out(20_000, 's'));
+    const { session } = await pausedOnSummaries(provider, fakeFileSystem({ bash }));
+    const saved = structuredClone(saves(session).mock.calls.at(-1)![0]) as LegacyPlanState;
+    const commands = ran(bash);
+    for (const done of [saved.plannerContextPause!.done, undefined]) {
+      const plan = structuredClone(saved);
+      plan.plannerContextPause = { ...plan.plannerContextPause!, doneTruncated: true };
+      if (done === undefined) delete plan.plannerContextPause.done;
+      const later = new FakeProvider([callsTool('bash_again', 'bash', { command: 'make step0' }), says('Carried on.')]);
+      const reloaded = plannerSession(later, fakeFileSystem({ bash }), { plan });
+      reloaded.catalog.windows[MODEL] = 1_000_000;
+
+      await expect(reloaded.session.retryPlannerCompaction()).rejects.toMatchObject({ name: 'ConversationEditError', message: expect.stringMatching(/already ran .*- \(more\)$/s) });
+
+      expect(later.requests).toHaveLength(0);
+      expect(ran(bash)).toEqual(commands);
+      expect(reloaded.session.planState!.plannerContextPause).toEqual(plan.plannerContextPause);
+    }
+  });
+
+  it('after a reload starts a paused turn that only read again from the transcript: reads may run again, and the message is sent once', async () => {
+    const provider = new FakeProvider([says('Hi.'), wideReads(8)]);
+    const readFile = vi.fn(async () => out(49_000, 'r'));
+    const { session } = await overstatedWindow(provider, fakeFileSystem({ readFile }));
+    await session.continueConversation('read every part');
+    expect(session.planState!.plannerContextPause).toBeDefined();
+    expect(session.planState!.plannerContextPause!.done).toBeUndefined();
+    const saved = structuredClone(saves(session).mock.calls.at(-1)![0]);
+
+    const later = new FakeProvider([says('The parts are read.')]);
+    const reloaded = plannerSession(later, fakeFileSystem(), { plan: saved });
+    reloaded.catalog.windows[MODEL] = 1_000_000;
+
     await reloaded.session.retryPlannerCompaction();
 
-    expect(ran(bash)).toEqual(commands);
-    const sent = later.requests[0];
-    const said = sent.messages.filter((m) => m.role === 'user' && (m.content ?? '').includes('run all the steps'));
-    expect(said).toHaveLength(1);
-    const listed = [...said[0].content!.matchAll(/^- bash\(\{"command":"(make step\d)"\}\) → s+/gm)].map((m) => m[1]);
-    expect(listed).toEqual(commands);
-    expect(userSaid(reloaded.session, 'run all the steps')).toHaveLength(1);
-    expect(history(reloaded.session).at(-1)).toMatchObject({ content: 'The remaining steps are next.' });
+    expect(later.requests).toHaveLength(1);
+    expect(later.requests[0].messages.filter((m) => m.role === 'user' && (m.content ?? '').includes('read every part'))).toHaveLength(1);
+    expect(userSaid(reloaded.session, 'read every part')).toHaveLength(1);
+    expect(history(reloaded.session).at(-1)).toMatchObject({ content: 'The parts are read.' });
     expect(reloaded.session.planState!.plannerContextPause).toBeUndefined();
-    expect(reloaded.session.planState!.pendingTurns).toEqual([]);
   });
 
   it('pauses again, bounded, when the retry\'s one call is refused, and keeps everything for the next', async () => {
@@ -388,23 +437,54 @@ describe('Retry compaction of a planner paused on its context', () => {
     expect(history(session).at(-1)).toMatchObject({ content: 'All steps done.' });
   });
 
-  it('starts from the transcript when the planner was switched to a model whose window is unknown: the held input is not the new model\'s to send', async () => {
+  it('stays paused when the planner was switched to a model whose window is unknown, rather than replay commands that ran, and carries on once switched to one known', async () => {
     const provider = new FakeProvider([says('Hi.'), ...steps()]);
     const bash = vi.fn(async () => out(20_000, 's'));
-    const { session, config } = await pausedOnSummaries(provider, fakeFileSystem({ bash }));
+    const { session, config, catalog, opening } = await pausedOnSummaries(provider, fakeFileSystem({ bash }));
+    const pause = session.planState!.plannerContextPause!;
     (config as { orchestratorModel: string }).orchestratorModel = 'vendor/unlisted';
-    provider.replies = [says('Picking up from the steps that ran.')];
+    // A model that asks for the first command again, whatever it is told.
+    provider.replies = [callsTool('bash_again', 'bash', { command: 'make step0' }), says('Picking up from the steps that ran.')];
+    const held = heldCall(provider, bash);
     const commands = ran(bash);
     const from = provider.requests.length;
+    const summaries = provider.summaries.length;
 
-    await session.retryPlannerCompaction();
+    await expect(session.retryPlannerCompaction()).rejects.toMatchObject({ name: 'ConversationEditError', message: expect.stringMatching(/already ran .*Stop it to drop the turn.*switch it to one it knows/s) });
 
-    const sent = provider.requests[from];
-    expect(sent.model).toBe('vendor/unlisted');
-    expect(sent.messages.some((m) => m.role === 'tool')).toBe(false);
-    expect(sent.messages.at(-1)!.content).toMatch(/Already done in that turn/);
+    expect(provider.requests).toHaveLength(from);
+    expect(provider.summaries).toHaveLength(summaries);
     expect(ran(bash)).toEqual(commands);
-    expect(history(session).at(-1)).toMatchObject({ content: 'Picking up from the steps that ran.' });
+    expect(session.planState!.plannerContextPause).toEqual(pause);
+    expect(session.planState!.pendingTurns!.map((t) => t.text)).toEqual(['run all the steps']);
+
+    // On a model whose window is known, the live context sends what it holds, once.
+    catalog.windows['vendor/large'] = opening * 20;
+    (config as { orchestratorModel: string }).orchestratorModel = 'vendor/large';
+    provider.replies = [...steps().slice(commands.length), says('All steps done.')];
+    await session.retryPlannerCompaction();
+    expect(trailingResults(provider.requests[from])).toEqual(held);
+    expect(ran(bash)).toEqual(allSteps);
+    expect(history(session).at(-1)).toMatchObject({ content: 'All steps done.' });
+  });
+
+  it('stays paused when the planner provider was switched on the same session, its live context let go with the old one: no call is made', async () => {
+    const provider = new FakeProvider([says('Hi.'), ...steps()]);
+    const bash = vi.fn(async () => out(20_000, 's'));
+    const { session, config, catalog } = await pausedOnSummaries(provider, fakeFileSystem({ bash }));
+    const pause = session.planState!.plannerContextPause!;
+    const commands = ran(bash);
+    (config as { aiProvider: string }).aiProvider = 'openai';
+    catalog.windows[MODEL] = 1_000_000;
+    provider.replies = [callsTool('bash_again', 'bash', { command: 'make step0' }), says('Carried on.')];
+    const from = provider.requests.length;
+
+    await expect(session.retryPlannerCompaction()).rejects.toMatchObject({ name: 'ConversationEditError', message: expect.stringMatching(/its live context is gone.*Stop it to drop the turn/s) });
+
+    expect(provider.requests).toHaveLength(from);
+    expect(ran(bash)).toEqual(commands);
+    expect(session.planState!.plannerContextPause).toEqual(pause);
+    expect(session.planState!.pendingTurns!.map((t) => t.text)).toEqual(['run all the steps']);
   });
 
   it('pauses an opening that fills its window, its goal waiting out of the dialogue, and lands the goal once on the retry', async () => {
@@ -669,7 +749,7 @@ describe('a planner model whose window no catalog states', () => {
     expect(history(session).some((m) => m.content === 'All steps done.')).toBe(true);
   });
 
-  it('starts again from the transcript when the refusal stated no window either, told what ran', async () => {
+  it('stays paused when the refusal stated no window either, rather than replay commands that ran: no call is made', async () => {
     const provider = new FakeProvider([says('Hi.'), ...steps()]);
     provider.statesWindow = false;
     const bash = vi.fn(async () => out(20_000, 's'));
@@ -677,15 +757,16 @@ describe('a planner model whose window no catalog states', () => {
     await session.continueConversation('hello');
     provider.windows[MODEL] = provider.requests.at(-1)!.promptTokens + 32_000 + 3 * 5_000;
     await session.continueConversation('run all the steps');
+    const pause = session.planState!.plannerContextPause!;
     const commands = ran(bash);
-    provider.replies = [says('Carrying on from the steps that ran.')];
+    provider.replies = [callsTool('bash_again', 'bash', { command: 'make step0' }), says('Carrying on from the steps that ran.')];
     const from = provider.requests.length;
 
-    await session.retryPlannerCompaction();
+    await expect(session.retryPlannerCompaction()).rejects.toMatchObject({ name: 'ConversationEditError', message: expect.stringMatching(/already ran .*Stop it to drop the turn.*switch it to one it knows: Retry compaction then carries the turn on.*Already ran:\n- bash\(\{"command":"make step0"\}\)/s) });
 
-    expect(provider.requests[from].messages.some((m) => m.role === 'tool')).toBe(false);
-    expect(provider.requests[from].messages.at(-1)!.content).toMatch(/Already done in that turn/);
+    expect(provider.requests).toHaveLength(from);
     expect(ran(bash)).toEqual(commands);
+    expect(session.planState!.plannerContextPause).toEqual(pause);
   });
 });
 

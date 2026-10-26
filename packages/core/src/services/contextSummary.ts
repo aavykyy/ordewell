@@ -240,14 +240,20 @@ function oneLine(s: string, max: number): string {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
+interface EffectCall {
+  name: string;
+  args: string;
+  /** The head of what it returned. */
+  outcome: string;
+}
+
 /**
  * The calls in `messages` that changed something, or that the user may have
  * been asked to approve — commands, web reads, subagents, execution tools —
- * each with its arguments and the head of what it returned, read off the
- * messages rather than asked of the model: the planner is told not to make
- * them again, so they must be exactly the ones it made.
+ * read off the messages rather than asked of the model, so they are exactly
+ * the ones it made.
  */
-export function effectLedger(messages: readonly CompactableMessage[]): string[] {
+function effectCalls(messages: readonly CompactableMessage[]): EffectCall[] {
   const results = new Map<string, string>();
   for (const m of messages) if (m.role === 'tool' && m.tool_call_id) results.set(m.tool_call_id, text(m.content));
   return messages.flatMap((m) => (m.tool_calls ?? []).flatMap((call) => {
@@ -255,8 +261,37 @@ export function effectLedger(messages: readonly CompactableMessage[]): string[] 
     if (!name || REPEATABLE_READS.has(name)) return [];
     const result = call.id !== undefined ? results.get(call.id) : undefined;
     const outcome = result === undefined ? 'no result recorded' : oneLine(result, SUMMARY_LIMITS.ledgerResultChars);
-    return [`- ${name}(${oneLine(call.function?.arguments ?? '', SUMMARY_LIMITS.ledgerArgsChars)}) → ${outcome}`];
+    return [{ name, args: call.function?.arguments ?? '', outcome }];
   }));
+}
+
+/** {@link effectCalls} as lines: each call with its arguments and the head of what it returned. */
+export function effectLedger(messages: readonly CompactableMessage[]): string[] {
+  return effectCalls(messages).map(({ name, args, outcome }) => `- ${name}(${oneLine(args, SUMMARY_LIMITS.ledgerArgsChars)}) → ${outcome}`);
+}
+
+/** {@link effectCalls} keyed by {@link callKey}, each to the head of what it returned. */
+export function effectReceipts(messages: readonly CompactableMessage[]): Array<[key: string, outcome: string]> {
+  return effectCalls(messages).map(({ name, args, outcome }) => [callKey(name, args), outcome]);
+}
+
+/** One call as a receipt knows it: its tool and its arguments, whatever order the model wrote their keys in. */
+export function callKey(name: string, args: string | Readonly<Record<string, unknown>>): string {
+  if (typeof args !== 'string') return `${name}\u0000${canonicalJson(args)}`;
+  try {
+    return `${name}\u0000${canonicalJson(JSON.parse(args))}`;
+  } catch {
+    return `${name}\u0000${args}`;
+  }
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
 }
 
 /**
