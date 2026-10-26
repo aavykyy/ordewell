@@ -146,6 +146,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     config: services.config,
     fsAdapter: services.fsAdapter,
     runner: services.runner,
+    runnerInstallation: services.runnerInstallation,
     notifications: services.notifications,
     getCurrentPlan: () => state.plan,
     setCurrentPlan: (plan) => { state.plan = plan; },

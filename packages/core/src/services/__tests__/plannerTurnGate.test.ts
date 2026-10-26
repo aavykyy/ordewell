@@ -252,7 +252,7 @@ describe('a planner whose agent is signed out', () => {
 
   it('refuses the turn with the login reason, and keeps the message the user held', async () => {
     const { session, aiService, notices } = signedOutSession();
-    recordRunnerAuth('claude-code', signedOut);
+    recordRunnerAuth('claude-code', signedOut, testWorkspace);
 
     const refusal = session.continueConversation('try now');
     await expect(refusal).rejects.toBeInstanceOf(PlannerNotReadyError);
@@ -266,7 +266,7 @@ describe('a planner whose agent is signed out', () => {
 
   it('lets a signed-in agent plan as before', async () => {
     const { session, aiService } = signedOutSession();
-    recordRunnerAuth('claude-code', { state: 'signed-in', loginCommand: ['claude', 'auth', 'login'] });
+    recordRunnerAuth('claude-code', { state: 'signed-in', loginCommand: ['claude', 'auth', 'login'] }, testWorkspace);
 
     await session.continueConversation('try now');
 
