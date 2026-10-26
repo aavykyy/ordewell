@@ -1,6 +1,7 @@
 import { TaskCommandsBridge } from './components/RunnerCommands';
 import React, { useState, useEffect, useCallback, useMemo, useReducer, useRef } from 'react';
 import EmptyState from './components/EmptyState';
+import PlannerLoginAction from './components/PlannerLogin';
 import GetStarted from './components/GetStarted';
 import { orNames } from './runnerNames';
 import ChatInput from './components/ChatInput';
@@ -895,24 +896,19 @@ export default function App() {
                           {b.label}
                         </button>
                         {canLogIn && (
-                          <button
-                            type="button"
+                          <PlannerLoginAction
                             className="planner-pill-login"
-                            aria-label={`Sign in to ${b.label}`}
-                            title={`Sign in to ${b.label}`}
-                            disabled={signingIn}
-                            aria-busy={signingIn ? true : undefined}
-                            onClick={() => handleRunnerLogin(runnerId)}
-                          >
-                            {signingIn
-                              ? <><span className="planner-login-spinner" aria-hidden="true" />Signing in…</>
-                              : 'Log in'}
-                          </button>
+                            onLogIn={() => handleRunnerLogin(runnerId)}
+                            pending={signingIn}
+                            ariaLabel={signingIn ? `Signing in to ${b.label}` : `Log in to ${b.label}`}
+                            title={signingIn ? `Signing in to ${b.label}` : `Log in to ${b.label}`}
+                          />
                         )}
                       </span>
-                      {!signingIn && loginFailure?.runner === runnerId && (
-                        <span className="planner-pill-login-failure" role="status">{loginFailure.message}</span>
-                      )}
+                      {!signingIn && loginFailure?.runner === runnerId
+                        && (b.id !== activePlanner || !emptyStateShown) && (
+                          <span className="planner-pill-login-failure" role="status">{loginFailure.message}</span>
+                        )}
                     </span>
                   );
                 })}

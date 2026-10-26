@@ -7,12 +7,12 @@ import EmptyState from '../EmptyState';
 const withAutorun = (autorun: boolean) => ({ autonomous: false, run: { ...RUN_SETTINGS_DEFAULTS, autorun } });
 
 describe('EmptyState — signed-out planner', () => {
-  it('names the agent and says it can be signed in from this chat', () => {
+  it('names the agent in one sentence, with the dot the pill also uses', () => {
     const { container } = render(<EmptyState signedOut={{ label: 'Claude Code' }} />);
     const warning = container.querySelector('.planner-auth-warning');
     expect(warning?.getAttribute('role')).toBe('status');
-    expect(warning?.textContent).toContain('Claude Code is not logged in.');
-    expect(warning?.textContent).toContain('sign in from this chat');
+    expect(warning?.getAttribute('aria-live')).toBe('polite');
+    expect(container.querySelector('.planner-auth-warning-text')?.textContent).toBe('Claude Code is not logged in.');
     expect(warning?.querySelector('.planner-auth-dot')?.getAttribute('aria-hidden')).toBe('true');
   });
 
@@ -26,6 +26,7 @@ describe('EmptyState — signed-out planner', () => {
     const { container, rerender } = render(<EmptyState signedOut={{ label: 'Claude Code', onLogIn }} />);
     const button = container.querySelector<HTMLButtonElement>('.planner-login-btn');
     expect(button?.textContent).toBe('Log in');
+    expect(button?.getAttribute('aria-label')).toBe('Log in to Claude Code');
     expect(button).not.toBeDisabled();
     expect(button?.getAttribute('aria-busy')).toBeNull();
 
@@ -35,17 +36,20 @@ describe('EmptyState — signed-out planner', () => {
     rerender(<EmptyState signedOut={{ label: 'Claude Code', onLogIn, pending: true }} />);
     const pending = container.querySelector<HTMLButtonElement>('.planner-login-btn');
     expect(pending?.textContent).toContain('Signing in…');
+    expect(pending?.getAttribute('aria-label')).toBe('Signing in to Claude Code');
     expect(pending).toBeDisabled();
     expect(pending?.getAttribute('aria-busy')).toBe('true');
     expect(pending?.querySelector('.planner-login-spinner')).toBeTruthy();
   });
 
-  it('says why a sign-in did not finish, inline, with the same button to retry', () => {
+  it('says why a sign-in did not finish in the same line, with the same button to retry', () => {
     const { container } = render(
       <EmptyState signedOut={{ label: 'Claude Code', onLogIn: () => {}, failure: 'The terminal closed before sign-in finished.' }} />,
     );
 
     expect(container.querySelector('.planner-auth-failure')?.textContent).toBe('The terminal closed before sign-in finished.');
+    // The result takes the sentence's slot rather than adding a line under it.
+    expect(container.querySelector('.planner-auth-warning-text')).toBeNull();
     expect(container.querySelector<HTMLButtonElement>('.planner-login-btn')).not.toBeDisabled();
   });
 });
