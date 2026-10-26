@@ -50,6 +50,13 @@ export type StructuredEvent =
   | { type: 'permission_decided'; id: string; decision: ApprovalDecision }
   /** An open `permission_request` can no longer be answered: the runner withdrew it, or its process is gone. */
   | { type: 'permission_withdrawn'; id: string }
+  /**
+   * The runner's `task_complete` call was accepted on the attempt's token, with
+   * the status it reported (ADR-0018, L1). A receipt, not evidence: the report
+   * reaches {@link IRunnerSession.onTaskComplete} once its turn closes or the
+   * interrupt grace runs out, and a turn or message the runner reads first voids it.
+   */
+  | { type: 'completion_received'; status: TaskCompleteArgs['status'] }
   /** A script task's command as it starts (ADR-0035): its argument vector, or its script, once. */
   | ({ type: 'script_run' } & ScriptRun)
   /**

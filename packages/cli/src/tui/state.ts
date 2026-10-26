@@ -34,6 +34,8 @@ export interface TaskView {
   status: string;
   /** Advisory silence timestamp from VerdictEngine — set while the task's runner has gone quiet. */
   idleSince?: string | null;
+  /** What its runner reported through `task_complete`, received while the attempt winds down (ADR-0018, L1). */
+  completionReceived?: RunTask['completionReceived'];
   dependencies: string[];
   assignedRunner?: string;
   taskMode?: string;

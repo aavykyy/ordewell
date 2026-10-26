@@ -340,6 +340,8 @@ export class StructuredSession extends AbstractRunnerSession {
           // its report published at the same grace; the verdict then stops it.
           if (this.completionTimer) clearTimeout(this.completionTimer);
           this.completionTimer = setTimeout(() => this.flushCompletion(), this.launch.interruptGraceMs);
+          // Said at once, so the task shows the report arrived while the turn winds down.
+          this.emitEvent({ type: 'completion_received', status: checked.handoff.status });
           return { text: 'Recorded. End your turn now.' };
         },
         checkpoint: async ({ question }, { signal }) => {
