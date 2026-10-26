@@ -32,6 +32,7 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
     pipeToClipboard: vi.fn(),
     writeTerminal: vi.fn(),
     reviveDaemon: vi.fn().mockResolvedValue(true),
+    login: async () => ({ ok: true }),
     exit: vi.fn(),
     ...over,
   };

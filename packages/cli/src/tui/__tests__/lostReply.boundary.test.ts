@@ -103,6 +103,7 @@ function tui(api: Partial<OrdewellApi>, start: Partial<TuiState> = {}) {
     pipeToClipboard: () => {},
     writeTerminal: () => {},
     reviveDaemon: vi.fn().mockResolvedValue(true),
+    login: async () => ({ ok: true }),
     exit: () => {},
   };
   function apply(action: Action): void {

@@ -30,6 +30,7 @@ function deps(api: Partial<OrdewellApi>, actions: Action[]): EffectDeps {
     pipeToClipboard: () => {},
     writeTerminal: () => {},
     reviveDaemon: () => Promise.resolve(false),
+    login: async () => ({ ok: true }),
     exit: () => {},
   };
 }

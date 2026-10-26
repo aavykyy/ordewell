@@ -1,5 +1,5 @@
 import {
-  EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, getProviderMeta, isApiProvider, isPlannerBackend, type AiProvider,
+  EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, getProviderMeta, isApiProvider, isPlannerBackend, runnerForProvider, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
 import { findCommand, type ParsedCommand } from '../slash';
@@ -59,6 +59,8 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
       return allowlist(state, args);
     case 'runners':
       return runners(state, args);
+    case 'login':
+      return login(state, args);
     case 'settings':
       return openSettings(state);
     case 'mouse':
@@ -351,6 +353,65 @@ function runners(state: TuiState, args: string[]): Step {
       chosen: state.runners.filter((r) => r.enabled).map((r) => r.id),
     }),
   } }, [{ type: 'loadRunners' }]);
+}
+
+/**
+ * `/login` hands this terminal to the login command the runner's own manifest
+ * declares, so signing in needs no second shell. Naming a runner signs that one
+ * in without touching the planner: `/login codex` while Claude Code plans is
+ * how the other agent gets fixed, not a planner switch.
+ *
+ * The command is read from the daemon's runner row, never built here: Ordewell
+ * only runs a login the manifest declared, and a signed-out verdict without one
+ * is only worth saying out loud.
+ */
+function login(state: TuiState, args: string[]): Step {
+  // Joined, not just `args[0]`: a display label is two words ("Claude Code").
+  const named = args.join(' ').trim();
+  const runner = named ? matchRunner(state, named) : runnerForProvider(state.plannerProvider);
+
+  if (!runner) {
+    return step(say(state, 'system', named
+      ? `No installed coding agent matches "${named}". ${signInHint(state)}`
+      : `The active planner is not a coding agent, so there is no agent to sign in. ${signInHint(state)}`));
+  }
+
+  const row = state.runners.find((r) => r.id === runner);
+  if (!row) {
+    // Only the active planner can reach here: a named runner was matched in
+    // `state.runners` itself, so it always has a row.
+    const label = getProviderMeta(state.plannerProvider)?.label ?? runner;
+    return step(say(state, 'system', `${label} is not installed, so there is nothing to sign in. /runners lists what is.`));
+  }
+
+  const command = row.auth?.loginCommand;
+  if (command && command.length > 0) {
+    // Offered even when the probe says signed in: an explicit /login may be a
+    // re-authentication, and this is the user's request rather than a guess.
+    return step(state, [{ type: 'plannerLogin', command, label: row.name }]);
+  }
+
+  if (row.id === 'opencode') {
+    return step(say(state, 'system', "OpenCode's login is not managed by Ordewell: sign in with OpenCode itself."));
+  }
+  if (!row.auth) {
+    return step(say(state, 'system', `Ordewell could not tell whether ${row.name} is signed in. If it needs a login, run its own command.`));
+  }
+  return step(say(state, 'system', `${row.name} has no login command Ordewell can run: sign in with its own command.`));
+}
+
+/** A runner named on the command line, by its id or its display label. */
+function matchRunner(state: TuiState, name: string): string | undefined {
+  const wanted = name.toLowerCase();
+  return state.runners.find((r) => r.id.toLowerCase() === wanted || r.name.toLowerCase() === wanted)?.id;
+}
+
+/** The installed agents that declared a login, as a sentence the notices end on. */
+function signInHint(state: TuiState): string {
+  const ids = state.runners.filter((r) => (r.auth?.loginCommand?.length ?? 0) > 0).map((r) => r.id);
+  return ids.length > 0
+    ? `Agents that can sign in: ${ids.join(', ')}.`
+    : 'No installed agent has a login Ordewell can run.';
 }
 
 /**

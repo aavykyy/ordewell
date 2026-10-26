@@ -150,6 +150,7 @@ export async function liveDaemon() {
       pipeToClipboard: () => {},
       writeTerminal: () => {},
       reviveDaemon: async () => true,
+      login: async () => ({ ok: true }),
       exit: () => {},
     };
     const act = async (action: Action): Promise<void> => {

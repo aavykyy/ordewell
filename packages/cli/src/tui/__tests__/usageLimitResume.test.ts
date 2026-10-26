@@ -117,7 +117,9 @@ describe('a task paused on a usage limit in the TUI', () => {
     const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Resumed.' });
     const deps: EffectDeps = {
       api: { execute } as unknown as OrdewellApi,
-      workspace: '/ws', port: 3742, dispatch: vi.fn(), newSessionId: () => 's2', setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true, exit: vi.fn(),
+      workspace: '/ws', port: 3742, dispatch: vi.fn(), newSessionId: () => 's2', setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true,
+      login: async () => ({ ok: true }),
+      exit: vi.fn(),
       reviveDaemon: vi.fn(), setMouseCapture: vi.fn(), writeTerminal: vi.fn(),
     };
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'resume-now' }, deps).catch(() => undefined);
@@ -129,7 +131,9 @@ describe('a task paused on a usage limit in the TUI', () => {
     const dispatch = vi.fn();
     const deps: EffectDeps = {
       api: { execute } as unknown as OrdewellApi,
-      workspace: '/ws', port: 3742, dispatch, newSessionId: () => 's2', setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true, exit: vi.fn(),
+      workspace: '/ws', port: 3742, dispatch, newSessionId: () => 's2', setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true,
+      login: async () => ({ ok: true }),
+      exit: vi.fn(),
       reviveDaemon: vi.fn(), setMouseCapture: vi.fn(), writeTerminal: vi.fn(),
     };
     // Only the request is pinned; the plan refresh after it has no daemon to reach.

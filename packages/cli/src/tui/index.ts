@@ -1,4 +1,5 @@
-import { assertWorkspaceExists, createSkillsService, EnvConfig, mintSessionId, SettingsService } from '@ordewell/core';
+import { spawn } from 'child_process';
+import { assertWorkspaceExists, createSkillsService, EnvConfig, mintSessionId, planDirectLaunch, SettingsService, workspaceEnvOf } from '@ordewell/core';
 import { ensureDaemonOwned, findFreePort, resolvePort, stopDaemon } from '../daemon';
 import { ApiClient } from '../apiClient';
 import { flag, saveLastSession } from '../utils';
@@ -9,6 +10,40 @@ import { registerSkillCommands } from './slash';
 import { openTerminal } from './terminal';
 import { startCliVersionCheck } from '../versionCheck';
 
+/** The one child-process seam a login needs, so a test drives it instead of starting an agent. */
+export type LoginSpawn = typeof spawn;
+
+/**
+ * Run a runner's login command on this tty and settle when it exits. A missing
+ * binary rejects, because nothing was started; a non-zero exit is an answer.
+ * The launch plan is the same one every other agent spawn uses, so a Windows
+ * `.cmd`/`.ps1` shim that `planDirectLaunch` knows how to start does not fail
+ * here with an ENOENT the probe never reported.
+ */
+async function runLogin(
+  start: LoginSpawn,
+  command: readonly string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  const plan = await planDirectLaunch(command[0], command.slice(1));
+  return new Promise((resolve, reject) => {
+    const child = start(plan.file, plan.args, {
+      stdio: 'inherit',
+      cwd,
+      env,
+      ...(plan.verbatim ? { windowsVerbatimArguments: true } : {}),
+    });
+    child.once('error', reject);
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+  });
+}
+
+export interface HandleTuiOptions {
+  /** Injected so a test drives the login without starting a real coding agent. */
+  spawn?: LoginSpawn;
+}
+
 /**
  * `ordewell tui` — the full-screen terminal client. By default each launch
  * gets its own private daemon, so two terminals never share a session list.
@@ -18,7 +53,7 @@ import { startCliVersionCheck } from '../versionCheck';
  * travels between it and the terminal through the saved-session store, not the
  * daemon.)
  */
-export async function handleTui(subArgs: string[]): Promise<void> {
+export async function handleTui(subArgs: string[], options: HandleTuiOptions = {}): Promise<void> {
   if (!process.stdin.isTTY) {
     console.error('The TUI needs an interactive terminal. Use `ordewell plan` for scripted runs.');
     process.exit(1);
@@ -62,6 +97,10 @@ export async function handleTui(subArgs: string[]): Promise<void> {
 
   // eslint-disable-next-line prefer-const
   let terminal: ReturnType<typeof openTerminal> | undefined;
+  // While a login's child runs it owns the tty, and the Ctrl-C that cancels the
+  // login is the child's too: the parent must not exit on it.
+  let loginRunning = false;
+  const spawnLogin = options.spawn ?? spawn;
 
   // On unless explicitly refused. It used to be opt-in, but the opt-in was
   // persisted per workspace (`.env`), so the wheel died again in every other
@@ -113,6 +152,38 @@ export async function handleTui(subArgs: string[]): Promise<void> {
           return { overridden: settings.autonomousModeOverridden() };
         },
         setMouseCapture: (enabled) => terminal?.setMouse(enabled),
+        // A login is the one effect that needs the tty itself: the runner's own
+        // command prompts for credentials, and nothing here may read or keep
+        // them. The workspace env is resolved before the hand-over so a slow
+        // direnv does not leave the user looking at a blank screen; then
+        // suspend so the child owns every byte, and resume in a `finally` so a
+        // missing binary or a throw cannot leave the alt screen and raw mode
+        // behind.
+        login: async (command) => {
+          let handedOver = false;
+          try {
+            const env = { ...process.env, ...(await workspaceEnvOf(workspace)) };
+            loginRunning = true;
+            handedOver = true;
+            terminal?.suspend();
+            const { code, signal } = await runLogin(spawnLogin, command, workspace, env);
+            if (code === 0) return { ok: true };
+            return {
+              ok: false,
+              message: signal
+                ? `${command[0]} stopped (${signal}) without finishing the login.`
+                : `${command[0]} exited with status ${code} without finishing the login.`,
+            };
+          } catch (err) {
+            return { ok: false, message: `Could not run ${command[0]}: ${err instanceof Error ? err.message : String(err)}` };
+          } finally {
+            loginRunning = false;
+            if (handedOver) {
+              terminal?.resume();
+              if (terminal) app.dispatch({ type: 'resize', ...terminal.size() });
+            }
+          }
+        },
         // The alt screen is up with the cursor hidden, so an OSC 52 write shows
         // nothing — the terminal reads it and answers by taking the clipboard.
         writeTerminal: (data) => process.stdout.write(data),
@@ -172,7 +243,13 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   // Restore the terminal even if something below us throws, the shell kills
   // us, or the terminal itself closes (SIGHUP) — and either way, take our
   // daemon down with us.
-  process.on('SIGINT', () => shutdown(0));
+  process.on('SIGINT', () => {
+    // A login's Ctrl-C is the child's: the tty sent it to the whole foreground
+    // group, and quitting here would take the TUI down with a login the user
+    // only meant to cancel. The child exits and `/login` resumes the screen.
+    if (loginRunning) return;
+    shutdown(0);
+  });
   process.on('SIGTERM', () => shutdown(0));
   process.on('SIGHUP', () => shutdown(0));
   // Ctrl-Z then `fg`: the shell had the terminal in between and handed back a

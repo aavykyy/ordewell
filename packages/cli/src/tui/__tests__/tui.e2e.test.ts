@@ -180,6 +180,7 @@ function harness(rows = 24) {
         writeTerminal: (data) => output.write(data),
         // The fake daemon never refuses a connection, so this is never reached.
         reviveDaemon: async () => true,
+        login: async () => ({ ok: true }),
         exit: () => { onExit(); terminal?.close(); },
       }),
     onExit: () => { onExit(); terminal?.close(); },

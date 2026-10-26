@@ -20,6 +20,7 @@ const TUI_ONLY: Record<string, string> = {
   settings: 'a stepped panel over the headless `ordewell auto`, `supervisor`, `automerge`, `trailer`, `autorun` and `parallel` commands',
   open: 'it opens a task\'s view in the full-screen terminal; a shell has no view to switch to, and `ordewell checkpoint` answers from one',
   mouse: 'it configures the full-screen terminal, which only the TUI holds (ORDEWELL_TUI_MOUSE persists it)',
+  login: 'it hands the full-screen terminal to the coding agent\'s own login command; on a shell, run that command directly',
 };
 
 /** CLI-only commands: a daemon, a wizard or a catalog has no slash equivalent, or the TUI's `/settings` and `/planner` panels cover it. */
