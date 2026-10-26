@@ -4,6 +4,7 @@ import { style } from '../ansi';
 import { initialState, type PickerState, type TuiState } from '../state';
 import { reduce } from '../reducer';
 import { openStepper, type StepperDefinition } from '../reducers/stepper';
+import { inkOf } from './paint';
 
 beforeAll(() => {
   style.enabled = false;
@@ -145,6 +146,27 @@ describe('picker paint', () => {
     const row = out.find((l) => l.includes('OpenCode'))!;
     expect(row).toContain(style.grey('OpenCode'));
     expect(row).toContain(style.grey('CLI not installed'));
+  });
+
+  it('paints a warn row in red but leaves its detail grey', () => {
+    const out = pickerScreen({
+      items: [
+        { id: 'codex', label: 'Codex', detail: 'coding agent' },
+        { id: 'claude-code', label: 'Claude Code', detail: 'not logged in · /login claude-code', warn: true },
+      ],
+    });
+    const row = out.find((l) => l.includes('Claude Code'))!;
+    expect(inkOf(row, 'Claude Code').fg).toBe('red');
+    expect(inkOf(row, 'not logged in · /login claude-code').fg).toBe('grey');
+  });
+
+  it('keeps a warn row on the active bar with only its label red', () => {
+    const out = pickerScreen({
+      items: [{ id: 'claude-code', label: 'Claude Code', detail: 'not logged in · /login claude-code', warn: true, selected: true }],
+    });
+    const row = out.find((l) => l.includes('Claude Code'))!;
+    expect(inkOf(row, 'Claude Code')).toMatchObject({ fg: 'red', inverse: true });
+    expect(inkOf(row, 'not logged in · /login claude-code')).toMatchObject({ fg: null, inverse: true });
   });
 
   it('paints key names bold and their meaning grey', () => {

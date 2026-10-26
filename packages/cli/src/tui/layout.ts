@@ -775,6 +775,21 @@ function welcomeLogo(restRows: number, rows: number, cols: number): string[] {
 
 const DETECTING = 'Detecting coding agents…';
 
+/**
+ * One quiet line under the workspace when the active planner's agent is signed
+ * out. Only the runner's own verdict raises it: `unknown` must never read as an
+ * alarm, and a vendor planner has no login of its own (ADR-0009).
+ */
+function signedOutPlannerLine(state: TuiState, cols: number): string[] {
+  if (!state.plannerKnown || !state.runnersKnown) return [];
+  const runner = runnerForProvider(state.plannerProvider);
+  if (!runner) return [];
+  const auth = state.runners.find((r) => r.id === runner)?.auth;
+  if (auth?.state !== 'signed-out') return [];
+  const label = getProviderMeta(state.plannerProvider)?.label ?? runner;
+  return wrap(style.red(`${label} is not logged in. /login to sign in.`), Math.max(1, cols - 1));
+}
+
 /** `rows` is the pane the welcome is painted into. */
 function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
   const planner = plannerSetup(state);
@@ -827,7 +842,13 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
   const versionCheck = state.versionCheckNotice
     ? [...wrap(style.grey(state.versionCheckNotice), Math.max(1, cols - 1)), '']
     : [];
-  const tail = [...notice, ...versionCheck, style.grey('/help   all commands'), workspaceLine(state.workspace, cols)];
+  const tail = [
+    ...notice,
+    ...versionCheck,
+    style.grey('/help   all commands'),
+    workspaceLine(state.workspace, cols),
+    ...signedOutPlannerLine(state, cols),
+  ];
 
   const rest = ['', ...prompt, ...approval, '', ...setup, ...tail];
   const logo = welcomeLogo(rest.length, rows, cols);

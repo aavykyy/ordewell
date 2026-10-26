@@ -76,6 +76,23 @@ describe('/planner', () => {
     expect(stepperOf(state).items.find((i) => i.id === 'claude-code')?.detail).toMatch(/no API key/i);
   });
 
+  it('offers a signed-out agent, flags its row and names its own login', () => {
+    const { state } = run('/planner', {
+      ...ready,
+      runners: [
+        { id: 'claude-code', name: 'Claude Code', enabled: true, auth: { state: 'signed-out', loginCommand: ['claude', 'login'] } },
+        { id: 'codex', name: 'Codex', enabled: true, auth: { state: 'signed-in' } },
+        { id: 'opencode', name: 'OpenCode', enabled: true },
+      ],
+    });
+    const items = stepperOf(state).items;
+    const claude = items.find((i) => i.id === 'claude-code');
+    expect(claude).toMatchObject({ warn: true, detail: 'not logged in · /login claude-code' });
+    expect(claude?.disabled).toBeUndefined();
+    expect(items.find((i) => i.id === 'codex')).toMatchObject({ detail: expect.stringMatching(/no API key/i) });
+    expect(items.find((i) => i.id === 'codex')?.warn).toBeUndefined();
+  });
+
   it('leaves an agent whose CLI is not installed off the list', () => {
     const opened = run('/planner', { ...ready, runners: [{ id: 'codex', name: 'Codex', enabled: true }] }).state;
 

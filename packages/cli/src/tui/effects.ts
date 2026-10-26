@@ -1079,7 +1079,9 @@ async function loadRunners(deps: EffectDeps): Promise<void> {
   const state = await deps.api.getRunners();
   deps.dispatch({
     type: 'runnersLoaded',
-    runners: (state.runners ?? []).map((r) => ({ id: r.id, name: r.name, enabled: r.enabled })),
+    // The daemon's own rows, auth included: re-typing the bag here is how the
+    // login verdict used to get dropped before any surface could flag it.
+    runners: state.runners ?? [],
     orchestratorModel: state.orchestratorModel,
   });
 }
