@@ -794,7 +794,14 @@ export default function App() {
 
   return (
     <OpenPatchContext.Provider value={handleOpenPatch}>
-    <div className="chat-container">
+    {/* Focus targets for a mouse selection, never tab stops. VS Code 1.143+
+        answers a Cmd/Ctrl+C in a webview by refocusing the last-focused
+        element before it copies whenever focus sits on <body>, and here that
+        is the composer, whose focus wipes the selection. A drag in the
+        conversation or the footer now focuses one of these instead, so focus
+        never rests on <body>. The list is its own target so arrow keys and
+        Page Down still scroll it after a click. */}
+    <div className="chat-container" tabIndex={-1}>
       <div className="setup-panel">
         <button
           type="button"
@@ -940,7 +947,7 @@ export default function App() {
         </div>
       )}
 
-      <div className="message-list" ref={messageListCallbackRef}>
+      <div className="message-list" tabIndex={-1} ref={messageListCallbackRef}>
         {!hasContent && !isReady && (
           <div className="loading-state">
             <div className="loading-pulse" />
