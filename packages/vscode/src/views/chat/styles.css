@@ -1224,6 +1224,62 @@ body.vscode-high-contrast-light .disclosure:hover {
   flex-shrink: 0;
 }
 
+/* A pill and the login that belongs to the agent it names. The row stays a
+   pill bar: the action is quiet, never a second pill. */
+.planner-pill-group {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.planner-pill-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.planner-pill-login {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 10.5px;
+  line-height: 1.3;
+  cursor: pointer;
+  outline: none;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.planner-pill-login:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.planner-pill-login:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.planner-pill-login:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+/* Why a login did not finish, under the pill that asked: one line, no dialog. */
+.planner-pill-login-failure {
+  max-width: 220px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
 /* ---- Run settings (Settings panel) ---- */
 .run-settings:focus {
   outline: none;
@@ -1367,6 +1423,85 @@ body.vscode-high-contrast-light .disclosure:hover {
 
 .planner-auth-warning-text {
   min-width: 0;
+}
+
+/* The sentence, and the reason a sign-in did not finish under it. */
+.planner-auth-warning-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.planner-auth-failure {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* The row's one strong control: it acts, the sentence explains. Its width is
+   reserved for "Signing in…" so the row does not jump when a login starts. */
+.planner-login-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-width: 84px;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.planner-login-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+.planner-login-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.planner-login-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* A light theme's red at 30% over white is too pale to read as a border; the
+   text stays the signal, and this only keeps the edge visible. */
+body.vscode-light .planner-login-btn {
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+}
+
+body.vscode-high-contrast .planner-login-btn {
+  border-color: var(--vscode-contrastBorder, var(--text-primary));
+}
+
+/* The only motion in the login: the ring says the row is waiting on the
+   terminal. The text says it too, for a reader who asked for less motion; see
+   the reduced-motion block at the end of this file. */
+.planner-login-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: planner-login-spin 700ms linear infinite;
+}
+
+@keyframes planner-login-spin {
+  to { transform: rotate(360deg); }
 }
 
 .planner-auth-warning-agent {
@@ -6079,13 +6214,18 @@ body.vscode-high-contrast-light .pending-message {
   white-space: pre-wrap;
 }
 
-/* The activity disclosures' chevrons hold still for a reader who asked for less motion. */
+/* What moves for progress — the activity disclosures' chevrons, the login
+   spinner — holds still for a reader who asked for less motion. */
 @media (prefers-reduced-motion: reduce) {
   .disclosure-chevron {
     transition: none;
   }
 
   .activity-group[data-state='running'] .activity-group-toggle > .disclosure-chevron {
+    animation: none;
+  }
+
+  .planner-login-spinner {
     animation: none;
   }
 }

@@ -1,6 +1,6 @@
 import React from 'react';
-import { describe, it, expect } from 'vitest';
-import { render } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { fireEvent, render } from '@testing-library/react';
 import { RUN_SETTINGS_DEFAULTS } from '@ordewell/core';
 import EmptyState from '../EmptyState';
 
@@ -19,6 +19,34 @@ describe('EmptyState — signed-out planner', () => {
   it('says nothing when the planner is signed in', () => {
     const { container } = render(<EmptyState />);
     expect(container.querySelector('.planner-auth-warning')).toBeNull();
+  });
+
+  it('offers the login beside the sentence, and shows what it is doing while it runs', () => {
+    const onLogIn = vi.fn();
+    const { container, rerender } = render(<EmptyState signedOut={{ label: 'Claude Code', onLogIn }} />);
+    const button = container.querySelector<HTMLButtonElement>('.planner-login-btn');
+    expect(button?.textContent).toBe('Log in');
+    expect(button).not.toBeDisabled();
+    expect(button?.getAttribute('aria-busy')).toBeNull();
+
+    fireEvent.click(button!);
+    expect(onLogIn).toHaveBeenCalledTimes(1);
+
+    rerender(<EmptyState signedOut={{ label: 'Claude Code', onLogIn, pending: true }} />);
+    const pending = container.querySelector<HTMLButtonElement>('.planner-login-btn');
+    expect(pending?.textContent).toContain('Signing in…');
+    expect(pending).toBeDisabled();
+    expect(pending?.getAttribute('aria-busy')).toBe('true');
+    expect(pending?.querySelector('.planner-login-spinner')).toBeTruthy();
+  });
+
+  it('says why a sign-in did not finish, inline, with the same button to retry', () => {
+    const { container } = render(
+      <EmptyState signedOut={{ label: 'Claude Code', onLogIn: () => {}, failure: 'The terminal closed before sign-in finished.' }} />,
+    );
+
+    expect(container.querySelector('.planner-auth-failure')?.textContent).toBe('The terminal closed before sign-in finished.');
+    expect(container.querySelector<HTMLButtonElement>('.planner-login-btn')).not.toBeDisabled();
   });
 });
 

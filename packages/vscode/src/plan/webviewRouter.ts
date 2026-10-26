@@ -24,6 +24,8 @@ export interface ExtensionHandlers {
   changeSettings(change: SettingsChange): Promise<void>;
   /** Turn on an installed runner the chat header offered; the host re-sends the list when it lands. */
   enableRunner(runnerId: RunnerId): Promise<void>;
+  /** Sign a coding agent in with its own login in a terminal; no runner means the active planner. */
+  loginPlanner(runner?: string): Promise<void>;
 }
 
 export interface WebviewRouterDeps extends PlanManagerDeps {
@@ -157,6 +159,11 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       return;
     case 'enableRunner':
       await deps.extension.enableRunner(msg.runnerId);
+      return;
+    // Awaited on purpose: the flow waits on the user's own terminal, and a
+    // poll that throws must still reach the user instead of vanishing.
+    case 'loginPlanner':
+      await deps.extension.loginPlanner(msg.runner);
       return;
     case 'stopResearch':
       handleStopPlanning(deps);

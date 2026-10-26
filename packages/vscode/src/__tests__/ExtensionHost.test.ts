@@ -72,12 +72,14 @@ function fakeChat() {
     sendTaskOutput: vi.fn(),
     reveal: vi.fn(),
     setAccountLimits: vi.fn(),
+    postMessage: vi.fn(),
   };
   return { messages, provider };
 }
 
 function fakeVscodeApi() {
   const showWarningMessage = vi.fn();
+  const showInformationMessage = vi.fn();
   const windowStateListeners: Array<(state: { focused: boolean }) => void> = [];
   const api = {
     window: {
@@ -89,7 +91,7 @@ function fakeVscodeApi() {
       registerWebviewViewProvider: vi.fn(() => ({ dispose: vi.fn() })),
       registerWebviewPanelSerializer: vi.fn(() => ({ dispose: vi.fn() })),
       showWarningMessage,
-      showInformationMessage: vi.fn(),
+      showInformationMessage,
       showErrorMessage: vi.fn(),
       showInputBox: vi.fn(),
       createQuickPick: vi.fn(),
@@ -106,6 +108,7 @@ function fakeVscodeApi() {
   return {
     api: api as unknown as typeof vscode,
     showWarningMessage,
+    showInformationMessage,
     /** The window gained or lost focus. */
     focus: (focused: boolean) => { for (const listener of windowStateListeners) listener({ focused }); },
   };
@@ -256,6 +259,8 @@ function harness(overrides: {
     update: vi.fn(async (key: string, value: unknown) => { stored.set(key, value); }),
   };
 
+  const notifications = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), confirm: vi.fn() };
+
   const services: ExtensionServices = {
     context: { subscriptions: [], extensionUri: { toString: () => 'file:///ext' }, globalState } as unknown as vscode.ExtensionContext,
     outputChannel: { appendLine: vi.fn() } as unknown as vscode.OutputChannel,
@@ -264,7 +269,7 @@ function harness(overrides: {
     runnerRegistry,
     runnerInstallation: installation as unknown as RunnerInstallation,
     fsAdapter: { getWorkspaceRoot: () => workspace } as unknown as VsCodeFileSystem,
-    notifications: {} as unknown as VsCodeNotification,
+    notifications: notifications as unknown as VsCodeNotification,
     runner: { stopAll: vi.fn() } as unknown as IRunner,
     settingsService: settings as unknown as SettingsService,
     plannerModelMemory: { remember: vi.fn(), recall: vi.fn(() => ({ model: '', effort: '', source: 'default' })) } as unknown as PlannerModelMemory,
@@ -284,6 +289,7 @@ function harness(overrides: {
     settings,
     resolver,
     installation,
+    notifications,
     services,
     sessionDeps,
   };
@@ -413,6 +419,19 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     h.chat.messages.fire({ type: 'ready' });
 
     await vi.waitFor(() => expect(h.chat.provider.adoptRun).toHaveBeenCalledWith(view));
+  });
+
+  it('signs a planner in through the router, and tells the chat when there is no login to run', async () => {
+    await h.host.start();
+    // This fake installation reports no auth verdict, so the module has no
+    // login command: the one path that answers without a terminal or a poll.
+    h.chat.messages.fire({ type: 'loginPlanner', runner: 'codex' });
+
+    await vi.waitFor(() => expect(h.notifications.info).toHaveBeenCalledWith('Ordewell has no login for Codex.'));
+    expect(h.chat.provider.postMessage).toHaveBeenCalledWith({
+      type: 'plannerLoginEnded', runner: 'codex', ok: false, message: 'Ordewell has no login for Codex.',
+    });
+    expect(h.installation.plannerUsability).toHaveBeenCalledWith('codex');
   });
 
   it('remembers the dragged plan dock height for the next webview to open', async () => {
