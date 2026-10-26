@@ -180,7 +180,8 @@ no prompt, so it is unchanged.
 
 The handoff is drawn, not just stored: the TUI and VS Code task views show the
 summary, the findings with their severity and evidence, the artifacts and
-`+N more`; `status`, `run` and `status --json` carry the digest; the
+`+N more` in expanded task details and task logs, not in collapsed plan cards
+or rows; `status`, `run` and `status --json` carry the digest; the
 planner's `task_query` and `task_output` return it; and the supervisor's run
 update and a research task's report wake carry it rendered by the rule above,
 the commit before the summary
@@ -296,3 +297,4 @@ merges findings; and any new setting.
 - 2026-10-22 — implemented the completion envelope, scoped reads, loop context, derived handoffs and all surfaces (#120).
 - 2026-10-23 — a change task's handoff carries its commit message, and its summary stops repeating it.
 - 2026-10-24 — a fifth artifact kind, `patch`, which only Ordewell adds, for a read-only task's saved patch (ADR-0050).
+- 2026-10-26 — task handoffs appear in expanded task details and task logs, not collapsed plan cards or rows.

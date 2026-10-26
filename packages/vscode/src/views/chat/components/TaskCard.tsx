@@ -5,7 +5,7 @@ import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import ModelSelector from './ModelSelector';
 import DependencyPicker from './DependencyPicker';
 import SkillChips from './SkillChips';
-import TaskHandoff, { HandoffPeek } from './TaskHandoff';
+import TaskHandoff from './TaskHandoff';
 import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
@@ -553,8 +553,6 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             )}
           </div>
         </div>
-
-        {!expanded && <HandoffPeek handoff={row.handoff} />}
 
         {/* Collapsed, the newest line is the whole signal — "which test is it on"
             without having to open the card. */}

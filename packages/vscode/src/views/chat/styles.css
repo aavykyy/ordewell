@@ -2374,15 +2374,6 @@ body.vscode-high-contrast-light .task-card.expanded {
   color: var(--text-secondary);
 }
 
-.task-handoff-peek {
-  padding: 3px 14px 6px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .task-handoff {
   min-width: 0;
   padding: 10px 12px;
