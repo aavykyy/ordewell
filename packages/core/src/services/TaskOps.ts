@@ -550,7 +550,9 @@ export function applyTaskOps(
     if (readOnly === false && target.research && op.changes?.research !== true) landed.research = false;
     const written = { ...target, ...changes };
     // A runner not allowed has nothing to resolve against; the plan's rules refuse it once the op is applied.
-    if (written.type !== 'ai' || runners.includes(written.assignedRunner)) {
+    // One the task already had stands, switched off since or not, and is resolved as it is.
+    const kept = target.type === 'ai' && written.assignedRunner === target.assignedRunner;
+    if (written.type !== 'ai' || kept || runners.includes(written.assignedRunner)) {
       const resolved = resolveAssignment({ writer: 'edit', task: written, before: target, readOnly, catalog: catalog ?? NO_CATALOG });
       if (!resolved.ok) return { error: resolved.error };
       if (resolved.task.assignedModel !== written.assignedModel) landed.assignedModel = resolved.task.assignedModel;
@@ -583,8 +585,16 @@ export function applyTaskOps(
   // since, say — is not, so it never blocks an unrelated edit. A breach is
   // told by its task and rule, not its wording: the wording carries the title,
   // which an edit may change.
-  const breachKey = (e: PlanTaskError) => `${e.taskId ?? ''}\u0000${e.field}`;
-  const standing = new Set(checkPlanInvariants(currentTasks, runners, catalog?.runnerModes).map(breachKey));
+  // A runner's breach is told by the runner too: moving a task from one runner
+  // switched off to another is the edit's own.
+  const breaches = (list: readonly Task[]): { error: PlanTaskError; key: string }[] => {
+    const runnerOf = new Map(flattenTasks(list).map((t) => [t.id, t.assignedRunner]));
+    return checkPlanInvariants(list, runners, catalog?.runnerModes).map((error) => {
+      const runner = error.field === 'assignedRunner' ? `\u0000${runnerOf.get(error.taskId ?? '') ?? ''}` : '';
+      return { error, key: `${error.taskId ?? ''}\u0000${error.field}${runner}` };
+    });
+  };
+  const standing = new Set(breaches(currentTasks).map((b) => b.key));
   const brokenBy = new Map<string, OpRef>();
   let lastLabel = opLabel(0);
 
@@ -800,15 +810,14 @@ export function applyTaskOps(
     lastLabel = label;
     // Invariants are judged on the final state, so a later op may complete an
     // earlier one; here they only record which op a breach belongs to.
-    const now = new Set(checkPlanInvariants(tasks, runners, catalog?.runnerModes).map(breachKey));
+    const now = new Set(breaches(tasks).map((b) => b.key));
     for (const key of brokenBy.keys()) if (!now.has(key)) brokenBy.delete(key);
     for (const key of now) if (!standing.has(key) && !brokenBy.has(key)) brokenBy.set(key, label);
   }
 
   if (!errors.length) {
-    for (const e of checkPlanInvariants(tasks, runners, catalog?.runnerModes)) {
-      const key = breachKey(e);
-      if (!standing.has(key)) errors.push({ op: brokenBy.get(key) ?? lastLabel, message: e.message });
+    for (const { error, key } of breaches(tasks)) {
+      if (!standing.has(key)) errors.push({ op: brokenBy.get(key) ?? lastLabel, message: error.message });
     }
   }
 

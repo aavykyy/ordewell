@@ -1320,7 +1320,7 @@ describe('edit_plan after a runner is switched off that the plan once used', () 
 
     expect((listed as { runners: { id: string }[] }).runners.map((r) => r.id)).toEqual(['claude-code', 'opencode']);
     expect(refused?.isError).toBe(true);
-    expect(JSON.stringify(refused?.body)).toMatch(OFF);
+    expect((refused?.body as { errors: { message: string }[] }).errors[0].message).toMatch(OFF);
     expect(planner.session.planTasks.map((t) => [t.title, t.assignedRunner])).toEqual([['Task a', 'codex'], ['Task b', 'claude-code']]);
     expect(landed(planner).planBroadcasts).toBe(before.planBroadcasts);
   });
@@ -1339,7 +1339,8 @@ describe('edit_plan after a runner is switched off that the plan once used', () 
   it('refuses at landing an edit it accepted while the runner was on', async () => {
     let accepted: { isError: boolean; body: unknown } | undefined;
     const planner = await codexSwitchedOff(async (mcp) => {
-      accepted = await call(mcp!, 'edit_plan', { ops: [{ op: 'add', task: { title: 'Docs', assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5', modelLabel: 'GPT-5' } } }] });
+      // The refusal at landing sends the planner a corrective turn, which runs this again with Codex off.
+      accepted ??= await call(mcp!, 'edit_plan', { ops: [{ op: 'add', task: { title: 'Docs', assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5', modelLabel: 'GPT-5' } } }] });
       planner.settings({ enabledRunners: ['claude-code', 'opencode'] });
       return 'Added docs on codex.';
     });

@@ -12,9 +12,8 @@ const ops = (list: unknown[]) => ({ kind: 'task_ops', ops: list, text: '{"taskOp
  * defect is involved). `reply` is the planner's next turn, as an API planner's
  * task_ops reply, which lands through the session's PlanChangeCheck.
  */
-async function planOnceOnCodex(reply: unknown) {
+async function planOnceOnCodex(reply: unknown, continueConversation = vi.fn()) {
   let settings: SessionRuntimeSettings = { enabledRunners: ['codex', 'claude-code', 'opencode'] };
-  const continueConversation = vi.fn();
   continueConversation.mockResolvedValueOnce(reply);
   continueConversation.mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
   const session = makeSession({
@@ -69,11 +68,13 @@ describe('a planner edit after Codex is switched off, Codex being only in the pl
   });
 
   it('names the runners it may use when it refuses, and leaves the plan as it was', async () => {
-    const session = await planOnceOnCodex(ops([{ op: 'add', task: { title: 'New', assignedRunner: 'codex' } }]));
+    const planner = vi.fn();
+    const session = await planOnceOnCodex(ops([{ op: 'add', task: { title: 'New', assignedRunner: 'codex' } }]), planner);
     const before = session.planTasks.map((t) => [t.id, t.title, t.assignedRunner]);
     await session.continueConversation('add one');
     expect(session.planTasks.map((t) => [t.id, t.title, t.assignedRunner])).toEqual(before);
-    expect(session.planState!.conversationHistory!.map((e) => e.content).join('\n')).toMatch(/Expected one of: claude-code, opencode/);
+    // The refusal goes back to the planner as its corrective turn.
+    expect(String(planner.mock.calls[1]?.[0])).toMatch(/Expected one of: claude-code, opencode/);
   });
 
   it('does not put a subtask on Codex', async () => {

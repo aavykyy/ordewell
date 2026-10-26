@@ -1044,16 +1044,17 @@ export class Session {
   /**
    * What every planner change is checked against (`PlanChangeCheck`), as it
    * is made and as it lands: the live catalog and plan, and the open turn's
-   * held edit. A plan may use the runners enabled now, an edit the plan's own
-   * as well (`assignableRunners`), one set at both ends, so what was accepted
-   * cannot be refused at commit unless the catalog moved. `guarded`: the
-   * change meets the supervisor's oscillation guard.
+   * held edit. A change may put a task only on the runners enabled now
+   * (`assignableRunners`), one set at both ends, so what was accepted cannot
+   * be refused at commit unless the catalog moved; the plan's own runners'
+   * modes are read too, for a task left on one switched off since. `guarded`:
+   * the change meets the supervisor's oscillation guard.
    */
   private changeScope(guarded: () => boolean): PlanChangeScope {
     return {
       tasks: () => this.store.planTasks,
       runners: (kind) => this.catalog.runnersFor(kind === 'plan' ? 'plan' : 'edit') ?? [],
-      catalog: (runners) => this.catalog.edit(runners),
+      catalog: (runners) => this.catalog.edit([...new Set([...(this.plan?.runners ?? []), ...runners])]),
       skills: () => this.workspaceSkills(),
       held: () => this.conversation.pendingOps() ?? [],
       addedPast: () => this.turnEffects.addedPastEdit,
