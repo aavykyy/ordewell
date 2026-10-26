@@ -161,9 +161,10 @@ export type WebviewToHost =
   /**
    * A Runners pill clicked: save the runner on or off in the settings file every
    * surface shares (ADR-0043), then re-send the runner list. It names the state
-   * wanted, so a repeated or stale click can never flip a newer choice back.
+   * wanted, so a repeated or stale click can never flip a newer choice back;
+   * `requestId` is what the host's `runnerChoiceSaved` answers.
    */
-  | { type: 'setRunnerEnabled'; runnerId: RunnerId; enabled: boolean }
+  | { type: 'setRunnerEnabled'; runnerId: RunnerId; enabled: boolean; requestId: string }
   /** Who plans (ADR-0009) — a vendor provider id or one of the harness planners. */
   | { type: 'setPlanner'; provider: string }
   /** The planner's own model and thinking effort, a pair so neither can outlive the other. */
@@ -226,6 +227,13 @@ export type HostToWebview =
   | { type: 'showError'; error: string }
   | { type: 'setModels'; models: DiscoveredModel[] }
   | { type: 'setRunners'; runners: RunnerMeta[] }
+  /**
+   * The answer to one `setRunnerEnabled`, saved, refused or failed: `enabled`
+   * is what the shared list holds for that runner now. Only this settles a
+   * pill click; a runner list names no request, so one that discovery began
+   * before the save can neither settle the click nor undo it.
+   */
+  | { type: 'runnerChoiceSaved'; requestId: string; runnerId: RunnerId; enabled: boolean }
   /** The remembered plan dock height in px; absent until the user first drags it. */
   | { type: 'planDockHeight'; height?: number }
   /** The user's autonomy level, run settings (ADR-0030) and parallel limit, sent on ready and after each change. */

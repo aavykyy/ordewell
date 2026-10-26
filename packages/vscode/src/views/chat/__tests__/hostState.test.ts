@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { EMPTY_RUN, type LegacyPlanState, type RunTask, type RunView } from '@ordewell/core';
-import { reduceHost, resetSession, runnersOn, INITIAL_HOST_STATE, type HostState, type HostMessage, type HostAction } from '../hostState';
+import { reduceHost, resetSession, runnersOn, INITIAL_HOST_STATE, type HostState, type HostMessage } from '../hostState';
 
 const NOW = 1_000;
-const msg = (m: { type: string } & Record<string, unknown>): HostMessage => ({ now: NOW, ...m }) as HostMessage;
+const msg = (m: { type: HostMessage['type'] } & Record<string, unknown>): HostMessage => ({ now: NOW, ...m }) as HostMessage;
 
 function planWith(status: string): LegacyPlanState {
   return { status, tasks: [] } as unknown as LegacyPlanState;
@@ -174,10 +174,8 @@ describe('a Runners pill clicked', () => {
     { id: 'opencode', displayName: 'OpenCode', enabled: enabled.includes('opencode') },
   ];
   const listed = (state: HostState, enabled: string[]): HostState => reduceHost(state, msg({ type: 'setRunners', runners: installed(enabled) }));
-  // The request id and the acknowledgement are the contract under test: the
-  // action and message types do not exist until the fix adds them.
   const click = (state: HostState, runnerId: string, enabled: boolean, requestId: string): HostState =>
-    reduceHost(state, { type: 'runnerChoiceRequested', runnerId, enabled, requestId } as unknown as HostAction);
+    reduceHost(state, { type: 'runnerChoiceRequested', runnerId, enabled, requestId });
   const ack = (state: HostState, requestId: string, runnerId: string, enabled: boolean): HostState =>
     reduceHost(state, msg({ type: 'runnerChoiceSaved', requestId, runnerId, enabled }));
   const pendingIds = (state: HostState): string[] => Object.keys(state.pendingRunners).sort();

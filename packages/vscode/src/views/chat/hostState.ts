@@ -41,11 +41,11 @@ export interface HostState {
   /** The runners the settings file every surface shares holds on (ADR-0043), as the host last reported them. */
   enabledRunnerIds: string[];
   /**
-   * A Runners pill clicked, on or off, until the host's next runner list
-   * answers it. The host sends one after every request, saved or not, so the
-   * list that follows is the truth either way.
+   * A Runners pill clicked, on or off, until the host's `runnerChoiceSaved`
+   * for that request answers it, saved or not. A runner list is never the
+   * answer: discovery that began before the save would revive the old state.
    */
-  pendingRunners: Partial<Record<RunnerId, boolean>>;
+  pendingRunners: Partial<Record<RunnerId, { enabled: boolean; requestId: string }>>;
   /** Queued prompts: what the host is holding for the next planner turn. */
   held: PromptHold;
   /** The last queued text the host gave back; `seq` makes a repeat of the same words land again. */
@@ -182,7 +182,7 @@ export type HostAction =
   | { type: 'turnLost' }
   | { type: 'patchError'; error: string }
   | { type: 'patchReady'; ready: boolean }
-  | { type: 'runnerChoiceRequested'; runnerId: RunnerId; enabled: boolean }
+  | { type: 'runnerChoiceRequested'; runnerId: RunnerId; enabled: boolean; requestId: string }
   | { type: 'checkpointAnswered' }
   | { type: 'patchDockHeight'; height: number | undefined }
   | { type: 'patchDockExpanded'; expanded: Updatable<boolean> };
@@ -227,7 +227,7 @@ export function resetSession(state: HostState, kind: SessionResetKind): HostStat
 
 /** The runners shown on: the saved list, with any pill click the host has not answered yet. */
 export function runnersOn(state: Pick<HostState, 'runnerList' | 'enabledRunnerIds' | 'pendingRunners'>): RunnerId[] {
-  const on = (id: RunnerId) => state.pendingRunners[id] ?? state.enabledRunnerIds.includes(id);
+  const on = (id: RunnerId) => state.pendingRunners[id]?.enabled ?? state.enabledRunnerIds.includes(id);
   const listed = state.runnerList.map((r) => r.id);
   return [...new Set([...listed, ...state.enabledRunnerIds])].filter(on);
 }
@@ -265,8 +265,23 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     case 'patchReady':
       return { ...state, isReady: action.ready };
 
-    case 'runnerChoiceRequested':
-      return { ...state, pendingRunners: { ...state.pendingRunners, [action.runnerId]: action.enabled } };
+    case 'runnerChoiceRequested': {
+      const { runnerId, enabled, requestId } = action;
+      return { ...state, pendingRunners: { ...state.pendingRunners, [runnerId]: { enabled, requestId } } };
+    }
+
+    case 'runnerChoiceSaved': {
+      // An answer to an older or repeated request, or to the page before a
+      // reload, leaves the newer click it would otherwise clear.
+      if (state.pendingRunners[action.runnerId]?.requestId !== action.requestId) return state;
+      const pendingRunners = { ...state.pendingRunners };
+      delete pendingRunners[action.runnerId];
+      const saved = state.enabledRunnerIds.includes(action.runnerId);
+      let enabledRunnerIds = state.enabledRunnerIds;
+      if (action.enabled && !saved) enabledRunnerIds = [...enabledRunnerIds, action.runnerId];
+      if (!action.enabled && saved) enabledRunnerIds = enabledRunnerIds.filter((id) => id !== action.runnerId);
+      return { ...state, enabledRunnerIds, pendingRunners };
+    }
 
     case 'checkpointAnswered':
       // The question is answered here, before the run says so: remember it so
@@ -430,7 +445,6 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
         ...state,
         runnerList: list.map((r: RunnerMeta) => ({ id: r.id, displayName: r.displayName })),
         enabledRunnerIds: list.filter((r: RunnerMeta) => r.enabled).map((r: RunnerMeta) => r.id),
-        pendingRunners: {},
         runnersKnown: true,
       };
     }

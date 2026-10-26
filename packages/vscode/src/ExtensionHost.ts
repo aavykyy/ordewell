@@ -250,14 +250,14 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       openFile: (path) => { void openWorkspaceFile(path); },
       setPlanDockHeight: (height) => { void services.context.globalState.update(PLAN_DOCK_HEIGHT_KEY, height); },
       changeSettings,
-      setRunnerEnabled: async (runnerId, enabled) => {
+      setRunnerEnabled: async (runnerId, enabled, requestId) => {
         try {
           const saved = await setRunnerEnabled(
             {
               runnerRegistry: services.runnerRegistry,
               settingsService: services.settingsService,
               config: services.config,
-              // Not awaited: the pill waits on the list sent below, and a cold
+              // Not awaited: the pill waits on the answer sent below, and a cold
               // runner CLI can hold discovery up for tens of seconds.
               sendRunnerAndModels: async () => {
                 discovery.refresh().catch((err) => log(`Model discovery refresh failed: ${err instanceof Error ? err.message : String(err)}`));
@@ -270,10 +270,12 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
           // manifest owns it, so there is nothing to save.
           if (!saved) log(`Ignored a request to switch the unknown runner "${runnerId}" ${enabled ? 'on' : 'off'}.`);
         } finally {
-          // The pill shows the click until a runner list answers it, so one
-          // goes out whatever happened: the list as saved now, which after a
-          // refused or failed save puts the pill back.
-          services.chatProvider.setEnabledRunnerIds(services.config.enabledRunners);
+          // The pill shows the click until this request is answered, so the
+          // answer goes out whatever happened: the runner as saved now, which
+          // after a refused or failed save puts the pill back.
+          const savedList = services.config.enabledRunners;
+          services.chatProvider.acknowledgeRunnerChoice(requestId, runnerId, savedList.includes(runnerId));
+          services.chatProvider.setEnabledRunnerIds(savedList);
         }
       },
     },

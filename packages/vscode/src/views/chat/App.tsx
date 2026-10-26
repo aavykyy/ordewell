@@ -109,6 +109,10 @@ export default function App() {
   /** A start is with the host; a second click is the same start, not another. */
   const startPendingRef = useRef(false);
   const nextStartRequest = useRef(0);
+  // Prefixed per page: a reload starts the count again, and an answer still
+  // on its way to the old page must not match a click on the new one.
+  const runnerRequestPrefix = useRef(Math.random().toString(36).slice(2));
+  const nextRunnerRequest = useRef(0);
   const lastActivityRef = useRef(Date.now());
   const planRef = useRef(plan);
   planRef.current = plan;
@@ -237,10 +241,12 @@ export default function App() {
   // The pills are the saved choice every surface and planner turn reads
   // (ADR-0043), so a click asks the host to save it. The request names the
   // state wanted, which keeps a quick second click or a repeat from flipping
-  // it back; the pill shows the click until the host's list answers.
+  // it back; the pill shows the click until the host answers this request.
   const handleRunnerPill = useCallback((runnerId: RunnerId, enabled: boolean) => {
-    dispatch({ type: 'runnerChoiceRequested', runnerId, enabled });
-    vscode.postMessage({ type: 'setRunnerEnabled', runnerId, enabled });
+    nextRunnerRequest.current += 1;
+    const requestId = `${runnerRequestPrefix.current}-${nextRunnerRequest.current}`;
+    dispatch({ type: 'runnerChoiceRequested', runnerId, enabled, requestId });
+    vscode.postMessage({ type: 'setRunnerEnabled', runnerId, enabled, requestId });
   }, []);
 
   const handleConfigureApiKey = useCallback(() => {
