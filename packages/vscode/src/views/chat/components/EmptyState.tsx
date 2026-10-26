@@ -1,12 +1,16 @@
 import React from 'react';
 import type { GlobalRunSettings } from '@ordewell/core';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
+import type { IsolationPreview } from '@ordewell/core';
+import IsolationNotice from './IsolationNotice';
 import PlanApprovalNote, { type HostRunSettings } from './PlanApprovalNote';
 
 interface EmptyStateProps {
   onLoadSession?: () => void;
   /** The user's autonomy level and run settings (ADR-0030); absent until the host sends them. */
   runSettings?: HostRunSettings | null;
+  /** The repositories and branches the host found; see {@link IsolationNotice}. */
+  isolationPreview?: IsolationPreview | null;
 }
 
 /** One Setup row: what is set, and the command that changes it. */
@@ -31,7 +35,7 @@ function RunValue({ run }: { run: GlobalRunSettings }) {
   );
 }
 
-export default function EmptyState({ onLoadSession, runSettings }: EmptyStateProps) {
+export default function EmptyState({ onLoadSession, runSettings, isolationPreview }: EmptyStateProps) {
   return (
     <div className="empty-state">
       <div className="empty-state-logo">
@@ -82,6 +86,7 @@ export default function EmptyState({ onLoadSession, runSettings }: EmptyStatePro
         generate a structured task plan, and execute it.
       </p>
       <PlanApprovalNote runSettings={runSettings} />
+      <IsolationNotice preview={isolationPreview} />
       {runSettings && (
         <div className="empty-state-setup">
           <SetupRow label="Autonomy" value={runSettings.autonomous ? 'Full' : 'Guarded'} warn={runSettings.autonomous} command="/settings" />

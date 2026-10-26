@@ -1,4 +1,4 @@
-import type { AccountLimitSnapshot, GlobalRunSettings,
+import type { AccountLimitSnapshot, GlobalRunSettings, IsolationPreview,
   AiProvider, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
   TaskModelAssignment,
 } from '@ordewell/core';
@@ -265,4 +265,11 @@ export type HostToWebview =
    * them, sent on each change and on ready. Live account data: it outlives a
    * restored or new session, and is never part of the planner's usage.
    */
-  | { type: 'accountLimits'; limits: readonly AccountLimitSnapshot[] };
+  | { type: 'accountLimits'; limits: readonly AccountLimitSnapshot[] }
+  /**
+   * What the workspace's repositories and branches say about isolated worktrees,
+   * read now. `null` is "being read": sent when the answer shown belongs to a
+   * workspace or a webview that is gone, so an old branch is never shown as
+   * current. A read that failed arrives as a `failed` preview, never as null.
+   */
+  | { type: 'isolationPreview'; preview: IsolationPreview | null };

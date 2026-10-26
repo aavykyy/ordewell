@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { EMPTY_RUN, type LegacyPlanState, type RunTask, type RunView } from '@ordewell/core';
+import { EMPTY_RUN, type IsolationPreview, type LegacyPlanState, type RunTask, type RunView } from '@ordewell/core';
 import { reduceHost, resetSession, runnersOn, INITIAL_HOST_STATE, type HostState, type HostMessage } from '../hostState';
 
 const NOW = 1_000;
@@ -329,5 +329,27 @@ describe('conversationEpoch: which conversation the blocks belong to', () => {
     const shown = reduceHost(INITIAL_HOST_STATE, patch(['b1']));
     expect(reduceHost(shown, patch(['b1'])).conversationEpoch).toBe(shown.conversationEpoch);
     expect(reduceHost(INITIAL_HOST_STATE, patch([])).conversationEpoch).toBe(INITIAL_HOST_STATE.conversationEpoch);
+  });
+});
+
+describe('the repositories notice', () => {
+  const preview: IsolationPreview = { status: 'ready', shared: [], repos: [{ path: '.', head: { kind: 'branch', branch: 'main', commit: 'a1b2c3d' }, dirty: false }] };
+
+  it('is unheard of until the host says, then holds what it last sent, null included', () => {
+    expect(INITIAL_HOST_STATE.isolationPreview).toBeUndefined();
+
+    const shown = reduceHost(INITIAL_HOST_STATE, msg({ type: 'isolationPreview', preview }));
+    expect(shown.isolationPreview).toEqual(preview);
+
+    // A workspace change or a reload sends null: the old branch is gone, not kept until the answer.
+    expect(reduceHost(shown, msg({ type: 'isolationPreview', preview: null })).isolationPreview).toBeNull();
+  });
+
+  it('belongs to the workspace, so a new, restored or emptied session keeps it', () => {
+    const shown = reduceHost(INITIAL_HOST_STATE, msg({ type: 'isolationPreview', preview }));
+
+    for (const kind of ['empty', 'restore', 'new'] as const) {
+      expect(resetSession(shown, kind).isolationPreview).toEqual(preview);
+    }
   });
 });

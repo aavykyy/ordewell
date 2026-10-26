@@ -957,11 +957,11 @@ export default function App() {
         )}
 
         {!hasContent && isReady && !canPlan && plannerKnown && (
-          <GetStarted runnerNames={agentNames} onConfigure={handleConfigureApiKey} runSettings={host.runSettings} />
+          <GetStarted runnerNames={agentNames} onConfigure={handleConfigureApiKey} runSettings={host.runSettings} isolationPreview={host.isolationPreview} />
         )}
 
         {!hasContent && isReady && canPlan && (
-          <EmptyState onLoadSession={handleLoadSession} runSettings={host.runSettings} />
+          <EmptyState onLoadSession={handleLoadSession} runSettings={host.runSettings} isolationPreview={host.isolationPreview} />
         )}
 
         {error && (

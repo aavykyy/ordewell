@@ -1572,6 +1572,18 @@ a group is a set of paths.
 repositories), "multi-root workspace" (a VS Code notion, a later slice), "project"
 or "package" for a repo.
 
+**Isolation preview** (`IIsolationPreview.preview`, `createIsolationPreview`) — a
+read-only, current look at a workspace's repo group for a surface that shows it
+before any run: each repo's path, branch (or detached short commit, or no
+commits yet) and whether its tracked files are dirty, with a status — `ready`,
+`dirty`, `disabled`, `git-missing`, `no-commits`, `no-repo` or `failed` — that
+agrees with `isActive` for the same workspace; `failed` means git could not be
+read and says nothing about whether a repository exists. It uses the same
+discovery as `startRun`, starts no run and writes nothing; `describeIsolationPreview`
+holds the words every surface shares. Only `isActive` at run start is
+authoritative: the base branch a run forks from is read again then.
+*Avoid:* "scan" for it — that is the discovery it shares with execution.
+
 **Shared path** — a loose file or folder in the workspace root that is in no repo
 of the group, or a repo that cannot be isolated (no commits, or git refuses a
 worktree), linked live into every task workspace (ADR-0014). For a repository
