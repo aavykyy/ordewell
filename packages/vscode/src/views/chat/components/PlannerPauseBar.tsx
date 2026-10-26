@@ -15,7 +15,7 @@ export default function PlannerPauseBar({ pause, busy, onRetry, onStop }: { paus
       <span className="planner-resend-text">Planner paused: its context does not fit {pause.model}'s window</span>
       <span className="planner-pause-actions">
         <button type="button" className="task-log-open-btn" onClick={onRetry}
-          title="Condense the planner's context and carry the paused turn on: nothing it ran runs again">
+          title="Condense the planner's context and try the paused turn again. If the planner cannot safely continue after commands ran, it stays paused">
           Retry compaction
         </button>
         <button type="button" className="task-log-open-btn" onClick={onStop}

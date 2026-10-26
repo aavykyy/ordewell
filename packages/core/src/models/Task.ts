@@ -731,11 +731,13 @@ export interface PlannerContextPause {
   inputs: string[];
   /**
    * The calls the paused turn made that changed something or reached out,
-   * each with the head of what it returned (`effectLedger`): what a retry
-   * that cannot continue the live context tells the planner not to make again.
+   * each with the head of what it returned (`effectLedger`). It is never
+   * replayed to the planner as a note: it is what lets a retry see that a
+   * turn which ran effects cannot start again from the transcript, and what
+   * the refusal lists for the user.
    */
   done?: string[];
-  /** More such calls ran than `done` keeps: a retry without the live context could not tell the planner all of them. */
+  /** More such calls ran than `done` keeps: the refusal could not list all of them, and a retry without the live context stays refused. */
   doneTruncated?: true;
 }
 

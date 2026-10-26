@@ -424,7 +424,7 @@ and nothing broader, is answered once per call: the window it states and the
 size it refused bound the chat's later calls on the model, one more
 compaction is made against them, and the same input is sent once more only if
 it got smaller. A call that still cannot fit is not made: its input is held, so
-no tool runs twice and no result is sent twice, and the planner pauses (see
+no completed tool runs again for it and no result is sent twice, and the planner pauses (see
 **Planner context pause**). Each compaction is a **Compaction event** of the
 turn: a pruning reports only its end. A model whose window the catalogs Ordewell holds do not state, or the
 settings file's `plannerAutoCompaction: false` (on when absent; no settings

@@ -210,7 +210,7 @@ interface UserTurn {
   /**
    * The pause it retries, and whether it carries on the live context's held
    * input — whose calls the chat still holds — or starts again from the
-   * transcript, told only what the pause listed.
+   * transcript, which only a turn whose calls changed nothing may do.
    */
   recovery?: { pause: PlannerContextPause; live: boolean };
   /** Handed in since the backend last answered; see {@link PlannerConversation.submit}. */
@@ -445,10 +445,10 @@ function unsafeReplay(pause: PlannerContextPause, liveContext: boolean): string 
     ...done.slice(0, REFUSAL_LISTED).map((line) => (line.length > REFUSAL_LINE_CHARS ? `${line.slice(0, REFUSAL_LINE_CHARS - 1)}…` : line)),
     ...(more > 0 || pause.doneTruncated ? [`- (${pause.doneTruncated ? 'more' : `${more} more`})`] : []),
   ];
-  const why = liveContext ? 'it cannot be carried on where it paused' : 'its live context is gone';
+  const why = liveContext ? 'it cannot be continued where it paused' : 'its live context is gone';
   // The live context still holds the turn: a window to compact it against is what a retry on it may lack.
   const window = liveContext
-    ? ' If the planner model is one whose window Ordewell does not know, switch it to one it knows: Retry compaction then carries the turn on where it paused.'
+    ? ' If the planner model is one whose window Ordewell does not know, switch it to one it knows: Retry compaction can then continue the turn where it paused.'
     : '';
   return [
     `The paused turn already ran calls that changed something, and ${why}: starting it again from the conversation could make one of them twice, so Ordewell keeps the planner paused. Stop it to drop the turn, then tell the planner what already ran and where to pick up.${window}`,
@@ -1169,7 +1169,7 @@ export class PlannerConversation {
     // What is too long by itself takes a larger window: a Retry on this model compacts what is beside it and pauses again.
     const action = err.tooLong !== undefined
       ? `The planner is paused: switch it to a model with a larger window, then Retry compaction, or stop it to drop the ${err.tooLong === 'message' ? 'message' : 'turn'}.`
-      : 'The planner is paused: Retry compaction condenses its context and carries the turn on, or stop it to drop the turn.';
+      : 'The planner is paused: Retry compaction tries to condense its context and continue the turn, or stop it to drop the turn.';
     const pause = this.host.contextPaused({
       model: err.model,
       reason: `${err.message} ${action}`,

@@ -2033,10 +2033,10 @@ export class Session {
    * The user's Retry compaction of a planner paused on its context (ADR-0002):
    * the paused turn opens again on the inputs it kept. On the live context it
    * condenses what it can, then sends the held input once; with the live
-   * context gone — a reload, another provider — it starts again from the
-   * transcript, told which of its calls already ran. Refused, the pause kept,
-   * when neither can be done without risking an effect twice. Settles with
-   * the plan the turn lands, or paused again on; a Stop ends the pause.
+   * context gone — a reload, another provider — a turn that only read starts
+   * again from the transcript. One whose calls changed something is refused,
+   * the pause kept, since no note could stop an effect running twice. Settles
+   * with the plan the turn lands, or paused again on; a Stop ends the pause.
    */
   async retryPlannerCompaction(signal?: AbortSignal): Promise<LegacyPlanState> {
     const pause = this.plan?.plannerContextPause;

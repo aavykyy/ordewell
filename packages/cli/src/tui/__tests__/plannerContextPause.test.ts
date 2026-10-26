@@ -12,7 +12,7 @@ import { chatLayout } from '../layout';
  */
 
 const session = (over: Partial<TuiState> = {}): TuiState => initialState({ sessionId: 's1', rows: 30, cols: 120, ...over });
-const REASON = "vendor/model refused the planner's call as too long for its window, even after pruning older file reads. The planner is paused: Retry compaction condenses its context and carries the turn on, or stop it to drop the turn.";
+const REASON = "vendor/model refused the planner's call as too long for its window, even after pruning older file reads. The planner is paused: Retry compaction tries to condense its context and continue the turn, or stop it to drop the turn.";
 const pause = { model: 'vendor/model', at: '2026-10-25T10:00:00Z', reason: REASON, inputs: ['turn-1'] };
 const planWith = (plannerContextPause?: typeof pause) => ({ tasks: [], ...(plannerContextPause ? { plannerContextPause } : {}) });
 const planUpdated = (state: TuiState, plan: unknown): TuiState => reduce(state, { type: 'planUpdated', plan, sessionId: 's1' }).state;
