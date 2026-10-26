@@ -19,17 +19,23 @@ export default function UsageLine({ block, limits }: { block?: UsageBlock; limit
   const shownLimits = limits.filter(hasAccountLimits);
   if (!meter && !cost && agents.length === 0 && shownLimits.length === 0) return null;
 
+  // Context, live limits, then cost, as the TUI draws them. The limits are not
+  // a live region, so each measure either side of them is its own.
   return (
     <div className="usage-line">
-      {(meter || cost) && (
+      {meter && block?.contextFill && (
         <span className="usage-line-measures" role="status">
-          {meter && block?.contextFill && <span className="usage-line-context" title={contextMeterTitle(block.contextFill)}>Planner {meter}</span>}
-          {meter && cost && ' · '}
-          {cost && <span className="usage-line-cost" title={block?.byModel && modelCostTitle(block.byModel)}>{cost}</span>}
+          <span className="usage-line-context" title={contextMeterTitle(block.contextFill)}>Planner {meter}</span>
         </span>
       )}
-      {(meter || cost) && shownLimits.length > 0 && ' · '}
+      {meter && shownLimits.length > 0 && ' · '}
       <AccountLimitRows limits={shownLimits} />
+      {(meter || shownLimits.length > 0) && cost && ' · '}
+      {cost && (
+        <span className="usage-line-measures" role="status">
+          <span className="usage-line-cost" title={block?.byModel && modelCostTitle(block.byModel)}>{cost}</span>
+        </span>
+      )}
       {(meter || cost || shownLimits.length > 0) && agents.length > 0 && ' · '}
       {agents.length > 0 && (
         <span className="usage-line-subagents" title={subagentCostTitle(block?.bySubagent ?? {})}>
