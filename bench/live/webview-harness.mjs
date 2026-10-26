@@ -83,15 +83,72 @@ const THEMES = {
     '--vscode-editor-font-family': "Menlo, Monaco, 'Courier New', monospace",
     'color-scheme': 'light',
   },
+  // High Contrast Dark: the theme uses its contrastBorder everywhere and puts
+  // the focus ring in the theme's own yellow, so a screenshot under it proves
+  // the login row did not quietly fall back to the dark theme's borders.
+  'high-contrast': {
+    '--vscode-editor-background': '#000000',
+    '--vscode-sideBar-background': '#000000',
+    '--vscode-editorWidget-background': '#000000',
+    '--vscode-quickInput-background': '#000000',
+    '--vscode-list-hoverBackground': '#0a0a0a',
+    '--vscode-input-background': '#000000',
+    '--vscode-input-placeholderForeground': '#ffffff',
+    '--vscode-panel-border': '#6fc3df',
+    '--vscode-widget-border': '#6fc3df',
+    '--vscode-contrastBorder': '#6fc3df',
+    '--vscode-foreground': '#ffffff',
+    '--vscode-descriptionForeground': '#ffffff',
+    '--vscode-errorForeground': '#f48771',
+    '--vscode-focusBorder': '#f38518',
+    '--vscode-button-background': '#000000',
+    '--vscode-testing-iconPassed': '#73c991',
+    '--vscode-testing-iconFailed': '#f48771',
+    '--vscode-textLink-foreground': '#3794ff',
+    '--vscode-textPreformat-background': 'rgba(255, 255, 255, 0.1)',
+    '--vscode-font-family': "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    '--vscode-editor-font-family': "Menlo, Monaco, 'Courier New', monospace",
+    'color-scheme': 'dark',
+  },
+  'high-contrast-light': {
+    '--vscode-editor-background': '#ffffff',
+    '--vscode-sideBar-background': '#ffffff',
+    '--vscode-editorWidget-background': '#ffffff',
+    '--vscode-quickInput-background': '#ffffff',
+    '--vscode-list-hoverBackground': '#f2f2f2',
+    '--vscode-input-background': '#ffffff',
+    '--vscode-input-placeholderForeground': '#292929',
+    '--vscode-panel-border': '#0f4a85',
+    '--vscode-widget-border': '#0f4a85',
+    '--vscode-contrastBorder': '#0f4a85',
+    '--vscode-foreground': '#292929',
+    '--vscode-descriptionForeground': '#292929',
+    '--vscode-errorForeground': '#a1260d',
+    '--vscode-focusBorder': '#0f4a85',
+    '--vscode-button-background': '#0f4a85',
+    '--vscode-testing-iconPassed': '#388a34',
+    '--vscode-testing-iconFailed': '#a1260d',
+    '--vscode-textLink-foreground': '#0f4a85',
+    '--vscode-textPreformat-background': 'rgba(0, 0, 0, 0.06)',
+    '--vscode-font-family': "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    '--vscode-editor-font-family': "Menlo, Monaco, 'Courier New', monospace",
+    'color-scheme': 'light',
+  },
 };
 
+const themeName = (raw) => (raw === 'light' ? 'light'
+  : raw === 'high-contrast' ? 'high-contrast'
+  : raw === 'high-contrast-light' ? 'high-contrast-light'
+  : 'dark');
+
 function themeStyle(name) {
-  const vars = THEMES[name] ?? THEMES.dark;
+  const vars = THEMES[name];
   const decls = Object.entries(vars).map(([k, v]) => `${k}: ${v};`).join(' ');
   return `:root { ${decls} }`;
 }
 
-function page(theme, script) {
+function page(rawTheme, script) {
+  const theme = themeName(rawTheme);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -143,7 +200,7 @@ const server = http.createServer((req, res) => {
   const script = url.pathname === '/' || url.pathname === '/index.html' ? 'chat.js'
     : url.pathname === '/tasklog' ? 'tasklog.js' : null;
   if (script) {
-    const theme = url.searchParams.get('theme') === 'light' ? 'light' : 'dark';
+    const theme = themeName(url.searchParams.get('theme'));
     res.writeHead(200, { 'content-type': 'text/html' }).end(page(theme, script));
     return;
   }

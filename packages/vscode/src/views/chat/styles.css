@@ -1216,6 +1216,11 @@ body.vscode-high-contrast-light .disclosure:hover {
   border-color: var(--red);
 }
 
+.planner-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .planner-auth-dot {
   width: 6px;
   height: 6px;
@@ -1224,42 +1229,48 @@ body.vscode-high-contrast-light .disclosure:hover {
   flex-shrink: 0;
 }
 
-/* A pill and the login that belongs to the agent it names. The row stays a
-   pill bar: the action is quiet, never a second pill. */
+/* A pill and the login that belongs to the agent it names. The action is a
+   small quiet button, not another pill: the agent stays the choice. */
 .planner-pill-group {
   display: inline-flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
 }
 
 .planner-pill-row {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
 }
 
+/* Fixed width for the same reason as the empty state's action: the label is
+   longer while a login runs, and the pill bar must not reflow around it. */
 .planner-pill-login {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
-  padding: 2px 4px;
-  border: none;
+  flex: 0 0 auto;
+  min-width: 92px;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 18%, transparent);
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   font-family: inherit;
   font-size: 10.5px;
-  line-height: 1.3;
+  line-height: 1.4;
   cursor: pointer;
   outline: none;
-  transition: color var(--transition-fast), background var(--transition-fast);
+  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
 }
 
 .planner-pill-login:hover:not(:disabled) {
   color: var(--text-primary);
   background: var(--bg-hover);
+  border-color: var(--accent);
 }
 
 .planner-pill-login:focus-visible {
@@ -1268,16 +1279,23 @@ body.vscode-high-contrast-light .disclosure:hover {
 }
 
 .planner-pill-login:disabled {
-  opacity: 0.7;
+  color: var(--text-secondary);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
   cursor: default;
 }
 
 /* Why a login did not finish, under the pill that asked: one line, no dialog. */
 .planner-pill-login-failure {
   max-width: 220px;
+  padding-left: 2px;
   font-size: 11px;
-  line-height: 1.4;
-  color: var(--text-secondary);
+  line-height: 1.45;
+  color: var(--text-hint);
+}
+
+body.vscode-high-contrast .planner-pill-login,
+body.vscode-high-contrast-light .planner-pill-login {
+  border-color: var(--vscode-contrastBorder, var(--text-primary));
 }
 
 /* ---- Run settings (Settings panel) ---- */
@@ -1400,43 +1418,49 @@ body.vscode-high-contrast-light .disclosure:hover {
   line-height: 1.6;
 }
 
-/* The red tint comes from the theme's own red, so a light theme darkens the
-   wash rather than making it pink. The sentence carries the meaning: colour is
-   never the only signal. */
+/* Not a banner: one status line on the first screen, the dot carrying the
+   colour and the sentence carrying the meaning. No tint or box, so it sits
+   with the setup rows instead of interrupting them. */
 .planner-auth-warning {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
-  flex-wrap: wrap;
   width: 100%;
   max-width: 360px;
-  padding: 9px 12px;
-  border-radius: var(--radius-md);
-  border: 1px solid color-mix(in srgb, var(--red) 22%, transparent);
-  background: color-mix(in srgb, var(--red) 7%, transparent);
+  margin: 10px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
   font-size: 12px;
   line-height: 1.5;
   text-align: left;
-  margin: 12px 0 0;
   color: var(--text-secondary);
+}
+
+/* On the first line's centre. The row is anchored to the top so the action
+   beside it keeps its slot through every state. */
+.planner-auth-warning .planner-auth-dot {
+  margin-top: 6px;
 }
 
 .planner-auth-warning-text {
   min-width: 0;
 }
 
-/* The sentence, and the reason a sign-in did not finish under it. */
+/* One line in every state: the sentence or, after a failed attempt, the
+   reason. Replacing it rather than adding a line keeps the row and the action
+   beside it exactly where they were. */
 .planner-auth-warning-body {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  flex: 1 1 160px;
+  flex: 1 1 0;
   min-width: 0;
 }
 
 .planner-auth-failure {
   font-size: 11px;
-  color: var(--text-secondary);
+  line-height: 1.5;
+  color: var(--text-hint);
 }
 
 /* The row's one strong control: it acts, the sentence explains. Its width is
@@ -1445,24 +1469,28 @@ body.vscode-high-contrast-light .disclosure:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 5px;
   flex: 0 0 auto;
-  min-width: 84px;
-  padding: 3px 10px;
+  min-width: 104px;
+  margin-top: -4px;
+  padding: 4px 12px;
   border-radius: var(--radius-sm);
-  border: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
-  background: transparent;
+  /* A tonal primary: the accent is the theme's own action colour, but the
+     fill stays low enough that the sentence, not the button, is what reads
+     first. The text keeps the foreground's contrast. */
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--accent-subtle);
   color: var(--text-primary);
   font-family: inherit;
   font-size: 11px;
   font-weight: 500;
   line-height: 1.4;
   cursor: pointer;
-  transition: background var(--transition-fast), border-color var(--transition-fast);
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
 }
 
 .planner-login-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
+  background: var(--accent-glow);
   border-color: var(--accent);
 }
 
@@ -1472,17 +1500,15 @@ body.vscode-high-contrast-light .disclosure:hover {
 }
 
 .planner-login-btn:disabled {
-  opacity: 0.55;
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  color: var(--text-secondary);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
   cursor: default;
 }
 
-/* A light theme's red at 30% over white is too pale to read as a border; the
-   text stays the signal, and this only keeps the edge visible. */
-body.vscode-light .planner-login-btn {
-  border-color: color-mix(in srgb, var(--red) 45%, transparent);
-}
-
-body.vscode-high-contrast .planner-login-btn {
+body.vscode-high-contrast .planner-login-btn,
+body.vscode-high-contrast-light .planner-login-btn {
+  background: transparent;
   border-color: var(--vscode-contrastBorder, var(--text-primary));
 }
 
@@ -1507,10 +1533,6 @@ body.vscode-high-contrast .planner-login-btn {
 .planner-auth-warning-agent {
   color: var(--text-primary);
   font-weight: 500;
-}
-
-body.vscode-high-contrast .planner-auth-warning {
-  border-color: var(--vscode-contrastBorder, var(--red));
 }
 
 .load-session-btn {
@@ -6227,6 +6249,12 @@ body.vscode-high-contrast-light .pending-message {
 
   .planner-login-spinner {
     animation: none;
+  }
+
+  .planner-pill,
+  .planner-pill-login,
+  .planner-login-btn {
+    transition: none;
   }
 }
 

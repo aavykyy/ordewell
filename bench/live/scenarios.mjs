@@ -51,6 +51,49 @@ const SETUP = [
   { mark: 'empty' },
 ];
 
+/**
+ * The first screen with a signed-out coding agent: the planner pill carries the
+ * dot, and the empty state carries the sentence and the one login action.
+ * `signedIn` is the same pair after a login, for the state that must redraw.
+ */
+const signedOut = { state: 'signed-out', loginCommand: ['claude', 'auth', 'login'], detail: 'not logged in' };
+const signedIn = { state: 'signed-in', loginCommand: ['claude', 'auth', 'login'] };
+export const SIGNED_OUT_PLANNERS = {
+  signedOut: {
+    type: 'setPlannerBackends',
+    backends: [
+      { id: 'claude-code', label: 'Claude Code', kind: 'harness', runner: 'claude-code', usable: true, reason: 'not logged in', auth: signedOut },
+      { id: 'codex', label: 'Codex', kind: 'harness', runner: 'codex', usable: true, auth: { ...signedOut, loginCommand: ['codex', 'login'] } },
+    ],
+    provider: 'claude-code',
+    runner: 'claude-code',
+  },
+  signedIn: {
+    type: 'setPlannerBackends',
+    backends: [
+      { id: 'claude-code', label: 'Claude Code', kind: 'harness', runner: 'claude-code', usable: true, reason: 'coding agent · no API key needed', auth: signedIn },
+      { id: 'codex', label: 'Codex', kind: 'harness', runner: 'codex', usable: true, auth: { ...signedIn, loginCommand: ['codex', 'login'] } },
+    ],
+    provider: 'claude-code',
+    runner: 'claude-code',
+  },
+};
+
+export const SIGNED_OUT_SETUP = [
+  { post: { type: 'setConfiguredProviders', providers: [] } },
+  { post: SIGNED_OUT_PLANNERS.signedOut },
+  { post: { type: 'setModelConfig', modelConfig: { orchestrator: 'deepseek/deepseek-v4-flash' } } },
+  {
+    post: {
+      type: 'setRunners',
+      runners: [
+        { id: 'claude-code', displayName: 'Claude Code', enabled: true },
+        { id: 'codex', displayName: 'Codex', enabled: true },
+      ],
+    },
+  },
+];
+
 /** A prose reply streamed in one segment, then settled — screenshot mid-stream and after. */
 const STREAMED_REPLY = [
   { drive: (h) => h.note('user', 'add persistence') },

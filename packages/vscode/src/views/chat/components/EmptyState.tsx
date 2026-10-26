@@ -2,6 +2,7 @@ import React from 'react';
 import type { GlobalRunSettings } from '@ordewell/core';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 import PlanApprovalNote, { type HostRunSettings } from './PlanApprovalNote';
+import PlannerLoginAction from './PlannerLogin';
 
 interface EmptyStateProps {
   onLoadSession?: () => void;
@@ -98,25 +99,24 @@ export default function EmptyState({ onLoadSession, runSettings, signedOut }: Em
         <div className="planner-auth-warning" role="status" aria-live="polite">
           <span className="planner-auth-dot" aria-hidden="true" />
           <div className="planner-auth-warning-body">
-            <span className="planner-auth-warning-text">
-              <span className="planner-auth-warning-agent">{signedOut.label}</span>
-              {' is not logged in. You can sign in from this chat.'}
-            </span>
-            {/* Inline, on the same row: the retry is this button, now enabled. */}
-            {signedOut.failure && <span className="planner-auth-failure">{signedOut.failure}</span>}
+            {/* One line, always: the state before a login, the last attempt's
+                result after one. The retry is the same button beside it. */}
+            {signedOut.failure
+              ? <span className="planner-auth-failure">{signedOut.failure}</span>
+              : (
+                <span className="planner-auth-warning-text">
+                  <span className="planner-auth-warning-agent">{signedOut.label}</span>
+                  {' is not logged in.'}
+                </span>
+              )}
           </div>
           {signedOut.onLogIn && (
-            <button
-              type="button"
+            <PlannerLoginAction
               className="planner-login-btn"
-              onClick={signedOut.onLogIn}
-              disabled={signedOut.pending}
-              aria-busy={signedOut.pending ? true : undefined}
-            >
-              {signedOut.pending
-                ? <><span className="planner-login-spinner" aria-hidden="true" />Signing in…</>
-                : 'Log in'}
-            </button>
+              onLogIn={signedOut.onLogIn}
+              pending={signedOut.pending}
+              ariaLabel={signedOut.pending ? `Signing in to ${signedOut.label}` : `Log in to ${signedOut.label}`}
+            />
           )}
         </div>
       )}

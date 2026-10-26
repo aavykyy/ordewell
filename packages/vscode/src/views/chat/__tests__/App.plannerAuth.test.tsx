@@ -70,8 +70,8 @@ describe('a signed-out planner', () => {
     post({ type: 'setPlannerBackends', backends: [signedOutClaude], provider: 'claude-code', runner: 'claude-code' });
 
     expect(warning()?.getAttribute('role')).toBe('status');
-    expect(warning()?.textContent).toContain('Claude Code is not logged in.');
-    expect(warning()?.textContent).toContain('sign in from this chat');
+    expect(warning()?.querySelector('.planner-auth-warning-text')?.textContent).toBe('Claude Code is not logged in.');
+    expect(loginButton().textContent).toBe('Log in');
   });
 
   it('stays quiet when the signed-out agent is not the one planning', () => {
@@ -119,12 +119,14 @@ describe('a signed-out planner', () => {
     api.postMessage.mockClear();
 
     expect(pillLogins()).toHaveLength(1);
+    expect(pillLogins()[0].getAttribute('aria-label')).toBe('Log in to Codex');
     fireEvent.click(pillLogins()[0]);
 
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'loginPlanner', runner: 'codex' });
     expect(api.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'setPlanner' }));
     expect(pillLogins()[0]).toBeDisabled();
     expect(pillLogins()[0].getAttribute('aria-busy')).toBe('true');
+    expect(pillLogins()[0].getAttribute('aria-label')).toBe('Signing in to Codex');
     // Only that agent's action waits: the pill bar stays usable.
     for (const p of document.querySelectorAll<HTMLButtonElement>('.planner-pill')) expect(p).not.toBeDisabled();
     expect(pill().className).toContain('active');
@@ -172,6 +174,10 @@ describe('a signed-out planner', () => {
     post({ type: 'plannerLoginEnded', runner: 'claude-code', ok: false, message: 'The terminal closed before sign-in finished.' });
 
     expect(document.querySelector('.planner-auth-failure')?.textContent).toBe('The terminal closed before sign-in finished.');
+    // The reason replaces the state sentence: the row stays one line, and the
+    // pill above must not repeat it.
+    expect(document.querySelector('.planner-auth-warning-text')).toBeNull();
+    expect(document.querySelector('.planner-pill-login-failure')).toBeNull();
     expect(loginButton()).not.toBeDisabled();
     expect(loginButton().getAttribute('aria-busy')).toBeNull();
   });
