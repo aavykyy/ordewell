@@ -98,6 +98,8 @@ export interface Options {
   /** The user's run settings (ADR-0030), Watch and the other defaults unless set. */
   settings?: Partial<GlobalRunSettings>;
   config?: Partial<IConfig>;
+  /** The enabled runners the user's settings file holds, read at each call as the host's settings are; the config's unless set. */
+  enabledRunners?: () => string[] | undefined;
   isolation?: IWorktreeIsolation;
   /** False leaves the plan as loaded, never executed by the user. */
   execute?: boolean;
@@ -122,7 +124,7 @@ export async function supervised(tasks: Task[] = [task('t1', 1), task('t2', 2)],
     broadcast: (m) => messages.push(m),
     onNotice: (n) => notices.push(n),
     config: fakeConfig(options.config),
-    settings: () => ({ run: { ...settings } }),
+    settings: () => ({ run: { ...settings }, ...(options.enabledRunners ? { enabledRunners: options.enabledRunners() } : {}) }),
     ...(options.isolation ? { workspaceRoot: () => '/repo' } : {}),
   });
   session.loadPlan(plan(tasks, options.plan), 'build it', options.isolation ? '/repo' : testWorkspace);

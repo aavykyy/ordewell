@@ -7,7 +7,8 @@ import { RUN_SETTINGS_DEFAULTS,
   createTask, defaultEnabledRunners, saveState, RunnerRegistry, recordedInstalledPlanner, resetInstalledPlanner,
   type AiProvider, type DiscoveredModel, type IRunner, type LegacyPlanState, type PlannerUsability,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
-  type RunView, type Session, type SessionDeps, type SettingsService,
+  type RunView, type Session, type SessionDeps, SettingsService, createSession, sessionRuntimeSettings,
+  type ConversationRequest, type ConversationTurn,
   PendingApprovals, approvalScopes, type ApprovalRequestMessage,
   AccountLimitMonitor, type AccountLimitCollector, type AccountLimitReading,
 } from '@ordewell/core';
@@ -239,6 +240,9 @@ function harness(overrides: {
   runnerInstallation?: ReturnType<typeof fakeRunnerInstallation>;
   chatProvider?: ChatViewProvider;
   accountLimits?: AccountLimitMonitor;
+  /** A settings file of the test's own, in place of the fake that holds nothing. */
+  settingsService?: SettingsService;
+  sessionFactory?: ExtensionServices['sessionFactory'];
 } = {}) {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-host-'));
   const vscodeApi = fakeVscodeApi();
@@ -266,11 +270,11 @@ function harness(overrides: {
     fsAdapter: { getWorkspaceRoot: () => workspace } as unknown as VsCodeFileSystem,
     notifications: {} as unknown as VsCodeNotification,
     runner: { stopAll: vi.fn() } as unknown as IRunner,
-    settingsService: settings as unknown as SettingsService,
+    settingsService: overrides.settingsService ?? settings as unknown as SettingsService,
     plannerModelMemory: { remember: vi.fn(), recall: vi.fn(() => ({ model: '', effort: '', source: 'default' })) } as unknown as PlannerModelMemory,
     modelResolver: resolver as unknown as ModelResolver,
     chatProvider: overrides.chatProvider ?? chat.provider as unknown as ChatViewProvider,
-    sessionFactory: (deps) => { sessionDeps.current = deps; return session.session; },
+    sessionFactory: (deps) => { sessionDeps.current = deps; return overrides.sessionFactory?.(deps) ?? session.session; },
     ...(overrides.accountLimits ? { accountLimits: overrides.accountLimits } : {}),
   };
 
@@ -974,5 +978,228 @@ describe('the host\'s one account-limit monitor', () => {
 
     expect(dispose).toHaveBeenCalled();
     expect(reads).toBe(1);
+  });
+});
+
+
+/**
+ * A pill click in the chat header is the user's choice of runners, so it has to
+ * reach the one saved list every surface and every planner turn reads
+ * (ADR-0043). Driven from the webview's message through the real router, host,
+ * settings file and Session; only the planner's model is a fake.
+ */
+describe('a runner pill click persists to the one saved list', () => {
+  const ALL = ['claude-code', 'codex', 'opencode'];
+  const ALLOWED = ['claude-code', 'opencode'];
+  const ctx = { signal: new AbortController().signal };
+  const dirs: string[] = [];
+  const hosts: Array<ReturnType<typeof harness>> = [];
+
+  afterEach(() => {
+    for (const h of hosts.splice(0)) { h.host.dispose(); fs.rmSync(h.workspace, { recursive: true, force: true }); }
+    for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A planner whose turns answer at once, keeping the tools its latest turn was handed. */
+  function plannerModel() {
+    let live = false;
+    let handler: NonNullable<ConversationRequest['plannerTools']>['handler'] | undefined;
+    const reply: ConversationTurn = { kind: 'message', text: 'ok', researchLog: [] };
+    const service = {
+      startConversation: vi.fn(async (req: ConversationRequest) => { live = true; handler = req.plannerTools?.handler; return reply; }),
+      continueConversation: vi.fn(async () => reply),
+      hasActiveConversation: () => live,
+      plannerToolsAttached: () => true,
+      reset: vi.fn(() => { live = false; }),
+      restart: vi.fn(),
+    };
+    const tools = () => handler!;
+    return {
+      service,
+      listRunners: async () => (JSON.parse((await tools().listRunners!({}, ctx)).text) as { runners: Array<{ id: string }> }).runners.map((r) => r.id),
+      listModels: (runner: string) => tools().listModels!({ runner }, ctx),
+    };
+  }
+
+  /** A Session over `deps` that reads `settings` as a window of the host would, with `planner` as its model. */
+  const sessionOver = (deps: SessionDeps, settings: SettingsService, planner: ReturnType<typeof plannerModel>) => createSession({
+    ...deps,
+    // The host's fake config knows no repositories; the Session lists them to lay out skills.
+    config: Object.assign(Object.create(deps.config) as SessionDeps['config'], { workspaceRepos: [], worktreeIsolation: false }),
+    settings: () => sessionRuntimeSettings(settings.getAll()),
+    aiService: planner.service as never,
+    saveSession: vi.fn(),
+  });
+
+  /** The host with three runners installed and all three saved on, over a temporary settings file. */
+  function pillHost(options: { discovery?: Promise<void> } = {}) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-pills-'));
+    dirs.push(dir);
+    const file = new SettingsService(path.join(dir, 'settings.json'));
+    file.setEnabledRunners(ALL);
+    const planner = plannerModel();
+    const installation = fakeRunnerInstallation(ALL);
+    if (options.discovery) {
+      installation.filterInstalled.mockImplementation(async (runners: string[]) => { await options.discovery; return runners; });
+    }
+    const chat = liveChat();
+    const h = harness({
+      settingsService: file,
+      chatProvider: chat.provider,
+      runnerInstallation: installation,
+      modelResolver: fakeResolver({ 'claude-code': models, codex: models, opencode: models }),
+      sessionFactory: (deps) => sessionOver(deps, file, planner),
+    });
+    hosts.push(h);
+    // A failed request is reported to the user through the host's notifications.
+    Object.assign(h.services.notifications, { error: vi.fn() });
+    Object.defineProperty(h.config.config, 'enabledRunners', { get: () => file.getEnabledRunners() ?? defaultEnabledRunners() });
+    const posted = vi.spyOn(chat.provider, 'postMessage');
+    /** What the webview was last told about the runners: the ids it draws on. */
+    const shown = (): string[] | undefined => {
+      const lists = posted.mock.calls.flatMap(([msg]) => (msg.type === 'setRunners' ? [msg.runners] : []));
+      return lists.at(-1)?.filter((r) => r.enabled).map((r) => r.id);
+    };
+    return {
+      h, chat, file, planner, posted, shown,
+      /** What another process reading the same file would find. */
+      saved: () => new SettingsService(path.join(dir, 'settings.json')).getEnabledRunners(),
+      settingsPath: path.join(dir, 'settings.json'),
+      /** The webview asks for `runnerId` on or off. The message type is the fix's to define, so it is built here. */
+      setRunnerEnabled: (runnerId: string, enabled: boolean) => {
+        chat.send({ type: 'setRunnerEnabled', runnerId, enabled } as unknown as WebviewToHost);
+      },
+      send: (text: string, runners: string[]) => chat.send({ type: 'sendMessage', text, runners, typed: true }),
+    };
+  }
+
+  it('saves Codex off as exactly the two allowed runners, and tells the webview the list it now holds', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+    expect(p.shown()).toEqual(ALL);
+
+    p.setRunnerEnabled('codex', false);
+
+    await vi.waitFor(() => expect(p.saved()).toEqual(ALLOWED));
+    await vi.waitFor(() => expect(p.shown()).toEqual(ALLOWED));
+  });
+
+  it('keeps Codex out of the first planning turn: list_runners drops it and list_models refuses it', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+
+    p.setRunnerEnabled('codex', false);
+    await vi.waitFor(() => expect(p.saved()).toEqual(ALLOWED));
+    p.send('build it', ALLOWED);
+    await vi.waitFor(() => expect(p.planner.service.startConversation).toHaveBeenCalled());
+
+    expect(await p.planner.listRunners()).toEqual(ALLOWED);
+    expect(await p.planner.listModels('codex')).toMatchObject({ isError: true, text: expect.stringContaining('"codex" is not enabled') });
+    expect(await p.planner.listModels('opencode')).not.toMatchObject({ isError: true });
+  });
+
+  it('keeps Codex out of a follow-up turn of a conversation that began with all three', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+    p.send('build it', ALL);
+    await vi.waitFor(() => expect(p.planner.service.startConversation).toHaveBeenCalled());
+    expect(await p.planner.listRunners()).toEqual(ALL);
+
+    p.setRunnerEnabled('codex', false);
+    await vi.waitFor(() => expect(p.saved()).toEqual(ALLOWED));
+    p.send('add a follow-up task', ALLOWED);
+    await vi.waitFor(() => expect(p.planner.service.continueConversation).toHaveBeenCalled());
+
+    expect(await p.planner.listRunners()).toEqual(ALLOWED);
+    expect(await p.planner.listModels('codex')).toMatchObject({ isError: true });
+  });
+
+  it('is read by a second consumer of the same workspace\'s settings file, a Session of its own', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+    const second = plannerModel();
+    const secondSession = sessionOver(p.h.sessionDeps.current!, new SettingsService(p.settingsPath), second);
+    await secondSession.startPlanning('goal', ALL);
+    expect(await second.listRunners()).toEqual(ALL);
+
+    p.setRunnerEnabled('codex', false);
+
+    await vi.waitFor(async () => expect(await second.listRunners()).toEqual(ALLOWED));
+    expect(await second.listModels('codex')).toMatchObject({ isError: true });
+  });
+
+  it('says the same thing twice with the same result: the request names a state, it does not flip one', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+
+    p.setRunnerEnabled('codex', false);
+    p.setRunnerEnabled('codex', false);
+
+    await vi.waitFor(() => expect(p.saved()).toEqual(ALLOWED));
+    p.setRunnerEnabled('codex', false);
+    p.setRunnerEnabled('opencode', true);
+    await vi.waitFor(() => expect(p.shown()).toEqual(ALLOWED));
+    expect(p.saved()).toEqual(ALLOWED);
+  });
+
+  it('does not bring back a runner another surface switched off since the webview last drew', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+    // The terminal UI switched Codex off; this webview has not heard yet and asks for the same.
+    p.file.updateEnabledRunners((saved) => (saved ?? ALL).filter((r) => r !== 'codex'));
+
+    p.setRunnerEnabled('codex', false);
+    p.setRunnerEnabled('opencode', false);
+
+    await vi.waitFor(() => expect(p.saved()).toEqual(['claude-code']));
+  });
+
+  it('refuses to switch off the last saved runner, whatever the webview thought it held', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+    p.file.setEnabledRunners(['claude-code']);
+    p.posted.mockClear();
+
+    p.setRunnerEnabled('claude-code', false);
+
+    await vi.waitFor(() => expect(p.shown()).toEqual(['claude-code']));
+    expect(p.saved()).toEqual(['claude-code']);
+  });
+
+  it('writes no id that is not a runner into the shared file', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+
+    p.setRunnerEnabled('no-such-agent', true);
+    p.setRunnerEnabled('no-such-agent', false);
+    p.setRunnerEnabled('codex', false);
+
+    await vi.waitFor(() => expect(p.saved()).toEqual(ALLOWED));
+    expect(p.saved()).not.toContain('no-such-agent');
+  });
+
+  it('survives discovery that finishes after the click: the saved choice stands and the late list shows it', async () => {
+    let finishDiscovery!: () => void;
+    const p = pillHost({ discovery: new Promise<void>((resolve) => { finishDiscovery = resolve; }) });
+    const starting = p.h.host.start();
+
+    p.setRunnerEnabled('codex', false);
+    finishDiscovery();
+    await starting;
+
+    await vi.waitFor(() => expect(p.saved()).toEqual(ALLOWED));
+    await vi.waitFor(() => expect(p.shown()).toEqual(ALLOWED));
+  });
+
+  it('puts the webview back on the saved list when the save is rejected, leaving the file as it was', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+    vi.spyOn(p.file, 'updateEnabledRunners').mockImplementation(() => { throw new Error('EACCES: settings file is read-only'); });
+    p.posted.mockClear();
+
+    p.setRunnerEnabled('codex', false);
+
+    await vi.waitFor(() => expect(p.shown()).toEqual(ALL));
+    expect(p.saved()).toEqual(ALL);
   });
 });
