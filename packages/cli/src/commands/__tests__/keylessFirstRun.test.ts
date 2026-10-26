@@ -125,6 +125,7 @@ describe('keyless first-run entry points at the process boundary', () => {
     recordInstalledPlanner('claude-code');
     runner = { activeCount: 0, spawn: vi.fn(async (opts) => new FakeRunnerSession('task-run', opts.taskId)), stop: vi.fn(), stopAll: vi.fn() };
     pool = new OrchestratorPool({
+      accountLimitCollectors: () => [],
       modelResolver: inertResolver(),
       runner,
       runnerInstallation: { plannerUsability: async () => ({ usable: true as const }), filterInstalled: async (ids: string[]) => ids.filter((id) => id === 'claude-code') },

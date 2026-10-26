@@ -2,6 +2,14 @@ import { spawn as nodeSpawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { WebSocket } from 'ws';
 import {
+  AccountLimitMonitor,
+  claudeAccountLimitCollector,
+  codexAccountLimitCollector,
+  openCodeGoAccountLimitCollector,
+  assignedRunnerOf,
+  flattenTasks,
+  type AccountLimitCollector,
+  type AccountLimitsFrame,
   Session,
   createSession,
   type ConversationCompaction,
@@ -78,6 +86,8 @@ export interface AdoptedFork {
 type RunnerInstall = Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability'> & Partial<Pick<RunnerInstallation, 'refresh'>>;
 
 export interface OrchestratorPoolDeps {
+  /** Inject acquisition boundaries without reading real accounts in host lifecycle tests. */
+  accountLimitCollectors?: (workspace: string) => readonly AccountLimitCollector[];
   /**
    * Where every plan's tasks run (ADR-0018), shared across sessions behind
    * each plan's `PoolAwareRunner`. Defaulted to a real one; tests inject a fake.
@@ -101,6 +111,12 @@ export interface OrchestratorPoolDeps {
 }
 
 export class OrchestratorPool {
+  // A daemon serves several workspaces; login selection must never follow
+  // whichever session was opened most recently (ADR-0051).
+  private readonly sessionWorkspaces = new Map<string, string>();
+  private readonly accountLimits = new Map<string, AccountLimitMonitor>();
+  private readonly accountLimitCollectors: (workspace: string) => readonly AccountLimitCollector[];
+  private limitsRevision = 0;
   private sessions = new Map<string, Session>();
   private clients = new Map<string, Set<WebSocket>>();
   /**
@@ -137,6 +153,16 @@ export class OrchestratorPool {
     this.codexSandbox = deps.codexSandbox
       ?? new CodexSandboxAvailability(this.registry, { spawn: nodeSpawn, fetch: globalThis.fetch }, { cwd: process.cwd(), env: process.env });
     this.leaseHost = deps.leaseHost;
+    this.accountLimitCollectors = deps.accountLimitCollectors ?? ((workspace) => {
+      const workspaceRoot = () => workspace;
+      const isInstalled = (runner: string) => async () => (await this.runnerInstallation.filterInstalled([runner])).includes(runner);
+      const server = this.registry.getManifest('codex')?.modelDiscovery.appServer;
+      return [
+        claudeAccountLimitCollector({ workspaceRoot, isInstalled: isInstalled('claude-code') }),
+        codexAccountLimitCollector({ workspaceRoot, isInstalled: isInstalled('codex'), command: server?.command, args: server?.args }),
+        openCodeGoAccountLimitCollector({ workspaceRoot, isInstalled: isInstalled('opencode') }),
+      ];
+    });
   }
 
   /**
@@ -180,14 +206,65 @@ export class OrchestratorPool {
   subscribe(sessionId: string, ws: WebSocket): void {
     if (!this.clients.has(sessionId)) this.clients.set(sessionId, new Set());
     this.clients.get(sessionId)!.add(ws);
+    this.connectAccountLimits(sessionId, ws);
   }
 
   unsubscribe(sessionId: string, ws: WebSocket): void {
     this.clients.get(sessionId)?.delete(ws);
     if (this.clients.get(sessionId)?.size === 0) this.clients.delete(sessionId);
+    this.releaseUnusedAccountLimits();
+  }
+
+  private connectAccountLimits(sessionId: string, ws: WebSocket): void {
+    const workspace = this.sessionWorkspaces.get(sessionId);
+    if (!workspace) {
+      this.sendAccountLimits(sessionId, ws, []);
+      return;
+    }
+    let monitor = this.accountLimits.get(workspace);
+    if (!monitor) {
+      monitor = new AccountLimitMonitor({ collectors: this.accountLimitCollectors(workspace) });
+      this.accountLimits.set(workspace, monitor);
+      monitor.subscribe((limits) => {
+        for (const [id, clients] of this.clients) {
+          if (this.sessionWorkspaces.get(id) !== workspace) continue;
+          for (const client of clients) this.sendAccountLimits(id, client, limits);
+        }
+      });
+    }
+    this.sendAccountLimits(sessionId, ws, monitor.snapshots());
+    monitor.setForeground(true);
+    monitor.surfaceConnected();
+  }
+
+  private sendAccountLimits(sessionId: string, ws: WebSocket, limits: AccountLimitsFrame['limits']): void {
+    if (ws.readyState !== ws.OPEN) return;
+    ws.send(JSON.stringify({ type: 'account_limits', sessionId, limits, stream: this.stream, revision: ++this.limitsRevision } satisfies AccountLimitsFrame));
+  }
+
+  private releaseUnusedAccountLimits(): void {
+    for (const [workspace, monitor] of this.accountLimits) {
+      if ([...this.clients.keys()].some((id) => this.sessionWorkspaces.get(id) === workspace)) continue;
+      monitor.dispose();
+      this.accountLimits.delete(workspace);
+    }
+  }
+
+  private registerSession(sessionId: string, workspace: string, session: Session): void {
+    this.sessions.set(sessionId, session);
+    this.sessionWorkspaces.set(sessionId, workspace);
+    for (const ws of this.clients.get(sessionId) ?? []) this.connectAccountLimits(sessionId, ws);
   }
 
   private broadcast(sessionId: string, msg: SessionMessage | SessionNotice): void {
+    const workspace = this.sessionWorkspaces.get(sessionId);
+    const monitor = workspace ? this.accountLimits.get(workspace) : undefined;
+    if (msg.type === 'planner_usage') monitor?.invalidate();
+    else if (msg.type === 'task_log' && msg.events.some((event) => event.type === 'turn_end')) {
+      const task = flattenTasks(this.sessions.get(sessionId)?.planTasks ?? []).find((task) => task.id === msg.taskId);
+      const runner = task && assignedRunnerOf(task);
+      if (runner) monitor?.invalidate(runner);
+    }
     const seq = (this.sequence.get(sessionId) ?? 0) + 1;
     this.sequence.set(sessionId, seq);
     const payload = JSON.stringify({ ...msg, stream: this.stream, seq } satisfies SessionFrame);
@@ -466,6 +543,8 @@ export class OrchestratorPool {
       }
     }
 
+    if (envChanges) for (const monitor of this.accountLimits.values()) monitor.refresh();
+
     if (selection?.remember) {
       const { provider, model, effort } = selection.remember;
       // Without a switch a vendor pick is keyed by the provider its model id
@@ -611,7 +690,7 @@ export class OrchestratorPool {
     // that answer arrives over POST /api/approvals/:sessionId — which 404s
     // until the session is in this map. Registering only on return made the
     // first approval of every session unanswerable until its 5-minute timeout.
-    this.sessions.set(sessionId, session);
+    this.registerSession(sessionId, workspace, session);
     this.warmCodexSandbox();
     return session;
   }
@@ -686,7 +765,7 @@ export class OrchestratorPool {
     }
     // A live session with no plan yet is mid-planning; replacing it must stop that turn.
     this.destroy(sessionId);
-    this.sessions.set(sessionId, session);
+    this.registerSession(sessionId, workspace, session);
 
     return session.planState ?? saved.plan;
   }
@@ -731,6 +810,8 @@ export class OrchestratorPool {
   destroy(sessionId: string, options?: { notifyClients?: boolean }): void {
     this.sessions.get(sessionId)?.destroy();
     this.sessions.delete(sessionId);
+    this.sessionWorkspaces.delete(sessionId);
+    this.releaseUnusedAccountLimits();
     if (!options?.notifyClients) return;
     const clients = this.clients.get(sessionId);
     if (!clients) return;

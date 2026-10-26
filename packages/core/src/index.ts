@@ -197,6 +197,7 @@ export {
 export { globalDataDir, migrateOldConfigDir } from './utils/globalDataDir';
 export { writePrivateFile, ensurePrivateDir } from './utils/privateFile';
 export type {
+  AccountLimitsMessage,
   SessionMessage,
   SessionBroadcaster,
   SessionNotice,

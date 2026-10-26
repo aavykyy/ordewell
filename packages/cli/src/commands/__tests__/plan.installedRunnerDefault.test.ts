@@ -101,6 +101,7 @@ describe('with no saved runner choice, the installed agents are the enabled runn
 
     const runner: IRunner = { activeCount: 0, spawn: vi.fn(async (opts) => new FakeRunnerSession('task-run', opts.taskId)), stop: vi.fn(), stopAll: vi.fn() };
     pool = new OrchestratorPool({
+      accountLimitCollectors: () => [],
       modelResolver: inertResolver(),
       runner,
       runnerInstallation: {

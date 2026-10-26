@@ -19,7 +19,7 @@ store, which is a security boundary and needs a decision on record.
 
 ## Decision
 
-**The extension host reads the one login OpenCode would pay for a Go model
+**The host reads the one login OpenCode would pay for a Go model
 with, from OpenCode's own store and nowhere else, and sends it only to
 OpenCode's fixed quota addresses.** No OpenCode process is started, no model
 is called, and nothing is refreshed, written, copied or kept beyond the read.
@@ -38,7 +38,7 @@ is called, and nothing is refreshed, written, copied or kept beyond the read.
   `OPENCODE_DB` or `opencode.db`, under the workspace's environment as an
   OpenCode task would see it (ADR-0016).
 - **How it is read (G3).** Through the runtime's own `node:sqlite`, in a
-  worker thread so a slow disk or a writer's lock never stalls the extension
+  worker thread so a slow disk or a writer's lock never stalls the
   host, with a deadline. The worker opens the store read-only (immutable for a
   WAL store that no writer has open, so no WAL files are created beside it),
   ranks connections on their ids alone, and reads the value of the selected
@@ -63,16 +63,34 @@ is called, and nothing is refreshed, written, copied or kept beyond the read.
   amount to its limit is shown. It is computed exactly from whole-number
   strings, and with no limit there is no share. The key route's percentages
   are shown as given. A reset that is not reported stays unknown.
-- **Whose task (G7).** The limits meter `opencode-go/…` models only. A task
+- **Whose footer (G7).** The limits meter `opencode-go/…` models only. A task
   log draws them while the provider serving the task is `opencode-go`: the
   provider named by the latest attempt's own usage, under its current
   assignment, else the assigned model's. A task on Zen, a third party or no
-  named model draws none. The planner footer draws them whatever plans.
+  named model draws none. Browsing an older attempt keeps these live limits
+  attached once, beside the existing attempt and task-total accounting. The
+  planner footer draws only its currently selected harness's account, and Go
+  only for a selected `opencode-go/…` model. A vendor API or unknown planner
+  draws no account limits. Context comes first (`Planner ctx` for the planner,
+  `ctx` for a task), then limits, then reported cost, in one compact row.
+  The TUI truncates the row to the terminal width; it adds no details or wrap.
 - **Refusals (G8).** 401 is signed out, 404 and the key route's
   `EntitlementError` are unsupported, and any other 403 is a denial that keeps
   nothing. 429 and 5xx keep the same login's last read, stale, and a
   `Retry-After` holds every read of that account until it passes. A throttled
   quota read is never an exhausted quota.
+
+The VS Code extension host and the local daemon compose the same core
+collectors and `AccountLimitMonitor`. The daemon owns one monitor per workspace
+with connected session subscribers, binding every collector to that workspace's
+environment. Sessions in that workspace share reads; another workspace shares
+none of its login data. Connecting or reconnecting sends the latest snapshot,
+including an initial empty one, over the existing session socket in a typed
+host-owned frame with its own revision, independent of run snapshots. Model
+usage invalidates at the monitor's normal pace. The last disconnect, session
+replacement without another consumer, or daemon shutdown disposes the monitor
+and aborts its reads; a late answer reaches no surface. No live quota data
+enters saved plan state, a transcript or planner context.
 
 ## Testing decisions
 
@@ -90,7 +108,6 @@ reaches the network.
 - Whether a Console login serves Go is decided by the Console's config, which
   is not fetched; a Console login with no Go plan shows none, even beside a Go
   key OpenCode might then use.
-- The CLI and TUI do not read these limits yet.
 
 ## Considered options
 
@@ -109,12 +126,14 @@ reaches the network.
 
 ## Consequences
 
-- A Go account's limits show without any OpenCode process running.
+- A Go account's limits show in VS Code and the TUI without any OpenCode
+  process running; the daemon acquires them for the TUI.
 - The Console route is the one the Console's own page reads, not a published
   API. A shape it no longer matches reads as a failed read, never as zero.
-- A VS Code whose Node predates 22.16 shows no Go row for a v2 login: its
+- A host whose Node predates 22.16 shows no Go row for a v2 login: its
   snapshot is `unsupported`, which draws nothing.
 
 ## History
 
 - 2026-10-25 — accepted.
+- 2026-10-26 — the daemon supplies workspace-scoped live limits to the TUI, and planner footers follow the selected harness and model (G7).
