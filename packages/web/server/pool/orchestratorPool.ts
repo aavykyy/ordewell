@@ -58,6 +58,7 @@ import {
   PlannerTurnStoppedError,
   type LeaseHost,
   workspaceEnvOf,
+  recordedRunnerAuth,
 } from '@ordewell/core';
 import { WebConfig, type PlannerPick } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
@@ -146,7 +147,10 @@ export class OrchestratorPool {
     // request naming a workspace is judged by that workspace's own probe.
     this.suppliedRunnerInstallation = deps.runnerInstallation;
     this.runnerInstallation = deps.runnerInstallation
-      ?? new RunnerInstallation(this.registry, undefined, undefined, { env: () => workspaceEnvOf(process.cwd()) });
+      ?? new RunnerInstallation(this.registry, undefined, undefined, {
+        env: () => workspaceEnvOf(process.cwd()),
+        workspace: () => process.cwd(),
+      });
     this.modelResolver = deps.modelResolver ?? new ModelResolver(this.registry, new WebConfig());
     this.codexSandbox = deps.codexSandbox
       ?? new CodexSandboxAvailability(this.registry, { spawn: nodeSpawn, fetch: globalThis.fetch }, { cwd: process.cwd(), env: process.env });
@@ -578,7 +582,10 @@ export class OrchestratorPool {
     const key = resolve(workspace);
     let installation = this.workspaceInstallations.get(key);
     if (!installation) {
-      installation = new RunnerInstallation(this.registry, undefined, undefined, { env: () => workspaceEnvOf(key) });
+      installation = new RunnerInstallation(this.registry, undefined, undefined, {
+        env: () => workspaceEnvOf(key),
+        workspace: () => key,
+      });
       this.workspaceInstallations.set(key, installation);
     }
     return installation;
@@ -624,8 +631,26 @@ export class OrchestratorPool {
   }
 
   async generatePlan(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<PlanState> {
+    const recheck = this.recheckSignedOutPlanner(workspace, this.plannerConfig(modelOverride).aiProvider);
+    if (recheck) await recheck;
     const session = this.openPlanningSession(sessionId, runners, workspace, modelOverride, options);
     return migratePlanState(await this.firstTurn(sessionId, session, () => session.generatePlan(goal, runners)));
+  }
+
+  /**
+   * Judge the planner as the workspace's account is now, not as it was when the
+   * list was last read: the signed-out refusal itself offers the runner's own
+   * `auth login` as a way back, and that happens in another process. Only a
+   * recorded signed-out verdict is asked again — unknown never blocks, and a
+   * signed-in one is the runner's own failure to report. Null when there is
+   * nothing to ask, so the turn registers at once as it always did.
+   */
+  private recheckSignedOutPlanner(workspace: string, provider: PlannerBackendId): Promise<void> | null {
+    const runner = runnerForProvider(provider);
+    if (!runner || recordedRunnerAuth(runner, workspace)?.state !== 'signed-out') return null;
+    const installation = this.installationFor(workspace);
+    installation.refresh?.();
+    return installation.plannerUsability(runner).then(() => undefined);
   }
 
   /**
@@ -665,6 +690,8 @@ export class OrchestratorPool {
    * assistant message lives in conversationHistory).
    */
   async startPlanning(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<LegacyPlanState> {
+    const recheck = this.recheckSignedOutPlanner(workspace, this.plannerConfig(modelOverride).aiProvider);
+    if (recheck) await recheck;
     const session = this.openPlanningSession(sessionId, runners, workspace, modelOverride, options);
     return this.firstTurn(sessionId, session, () => session.startPlanning(goal, runners));
   }

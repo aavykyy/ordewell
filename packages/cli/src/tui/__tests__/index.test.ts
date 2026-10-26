@@ -62,6 +62,7 @@ vi.mock('../terminal', () => ({
 }));
 
 import { handleTui, type LoginSpawn } from '../index';
+import { augmentedPath, clearAugmentedPathCache } from '@ordewell/core';
 
 type SignalName = 'SIGINT' | 'SIGTERM' | 'SIGHUP' | 'SIGCONT' | 'uncaughtException';
 const SIGNALS: SignalName[] = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGCONT', 'uncaughtException'];
@@ -178,6 +179,27 @@ describe('handleTui', () => {
       expect(daemon.ensureDaemonOwned).toHaveBeenCalledWith(4000, { detached: false, cwd: workspace });
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves a relative --workspace once, so its daemon is not handed <ws>/<ws>', async () => {
+    // The daemon runs with the workspace as its cwd. A raw `sub` sent on each
+    // request is then resolved again against the daemon's cwd, so the probe
+    // reads a directory that does not exist and ignores the workspace's env.
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-tui-relative-'));
+    const cwd = process.cwd();
+    try {
+      fs.mkdirSync(path.join(parent, 'sub'), { recursive: true });
+      process.chdir(parent);
+      void handleTui(['--workspace', 'sub']);
+
+      await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
+      const resolved = path.resolve('sub');
+      expect(daemon.ensureDaemonOwned).toHaveBeenCalledWith(4000, { detached: false, cwd: resolved });
+      expect(apiClient.ApiClient).toHaveBeenCalledWith(4000, resolved);
+    } finally {
+      process.chdir(cwd);
+      fs.rmSync(parent, { recursive: true, force: true });
     }
   });
 
@@ -400,6 +422,28 @@ describe('handleTui', () => {
       await vi.waitFor(() => expect(frame()).toContain('Claude Code is signed in.'));
       expect(frame()).not.toContain('Claude Code is not logged in');
       vi.unstubAllEnvs();
+    });
+
+    it('runs the login with the same augmented PATH the probe and planner-spawn use', async () => {
+      // A GUI-launched TUI inherits a minimal PATH; the probe and the planner
+      // find an agent in ~/.local/bin, so its own login must start too.
+      const { child, spawn } = await signedOutTui();
+      const original = process.env.PATH;
+      try {
+        process.env.PATH = '/definitely-not-a-real-bin';
+        clearAugmentedPathCache();
+        type('/login');
+        await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+
+        const env = vi.mocked(spawn).mock.calls[0][2]?.env as NodeJS.ProcessEnv;
+        expect(await augmentedPath()).toContain(path.join(os.homedir(), '.local', 'bin'));
+        expect(env.PATH).toContain(path.join(os.homedir(), '.local', 'bin'));
+        child.emit('exit', 1, null);
+      } finally {
+        process.env.PATH = original;
+        clearAugmentedPathCache();
+        vi.unstubAllEnvs();
+      }
     });
 
     it('takes the terminal back and names the command when the login cannot start', async () => {

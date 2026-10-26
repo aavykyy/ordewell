@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { plannerPreflightError } from '../PlanManager';
-import { getProviderMeta, PROVIDER_DETECT_PRIORITY, type PlannerBackendId } from '@ordewell/core';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { plannerPreflightError, recheckSignedOutPlanner, type PlanManagerDeps } from '../PlanManager';
+import { getProviderMeta, PROVIDER_DETECT_PRIORITY, recordRunnerAuth, resetRunnerAuth, type PlannerBackendId } from '@ordewell/core';
 import { VsCodeConfig } from '../../adapters/VsCodeConfig';
 import { SecretStore } from '../../adapters/SecretStore';
 import { __setConfig, __resetConfig } from '../../test/vscode.mock';
@@ -101,5 +101,58 @@ describe('plannerPreflightError on the extension\'s own config', () => {
 
     expect(plannerPreflightError(config)).toBeNull();
     expect(config.apiKey).toBe('g-legacy');
+  });
+});
+
+/**
+ * A signed-out refusal offers the runner's own login as a way back, and that
+ * runs outside the extension host. The turn must ask the workspace's account
+ * again rather than keep the verdict the last runner list read.
+ */
+describe('recheckSignedOutPlanner', () => {
+  afterEach(() => resetRunnerAuth());
+
+  function host(auth?: { state: 'signed-in' | 'signed-out' | 'unknown'; loginCommand?: string[] }) {
+    const plannerUsability = vi.fn(async () => ({ usable: true }));
+    const installation = { refresh: vi.fn(), plannerUsability };
+    if (auth) recordRunnerAuth('claude-code', auth, '/repo');
+    return {
+      plannerUsability,
+      installation,
+      deps: {
+        config: config('claude-code', '', 'sonnet'),
+        fsAdapter: { getWorkspaceRoot: () => '/repo' } as unknown as PlanManagerDeps['fsAdapter'],
+        runnerInstallation: installation,
+      },
+    };
+  }
+
+  it('asks the workspace account again after a signed-out verdict', async () => {
+    const h = host({ state: 'signed-out', loginCommand: ['claude', 'auth', 'login'] });
+
+    await recheckSignedOutPlanner(h.deps);
+
+    expect(h.installation.refresh).toHaveBeenCalledTimes(1);
+    expect(h.plannerUsability).toHaveBeenCalledWith('claude-code');
+  });
+
+  it('asks nothing when the verdict is signed in or unknown', async () => {
+    for (const state of ['signed-in', 'unknown'] as const) {
+      resetRunnerAuth();
+      const h = host({ state });
+
+      await recheckSignedOutPlanner(h.deps);
+
+      expect(h.plannerUsability).not.toHaveBeenCalled();
+    }
+  });
+
+  it('does not read another workspace\'s signed-out verdict', async () => {
+    const h = host();
+    recordRunnerAuth('claude-code', { state: 'signed-out', loginCommand: ['claude', 'auth', 'login'] }, '/elsewhere');
+
+    await recheckSignedOutPlanner(h.deps);
+
+    expect(h.plannerUsability).not.toHaveBeenCalled();
   });
 });

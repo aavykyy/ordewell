@@ -60,6 +60,7 @@ import { approvalRecordOf, flattenTasks, keepExecutionState, migrateLoadedPlan, 
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import { describeHeld, describeLost, processLeaseHost, UNLEASED, type LeaseHost, type SessionHeld, type SessionLease } from './sessionLease';
 import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
+import { recordedRunnerAuth } from './runnerAuth';
 import { installedPlannerAnswered, installedPlannerDetected } from './InstalledPlanner';
 import type { IConfig } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
@@ -1471,7 +1472,9 @@ export class Session {
    * the session.
    */
   assertPlannerReady(): void {
-    const reason = plannerNotReadyFor(this.config);
+    // Read the record for this session's workspace: a daemon may serve several,
+    // and another one's runner list must not decide this planner's login.
+    const reason = plannerNotReadyFor(this.config, (runner) => recordedRunnerAuth(runner, this.workspace));
     if (reason) throw new PlannerNotReadyError(reason);
   }
 

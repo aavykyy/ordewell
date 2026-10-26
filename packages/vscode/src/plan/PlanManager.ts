@@ -5,6 +5,7 @@ import {
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
   createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, pastGateConfirmation, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
   taskActionCommand, runHoldsEditors, cardEditNeedsUnstarted, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction, type TaskEditOptions,
+  recordedRunnerAuth, runnerForProvider, type RunnerInstallation,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit } from '../shared/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -21,6 +22,12 @@ export interface PlanManagerDeps {
   config: VsCodeConfig;
   fsAdapter: VsCodeFileSystem;
   runner: IRunner;
+  /**
+   * The host's login probe, asked again before a turn whose recorded verdict
+   * says signed out: the refusal offers the runner's own login as a way back,
+   * and that happens outside this process.
+   */
+  runnerInstallation?: Pick<RunnerInstallation, 'refresh' | 'plannerUsability'>;
   notifications: INotification;
   getCurrentPlan: () => LegacyPlanState;
   setCurrentPlan: (plan: LegacyPlanState) => void;
@@ -113,6 +120,23 @@ export function plannerPreflightError(config: PlanManagerDeps['config']): string
 }
 
 /**
+ * Ask this workspace's account again when the last verdict was signed out. The
+ * gate is synchronous and the refusal itself offers the runner's own login as
+ * a way back, which runs in another process; without this the user who took
+ * that route stays refused until a runner-list refresh.
+ */
+export function recheckSignedOutPlanner(
+  deps: Pick<PlanManagerDeps, 'config' | 'fsAdapter' | 'runnerInstallation'>,
+): Promise<void> | null {
+  const installation = deps.runnerInstallation;
+  if (!installation) return null;
+  const runner = runnerForProvider(deps.config.aiProvider);
+  if (!runner || recordedRunnerAuth(runner, deps.fsAdapter.getWorkspaceRoot())?.state !== 'signed-out') return null;
+  installation.refresh();
+  return installation.plannerUsability(runner).then(() => undefined);
+}
+
+/**
  * The session owns the turn — its busy state, its stop, and its planner gate,
  * which waits for the activation probe and judges readiness (ADR-0009); a
  * failure is all that is left to report. Nothing waits here: a wait the
@@ -149,6 +173,9 @@ export async function handleStartPlanning(
   // with no pick of the user's, the session reads the enabled runners itself
   // once its planner gate opens, rather than plan for an agent not installed.
   const requested = !pendingRunners?.length && !installedPlannerAnswered() ? undefined : runners;
+  // A login done with the runner's own command is seen before the gate judges.
+  const recheck = recheckSignedOutPlanner(deps);
+  if (recheck) await recheck;
   // A goal still waiting for the probe is replaced by this one in the session.
   await inPlannerTurn(deps, async () => {
     const plan = await deps.session.startPlanning(userDescription, requested);

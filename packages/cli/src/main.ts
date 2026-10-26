@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { resolve } from 'path';
 import { migrateOldConfigDir } from '@ordewell/core';
 import { loadEnvFile, moveAutonomyToSettings } from './utils/env';
 import { printHelp } from './help';
@@ -33,7 +34,9 @@ async function main(): Promise<void> {
     console.log(cliVersion());
     return;
   }
-  ApiClient.defaultWorkspace = flag(argv, '--workspace') || undefined;
+  // Resolved once, so a daemon that runs in another directory never resolves a
+  // relative `--workspace` against its own cwd.
+  ApiClient.defaultWorkspace = resolve(flag(argv, '--workspace') || process.cwd());
   const sessionAt = argv.indexOf('--session-id');
   if (sessionAt > 0 && argv[sessionAt + 1]) {
     argv[sessionAt + 1] = expandSessionId(argv[sessionAt + 1], flag(argv, '--workspace') || process.cwd());

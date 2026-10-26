@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join, resolve } from 'path';
+import { delimiter, join, resolve } from 'path';
 import {
-  CliAgentAiService, OpenAiService, Session, getProviderMeta, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PROVIDER_DETECT_PRIORITY,
-  RunnerInstallation, createTask, resetInstalledPlanner, saveSession, type ConversationTurn, type IRunner, type LegacyPlanState,
+  CliAgentAiService, OpenAiService, Session, clearAugmentedPathCache, getProviderMeta, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PROVIDER_DETECT_PRIORITY,
+  RunnerInstallation, createTask, resetInstalledPlanner, resetRunnerAuth, saveSession, type ConversationTurn, type IRunner, type LegacyPlanState,
   type PlannerUsability, type RunnerSpawnOptions,
 } from '@ordewell/core';
 import { FakeRunnerSession } from '@ordewell/core/testing';
@@ -37,8 +37,38 @@ describe('OrchestratorPool default planner', () => {
     vi.restoreAllMocks();
     resetInstalledPlanner();
     process.env = { ...saved };
+    clearAugmentedPathCache();
     rmSync(dir, { recursive: true, force: true });
   });
+
+  /**
+   * A fake `claude` on PATH whose login state is the presence of
+   * `<CLAUDE_CONFIG_DIR>.logged-in`, so an account file can turn from signed-out
+   * to signed-in the way a login in another process does.
+   */
+  function fakeClaudeAgent(): void {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const command = join(bin, 'claude');
+    writeFileSync(command, [
+      '#!/bin/sh',
+      'case "$1" in',
+      '  --version) echo "claude fake"; exit 0 ;;',
+      '  auth)',
+      '    if [ -f "$CLAUDE_CONFIG_DIR.logged-in" ]; then',
+      '      echo \'{"authMethod":"oauth"}\'; exit 0',
+      '    fi',
+      '    echo \'{"authMethod":"none"}\'; exit 1 ;;',
+      'esac',
+      '',
+    ].join('\n'));
+    chmodSync(command, 0o755);
+    process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`;
+    clearAugmentedPathCache();
+    // The other agents are not what these tests are about; keep detection and
+    // the list to the one whose account each workspace chooses.
+    vi.spyOn(RunnerInstallation.prototype, 'isInstalled').mockImplementation(async (runner: string) => runner === 'claude-code');
+  }
 
   /** An installation whose agents all answer when the test says so: Claude Code first in order. */
   function gatedInstallation(usable = true) {
@@ -389,5 +419,81 @@ describe('OrchestratorPool default planner', () => {
 
     expect(runners).toEqual([expect.objectContaining({ id: 'claude-code', auth })]);
     pool.destroyAll();
+  });
+  /** A workspace whose `.ordewell/env` selects `accountDir` as its Claude account. */
+  function workspaceWithAccount(name: string, accountDir: string): string {
+    const ws = join(dir, name);
+    mkdirSync(join(ws, '.ordewell'), { recursive: true });
+    mkdirSync(join(ws, '.git'), { recursive: true });
+    writeFileSync(join(ws, '.ordewell', 'env'), `CLAUDE_CONFIG_DIR=${accountDir}\n`);
+    return ws;
+  }
+
+  /** An account directory, signed in when its `.logged-in` marker is present. */
+  function accountDir(name: string, signedIn: boolean): string {
+    const account = join(dir, 'accounts', name);
+    mkdirSync(account, { recursive: true });
+    const marker = `${account}.logged-in`;
+    if (signedIn) writeFileSync(marker, '');
+    else rmSync(marker, { force: true });
+    return account;
+  }
+
+  // The auth gate is synchronous, while a daemon can serve several workspaces:
+  // a runner list for another workspace must not decide whether this one's
+  // planner is signed in.
+  it('judges a turn by the workspace that will plan, not by the last runner list request', async () => {
+    fakeClaudeAgent();
+    const wsA = workspaceWithAccount('workspace-a', accountDir('a', true));
+    const wsB = workspaceWithAccount('workspace-b', accountDir('b', false));
+    const pool = new OrchestratorPool({
+      codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
+    });
+    try {
+      resetRunnerAuth();
+      await pool.detectInstalledPlanner();
+      expect(await pool.getInstalledRunners(wsA)).toEqual([
+        expect.objectContaining({ id: 'claude-code', auth: expect.objectContaining({ state: 'signed-in' }) }),
+      ]);
+      // Account B is signed out; asking for its list must not un-sign-in A.
+      expect(await pool.getInstalledRunners(wsB)).toEqual([
+        expect.objectContaining({ id: 'claude-code', auth: expect.objectContaining({ state: 'signed-out' }) }),
+      ]);
+      agentTransport();
+
+      await expect(pool.startPlanning('sA', 'ship it', ['claude-code'], wsA)).resolves.toBeDefined();
+      // The reverse too: the signed-in verdict A just recorded must not open
+      // B, whose own account the list found signed out.
+      await expect(pool.startPlanning('sB', 'ship it', ['claude-code'], wsB)).rejects.toBeInstanceOf(PlannerNotReadyError);
+    } finally {
+      pool.destroyAll();
+    }
+  });
+
+  // The refusal itself offers the runner's own command as a way back in. A
+  // login done that way happens in another process; the gate must ask again
+  // rather than keep the verdict it recorded before.
+  it('sees a login completed outside Ordewell before it refuses the next turn', async () => {
+    fakeClaudeAgent();
+    const account = accountDir('a', false);
+    const ws = workspaceWithAccount('workspace', account);
+    const pool = new OrchestratorPool({
+      codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
+    });
+    try {
+      resetRunnerAuth();
+      await pool.detectInstalledPlanner();
+      expect(await pool.getInstalledRunners(ws)).toEqual([
+        expect.objectContaining({ id: 'claude-code', auth: expect.objectContaining({ state: 'signed-out' }) }),
+      ]);
+
+      // What `claude auth login` in the user's own terminal leaves behind.
+      writeFileSync(`${account}.logged-in`, '');
+      agentTransport();
+
+      await expect(pool.startPlanning('s1', 'ship it', ['claude-code'], ws)).resolves.toBeDefined();
+    } finally {
+      pool.destroyAll();
+    }
   });
 });

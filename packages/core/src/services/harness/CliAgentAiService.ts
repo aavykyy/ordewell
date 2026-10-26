@@ -690,7 +690,7 @@ export class CliAgentAiService implements IAiService {
     const manifest = BUILTIN_MANIFESTS.find((candidate) => candidate.name === this.runner);
     const auth = manifest ? signedOutFromFailure(manifest, failure) : undefined;
     if (!manifest || !auth) return failure;
-    recordRunnerAuth(this.runner, auth);
+    recordRunnerAuth(this.runner, auth, this.workspaceRoot());
     const reason: PlannerNotReady = {
       code: 'signed_out',
       provider: providerForRunner(this.runner) ?? this.config.aiProvider,

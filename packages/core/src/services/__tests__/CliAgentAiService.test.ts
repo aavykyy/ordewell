@@ -2826,7 +2826,7 @@ describe('CliAgentAiService — a turn that says the agent is signed out', () =>
         'Claude Code is not logged in. Sign in with /login, or run claude auth login and try again.\n\n' +
         'Not logged in · Please run /login',
     });
-    expect(recordedRunnerAuth('claude-code')).toEqual({
+    expect(recordedRunnerAuth('claude-code', '/repo')).toEqual({
       state: 'signed-out',
       loginCommand: ['claude', 'auth', 'login'],
       detail: 'not logged in',
@@ -2837,13 +2837,13 @@ describe('CliAgentAiService — a turn that says the agent is signed out', () =>
     const turn = await failing('The repository is not a git repository').startConversation(request());
 
     expect(turn).toMatchObject({ kind: 'message', failed: true, text: 'The repository is not a git repository' });
-    expect(recordedRunnerAuth('claude-code')).toBeUndefined();
+    expect(recordedRunnerAuth('claude-code', '/repo')).toBeUndefined();
   });
 
   it('leaves a runner that declares no login alone, even when its words say not logged in', async () => {
     const turn = await failing('Not logged in · Please run /login', 'opencode').startConversation(request({ runners: ['opencode'] }));
 
     expect(turn).toMatchObject({ kind: 'message', failed: true, text: 'Not logged in · Please run /login' });
-    expect(recordedRunnerAuth('opencode')).toBeUndefined();
+    expect(recordedRunnerAuth('opencode', '/repo')).toBeUndefined();
   });
 });

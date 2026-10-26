@@ -44,6 +44,12 @@ export interface RunnerInstallationOptions {
    * account the planner will use.
    */
   env?: () => Promise<Record<string, string>>;
+  /**
+   * The workspace whose account this installation judges. The verdict is
+   * recorded under it, so a planner gate in that workspace reads it and one in
+   * another cannot (ADR-0009).
+   */
+  workspace?: () => string | undefined;
   /** Injectable status command runner, so tests need no real agent binary. */
   authExec?: RunnerAuthExec;
 }
@@ -63,6 +69,7 @@ export class RunnerInstallation {
   private execImpl: ExecImpl;
   private now: () => number;
   private env: () => Promise<Record<string, string>>;
+  private workspace: () => string | undefined;
   private authExec: RunnerAuthExec | undefined;
 
   constructor(
@@ -75,6 +82,7 @@ export class RunnerInstallation {
     this.execImpl = execImpl;
     this.now = now;
     this.env = options.env ?? (async () => ({}));
+    this.workspace = options.workspace ?? (() => undefined);
     this.authExec = options.authExec;
   }
 
@@ -157,7 +165,7 @@ export class RunnerInstallation {
 
   /**
    * The runner's own login verdict, cached briefly and asked once when several
-   * callers arrive together. Recorded process-wide for the synchronous planner
+   * callers arrive together. Recorded per workspace for the synchronous planner
    * gate, which cannot await this.
    */
   private async authFor(runner: string, manifest: RunnerManifest): Promise<RunnerAuth> {
@@ -181,7 +189,7 @@ export class RunnerInstallation {
     })().then((auth) => {
       this.authCache.set(runner, { auth, at: this.now() });
       this.authInflight.delete(runner);
-      recordRunnerAuth(runner, auth);
+      recordRunnerAuth(runner, auth, this.workspace());
       return auth;
     });
 

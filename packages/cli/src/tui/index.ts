@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
-import { assertWorkspaceExists, createSkillsService, EnvConfig, mintSessionId, planDirectLaunch, SettingsService, workspaceEnvOf } from '@ordewell/core';
+import { resolve } from 'path';
+import { assertWorkspaceExists, augmentedPath, createSkillsService, EnvConfig, mintSessionId, planDirectLaunch, SettingsService, withPath, workspaceEnvOf } from '@ordewell/core';
 import { ensureDaemonOwned, findFreePort, resolvePort, stopDaemon } from '../daemon';
 import { ApiClient } from '../apiClient';
 import { flag, saveLastSession } from '../utils';
@@ -59,7 +60,9 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
     process.exit(1);
   }
 
-  const workspace = flag(subArgs, '--workspace') || process.cwd();
+  // Resolved once: the daemon is started with this as its cwd, so a relative
+  // `--workspace` sent on every request would be resolved again against it.
+  const workspace = resolve(flag(subArgs, '--workspace') || process.cwd());
   try {
     assertWorkspaceExists(workspace);
   } catch {
@@ -162,7 +165,9 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
         login: async (command) => {
           let handedOver = false;
           try {
-            const env = { ...process.env, ...(await workspaceEnvOf(workspace)) };
+            // The same PATH the probe and the planner spawn with, so a runner
+            // found in ~/.local/bin can also run its login here.
+            const env = withPath(process.env, await augmentedPath(), await workspaceEnvOf(workspace));
             loginRunning = true;
             handedOver = true;
             terminal?.suspend();

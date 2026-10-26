@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import { resolve } from 'path';
 import type { RunnerManifest, RunnerAuthSpec } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
 
@@ -130,19 +131,28 @@ function verdictFromExit(spec: RunnerAuthSpec, output: string, code: number): 's
 }
 
 /**
- * The latest verdict per runner, process-wide because a planner readiness check
- * is synchronous and cannot await a probe. Follows
+ * The latest verdict per runner and workspace, because a planner readiness
+ * check is synchronous and cannot await a probe, and because one daemon can
+ * serve several workspaces whose accounts differ (ADR-0016). Follows
  * `services/InstalledPlanner.ts`: a host probes when it builds or refreshes its
- * runner list, and every later sync check reads the answer here.
+ * runner list, and every later sync check reads that workspace's answer here.
+ * A caller with no workspace — a test, or a host that only ever plans in its
+ * own cwd — reads and writes the unscoped entry.
  */
 const recorded = new Map<string, RunnerAuth>();
 
-export function recordRunnerAuth(runner: string, auth: RunnerAuth): void {
-  recorded.set(runner, auth);
+function recordKey(runner: string, workspace?: string): string {
+  // Resolved on both sides, since a request may name a relative workspace while
+  // the installation it probed is keyed by the absolute one.
+  return workspace ? `${resolve(workspace)}\u0000${runner}` : runner;
 }
 
-export function recordedRunnerAuth(runner: string): RunnerAuth | undefined {
-  return recorded.get(runner);
+export function recordRunnerAuth(runner: string, auth: RunnerAuth, workspace?: string): void {
+  recorded.set(recordKey(runner, workspace), auth);
+}
+
+export function recordedRunnerAuth(runner: string, workspace?: string): RunnerAuth | undefined {
+  return recorded.get(recordKey(runner, workspace));
 }
 
 /** For tests: the record is process-wide, so one case's verdict must not decide the next's. */
