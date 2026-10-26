@@ -2,10 +2,44 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-26
+
+New installations now start in Guarded autonomy, a read-only task can change
+files only in its own throwaway worktree, and the planner's plan edits apply
+as it makes them. See the full changelog for daemon and API changes.
+
 ### Added
 
-- **Task handoffs.** Task cards show the summary, numbered findings with
-  severity and evidence, artifacts and a count of findings left in the log.
+- **Account limits in the footers.** When Codex, Claude Code or OpenCode Go
+  plans, the planner footer shows what that account has used of its plan's
+  windows (five hours, a week, a month) beside the planner's context and cost,
+  and a task log's footer shows its own runner's, in the order context,
+  limits, cost.
+  Limits are read from each runner's own account, with your workspace's
+  environment, about once a minute while the window has focus; the footer
+  stays on one line, with reset times in the hover. They are never saved and
+  never pause work.
+- **An API planner compacts its own context.** An OpenAI, OpenRouter,
+  OpenAI-compatible or Gemini planner keeps each call inside 90% of its
+  model's known window, first trimming older file reads, then condensing the
+  conversation. The chat shows a Compacting status with Stop, then one quiet
+  "Context compacted automatically" marker whose summary opens on demand. If
+  a call still cannot fit, only the planner pauses, with your message kept and
+  tasks still running, and a Retry compaction button above the composer
+  attempts recovery. `"plannerAutoCompaction": false` in
+  `~/.ordewell/settings.json` turns it off.
+- **The first screen shows the repositories and branches tasks will use**,
+  with each one's commit, any uncommitted changes, and whether code tasks get
+  isolated worktrees. It only reads, and refreshes on focus and on a settings
+  or workspace change.
+- **"Completion received" as soon as a task reports.** The card says so at
+  once while the attempt winds down; the verdict still comes when it ends.
+- **Read-only and research tasks can read the web** through Ordewell's own
+  `fetch` and `web_search`, under the planner's web-read policy and without
+  asking you; each decision is in the task's log, not the planner chat.
+- **Task handoffs.** A task's expanded details show the summary, numbered
+  findings with severity and evidence, artifacts and a count of findings left
+  in the log.
   Dependents can pull the full handoff, and a loop's check gets its fix's
   handoff and its own previous findings. Research run updates carry summaries
   and whole findings; long reports stay in attempt logs.
@@ -64,6 +98,30 @@
 
 ### Changed
 
+- **New installations start in Guarded autonomy.** A settings file with no
+  level used to mean Full; tasks now run in their runner's safe mode and
+  a planner request the allowlist does not cover asks you. A level you saved
+  is kept.
+- **The planner's `submit_plan` and `edit_plan` apply as the call answers.**
+  The plan shows the change while the planner is still replying, a change
+  stays if the reply is stopped or fails, and the "Proposed: lands when this
+  reply ends" preview is gone.
+- **A queued task can be edited while others run.** A task that has not
+  started keeps its runner, model, effort, mode, prompt, dependency, skill and
+  ops editors during a run.
+- **Marking a task complete or not done is deliberate.** It is refused while a
+  run could still advance the task, and asks you to confirm once it is
+  stopped. A task's status circle only shows its status; the mark is at the
+  bottom of its details.
+- **Open log is now Open chat**, and a task offers it only once an attempt has
+  started.
+- **Execute Plan shows Starting… at once** and becomes Stop when a task
+  starts.
+- **The planner's activity stays visible for the whole turn**, including
+  while it streams its thinking.
+- **Supervisor reads is no longer in the Run block.** Set it with
+  `ordewell supervisor reads <n>` or in `settings.json`; a saved value is
+  kept.
 - **The chat and task logs fold what an agent did.** Each run of thinking,
   calls, subagents and setup notices between two messages is one line that
   says what it did, such as "Ran 4 commands, fetched 2 pages (2 failed)", and
@@ -102,6 +160,9 @@
   what the planner did.
 
 ### Fixed
+
+- **A supervisor's Merge all after a run that merged itself no longer shows a
+  refusal**; the run update says the work is already merged.
 
 - **A Runners pill click is saved.** Switching a runner off or on in the chat
   header now saves it in the enabled runners every surface shares, so the
