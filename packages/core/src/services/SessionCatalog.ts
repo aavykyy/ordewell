@@ -46,7 +46,7 @@ export class SessionCatalog {
 
   /** The runners `writer` may put a task on now ({@link assignableRunners}); undefined means any. */
   runnersFor(writer: AssignmentWriter): RunnerId[] | undefined {
-    return assignableRunners(writer, this.enabledRunners(), this.deps.planRunners());
+    return assignableRunners(writer, this.enabledRunners());
   }
 
   /**

@@ -66,9 +66,9 @@ export type PassedChange = Extract<CheckedChange, { ok: true }>;
 export interface PlanChangeScope {
   /** The plan's tasks as they stand. */
   tasks(): readonly Task[];
-  /** The runners a change may put a task on (`assignableRunners`): those enabled for a whole plan, the plan's own too for an edit. */
+  /** The runners a change may put a task on (`assignableRunners`): those enabled now, for a whole plan and an edit alike. */
   runners(kind: PlannerChange['kind']): RunnerId[];
-  /** What an assignment is resolved against, with the modes of `runners`. */
+  /** What an assignment is resolved against, with the modes of `runners` and of any a task may be left on. */
   catalog(runners: RunnerId[]): AssignmentCatalog & { runnerModes?: Record<RunnerId, RunnerModeInfo[]> };
   /** Where attached skill names are looked up; absent, none are. */
   skills?(): SkillLookup;

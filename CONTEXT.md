@@ -1935,8 +1935,8 @@ from what the planner was last told (`scopeChange`), its next turn carries a
 `<runners_changed>` block naming the change and the flagged tasks; a turn that
 failed or was stopped keeps the note owed. The **enabled runners** are one list
 in the settings file (`enabledRunners`), shared by the terminal UI, the daemon
-and VS Code; VS Code's retired `ordewell.enabledRunners` is copied once and
-cleared.
+and VS Code, whose runner pills write it; VS Code's retired
+`ordewell.enabledRunners` is copied once and cleared.
 *Avoid:* "disabled task" for a flagged one — nothing about it is disabled.
 
 **PlanEditor** — the module behind Session's direct plan edits: `updateTask`,
@@ -1975,8 +1975,12 @@ offers it, else its nearest level, else none; the TUI's and VS Code's model
 pickers call the same rule. The mode is the user's pick where they made one, and
 otherwise is derived, as for the planner (ADR-0001), when a task is new, moves
 runner, turns from a manual task into an AI one, or the planner says read-only
-or not. Which runners a writer may use is `assignableRunners`: the enabled ones
-for a submitted plan, the plan's own too for a planner edit, any for the user.
+or not. Which runners a writer may use is `assignableRunners`: the ones enabled
+now for the planner, a submitted plan and an edit alike, any for the user. The
+runners the plan once used (`plan.runners`) say where work ran, not where new
+work may go: a task an edit leaves on a runner switched off since stands, but
+one it adds, moves there, or makes by splitting or merging is new and is
+refused there, and one it adds naming no runner lands on the first enabled one.
 *Live runner* — an attempt of the task is claimed, running, quiet or waiting on
 someone (`liveRunner`). It is the one test for the hold above, and for leaving
 an untouched task's effort as it is.

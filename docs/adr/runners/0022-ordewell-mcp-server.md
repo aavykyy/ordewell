@@ -173,8 +173,10 @@ planner tools are recorded here as an explicit entry against both:
   the same check and commit path as the envelopes they replace. One module,
   `PlanChangeCheck`, holds every planner change to its rules, a whole plan or a
   batch of task ops, as it is made and again as its turn lands it, against
-  one live scope: the enabled runners for a plan (the plan's own as well for
-  an edit), their modes, the assignment resolver (ADR-0003: a stray model id
+  one live scope: the runners enabled now, for a plan and an edit alike
+  (ADR-0003, V1: a task an edit leaves on a runner switched off since stands,
+  and nothing new goes there), their modes and those of the runners the plan's
+  tasks are on, the assignment resolver (ADR-0003: a stray model id
   in a submitted plan is replaced by the allowlist's, its effort carried to
   the nearest level, and the result reports the adjustment), `applyTaskOps`
   with `TaskEditValidator` (ADR-0012), the attached skills (ADR-0024) and, for
@@ -317,3 +319,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-24 — a read-only task's token serves `save_patch` (ADR-0050).
 - 2026-10-24 — a change task's token serves `apply_patch` (ADR-0050).
 - 2026-10-25 — a read-only task's token serves `fetch` and `web_search` (ADR-0046); a caller's cancellation aborts the token's call it names.
+- 2026-10-26 — P2: an edit's scope is the enabled runners alone, not the plan's own as well (ADR-0003, V1).
