@@ -24,6 +24,7 @@ export type OrdewellApi = Pick<ApiClient,
   | 'invokeTaskCommand' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint'
   | 'addTask' | 'updateTask' | 'removeTask'
   | 'getSessions' | 'getSession' | 'adoptSession' | 'deleteSession' | 'closeSession'
+  | 'getIsolationPreview'
   | 'forkConversation' | 'rewindTargets' | 'rewindConversation' | 'compactConversation'
   | 'reviewRunDiff' | 'mergeRun' | 'discardRun' | 'cleanupRun' | 'continueWithStash' | 'continueWithoutIsolation' | 'resolveConflictAsTask'
   | 'getSettings' | 'updateSettings' | 'updateRunSettings'
@@ -103,6 +104,12 @@ export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void>
     }
 
     deps.dispatch({ type: 'notice', message: 'The server had stopped; started a new one and retried.' });
+    // A replacement daemon may serve a different workspace configuration, so
+    // the welcome's repository read starts again instead of outliving it. A
+    // refresh or loadScope about to be retried asks for it anyway.
+    if (effect.type !== 'loadIsolationPreview' && effect.type !== 'refresh' && effect.type !== 'loadScope') {
+      deps.dispatch({ type: 'daemonReconnected' });
+    }
     try {
       await perform(effect, deps);
     } catch (retryErr) {
@@ -691,12 +698,16 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       return;
 
     case 'loadScope':
-      await Promise.all([loadRunners(deps), loadSettings(deps)]);
+      await Promise.all([loadRunners(deps), loadSettings(deps), loadIsolationPreview(deps)]);
+      return;
+
+    case 'loadIsolationPreview':
+      await loadIsolationPreview(deps);
       return;
 
     case 'refresh':
-      await Promise.all([loadRunners(deps), loadSettings(deps), loadModels(deps)]);
-      if (effect.announce) dispatch({ type: 'notice', message: 'Refreshed runners, settings and models.' });
+      await Promise.all([loadRunners(deps), loadSettings(deps), loadModels(deps), loadIsolationPreview(deps)]);
+      if (effect.announce) dispatch({ type: 'notice', message: 'Refreshed runners, settings, models and repositories.' });
       return;
 
     case 'exit':
@@ -812,6 +823,8 @@ const runStreams = new WeakMap<object, Map<string, number>>();
 /** Consecutive reconnects that failed before opening, for the backoff. */
 const followFailures = new WeakMap<object, number>();
 const followRetryTimers = new WeakMap<object, { sessionId: string; timer: ReturnType<typeof setTimeout> }>();
+/** Per client, the newest preview read it started; answers carry the number they answer. */
+const previewReads = new WeakMap<object, number>();
 const FOLLOW_RETRY_MS = 500;
 const FOLLOW_RETRY_MAX_MS = 8_000;
 
@@ -1086,4 +1099,24 @@ async function loadRunners(deps: EffectDeps): Promise<void> {
 
 async function loadSettings(deps: EffectDeps): Promise<void> {
   deps.dispatch({ type: 'settingsLoaded', settings: await deps.api.getSettings() });
+}
+
+/**
+ * Reads what the welcome says about repositories and branches. Reads can
+ * overlap (launch, a settings change, a refresh); each gets a number the
+ * reducer compares, so a slower older answer cannot replace a newer one.
+ * A refused connection is left to the caller's revive-and-retry; any other
+ * failure is a `failed` preview, never a claim that there is no repository.
+ */
+async function loadIsolationPreview(deps: EffectDeps): Promise<void> {
+  const read = (previewReads.get(deps.api) ?? 0) + 1;
+  previewReads.set(deps.api, read);
+  deps.dispatch({ type: 'isolationPreviewLoading', read });
+  try {
+    const { preview } = await deps.api.getIsolationPreview(deps.workspace);
+    deps.dispatch({ type: 'isolationPreviewLoaded', preview, read });
+  } catch (err) {
+    if (isConnectionRefused(err)) throw err;
+    deps.dispatch({ type: 'isolationPreviewFailed', message: explain(err), read });
+  }
 }

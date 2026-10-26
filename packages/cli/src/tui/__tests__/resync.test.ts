@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createTask } from '@ordewell/core';
 import { inboundFor } from '../inbound';
+import { render } from '../render';
+import { stripAnsi } from '../ansi';
 import type { Action } from '../reducer';
 import type { WsEvent } from '../../apiClient';
 import { draftPlan, liveDaemon, toolContext, type LiveDaemon, type Tui } from './liveDaemon';
@@ -214,5 +216,21 @@ describe('the planner\'s approval requests on a TUI that was not listening', () 
     expect(asking(b)).toBeNull();
     expect(cards(b)).toEqual([]);
     expect(starts()).toHaveLength(1);
+  });
+});
+
+describe('the welcome through the real daemon and client', () => {
+  let daemon: LiveDaemon;
+
+  beforeEach(async () => { daemon = await liveDaemon(); });
+  afterEach(async () => { await daemon.close(); });
+
+  it('carries the workspace preview from the daemon into the welcome, saying plainly there is no repository', async () => {
+    const tui = daemon.tui();
+
+    await tui.run({ type: 'refresh' });
+
+    expect(tui.state().isolationPreview).toMatchObject({ status: 'no-repo', repos: [] });
+    expect(stripAnsi(render(tui.state()).join('\n'))).toContain('No Git repository detected. Tasks run in the workspace without isolated worktrees.');
   });
 });

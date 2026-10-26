@@ -19,6 +19,7 @@ import type {
   GeneratePlanResponse,
   IsolationDiffResponse,
   IsolationMergeResponse,
+  IsolationPreviewResponse,
   MergeGateEntry,
   MergeGateResponse,
   ModelsResponse,
@@ -531,6 +532,16 @@ export class ApiClient {
   /** Aborts a planning turn in flight. A harmless no-op when the session isn't planning. */
   cancelPlanning(sessionId: string): Promise<CancelPlanningResponse> {
     return this.call('POST', `/api/plans/${sessionId}/planning/stop`, 'Cancel planning failed');
+  }
+
+  /**
+   * The repositories and branches the daemon would isolate for `workspace`,
+   * read without starting a run or touching any repository. Never rejects for
+   * a repository that cannot be read: the daemon answers a `failed` preview.
+   */
+  getIsolationPreview(workspace?: string): Promise<IsolationPreviewResponse> {
+    const qs = workspace ? `?workspace=${encodeURIComponent(workspace)}` : '';
+    return this.call('GET', `/api/workspaces/isolation-preview${qs}`, 'Failed to read the repositories');
   }
 
   getSessions(workspace?: string): Promise<SessionListResponse> {

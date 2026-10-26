@@ -11,7 +11,7 @@ import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { accountLimitsText, contextMeterText, accountLimitsOf, assignedRunnerOf, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
+import { accountLimitsText, contextMeterText, accountLimitsOf, assignedRunnerOf, describeIsolationPreview, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -787,6 +787,35 @@ function welcomeLogo(restRows: number, rows: number, cols: number): string[] {
 }
 
 const DETECTING = 'Detecting coding agents…';
+const CHECKING_REPOSITORIES = 'Checking repositories…';
+
+/**
+ * What the welcome says about the repositories a run would isolate. The words
+ * are core's shared notice, so the terminal and the editor cannot drift. A
+ * ready group's note is dropped to keep the welcome compact; a dirty tree's
+ * decision and a failure's reason are the parts a run is waiting on.
+ */
+function isolationPreviewLines(state: TuiState, cols: number): string[] {
+  const room = Math.max(1, cols - 1);
+  const head = style.bold('Repositories and branches');
+  const preview = state.isolationPreview;
+  if (!preview) {
+    // `undefined` is before the first read, `null` while one is in flight:
+    // neither knows a repository, so neither may claim there is none.
+    return [head, ...wrap(style.grey(CHECKING_REPOSITORIES), room), ''];
+  }
+  const notice = describeIsolationPreview(preview);
+  const important = preview.status === 'dirty' || preview.status === 'failed';
+  const summary = important ? style.yellow(notice.summary) : notice.summary;
+  return [
+    head,
+    ...wrap(summary, room),
+    ...notice.repos.flatMap((repo) => wrap(`  ${repo.name} · ${style.grey(repo.detail)}`, room)),
+    ...(notice.shared ? wrap(style.grey(notice.shared), room) : []),
+    ...(notice.note && important ? wrap(style.grey(notice.note), room) : []),
+    '',
+  ];
+}
 
 /** `rows` is the pane the welcome is painted into. */
 function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
@@ -842,7 +871,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     : [];
   const tail = [...notice, ...versionCheck, style.grey('/help   all commands'), workspaceLine(state.workspace, cols)];
 
-  const rest = ['', ...prompt, ...approval, '', ...setup, ...tail];
+  const rest = ['', ...prompt, ...approval, '', ...setup, ...isolationPreviewLines(state, cols), ...tail];
   const logo = welcomeLogo(rest.length, rows, cols);
   return logo.length > 0 ? [...logo, ...rest] : rest.slice(1);
 }

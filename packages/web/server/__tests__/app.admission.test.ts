@@ -186,6 +186,7 @@ describe('daemon admission control', () => {
       ['GET', '/api/models', undefined],
       ['GET', '/api/commands', undefined],
       ['GET', '/api/workspaces', undefined],
+      ['GET', '/api/workspaces/isolation-preview', undefined],
       ['POST', '/api/approvals/s1/ap-1', JSON.stringify({ granted: true })],
       ['POST', '/api/plans/s1/generate', JSON.stringify({ goal: 'x' })],
       ['PATCH', '/api/settings', JSON.stringify({ env: { NODE_OPTIONS: '--require /tmp/x.js' } })],

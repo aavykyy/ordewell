@@ -2,7 +2,7 @@ import { describe, it, expect, vi, type Mock, type Mocked } from 'vitest';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action } from '../reducer';
 import type { Effect } from '../reducer';
-import { fromTranscript, type SessionMessage } from '@ordewell/core';
+import { fromTranscript, type IsolationPreview, type SessionMessage } from '@ordewell/core';
 import { DaemonError } from '../../apiClient';
 import type { TuiState } from '../state';
 import { chatOf, messagesOf } from './chat';
@@ -36,6 +36,7 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
       getRunners: vi.fn().mockResolvedValue({ runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], orchestratorModel: 'm/1' }),
       setRunnerEnabled: vi.fn().mockResolvedValue({ ok: true }),
       getModels: vi.fn().mockResolvedValue({ models: [], providers: [] }),
+      getIsolationPreview: vi.fn().mockResolvedValue({ preview: { status: 'no-repo', repos: [], shared: [] } }),
       streamPlanning: vi.fn().mockReturnValue({ close: vi.fn() }),
       streamExecution: vi.fn().mockImplementation((_id: string, _callback: (event: unknown) => void, onReady?: (error?: Error) => void) => {
         onReady?.();
@@ -1302,7 +1303,7 @@ describe('catalogs and sessions', () => {
   it('an announced refresh posts the notice', async () => {
     const h = harness();
     await runEffect({ type: 'refresh', announce: true }, h.deps);
-    expect(h.actions).toContainEqual({ type: 'notice', message: 'Refreshed runners, settings and models.' });
+    expect(h.actions).toContainEqual({ type: 'notice', message: 'Refreshed runners, settings, models and repositories.' });
   });
 });
 
@@ -2584,5 +2585,79 @@ describe('following the session', () => {
     await Promise.resolve();
 
     expect(types(h.actions)).not.toContain('followLost');
+  });
+});
+
+
+describe('the welcome repositories and branches', () => {
+  const ready = { status: 'ready' as const, repos: [{ path: '.', head: { kind: 'branch' as const, branch: 'main', commit: 'a1b2c3d' }, dirty: false }], shared: [] };
+
+  it('reads the preview at startup with the workspace, and says it is loading first', async () => {
+    const h = harness({ getIsolationPreview: vi.fn().mockResolvedValue({ preview: ready }) });
+
+    await runEffect({ type: 'refresh' }, h.deps);
+
+    expect(h.api.getIsolationPreview).toHaveBeenCalledWith('/ws');
+    expect(h.actions).toContainEqual({ type: 'isolationPreviewLoading', read: 1 });
+    expect(h.actions).toContainEqual({ type: 'isolationPreviewLoaded', preview: ready, read: 1 });
+  });
+
+  it('reads it again when the shared settings change what a run would isolate', async () => {
+    const h = harness({ getIsolationPreview: vi.fn().mockResolvedValue({ preview: ready }) });
+
+    await runEffect({ type: 'loadScope' }, h.deps);
+
+    expect(h.api.getIsolationPreview).toHaveBeenCalledWith('/ws');
+    expect(types(h.actions)).toEqual(expect.arrayContaining(['isolationPreviewLoading', 'isolationPreviewLoaded']));
+  });
+
+  it('keeps a failed read as failed, with the reason, instead of claiming no repository', async () => {
+    const h = harness({ getIsolationPreview: vi.fn().mockRejectedValue(new Error('the server had stopped')) });
+
+    await runEffect({ type: 'loadIsolationPreview' }, h.deps);
+
+    expect(h.actions).toContainEqual({ type: 'isolationPreviewFailed', read: 1, message: 'the server had stopped' });
+    expect(h.actions.some((a) => a.type === 'failed')).toBe(false);
+  });
+
+  it('revives a stopped daemon and reads the preview once on the retry', async () => {
+    const getIsolationPreview = vi.fn()
+      .mockRejectedValueOnce(refused())
+      .mockResolvedValueOnce({ preview: ready });
+    const h = harness({ getIsolationPreview });
+
+    await runEffect({ type: 'loadIsolationPreview' }, h.deps);
+
+    expect(getIsolationPreview).toHaveBeenCalledTimes(2);
+    expect(reviveMock(h.deps)).toHaveBeenCalledTimes(1);
+    expect(h.actions).toContainEqual({ type: 'isolationPreviewLoaded', preview: ready, read: 2 });
+  });
+
+  it('asks the welcome to read again when a revive replaces the daemon', async () => {
+    const h = harness({
+      getRunners: vi.fn()
+        .mockRejectedValueOnce(refused())
+        .mockResolvedValue({ runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], orchestratorModel: 'm/1' }),
+    });
+
+    await runEffect({ type: 'loadRunners' }, h.deps);
+
+    expect(types(h.actions)).toContain('daemonReconnected');
+  });
+
+  it('numbers overlapping reads so the reducer can drop the older answer', async () => {
+    const answers: Array<(value: { preview: IsolationPreview }) => void> = [];
+    const h = harness({ getIsolationPreview: vi.fn().mockImplementation(() => new Promise((resolve) => { answers.push(resolve); })) });
+
+    const first = runEffect({ type: 'loadIsolationPreview' }, h.deps);
+    const second = runEffect({ type: 'loadIsolationPreview' }, h.deps);
+    await vi.waitFor(() => expect(answers).toHaveLength(2));
+    answers[1]({ preview: ready });
+    await second;
+    answers[0]({ preview: { status: 'no-repo', repos: [], shared: [] } });
+    await first;
+
+    expect(h.actions).toContainEqual({ type: 'isolationPreviewLoaded', preview: ready, read: 2 });
+    expect(h.actions).toContainEqual({ type: 'isolationPreviewLoaded', preview: { status: 'no-repo', repos: [], shared: [] }, read: 1 });
   });
 });
