@@ -1198,6 +1198,32 @@ body.vscode-high-contrast-light .disclosure:hover {
   opacity: 0.7;
 }
 
+/* A signed-out agent is offered, not blocked: the login is the fix. The dot
+   says it quietly, and the sentence on the empty state says it in words. */
+.planner-pill.signed-out {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-color: color-mix(in srgb, var(--red) 32%, var(--border-color));
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.planner-pill.signed-out:not(.active):hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.planner-pill.signed-out:hover:not(:disabled) {
+  border-color: var(--red);
+}
+
+.planner-auth-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--red);
+  flex-shrink: 0;
+}
+
 /* ---- Run settings (Settings panel) ---- */
 .run-settings:focus {
   outline: none;
@@ -1316,6 +1342,40 @@ body.vscode-high-contrast-light .disclosure:hover {
   color: var(--text-secondary);
   max-width: 360px;
   line-height: 1.6;
+}
+
+/* The red tint comes from the theme's own red, so a light theme darkens the
+   wash rather than making it pink. The sentence carries the meaning: colour is
+   never the only signal. */
+.planner-auth-warning {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
+  max-width: 360px;
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--red) 22%, transparent);
+  background: color-mix(in srgb, var(--red) 7%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  margin: 12px 0 0;
+  color: var(--text-secondary);
+}
+
+.planner-auth-warning-text {
+  min-width: 0;
+}
+
+.planner-auth-warning-agent {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+body.vscode-high-contrast .planner-auth-warning {
+  border-color: var(--vscode-contrastBorder, var(--red));
 }
 
 .load-session-btn {

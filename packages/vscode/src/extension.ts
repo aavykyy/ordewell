@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { spawn as nodeSpawn } from 'child_process';
-import { AccountLimitMonitor, claudeAccountLimitCollector, codexAccountLimitCollector, openCodeGoAccountLimitCollector, createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider, processLeaseHost } from '@ordewell/core';
+import { AccountLimitMonitor, claudeAccountLimitCollector, codexAccountLimitCollector, openCodeGoAccountLimitCollector, createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider, processLeaseHost, workspaceEnvOf } from '@ordewell/core';
 import { ChatViewProvider } from './providers/ChatViewProvider';
 import { VsCodeConfig, moveAutonomyFromVsCodeSetting, moveEnabledRunnersFromVsCodeSetting } from './adapters/VsCodeConfig';
 import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
@@ -45,9 +45,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await moveAutonomyFromVsCodeSetting(settingsService);
     await moveEnabledRunnersFromVsCodeSetting(settingsService);
 
-    const runnerInstallation = new RunnerInstallation(runnerRegistry);
-    const codexServer = runnerRegistry.getManifest('codex')?.modelDiscovery.appServer;
     const fsAdapter = new VsCodeFileSystem();
+    // The login probe must ask the same account the planner will use, so it
+    // reads the workspace's .envrc/.ordewell/env exactly as a spawn does (ADR-0016).
+    const runnerInstallation = new RunnerInstallation(runnerRegistry, undefined, undefined, {
+      env: () => workspaceEnvOf(fsAdapter.getWorkspaceRoot()),
+    });
+    const codexServer = runnerRegistry.getManifest('codex')?.modelDiscovery.appServer;
 
     activeHost = createExtension({
       context,

@@ -1,5 +1,5 @@
 import type { AccountLimitSnapshot, GlobalRunSettings,
-  AiProvider, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
+  AiProvider, RunnerAuth, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
   TaskModelAssignment,
 } from '@ordewell/core';
 
@@ -18,6 +18,8 @@ export interface PlannerBackend {
   runner?: string;
   usable: boolean;
   reason?: string;
+  /** The runner's own login verdict: a signed-out agent stays usable and is flagged, never blocked. */
+  auth?: RunnerAuth;
 }
 
 export interface RunnerMeta {

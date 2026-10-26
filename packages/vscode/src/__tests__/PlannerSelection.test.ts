@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PlannerModelMemory, recordInstalledPlanner, resetInstalledPlanner, type PlannerModelStore } from '@ordewell/core';
+import { PlannerModelMemory, recordInstalledPlanner, resetInstalledPlanner, type PlannerModelStore, type RunnerAuth } from '@ordewell/core';
 import { __resetConfig, __setConfig, configUpdates } from '../test/vscode.mock';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { PlannerSelection } from '../PlannerSelection';
 
-function setup(runnerModels: Record<string, { modelId: string; variants: { id: string }[] }[]> = {}) {
+function setup(runnerModels: Record<string, { modelId: string; variants: { id: string }[] }[]> = {}, auth?: RunnerAuth) {
   const stored: Record<string, { model: string; effort?: string }> = {};
   const store: PlannerModelStore = {
     getPlannerModel: (p) => stored[p],
@@ -17,7 +17,7 @@ function setup(runnerModels: Record<string, { modelId: string; variants: { id: s
     config: new VsCodeConfig(),
     modelResolver: { modelsForRunners: async (runners: string[]) => Object.fromEntries(runners.map((r) => [r, runnerModels[r] ?? []])), pickerOptions: async () => [] } as never,
     plannerModelMemory: memory,
-    runnerInstallation: { plannerUsability: async () => ({ usable: true }) } as never,
+    runnerInstallation: { plannerUsability: async () => ({ usable: true, ...(auth ? { auth } : {}) }) } as never,
     chatProvider: { setPlannerBackends } as never,
     sendModelConfig,
     log: () => {},
@@ -108,6 +108,23 @@ describe('PlannerSelection.apply', () => {
     await selection.apply('claude-code');
 
     expect(configUpdates).toEqual([]);
+  });
+});
+
+describe('PlannerSelection.backends', () => {
+  beforeEach(() => {
+    __resetConfig();
+    __setConfig({ aiProvider: 'claude-code', orchestratorModel: 'claude-a', plannerThinkingEffort: '' });
+  });
+
+  it('carries the runner login verdict to a signed-out agent without making it unusable', async () => {
+    const auth: RunnerAuth = { state: 'signed-out', loginCommand: ['claude', 'auth', 'login'], detail: 'not logged in' };
+    const { selection } = setup({}, auth);
+
+    const claude = (await selection.backends()).find((b) => b.id === 'claude-code');
+
+    expect(claude?.auth).toEqual(auth);
+    expect(claude?.usable).toBe(true);
   });
 });
 
