@@ -114,7 +114,6 @@ const trailing = (req: SentRequest) => {
   const last = req.contents.map((c) => c.role).lastIndexOf('model');
   return req.contents.slice(last + 1).flatMap((c) => (c.role === 'function' ? c.parts.map((p) => p.functionResponse!.response.output.length) : []));
 };
-const textOf = (c: Content) => c.parts.map((p) => p.text ?? '').join('');
 
 const GOAL = 'run the build';
 const STEPS = 6;
@@ -230,7 +229,7 @@ describe('a Gemini provider refusal of a planner call as too long', () => {
     expect(kit.session.planState!.plannerContextPause).toBeUndefined();
   });
 
-  it('after a reload, starts the paused turn again from the transcript, told what ran, with its commands not run again', async () => {
+  it('after a reload stays paused rather than start the turn again from the transcript: its commands ran, so no call is made and none runs twice', async () => {
     const provider = new FakeGemini([says('Hi.'), ...steps()]);
     const bash = vi.fn(async () => out(20_000, 's'));
     const { session } = await overstatedLimit(provider, bash);
@@ -238,20 +237,46 @@ describe('a Gemini provider refusal of a planner call as too long', () => {
     await session.continueConversation('run all the steps');
     const saved = structuredClone(saves(session).mock.calls.at(-1)![0]);
     const commands = ran(bash);
+    expect(commands.length).toBeGreaterThan(0);
 
-    const later = new FakeGemini([says('Carrying on from the steps that ran.')]);
+    // A model that asks for the first command again, whatever it is told.
+    const later = new FakeGemini([callsTools(['bash', { command: 'make step0' }]), says('Carrying on from the steps that ran.')]);
     const reloaded = plannerSession(later, fakeFileSystem({ bash }), saved);
     reloaded.limits.input['big-model'] = 1_000_000;
-    await reloaded.session.retryPlannerCompaction();
 
+    await expect(reloaded.session.retryPlannerCompaction()).rejects.toMatchObject({ name: 'ConversationEditError', message: expect.stringMatching(/already ran .*Stop it to drop the turn/s) });
+
+    expect(later.requests).toHaveLength(0);
     expect(ran(bash)).toEqual(commands);
-    const sent = later.requests[0];
-    expect(responses(sent)).toEqual([]);
-    const said = sent.contents.map(textOf).filter((t) => t.includes('run all the steps'));
-    expect(said).toHaveLength(1);
-    expect([...said[0].matchAll(/^- bash\(\{"command":"(make step\d)"\}\)/gm)].map((m) => m[1])).toEqual(commands);
-    expect(history(reloaded.session).at(-1)).toMatchObject({ content: 'Carrying on from the steps that ran.' });
-    expect(reloaded.session.planState!.pendingTurns).toEqual([]);
+    expect(reloaded.session.planState!.plannerContextPause).toEqual(saved.plannerContextPause);
+    expect(reloaded.session.planState!.pendingTurns!.map((t) => t.text)).toEqual(['run all the steps']);
+
+    // Stop is the way on, and the next message goes over a history Gemini accepts.
+    later.replies = [says('Where should I pick up?')];
+    expect(reloaded.session.abortPlannerTurn()).toBe(true);
+    await reloaded.session.continueConversation('steps 0 to 2 ran; carry on from step 3');
+    expect(responses(later.requests[0])).toEqual([]);
+    expect(history(reloaded.session).at(-1)).toMatchObject({ content: 'Where should I pick up?' });
+    expect(ran(bash)).toEqual(commands);
+  });
+
+  it('on the same session stays paused when the planner was switched to a model whose limit is unknown, its commands not run again', async () => {
+    const provider = new FakeGemini([says('Hi.'), ...steps()]);
+    const bash = vi.fn(async () => out(20_000, 's'));
+    const { session, config } = await overstatedLimit(provider, bash);
+    provider.refusesAfter = 1;
+    await session.continueConversation('run all the steps');
+    const pause = session.planState!.plannerContextPause!;
+    const commands = ran(bash);
+    (config as { orchestratorModel: string }).orchestratorModel = 'gemini:unlisted-model';
+    provider.replies = [callsTools(['bash', { command: 'make step0' }]), says('Carrying on.')];
+    const from = provider.requests.length;
+
+    await expect(session.retryPlannerCompaction()).rejects.toMatchObject({ name: 'ConversationEditError', message: expect.stringMatching(/already ran .*Stop it to drop the turn.*switch it to one it knows/s) });
+
+    expect(provider.requests).toHaveLength(from);
+    expect(ran(bash)).toEqual(commands);
+    expect(session.planState!.plannerContextPause).toEqual(pause);
   });
 
   it('is not what any other failure is taken for: a server error or a quota is not retried and pauses nothing', async () => {

@@ -2,10 +2,10 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ConversationMessage, PlannerCompaction, PlannerCompactionOutcome } from '../models/Task';
 import type { UsageRecord } from '../models/Usage';
 import type { ContextCondenseRequest } from './AiService';
-import type { ResearchChat, ResearchTurn, ToolResult } from './BaseAiService';
+import type { ResearchChat, ResearchTurn, ToolCall, ToolResult } from './BaseAiService';
 import { ChatHistory, historyProblem, messageChars, type CompactableMessage } from './contextCompaction';
 import { condensedNotice } from './conversationSummary';
-import { condense, effectLedger, summaryLimits, turnProgressNote, ContextSummaryError, type SummaryCall, type SummaryLimits, type SummarySubject } from './contextSummary';
+import { callKey, condense, effectLedger, effectReceipts, summaryLimits, turnProgressNote, ContextSummaryError, type SummaryCall, type SummaryLimits, type SummarySubject } from './contextSummary';
 import { CONTEXT_BUDGET, PlannerContextExhaustedError, callBudget, replyTokens, type CallBudget, type ChatBudget, type ContextExhaustion, type ContextSummaryAttempt, type ModelLimits } from './plannerContextBudget';
 
 /** What one call sends after the history: a user message, or the results of the last call's tools. */
@@ -129,6 +129,8 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
   private turn: { id: string; at: number } | null = null;
   /** The calls the open turn made that its condensed rounds no longer show, carried from one condensing to the next. */
   private done: string[] = [];
+  /** The same calls by {@link callKey}, each to the head of what it returned: what answers one asked for again (see {@link answered}). */
+  private readonly receipts = new Map<string, string>();
   /** Windows the provider stated, per model, in refusing a call as too long: its own word on them. */
   private readonly stated = new Map<string, ModelLimits>();
   /** The smallest prompt, in characters, the provider refused per model: whatever its window says, it takes less. */
@@ -218,6 +220,7 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
     this.history.replace(next as M[]);
     this.turn = null;
     this.done = [];
+    this.receipts.clear();
     this.chat.budget?.onCompacted();
   }
 
@@ -259,6 +262,20 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
     if (this.turn?.id === id && id !== undefined) return;
     this.turn = id === undefined ? null : { id, at: this.history.length };
     this.done = [];
+    this.receipts.clear();
+  }
+
+  /**
+   * The answer to a call the open turn already made in rounds condensed out
+   * of the model's sight (ADR-0002): what that call returned. The note in
+   * their place lists them, but only the model's compliance would act on it;
+   * this is what keeps one from running twice. Undefined for any other call,
+   * which runs as it would have.
+   */
+  answered(call: ToolCall): string | undefined {
+    const outcome = this.receipts.get(callKey(call.name, call.args));
+    if (outcome === undefined) return undefined;
+    return `Not run again: this exact call already ran earlier in this turn, in rounds condensed out of your context since. What it returned began: ${outcome}`;
   }
 
   /**
@@ -576,6 +593,7 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
     if (problem) throw new ContextSummaryError(`The condensed turn would not be accepted: ${problem}.`);
     this.replace(next, at);
     this.done = done;
+    for (const [key, outcome] of effectReceipts(plan.condensed)) this.receipts.set(key, outcome);
     return true;
   }
 
@@ -614,8 +632,8 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
 
   /**
    * The calls the open turn made that changed something or reached out,
-   * held results included: what a recovery that cannot send the held input
-   * tells the planner it already did.
+   * held results included: what a pause shows already ran, and what keeps a
+   * retry from starting the turn again from the transcript (ADR-0002).
    */
   private turnLedger(): string[] {
     const from = this.turn?.at ?? Math.max(0, this.history.lastUserIndex);

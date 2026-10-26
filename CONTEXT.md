@@ -410,7 +410,9 @@ the turn's held inputs, keeping verbatim the newest exchanges whose replay fits;
 then, if the turn fills the window by itself, its older complete rounds are
 condensed in the live context alone into a note after the user's message, with
 the list of the calls they made that changed something or reached out
-(`effectLedger`, read off the messages), so none is made again. Each summary is
+(`effectLedger`, read off the messages). One the model asks for again with the
+same tool and arguments is not run: the chat answers it with what it returned,
+shown as not executed (`ResearchChat.answered`). Each summary is
 one tool-less call, or a bounded fold of several, on the planner's own
 provider, model and credentials; its spend counts in the *Usage totals* and
 moves no *Context fill* meter, which the condensed context clears. A summary
@@ -447,11 +449,13 @@ waits: tasks run on, and the supervisor's wake-ups and the user's messages sent
 meanwhile wait behind it. **Retry compaction** (`Session.retryPlannerCompaction()`;
 TUI `/compact retry`, CLI `ordewell compact retry`, VS Code's bar above the
 composer) opens the paused turn again on those inputs alone. On the live context
-it condenses with the user's consent and sends the held input once; with that
-context gone, after a reload or a switch of provider, it starts the turn again
-from the **Model context**, told the listed calls so none is made again. A
-retry that fits nothing pauses again. **Stop** ends the pause and drops its user
-inputs.
+it condenses with the user's consent and sends the held input once. Without it
+(a reload, a switch of provider, a model whose window no one states) only a turn
+whose calls changed nothing starts again from the **Model context**; one that
+listed any is refused before a call is made, the pause kept, with what already
+ran and the way on: Stop, or a model whose window is known while the live
+context remains. A retry that fits nothing pauses again. **Stop** ends the
+pause and drops its user inputs.
 *Avoid:* "error" for it: nothing is lost and the user chooses what follows;
 "resend", which is the usage limit's (**Planner resend**).
 

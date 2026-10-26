@@ -404,6 +404,37 @@ describe('an API planner turn that fills the window by itself', () => {
     expect(history(session).some((m) => m.kind === 'compaction')).toBe(false);
     expect(compactions().filter((c) => c.phase === 'ended').every((c) => c.outcome === 'condensed' && c.turnId === turnIds().at(-1))).toBe(true);
   });
+
+  it('answers a call its condensed rounds already made with what that call returned, never running it again', async () => {
+    const steps = 6;
+    const provider = new FakeProvider([
+      says('Hi.'),
+      ...Array.from({ length: steps }, (_, i) => callsTool(`bash_${i}`, 'bash', { command: `make step${i}` })),
+      // A model that asks for the first command again, whatever the note tells it.
+      callsTool('bash_again', 'bash', { command: 'make step0' }),
+      says('All steps done.'),
+    ]);
+    const bash = vi.fn(async (command: string) => out(20_000, command === 'make step0' ? 'a' : 's'));
+    const { session, catalog, events } = plannerSession(provider, fakeFileSystem({ bash }));
+    await session.continueConversation('hello');
+    catalog.windows['vendor/model'] = provider.requests.at(-1)!.promptTokens * 2;
+    catalog.maxOutput = 4_096;
+    await session.continueConversation('run all the steps');
+
+    expect(bash.mock.calls.map(([command]) => command)).toEqual(Array.from({ length: steps }, (_, i) => `make step${i}`));
+    const asked = provider.requests.findIndex((r) => r.messages.some((m) => m.tool_calls?.some((c) => c.id === 'bash_again')));
+    // It was condensed out of the context the model asked from: listed in the note, its result no longer shown.
+    const before = provider.requests[asked - 1];
+    expect(before.messages.find((m) => (m.content ?? '').startsWith('[Context note from Ordewell]'))!.content).toMatch(/^- bash\(\{"command":"make step0"\}\) → a+…$/m);
+    expect(toolOutputs(before).some((m) => m.tool_call_id === 'bash_0')).toBe(false);
+    const answer = toolOutputs(provider.requests[asked]).find((m) => m.tool_call_id === 'bash_again')!.content!;
+    expect(answer).toMatch(/^Not run again: this exact call already ran earlier in this turn/);
+    expect(answer).toMatch(/a{100}/);
+    for (const req of provider.requests) expect(pairsValid(req.messages)).toBe(true);
+    const step = events.flatMap((m) => (m.type === 'research_step_done' ? [m] : [])).find((m) => m.step?.toolCallId === 'bash_again');
+    expect(step?.step).toMatchObject({ outcome: 'not_executed', success: false });
+    expect(history(session).at(-1)).toMatchObject({ content: 'All steps done.' });
+  });
 });
 
 describe('a turn whose condensed rounds made many calls that changed something', () => {
