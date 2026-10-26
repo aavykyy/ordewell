@@ -24,7 +24,11 @@ export interface RunnerAuthSpec {
   statusArgs: string[];
   /** The CLI args that run the login, e.g. `auth login`. */
   loginArgs: string[];
-  /** Matched against the status command's stdout+stderr when it exits non-zero. */
+  /**
+   * Matched against the status command's stdout+stderr when it exits non-zero,
+   * and against a failed turn's own words to tell a signed-out failure from an
+   * unrelated one.
+   */
   signedOut?: RegExp;
   /**
    * A runner-specific reader that overrides the exit-code/regex rule. `null`

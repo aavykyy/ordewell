@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { realpathSync } from 'fs';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { createAiService } from '../AiService';
@@ -17,6 +17,7 @@ import { addPlannerUsage, plannerContextFill } from '../../models/Usage';
 import { TurnStream } from '../replyStream';
 import { WebReadPolicy, type WebRead } from '../webReadPolicy';
 import { summarizeToolCall } from '../researchStepSummary';
+import { recordedRunnerAuth, resetRunnerAuth } from '../runnerAuth';
 
 /**
  * Harness planners, driven through the one seam the design commits to: the
@@ -2801,5 +2802,48 @@ describe('CliAgentAiService — compactions of the planner\'s own context', () =
     await svc.startConversation(request({ runners: ['codex'] }));
 
     expect(svc.compactions()).toBe(1);
+  });
+});
+
+describe('CliAgentAiService — a turn that says the agent is signed out', () => {
+  function failing(error: string, provider: IConfig['aiProvider'] = 'claude-code'): CliAgentAiService {
+    return new CliAgentAiService(fakeConfig({ aiProvider: provider }), {
+      createAdapter: scriptedAdapter([[{ type: 'error', message: error }, { type: 'turn_end' }]]),
+      workspaceRoot: () => '/repo',
+      mcpServer: fakeMcpServer(),
+    });
+  }
+
+  afterEach(() => resetRunnerAuth());
+
+  it('records the runner signed out and puts the way back in ahead of its own words', async () => {
+    const turn = await failing('Not logged in · Please run /login').startConversation(request());
+
+    expect(turn).toMatchObject({
+      kind: 'message',
+      failed: true,
+      text:
+        'Claude Code is not logged in. Sign in with /login, or run claude auth login and try again.\n\n' +
+        'Not logged in · Please run /login',
+    });
+    expect(recordedRunnerAuth('claude-code')).toEqual({
+      state: 'signed-out',
+      loginCommand: ['claude', 'auth', 'login'],
+      detail: 'not logged in',
+    });
+  });
+
+  it('leaves an unrelated failure exactly as the runner said it', async () => {
+    const turn = await failing('The repository is not a git repository').startConversation(request());
+
+    expect(turn).toMatchObject({ kind: 'message', failed: true, text: 'The repository is not a git repository' });
+    expect(recordedRunnerAuth('claude-code')).toBeUndefined();
+  });
+
+  it('leaves a runner that declares no login alone, even when its words say not logged in', async () => {
+    const turn = await failing('Not logged in · Please run /login', 'opencode').startConversation(request({ runners: ['opencode'] }));
+
+    expect(turn).toMatchObject({ kind: 'message', failed: true, text: 'Not logged in · Please run /login' });
+    expect(recordedRunnerAuth('opencode')).toBeUndefined();
   });
 });

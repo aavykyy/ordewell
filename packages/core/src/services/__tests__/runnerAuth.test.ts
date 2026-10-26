@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { readRunnerAuth, type RunnerAuthExec } from '../runnerAuth';
+import { readRunnerAuth, signedOutFromFailure, type RunnerAuthExec } from '../runnerAuth';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
 import { OPENCODE_MANIFEST } from '../../plugins/builtin/opencode.manifest';
@@ -109,5 +109,34 @@ describe('readRunnerAuth', () => {
 
     expect(await readRunnerAuth(OPENCODE_MANIFEST, { exec })).toEqual({ state: 'unknown' });
     expect(exec).not.toHaveBeenCalled();
+  });
+});
+
+describe('signedOutFromFailure', () => {
+  it("reads the runner's own not-logged-in words as signed out, with its login command", () => {
+    expect(signedOutFromFailure(CLAUDE_CODE_MANIFEST, 'Not logged in · Please run /login')).toEqual({
+      state: 'signed-out',
+      loginCommand: ['claude', 'auth', 'login'],
+      detail: 'not logged in',
+    });
+    expect(signedOutFromFailure(CODEX_MANIFEST, 'Not logged in\n')).toEqual({
+      state: 'signed-out',
+      loginCommand: ['codex', 'login'],
+      detail: 'not logged in',
+    });
+  });
+
+  it('leaves an unrelated failure, and a runner that declares no login, unjudged', () => {
+    expect(signedOutFromFailure(CLAUDE_CODE_MANIFEST, 'The repository is not a git repository')).toBeUndefined();
+    expect(signedOutFromFailure(OPENCODE_MANIFEST, 'Not logged in · Please run /login')).toBeUndefined();
+  });
+
+  it("never throws when a runner's reader cannot judge a failure", () => {
+    const manifest = {
+      ...CLAUDE_CODE_MANIFEST,
+      auth: { statusArgs: ['auth', 'status'], loginArgs: ['auth', 'login'], read: () => { throw new Error('boom'); } },
+    };
+
+    expect(signedOutFromFailure(manifest, 'anything')).toBeUndefined();
   });
 });

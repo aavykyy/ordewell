@@ -1,5 +1,7 @@
-import type { AiProvider, IConfig } from '../interfaces/IConfig';
-import { CLI_PROVIDERS, getProviderMeta, isApiProvider, isCliProvider } from './ProviderRegistry';
+import type { AiProvider, IConfig, PlannerBackendId } from '../interfaces/IConfig';
+import { commandLine } from '../models/ScriptTask';
+import { CLI_PROVIDERS, getProviderMeta, isApiProvider, isCliProvider, runnerForProvider } from './ProviderRegistry';
+import { recordedRunnerAuth, type RunnerAuth } from './runnerAuth';
 
 /** What the preflight reads: the planner choice and whatever it needs to be reachable. */
 export type PlannerReadinessConfig = Pick<IConfig, 'aiProvider' | 'planningModel' | 'openaiCompatibleBaseUrl' | 'getProviderApiKey'>;
@@ -12,19 +14,46 @@ export type PlannerReadinessConfig = Pick<IConfig, 'aiProvider' | 'planningModel
 export type PlannerNotReady =
   | { code: 'no_key'; provider: AiProvider; label: string; keyEnvVar: string }
   | { code: 'no_base_url'; provider: AiProvider; label: string; baseUrlEnvVar: string }
-  | { code: 'no_model'; provider: AiProvider; label: string };
+  | { code: 'no_model'; provider: AiProvider; label: string }
+  | { code: 'signed_out'; provider: PlannerBackendId; label: string; runner: string; loginCommand: string[] };
+
+/** A runner's latest login verdict, read synchronously because every planner turn is judged that way. */
+export type RunnerAuthLookup = (runner: string) => RunnerAuth | undefined;
 
 /**
  * What the selected planner still needs before it can plan, or null when it is
- * ready. There are two ways in (ADR-0009), and only one of them involves a
+ * ready. There are two ways in (ADR-0009), and only one of them involves an
  * credential: a harness planner drives a coding agent already installed on the
  * machine, authenticated by the user's own subscription, so demanding an API
  * key of it turns a working setup into a wall. Its model is optional too: an
  * unset id means "the agent's own default".
+ *
+ * A harness planner whose own status command says the user is signed out is
+ * refused too: the agent will fail every turn until they log in. Only that
+ * verdict blocks — unknown says nothing, and a stale signed-in one is left to
+ * the runner's own failure.
  */
-export function plannerNotReady(config: PlannerReadinessConfig): PlannerNotReady | null {
+export function plannerNotReady(
+  config: PlannerReadinessConfig,
+  auth: RunnerAuthLookup = () => undefined,
+): PlannerNotReady | null {
   const provider = config.aiProvider;
-  if (isCliProvider(provider) || !isApiProvider(provider)) return null;
+  if (isCliProvider(provider)) {
+    const runner = runnerForProvider(provider);
+    if (!runner) return null;
+    const verdict = auth(runner);
+    // A signed-out verdict without its command has no way out to offer; the
+    // recorded fallback always carries one.
+    if (verdict?.state !== 'signed-out' || !verdict.loginCommand?.length) return null;
+    return {
+      code: 'signed_out',
+      provider,
+      label: getProviderMeta(provider)?.label ?? provider,
+      runner,
+      loginCommand: [...verdict.loginCommand],
+    };
+  }
+  if (!isApiProvider(provider)) return null;
   const meta = getProviderMeta(provider);
   if (provider === 'openai_compatible') {
     // A local endpoint (ollama, vLLM) takes no key; the URL is what makes it reachable.
@@ -47,16 +76,20 @@ export function plannerNotReady(config: PlannerReadinessConfig): PlannerNotReady
  */
 export function plannerNotReadyFor(
   config: Pick<IConfig, 'aiProvider' | 'orchestratorModel' | 'planningModel' | 'openaiCompatibleBaseUrl' | 'getProviderApiKey'>,
+  auth: RunnerAuthLookup = recordedRunnerAuth,
 ): PlannerNotReady | null {
-  return plannerNotReady({
-    aiProvider: config.aiProvider,
-    // The vendor transports read different fields (OpenAI-style the
-    // orchestrator model, Gemini the planning model, which has a default),
-    // so either one set means a model will be found.
-    planningModel: config.orchestratorModel || config.planningModel,
-    openaiCompatibleBaseUrl: config.openaiCompatibleBaseUrl,
-    getProviderApiKey: (provider) => config.getProviderApiKey(provider),
-  });
+  return plannerNotReady(
+    {
+      aiProvider: config.aiProvider,
+      // The vendor transports read different fields (OpenAI-style the
+      // orchestrator model, Gemini the planning model, which has a default),
+      // so either one set means a model will be found.
+      planningModel: config.orchestratorModel || config.planningModel,
+      openaiCompatibleBaseUrl: config.openaiCompatibleBaseUrl,
+      getProviderApiKey: (provider) => config.getProviderApiKey(provider),
+    },
+    auth,
+  );
 }
 
 /** How one surface spells the commands a not-ready message points at. */
@@ -64,6 +97,7 @@ export interface PlannerCommandSyntax {
   pickPlanner: string;
   setKey(provider: AiProvider): string;
   setModel: string;
+  login(loginCommand: readonly string[]): string;
 }
 
 export const TERMINAL_UI_COMMANDS: PlannerCommandSyntax = {
@@ -72,6 +106,8 @@ export const TERMINAL_UI_COMMANDS: PlannerCommandSyntax = {
   // `/planner` walks harness, model and effort in one flow; there is no
   // separate `/model` (or `/planner-effort`) to point at.
   setModel: '/planner',
+  // `/login` hands the terminal to the selected runner's own login (ADR-0009).
+  login: () => '/login',
 };
 
 /** The VS Code chat shares the terminal's slash commands: its Planner panel and `/planner` own the model. */
@@ -81,6 +117,7 @@ export const HEADLESS_CLI_COMMANDS: PlannerCommandSyntax = {
   pickPlanner: 'ordewell planner <id>',
   setKey: (provider) => `ordewell key set ${provider} <key>`,
   setModel: 'ordewell model set <id>',
+  login: (loginCommand) => commandLine(loginCommand),
 };
 
 /** "A, B and C" — read from the harness registrations, so it lists what can plan instead of a copy that goes stale. */
@@ -99,6 +136,15 @@ function harnessPlannerNames(): string {
 export const PLANNER_ESCAPE_HINT = `or pick a coding agent with ${TERMINAL_UI_COMMANDS.pickPlanner}: it plans with no API key`;
 
 export function describePlannerNotReady(reason: PlannerNotReady, commands: PlannerCommandSyntax): string {
+  if (reason.code === 'signed_out') {
+    const own = commandLine(reason.loginCommand);
+    const surface = commands.login(reason.loginCommand);
+    // The headless CLI's own login is the runner's command; naming both would
+    // read as two routes where there is one.
+    return surface === own
+      ? `${reason.label} is not logged in. Run ${own} to sign in, then try again.`
+      : `${reason.label} is not logged in. Sign in with ${surface}, or run ${own} and try again.`;
+  }
   if (reason.code === 'no_model') {
     // The TUI and VS Code pick the model inside `/planner`; the headless CLI
     // has its own `ordewell model set`. Name the one place, not two.

@@ -70,6 +70,9 @@ export const CLAUDE_CODE_MANIFEST: RunnerManifest = {
   auth: {
     statusArgs: ['auth', 'status'],
     loginArgs: ['auth', 'login'],
+    // A turn on a signed-out account ends with this line, which the status
+    // command's JSON reader cannot parse; the failure fallback matches it here.
+    signedOut: /not logged in/i,
     // The status command prints JSON; an older CLI prints prose instead, which
     // must stay unknown rather than claiming the user is signed out.
     read: (output, code) => {

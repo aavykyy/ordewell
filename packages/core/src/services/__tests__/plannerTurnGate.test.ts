@@ -5,6 +5,7 @@ import type { IConfig } from '../../interfaces/IConfig';
 import { detectInstalledPlanner, recordInstalledPlanner, recordedInstalledPlanner, resetInstalledPlanner } from '../InstalledPlanner';
 import { PlannerTurnDiscardedError, PlannerTurnStoppedError } from '../PlannerConversation';
 import { PlannerNotReadyError } from '../plannerReadiness';
+import { recordRunnerAuth, resetRunnerAuth } from '../runnerAuth';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { fakeConfig, makeSession, testWorkspace } from './sessionTestKit';
 import { recordingRunner } from './supervisorTestKit';
@@ -77,7 +78,10 @@ function savedPlan(pending: string[] = []): LegacyPlanState {
 const pendingTexts = (plan: LegacyPlanState | null) => (plan?.pendingTurns ?? []).map((t) => t.text);
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-afterEach(() => resetInstalledPlanner());
+afterEach(() => {
+  resetInstalledPlanner();
+  resetRunnerAuth();
+});
 
 describe('a restored message', () => {
   it('stays idle when the probe answers, then goes with the next user message', async () => {
@@ -231,6 +235,44 @@ describe('after the selected vendor\'s key is taken away', () => {
       expect(session.isPlannerBusy).toBe(false);
     });
   }
+});
+
+describe('a planner whose agent is signed out', () => {
+  const signedOut = { state: 'signed-out' as const, loginCommand: ['claude', 'auth', 'login'], detail: 'not logged in' };
+
+  function signedOutSession() {
+    const config = keylessConfig();
+    recordInstalledPlanner('claude-code');
+    const { aiService } = recordingPlanner(config);
+    const notices: string[] = [];
+    const session = makeSession({ config, aiService, onNotice: (n) => notices.push(n.message) });
+    session.loadPlan(savedPlan(['rename task 1']), 'build it', testWorkspace);
+    return { session, aiService, notices };
+  }
+
+  it('refuses the turn with the login reason, and keeps the message the user held', async () => {
+    const { session, aiService, notices } = signedOutSession();
+    recordRunnerAuth('claude-code', signedOut);
+
+    const refusal = session.continueConversation('try now');
+    await expect(refusal).rejects.toBeInstanceOf(PlannerNotReadyError);
+    await expect(refusal).rejects.toThrow(/Claude Code is not logged in\. Sign in with \/login, or run claude auth login and try again\./);
+
+    expect(aiService.continueConversation).not.toHaveBeenCalled();
+    expect(pendingTexts(session.planState)).toEqual(['rename task 1']);
+    await vi.waitFor(() => expect(notices.join('\n')).toContain('Claude Code is not logged in'));
+    expect(notices.join('\n')).toContain('rename task 1');
+  });
+
+  it('lets a signed-in agent plan as before', async () => {
+    const { session, aiService } = signedOutSession();
+    recordRunnerAuth('claude-code', { state: 'signed-in', loginCommand: ['claude', 'auth', 'login'] });
+
+    await session.continueConversation('try now');
+
+    expect(aiService.continueConversation).toHaveBeenCalledTimes(1);
+    expect(pendingTexts(session.planState)).toEqual([]);
+  });
 });
 
 describe('Stop while a turn waits at the gate', () => {
