@@ -120,3 +120,20 @@ it('preserves historical attempt and task total accounting and attaches live lim
   expect(footer(state)).toEqual(['attempt 1: ctx 36k (18%) · $1.00', 'task total: ctx 100k (50%) · Codex 5h 24% used · $1.50']);
   expect(render({ ...state, rows: 12, cols: 30 })).toHaveLength(12);
 });
+
+it('joins only the known parts around the limits when the context or the cost is missing, as VS Code does', () => {
+  let planner = initialState({ sessionId: 's', plannerProvider: 'codex', accountLimits: [codex] });
+  planner = reduce(planner, { type: 'sessionMessage', message: { type: 'planner_usage', totals: { reportedCost: { USD: 0.42 } }, byModel: [] } }).state;
+  expect(footer(planner)).toEqual(['Codex 5h 24% used · $0.42']);
+
+  const attempt = (n: number, totals: { reportedCost?: Record<string, number> }, prompt?: number) => ({ attempt: n, runner: 'codex', startedAt: '', wallTimeMs: 0, totals, byModel: [], ...(prompt ? { lastPromptTokens: prompt } : {}) });
+  const task = (attemptUsage: ReturnType<typeof attempt>[], viewed: number) => initialState({
+    sessionId: 's', accountLimits: [codex],
+    tasks: [{ id: 't', order: 1, title: 'Work', type: 'ai', status: 'completed', dependencies: [], assignedRunner: 'codex', attemptUsage }],
+    taskView: { ...EMPTY_TASK_LOG_FOLLOW, taskId: 't', attempts: attemptUsage.map((a) => a.attempt), attempt: viewed, followLatest: false, loaded: true, queuedIndex: null },
+  });
+  expect(footer(task([attempt(1, {}, 13000)], 1))).toEqual(['ctx 13k · Codex 5h 24% used']);
+  expect(footer(task([attempt(1, { reportedCost: { USD: 0.42 } })], 1))).toEqual(['Codex 5h 24% used · $0.42']);
+  expect(footer(task([attempt(1, { reportedCost: { USD: 0.5 } }), attempt(2, { reportedCost: { USD: 1 } })], 1)))
+    .toEqual(['attempt 1: $0.50', 'Codex 5h 24% used · task total: $1.50']);
+});

@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { AccountLimitSnapshot, SessionMessage } from '@ordewell/core';
@@ -118,6 +118,15 @@ const openCodeLimits = (provider: string): AccountLimitSnapshot => ({
   readAt: '2026-03-02T10:00:00.000Z',
 });
 
+/** Each footer row as a reader sees it: the limits' screen-reader description is in the DOM but never drawn. */
+function visibleFooter(): string[] {
+  return [...document.querySelectorAll('.usage-line')].map((line) => {
+    const drawn = line.cloneNode(true) as Element;
+    drawn.querySelectorAll('.account-limit-details').forEach((details) => details.remove());
+    return drawn.textContent ?? '';
+  });
+}
+
 describe('account limits under the planner', () => {
   let host: ReturnType<typeof hostBridge>;
   beforeEach(() => {
@@ -156,16 +165,42 @@ describe('account limits under the planner', () => {
     expect(region.getAttribute('aria-live')).toBeNull();
   });
 
-  it('keeps the planner\'s context and cost beside them', () => {
+  it('draws context, then live limits, then reported cost and the subagent count, as the TUI does', () => {
     host.planner([{ id: 'codex', label: 'Codex', kind: 'harness', runner: 'codex', usable: true }], 'codex', 'codex');
-    host.session(turnStarted, usage({ totals: { reportedCost: { USD: 0.5 } }, contextFill: { usedTokens: 700, windowTokens: 10_000 } }));
+    host.session(turnStarted, usage({
+      totals: { reportedCost: { USD: 0.5 } }, contextFill: { usedTokens: 700, windowTokens: 10_000 },
+      bySubagent: { 'sub-1': { reportedCost: { USD: 0.02 } } },
+    }));
     host.provider.setAccountLimits([codexLimits()]);
 
-    expect(document.querySelector('.usage-line-measures')!.textContent).toBe('Planner ctx 700 (7%) · $0.50');
-    const measuresLine = document.querySelector('.usage-line-measures')!.closest('.usage-line');
-    const limitsLine = document.querySelector('.account-limit')!.closest('.usage-line');
-    expect(limitsLine).toBe(measuresLine);
     expect(document.querySelectorAll('.usage-line')).toHaveLength(1);
+    expect(visibleFooter()).toEqual(['Planner ctx 700 (7%) · Codex 5h 24% used · Weekly 61% used · $0.50 · 1 subagent']);
+    // The measures are announced; the passive quota between them is not part of any live region.
+    const announced = within(document.querySelector<HTMLElement>('.usage-line')!).getAllByRole('status').map((region) => region.textContent);
+    expect(announced).toEqual(['Planner ctx 700 (7%)', '$0.50']);
+    expect(document.querySelector('.account-limits')!.closest('[role="status"]')).toBeNull();
+    expect(document.querySelector('.usage-line-context')!.getAttribute('title')).toBe('700 of 10,000 tokens');
+  });
+
+  it('joins only the known parts when the context, the cost or a percentage is missing', () => {
+    host.planner([{ id: 'codex', label: 'Codex', kind: 'harness', runner: 'codex', usable: true }], 'codex', 'codex');
+    const unknownWeekly = codexLimits({ buckets: [{ id: 'codex', windows: [
+      { slot: 'primary', usedPercent: 24, durationMinutes: 300, resetsAt: null },
+      { slot: 'secondary', usedPercent: null, durationMinutes: 10080, resetsAt: null },
+    ] }] });
+    host.provider.setAccountLimits([unknownWeekly]);
+    expect(visibleFooter()).toEqual(['Codex 5h 24% used']);
+
+    host.session(turnStarted, usage({ contextFill: { usedTokens: 61_000 } }));
+    expect(visibleFooter()).toEqual(['Planner ctx 61k · Codex 5h 24% used']);
+
+    cleanup();
+    render(<App />);
+    host = hostBridge();
+    host.planner([{ id: 'codex', label: 'Codex', kind: 'harness', runner: 'codex', usable: true }], 'codex', 'codex');
+    host.provider.setAccountLimits([unknownWeekly]);
+    host.session(turnStarted, usage({ totals: { reportedCost: { USD: 0.42 } } }));
+    expect(visibleFooter()).toEqual(['Codex 5h 24% used · $0.42']);
   });
 
   it('shows only the selected planner harness limits, switches cleanly, and follows a restricted provider model', () => {

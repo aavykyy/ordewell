@@ -2,13 +2,36 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { ConversationBlocks } from '../chat/components/ChatMessage';
 import { OpenPatchContext } from '../chat/openPatch';
 import { useFollowOutput } from '../chat/followOutput';
-import { contextMeterTitle, hasAccountLimits } from '@ordewell/core/plan-utils';
+import { contextMeterText, contextMeterTitle, hasAccountLimits } from '@ordewell/core/plan-utils';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type PatchedView } from '../../shared/conversationPatch';
 import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../../shared/taskLogProtocol';
 import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
 import AccountLimitRows from '../chat/components/AccountLimitRows';
 import PendingMessages, { QUEUE_TITLE, SendKeyHint, isSendNowKey, type PendingMessage } from '../chat/components/PendingMessages';
-import type { AccountLimitSnapshot, TaskLogHeaderView } from '@ordewell/core';
+import type { AccountLimitSnapshot, TaskLogHeaderUsage, TaskLogHeaderView } from '@ordewell/core';
+
+/**
+ * One row of the log header's usage: its context, the runner's live limits,
+ * then its cost, as the TUI draws them. Only the last row — the task total
+ * under a past attempt's own numbers — takes the limits, so a past attempt
+ * keeps its row as it was. The row is cut where core's meter ends, and each
+ * side is its own live region since the limits between them are not one.
+ */
+function UsageRow({ row, total, limits }: { row: TaskLogHeaderUsage; total: boolean; limits: readonly AccountLimitSnapshot[] }) {
+  const meter = contextMeterText(row.contextFill);
+  const at = meter ? row.text.indexOf(meter) : -1;
+  const context = meter && at >= 0 ? row.text.slice(0, at + meter.length) : '';
+  const rest = row.text.slice(context.length).replace(/^ · /, '');
+  return (
+    <div className={total ? 'usage-line usage-line-total' : 'usage-line'}>
+      {context && <span className="usage-line-measures" role="status" title={row.contextFill && contextMeterTitle(row.contextFill)}>{context}</span>}
+      {context && limits.length > 0 && ' · '}
+      <AccountLimitRows limits={limits} />
+      {(context || limits.length > 0) && rest && ' · '}
+      {rest && <span className="usage-line-measures" role="status">{rest}</span>}
+    </div>
+  );
+}
 
 declare function acquireVsCodeApi(): { postMessage(message: TaskLogToHost): void; setState(state: unknown): void };
 
@@ -222,11 +245,8 @@ export default function TaskLogApp() {
               onAnswerApproval={(id, decision) => vscode.postMessage({ type: 'answerApproval', id, decision })} />}
       </div>
 
-      {header?.usage.map((row, i) => (
-        <div key={i} className={i === 0 ? 'usage-line' : 'usage-line usage-line-total'}>
-          <span className="usage-line-measures" role="status" title={row.contextFill ? contextMeterTitle(row.contextFill) : undefined}>{row.text}</span>
-          {i === 0 && shownLimits.length > 0 && <>{' · '}<AccountLimitRows limits={shownLimits} /></>}
-        </div>
+      {header?.usage.map((row, i, rows) => (
+        <UsageRow key={i} row={row} total={i > 0} limits={i === rows.length - 1 ? shownLimits : []} />
       ))}
 
       {!header?.usage.length && shownLimits.length > 0 && <div className="usage-line"><AccountLimitRows limits={shownLimits} /></div>}
