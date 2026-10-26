@@ -285,6 +285,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **Copying selected chat text works again in VS Code 1.143.** Cmd+C, Ctrl+C
+  and context-menu Copy of text selected with the mouse in the planner
+  conversation or the `Planner ctx` footer copied nothing once the composer had
+  been focused, because VS Code moved focus back to the composer before
+  copying. The selection now keeps focus, and is copied.
 - **A supervisor at Act can start the task it just added.** Its `run_task`,
   fresh `retry_task` or `run_plan` in the reply whose edit adds the task now
   waits for the edit and then starts it, as the planner's start does in your

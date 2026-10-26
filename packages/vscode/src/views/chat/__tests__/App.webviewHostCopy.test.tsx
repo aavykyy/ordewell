@@ -314,6 +314,52 @@ describe.each(['1.142.0', '1.143.1'] as const)('VS Code %s webview copy route', 
   });
 });
 
+describe('the focus a mouse selection leaves behind (VS Code 1.143.1 route)', () => {
+  let host: ReturnType<typeof hostBridge>;
+  let guest: Guest;
+
+  beforeEach(() => {
+    installExecCommand();
+    guest = installGuest('1.143.1');
+    render(<App />);
+    host = hostBridge();
+    textarea().focus();
+    host.session(turnStarted('how do I run the tests?'), usage(88_000, 463_000), reply('Run the suite before you commit.'), turnEnded());
+  });
+  afterEach(() => guest.detach());
+
+  it('lands on something neither editable nor a tab stop, for a reply and for the footer', () => {
+    const landed = [
+      firstText(document.querySelector('.chat-msg-planner .chat-msg-content p')),
+      document.querySelector('.usage-line-context')!,
+    ].map((node) => {
+      selectRange(node);
+      const active = document.activeElement as HTMLElement;
+      return { body: active === document.body, editable: isEditable(active), tabStop: active.tabIndex >= 0 };
+    });
+
+    expect(landed).toEqual([
+      { body: false, editable: false, tabStop: false },
+      { body: false, editable: false, tabStop: false },
+    ]);
+  });
+
+  it('gives the composer back whole: after a reply is copied, a click there edits and copies its own selection', () => {
+    selectRange(firstText(document.querySelector('.chat-msg-planner .chat-msg-content p')));
+    press(CHORDS[0][1]);
+
+    mouseSelect(textarea(), 0, 0);
+    expect(document.activeElement).toBe(textarea());
+    fireEvent.change(textarea(), { target: { value: 'hello world' } });
+    textarea().setSelectionRange(6, 11);
+    press(CHORDS[0][1]);
+
+    expect(copyObservations.map((c) => c.clipboard)).toEqual(['Run the suite before you commit.', 'world']);
+    expect(textarea().value).toBe('hello world');
+    expect(document.activeElement).toBe(textarea());
+  });
+});
+
 describe('footer selection through unrelated host updates', () => {
   beforeEach(() => {
     render(<App />);

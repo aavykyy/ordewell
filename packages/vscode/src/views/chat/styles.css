@@ -91,6 +91,12 @@ body {
   overflow: hidden;
 }
 
+/* Mouse focus targets only (App.tsx); a ring around the whole view would be noise. */
+.chat-container:focus,
+.message-list:focus {
+  outline: none;
+}
+
 /* ---- New Session Confirm ---- */
 .new-session-confirm {
   display: flex;
