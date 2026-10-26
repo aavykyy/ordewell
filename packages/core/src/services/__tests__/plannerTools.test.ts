@@ -1283,6 +1283,96 @@ describe('edit_plan', () => {
   });
 });
 
+/** A plan whose first task is on Codex, then Codex switched off: it stays in the plan's runners, and out of the enabled list. */
+async function codexSwitchedOff(second: (mcp: Client | null, message: string) => Promise<string>) {
+  let planned = false;
+  const planner = plannerSession(fakeClaude({
+    turn: async (mcp, message) => {
+      if (planned) return second(mcp, message);
+      planned = true;
+      return submitted(mcp, [planTask('a', 1, 'codex', 'gpt-5'), planTask('b', 2, 'claude-code', 'claude-sonnet-4')]);
+    },
+  }), { enabledRunners: ['claude-code', 'codex', 'opencode'] });
+  await planner.session.startPlanning('add a cache', ['codex', 'claude-code']);
+  planner.settings({ enabledRunners: ['claude-code', 'opencode'] });
+  return planner;
+}
+
+describe('edit_plan after a runner is switched off that the plan once used', () => {
+  const OFF = /invalid assignedRunner "codex"\. Expected one of: claude-code, opencode/;
+  const stale: [string, Record<string, unknown>[]][] = [
+    ['an added task naming it', [{ op: 'add', task: { title: 'New', assignedRunner: 'codex' } }]],
+    ['a task moved onto it', [{ op: 'update', taskId: '#2', changes: { assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5', modelLabel: 'GPT-5' } } }]],
+    ['a split part that inherits it', [{ op: 'split', taskId: '#1', parts: [{ title: 'One' }, { title: 'Two' }] }]],
+  ];
+
+  it.each(stale)('refuses %s, though list_runners shows the planner only the enabled runners', async (_name, ops) => {
+    let listed: unknown;
+    let refused: { isError: boolean; body: unknown } | undefined;
+    const planner = await codexSwitchedOff(async (mcp) => {
+      listed = (await call(mcp!, 'list_runners')).body;
+      refused = await call(mcp!, 'edit_plan', { ops });
+      return 'That did not work.';
+    });
+    const before = landed(planner);
+
+    await planner.session.continueConversation('EDIT NOW');
+
+    expect((listed as { runners: { id: string }[] }).runners.map((r) => r.id)).toEqual(['claude-code', 'opencode']);
+    expect(refused?.isError).toBe(true);
+    expect(JSON.stringify(refused?.body)).toMatch(OFF);
+    expect(planner.session.planTasks.map((t) => [t.title, t.assignedRunner])).toEqual([['Task a', 'codex'], ['Task b', 'claude-code']]);
+    expect(landed(planner).planBroadcasts).toBe(before.planBroadcasts);
+  });
+
+  it('puts an added task that names no runner on an enabled one', async () => {
+    const planner = await codexSwitchedOff(async (mcp) => {
+      await call(mcp!, 'edit_plan', { ops: [{ op: 'add', task: { title: 'Docs' } }] });
+      return 'Added docs.';
+    });
+
+    await planner.session.continueConversation('EDIT NOW');
+
+    expect(planner.session.planTasks.find((t) => t.title === 'Docs')?.assignedRunner).toBe('claude-code');
+  });
+
+  it('refuses at landing an edit it accepted while the runner was on', async () => {
+    let accepted: { isError: boolean; body: unknown } | undefined;
+    const planner = await codexSwitchedOff(async (mcp) => {
+      accepted = await call(mcp!, 'edit_plan', { ops: [{ op: 'add', task: { title: 'Docs', assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5', modelLabel: 'GPT-5' } } }] });
+      planner.settings({ enabledRunners: ['claude-code', 'opencode'] });
+      return 'Added docs on codex.';
+    });
+    planner.settings({ enabledRunners: ['claude-code', 'codex', 'opencode'] });
+
+    await planner.session.continueConversation('EDIT NOW');
+
+    expect(accepted?.isError).toBe(false);
+    expect(planner.session.planTasks.map((t) => t.title)).toEqual(['Task a', 'Task b']);
+  });
+
+  it('still lands an edit that leaves the task on it alone, or moves it off', async () => {
+    const answers: { isError: boolean; body: unknown }[] = [];
+    const planner = await codexSwitchedOff(async (mcp) => {
+      answers.push(await call(mcp!, 'edit_plan', { ops: [{ op: 'update', taskId: '#1', changes: { title: 'Renamed' } }] }));
+      answers.push(await call(mcp!, 'edit_plan', { ops: [{ op: 'update', taskId: '#2', changes: { title: 'Second' } }] }));
+      return 'Renamed both.';
+    });
+
+    await planner.session.continueConversation('EDIT NOW');
+
+    expect(answers.map((a) => a.isError)).toEqual([false, false]);
+    expect(planner.session.planTasks.map((t) => [t.title, t.assignedRunner])).toEqual([['Renamed', 'codex'], ['Second', 'claude-code']]);
+
+    const moved = await codexSwitchedOff(async (mcp) => {
+      await call(mcp!, 'edit_plan', { ops: [{ op: 'update', taskId: '#1', changes: { assignedRunner: 'claude-code', assignedModel: { modelId: 'claude-sonnet-4', modelLabel: 'Claude Sonnet 4' } } }] });
+      return 'Moved it.';
+    });
+    await moved.session.continueConversation('EDIT NOW');
+    expect(moved.session.planTasks.map((t) => t.assignedRunner)).toEqual(['claude-code', 'claude-code']);
+  });
+});
+
 /**
  * Every rule a planned task is held to, met the same way whether the task
  * arrives in a whole plan or in an edit, subtasks included.

@@ -173,6 +173,59 @@ describe('moving a task paused on a usage limit', () => {
   });
 });
 
+/**
+ * The supervisor woken at Act on a plan that once used Codex, the user having
+ * switched Codex off since: the plan's runners still hold it, the enabled list
+ * does not. Tasks 2 and 3 wait on task 1, and task 3 is left on Codex.
+ */
+async function codexSwitchedOff(): Promise<Env> {
+  return wokenUp(
+    { ...ACT, plan: { runners: ['codex', 'claude-code'] }, config: { enabledRunners: ['claude-code', 'opencode'] } },
+    [task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { assignedRunner: 'codex', dependencies: ['t1'] })],
+  );
+}
+
+describe('the supervisor\'s edits after a runner is switched off that the plan once used', () => {
+  it.each<[string, { op: 'add'; task: Record<string, unknown> } | { op: 'update'; taskId: string; changes: Record<string, unknown> }]>([
+    ['an added task naming it', { op: 'add', task: { title: 'Fix the import', prompt: 'fix it', assignedRunner: 'codex' } }],
+    ['a task moved onto it', { op: 'update', taskId: '#2', changes: { assignedRunner: 'codex' } }],
+  ])('refuse %s, and change nothing', async (_name, op) => {
+    const env = await codexSwitchedOff();
+
+    const edit = await env.planner.tools().editPlan!({ ops: [op] }, ctx);
+    env.planner.calls[0].finish(prose('That did not work.'));
+    await settled();
+
+    expect(edit.isError).toBe(true);
+    expect(JSON.parse(edit.text).errors[0].message).toMatch(/invalid assignedRunner "codex"\. Expected one of: claude-code, opencode/);
+    expect(env.session.planTasks.map((t) => [t.title, t.assignedRunner])).toEqual([['Task t1', 'claude-code'], ['Task t2', 'claude-code'], ['Task t3', 'codex']]);
+  });
+
+  it('put an added task that names no runner on an enabled one, as the supervisor\'s', async () => {
+    const env = await codexSwitchedOff();
+
+    const edit = await env.planner.tools().editPlan!({ ops: [{ op: 'add', task: { title: 'Fix the import', prompt: 'fix it' } }] }, ctx);
+    env.planner.calls[0].finish(prose('Added a fix.'));
+    await settled();
+
+    expect(edit.isError, edit.text).toBeFalsy();
+    expect(byTitle(env, 'Fix the import')).toMatchObject({ assignedRunner: 'claude-code', addedBy: 'supervisor' });
+  });
+
+  it('still edit the task left on it and move it off', async () => {
+    const env = await codexSwitchedOff();
+
+    const edit = await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#3', changes: { prompt: 'do t3 with Postgres' } }] }, ctx);
+    const move = await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#3', changes: { assignedRunner: 'opencode' } }] }, ctx);
+    env.planner.calls[0].finish(prose('Updated task 3.'));
+    await settled();
+
+    expect(edit.isError, edit.text).toBeFalsy();
+    expect(move.isError, move.text).toBeFalsy();
+    expect(taskOf(env.session, 't3')).toMatchObject({ prompt: 'do t3 with Postgres', assignedRunner: 'opencode' });
+  });
+});
+
 const notes = (env: Env) => env.session.planState!.conversationHistory!.filter((e) => e.kind === 'supervisor').map((e) => e.content);
 
 /** A one-task run whose task failed, with the supervisor woken to it at Act. */
