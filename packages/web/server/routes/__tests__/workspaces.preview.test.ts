@@ -50,7 +50,7 @@ describe('GET /api/workspaces/isolation-preview', () => {
     let answer: (preview: IsolationPreview) => void = () => {};
     const app = appWith({ preview: () => new Promise((resolve) => { answer = resolve; }) });
 
-    const pending = app.request(`/api/workspaces/isolation-preview?workspace=${encodeURIComponent(process.cwd())}`);
+    const pending = Promise.resolve(app.request(`/api/workspaces/isolation-preview?workspace=${encodeURIComponent(process.cwd())}`));
     let answered = false;
     void pending.then(() => { answered = true; });
     await Promise.resolve();
