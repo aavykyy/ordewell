@@ -53,9 +53,10 @@ Conversation** and **Compact Conversation**. Isolation can be configured under
 
 Once a day, the extension asks ordewell.ai whether a newer version is out. The
 request carries the version you run and a random install ID, kept in
-`~/.ordewell/version-check.json` and shared with the command line. Nothing else
-is sent: no code, prompts, paths, file names or account details. Like any
-server, ordewell.ai sees the IP address the request comes from.
+`~/.ordewell/version-check.json` and shared with the command line. The ID is
+replaced every 30 days. Nothing else is sent: no code, prompts, paths, file
+names or account details. Like any server, ordewell.ai sees the IP address the
+request comes from.
 
 The first time Ordewell starts on a machine, the extension shows a notice saying
 this and sends nothing. If it cannot write that file, it shows no notice and

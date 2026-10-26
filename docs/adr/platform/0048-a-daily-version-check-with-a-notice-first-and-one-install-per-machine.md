@@ -27,7 +27,10 @@ the update line, and decides only where they appear.
 - **What is sent.** The running version and a random install ID
   (`crypto.randomUUID()`), as the only two query parameters. No body, no
   cookies, no custom headers. Redirects are not followed, so the install ID
-  goes to that one URL and nowhere a redirect points.
+  goes to that one URL and nowhere a redirect points. The ID is replaced every
+  30 days, so no row belongs to more than a month of a machine's history. An ID
+  whose minting time is missing or in the future counts as due for replacement,
+  since its age cannot be shown to be short.
 - **The answer.** 204, or 200 with `{"latest":"x.y.z"}`, `latest` optional.
   When `latest` is a newer version by semver precedence, the surface shows one
   line: `Ordewell <latest> is out — npm i -g ordewell`. Any other answer, a
@@ -36,9 +39,9 @@ the update line, and decides only where they appear.
   holds up a start.
 - **One install per machine.** The state is `version-check.json` in
   `globalDataDir()` (`~/.ordewell/`), next to the global `settings.json`:
-  `installId`, `noticeShownAt` and `lastCheckAt`. The CLI and the VS Code
-  extension read and write the same file. It is written atomically and owner
-  only. A field of the wrong type counts as absent, and a file without an
+  `installId`, `installIdAt`, `noticeShownAt` and `lastCheckAt`. The CLI and the
+  VS Code extension read and write the same file. It is written atomically and
+  owner only. A field of the wrong type counts as absent, and a file without an
   `installId` or a `noticeShownAt` (missing, not JSON, or that field absent) is
   recreated as on a first start, notice included and `lastCheckAt` dropped, so
   the next start pings: with no install ID nothing
@@ -57,9 +60,12 @@ the update line, and decides only where they appear.
   only a later start could honour one the notice just told the user about. A
   start that cannot record the notice does not show it, since it would show
   again on every start, and a machine with no install ID on disk sends nothing
-  to tell the user about. The notice reads: "Ordewell checks for a new version once a day, sending only its
-  version and a random install ID. Set ORDEWELL_NO_VERSION_CHECK=1 to turn this
-  off. Details: https://ordewell.ai/docs#version-check".
+  to tell the user about. The notice reads: "Ordewell checks for a new version
+  once a day, sending its version and a random install ID that is replaced every
+  30 days. Like any server, ordewell.ai sees your IP address. Set
+  ORDEWELL_NO_VERSION_CHECK=1 to turn this off. Details:
+  https://ordewell.ai/docs#version-check". It names the IP address because that
+  request is the only thing a user is not already choosing to send.
 - **Off switches.** `ORDEWELL_NO_VERSION_CHECK` or `DO_NOT_TRACK` set to `1`,
   `true` or `yes`, or a caller passing `telemetryEnabled: false` (the VS Code
   extension, from VS Code's telemetry setting). Any one turns everything off:
@@ -111,6 +117,14 @@ in the rendered welcome, like the rest of the welcome.
   their own day. Rejected: one person with both counts twice and the machine
   pings twice a day. One shared file makes the machine the install and the day
   shared.
+- **An install ID that never changes.** One UUID for the life of the install.
+  Rejected: it is the one field that makes a row about a machine rather than
+  about a version, and an ID that never changes outlives the three months the
+  dataset keeps, so it joins every row that machine ever wrote, and a copy of
+  `version-check.json` in a backup would link the machine across them. A
+  30 day ID does the counting job just as well: a daily count is exact, and a
+  window that spans a rotation can count one machine twice, which makes a
+  monthly figure a close estimate rather than an exact count.
 - **Lock the state file.** Take a lock, or compare-and-swap `lastCheckAt`, so
   two surfaces starting together cannot both ping. Rejected: the race spans
   one synchronous read and write of a small file, and a lock left by a process
@@ -135,3 +149,4 @@ in the rendered welcome, like the rest of the welcome.
 
 - 2026-10-23 — accepted.
 - 2026-10-23 — a file without an install ID starts over; a notice that cannot be recorded is not shown.
+- 2026-10-25: the install ID is replaced every 30 days, and the notice names the IP address.

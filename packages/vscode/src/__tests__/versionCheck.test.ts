@@ -41,7 +41,7 @@ describe('startExtensionVersionCheck', () => {
   });
 
   it('shows no update line when a newer version is out', async () => {
-    fs.writeFileSync(stateFile(), JSON.stringify({ installId: 'abc', noticeShownAt: new Date().toISOString() }));
+    fs.writeFileSync(stateFile(), JSON.stringify({ installId: 'abc', installIdAt: new Date().toISOString(), noticeShownAt: new Date().toISOString() }));
     const fetch = vi.fn(async () => ({ status: 200, text: async () => '{"latest":"9.9.9"}' }));
     const fake = fakeHost(true);
     startExtensionVersionCheck(fake.host, '1.0.0', { env, stateDir, fetch });
@@ -64,7 +64,7 @@ describe('startExtensionVersionCheck', () => {
   it('stops the re-check when telemetry is turned off mid-session', () => {
     vi.useFakeTimers();
     try {
-      fs.writeFileSync(stateFile(), JSON.stringify({ installId: 'abc', noticeShownAt: '2020-01-01T00:00:00.000Z' }));
+      fs.writeFileSync(stateFile(), JSON.stringify({ installId: 'abc', installIdAt: '2020-01-01T00:00:00.000Z', noticeShownAt: '2020-01-01T00:00:00.000Z' }));
       let now = Date.now();
       const fetch = vi.fn(async () => ({ status: 204, text: async () => '' }));
       const fake = fakeHost(true);
