@@ -3,6 +3,7 @@ import type { RunnerId } from '../models/Task';
 import { BUILTIN_MANIFESTS } from '../plugins/builtin';
 import { connectorFor } from './harness/connectors';
 import { PROVIDER_PRIORITY, VENDORS, type ProviderRegistration } from './apiProviders';
+import type { RunnerAuth } from './runnerAuth';
 
 export { PROVIDER_DETECT_PRIORITY, PROVIDER_PRIORITY, type ProviderRegistration } from './apiProviders';
 
@@ -120,6 +121,8 @@ export function providerForRunner(runner: RunnerId): PlannerBackendId | null {
 export interface PlannerUsability {
   usable: boolean;
   reason?: string;
+  /** The runner's own login verdict, beside usability: a signed-out agent is still offered. */
+  auth?: RunnerAuth;
 }
 
 /**
@@ -135,6 +138,8 @@ export interface PlannerBackendEntry {
   runner?: string;
   usable: boolean;
   reason?: string;
+  /** Set for a harness planner whose login status was asked; never a gate on `usable`. */
+  auth?: RunnerAuth;
 }
 
 /** The detail a usable harness planner is always shown with. */
@@ -159,13 +164,17 @@ export function plannerBackendEntries(
   const harness: PlannerBackendEntry[] = HARNESS_PLANNERS.map(({ id, label, runnerId }) => {
     const runner = runnerId ?? id;
     const status = usability[runner];
+    const signedOut = status?.auth?.state === 'signed-out';
     return {
       id,
       label,
       kind: 'harness' as const,
       runner,
       usable: status?.usable ?? false,
-      reason: status ? (status.reason ?? HARNESS_PLANNER_REASON) : HARNESS_PLANNER_UNAVAILABLE_REASON,
+      reason: status
+        ? (status.reason ?? (signedOut ? (status.auth?.detail ?? 'not logged in') : HARNESS_PLANNER_REASON))
+        : HARNESS_PLANNER_UNAVAILABLE_REASON,
+      ...(status?.auth ? { auth: status.auth } : {}),
     };
   });
   const vendors: PlannerBackendEntry[] = PROVIDER_PRIORITY

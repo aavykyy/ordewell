@@ -14,6 +14,7 @@ import type { RunnerModeInfo } from './services/ModeResolver';
 import type { GlobalRunSettings, UserSettings } from './services/SettingsService';
 import type { TaskLogEvent } from './models/TaskLog';
 import type { CommandPayload } from './services/ExecutionCommands';
+import type { RunnerAuth } from './services/runnerAuth';
 
 /**
  * The daemon contract: every HTTP body the local daemon sends, in one place.
@@ -205,6 +206,8 @@ export interface RunnerEntry {
   id: string;
   name: string;
   enabled: boolean;
+  /** The runner's own login verdict, beside `enabled`: a signed-out agent is still offered, flagged. */
+  auth?: RunnerAuth;
 }
 
 export interface RunnersResponse {

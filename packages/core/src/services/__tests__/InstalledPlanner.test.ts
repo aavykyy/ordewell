@@ -5,6 +5,7 @@ import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
 import { OPENCODE_MANIFEST } from '../../plugins/builtin/opencode.manifest';
+import type { RunnerAuthExec } from '../runnerAuth';
 import {
   defaultEnabledRunners, detectInstalledPlanner, findInstalledPlanner, installedPlannerAnswered, installedPlannerDetected, recordedInstalledPlanner, resetInstalledPlanner,
 } from '../InstalledPlanner';
@@ -24,19 +25,27 @@ function installedOnly(...commands: string[]): ExecImpl {
   });
 }
 
+// Auth is beside usability here, so these cases inject a status command that
+// answers nothing rather than spawning a real agent.
+const quietAuth: RunnerAuthExec = async () => ({ code: -1, stdout: '', stderr: '' });
+
+function installation(manifests: Array<{ name: string; runner: { command: string } }>, exec: ExecImpl): RunnerInstallation {
+  return new RunnerInstallation(registryWith(...manifests), exec, Date.now, { authExec: quietAuth });
+}
+
 describe('findInstalledPlanner', () => {
   it('picks the first harness planner in display order when several are installed', async () => {
-    const inst = new RunnerInstallation(registryWith(...ALL), installedOnly('claude', 'codex', 'opencode'));
+    const inst = installation(ALL, installedOnly('claude', 'codex', 'opencode'));
     expect(await findInstalledPlanner(inst)).toBe('claude-code');
   });
 
   it('skips an agent that is not installed', async () => {
-    const inst = new RunnerInstallation(registryWith(...ALL), installedOnly('opencode'));
+    const inst = installation(ALL, installedOnly('opencode'));
     expect(await findInstalledPlanner(inst)).toBe('opencode');
   });
 
   it('chooses the second agent when only Codex is installed', async () => {
-    const inst = new RunnerInstallation(registryWith(...ALL), installedOnly('codex'));
+    const inst = installation(ALL, installedOnly('codex'));
     expect(await findInstalledPlanner(inst)).toBe('codex');
   });
 
@@ -47,12 +56,12 @@ describe('findInstalledPlanner', () => {
   });
 
   it('skips an agent with no manifest registered', async () => {
-    const inst = new RunnerInstallation(registryWith(CODEX_MANIFEST), installedOnly('claude', 'codex'));
+    const inst = installation([CODEX_MANIFEST], installedOnly('claude', 'codex'));
     expect(await findInstalledPlanner(inst)).toBe('codex');
   });
 
   it('answers null when no coding agent is installed', async () => {
-    const inst = new RunnerInstallation(registryWith(...ALL), installedOnly());
+    const inst = installation(ALL, installedOnly());
     expect(await findInstalledPlanner(inst)).toBeNull();
   });
 
@@ -77,7 +86,7 @@ describe('detectInstalledPlanner', () => {
   afterEach(() => resetInstalledPlanner());
 
   it('records the agent it finds, for detectProvider to read', async () => {
-    const inst = new RunnerInstallation(registryWith(...ALL), installedOnly('codex'));
+    const inst = installation(ALL, installedOnly('codex'));
     await detectInstalledPlanner(inst);
     expect(recordedInstalledPlanner()).toBe('codex');
   });

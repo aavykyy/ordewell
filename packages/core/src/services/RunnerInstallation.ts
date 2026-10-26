@@ -1,10 +1,12 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
+import type { RunnerManifest } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { planDirectLaunch } from '../utils/launch';
 import type { ExecImpl } from './ModelDiscovery';
 import { connectorFor } from './harness/connectors';
+import { readRunnerAuth, recordRunnerAuth, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
 
 const execAsync = promisify(exec);
 
@@ -30,6 +32,23 @@ const CHECK_TIMEOUT_MS = 8000;
 const NEGATIVE_TTL_MS = 60_000;
 
 /**
+ * How long a login verdict is trusted. Short on purpose: the user can log in
+ * or out while a host runs, and a refresh asks again at once.
+ */
+const AUTH_TTL_MS = 30_000;
+
+export interface RunnerInstallationOptions {
+  /**
+   * The workspace's own variables (ADR-0016), asked afresh for each auth probe.
+   * A `.envrc` can choose another account, so the probe must ask the same
+   * account the planner will use.
+   */
+  env?: () => Promise<Record<string, string>>;
+  /** Injectable status command runner, so tests need no real agent binary. */
+  authExec?: RunnerAuthExec;
+}
+
+/**
  * Detects whether a runner's underlying CLI is actually installed on the host,
  * by invoking `<command> --version`. Mirrors ModelDiscovery: injectable exec,
  * augmented PATH, per-process cache. A runner that isn't installed should never
@@ -38,14 +57,25 @@ const NEGATIVE_TTL_MS = 60_000;
 export class RunnerInstallation {
   private cache: Map<string, { installed: boolean; at: number }> = new Map();
   private inflight: Map<string, Promise<boolean>> = new Map();
+  private authCache: Map<string, { auth: RunnerAuth; at: number }> = new Map();
+  private authInflight: Map<string, Promise<RunnerAuth>> = new Map();
   private registry: RunnerRegistry;
   private execImpl: ExecImpl;
   private now: () => number;
+  private env: () => Promise<Record<string, string>>;
+  private authExec: RunnerAuthExec | undefined;
 
-  constructor(registry: RunnerRegistry, execImpl: ExecImpl = defaultExec, now: () => number = Date.now) {
+  constructor(
+    registry: RunnerRegistry,
+    execImpl: ExecImpl = defaultExec,
+    now: () => number = Date.now,
+    options: RunnerInstallationOptions = {},
+  ) {
     this.registry = registry;
     this.execImpl = execImpl;
     this.now = now;
+    this.env = options.env ?? (async () => ({}));
+    this.authExec = options.authExec;
   }
 
   /** True if the runner's CLI responds to `--version`. Cached per process. */
@@ -88,6 +118,9 @@ export class RunnerInstallation {
    */
   refresh(): void {
     for (const [runner, probe] of this.cache) if (!probe.installed) this.cache.delete(runner);
+    // A login can change in either direction while a host runs, and a refresh
+    // is the moment the user expects a fixed one to show.
+    this.authCache.clear();
   }
 
   /**
@@ -97,12 +130,11 @@ export class RunnerInstallation {
    * typing a real goal is the failure this exists to prevent.
    *
    * "Usable" is deliberately shallow: the binary answers `--version`, and the
-   * runner has a connector to plan over. Whether the user's subscription is
-   * live cannot be known without spending a turn on it, so an expired login
-   * surfaces where it actually bites — as the agent's own error text on the
-   * first turn.
+   * runner has a connector to plan over. A signed-out runner stays usable —
+   * it is installed, and the user may log in from the same picker — so the
+   * auth verdict rides beside usability, never inside it.
    */
-  async plannerUsability(runner: string): Promise<{ usable: boolean; reason?: string }> {
+  async plannerUsability(runner: string): Promise<{ usable: boolean; reason?: string; auth?: RunnerAuth }> {
     const manifest = this.registry.getManifest(runner);
     if (!manifest) return { usable: false, reason: `No runner manifest is registered for "${runner}".` };
     if (!connectorFor(runner)) {
@@ -120,7 +152,41 @@ export class RunnerInstallation {
           `Reinstall with the CLI's own installer, or add its install directory to PATH.`,
       };
     }
-    return { usable: true };
+    return { usable: true, auth: await this.authFor(runner, manifest) };
+  }
+
+  /**
+   * The runner's own login verdict, cached briefly and asked once when several
+   * callers arrive together. Recorded process-wide for the synchronous planner
+   * gate, which cannot await this.
+   */
+  private async authFor(runner: string, manifest: RunnerManifest): Promise<RunnerAuth> {
+    const cached = this.authCache.get(runner);
+    if (cached && this.now() - cached.at < AUTH_TTL_MS) return cached.auth;
+
+    const existing = this.authInflight.get(runner);
+    if (existing) return existing;
+
+    const probe = (async () => {
+      try {
+        return await readRunnerAuth(manifest, {
+          ...(this.authExec ? { exec: this.authExec } : {}),
+          env: await this.env(),
+        });
+      } catch {
+        // A workspace env or status probe that fails is no answer about the
+        // login, and must not flag a planner the runner might accept.
+        return { state: 'unknown' as const };
+      }
+    })().then((auth) => {
+      this.authCache.set(runner, { auth, at: this.now() });
+      this.authInflight.delete(runner);
+      recordRunnerAuth(runner, auth);
+      return auth;
+    });
+
+    this.authInflight.set(runner, probe);
+    return probe;
   }
 
   /**

@@ -9,6 +9,29 @@ export interface RunnerManifest {
   contextFile?: string;
   contextFileAltPath?: string;
   modes?: RunnerMode[];
+  /** How to ask whether the user is signed in. Absent when the runner offers no status command. */
+  auth?: RunnerAuthSpec;
+}
+
+/**
+ * A runner's own answer to "is the user signed in?" — the CLI args that ask,
+ * the args that log in, and how to read the answer. Declared here because a
+ * surface must run the same login the runner's own CLI would, with no second
+ * table to drift.
+ */
+export interface RunnerAuthSpec {
+  /** The CLI args that answer whether the user is signed in, e.g. `auth status`. */
+  statusArgs: string[];
+  /** The CLI args that run the login, e.g. `auth login`. */
+  loginArgs: string[];
+  /** Matched against the status command's stdout+stderr when it exits non-zero. */
+  signedOut?: RegExp;
+  /**
+   * A runner-specific reader that overrides the exit-code/regex rule. `null`
+   * means the output answered nothing, which stays `unknown` rather than
+   * guessing from an exit code.
+   */
+  read?: (output: string, code: number) => 'signed-in' | 'signed-out' | null;
 }
 
 export interface RunnerFeatures {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { RunnerInstallation } from '../RunnerInstallation';
 import type { ExecImpl } from '../ModelDiscovery';
 import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
@@ -6,6 +6,7 @@ import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest
 import { OPENCODE_MANIFEST } from '../../plugins/builtin/opencode.manifest';
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
 import { CONNECTORS } from '../harness/connectors';
+import { recordedRunnerAuth, resetRunnerAuth, type RunnerAuthExec } from '../runnerAuth';
 
 function registryWith(...manifests: Array<{ name: string; runner: { command: string } }>): RunnerRegistry {
   const byName = new Map(manifests.map((m) => [m.name, m]));
@@ -71,9 +72,13 @@ describe('RunnerInstallation', () => {
 describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
   it('reports a planner-capable runner whose CLI answers as usable', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
-    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec);
+    const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '{}', stderr: '' }));
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec });
 
-    expect(await inst.plannerUsability('claude-code')).toEqual({ usable: true });
+    expect(await inst.plannerUsability('claude-code')).toEqual({
+      usable: true,
+      auth: { state: 'signed-in', loginCommand: ['claude', 'auth', 'login'] },
+    });
   });
 
   it('names the missing binary so the picker can say why an agent is greyed out', async () => {
@@ -100,8 +105,9 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
 
   it('plans with exactly the runners the connector registry holds', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: 'ok' }));
+    const authExec: RunnerAuthExec = vi.fn(async () => ({ code: -1, stdout: '', stderr: '' }));
     const manifests = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST, { name: 'aider', runner: { command: 'aider' } }];
-    const inst = new RunnerInstallation(registryWith(...manifests), exec);
+    const inst = new RunnerInstallation(registryWith(...manifests), exec, Date.now, { authExec });
 
     const plannable: string[] = [];
     for (const m of manifests) if ((await inst.plannerUsability(m.name)).usable) plannable.push(m.name);
@@ -114,6 +120,94 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
 
     expect((await inst.plannerUsability('nonexistent')).usable).toBe(false);
     expect(exec).not.toHaveBeenCalled();
+  });
+});
+
+describe('RunnerInstallation auth (ADR-0009 preflight)', () => {
+  beforeEach(() => resetRunnerAuth());
+
+  const signedOutClaude: RunnerAuthExec = vi.fn(async () => ({
+    code: 1,
+    stdout: '{"loggedIn":false,"authMethod":"none"}',
+    stderr: '',
+  }));
+
+  it('carries the auth verdict beside usability, and never lets it make the planner unusable', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec: signedOutClaude });
+
+    const result = await inst.plannerUsability('claude-code');
+
+    expect(result.usable).toBe(true);
+    expect(result.auth).toEqual({
+      state: 'signed-out',
+      loginCommand: ['claude', 'auth', 'login'],
+      detail: 'not logged in',
+    });
+    expect(recordedRunnerAuth('claude-code')).toEqual(result.auth);
+  });
+
+  it('asks the status command with the workspace environment the planner will use', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
+    const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '{}', stderr: '' }));
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, {
+      authExec,
+      env: async () => ({ CLAUDE_CONFIG_DIR: '/home/me/.claude-b' }),
+    });
+
+    await inst.plannerUsability('claude-code');
+
+    expect(vi.mocked(authExec).mock.calls[0][2].env.CLAUDE_CONFIG_DIR).toBe('/home/me/.claude-b');
+  });
+
+  it('refresh() forgets a signed-out verdict so the next look asks again', async () => {
+    let authMethod = 'none';
+    const authExec: RunnerAuthExec = vi.fn(async () => ({
+      code: authMethod === 'none' ? 1 : 0,
+      stdout: `{"authMethod":"${authMethod}"}`,
+      stderr: '',
+    }));
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec });
+
+    expect((await inst.plannerUsability('claude-code')).auth?.state).toBe('signed-out');
+    authMethod = 'claude.ai';
+    expect((await inst.plannerUsability('claude-code')).auth?.state).toBe('signed-out');
+
+    inst.refresh();
+    expect((await inst.plannerUsability('claude-code')).auth?.state).toBe('signed-in');
+    expect(authExec).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-probes a verdict once its short TTL expires', async () => {
+    let clock = 0;
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
+    const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '{}', stderr: '' }));
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, () => clock, { authExec });
+
+    await inst.plannerUsability('claude-code');
+    clock += 29_000;
+    await inst.plannerUsability('claude-code');
+    expect(authExec).toHaveBeenCalledTimes(1);
+
+    clock += 2_000;
+    await inst.plannerUsability('claude-code');
+    expect(authExec).toHaveBeenCalledTimes(2);
+  });
+
+  it('coalesces concurrent auth probes into one status call', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
+    const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '{}', stderr: '' }));
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec });
+
+    const [a, b] = await Promise.all([
+      inst.plannerUsability('claude-code'),
+      inst.plannerUsability('claude-code'),
+    ]);
+
+    expect(a.auth?.state).toBe('signed-in');
+    expect(b.auth?.state).toBe('signed-in');
+    expect(authExec).toHaveBeenCalledTimes(1);
   });
 });
 

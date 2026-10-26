@@ -346,4 +346,25 @@ describe('OrchestratorPool default planner', () => {
     expect(pool.getSettings().aiProvider).toBe('opencode');
     pool.destroyAll();
   });
+
+  it('carries each installed runner\'s auth verdict without dropping a signed-out one from the list', async () => {
+    const auth = { state: 'signed-out' as const, loginCommand: ['claude', 'auth', 'login'], detail: 'not logged in' };
+    const installation = {
+      plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({
+        usable: runner === 'claude-code',
+        ...(runner === 'claude-code' ? { auth } : { auth: { state: 'unknown' as const } }),
+      })),
+      filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => r === 'claude-code')),
+      refresh: vi.fn(),
+    };
+    const pool = new OrchestratorPool({
+      runnerInstallation: installation,
+      codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
+    });
+
+    const runners = await pool.getInstalledRunners();
+
+    expect(runners).toEqual([expect.objectContaining({ id: 'claude-code', auth })]);
+    pool.destroyAll();
+  });
 });
