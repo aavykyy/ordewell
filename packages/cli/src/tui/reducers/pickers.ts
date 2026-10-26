@@ -227,12 +227,13 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
 export function plannerItems(state: TuiState): PickerItem[] {
   // The daemon's runner list is the TUI's only preflight: an installed runner
   // is usable, an absent one is dropped from the offered set.
-  const installed = new Set(state.runners.map((r) => r.id));
+  const installed = new Map(state.runners.map((runner) => [runner.id, runner]));
   const usability: Record<string, PlannerUsability> = {};
   for (const id of CLI_PROVIDERS) {
     const runner = runnerForProvider(id)!;
-    usability[runner] = installed.has(runner)
-      ? { usable: true }
+    const known = installed.get(runner);
+    usability[runner] = known
+      ? { usable: true, ...(known.auth ? { auth: known.auth } : {}) }
       : { usable: false, reason: 'CLI not installed or not on PATH' };
   }
 
@@ -240,12 +241,18 @@ export function plannerItems(state: TuiState): PickerItem[] {
   if (offered.length === 0) {
     return [{ id: '', label: 'No planner available', detail: 'install a coding agent or add a key with /key', disabled: true }];
   }
-  const items: PickerItem[] = offered.map((entry) => ({
-    id: entry.id,
-    label: entry.label,
-    detail: entry.reason,
-    selected: state.plannerProvider === entry.id,
-  }));
+  const items: PickerItem[] = offered.map((entry) => {
+    // A signed-out agent stays offered — auth never gates usability — but the
+    // row flags it and names its own login so it can be fixed without switching.
+    const signedOut = entry.kind === 'harness' && entry.auth?.state === 'signed-out';
+    return {
+      id: entry.id,
+      label: entry.label,
+      detail: signedOut ? `not logged in · /login ${entry.runner ?? entry.id}` : entry.reason,
+      selected: state.plannerProvider === entry.id,
+      ...(signedOut ? { warn: true } : {}),
+    };
+  });
 
   return offered.some((entry) => entry.kind === 'vendor')
     ? items

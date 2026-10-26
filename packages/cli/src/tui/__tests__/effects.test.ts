@@ -1074,6 +1074,22 @@ describe('settings', () => {
     expect(types(h.actions)).toEqual(['runnersLoaded']);
   });
 
+  it('carries each runner\'s login verdict into the state', async () => {
+    const auth = { state: 'signed-out' as const, loginCommand: ['claude', 'login'] };
+    const h = harness({
+      getRunners: vi.fn().mockResolvedValue({
+        runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true, auth }],
+        orchestratorModel: 'm/1',
+      }),
+    });
+    await runEffect({ type: 'loadRunners' }, h.deps);
+    expect(h.actions).toContainEqual({
+      type: 'runnersLoaded',
+      runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true, auth }],
+      orchestratorModel: 'm/1',
+    });
+  });
+
   it('applies a confirmed runner set as one batch, reloading and reporting once', async () => {
     const h = harness();
     await runEffect({

@@ -660,7 +660,13 @@ function pickerRows(list: PickerRowList, room: number, inner: number): string[] 
     const number = numbered ? `${String(i + 1).padStart(digits)}. ` : '';
     const mark = chosen ? `${chosen.includes(item.id) ? style.green('[✓]') : style.grey('[ ]')} ` : '';
     const name = truncate(item.label, Math.max(1, labelWidth - (current ? 2 : 0)));
-    const painted = item.disabled ? style.grey(name) : active ? style.bold(name) : name;
+    // A warn row is still selectable, so its label takes the red while its
+    // detail keeps the list's usual paint: the detail is guidance, not the alarm.
+    const painted = item.disabled
+      ? style.grey(name)
+      : item.warn
+        ? style.red(active ? style.bold(name) : name)
+        : active ? style.bold(name) : name;
     const tick = current ? ` ${style.green('✔')}` : '';
     const label = `${painted}${tick}${' '.repeat(Math.max(0, labelWidth - width(name) - (current ? 2 : 0)))}`;
     // The bar is one colour: grey detail on it would read as a hole in it.

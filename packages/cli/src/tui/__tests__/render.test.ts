@@ -234,6 +234,46 @@ describe('welcome mark', () => {
   });
 });
 
+describe('signed-out planner', () => {
+  const runner = (state: 'signed-in' | 'signed-out' | 'unknown') => [
+    { id: 'claude-code', name: 'Claude Code', enabled: true, auth: { state } },
+  ];
+  const plain = (over: Partial<TuiState>): string[] => screen(over).map(stripAnsi).map((l) => l.trimEnd());
+  const welcome = (over: Partial<TuiState>): string[] =>
+    plain({ cols: 80, rows: 24, workspace: '/w', ...over });
+  const WARNING = 'Claude Code is not logged in. /login to sign in.';
+
+  it('warns directly under the workspace row when the active agent is signed out', () => {
+    const lines = welcome({ ...DETECTED, plannerProvider: 'claude-code', runners: runner('signed-out') });
+    const workspace = lines.findIndex((l) => l.startsWith('/w'));
+    expect(workspace).toBeGreaterThanOrEqual(0);
+    expect(lines[workspace + 1]).toBe(WARNING);
+  });
+
+  it('says nothing when signed in, unknown, on a vendor planner, or before detection', () => {
+    const cases: Partial<TuiState>[] = [
+      { ...DETECTED, plannerProvider: 'claude-code', runners: runner('signed-in') },
+      { ...DETECTED, plannerProvider: 'claude-code', runners: runner('unknown') },
+      { ...DETECTED, plannerProvider: 'openrouter', configuredProviders: ['openrouter'], runners: runner('signed-out') },
+      { ...DETECTED, runnersKnown: false, plannerProvider: 'claude-code', runners: runner('signed-out') },
+    ];
+    for (const over of cases) expect(welcome(over).join('\n')).not.toContain('not logged in');
+  });
+
+  it('paints the warning red and wraps it inside the pane', () => {
+    style.enabled = true;
+    try {
+      const out = screen({ ...DETECTED, cols: 40, rows: 24, workspace: '/w', plannerProvider: 'claude-code', runners: runner('signed-out') });
+      const painted = out.filter((l) => /not logged in|\/login/.test(stripAnsi(l)));
+      expect(painted.length).toBeGreaterThan(0);
+      for (const line of painted) expect(line).toContain('\x1b[31m');
+      for (const line of out) expect(width(line)).toBeLessThanOrEqual(40);
+    } finally {
+      style.enabled = false;
+    }
+  });
+});
+
 describe('transcript', () => {
   it('shows the newest messages', () => {
     const out = text({ conversation: chatOf(['planner', 'Which database?']) });

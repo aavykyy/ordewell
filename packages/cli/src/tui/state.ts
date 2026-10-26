@@ -1,6 +1,7 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
 import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
+import type { RunnersResponse } from '../apiClient';
 import type { SaveSettingsEffect } from './reducers/settings';
 import type { StepperState } from './reducers/stepper';
 
@@ -134,11 +135,8 @@ export interface RewindTargetView {
   timestamp: string;
 }
 
-export interface RunnerView {
-  id: string;
-  name: string;
-  enabled: boolean;
-}
+/** The daemon's runner row, as `getRunners` hands it over — auth included, never restated. */
+export type RunnerView = RunnersResponse['runners'][number];
 
 export interface SessionView {
   id: string;
@@ -169,6 +167,12 @@ export interface PickerItem {
    * worse question than "Codex — not installed".
    */
   disabled?: boolean;
+  /**
+   * Needs attention but is still choosable: a signed-out agent can be picked
+   * and will ask for its own login before planning. Distinct from `disabled`,
+   * which cannot be chosen at all.
+   */
+  warn?: boolean;
 }
 
 /** What the runtime should do with the item(s) the user picks. */
