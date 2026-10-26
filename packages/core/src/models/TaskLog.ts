@@ -230,6 +230,9 @@ export function toTaskLogEvent(event: StructuredEvent): TaskLogEvent | null {
         type: 'script_exit', code: event.code, signal: event.signal, durationMs: event.durationMs,
         ...(event.timedOut ? { timedOut: true } : {}), ...(event.error !== undefined ? { error: event.error } : {}),
       };
+    // The call is in the log already; its receipt is the task's state, not an entry.
+    case 'completion_received':
+      return null;
     // Logged once the plan's write-back settles: see `TaskLogRecorder.note`.
     case 'model_switched':
     case 'model_drifted':

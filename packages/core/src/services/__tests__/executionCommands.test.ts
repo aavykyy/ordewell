@@ -979,7 +979,7 @@ describe('the command seam\'s extension points', () => {
       running: () => true, maxParallel: () => 3, runBlocked: () => false,
       startWaits: () => [], waitingRequests: () => [],
       runPlan: vi.fn(), joinRun: vi.fn(async () => ''), startTask: vi.fn(), forceStart: vi.fn(), markComplete: vi.fn(), markNotDone: vi.fn(), interrupt: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(), resumeNow: vi.fn(),
-      messageTask: vi.fn(), forceMessage: vi.fn(), forceSendQueued: vi.fn(), removeQueued: vi.fn(), cancelResume: vi.fn(), awaitsCheckpoint: () => false, answerCheckpoint: vi.fn(), approveReview: vi.fn(), answerRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), turnHandle: () => undefined,
+      messageTask: vi.fn(), forceMessage: vi.fn(), forceSendQueued: vi.fn(), removeQueued: vi.fn(), cancelResume: vi.fn(), awaitsCheckpoint: () => false, answerCheckpoint: vi.fn(), approveReview: vi.fn(), answerRequest: vi.fn(), mergeAll: vi.fn(), runMerged: () => false, record: vi.fn(), guardTripped: vi.fn(), turnHandle: () => undefined,
       draftScript: () => ({ ok: false, errors: ['not here'] }), addScript: vi.fn(), startAtGate: vi.fn(), awaitEnd: vi.fn(async () => {}), owe: vi.fn(), reportTail: () => undefined,
     };
   }

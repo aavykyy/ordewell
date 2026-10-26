@@ -226,6 +226,8 @@ export interface ExecutionHost {
   answerRequest(requestId: string, decision: ApprovalDecision): boolean;
   /** Merge all, through the queue it shares with landings. */
   mergeAll(): Promise<IsolationMergeResult>;
+  /** The plan's last isolated run closed with everything it landed merged into the user's branch, and no run has decided since. */
+  runMerged(): boolean;
   /** Keep the call in the timeline, worded as `text`. */
   record(record: ExecutionRecord, text: string): void;
   /** A loop guard stopped a call: the user is told, as the supervisor's message. */
@@ -1201,6 +1203,13 @@ export class ExecutionCommands {
 
   private prepareMergeAll(actor: ExecutionActor): Prepared {
     const users = actor.kind === 'user';
+    // A Merge all asked for after the run's own merged everything and closed it
+    // — at its end, or as the run settled mid-turn — is a request with nothing
+    // left to do, not a fault for the timeline (ADR-0029). A plan that never
+    // isolated is still refused, by Merge all itself.
+    if (this.host.runMerged()) {
+      return { nothing: `Nothing to merge: everything the run landed is in ${users ? 'your' : 'the user\'s'} branch already, and the run is closed.` };
+    }
     return {
       act: async () => {
         const result = await this.host.mergeAll();

@@ -176,6 +176,8 @@ export class IsolationRunController {
   private readonly liveTasks: () => ReadonlySet<string>;
 
   private run: IsolationRun | null = null;
+  /** See {@link mergedRun}. */
+  private merged: string | null = null;
   /** An adoption stays scoped even while cleanup temporarily leaves no run record. */
   private adoptions = 0;
   /** Copied paths already reported for the current run: every task gets the same copies. */
@@ -208,6 +210,15 @@ export class IsolationRunController {
 
   /** The plan's run record, open or not; null when the plan has not isolated. */
   get current(): IsolationRun | null { return this.run; }
+
+  /**
+   * The id of the plan's last isolated run once it closed with everything it
+   * landed merged into the user's branch and was cleared up: what tells a
+   * Merge all asked for after it, which has nothing to merge, from one in a
+   * plan that never isolated (ADR-0029). Null while the plan holds a run
+   * record, and once a later run decides how it executes. Saved with the plan.
+   */
+  get mergedRun(): string | null { return this.run ? null : this.merged; }
 
   get isOpen(): boolean { return this.mode !== null; }
 
@@ -266,12 +277,14 @@ export class IsolationRunController {
    * restore) would otherwise write a new session file on every reload. What
    * git changed is returned instead, for the caller to save where it can and
    * announce. A plan loaded meanwhile supersedes this adoption, which then
-   * touches nothing and resolves `unchanged`.
+   * touches nothing and resolves `unchanged`. `mergedRun` is the plan's saved
+   * {@link mergedRun}.
    */
-  async adopt(state: PlanIsolation | null): Promise<AdoptOutcome> {
+  async adopt(state: PlanIsolation | null, mergedRun?: string): Promise<AdoptOutcome> {
     const adoption = ++this.adoptions;
     this.run = state?.run ?? null;
     this.resolvers = { ...(state?.resolvers ?? {}) };
+    this.merged = this.run ? null : mergedRun ?? null;
     const run = this.run;
     if (!run) return 'unchanged';
     try {
@@ -296,11 +309,12 @@ export class IsolationRunController {
     const resolvers = this.resolvers;
     this.run = null;
     this.resolvers = {};
+    this.merged = run.id;
     const discarded = await this.discardMerged(run);
     if (this.adoptions !== adoption) return 'unchanged';
     if (!discarded) {
       // Refused: the record is the one pointer to what could not be let go.
-      if (this.run === null) { this.run = run; this.resolvers = resolvers; }
+      if (this.run === null) { this.run = run; this.resolvers = resolvers; this.merged = null; }
       return outcome;
     }
     // A start opened while git was deleting: the run in force is that one.
@@ -680,7 +694,7 @@ export class IsolationRunController {
       this.tell('info', `The run is not cleared up: ${why.join(', and ')}, so ${one ? 'its worktree stays' : 'their worktrees stay'}, and so do the run's branches.`);
       return;
     }
-    if (await this.discardMerged(run)) this.forget();
+    if (await this.discardMerged(run)) this.forget(run.id);
   }
 
   /** The records that keep a settled run from being cleared up: live, or holding work that never landed. */
@@ -711,9 +725,11 @@ export class IsolationRunController {
     for (const { worktree, reason, task } of removal.refused) this.tell('warn', refusedNotice(worktree, reason, task));
   }
 
-  private forget(): void {
+  /** The run goes from the plan; `merged` names it as {@link mergedRun} when everything it landed was merged. */
+  private forget(merged?: string): void {
     this.run = null;
     this.resolvers = {};
+    this.merged = merged ?? null;
     this.listener.changed();
     this.listener.closed();
   }
@@ -771,6 +787,8 @@ export class IsolationRunController {
   private begin(mode: 'isolated' | 'shared'): void {
     this.open();
     this.mode = mode;
+    // This run's own merges are what count from here: a shared one has none to make.
+    this.merged = null;
   }
 
   /** What earlier runs left merged in the group goes; a failure here is worth a word, never a stopped run. */

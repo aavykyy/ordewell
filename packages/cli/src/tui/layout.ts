@@ -1115,12 +1115,13 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   const runner = row.runner ?? '';
   const bodyPad = parent ? '      ' : '    ';
   // Only a state that wants the user gets a word: a runner approval ("enter
-  // opens it") and a task stopped at a question. Running and quiet are the
-  // status glyph's job — the spinner and the static '~' — so a running row
-  // reads `runner · model` and nothing is repeated above it.
+  // opens it") and a task stopped at a question — and a report received while
+  // its attempt winds down, which the spinner alone would hide. Running and
+  // quiet are the status glyph's job — the spinner and the static '~' — so a
+  // running row reads `runner · model` and nothing is repeated above it.
   const activity = row.approvals
     ? `${inRow(row.approvals)}: enter opens it`
-    : row.awaiting ? inRow(row.awaiting) : '';
+    : row.awaiting ? inRow(row.awaiting) : row.receipt ? inRow(row.receipt) : '';
   const skills = (task.skills ?? []).join(' · ');
   // A running row's tag says RUN, so the mark moves to the line beneath it.
   const meta = [activity, ...(row.research && row.running ? [style.cyan('research')] : []), runner, model];

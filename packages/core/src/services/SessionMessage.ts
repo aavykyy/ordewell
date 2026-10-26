@@ -23,6 +23,13 @@ export type SerializedTaskStatus = {
   verdict: { outcome: 'pass' | 'fail'; reason: string; checks: Verdict['checks']; reported?: Verdict['reported'] } | null;
   /** Advisory silence timestamp from VerdictEngine — not part of task status semantics. */
   idleSince?: string | null;
+  /**
+   * What the runner reported through `task_complete`, received while its
+   * attempt winds down (ADR-0018, L1): a receipt, not the verdict, which
+   * `verdict` and `status` carry once it is decided. Absent once the attempt
+   * ends or a new turn voids the report, and never saved.
+   */
+  completionReceived?: NonNullable<Verdict['reported']>;
   /** Absent unless the plan has an isolation run, so a shared-root plan's updates are unchanged. */
   isolation?: TaskIsolation;
   /** What an `awaiting_user` task waits on, when it was saved (ADR-0018, W1). */
@@ -368,7 +375,7 @@ export type PlanSnapshot = { type: 'plan_snapshot'; plan: SurfacePlan | SurfaceP
 /** What only the status stream says about a task; a plan refresh keeps these as they were. */
 export type RunTaskStatus = Partial<Pick<
   SerializedTaskStatus,
-  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'attempted'
+  'verdict' | 'idleSince' | 'completionReceived' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'attempted'
 >>;
 
 /** A task in the run view: the plan's fields, then the status stream's. */
@@ -478,6 +485,7 @@ export function serializeTaskStatus(
   checkpoint = '',
   waitsForApproval = false,
   holdReason: string | null = null,
+  completionReceived: Verdict['reported'] | null = null,
 ): SerializedTaskStatus {
   return {
     id: t.id,
@@ -487,6 +495,7 @@ export function serializeTaskStatus(
       ? { outcome: t.verdict.outcome, reason: t.verdict.reason, checks: t.verdict.checks || [], ...(t.verdict.reported ? { reported: t.verdict.reported } : {}) }
       : null,
     idleSince,
+    ...(completionReceived ? { completionReceived } : {}),
     ...(t.attempted ? { attempted: true as const } : {}),
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(isolation ? { isolation } : {}),

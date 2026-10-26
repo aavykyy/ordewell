@@ -84,6 +84,7 @@ function runTaskToView(t: RunTask): TaskView {
     attemptUsage: Array.isArray(t.attemptUsage) ? t.attemptUsage : undefined,
     status: planLabel(t.status, 'pending'),
     idleSince: t.idleSince ?? null,
+    ...(t.completionReceived === 'done' || t.completionReceived === 'failed' || t.completionReceived === 'blocked' ? { completionReceived: t.completionReceived } : {}),
     dependencies: Array.isArray(t.dependencies) ? t.dependencies.map((id) => planLabel(id)) : [],
     assignedRunner: typeof t.assignedRunner === 'string' ? planLabel(t.assignedRunner) : undefined,
     taskMode: typeof t.taskMode === 'string' ? planLabel(t.taskMode) : undefined,

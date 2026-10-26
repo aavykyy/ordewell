@@ -1,4 +1,4 @@
-import type { AwaitingReason } from '../models/Task';
+import type { AwaitingReason, Verdict } from '../models/Task';
 
 /**
  * What a row's status means to a reader, before any surface picks a word,
@@ -61,6 +61,21 @@ export function skippedLabel(reason: string | null): string {
  * runner is asking anything.
  */
 export const WAITS_FOR_APPROVAL_LABEL = 'Waits for your approval';
+
+const RECEIPT_LABELS: Record<NonNullable<Verdict['reported']>, string> = {
+  done: 'Completion received',
+  failed: 'Failure report received',
+  blocked: 'Blocked report received',
+};
+
+/**
+ * That a running task's runner reported through `task_complete` and its
+ * attempt is winding down (ADR-0018, L1); null otherwise. Worded as received,
+ * never as passed: the verdict, and what it lands, come after.
+ */
+export function receiptLabel(task: { status: string; completionReceived?: Verdict['reported'] }): string | null {
+  return isTaskRunning(task) && task.completionReceived ? RECEIPT_LABELS[task.completionReceived] : null;
+}
 
 /** Runner requests a task waits on (ADR-0018, A1); null when none do. */
 export function approvalLabel(count: number | undefined): string | null {

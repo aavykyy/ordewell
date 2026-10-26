@@ -467,6 +467,11 @@ export class TaskOrchestrator {
     return this.attempts.idleSince(taskId);
   }
 
+  /** What a live attempt's runner reported through `task_complete` while it winds down (ADR-0018, L1); null otherwise. */
+  getCompletionReceipt(taskId: string): Verdict['reported'] | null {
+    return this.attempts.receipt(taskId);
+  }
+
   /** Recent clean output of a task's latest attempt, running or ended; null if it never ran. */
   getLiveOutput(taskId: string, opts: LiveTailOptions): LiveTail | null {
     return this.attempts.liveTail(taskId, opts);
