@@ -89,7 +89,7 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
   // into the shared daemon (e.g. to pick up a plan from another CLI or TUI).
   const explicitPort = flag(subArgs, '--port') || process.env.ORDEWELL_PORT;
   const targetPort = explicitPort ? resolvePort(subArgs) : await findFreePort();
-  const { port, owned: ownedAtLaunch } = await ensureDaemonOwned(targetPort, { detached: false });
+  const { port, owned: ownedAtLaunch } = await ensureDaemonOwned(targetPort, { detached: false, cwd: workspace });
   // Not const: a daemon we did not start can die and be replaced by one we
   // did, and only the one we started may be stopped on the way out.
   let owned = ownedAtLaunch;
@@ -192,7 +192,7 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
           // terminal — the usual "Starting daemon..." lines would be painted
           // into it. `detached: false` matches launch, so the replacement dies
           // with this TUI exactly as the original would have.
-          const { owned: freshlyOwned } = await ensureDaemonOwned(port, { detached: false, quiet: true });
+          const { owned: freshlyOwned } = await ensureDaemonOwned(port, { detached: false, quiet: true, cwd: workspace });
           if (freshlyOwned) owned = true;
           return true;
         },

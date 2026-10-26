@@ -75,6 +75,22 @@ describe('the settings route given a malformed body', () => {
   });
 });
 
+describe('the runner list', () => {
+  it('asks the login probe about the workspace that will plan', async () => {
+    const getInstalledRunners = vi.fn(async () => []);
+    const pool = {
+      getInstalledRunners,
+      getRunnerState: () => ({ enabledRunners: [], orchestratorModel: '' }),
+    } as unknown as OrchestratorPool;
+
+    const res = await new Hono().route('/api/runners', runnersRoute(pool))
+      .request('/api/runners?workspace=%2Fprojects%2Fa');
+
+    expect(res.status).toBe(200);
+    expect(getInstalledRunners).toHaveBeenCalledWith('/projects/a');
+  });
+});
+
 describe('the runner toggle', () => {
   function appWith(pool: OrchestratorPool): Hono {
     return new Hono().route('/api/runners', runnersRoute(pool));

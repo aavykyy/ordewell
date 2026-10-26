@@ -68,8 +68,9 @@ export const CODEX_MANIFEST: RunnerManifest = {
     statusArgs: ['login', 'status'],
     loginArgs: ['login'],
     // `codex login status` prints "Not logged in" and exits 1 when signed out;
-    // a clean exit is the only other answer it gives.
-    signedOut: /not logged in/i,
+    // a clean exit is the only other answer it gives. Anchored to its own line:
+    // a failure can quote another tool that is not logged in.
+    signedOut: /^\s*not logged in\s*$/im,
   },
 
   contextFile: 'AGENTS.md',

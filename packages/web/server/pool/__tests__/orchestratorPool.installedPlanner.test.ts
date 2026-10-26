@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import {
   CliAgentAiService, OpenAiService, Session, getProviderMeta, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PROVIDER_DETECT_PRIORITY,
-  createTask, resetInstalledPlanner, saveSession, type ConversationTurn, type IRunner, type LegacyPlanState,
+  RunnerInstallation, createTask, resetInstalledPlanner, saveSession, type ConversationTurn, type IRunner, type LegacyPlanState,
   type PlannerUsability, type RunnerSpawnOptions,
 } from '@ordewell/core';
 import { FakeRunnerSession } from '@ordewell/core/testing';
@@ -347,8 +347,31 @@ describe('OrchestratorPool default planner', () => {
     pool.destroyAll();
   });
 
-  it('carries each installed runner\'s auth verdict without dropping a signed-out one from the list', async () => {
-    const auth = { state: 'signed-out' as const, loginCommand: ['claude', 'auth', 'login'], detail: 'not logged in' };
+  it('judges a named workspace\'s login with that workspace\'s env, not the daemon cwd', async () => {
+    // `ordewell web` may be serving a workspace other than the directory it was
+    // started from. The probe must read that workspace's `.ordewell/env`, or
+    // `/login` signs in one account while the list keeps reporting another.
+    const ws = join(dir, 'workspace-a');
+    mkdirSync(join(ws, '.ordewell'), { recursive: true });
+    writeFileSync(join(ws, '.ordewell', 'env'), 'CLAUDE_CONFIG_DIR=/accounts/a\n');
+    vi.spyOn(RunnerInstallation.prototype, 'filterInstalled').mockResolvedValue([]);
+    vi.spyOn(RunnerInstallation.prototype, 'plannerUsability').mockResolvedValue({ usable: true });
+    const pool = new OrchestratorPool({
+      codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
+    });
+
+    await pool.getInstalledRunners(ws);
+
+    const installations = (pool as unknown as {
+      workspaceInstallations: Map<string, { env: () => Promise<Record<string, string>> }>;
+    }).workspaceInstallations;
+    const probe = installations.get(resolve(ws));
+    expect(probe).toBeDefined();
+    expect(await probe!.env()).toEqual({ CLAUDE_CONFIG_DIR: '/accounts/a' });
+    pool.destroyAll();
+  });
+
+  it('carries each installed runner\'s auth verdict without dropping a signed-out one from the list', async () => {    const auth = { state: 'signed-out' as const, loginCommand: ['claude', 'auth', 'login'], detail: 'not logged in' };
     const installation = {
       plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({
         usable: runner === 'claude-code',

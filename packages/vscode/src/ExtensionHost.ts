@@ -239,6 +239,27 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     sendNextHeldPrompt: () => sendNextHeldPrompt(routerDeps),
   };
 
+  /**
+   * One login path for the webview's Log in buttons and the chat's `/login`:
+   * the runner's own status command alone decides it worked, and an omitted
+   * runner is the planner the config currently names.
+   */
+  function runPlannerLogin(runner?: string): Promise<void> {
+    return loginPlanner({
+      runnerInstallation: services.runnerInstallation,
+      runnerRegistry: services.runnerRegistry,
+      config: services.config,
+      workspaceRoot: () => services.fsAdapter.getWorkspaceRoot(),
+      // The fresh probe is what redraws the pill and the empty state; signing
+      // in some other agent leaves who plans exactly where it was.
+      sendState: () => planner.sendState(),
+      post: (msg) => services.chatProvider.postMessage(msg),
+      notifications: services.notifications,
+      window: vscodeApi.window,
+      log,
+    }, runner);
+  }
+
   const routerDeps: WebviewRouterDeps = {
     ...managerDeps,
     extension: {
@@ -251,19 +272,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       openFile: (path) => { void openWorkspaceFile(path); },
       setPlanDockHeight: (height) => { void services.context.globalState.update(PLAN_DOCK_HEIGHT_KEY, height); },
       changeSettings,
-      loginPlanner: (runner) => loginPlanner({
-        runnerInstallation: services.runnerInstallation,
-        runnerRegistry: services.runnerRegistry,
-        config: services.config,
-        workspaceRoot: () => services.fsAdapter.getWorkspaceRoot(),
-        // The fresh probe is what redraws the pill and the empty state; signing
-        // in some other agent leaves who plans exactly where it was.
-        sendState: () => planner.sendState(),
-        post: (msg) => services.chatProvider.postMessage(msg),
-        notifications: services.notifications,
-        window: vscodeApi.window,
-        log,
-      }, runner),
+      loginPlanner: runPlannerLogin,
       enableRunner: async (runnerId) => {
         const saved = await enableRunner(
           {
@@ -304,6 +313,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       settingsService: services.settingsService,
       plannerBackends: () => planner.backends(),
       refreshPlannerState: () => planner.sendState(),
+      loginPlanner: runPlannerLogin,
       sendRunnerAndModels: () => discovery.refresh(),
       runApiKeyWizard: (provider) => discovery.runApiKeyWizard(provider),
       recallPlannerModel: (provider, harnessModels, vendorOptions) => recallPlannerModel(services.plannerModelMemory, provider, harnessModels, vendorOptions),

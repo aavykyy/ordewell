@@ -649,11 +649,11 @@ export default function App() {
   /** The runner behind the active planner, which is whose login the empty state runs. */
   const activeRunnerId = activeBackend ? activeBackend.runner ?? activeBackend.id : null;
 
-  /** The empty state's button: the active planner, resolved by the host if it moved. */
+  /** The empty state's button: the planner on screen, named so a pending switch cannot sign in the previous one. */
   const handleActivePlannerLogin = useCallback(() => {
     setLoginFailure(null);
     setPendingLogin(activeRunnerId);
-    vscode.postMessage({ type: 'loginPlanner' });
+    vscode.postMessage({ type: 'loginPlanner', ...(activeRunnerId ? { runner: activeRunnerId } : {}) });
   }, [activeRunnerId]);
 
   /** A pill's own action: that agent's login, without switching the planner to it. */

@@ -94,8 +94,8 @@ describe('a signed-out planner', () => {
 
     fireEvent.click(loginButton());
 
-    // No runner: the host resolves the active planner, which may have moved.
-    expect(api.postMessage).toHaveBeenCalledWith({ type: 'loginPlanner' });
+    // Named, so a pending planner switch cannot sign in the previous agent.
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'loginPlanner', runner: 'claude-code' });
     expect(loginButton()).toBeDisabled();
     expect(loginButton().getAttribute('aria-busy')).toBe('true');
     expect(loginButton().textContent).toContain('Signing in…');
@@ -104,6 +104,29 @@ describe('a signed-out planner', () => {
 
     expect(loginButton()).not.toBeDisabled();
     expect(loginButton().getAttribute('aria-busy')).toBeNull();
+  });
+
+  it('signs in the agent the empty state names while a planner switch is still pending', () => {
+    const signedOutCodex: PlannerBackend = {
+      id: 'codex',
+      label: 'Codex',
+      kind: 'harness',
+      runner: 'codex',
+      usable: true,
+      auth: { state: 'signed-out', loginCommand: ['codex', 'login'] },
+    };
+    post({ type: 'setPlannerBackends', backends: [signedOutClaude, signedOutCodex], provider: 'claude-code', runner: 'claude-code' });
+    // The host has not answered the switch yet: the empty state already names
+    // Codex, while the saved config still points at Claude Code.
+    const codexPill = [...document.querySelectorAll<HTMLButtonElement>('.planner-pill')]
+      .find((p) => p.textContent === 'Codex')!;
+    fireEvent.click(codexPill);
+    expect(warning()?.querySelector('.planner-auth-warning-text')?.textContent).toBe('Codex is not logged in.');
+    api.postMessage.mockClear();
+
+    fireEvent.click(loginButton());
+
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'loginPlanner', runner: 'codex' });
   });
 
   it('signs in a signed-out pill without switching the planner to it', () => {

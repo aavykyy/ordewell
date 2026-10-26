@@ -2,6 +2,7 @@ import { execSync } from 'child_process';
 import {
   clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, mergeOutcome, confirmedOverride, newTaskFields, taskActionCommand, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
   type PlannerModelRecall,
+  type RunnersResponse,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
 import { DaemonError, RequestTimeoutError, UnreadableResponseError, WorkspaceInitNeededError, deliveryOf, type ApiClient, type SessionFollow } from '../apiClient';
@@ -462,15 +463,19 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       // not escape to `runEffect`'s connection-refused retry: that would hand
       // the tty to the same command a second time. Say the list is stale and
       // leave the revival to a later /refresh.
-      let refreshed = true;
+      let refreshed: RunnersResponse | undefined;
       try {
-        await loadRunners(deps);
+        refreshed = await loadRunners(deps);
       } catch (err) {
         if (!isConnectionRefused(err)) throw err;
-        refreshed = false;
       }
+      // The child's exit code is not the runner's verdict: a login can print
+      // success and persist nothing, so the fresh probe decides what to claim.
+      const stillSignedOut = refreshed?.runners.find((r) => r.name === effect.label)?.auth?.state === 'signed-out';
       const message = result.ok
-        ? `${effect.label} is signed in.`
+        ? stillSignedOut
+          ? `${effect.label} still reports not logged in.`
+          : `${effect.label} is signed in.`
         : result.message ?? `${effect.label} did not finish signing in.`;
       dispatch({
         type: 'notice',
@@ -1106,7 +1111,7 @@ async function loadSessions(deps: EffectDeps): Promise<void> {
   deps.dispatch({ type: 'sessionsLoaded', sessions: list });
 }
 
-async function loadRunners(deps: EffectDeps): Promise<void> {
+async function loadRunners(deps: EffectDeps): Promise<RunnersResponse> {
   const state = await deps.api.getRunners();
   deps.dispatch({
     type: 'runnersLoaded',
@@ -1115,6 +1120,7 @@ async function loadRunners(deps: EffectDeps): Promise<void> {
     runners: state.runners ?? [],
     orchestratorModel: state.orchestratorModel,
   });
+  return state;
 }
 
 async function loadSettings(deps: EffectDeps): Promise<void> {
