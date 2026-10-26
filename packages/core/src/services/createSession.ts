@@ -755,6 +755,7 @@ export class Session {
       userSettings: () => this.userRunSettings(),
       tasks: () => this.store.planTasks,
       checkpointQuestion: (taskId) => this.orchestrator.getCheckpointQuestion(taskId) ?? undefined,
+      landedWork: () => (this.runMergeView() ? 'pending' : this.runs.mergedRun ? 'merged' : null),
       recentOutput: (taskId) => this.orchestrator.getLiveOutput(taskId, { maxLines: 3 })?.text.trim(),
       reportTail: (taskId) => this.reportTail(taskId),
       reported: (taskId, to) => {
@@ -915,6 +916,7 @@ export class Session {
       answerCheckpoint: (taskId, approve, reason) => (approve ? this.approveCheckpoint(taskId) : this.rejectCheckpoint(taskId, reason)),
       answerRequest: (requestId, decision) => this.resolveApproval(requestId, decision),
       mergeAll: () => this.mergeAll(),
+      runMerged: () => this.runs.mergedRun !== null,
       record: (record, text) => this.recordExecution(record, text),
       guardTripped: (trip) => this.supervision.guardTripped(trip),
       heldEdit: (taskId) => this.heldEdit(taskId),
@@ -1289,6 +1291,7 @@ export class Session {
     }
     this.syncPlanTasks();
     this.plan.isolation = this.runs.planIsolation ?? undefined;
+    this.plan.mergedRun = this.runs.mergedRun ?? undefined;
     this.plan.plannerUsage = this.usage.snapshot();
     this.plan.contextWindows = this.windows.snapshot();
     // What supervision remembers is read here, at the one save seam, so it is
@@ -2452,9 +2455,10 @@ export class Session {
    * Starts nothing (ADR-0044).
    */
   private async adoptRun(plan: LegacyPlanState, persists: boolean): Promise<void> {
-    const outcome = await this.runs.adopt(plan.isolation ?? null);
+    const outcome = await this.runs.adopt(plan.isolation ?? null, plan.mergedRun);
     if (this.closed || this.plan !== plan || outcome === 'unchanged') return;
     plan.isolation = this.runs.planIsolation ?? undefined;
+    plan.mergedRun = this.runs.mergedRun ?? undefined;
     if (persists) this.persist();
     this.events.status(plan);
     if (outcome === 'cleared') this.broadcast({ type: 'run_closed' });

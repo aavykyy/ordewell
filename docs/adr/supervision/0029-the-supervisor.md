@@ -369,7 +369,14 @@ Merge all that stops is refused with that result, so the Merge all card can
 show why; whether the merge closed the run is the Session's word, `run_closed`
 ([ADR-0013](../isolation/0013-worktree-isolation.md)), never the payload's. A
 user's Stop with nothing to stop is answered ok and recorded nowhere, since
-the surface already shows the run stopped. A refusal is worded for who asked,
+the surface already shows the run stopped. So is a Merge all, from anyone
+allowed one, once the plan's last isolated run closed with everything it
+landed merged: by the automatic Merge all at its end, by an earlier Merge all,
+or as a run of tasks started one by one settled in the middle of the turn that
+asks. There is nothing left to merge, and saying "no isolated run" would read
+as a failed merge. The plan saves that run's id (`mergedRun`) until a later
+run decides how it executes, so a restart changes nothing; a plan that never
+isolated, or whose last run shared the workspace root, is still refused. A refusal is worded for who asked,
 in one place: a model is
 told the tools it calls and what to tell the user, the user the controls they
 press, and the supervisor and a planner turn are told apart where they differ,
@@ -504,7 +511,10 @@ either:
   "auto-merged" timeline entry, a notice and the `isolation_merge` broadcast.
   If that merge stops (conflict, dirty overlap, failure) the run is handed off
   to the user, and a supervisor that is watching gets an `auto_merge_stopped`
-  event. The settings key is `mergeAtGatesAutomatically`.
+  event. The settings key is `mergeAtGatesAutomatically`. The run update the
+  run's end wakes the supervisor with says where its landed work stands:
+  merged into the user's branch, with nothing to merge, or waiting for Merge
+  all. A live planner hears of the merge nowhere else.
 - **Surfaces do not open the handoff while a merge is coming,** so the overlay
   never asks about a merge Ordewell or the supervisor is about to make. With
   auto-merge on, no handoff is sent unless the automatic merge stops. With the
@@ -677,3 +687,4 @@ until #30 exists.
 - 2026-10-24 — the approval record's rules live in one module, `ApprovalRecord`, and run on each change to the task tree rather than inside a save: a task that leaves the plan takes its approval, and a save only writes. Approval taken from a task is announced to surfaces as a plan update with a status, wherever the change was made. `Session.isApproved` stays the one read.
 - 2026-10-24 — a start the Act supervisor asks for of a task its own edit adds waits for the edit instead of being refused as "tell the user".
 - 2026-10-25 — Mark complete and Mark not done on an AI or script task are refused while a run could advance the task and otherwise need the user's explicit yes, in both directions; a manual task's sign-off is never held up by a run.
+- 2026-10-26 — the run update at the run's end says whether its landed work is merged or waits for Merge all, and a Merge all after the plan's last isolated run closed merged is answered ok as nothing to merge, recorded nowhere, across a restart too (`mergedRun`). Seen live: an Act supervisor woken after the automatic Merge all at the run's end called `merge_all`, and the timeline said "refused: This plan has no isolated run".
