@@ -1115,13 +1115,6 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   // keep the shallower `bodyPad`: they need the room more than the alignment.
   if (metaText) lines.push(style.grey(truncate(`${continuation}${metaText}`, cols)));
   if (row.loop) lines.push(...loopLines(row.loop, cols, bodyPad));
-  // What it handed over (ADR-0047): one compact row, its count first so a long
-  // summary can be cut without taking what a reader scans for with it.
-  if (row.handoff) {
-    // The commit subject and summary are the author's text, so they are cleaned here rather than in core.
-    const handed = handoffPeekParts(row.handoff).map(sanitize).join(' · ');
-    lines.push(style.grey(truncate(`${bodyPad}↳ handed over · ${handed}`, cols)));
-  }
   // The one isolation state that needs the user; every other stays out of the
   // row and shows only in the expanded detail below.
   if (row.conflict) {
@@ -1171,6 +1164,10 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
 
   let editorLine: number | undefined;
   if (expanded) {
+    if (row.handoff) {
+      // The commit subject and summary are the author's text, so they are cleaned here rather than in core.
+      lines.push(...taskText('Handoff', handoffPeekParts(row.handoff).map(sanitize).join(' · '), cols, bodyPad));
+    }
     if (skills) lines.push(style.grey(truncate(`${bodyPad}skills: ${skills}`, cols)));
     if (effort || mode) lines.push(style.grey(truncate(`${bodyPad}${[effort, mode].filter(Boolean).join(' · ')}`, cols)));
     lines.push(style.grey(`${bodyPad}${STATUS_WORD[taskStatusKind(task)]}`));

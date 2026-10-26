@@ -25,12 +25,13 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     } });
   });
 
-  it('shows the digest from the run message, with its full count, and opens the attempt log for the rest', () => {
+  it('keeps the digest out of a collapsed card and shows it when expanded', () => {
     update({ ...task, handoff });
-    const peek = document.querySelector('.task-handoff-peek');
-    expect(peek).toHaveTextContent('Handed over · 28 findings · Blocker · Keep the token scoped.');
-    expect(peek).not.toHaveTextContent('More context.');
+    expect(document.querySelector('.task-handoff-peek')).toBeNull();
+    expect(document.body).not.toHaveTextContent('Keep the token scoped.');
     fireEvent.click(screen.getByText('Review boundary'));
+    expect(document.querySelector('.task-handoff-peek')).toBeNull();
+    expect(screen.getByText(/Keep the token scoped\./)).toBeTruthy();
     expect(screen.getByText('F1 · Blocker · Sibling read')).toBeTruthy();
     expect(screen.getByText('The token can read a sibling.')).toBeTruthy();
     expect(screen.getByText(/src\/token.ts:42 \(unresolved\)/)).toBeTruthy();
@@ -40,17 +41,21 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'openTaskLog', taskId: 't1' });
     update({ ...task, status: 'in_progress', handoff: undefined });
     expect(document.querySelector('.task-handoff')).toBeNull();
-    expect(document.querySelector('.task-handoff-peek')).toBeNull();
+    fireEvent.click(screen.getByText('Review boundary'));
+    expect(document.body).not.toHaveTextContent('Keep the token scoped.');
   });
 
   it('starts the summary at its first line with words', () => {
     update({ ...task, handoff: { ...handoff, summary: '\n\n  Keep the token scoped.\nMore context.' } });
-    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Handed over · 28 findings · Blocker · Keep the token scoped.');
+    expect(document.querySelector('.task-handoff-peek')).toBeNull();
+    expect(document.body).not.toHaveTextContent('Keep the token scoped.');
+    fireEvent.click(screen.getByText('Review boundary'));
+    expect(screen.getByText(/Keep the token scoped\./)).toBeTruthy();
   });
 
-  it('shows the commit before the summary, and a handoff with only a commit', () => {
+  it('shows the commit before the summary, and a handoff with only a commit, when expanded', () => {
     update({ ...task, handoff: { ...handoff, commit: { subject: 'Scope the token', body: 'Reads stay in the tenant.' } } });
-    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Commit: Scope the token · Keep the token scoped.');
+    expect(document.querySelector('.task-handoff-peek')).toBeNull();
     fireEvent.click(screen.getByText('Review boundary'));
     const section = document.querySelector('.task-handoff')!;
     expect(section.querySelector('.task-handoff-commit')).toHaveTextContent('Commit: Scope the tokenReads stay in the tenant.');
@@ -58,7 +63,9 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
       .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     fireEvent.click(screen.getByText('Review boundary'));
     update({ ...task, handoff: { summary: '', findings: [], findingCount: 0, commit: { subject: 'Only a commit' } } });
-    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Handed over · no findings · Commit: Only a commit');
+    expect(document.querySelector('.task-handoff-peek')).toBeNull();
+    fireEvent.click(screen.getByText('Review boundary'));
+    expect(document.querySelector('.task-handoff-commit-subject')).toHaveTextContent('Commit: Only a commit');
     expect(document.querySelector('.task-handoff-summary')).toBeNull();
   });
 
@@ -67,7 +74,8 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
       tasks: [{ ...task, type: 'script', handoff: { summary: 'Finished', findings: [], findingCount: 0 } }],
       generatedAt: '', lastUpdated: '', status: 'approved', runners: [],
     } });
-    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Handed over · no findings · Finished');
+    expect(document.querySelector('.task-handoff-peek')).toBeNull();
+    expect(document.body).not.toHaveTextContent('Finished');
     fireEvent.click(screen.getByText('Review boundary'));
     expect(screen.getByText('Handoff · no findings')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Read full handoff' }));
@@ -79,7 +87,8 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
       tasks: [{ ...task, type: 'user', attempted: undefined, handoff: { summary: 'Finished', findings: [], findingCount: 0 } }],
       generatedAt: '', lastUpdated: '', status: 'approved', runners: [],
     } });
-    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('Handed over · no findings · Finished');
+    expect(document.querySelector('.task-handoff-peek')).toBeNull();
+    expect(document.body).not.toHaveTextContent('Finished');
     fireEvent.click(screen.getByText('Review boundary'));
     expect(screen.getByText('Handoff · no findings')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Read full handoff' })).toBeNull();
@@ -93,7 +102,8 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     };
     update({ ...task, handoff: { ...handoff, artifacts: [patch] } });
 
-    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('patch: 2 files, +9 -1');
+    expect(document.querySelector('.task-handoff-peek')).toBeNull();
+    expect(document.body).not.toHaveTextContent('Tried it.');
     fireEvent.click(screen.getByText('Review boundary'));
     const block = document.querySelector('.task-handoff-patch')!;
     expect(block).toHaveTextContent('Patch · 2 files, +9 -1, 900 B');
@@ -114,6 +124,6 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     update({ ...check, handoff });
     expect(document.querySelector('.loop')).toHaveTextContent(/round 1 of 3/i);
     expect(document.querySelector('.status-failed')).toBeNull();
-    expect(document.querySelector('.task-handoff-peek')).toHaveTextContent('28 findings');
+    expect(document.querySelector('.task-handoff-peek')).toBeNull();
   });
 });
