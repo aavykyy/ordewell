@@ -321,7 +321,7 @@ export interface ApprovalAnswerResponse extends OkResponse {
 /**
  * Where a frame stands in its session's broadcast stream. A client holding
  * several sockets on one session gets every broadcast on each, and a frame's
- * content is no identity: two clears of a held edit are the same JSON. `seq`
+ * content is no identity: two identical status frames are the same JSON. `seq`
  * rises by one per broadcast of the session for as long as the daemon runs,
  * whichever Session object holds the id; `stream` names the daemon process,
  * so a restarted daemon's numbering is never compared with the last one's.
@@ -338,8 +338,8 @@ export type ApprovalRequestMessage = Extract<SessionMessage, { type: 'approval_r
 
 /**
  * What a session's socket sends right after `connected`: its run as it stands,
- * so a client that joins mid-run has the run view before the next update —
- * the held edit's preview included — and the planner's approval requests
+ * so a client that joins mid-run has the run view before the next update,
+ * and the planner's approval requests
  * still waiting, which no later frame would announce again. `seq` is the last
  * broadcast it accounts for. Session broadcasts are {@link SessionFrame}s;
  * host-owned account limits have their own snapshot and revision.

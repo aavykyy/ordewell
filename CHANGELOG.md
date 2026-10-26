@@ -148,6 +148,17 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **A planner's `submit_plan` and `edit_plan` apply as the call answers.**
+  The plan, the saved session and every surface show the change while the
+  planner is still replying, and the answer names the tasks it added, with
+  their ids and the handles the planner gave them, so it can read or start
+  them in the same reply. Each `edit_plan` call applies whole or not at all,
+  on its own; a later refused call leaves earlier ones in place. A change
+  stays if the reply is then stopped, fails or hits a usage limit, and the
+  message that asked for it is not sent again. The "Proposed: lands when this
+  reply ends" preview in the TUI and VS Code is gone, and a start asked for
+  after an edit runs the task as edited without waiting for the reply to end
+  ([ADR-0022](docs/adr/runners/0022-ordewell-mcp-server.md)).
 - **Merge and Split are planner requests, not task-card buttons.** VS Code's
   task cards no longer carry the Merge/Split controls, `Session` and the daemon
   no longer expose the matching request methods and routes, and the planner

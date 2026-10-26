@@ -595,7 +595,7 @@ describe('submit_plan', () => {
     settings({ enabledRunners: ['claude-code', 'codex'] });
     await session.continueConversation('use codex too');
 
-    expect(submitted).toEqual({ isError: false, body: expect.objectContaining({ ok: true, tasks: 2, coerced: [] }) });
+    expect(submitted).toEqual({ isError: false, body: expect.objectContaining({ ok: true, tasks: [{ id: 'a', ref: '#1', title: 'Task a' }, { id: 'b', ref: '#2', title: 'Task b' }], coerced: [] }) });
     expect(session.planTasks.map((t) => [t.id, t.assignedRunner, t.assignedModel?.modelId])).toEqual([
       ['a', 'claude-code', 'claude-sonnet-4'],
       ['b', 'codex', 'gpt-5'],
@@ -787,7 +787,9 @@ describe('submit_plan with names it cannot attach', () => {
     await session.startPlanning('add a cache', ['claude-code']);
 
     expect(session.planTasks.map((t) => t.id)).toEqual(['a', 'b']);
-    expect(session.planState?.conversationHistory?.at(-1)?.kind).toBe('plan_generated');
+    // Committed as the call answered, ahead of the reply that followed it.
+    expect(session.planState?.conversationHistory?.at(-2)?.kind).toBe('plan_generated');
+    expect(session.planState?.conversationHistory?.at(-1)?.content).toMatch(/^Submitted\. For reference/);
   });
 });
 
@@ -812,7 +814,7 @@ describe('the one route to a plan', () => {
     await viaText.session.startPlanning('add a cache', ['claude-code']);
 
     expect(viaTool.session.planTasks).toHaveLength(2);
-    expect(viaTool.session.planState?.conversationHistory?.at(-1)?.kind).toBe('plan_generated');
+    expect(viaTool.session.planState?.conversationHistory?.at(-2)?.kind).toBe('plan_generated');
     expect(viaText.session.planTasks).toEqual([]);
     expect(viaText.session.planState?.conversationHistory?.at(-1)).toEqual(expect.objectContaining({ role: 'assistant', content: asText }));
     expect(viaText.broadcast.mock.calls.filter(([m]) => m.type === 'plan_generated')).toHaveLength(0);
@@ -1188,7 +1190,9 @@ describe('edit_plan', () => {
     await planner.session.continueConversation('EDIT NOW');
 
     expect(planner.session.planTasks.map((t) => t.title)).toEqual(['Task a', 'Renamed']);
-    expect(landed(planner).last).toBe('Tasks updated:\n- Updated "Task b" (title)');
+    const history = planner.session.planState?.conversationHistory ?? [];
+    expect(history.at(-2)?.content).toBe('Tasks updated:\n- Updated "Task b" (title)');
+    expect(history.at(-1)?.content).toMatch(/^I renamed the second task/);
   });
 
   it('names what is wrong with each op and changes nothing', async () => {
@@ -1233,7 +1237,7 @@ describe('edit_plan', () => {
     expect(planner.session.planState?.runners).toEqual(['claude-code', 'codex']);
   });
 
-  it('joins the edits of one reply into a single batch, and the second call is checked with the first', async () => {
+  it('commits each call of one reply as a batch of its own, the second against the plan the first left', async () => {
     let second: { isError: boolean; body: unknown } | undefined;
     const planner = await planThen(async (mcp) => {
       await call(mcp!, 'edit_plan', { ops: [{ op: 'update', taskId: '#1', changes: { title: 'First' } }] });
@@ -1243,8 +1247,12 @@ describe('edit_plan', () => {
 
     await planner.session.continueConversation('EDIT NOW');
 
-    expect(second?.body).toEqual(expect.objectContaining({ ok: true, summary: ['Updated "Task a" (title)', 'Updated "Task b" (title)'] }));
+    expect(second?.body).toEqual(expect.objectContaining({ ok: true, summary: ['Updated "Task b" (title)'] }));
     expect(planner.session.planTasks.map((t) => t.title)).toEqual(['First', 'Second']);
+    expect((planner.session.planState?.conversationHistory ?? []).filter((m) => m.content.startsWith('Tasks updated:')).map((m) => m.content)).toEqual([
+      'Tasks updated:\n- Updated "Task a" (title)',
+      'Tasks updated:\n- Updated "Task b" (title)',
+    ]);
   });
 
   it('refuses before a plan exists, pointing at submit_plan', async () => {
@@ -1336,11 +1344,10 @@ describe('edit_plan after a runner is switched off that the plan once used', () 
     expect(planner.session.planTasks.find((t) => t.title === 'Docs')?.assignedRunner).toBe('claude-code');
   });
 
-  it('refuses at landing an edit it accepted while the runner was on', async () => {
+  it('keeps an edit committed while the runner was on, which switching it off later in the reply does not undo', async () => {
     let accepted: { isError: boolean; body: unknown } | undefined;
     const planner = await codexSwitchedOff(async (mcp) => {
-      // The refusal at landing sends the planner a corrective turn, which runs this again with Codex off.
-      accepted ??= await call(mcp!, 'edit_plan', { ops: [{ op: 'add', task: { title: 'Docs', assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5', modelLabel: 'GPT-5' } } }] });
+      accepted = await call(mcp!, 'edit_plan', { ops: [{ op: 'add', task: { title: 'Docs', assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5', modelLabel: 'GPT-5' } } }] });
       planner.settings({ enabledRunners: ['claude-code', 'opencode'] });
       return 'Added docs on codex.';
     });
@@ -1349,7 +1356,7 @@ describe('edit_plan after a runner is switched off that the plan once used', () 
     await planner.session.continueConversation('EDIT NOW');
 
     expect(accepted?.isError).toBe(false);
-    expect(planner.session.planTasks.map((t) => t.title)).toEqual(['Task a', 'Task b']);
+    expect(planner.session.planTasks.map((t) => [t.title, t.assignedRunner])).toEqual([['Task a', 'codex'], ['Task b', 'claude-code'], ['Docs', 'codex']]);
   });
 
   it('still lands an edit that leaves the task on it alone, or moves it off', async () => {
@@ -1494,7 +1501,8 @@ describe('one intake for submit_plan and edit_plan', () => {
 
     expect((submit.answer.body as { coerced: unknown }).coerced).toEqual([{ taskId: 'c', title: 'Child', field: 'thinkingEffort', from: 'xhigh', to: 'high' }]);
     expect(submit.tasks[0].subtasks[0].assignedModel?.thinkingEffort).toBe('high');
-    expect((edit.answer.body as { coerced: unknown }).coerced).toContainEqual({ title: 'Child', field: 'thinkingEffort', from: 'xhigh', to: 'high' });
+    // Committed as it answers, so an added task's adjustment names the id it got.
+    expect((edit.answer.body as { coerced: unknown }).coerced).toContainEqual({ taskId: edit.tasks[2].subtasks[0].id, title: 'Child', field: 'thinkingEffort', from: 'xhigh', to: 'high' });
     expect(edit.tasks[2].subtasks[0].assignedModel?.thinkingEffort).toBe('high');
   });
 
@@ -1523,7 +1531,7 @@ describe('one intake for submit_plan and edit_plan', () => {
     expect(edit.tasks[1]).not.toHaveProperty('thinkingEffort');
   });
 
-  it('numbers an edit\'s errors by the call that made them, not by the ops the reply already holds', async () => {
+  it('numbers an edit\'s errors by the call that made them, not by an earlier call\'s ops', async () => {
     let second: Answer | undefined;
     const planner = await planThen(async (mcp) => {
       await call(mcp!, 'edit_plan', { ops: [{ op: 'update', taskId: '#1', changes: { title: 'First' } }] });
@@ -1543,7 +1551,7 @@ describe('one intake for submit_plan and edit_plan', () => {
 
     expect(edit.answer.isError).toBe(false);
     expect(edit.tasks[0]).toMatchObject({ assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5' } });
-    expect((edit.answer.body as { coerced: unknown }).coerced).toContainEqual({ title: 'Task a', field: 'assignedModel', from: 'claude-sonnet-4', to: 'gpt-5' });
+    expect((edit.answer.body as { coerced: unknown }).coerced).toContainEqual({ taskId: 'a', title: 'Task a', field: 'assignedModel', from: 'claude-sonnet-4', to: 'gpt-5' });
   });
 
   it('refills a split part or a merged task that names only another runner, and says so', async () => {
@@ -1554,9 +1562,9 @@ describe('one intake for submit_plan and edit_plan', () => {
     expect(split.tasks.map((t) => [t.title, t.assignedRunner, t.assignedModel?.modelId])).toEqual([
       ['Task a', 'claude-code', 'claude-sonnet-4'], ['Half one', 'claude-code', 'claude-sonnet-4'], ['Half two', 'codex', 'gpt-5'],
     ]);
-    expect((split.answer.body as { coerced: unknown }).coerced).toEqual([{ title: 'Half two', field: 'assignedModel', from: 'claude-sonnet-4', to: 'gpt-5' }]);
+    expect((split.answer.body as { coerced: unknown }).coerced).toEqual([{ taskId: split.tasks[2].id, title: 'Half two', field: 'assignedModel', from: 'claude-sonnet-4', to: 'gpt-5' }]);
     expect(merge.tasks[0]).toMatchObject({ title: 'Both', assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5' } });
-    expect((merge.answer.body as { coerced: unknown }).coerced).toEqual([{ title: 'Both', field: 'assignedModel', from: 'claude-sonnet-4', to: 'gpt-5' }]);
+    expect((merge.answer.body as { coerced: unknown }).coerced).toEqual([{ taskId: merge.tasks[0].id, title: 'Both', field: 'assignedModel', from: 'claude-sonnet-4', to: 'gpt-5' }]);
   });
 
   it('refills a submitted task whose model only another runner lists, and says so', async () => {
@@ -1612,8 +1620,9 @@ describe('what the planner says around a plan or edit it submits', () => {
       'user: EDIT NOW',
       'planner: Updating the plan now.',
       'tool: mcp__ordewell__edit_plan',
-      'planner: Renamed the second task to "Wire it in".',
+      // Committed as the call answered, so it lands ahead of the reply that followed it.
       'planner: Tasks updated:\n- Updated "Task b" (title)',
+      'planner: Renamed the second task to "Wire it in".',
     ]);
     const plan = planner.session.planState!;
     expect(timeline(fromTranscript(plan.conversationHistory, plan.researchLog)).slice(-5)).toEqual(live.slice(-5));
@@ -1635,14 +1644,15 @@ describe('what the planner says around a plan or edit it submits', () => {
       'user: add a cache',
       'planner: Updating the plan now.',
       'tool: mcp__ordewell__submit_plan',
-      'planner: Two tasks: the cache, then wiring it in.',
       'plan: generated',
+      'planner: Two tasks: the cache, then wiring it in.',
     ]);
-    expect(view.blocks.at(-1)).toEqual(expect.objectContaining({ type: 'plan', status: 'generated', taskCount: 2 }));
+    const generated = expect.objectContaining({ type: 'plan', status: 'generated', taskCount: 2 });
+    expect(view.blocks.find((b) => b.type === 'plan')).toEqual(generated);
     const plan = planner.session.planState!;
     const reloaded = fromTranscript(plan.conversationHistory, plan.researchLog);
     expect(timeline(reloaded)).toEqual(timeline(view));
-    expect(reloaded.blocks.at(-1)).toEqual(expect.objectContaining({ type: 'plan', status: 'generated', taskCount: 2 }));
+    expect(reloaded.blocks.find((b) => b.type === 'plan')).toEqual(generated);
   });
 });
 
@@ -1931,8 +1941,8 @@ describe('a submission whose planner turn ends while its skill check runs', () =
       recordSkillLoad: () => false,
       liveCatalog: async () => ({ runners: ['claude-code'], models: { 'claude-code': [{ modelId: 'claude-sonnet-4', modelLabel: 'Sonnet', variants: [] }] }, modes: {}, autonomousDefault: true }),
       checkPlan: (tasks) => new PlanChangeCheck({ ...requestScope({ runners: ['claude-code'] }), skills: () => lookup }).check({ kind: 'plan', tasks }, 'submit'),
-      submitPlan: vi.fn(() => true),
-      editPlan: vi.fn(async () => ({ ok: true as const, summary: [], queued: false })),
+      submitPlan: vi.fn(async () => ({ ok: true as const, summary: [], tasks: [] })),
+      editPlan: vi.fn(async () => ({ ok: true as const, summary: [], tasks: [] })),
       tasks: () => [],
       read: async (_signature, answerRead) => ({ status: 'answered', value: await answerRead(), landNow: false }),
       liveOutput: () => null,
@@ -1978,8 +1988,8 @@ describe('task references in the read tools', () => {
     recordSkillLoad: () => false,
     liveCatalog: async () => ({ runners: ['claude-code'], models: {}, modes: {}, autonomousDefault: true }),
     checkPlan: async () => { throw new Error('not used here'); },
-    submitPlan: () => true,
-    editPlan: async () => ({ ok: true as const, summary: [], queued: false }),
+    submitPlan: async () => ({ ok: true as const, summary: [], tasks: [] }),
+    editPlan: async () => ({ ok: true as const, summary: [], tasks: [] }),
     tasks: () => plan,
     read: async (_signature, answerRead) => ({ status: 'answered', value: await answerRead(), landNow: false }),
     liveOutput: () => null,
@@ -2175,8 +2185,8 @@ describe('run_command, sealed (ADR-0036)', () => {
     recordSkillLoad: () => false,
     liveCatalog: async () => ({ runners: ['claude-code'], models: {}, modes: {}, autonomousDefault: true }),
     checkPlan: async () => { throw new Error('not used here'); },
-    submitPlan: () => true,
-    editPlan: async () => ({ ok: true as const, summary: [], queued: false }),
+    submitPlan: async () => ({ ok: true as const, summary: [], tasks: [] }),
+    editPlan: async () => ({ ok: true as const, summary: [], tasks: [] }),
     tasks: () => [],
     read: async (_signature, answerRead) => ({ status: 'answered', value: await answerRead(), landNow: false }),
     liveOutput: () => null,

@@ -18,7 +18,7 @@ function host(execute: (command: ExecutionCommand) => Promise<CommandOutcome>, t
   const unused = async (): Promise<never> => { throw new Error('not used here'); };
   return {
     skills: () => [], turnId, recordSkillLoad: () => false, liveCatalog: unused, checkPlan: unused,
-    submitPlan: () => false, editPlan: unused, tasks: () => [], read: unused, liveOutput: () => null, lastAttempt: () => null,
+    submitPlan: unused, editPlan: unused, tasks: () => [], read: unused, liveOutput: () => null, lastAttempt: () => null,
     taskLogAttempts: () => [], taskLog: () => [], taskDiff: unused,
     runCommand: unused, fetchUrl: unused, webSearch: unused,
     execute, editsRefused: () => undefined,

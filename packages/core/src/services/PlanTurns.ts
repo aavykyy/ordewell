@@ -173,9 +173,13 @@ export class PlanTurns {
     });
   }
 
-  /** A turn ended on the planner's usage limit: arm the wait for its inputs. Saved with the failure the turn records. */
-  usageLimit(said: TurnFailure): PlannerLimit {
-    return this.resend.limited(said);
+  /**
+   * A turn ended on the planner's usage limit: arm the wait for its inputs,
+   * unless a planner tool's change in it (`answered`) already took them
+   * (ADR-0022 P2). Saved with the failure the turn records.
+   */
+  usageLimit(said: TurnFailure, answered = false): PlannerLimit {
+    return answered ? this.resend.limitedAfterChange(said) : this.resend.limited(said);
   }
 
   /**

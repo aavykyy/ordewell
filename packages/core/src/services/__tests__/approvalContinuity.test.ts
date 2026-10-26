@@ -164,12 +164,14 @@ describe('the Guarded card', () => {
       { op: 'add', task: { title: 'Check by hand', type: 'user', sliceType: 'HITL', userSteps: [{ order: 1, instruction: 'look at it' }] } },
     ] }, ctx);
     expect(edit.isError).toBeFalsy();
-    await env.planner.tools().runPlan!({}, ctx);
-    env.planner.calls[0].finish(prose('Added both.'));
+    // The edit is in the plan as its call answers (ADR-0022 P2), so the start asks at once.
+    const pending = env.planner.tools().runPlan!({}, ctx);
     await until(() => cards(env).length === 1);
     expect(cards(env)[0].detail).toContain('Allowing approves task #2 "Add a cache", added since you approved the plan, and starts it with the rest.');
 
     env.session.resolveApproval(cards(env)[0].id, true);
+    expect((await pending).isError).toBeFalsy();
+    env.planner.calls[0].finish(prose('Added both.'));
     const cache = env.session.planTasks.find((t) => t.title === 'Add a cache')!.id;
     await until(() => env.run.spawnedIds().includes(cache));
 

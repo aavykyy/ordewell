@@ -11,13 +11,12 @@ import { carryPlannedModes } from './ModeResolver';
 import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
-import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome } from './plannerTools';
+import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome, type TaskHead } from './plannerTools';
 import { sharedMcpServer, type OrdewellMcpServer, type PlannerToolHandler } from './mcp';
 import { ConversationEditError, PlannerContextPausedError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
 import { PlanTurns, type PlanTurnInput } from './PlanTurns';
 import { RunSupervision, runOrigin } from './RunSupervision';
-import { editedFields } from './LoopGuards';
 import { Planner } from './Planner';
 import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type RunOrigin } from './TaskOrchestrator';
 import { PlanStore } from './PlanStore';
@@ -40,7 +39,7 @@ import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type User
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
-import { surfacePlan, type HeldEdit, type RunActivity, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
+import { surfacePlan, type RunActivity, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
 import { SubagentRuns } from './SubagentRuns';
@@ -50,6 +49,7 @@ import { digestTaskLog, type TaskLogEvent } from '../models/TaskLog';
 import { TaskLogRecorder } from './TaskLogRecorder';
 import { ScriptRunner, type ScriptRunnerDeps } from './ScriptRunner';
 import { rewrittenScripts } from '../models/ScriptTask';
+import { taskRefOf } from './TaskRefs';
 import { SessionWindows, withContextWindows } from './ContextWindowFill';
 import { PlannerUsageLedger } from './PlannerUsage';
 import { plannerContextFill } from '../models/Usage';
@@ -549,8 +549,6 @@ export class Session {
   private readonly ignoredEffectRules = new Set<string>();
   /** The run was forgotten and no surface has been told yet; see {@link announceClosed}. */
   private closedUnannounced = false;
-  /** The edit the open planner turn holds, as last announced: a surface that joins mid-turn is shown it. */
-  private sentHeld: HeldEdit | null = null;
   private readonly notifications: INotification;
   private readonly onNotice?: (notice: SessionNotice) => void;
   private readonly modelResolver: ModelResolver;
@@ -594,9 +592,7 @@ export class Session {
   private readonly commands: ExecutionCommands;
   private readonly supervision: RunSupervision;
   /** The open planner turn's, or the last one's once it settled; see {@link openTurn}. */
-  private turnEffects: TurnEffects = this.newTurnEffects();
-  /** Every turn's effects with starts still owed: a turn's may still be running its starts when the next opens. */
-  private readonly owingEffects = new Set<TurnEffects>();
+  private turnEffects = new TurnEffects();
   private unlistenApprovals: (() => void) | null;
   /** The one check of a planner's change to the plan; an Act supervisor's edits meet its guard. */
   private readonly planChanges = new PlanChangeCheck(this.changeScope(() => this.supervisorEditing()));
@@ -610,8 +606,8 @@ export class Session {
       await this.liveCatalog();
       return this.planChanges.check({ kind: 'plan', tasks }, 'submit');
     },
-    submitPlan: (tasks) => this.submitPlanFromTool(tasks),
-    editPlan: (ops) => this.editPlanFromTool(ops),
+    submitPlan: (tasks, turn) => this.submitPlanFromTool(tasks, turn),
+    editPlan: (ops, turn) => this.editPlanFromTool(ops, turn),
     tasks: () => this.store.planTasks,
     read: (signature, answer) => this.conversation.read(signature, answer),
     liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
@@ -627,7 +623,7 @@ export class Session {
     runCommand: (command, signal, opts) => this.fsAdapter.bash(command, signal, opts),
     fetchUrl: (url) => this.fetcher.fetch(url),
     webSearch: async (query) => this.fetcher.search?.(query),
-    execute: (command, signal) => this.commands.run(command, this.turnActor(), undefined, signal),
+    execute: (command, signal) => this.commands.run(command, this.turnActor(), signal),
     editsRefused: (change) => this.conversation.currentWakeUp?.refused(change),
   });
 
@@ -640,7 +636,6 @@ export class Session {
       if (msg.type === 'isolation_handoff' || msg.type === 'isolation_merge' || msg.type === 'run_closed') {
         this.sentHandoff = reduceRun({ ...EMPTY_RUN, handoff: this.sentHandoff }, msg).handoff;
       }
-      if (msg.type === 'plan_edit_held') this.sentHeld = msg.held;
       parts.broadcast(msg);
     };
     this.notifications = parts.notifications;
@@ -709,7 +704,7 @@ export class Session {
         this.backend.settle();
         queueMicrotask(() => this.turns.pump());
       },
-      usageLimit: (said) => this.turns.usageLimit(said),
+      usageLimit: (said, answered) => this.turns.usageLimit(said, answered),
       contextPaused: (details) => this.turns.contextPaused(details),
     });
 
@@ -825,30 +820,11 @@ export class Session {
     return this.commands.run(command, actor);
   }
 
-  private newTurnEffects(): TurnEffects {
-    return new TurnEffects({
-      replay: (command, actor, admission) => this.commands.replay(command, actor, admission),
-      supervisorLevel: () => this.supervision.level,
-      notice: (level, message) => this.notice(level, message),
-    });
-  }
-
-  /**
-   * Run one planner turn with its own {@link TurnEffects}, settled in a
-   * `finally`: a turn that throws — stopped, failed, discarded — still
-   * reports what it deferred as not done, rather than the next turn
-   * silently forgetting it.
-   */
+  /** Run one planner turn with its own {@link TurnEffects}, which only a turn that lands hands back. */
   private async openTurn<T>(turn: () => Promise<T>): Promise<{ landed: T; effects: TurnEffects }> {
-    const effects = this.newTurnEffects();
+    const effects = new TurnEffects();
     this.turnEffects = effects;
-    for (const owing of this.owingEffects) if (!owing.outstanding) this.owingEffects.delete(owing);
-    this.owingEffects.add(effects);
-    try {
-      return { landed: await turn(), effects };
-    } finally {
-      effects.settle();
-    }
+    return { landed: await turn(), effects };
   }
 
   /**
@@ -919,15 +895,7 @@ export class Session {
       runMerged: () => this.runs.mergedRun !== null,
       record: (record, text) => this.recordExecution(record, text),
       guardTripped: (trip) => this.supervision.guardTripped(trip),
-      heldEdit: (taskId) => this.heldEdit(taskId),
-      editedTasks: () => this.editedTasks(),
-      heldHandle: (name) => this.editedPlan().handles.get(name),
-      deferUntilLanded: (command, actor, intent, admission) => this.turnEffects.defer(command, actor, intent, admission),
-      queuedNotRun: (text) => {
-        this.systemNote(text);
-        this.conversation.tellRunUpdate(text);
-      },
-      heldPlan: () => this.conversation.pendingOps() === null,
+      turnHandle: (name) => this.conversation.turnHandle(name),
       draftScript: (call, actor) => this.draftScript(call, actor),
       addScript: (task, actor) => this.addScript(task, actor),
       startAtGate: (taskId) => this.orchestrator.startAtGate(taskId),
@@ -939,9 +907,9 @@ export class Session {
 
   /**
    * The script task a `run_script` call would add (ADR-0035), checked as the
-   * planner's own add is, against the plan as it stands: never the turn's held
-   * edit, which lands only as the reply ends. A supervisor's is held to the
-   * oscillation guard its edits are held to, and marked as its own.
+   * planner's own add is, against the plan as it stands, the turn's committed
+   * edits included. A supervisor's is held to the oscillation guard its edits
+   * are held to, and marked as its own.
    */
   private draftScript(call: Extract<ExecutionCommand, { command: 'run_script' }>, actor: ExecutionActor): { ok: true; task: Task } | { ok: false; errors: string[] } {
     const spec: Partial<Task> = {
@@ -967,7 +935,6 @@ export class Session {
       this.store.add(task);
       return true;
     });
-    this.turnEffects.scriptAdded(task.id);
     if (actor.kind === 'supervisor') this.supervision.edited(before, this.store.planTasks);
   }
 
@@ -1003,40 +970,6 @@ export class Session {
     return live?.trim() ? live : this.store.get(taskId)?.outputSummary?.logTail;
   }
 
-  /**
-   * Whether the open turn holds a task edit, landing as its reply ends, that
-   * changes this task — or any, when none is named. A whole plan held is not
-   * one: nothing it would start is approved until the user executes it.
-   */
-  private heldEdit(taskId?: string): boolean {
-    const held = this.conversation.pendingOps();
-    if (!held || held.length === 0 || !this.plan) return false;
-    if (taskId === undefined) return true;
-    const before = this.store.get(taskId);
-    const after = this.asEdited(taskId);
-    return !!before && (!after || editedFields(before, after).length > 0);
-  }
-
-  /** The plan's tasks as the open turn's held edit leaves them: as they are, when it holds none or one that would not apply. */
-  private editedTasks(): readonly Task[] {
-    return this.editedPlan().tasks;
-  }
-
-  /** {@link editedTasks}, with the id each of the held batch's handles names in them. */
-  private editedPlan(): { tasks: readonly Task[]; handles: ReadonlyMap<string, string> } {
-    const unedited = { tasks: this.store.planTasks, handles: new Map<string, string>() };
-    const held = this.conversation.pendingOps();
-    if (!held || held.length === 0 || !this.plan) return unedited;
-    // Unguarded: the batch met the guard as it was made, and a trip tells the user, which a read of the plan must not.
-    const result = new PlanChangeCheck(this.changeScope(() => false)).checkNow({ kind: 'ops', ops: held }, 'land');
-    return result.ok ? { tasks: result.tasks, handles: result.handles } : unedited;
-  }
-
-  /** The task as the open turn's held edit leaves it; undefined when that edit removes it. */
-  private asEdited(taskId: string): Task | undefined {
-    return flattenTasks(this.editedTasks()).find((t) => t.id === taskId);
-  }
-
   /** The open planner turn is the supervisor's, acting at Act: its edits and added tasks are its own (ADR-0029). */
   private supervisorEditing(): boolean {
     const actor = this.turnActor();
@@ -1045,12 +978,13 @@ export class Session {
 
   /**
    * What every planner change is checked against (`PlanChangeCheck`), as it
-   * is made and as it lands: the live catalog and plan, and the open turn's
-   * held edit. A change may put a task only on the runners enabled now
-   * (`assignableRunners`), one set at both ends, so what was accepted cannot
-   * be refused at commit unless the catalog moved; the plan's own runners'
-   * modes are read too, for a task left on one switched off since. `guarded`:
-   * the change meets the supervisor's oscillation guard.
+   * is submitted and as it commits: the live catalog and plan, and the
+   * handles the open turn's committed edits gave. A change may put a task
+   * only on the runners enabled now (`assignableRunners`), one set at both
+   * ends, so what was accepted cannot be refused at commit unless the catalog
+   * moved; the plan's own runners' modes are read too, for a task left on one
+   * switched off since. `guarded`: the change meets the supervisor's
+   * oscillation guard.
    */
   private changeScope(guarded: () => boolean): PlanChangeScope {
     return {
@@ -1058,8 +992,7 @@ export class Session {
       runners: (kind) => this.catalog.runnersFor(kind === 'plan' ? 'plan' : 'edit') ?? [],
       catalog: (runners) => this.catalog.edit([...new Set([...(this.plan?.runners ?? []), ...runners])]),
       skills: () => this.workspaceSkills(),
-      held: () => this.conversation.pendingOps() ?? [],
-      addedPast: () => this.turnEffects.addedPastEdit,
+      handles: () => this.conversation.turnHandles(),
       guard: (before, after) => (guarded() ? this.supervision.checkEdit(before, after)?.refusal : undefined),
     };
   }
@@ -1349,9 +1282,9 @@ export class Session {
    * The plan scope ends: everything that belongs to the plan this Session
    * holds goes, so nothing of it reaches the next one — a new plan, another
    * session adopted, or the Session closed. Its run is stopped, the planner
-   * turn in flight is abandoned with everything it held, what that turn
-   * deferred is settled, and the conversation, supervision, usage ledger,
-   * execution log and planner prompts are cleared. A new plan on the same
+   * turn in flight is abandoned with everything it held, and the
+   * conversation, supervision, usage ledger, execution log and planner
+   * prompts are cleared. A new plan on the same
    * Session keeps the scopes the user granted (`keepGrants`); a session
    * boundary does not (ADR-0008).
    */
@@ -1364,9 +1297,6 @@ export class Session {
     this.conversation.abandonTurn();
     this.turns.abandon();
     this.supervision.reset();
-    this.turnEffects.abandon();
-    for (const effects of this.owingEffects) effects.abandon();
-    this.owingEffects.clear();
     this.conversation.reset();
     // Totals belong to the plan they were recorded under; a fresh plan starts
     // its ledger from zero so the previous session's line never lingers.
@@ -1379,7 +1309,6 @@ export class Session {
     this.store.clearLog();
     this.sentHandoff = null;
     this.closedUnannounced = false;
-    this.sentHeld = null;
   }
 
   /** The handoff a settled run with landed work owes the user, unmarked; null while a run is open or nothing landed. */
@@ -1669,7 +1598,8 @@ export class Session {
         return this.plan;
       }
       if (!(err instanceof PlannerUsageLimitError) || !this.plan) throw err;
-      this.turns.waitOnLimit({ source: 'user', ...this.resolveSkillInvocation(goal) });
+      // A goal its own submit_plan already answered is not sent again to be planned twice (ADR-0022 P2).
+      if (!err.answered) this.turns.waitOnLimit({ source: 'user', ...this.resolveSkillInvocation(goal) });
       return this.plan;
     } finally {
       if (this.opening === pending) this.opening = null;
@@ -1788,40 +1718,50 @@ export class Session {
     return this.conversation.rewindTargets();
   }
 
-  /** A plan the planner submitted through its tool, already checked against the live catalog. */
-  private submitPlanFromTool(tasks: Task[]): boolean {
-    return !!this.plan && this.conversation.submit({ kind: 'plan', tasks });
+  /**
+   * A plan the planner submitted through its tool, already checked against
+   * the live catalog: committed now, in the turn the call was made in
+   * (ADR-0022 P2), and answered with the tasks it holds.
+   */
+  private async submitPlanFromTool(tasks: Task[], turn: string | undefined): Promise<PlanEditOutcome> {
+    if (!this.plan) return { ok: false, errors: [{ field: 'tasks', message: 'No planning turn is open to take the plan.' }] };
+    const committed = await this.conversation.commitFromTool({ kind: 'plan', tasks }, turn);
+    if (!committed.ok) return committed;
+    const { adjustments, warnings } = committed.passed;
+    return { ok: true, summary: [], coerced: adjustments, warnings, tasks: this.taskHeads(flattenTasks(this.store.planTasks)) };
   }
 
   /**
-   * A task edit the planner made through its tool. Checked against the live
-   * catalog — an edit to a running or completed task is refused here, with
-   * what would be accepted — then handed to the open turn, which commits it as
-   * it would the same ops in a taskOps reply. Edits made in one reply join one
-   * batch, which applies whole or not at all.
+   * A task edit the planner made through its tool, checked against the live
+   * catalog and committed now, in the turn the call was made in, as a batch
+   * of its own: whole or not at all, against the plan as it stands
+   * (ADR-0022 P2). An edit to a running or completed task is refused, with
+   * what would be accepted. Answered with the tasks it added and the task
+   * each handle it gave names, for a later call to read or start them by.
    */
-  private async editPlanFromTool(ops: TaskOp[]): Promise<PlanEditOutcome> {
+  private async editPlanFromTool(ops: TaskOp[], turn: string | undefined): Promise<PlanEditOutcome> {
     const refuse = (message: string): PlanEditOutcome => ({ ok: false, errors: [{ message }] });
-    const wholePlanHeld = 'A whole plan was submitted in this reply and replaces the plan when it ends: make the edit in your next reply.';
-    const turn = this.conversation.currentTurnId;
     await this.liveCatalog();
     if (this.conversation.currentTurnId !== turn) return refuse(PLANNER_TURN_ENDED);
     if (!this.plan || this.store.planTasks.length === 0) return refuse('There is no plan to edit yet: submit one with submit_plan.');
-    if (!this.conversation.pendingOps()) return refuse(wholePlanHeld);
-
-    // The held batch is read where the check's rules run, after its last
-    // wait, and joined in that tick: two calls made in parallel join one
-    // batch instead of one replacing the other.
-    let refused: string | undefined;
-    const checked = await this.planChanges.check({ kind: 'ops', ops }, 'submit', () => {
-      const held = this.conversation.pendingOps();
-      if (this.conversation.currentTurnId !== turn) refused = PLANNER_TURN_ENDED;
-      else if (!held) refused = wholePlanHeld;
-      else if (!this.conversation.submit({ kind: 'task_ops', ops: [...held, ...ops] })) refused = 'No planning turn is open to take the edit.';
+    const committed = await this.conversation.commitFromTool({ kind: 'task_ops', ops }, turn);
+    if (!committed.ok) return committed;
+    const { summary, adjustments, warnings, handles } = committed.passed;
+    const known = new Set(flattenTasks(committed.before).map((t) => t.id));
+    const added = flattenTasks(this.store.planTasks).filter((t) => !known.has(t.id));
+    const named = [...handles].flatMap(([name, id]) => {
+      const task = this.store.get(id);
+      return task ? [[name, this.taskHeads([task])[0]] as const] : [];
     });
-    if (refused) return refuse(refused);
-    if (!checked.ok) return this.conversation.currentTurnId === turn ? { ok: false, errors: checked.errors } : refuse(PLANNER_TURN_ENDED);
-    return { ok: true, summary: checked.summary, coerced: checked.adjustments.map(({ taskId: _id, ...rest }) => rest), warnings: checked.warnings };
+    return {
+      ok: true, summary, coerced: adjustments, warnings, tasks: this.taskHeads(added),
+      ...(named.length > 0 ? { handles: Object.fromEntries(named) } : {}),
+    };
+  }
+
+  /** Tasks as a planner tool's answer names them: by id and by the reference the plan gives each now. */
+  private taskHeads(tasks: readonly Task[]): TaskHead[] {
+    return tasks.map((t) => ({ id: t.id, ref: taskRefOf(this.store.planTasks, t.id) ?? `#${t.order}`, title: t.title }));
   }
 
   /** Whether the planner conversation is live (started and not yet committed to a plan). */
@@ -2179,8 +2119,7 @@ export class Session {
     const planned = reduceRun(EMPTY_RUN, { type: 'plan_snapshot', plan: surfacePlan({ ...this.plan, tasks: this.store.snapshot() }) });
     // The status last, as the stream's newest word: it drops what of the handoff git has found merged since it was sent.
     const handed = this.sentHandoff ? reduceRun(planned, { type: 'isolation_handoff', ...this.sentHandoff }) : planned;
-    const view = reduceRun(handed, this.events.statusMessage());
-    return this.sentHeld ? reduceRun(view, { type: 'plan_edit_held', held: this.sentHeld }) : view;
+    return reduceRun(handed, this.events.statusMessage());
   }
 
   /** The ancestors a task waits on at its merge gate (ADR-0020); empty when it waits for no Merge all. */

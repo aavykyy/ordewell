@@ -218,8 +218,6 @@ export type {
   RunTaskStatus,
   RunView,
   RunActivity,
-  HeldEdit,
-  HeldEditMark,
 } from './services/SessionMessage';
 export { EMPTY_RUN, reduceRun } from './services/runView';
 export { IDLE_ACTIVITY } from './services/SessionMessage';

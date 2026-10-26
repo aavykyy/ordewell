@@ -45,7 +45,7 @@ describe('a supervised run at Act', () => {
     const retry = await env.planner.tools().retryTask!({ task: '2', from: 'fresh' }, ctx);
     expect(edit.isError, edit.text).toBeFalsy();
     expect(retry.isError, retry.text).toBeFalsy();
-    // Nothing starts while the wake-up turn is open: the retry waits for its edit to land.
+    // Nothing starts while the wake-up turn is open: its start hold keeps the retry, already as edited (ADR-0022 P2).
     expect(env.run.spawnedIds()).toEqual(['t1', 't2']);
     env.planner.calls[0].finish(prose('Task 2 imported from the wrong place; I fixed its prompt and retried it.'));
 
@@ -64,8 +64,8 @@ describe('a supervised run at Act', () => {
       expect.objectContaining({ command: 'retry_task', actor: 'supervisor', level: 'act', outcome: 'done', task: expect.objectContaining({ id: 't2', ref: '#2' }) }),
     ]);
     expect(supervisorSaid(env)).toEqual([
-      'Task 2 imported from the wrong place; I fixed its prompt and retried it.',
       'Tasks updated:\n- Updated "Task t2" (prompt)',
+      'Task 2 imported from the wrong place; I fixed its prompt and retried it.',
     ]);
     expect(env.messages).toContainEqual(expect.objectContaining({ type: 'planner_message', supervisor: true }));
     expect(env.session.executionLog.find((s) => s.id === 't2')).toMatchObject({ retryCount: 1, verdict: { outcome: 'pass' } });

@@ -1,5 +1,5 @@
 import type { AccountLimitSnapshot } from '@ordewell/core';
-import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, IsolationPreview, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskLogEvent, TaskStatus } from '@ordewell/core';
+import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, IsolationPreview, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskLogEvent, TaskStatus } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -152,7 +152,6 @@ export type Action =
   /** The run as the daemon sends it when a socket connects, before the next update. */
   | { type: 'runSnapshot'; view: RunView; approvals?: ApprovalRequestMessage[]; sessionId?: string }
   /** The edit the open planner turn holds, as it would leave the plan; null once it landed or was dropped. */
-  | { type: 'heldEdit'; held: HeldEdit | null; sessionId?: string }
   | { type: 'isolationBlocked'; message: string; repos?: string[]; sessionId?: string }
   | { type: 'isolationHandoff'; handoff: HandoffView; sessionId?: string }
   | { type: 'handoffDiff'; diff: string; sessionId?: string }
