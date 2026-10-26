@@ -214,6 +214,99 @@ describe('openTerminal', () => {
     expect(output.writes.join('')).toContain('\x1b[?1049h');
   });
 
+  it('suspend() hands the tty to a child: alt screen off, cursor and modes restored, raw mode off, input paused', () => {
+    // The login command a runner declares owns the terminal for as long as it
+    // runs: it must not paint into a frame that will be erased, and the bytes
+    // the user types must reach it, not this decoder.
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      mouse: true,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    output.writes.length = 0;
+    terminal.suspend();
+    const written = output.writes.join('');
+
+    for (const off of ['\x1b[?1049l', '\x1b[?25h', '\x1b[?2004l', '\x1b[<u', '\x1b[?1000l', '\x1b[?1002l', '\x1b[?1006l', '\x1b[?1007r']) {
+      expect(written, off).toContain(off);
+    }
+    expect(input.setRawMode).toHaveBeenLastCalledWith(false);
+    expect(input.pause).toHaveBeenCalled();
+  });
+
+  it('resume() takes the tty back: modes on, screen cleared, raw mode on, input resumed, every row repainted', () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      mouse: true,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    terminal.draw(['same', 'same']);
+    terminal.suspend();
+    output.writes.length = 0;
+    input.setRawMode.mockClear();
+    input.resume.mockClear();
+    terminal.resume();
+    const written = output.writes.join('');
+
+    for (const on of ['\x1b[?1049h', '\x1b[?25l', '\x1b[?2004h', '\x1b[>1u', '\x1b[?1007s', '\x1b[?1007l', '\x1b[?1000h', '\x1b[?1002h', '\x1b[?1006h']) {
+      expect(written, on).toContain(on);
+    }
+    expect(written).toContain('\x1b[2J');
+    expect(input.setRawMode).toHaveBeenLastCalledWith(true);
+    expect(input.resume).toHaveBeenCalled();
+
+    // The child may have written anywhere on the screen, so the frame held
+    // here is worthless: the next draw must paint every row, not diff it.
+    output.writes.length = 0;
+    terminal.draw(['same', 'same']);
+    expect(output.writes.join('')).toContain('\x1b[1;1Hsame');
+    expect(output.writes.join('')).toContain('\x1b[2;1Hsame');
+
+    // And a later reset — a Ctrl-Z after the login — still behaves as before.
+    output.writes.length = 0;
+    terminal.reset();
+    expect(output.writes.join('')).toContain('\x1b[?1049h');
+    terminal.close();
+  });
+
+  it('draws nothing while suspended, so a login command keeps the screen it owns', () => {
+    // The app keeps painting behind an effect — a spinner tick, a streamed
+    // planner line — and one of those frames on the main screen would land in
+    // the middle of the child's prompt. resume() forces the repaint instead.
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    terminal.suspend();
+    output.writes.length = 0;
+    terminal.draw(['frame']);
+    output.emit('resize');
+    terminal.setMouse(true);
+
+    expect(output.writes).toEqual([]);
+    terminal.resume();
+    expect(output.writes.join('')).toContain('\x1b[?1000h');
+    output.writes.length = 0;
+    terminal.draw(['frame']);
+    expect(output.writes.join('')).toContain('\x1b[1;1Hframe');
+    terminal.close();
+  });
+
   it('keeps the mouse captured across a resize and a redraw', () => {
     // Both write to the tty while tracking is on — the resize clears the
     // screen, every draw brackets itself with autowrap off/on — and neither

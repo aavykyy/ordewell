@@ -202,7 +202,9 @@ describe('task texts and actions, pinned before their rules move to core', () =>
     const addTask = vi.fn().mockResolvedValue({ ok: true });
     const deps: EffectDeps = {
       api: { addTask } as unknown as OrdewellApi,
-      workspace: '/ws', port: 3742, dispatch: () => {}, newSessionId: () => 's2', setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true, exit: vi.fn(),
+      workspace: '/ws', port: 3742, dispatch: () => {}, newSessionId: () => 's2', setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true,
+      login: async () => ({ ok: true }),
+      exit: vi.fn(),
       reviveDaemon: vi.fn(), setMouseCapture: vi.fn(), writeTerminal: vi.fn(),
     };
     // Only the request is pinned; the plan refresh after it has no daemon to reach.

@@ -21,6 +21,8 @@ export type Effect =
   | { type: 'setApiKey'; provider: string; key: string }
   | { type: 'setAllowlist'; runner: string; modelIds: string[] }
   | { type: 'setRunnerEnabled'; runner: string; enabled: boolean }
+  /** Hands the terminal to the login command a runner's manifest declared; `label` names it in the notice. */
+  | { type: 'plannerLogin'; command: readonly string[]; label: string }
   /** The runner picker's whole confirmed set, so one visit reports one result. */
   | { type: 'setRunners'; changes: { runner: string; enabled: boolean }[]; message: string }
   | { type: 'setMouseCapture'; enabled: boolean }

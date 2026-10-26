@@ -344,7 +344,9 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       const actions: Action[] = [];
       const deps: EffectDeps = {
         api: client, workspace, port: 0, dispatch: (action) => { actions.push(action); }, newSessionId: () => 'unused',
-        setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true, exit: () => {},
+        setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true,
+        login: async () => ({ ok: true }),
+        exit: () => {},
         reviveDaemon: async () => false, setMouseCapture: () => {}, writeTerminal: () => {},
       };
       return { deps, actions };

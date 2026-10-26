@@ -89,6 +89,18 @@ export interface Terminal {
    * this file needs to know which escapes that involves. Caller redraws after.
    */
   reset(): void;
+  /**
+   * Hand the tty to a child process: leave the alternate screen, show the
+   * cursor, turn every mode off and stop reading input. Nothing above this
+   * file needs to know which escapes that involves.
+   */
+  suspend(): void;
+  /**
+   * Take the tty back after `suspend()`: the modes `reset()` owns, raw mode and
+   * input reading again, and a forced repaint of the frame `suspend()` left
+   * behind.
+   */
+  resume(): void;
   close(): void;
 }
 
@@ -134,6 +146,10 @@ export function openTerminal(options: TerminalOptions): Terminal {
   output.write(modes() + CLEAR + (style.enabled ? BACKGROUND_QUERY : ''));
 
   let closed = false;
+  // The tty belongs to a child process between suspend() and resume(). Nothing
+  // here may write in between: the app keeps painting behind whatever effect
+  // started the child, and those bytes would land on its screen.
+  let suspended = false;
   // What the last frame actually put on the screen. A row whose rendered text
   // did not change costs no bytes at all; a resize, `reset()` and a palette
   // change clear the screen and force the next draw to repaint every row.
@@ -141,6 +157,12 @@ export function openTerminal(options: TerminalOptions): Terminal {
   let lastPainted: string[] = [];
   let lastCols = 0;
   let fullRepaint = true;
+
+  /** Re-arm every mode and wipe what is on the screen; the next draw repaints it all. */
+  const reestablish = (): void => {
+    output.write(modes() + CLEAR);
+    fullRepaint = true;
+  };
 
   const decode = createKeyDecoder();
   const onData = (chunk: string) => {
@@ -156,6 +178,9 @@ export function openTerminal(options: TerminalOptions): Terminal {
     for (const key of decode(rest)) options.onKey(key);
   };
   const onResize = () => {
+    // A resize while the child owns the screen is the child's to repaint; our
+    // clear-and-rearm would wipe it. `resume()` asks for the size again.
+    if (suspended) return;
     // A shrink leaves glyphs beyond the new frame that row-anchored erase
     // never touches (it only erases within each row the new frame writes);
     // start the next draw from a clean screen.
@@ -181,7 +206,7 @@ export function openTerminal(options: TerminalOptions): Terminal {
   return {
     size,
     draw(frame) {
-      if (closed) return;
+      if (closed || suspended) return;
       // Row-anchored rather than home-and-blit: each changed row is positioned
       // absolutely and erased to end of line, so a row that renders wider
       // than measured only misplaces itself instead of shoving every row
@@ -222,14 +247,39 @@ export function openTerminal(options: TerminalOptions): Terminal {
     setMouse(enabled) {
       if (closed || enabled === mouse) return;
       mouse = enabled;
-      output.write(enabled ? MOUSE_TRACKING_ON : MOUSE_TRACKING_OFF);
+      // Deferred while a child owns the tty: resume() re-arms whichever
+      // tracking mode is current, and tracking the login's own mouse would
+      // steal its clicks.
+      if (!suspended) output.write(enabled ? MOUSE_TRACKING_ON : MOUSE_TRACKING_OFF);
     },
     reset() {
-      if (closed) return;
-      output.write(modes() + CLEAR);
+      if (closed || suspended) return;
       // The shell handed back a plain screen: nothing from the last frame is
       // on it any more.
-      fullRepaint = true;
+      reestablish();
+    },
+    suspend() {
+      if (closed || suspended) return;
+      suspended = true;
+      // The inverse of `modes()`, plus what `close()` also owns: a child handed
+      // this tty must find autowrap and the cursor as a shell leaves them, and
+      // stay on the main screen so its own output is what the user sees.
+      output.write(
+        MOUSE_TRACKING_OFF + ALT_SCROLL_RESTORE + KITTY_KEYBOARD_OFF + PASTE_MODE_OFF + AUTOWRAP_ON + SHOW_CURSOR + ALT_SCREEN_OFF,
+      );
+      // Paused rather than merely un-decoded: the child owns every byte typed
+      // from here until it exits, and none may land in a frame behind it.
+      if (input.isTTY) input.setRawMode(false);
+      input.pause();
+    },
+    resume() {
+      if (closed || !suspended) return;
+      suspended = false;
+      // Whatever the child painted is now on the screen, so the frame kept for
+      // diffing is worthless: `reestablish` clears and forces a full repaint.
+      reestablish();
+      if (input.isTTY) input.setRawMode(true);
+      input.resume();
     },
     close() {
       if (closed) return;

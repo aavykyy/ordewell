@@ -56,6 +56,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'key', usage: '/key [set <provider> <key>]', description: 'Configure API provider keys', category: 'models' },
   { name: 'allowlist', usage: '/allowlist [set <runner> <ids> | clear <runner>]', description: 'Limit which models a runner may use', category: 'models' },
   { name: 'runners', usage: '/runners [<id> on|off]', description: `Enable or disable runners (${runnerIdList()})`, category: 'models' },
+  { name: 'login', usage: '/login [<runner>]', description: 'Sign the active coding agent in, or the one named, in this terminal', category: 'models' },
   { name: 'settings', usage: '/settings', description: 'Run settings: autonomy, supervisor, merging, autorun and parallel tasks', category: 'models' },
   { name: 'refresh', usage: '/refresh', description: 'Re-discover runners and model catalogs', category: 'models' },
 

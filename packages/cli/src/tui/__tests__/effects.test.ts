@@ -56,6 +56,7 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
     // fixtures on the developer's actual clipboard.
     hasBin: () => true,
     pipeToClipboard: vi.fn(),
+    login: vi.fn().mockResolvedValue({ ok: true }),
     writeTerminal: vi.fn(),
     reviveDaemon: vi.fn().mockResolvedValue(true),
     exit,
@@ -1029,6 +1030,76 @@ describe('planner choice', () => {
     expect(h.actions.filter((a) => a.type === 'notice')).toEqual([
       { type: 'notice', message: 'Planner: Claude Code · Claude Opus 5.5 · High effort' },
     ]);
+  });
+});
+
+describe('runner login', () => {
+  const loginEffect: Effect = { type: 'plannerLogin', command: ['claude', 'login'], label: 'Claude Code' };
+
+  it('runs the login command, re-probes the runners, then says the agent is signed in', async () => {
+    const order: string[] = [];
+    const h = harness({}, {
+      login: vi.fn(async () => {
+        order.push('login');
+        return { ok: true };
+      }),
+    });
+    h.api.getRunners.mockImplementation(async () => {
+      order.push('runners');
+      return { runners: [], orchestratorModel: '' };
+    });
+
+    await runEffect(loginEffect, h.deps);
+
+    expect(h.deps.login).toHaveBeenCalledWith(['claude', 'login']);
+    // The welcome line and the picker read the daemon's fresh probe, so the
+    // reload must follow the child rather than run before it.
+    expect(order).toEqual(['login', 'runners']);
+    expect(messageOf(h.actions, 'notice')).toBe('Claude Code is signed in.');
+  });
+
+  it('reloads the runners after a failed login too, and reports the message the login gave', async () => {
+    const h = harness({}, {
+      login: vi.fn(async () => ({ ok: false, message: 'claude exited with status 1 without finishing the login.' })),
+    });
+
+    await runEffect(loginEffect, h.deps);
+
+    expect(h.api.getRunners).toHaveBeenCalled();
+    expect(messageOf(h.actions, 'notice')).toBe('claude exited with status 1 without finishing the login.');
+  });
+
+  it('names the agent when a failed login gave no message', async () => {
+    const h = harness({}, { login: vi.fn(async () => ({ ok: false })) });
+
+    await runEffect(loginEffect, h.deps);
+
+    expect(messageOf(h.actions, 'notice')).toBe('Claude Code did not finish signing in.');
+  });
+
+  it('fails the effect when the login throws, so the runtime restores the terminal', async () => {
+    const h = harness({}, {
+      login: vi.fn(async () => {
+        throw new Error('spawn claude ENOENT');
+      }),
+    });
+
+    await runEffect(loginEffect, h.deps);
+
+    expect(messageOf(h.actions, 'failed')).toContain('spawn claude ENOENT');
+  });
+
+  it('never starts the login twice when the reload after it finds the server gone', async () => {
+    // `runEffect` retries a refused connection, and this effect is not one it
+    // may replay: the child already ran and the user may already be signed in.
+    const login = vi.fn(async () => ({ ok: true }));
+    const h = harness({ getRunners: vi.fn().mockRejectedValue(refused()) }, { login });
+
+    await runEffect(loginEffect, h.deps);
+
+    expect(login).toHaveBeenCalledTimes(1);
+    expect(messageOf(h.actions, 'notice')).toContain('Claude Code is signed in.');
+    expect(messageOf(h.actions, 'notice')).toContain('could not be refreshed');
   });
 });
 

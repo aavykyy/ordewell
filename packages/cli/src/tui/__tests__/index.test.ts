@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
+import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -14,9 +15,11 @@ const daemon = vi.hoisted(() => ({
 const apiClient = vi.hoisted(() => ({
   // Swapped per test to hold or shape the daemon's settings reply.
   getSettings: vi.fn(async (): Promise<Record<string, unknown>> => ({})),
+  // Swapped per test to shape the runner rows, auth included.
+  getRunners: vi.fn(async (): Promise<Record<string, unknown>> => ({ runners: [], orchestratorModel: '' })),
   ApiClient: vi.fn(function stub() {
     return {
-      getRunners: async () => ({ runners: [], orchestratorModel: '' }),
+      getRunners: () => apiClient.getRunners(),
       getSettings: () => apiClient.getSettings(),
       getModels: async () => ({ models: [] }),
     };
@@ -30,6 +33,8 @@ const fakeTerminal = vi.hoisted(() => {
     draw: vi.fn(),
     close: vi.fn(),
     reset: vi.fn(),
+    suspend: vi.fn(),
+    resume: vi.fn(),
   };
   return state;
 });
@@ -49,12 +54,14 @@ vi.mock('../terminal', () => ({
       draw: fakeTerminal.draw,
       close: fakeTerminal.close,
       reset: fakeTerminal.reset,
+      suspend: fakeTerminal.suspend,
+      resume: fakeTerminal.resume,
       setMouse: vi.fn(),
     };
   }),
 }));
 
-import { handleTui } from '../index';
+import { handleTui, type LoginSpawn } from '../index';
 
 type SignalName = 'SIGINT' | 'SIGTERM' | 'SIGHUP' | 'SIGCONT' | 'uncaughtException';
 const SIGNALS: SignalName[] = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGCONT', 'uncaughtException'];
@@ -73,6 +80,7 @@ describe('handleTui', () => {
     vi.clearAllMocks();
     fakeTerminal.draw.mockReset();
     apiClient.getSettings.mockImplementation(async () => ({}));
+    apiClient.getRunners.mockImplementation(async () => ({ runners: [], orchestratorModel: '' }));
     daemon.ensureDaemonOwned.mockImplementation(async () => ({ port: 4000, owned: true }));
     fakeTerminal.onKey = undefined;
     priorListeners = new Map(SIGNALS.map((s) => [s, listenersFor(s)]));
@@ -322,5 +330,88 @@ describe('handleTui', () => {
 
     await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(0));
     expect(daemon.stopDaemon).not.toHaveBeenCalled();
+  });
+
+  describe('/login', () => {
+    const signedOut = {
+      id: 'claude-code', name: 'Claude Code', enabled: true,
+      auth: { state: 'signed-out', loginCommand: ['claude', 'login'] },
+    };
+    const signedIn = {
+      ...signedOut,
+      auth: { state: 'signed-in', loginCommand: ['claude', 'login'] },
+    };
+
+    const frame = (): string =>
+      // eslint-disable-next-line no-control-regex
+      (fakeTerminal.draw.mock.calls.at(-1)![0] as string[]).join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+
+    const type = (text: string): void => {
+      for (const char of text) fakeTerminal.onKey!({ name: 'char', char });
+      fakeTerminal.onKey!({ name: 'enter' });
+    };
+
+    /** A `/login` typed at a TUI whose active planner is a signed-out Claude Code. */
+    async function signedOutTui(): Promise<{ child: EventEmitter; spawn: ReturnType<typeof vi.fn> }> {
+      apiClient.getSettings.mockImplementation(async () => ({ aiProvider: 'claude-code' }));
+      apiClient.getRunners.mockImplementation(async () => ({ runners: [signedOut], orchestratorModel: '' }));
+      const child = new EventEmitter();
+      const spawn = vi.fn(() => child);
+      vi.stubEnv('NO_COLOR', '1');
+      void handleTui([], { spawn: spawn as unknown as LoginSpawn });
+
+      await vi.waitFor(() => expect(frame()).toContain('Claude Code is not logged in'));
+      return { child, spawn };
+    }
+
+    it('hands the terminal to the command the runner declares, then takes it back and repaints sign-in', async () => {
+      const { child, spawn } = await signedOutTui();
+
+      type('/login');
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+
+      expect(fakeTerminal.suspend).toHaveBeenCalled();
+      expect(spawn).toHaveBeenCalledWith('claude', ['login'], expect.objectContaining({
+        stdio: 'inherit',
+        cwd: process.cwd(),
+      }));
+
+      // The daemon's fresh probe finds the account signed in; the reload after
+      // the child is what lets the red line clear without a /refresh.
+      apiClient.getRunners.mockImplementation(async () => ({ runners: [signedIn], orchestratorModel: '' }));
+      child.emit('exit', 0, null);
+
+      await vi.waitFor(() => expect(fakeTerminal.resume).toHaveBeenCalled());
+      await vi.waitFor(() => expect(frame()).toContain('Claude Code is signed in.'));
+      expect(frame()).not.toContain('Claude Code is not logged in');
+      vi.unstubAllEnvs();
+    });
+
+    it('takes the terminal back and names the command when the login cannot start', async () => {
+      const { child } = await signedOutTui();
+
+      type('/login');
+      await vi.waitFor(() => expect(fakeTerminal.suspend).toHaveBeenCalled());
+      child.emit('error', Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' }));
+
+      await vi.waitFor(() => expect(fakeTerminal.resume).toHaveBeenCalled());
+      await vi.waitFor(() => expect(frame()).toContain('Could not run claude'));
+      vi.unstubAllEnvs();
+    });
+
+    it('lets the login keep its own Ctrl-C, so cancelling it does not take the TUI down', async () => {
+      const { child } = await signedOutTui();
+
+      type('/login');
+      await vi.waitFor(() => expect(fakeTerminal.suspend).toHaveBeenCalled());
+      // The tty delivers Ctrl-C to the whole foreground group, the child
+      // included; the parent's handler must leave the login to it.
+      process.emit('SIGINT');
+      expect(exitSpy).not.toHaveBeenCalled();
+
+      child.emit('exit', 130, null);
+      await vi.waitFor(() => expect(fakeTerminal.resume).toHaveBeenCalled());
+      vi.unstubAllEnvs();
+    });
   });
 });

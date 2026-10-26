@@ -61,6 +61,11 @@ export interface EffectDeps {
   hasBin?: HasBinFn;
   /** Runs `command` with `text` on its stdin. Injected for the same reason. */
   pipeToClipboard?(command: string, text: string): void;
+  /**
+   * Hands the terminal to a coding agent's own login command and resolves
+   * when the child exits. Injected so no test starts a real agent.
+   */
+  login(command: readonly string[]): Promise<{ ok: boolean; message?: string }>;
   /** Writes raw bytes to the terminal — the OSC 52 fallback's only route out. */
   writeTerminal(data: string): void;
   exit(): void;
@@ -447,6 +452,32 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       await loadRunners(deps);
       dispatch({ type: 'notice', message: `${effect.runner} ${effect.enabled ? 'enabled' : 'disabled'}.` });
       return;
+
+    // The child owns the terminal for as long as it runs (`deps.login` hands it
+    // over and takes it back); the answer only reaches the transcript once the
+    // probes have been asked again, so the welcome line and picker agree.
+    case 'plannerLogin': {
+      const result = await deps.login(effect.command);
+      // The login has already run, so a reload that cannot reach the daemon must
+      // not escape to `runEffect`'s connection-refused retry: that would hand
+      // the tty to the same command a second time. Say the list is stale and
+      // leave the revival to a later /refresh.
+      let refreshed = true;
+      try {
+        await loadRunners(deps);
+      } catch (err) {
+        if (!isConnectionRefused(err)) throw err;
+        refreshed = false;
+      }
+      const message = result.ok
+        ? `${effect.label} is signed in.`
+        : result.message ?? `${effect.label} did not finish signing in.`;
+      dispatch({
+        type: 'notice',
+        message: refreshed ? message : `${message} The runner list could not be refreshed: the server is not answering.`,
+      });
+      return;
+    }
 
     case 'setRunners': {
       // One at a time: each request rewrites the same stored list, so firing

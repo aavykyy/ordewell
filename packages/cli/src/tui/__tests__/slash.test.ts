@@ -25,7 +25,7 @@ describe('SLASH_COMMANDS', () => {
   // Feature-parity contract with the VS Code extension (issue #24). Every
   // capability the webview exposes must be reachable from the TUI.
   const REQUIRED = [
-    'help', 'planner', 'key', 'allowlist', 'refresh',
+    'help', 'planner', 'key', 'allowlist', 'refresh', 'login',
     'sessions', 'new', 'save', 'load', 'delete',
     'runners', 'settings',
     // No 'plan': typing the goal starts planning, so an alias would only

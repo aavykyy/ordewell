@@ -43,6 +43,7 @@ async function settle(state: TuiState, effect: Effect, api: Partial<OrdewellApi>
     reviveDaemon: () => Promise.resolve(false),
     setMouseCapture: () => {},
     writeTerminal: () => {},
+    login: async () => ({ ok: true }),
     exit: () => {},
     ...over,
   };

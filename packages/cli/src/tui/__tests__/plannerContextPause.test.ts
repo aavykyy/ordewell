@@ -81,7 +81,9 @@ describe('/compact retry', () => {
         streamPlanning: vi.fn().mockReturnValue({ close: vi.fn() }),
         followSession: vi.fn().mockReturnValue({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: vi.fn() }),
       } as unknown as OrdewellApi,
-      workspace: '/ws', port: 3742, dispatch, newSessionId: () => 's2', setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true, exit: vi.fn(),
+      workspace: '/ws', port: 3742, dispatch, newSessionId: () => 's2', setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true,
+      login: async () => ({ ok: true }),
+      exit: vi.fn(),
       reviveDaemon: vi.fn(), setMouseCapture: vi.fn(), writeTerminal: vi.fn(),
     };
 
