@@ -31,6 +31,7 @@ import type {
   ResolveConflictResponse,
   RewindTarget,
   RewindTargetsResponse,
+  AccountLimitsFrame,
   RunSnapshotFrame,
   RunnersResponse,
   SessionFrame,
@@ -160,7 +161,7 @@ export type { SessionMeta };
  * broadcast carries its place in the session's stream, for a client holding
  * several sockets to tell one broadcast's copies from two broadcasts.
  */
-export type WsEvent = SessionFrame | RunSnapshotFrame;
+export type WsEvent = SessionFrame | RunSnapshotFrame | AccountLimitsFrame;
 
 /** A held subscription to a session (`followSession`). `ended` is `'lost'` unless `close` ended it. */
 export interface SessionFollow {

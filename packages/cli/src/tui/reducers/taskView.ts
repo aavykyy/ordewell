@@ -1,3 +1,4 @@
+import { observeTaskServedModel } from '../accountLimits';
 import { EMPTY_TASK_LOG_FOLLOW, followTaskLog, resumeLabel, runnerToolSubject, taskRowView, truncateCheckpointSummary, type ApprovalDecision } from '@ordewell/core';
 import { commit } from '../editor';
 import type { Key } from '../keys';
@@ -58,6 +59,7 @@ export function taskLogAbandoned(state: TuiState): TuiState {
 }
 
 export function taskLogArrived(state: TuiState, action: Extract<Action, { type: 'taskLog' }>): TuiState {
+  state = observeTaskServedModel(state, action);
   const tv = state.taskView;
   if (!tv || tv.taskId !== action.taskId) return state;
   const next = followTaskLog(tv, { ...action, type: 'live' });
@@ -93,6 +95,7 @@ export function announceCheckpoint(state: TuiState, action: Extract<Action, { ty
 }
 
 export function taskLogLoaded(state: TuiState, action: Extract<Action, { type: 'taskLogLoaded' }>): TuiState {
+  state = observeTaskServedModel(state, action);
   const tv = state.taskView;
   if (!tv || tv.taskId !== action.taskId) return state;
   return { ...state, taskView: clampQueueIndex({ ...tv, ...followTaskLog(tv, { ...action, type: 'loaded' }) }) };

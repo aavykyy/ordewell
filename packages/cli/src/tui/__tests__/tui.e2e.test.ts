@@ -314,7 +314,7 @@ describe('TUI end to end', () => {
     // Pinned to the chat pane's last row: above the status row, which sits above
     // the composer's empty band row and then its text.
     const input = chat.findIndex((line, i) => i > header && line.startsWith('❯'));
-    expect(chat[input - 3]).toBe('ctx 36k (18%)');
+    expect(chat[input - 3]).toBe('Planner ctx 36k (18%)');
   });
 
   it('ctrl+o raw bytes toggle full detail on the command rows, with the footer hint following', async () => {
@@ -1062,6 +1062,8 @@ describe('TUI end to end', () => {
     };
 
     const h = harness();
+    h.output.columns = 140;
+    h.output.emit('resize');
     h.daemon.mocks.startConversation.mockImplementationOnce(async () => {
       const emit = h.daemon.emitPlanning;
       emit({ type: 'planner_turn_started', turnId: 'p1', prompt: 'Build the login flow' });
@@ -1075,7 +1077,7 @@ describe('TUI end to end', () => {
     h.type('\r');
     await vi.waitFor(() => expect(h.screen()).toContain('Add the login route'));
 
-    expect(h.transcript()).toContain('ctx 61k (6%) · ≈$7.89 API-equivalent');
+    expect(h.transcript()).toContain('Planner ctx 61k (6%) · ≈$7.89 API-equivalent');
     h.daemon.emitExecution({ type: 'status_update', tasks: [
       { id: 't1', status: 'completed', attemptUsage: attempts.t1 },
       { id: 't2', status: 'completed', attemptUsage: attempts.t2 },
@@ -1119,7 +1121,7 @@ describe('TUI end to end', () => {
     h.type('/load saved-1');
     h.type('\r');
     await vi.waitFor(() => expect(h.screen()).toContain('Loaded "Build the login flow".'));
-    expect(h.transcript()).toContain('ctx 61k (6%) · ≈$7.89 API-equivalent');
+    expect(h.transcript()).toContain('Planner ctx 61k (6%) · ≈$7.89 API-equivalent');
     expect(h.screen()).toContain('Tasks total: ≈$2.35 · codex reports no cost');
     h.type('/open t1');
     h.type('\r');

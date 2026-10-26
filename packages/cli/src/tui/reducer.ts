@@ -64,6 +64,9 @@ export function reduce(state: TuiState, action: Action): Step {
 
 function reduceAction(state: TuiState, action: Action): Step {
   switch (action.type) {
+    case 'accountLimits':
+      return stale(state, action.sessionId) ? step(state) : step({ ...state, accountLimits: action.limits });
+
     case 'key':
       return handleKey(state, action.key);
 
@@ -71,7 +74,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // (`task-1`), so nothing of the last one's — a merge gate, a checkpoint, its
     // tasks — may carry over into this.
     case 'sessionStarted':
-      return step(withRun({ ...state, sessionId: action.sessionId, goal: action.goal, taskView: null, status: 'idle' }, EMPTY_RUN));
+      return step(withRun({ ...state, sessionId: action.sessionId, goal: action.goal, accountLimits: [], servedModels: {}, taskView: null, status: 'idle' }, EMPTY_RUN));
 
     // A loaded session is a different one: the turn the old one had out, the
     // prompts held behind it and a stop armed against it are not this one's.
@@ -80,6 +83,8 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'sessionLoaded':
       return step(withRun({
         ...state,
+        accountLimits: [],
+        servedModels: {},
         sessionId: action.sessionId,
         goal: action.goal,
         taskView: null,
@@ -103,6 +108,8 @@ function reduceAction(state: TuiState, action: Action): Step {
       // and the turn gate it held with it.
       return step(withRun({
         ...state,
+        accountLimits: [],
+        servedModels: {},
         sessionId: null,
         goal: '',
         taskView: null,

@@ -1,5 +1,5 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type AccountLimitSnapshot, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { SaveSettingsEffect } from './reducers/settings';
 import type { StepperState } from './reducers/stepper';
@@ -363,6 +363,8 @@ export interface TuiState {
    * `SessionMessage` and every line the TUI adds itself as a `LocalEntry`.
    */
   conversation: ConversationView;
+  accountLimits: readonly AccountLimitSnapshot[];
+  servedModels: Record<string, { attempt: number; model?: string; assignment?: string }>;
   /** Set while the chat pane is drawing a structured task's log; null is the planner chat. */
   taskView: TaskLogState | null;
   /** The planner turn the conversation has open, and the one the user stopped — core's stop rule. */
@@ -679,6 +681,8 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
   return {
     editor: emptyEditor(),
     conversation: EMPTY_CONVERSATION,
+    accountLimits: [],
+    servedModels: {},
     taskView: null,
     turnGate: NO_TURN,
     detailAll: false,

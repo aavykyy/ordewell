@@ -6,7 +6,7 @@ import type { DiscoveredModel } from './models/Task';
 import type { PlannerNotReady } from './services/plannerReadiness';
 import type { SessionHeld } from './services/sessionLease';
 import type { PendingApproval } from './services/PendingApprovals';
-import type { RunView, SessionMessage, SessionNotice, SurfacePlan, SurfacePlanState } from './services/SessionMessage';
+import type { AccountLimitsMessage, RunView, SessionMessage, SessionNotice, SurfacePlan, SurfacePlanState } from './services/SessionMessage';
 import type { ConversationCompaction, RewindTarget } from './services/PlannerConversation';
 import type { PlannerModelRecall } from './services/PlannerModelMemory';
 import type { OrchestratorOption } from './services/ProviderRouting';
@@ -332,7 +332,8 @@ export type ApprovalRequestMessage = Extract<SessionMessage, { type: 'approval_r
  * so a client that joins mid-run has the run view before the next update —
  * the held edit's preview included — and the planner's approval requests
  * still waiting, which no later frame would announce again. `seq` is the last
- * broadcast it accounts for. Every frame after it is a {@link SessionFrame}.
+ * broadcast it accounts for. Session broadcasts are {@link SessionFrame}s;
+ * host-owned account limits have their own snapshot and revision.
  */
 export interface RunSnapshotFrame extends Partial<StreamStamp> {
   type: 'run_snapshot';
@@ -340,4 +341,11 @@ export interface RunSnapshotFrame extends Partial<StreamStamp> {
   view: RunView;
   /** Absent from a daemon older than the field: nothing is known, not "none waiting". */
   approvals?: ApprovalRequestMessage[];
+}
+
+/** Independent of run snapshot stamps: quota reads have their own revision. */
+export interface AccountLimitsFrame extends AccountLimitsMessage {
+  sessionId: string;
+  stream: string;
+  revision: number;
 }

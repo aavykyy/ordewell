@@ -40,6 +40,8 @@ export function createWsHandler(pool: OrchestratorPool) {
     // broadcast it already holds.
     const compaction = pool.plannerCompaction(sessionId);
     if (compaction) ws.send(JSON.stringify(compaction satisfies SessionFrame));
+    // Subscribing also greets with host-owned account limits, independently
+    // of the run snapshot above, even when the host knows none yet.
     pool.subscribe(sessionId, ws);
   });
 

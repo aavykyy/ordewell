@@ -1,3 +1,4 @@
+import { taskServedModel } from './accountLimits';
 import { firstGrapheme, nextBoundary, pad, previousBoundary, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
 import { cursorInLines, type CursorPosition } from './editor';
 import { assignmentFlagText, checkpointCardLines, conversationLines, tokenLine } from './blocks';
@@ -10,7 +11,7 @@ import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { assignedRunnerOf, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
+import { accountLimitsText, contextMeterText, accountLimitsOf, assignedRunnerOf, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -495,7 +496,7 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   // The usage rows are the session's (or the opened task's), not lines of the
   // transcript: they keep the pane's bottom rows while everything above them
   // scrolls — unless the pane is a single row, which belongs to the conversation.
-  const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, cols) : [...plannerPauseRow(state, cols), ...plannerResendRow(state, cols), ...tokenRow(blocks, cols)];
+  const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, cols) : [...plannerPauseRow(state, cols), ...plannerResendRow(state, cols), ...tokenRow(state, blocks, cols)];
   // The per-model rows are the expendable part: they yield to the transcript
   // so a short pane never trades its last conversation row for a breakdown.
   const footer = usage.slice(0, Math.max(1, rows - taskHeader.length - 1));
@@ -521,8 +522,10 @@ function plannerPauseRow(state: TuiState, cols: number): string[] {
   return [style.yellow(truncate(`⏸ Planner paused: its context does not fit ${plannerPause.model}'s window · /compact retry attempts recovery · /stop drops the turn`, cols))];
 }
 
-const tokenRow = (blocks: readonly DisplayBlock[], cols: number): string[] => {
-  const line = tokenLine(blocks, cols);
+const tokenRow = (state: TuiState, blocks: readonly DisplayBlock[], cols: number): string[] => {
+  const runner = runnerForProvider(state.plannerProvider);
+  const limits = accountLimitsOf(state.accountLimits, runner ?? undefined, state.orchestratorModel);
+  const line = tokenLine(blocks, cols, limits);
   return line ? [line] : [];
 };
 
@@ -534,7 +537,17 @@ const tokenRow = (blocks: readonly DisplayBlock[], cols: number): string[] => {
  * — has the log's own last usage block there instead, and still the task total.
  */
 function taskUsageFooter(state: TuiState, tv: NonNullable<TuiState['taskView']>, cols: number): string[] {
-  return logHeader(state, tv).usage.map((row) => style.grey(truncate(row.text, cols)));
+  const task = findTask(state.tasks, tv.taskId);
+  const limits = accountLimitsOf(state.accountLimits, task && assignedRunnerOf(task), task && taskServedModel(state, task))
+    .map(accountLimitsText).filter(Boolean).join(' · ');
+  const rows = logHeader(state, tv).usage;
+  const text = rows.map((row, index) => {
+    if (!limits || index !== rows.length - 1) return row.text;
+    const context = contextMeterText(row.contextFill);
+    return context ? row.text.replace(context, `${context} · ${limits}`) : `${limits} · ${row.text}`;
+  });
+  if (text.length === 0 && limits) text.push(limits);
+  return text.map((row) => style.grey(truncate(sanitize(row).replace(/\n/g, ' '), cols)));
 }
 
 /**

@@ -104,7 +104,7 @@ function replyKey(content: string, timestamp?: string): string {
 }
 
 /** A broadcast this client may have had more than once. */
-type Broadcast = Exclude<WsEvent, RunSnapshotFrame>;
+type Broadcast = Exclude<WsEvent, RunSnapshotFrame | { type: 'account_limits' }>;
 
 function stampOf(frame: Partial<StreamStamp>): StreamStamp | null {
   return frame.stream !== undefined && frame.seq !== undefined ? { stream: frame.stream, seq: frame.seq } : null;
@@ -319,6 +319,7 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let holdingSnapshot = false;
   let heldSnapshot: RunSnapshotFrame | null = null;
+  let limitsPosition: { stream: string; revision: number } | null = null;
   let heldAfter: (() => void)[] = [];
 
   const flush = (): void => {
@@ -411,6 +412,13 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
     }
     if (holdingSnapshot) {
       heldAfter.push(() => receive(kind, id, event));
+      return;
+    }
+    if (event.type === 'account_limits') {
+      if (event.sessionId !== sessionId) return;
+      if (limitsPosition?.stream === event.stream && event.revision <= limitsPosition.revision) return;
+      limitsPosition = { stream: event.stream, revision: event.revision };
+      dispatch({ type: 'accountLimits', limits: event.limits, sessionId });
       return;
     }
     if (isStreamed(event)) {

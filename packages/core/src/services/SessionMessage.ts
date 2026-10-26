@@ -1,3 +1,4 @@
+import type { AccountLimitSnapshot } from '../models/AccountLimits';
 import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, PendingPlanTurn, PlannerCompaction, ReplyRun, ResearchStep, RunnerId, RunSettings, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
 import type { SessionBilling, AttemptUsage, ContextFill, ModelUsage, PlanUsage, UsageTotals } from '../models/Usage';
 import type { ExecutionRecord } from '../models/Execution';
@@ -608,4 +609,10 @@ export function truncateCheckpointSummary(summary: string): string {
   const firstLine = summary.split('\n')[0].trim();
   if (firstLine.length <= CHECKPOINT_TRUNCATE_LENGTH) return firstLine;
   return firstLine.slice(0, CHECKPOINT_TRUNCATE_LENGTH - 1) + '…';
+}
+
+/** Host-owned live data: never part of a Session's transcript or saved plan. */
+export interface AccountLimitsMessage {
+  type: 'account_limits';
+  limits: readonly AccountLimitSnapshot[];
 }
