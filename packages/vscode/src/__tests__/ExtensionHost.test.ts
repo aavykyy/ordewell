@@ -11,6 +11,7 @@ import { RUN_SETTINGS_DEFAULTS,
   type ConversationRequest, type ConversationTurn,
   PendingApprovals, approvalScopes, type ApprovalRequestMessage,
   AccountLimitMonitor, type AccountLimitCollector, type AccountLimitReading,
+  type IIsolationPreview, type IsolationPreview,
 } from '@ordewell/core';
 import { ChatViewProvider as RealChatViewProvider } from '../providers/ChatViewProvider';
 import { createExtension, type ExtensionServices } from '../ExtensionHost';
@@ -19,7 +20,7 @@ import type { SecretStore, ApiProvider } from '../adapters/SecretStore';
 import type { VsCodeConfig } from '../adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from '../adapters/VsCodeNotification';
-import type { WebviewToHost } from '../shared/protocol';
+import type { HostToWebview, WebviewToHost } from '../shared/protocol';
 import { __panels, __resetPanels, commands, createFakeWebviewPanel, window } from '../test/vscode.mock';
 
 const models: DiscoveredModel[] = [
@@ -73,6 +74,7 @@ function fakeChat() {
     sendTaskOutput: vi.fn(),
     reveal: vi.fn(),
     setAccountLimits: vi.fn(),
+    setIsolationPreview: vi.fn(),
   };
   return { messages, provider };
 }
@@ -80,6 +82,7 @@ function fakeChat() {
 function fakeVscodeApi() {
   const showWarningMessage = vi.fn();
   const windowStateListeners: Array<(state: { focused: boolean }) => void> = [];
+  const folderListeners: Array<() => void> = [];
   const api = {
     window: {
       state: { focused: true },
@@ -99,7 +102,7 @@ function fakeVscodeApi() {
       registerCommand: vi.fn(() => ({ dispose: vi.fn() })),
     },
     workspace: {
-      onDidChangeWorkspaceFolders: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidChangeWorkspaceFolders: vi.fn((listener: () => void) => { folderListeners.push(listener); return { dispose: vi.fn() }; }),
     },
     QuickInputButtons: { Back: {} },
     ProgressLocation: { Notification: 15 },
@@ -109,6 +112,8 @@ function fakeVscodeApi() {
     showWarningMessage,
     /** The window gained or lost focus. */
     focus: (focused: boolean) => { for (const listener of windowStateListeners) listener({ focused }); },
+    /** A folder was added to or removed from the window's workspace. */
+    foldersChanged: () => { for (const listener of folderListeners) listener(); },
   };
 }
 
@@ -243,6 +248,7 @@ function harness(overrides: {
   /** A settings file of the test's own, in place of the fake that holds nothing. */
   settingsService?: SettingsService;
   sessionFactory?: ExtensionServices['sessionFactory'];
+  isolationPreview?: IIsolationPreview;
 } = {}) {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-host-'));
   const vscodeApi = fakeVscodeApi();
@@ -276,6 +282,7 @@ function harness(overrides: {
     chatProvider: overrides.chatProvider ?? chat.provider as unknown as ChatViewProvider,
     sessionFactory: (deps) => { sessionDeps.current = deps; return overrides.sessionFactory?.(deps) ?? session.session; },
     ...(overrides.accountLimits ? { accountLimits: overrides.accountLimits } : {}),
+    ...(overrides.isolationPreview ? { isolationPreview: overrides.isolationPreview } : {}),
   };
 
   return {
@@ -791,6 +798,7 @@ describe('the task skill chips in a repo group', () => {
 /** The chat as VS Code hosts it, on a webview that can be reloaded: what it was sent, and a way to talk back. */
 function liveChat() {
   const provider = new RealChatViewProvider({ toString: () => 'file:///ext' } as unknown as vscode.Uri);
+  const posted: HostToWebview[] = [];
   let receive: (msg: WebviewToHost) => void = () => {};
   const open = (): void => {
     provider.resolveWebviewView({
@@ -799,13 +807,15 @@ function liveChat() {
       webview: {
         options: {}, html: '', cspSource: 'vscode-resource:', asWebviewUri: (u: unknown) => u,
         onDidReceiveMessage: (fn: (msg: WebviewToHost) => void) => { receive = fn; return { dispose() {} }; },
-        postMessage: () => Promise.resolve(true),
+        postMessage: (msg: HostToWebview) => { posted.push(msg); return Promise.resolve(true); },
       },
     } as unknown as vscode.WebviewView, {} as never, {} as never);
   };
   open();
   return {
     provider,
+    /** Everything the host has posted to the webview, in order. */
+    posted,
     /** The webview is torn down and comes back, as on a window reload: it says `ready`. */
     reload: () => { open(); receive({ type: 'ready' }); },
     send: (msg: WebviewToHost) => receive(msg),
@@ -1279,5 +1289,161 @@ describe('a runner pill click persists to the one saved list', () => {
       ]);
       expect(p.saved()).toEqual(['claude-code']);
     });
+  });
+});
+
+
+describe('the repositories and branches the startup view shows', () => {
+  let h: ReturnType<typeof harness>;
+  let reads: Array<{ root: string; answer: (preview: IsolationPreview) => void }>;
+  const ready = (branch: string): IsolationPreview => ({
+    status: 'ready', shared: [], repos: [{ path: '.', head: { kind: 'branch', branch, commit: 'a1b2c3d' }, dirty: false }],
+  });
+  const sent = () => h.chat.provider.setIsolationPreview.mock.calls.map(([preview]) => preview);
+
+  beforeEach(() => {
+    reads = [];
+    h = harness({
+      isolationPreview: { preview: (root) => new Promise((resolve) => { reads.push({ root, answer: resolve }); }) },
+    });
+  });
+  afterEach(() => {
+    h.host.dispose();
+    fs.rmSync(h.workspace, { recursive: true, force: true });
+  });
+
+  it('is read for the workspace at start without holding the start up, and sent once git has answered', async () => {
+    await h.host.start();
+
+    expect(reads.map((r) => r.root)).toEqual([h.workspace]);
+    expect(sent()).toEqual([]);
+
+    reads[0].answer(ready('main'));
+    await vi.waitFor(() => expect(sent()).toEqual([ready('main')]));
+  });
+
+  it('does not hold the model discovery or the composer behind git either', async () => {
+    await h.host.start();
+
+    // Discovery has finished and the first screen's other state is out, with git still unanswered.
+    expect(h.chat.provider.setModelsByRunner).toHaveBeenCalled();
+    expect(reads).toHaveLength(1);
+  });
+
+  it('starts over when the webview connects: the old answer is cleared, then the current one sent', async () => {
+    await h.host.start();
+    reads[0].answer(ready('main'));
+    await vi.waitFor(() => expect(sent()).toHaveLength(1));
+
+    h.chat.messages.fire({ type: 'ready' });
+
+    expect(sent()).toEqual([ready('main'), null]);
+    expect(reads).toHaveLength(2);
+    reads[1].answer(ready('feature'));
+    await vi.waitFor(() => expect(sent()).toEqual([ready('main'), null, ready('feature')]));
+  });
+
+  it.each([
+    ['the configuration changes', (hh: typeof h) => { for (const listener of hh.config.listeners) listener(); }],
+    ['the window regains focus', (hh: typeof h) => { hh.vscodeApi.focus(false); hh.vscodeApi.focus(true); }],
+  ])('is read again when %s, replacing the branch shown without blanking it first', async (_when, trigger) => {
+    await h.host.start();
+    reads[0].answer(ready('main'));
+    await vi.waitFor(() => expect(sent()).toHaveLength(1));
+
+    trigger(h);
+
+    expect(reads).toHaveLength(2);
+    reads[1].answer(ready('feature'));
+    await vi.waitFor(() => expect(sent()).toEqual([ready('main'), ready('feature')]));
+  });
+
+  it('does not read when the window loses focus', async () => {
+    await h.host.start();
+
+    h.vscodeApi.focus(false);
+
+    expect(reads).toHaveLength(1);
+  });
+
+  it('drops the previous workspace\'s answer when the folders change, and a late reply from it never shows', async () => {
+    await h.host.start();
+    reads[0].answer(ready('main'));
+    await vi.waitFor(() => expect(sent()).toHaveLength(1));
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-host-other-'));
+    try {
+      // The first read is still out when the folders change.
+      h.vscodeApi.foldersChanged();
+      expect(sent()).toEqual([ready('main'), null]);
+      vi.spyOn(h.services.fsAdapter, 'getWorkspaceRoot').mockReturnValue(other);
+      h.vscodeApi.foldersChanged();
+      expect(reads.map((r) => r.root)).toEqual([h.workspace, h.workspace, other]);
+
+      reads[1].answer(ready('old-workspace-branch'));
+      await Promise.resolve();
+      expect(sent()).toEqual([ready('main'), null, null]);
+      reads[2].answer(ready('other-branch'));
+      await vi.waitFor(() => expect(sent()).toEqual([ready('main'), null, null, ready('other-branch')]));
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it('shows the newest read when an older one answers last', async () => {
+    await h.host.start();
+    h.vscodeApi.focus(true);
+    expect(reads).toHaveLength(2);
+
+    reads[1].answer(ready('newer'));
+    await vi.waitFor(() => expect(sent()).toEqual([ready('newer')]));
+    reads[0].answer(ready('older'));
+    await Promise.resolve();
+
+    expect(sent()).toEqual([ready('newer')]);
+  });
+
+  it('is sent as a failed read, never as no repository, when the look itself rejects', async () => {
+    h.host.dispose();
+    h = harness({ isolationPreview: { preview: () => Promise.reject(new Error('git exploded')) } });
+
+    await h.host.start();
+
+    await vi.waitFor(() => expect(sent()).toEqual([{ status: 'failed', repos: [], shared: [], error: 'git exploded' }]));
+  });
+
+  it('is not asked for when the host has no isolation look to give', async () => {
+    const plain = harness();
+
+    await plain.host.start();
+
+    expect(plain.chat.provider.setIsolationPreview).not.toHaveBeenCalled();
+    plain.host.dispose();
+    fs.rmSync(plain.workspace, { recursive: true, force: true });
+  });
+});
+
+describe('the repositories notice on a webview that is reloaded', () => {
+  it('reaches the reloaded webview as null, then the current answer', async () => {
+    const chat = liveChat();
+    const answers: Array<(p: IsolationPreview) => void> = [];
+    const h = harness({ chatProvider: chat.provider, isolationPreview: { preview: () => new Promise((resolve) => { answers.push(resolve); }) } });
+    try {
+      await h.host.start();
+      const preview: IsolationPreview = { status: 'no-repo', repos: [], shared: [] };
+      answers[0](preview);
+      await vi.waitFor(() => expect(chat.posted).toContainEqual({ type: 'isolationPreview', preview }));
+      chat.posted.length = 0;
+
+      chat.reload();
+      answers[1]({ status: 'disabled', repos: [], shared: [] });
+
+      await vi.waitFor(() => expect(chat.posted.filter((m) => m.type === 'isolationPreview')).toEqual([
+        { type: 'isolationPreview', preview: null },
+        { type: 'isolationPreview', preview: { status: 'disabled', repos: [], shared: [] } },
+      ]));
+    } finally {
+      h.host.dispose();
+      fs.rmSync(h.workspace, { recursive: true, force: true });
+    }
   });
 });

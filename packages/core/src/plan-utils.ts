@@ -13,6 +13,8 @@ export { isFileEditTool } from './services/harness/agentTools';
 export { truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, IDLE_ACTIVITY } from './services/SessionMessage';
 export { capConflictFiles } from './services/conflictFiles';
 export { describeMergeResult, mergeOutcome, blockNotice, blockNotices, repairedLanded, repairedNotice } from './services/mergeResultNotice';
+export { describeIsolationPreview } from './services/isolationPreviewText';
+export type { IsolationPreviewNotice } from './services/isolationPreviewText';
 export { handoffBaseLine, handoffBranchName, isRepoGroup, repoBaseLine, repoResultLines } from './services/mergeWording';
 export type { HandoffForkRepo } from './services/mergeWording';
 export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, type PlanBlocks } from './services/blocking';

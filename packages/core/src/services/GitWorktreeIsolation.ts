@@ -6,12 +6,14 @@ import * as path from 'path';
 import type { IConfig } from '../interfaces/IConfig';
 import type {
   IsolationAvailability,
+  IIsolationPreview,
   IsolationHandoff,
   IsolationInactiveReason,
   IsolationMergeBlock,
   IsolationMergeBlockReason,
   IsolationMergeResult,
   IsolationOutcome,
+  IsolationPreview,
   IsolationPruneResult,
   IsolationRemoval,
   IsolationRepo,
@@ -22,6 +24,8 @@ import type {
   IWorktreeIsolation,
   PreparedTask,
   PrepareIntent,
+  PreviewRepo,
+  RepoHead,
   PreservedWork,
   RepairEvidence,
   SetupFailure,
@@ -38,7 +42,7 @@ import { IsolationLocks } from './isolationLocks';
 import { bootstrap, installDirs, isEnvFile, lexists, LINKED_ARTIFACTS, listDir, SetupCommandError } from './worktreeBootstrap';
 import { linkPath } from './worktreeLink';
 import { landingMessage, messageArgs, runMergeMessage, type LandingCommit, type LandingSubject } from './landingMessage';
-import { childDirs, groupPaths, hasGitEntry } from './repoGroup';
+import { childDirs, groupPaths, hasGitEntry, workspaceRepoGroup } from './repoGroup';
 
 export type { GitExecFn } from './gitExec';
 
@@ -76,6 +80,11 @@ const PRESERVED_BRANCHES = 'ordewell-preserved';
 const NESTED_REPO_DEPTH = 2;
 const GITLINK_MODE = '160000';
 
+// A look that runs on every window focus must leave the repository as it found
+// it: `status` would otherwise refresh the index under a lock a commit in the
+// editor then trips over, and run the user's fsmonitor hook.
+const READ_ONLY = ['--no-optional-locks', '-c', 'core.fsmonitor=false'];
+
 /** One repo's share of a worktree about to be removed, as {@link GitWorktreeIsolation.preserve} reads it; its rescue commit is named from the subject. */
 interface RemovalTarget extends LandingSubject {
   /** Absent once the worktree is gone, or for a branch no worktree has. */
@@ -93,7 +102,7 @@ interface RemovalTarget extends LandingSubject {
  * the repositories found inside a lone repository, which cannot be isolated
  * with it and are shared live instead; empty for a folder group.
  */
-type GroupScan = { paths: string[]; nested: string[] } | { refused: IsolationAvailability };
+type GroupScan = { paths: string[]; nested: string[]; toplevel?: string } | { refused: IsolationAvailability };
 
 interface QueuedMerge {
   task: Task;
@@ -272,6 +281,64 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   /**
+   * The same discovery `isActive` and `startRun` use, read for display: which
+   * repositories a run would isolate and where each stands now. Reads only,
+   * and takes no turn behind a run's own git work.
+   */
+  async preview(workspaceRoot: string): Promise<IsolationPreview> {
+    try {
+      return await this.previewGroup(workspaceRoot);
+    } catch (err) {
+      return { status: 'failed', repos: [], shared: [], error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  private async previewGroup(workspaceRoot: string): Promise<IsolationPreview> {
+    const enabled = this.deps.config.worktreeIsolation;
+    if (!(await this.tryGit(undefined, ['--version'])).ok) {
+      // Without git the group is read off the files alone; nothing about any repo is known.
+      const repos = workspaceRepoGroup(workspaceRoot, this.deps.config.workspaceRepos)
+        .map((repoPath): PreviewRepo => ({ path: repoPath, head: { kind: 'unknown' } }));
+      return { status: enabled ? 'git-missing' : 'disabled', repos, shared: [] };
+    }
+
+    const scan = await this.scanGroup(workspaceRoot);
+    if ('refused' in scan) return { status: enabled ? 'no-repo' : 'disabled', repos: [], shared: [] };
+
+    const repos: PreviewRepo[] = [];
+    for (const repoPath of scan.paths) {
+      const root = repoRootOf(workspaceRoot, repoPath);
+      const head = await this.headOf(root);
+      const repo: PreviewRepo = { path: repoPath, head };
+      if (scan.toplevel !== undefined) {
+        const top = path.relative(workspaceRoot, scan.toplevel).split(path.sep).join('/');
+        if (top !== '') repo.top = top;
+      }
+      if (enabled && (head.kind === 'branch' || head.kind === 'detached')) {
+        const tracked = await this.trackedChanges(root, { readOnly: true });
+        if (tracked !== null) repo.dirty = tracked;
+      }
+      repos.push(repo);
+    }
+
+    if (!enabled) return { status: 'disabled', repos, shared: [] };
+    const unreadable = repos.find((r) => r.head.kind === 'unknown' || (r.head.kind !== 'unborn' && r.dirty === undefined));
+    if (unreadable) return { status: 'failed', repos, shared: [], error: `git could not be read in ${unreadable.path === SELF_REPO ? 'the workspace' : unreadable.path}` };
+    const committed = repos.filter((r) => r.head.kind !== 'unborn').map((r) => r.path);
+    if (committed.length === 0) return { status: 'no-commits', repos, shared: [] };
+    const shared = committed.includes(SELF_REPO) ? scan.nested : this.sharedPaths(workspaceRoot, committed);
+    return { status: repos.some((r) => r.dirty) ? 'dirty' : 'ready', repos, shared };
+  }
+
+  private async headOf(root: string): Promise<RepoHead> {
+    const branch = (await this.tryGit(root, [...READ_ONLY, 'symbolic-ref', '--short', '-q', 'HEAD'])).stdout.trim();
+    const commit = await this.tryGit(root, [...READ_ONLY, 'rev-parse', '--verify', '-q', '--short', 'HEAD']);
+    if (commit.ok) return branch ? { kind: 'branch', branch, commit: commit.stdout.trim() } : { kind: 'detached', commit: commit.stdout.trim() };
+    // `symbolic-ref` answers for a branch with no commit; an unreadable repository answers neither.
+    return branch ? { kind: 'unborn', branch } : { kind: 'unknown' };
+  }
+
+  /**
    * A workspace inside a repository is a group of one at `.`, and any
    * repositories nested in it are shared live. A folder that is not forms a
    * group from `workspaceRepos` when set, otherwise from the repositories
@@ -280,7 +347,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   private async scanGroup(workspaceRoot: string): Promise<GroupScan> {
     // cwd may not exist; any failure here is "not a repository" as far as the caller can act on it.
     const toplevel = await this.tryGit(workspaceRoot, ['rev-parse', '--show-toplevel']);
-    if (toplevel.ok) return { paths: [SELF_REPO], nested: await this.nestedRepos(workspaceRoot, toplevel.stdout.trim()) };
+    if (toplevel.ok) return { paths: [SELF_REPO], nested: await this.nestedRepos(workspaceRoot, toplevel.stdout.trim()), toplevel: toplevel.stdout.trim() };
     const paths = groupPaths(workspaceRoot, this.deps.config.workspaceRepos);
     return paths.length > 0 ? { paths, nested: [] } : { refused: { active: false, reason: 'not-git' } };
   }
@@ -294,8 +361,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   /** Whether tracked files differ from HEAD; null when git cannot tell. Untracked and ignored files never count: the bootstrap step accounts for them. */
-  private async trackedChanges(root: string): Promise<boolean | null> {
-    const status = await this.tryGit(root, ['status', '--porcelain', '--untracked-files=no']);
+  private async trackedChanges(root: string, opts: { readOnly?: boolean } = {}): Promise<boolean | null> {
+    const status = await this.tryGit(root, [...(opts.readOnly ? READ_ONLY : []), 'status', '--porcelain', '--untracked-files=no']);
     return status.ok ? status.stdout.trim() !== '' : null;
   }
 
@@ -1548,6 +1615,11 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   private git(cwd: string, args: string[]): Promise<string> {
     return git(this.gitInvoker, cwd, args);
   }
+}
+
+/** The preview alone, for a surface that shows isolation without ever running it. */
+export function createIsolationPreview(deps: Pick<WorktreeIsolationDeps, 'config' | 'execFileImpl' | 'resolvePath'>): IIsolationPreview {
+  return new GitWorktreeIsolation(deps);
 }
 
 export function createWorktreeIsolation(deps: WorktreeIsolationDeps): IWorktreeIsolation {

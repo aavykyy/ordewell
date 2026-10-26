@@ -1319,6 +1319,59 @@ body.vscode-high-contrast-light .disclosure:hover {
   line-height: 1.6;
 }
 
+/* Repositories and branches on the first screens: stacked rows that wrap, so a
+   long path or branch stays whole in a narrow sidebar, and selectable to copy. */
+.isolation-notice {
+  width: 100%;
+  max-width: 360px;
+  margin: 8px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  color: var(--text-secondary);
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
+.isolation-notice-checking {
+  color: var(--vscode-descriptionForeground);
+}
+
+.isolation-notice[data-status='failed'] .isolation-notice-summary,
+.isolation-notice[data-status='dirty'] .isolation-notice-summary {
+  color: var(--vscode-editorWarning-foreground);
+}
+
+.isolation-notice p {
+  margin: 0 0 4px;
+  max-width: none;
+  font-size: 12px;
+}
+
+.isolation-repos {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.isolation-repo {
+  display: flex;
+  flex-direction: column;
+  padding-left: 8px;
+  border-left: 2px solid var(--border-muted);
+}
+
+.isolation-repo-name {
+  color: var(--text-primary);
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.isolation-repo-detail {
+  color: var(--vscode-descriptionForeground);
+}
+
 .load-session-btn {
   margin-top: 14px;
   background: transparent;

@@ -23,6 +23,59 @@ export type IsolationAvailability =
   | { active: false; reason: IsolationInactiveReason; repos?: string[] };
 
 /**
+ * What a repository's HEAD is. `unborn` is a repository with no commit yet,
+ * on `branch`; `unknown` is one git could not be asked about.
+ */
+export type RepoHead =
+  | { kind: 'branch'; branch: string; commit: string }
+  | { kind: 'detached'; commit: string }
+  | { kind: 'unborn'; branch?: string }
+  | { kind: 'unknown' };
+
+/** One repository of the group, as it is right now. */
+export interface PreviewRepo {
+  /** Relative to the workspace, as everywhere else: `.` for a workspace that is in one repository. */
+  path: string;
+  head: RepoHead;
+  /** Whether tracked files differ from HEAD; absent when not inspected (isolation is off or git is missing). */
+  dirty?: boolean;
+  /** Only for the lone repository: the workspace-relative path of its top level when the workspace is below it, such as `..`. */
+  top?: string;
+}
+
+/**
+ * What a current look at a workspace says about isolation, for a surface that
+ * shows it before any run (ADR-0013, ADR-0014). Every status but `failed`
+ * answers as `isActive` would for the same workspace, so the two cannot
+ * disagree; only `isActive` at run start is authoritative, and the base
+ * branch a run forks from is read again then.
+ *
+ * - `ready`: code tasks get isolated worktrees from `repos`. A repo with no
+ *   commit yet is listed with an `unborn` head and shared instead.
+ * - `dirty`: as `ready` once the start-time decision (stash, or run without
+ *   isolation) is made; `repos` marks the ones with `dirty`.
+ * - `disabled`, `git-missing`, `no-commits`: code tasks run in the workspace.
+ * - `no-repo`: nothing in the workspace is a repository (`repos` is empty).
+ * - `failed`: git could not be read; says nothing about whether there is a
+ *   repository. `error` is the reason.
+ *
+ * Ops and script tasks use the user's checkout whatever the status.
+ */
+export interface IsolationPreview {
+  status: 'ready' | 'dirty' | 'disabled' | 'git-missing' | 'no-repo' | 'no-commits' | 'failed';
+  repos: PreviewRepo[];
+  /** What every task would share live, as `IsolationAvailability.shared` names it; empty unless `ready` or `dirty`. */
+  shared: string[];
+  error?: string;
+}
+
+/** The read-only look at a workspace's isolation: starts no run and changes nothing in any repository. */
+export interface IIsolationPreview {
+  /** Never rejects: a failed inspection is a `failed` preview. */
+  preview(workspaceRoot: string): Promise<IsolationPreview>;
+}
+
+/**
  * Where a run's tasks work, as the planner is told it: the repos of the group
  * and the paths shared live between tasks. A lone repository is `['.']` with
  * nothing shared, unless it holds nested repositories, which are shared live

@@ -1,4 +1,4 @@
-import type { AccountLimitSnapshot, GlobalRunSettings } from '@ordewell/core';
+import type { AccountLimitSnapshot, GlobalRunSettings, IsolationPreview } from '@ordewell/core';
 import type { SurfacePlan, DiscoveredModel, RunnerId, RunActivity, RunView, RunTask, AiProvider } from '@ordewell/core';
 import { DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, IDLE_ACTIVITY, type PromptHold } from '@ordewell/core/plan-utils';
 import type { HostToWebview, PlannerBackend, RunnerMeta } from '../../shared/protocol';
@@ -119,6 +119,13 @@ export interface HostState {
   sessionCleared: boolean;
   /** Every installed runner's account limits: live account data, kept across a session reset. */
   accountLimits: readonly AccountLimitSnapshot[];
+  /**
+   * The workspace's repositories and branches, as the host last read them.
+   * `undefined` until the host says anything; `null` while it re-reads, after
+   * a workspace change or a reload, so an old answer is never shown as current.
+   * Not part of a session: a new or restored one keeps it.
+   */
+  isolationPreview: IsolationPreview | null | undefined;
 }
 
 export const INITIAL_HOST_STATE: HostState = {
@@ -163,6 +170,7 @@ export const INITIAL_HOST_STATE: HostState = {
   turnLost: false,
   sessionCleared: false,
   accountLimits: [],
+  isolationPreview: undefined,
 };
 
 export type SessionResetKind = 'empty' | 'restore' | 'new';
@@ -466,6 +474,9 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'accountLimits':
       return { ...state, accountLimits: action.limits };
+
+    case 'isolationPreview':
+      return { ...state, isolationPreview: action.preview };
 
     case 'setRunSettings':
       return { ...state, runSettings: { autonomous: action.autonomous, run: action.run, maxParallel: action.maxParallel } };

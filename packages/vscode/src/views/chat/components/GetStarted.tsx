@@ -1,5 +1,7 @@
 import React from 'react';
 import { orNames } from '../runnerNames';
+import type { IsolationPreview } from '@ordewell/core';
+import IsolationNotice from './IsolationNotice';
 import PlanApprovalNote, { type HostRunSettings } from './PlanApprovalNote';
 
 interface GetStartedProps {
@@ -8,6 +10,8 @@ interface GetStartedProps {
   onConfigure: () => void;
   /** The user's run settings; absent until the host sends them. */
   runSettings?: HostRunSettings | null;
+  /** The repositories and branches the host found; see {@link IsolationNotice}. */
+  isolationPreview?: IsolationPreview | null;
 }
 
 /**
@@ -15,7 +19,7 @@ interface GetStartedProps {
  * no API key. Either one is enough (ADR-0009), so it offers both routes rather
  * than presenting a key as mandatory.
  */
-export default function GetStarted({ runnerNames, onConfigure, runSettings }: GetStartedProps) {
+export default function GetStarted({ runnerNames, onConfigure, runSettings, isolationPreview }: GetStartedProps) {
   return (
     <div className="empty-state get-started">
       <div className="empty-state-icon">
@@ -31,6 +35,7 @@ export default function GetStarted({ runnerNames, onConfigure, runSettings }: Ge
       </p>
       <p className="get-started-alt">Or add an API key instead; it is stored in your OS keychain.</p>
       <PlanApprovalNote runSettings={runSettings} />
+      <IsolationNotice preview={isolationPreview} />
       <div className="get-started-actions">
         <button className="get-started-btn" onClick={onConfigure}>
           Add API key
