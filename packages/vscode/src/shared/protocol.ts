@@ -181,7 +181,12 @@ export type WebviewToHost =
    * handoff card. Reviewing, merging, discarding and cleaning up are all
    * asymmetric operations the host alone can confirm and perform.
    */
-  | { type: 'isolationAction'; action: IsolationActionKind; taskId?: string };
+  | { type: 'isolationAction'; action: IsolationActionKind; taskId?: string }
+  /**
+   * Sign a coding agent in with its own login, in a real terminal: the flows
+   * are interactive. A runner names that agent; absent means the active planner.
+   */
+  | { type: 'loginPlanner'; runner?: string };
 
 /** One change from the Settings panel's Run block: Full/Guarded, run settings (ADR-0030) or the parallel limit. */
 export interface SettingsChange {
@@ -243,6 +248,13 @@ export type HostToWebview =
   /** The per-runner model allowlist, sent on ready and after each change: what a task card flags a model against. */
   | { type: 'setModelAllowlist'; allowlist: Record<string, string[]> }
   | { type: 'setModelsByRunner'; modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>> }
+  /**
+   * The login a `loginPlanner` asked for has ended, so the webview clears its
+   * pending state. `runner` is the agent the host actually signed in — the
+   * resolved one, even when the request named none — and `message` is the short
+   * reason a sign-in did not finish, shown inline.
+   */
+  | { type: 'plannerLoginEnded'; runner?: string; ok: boolean; message?: string }
   /** `notice` is the one line the runner list shows while a runner's modes are off on this host, and the page that explains it. */
   | { type: 'setModesByRunner'; modesByRunner: Record<string, RunnerModeMeta[]>; notice?: { line: string; docs: string } | null }
   | { type: 'setModelConfig'; modelConfig: { orchestrator: string; orchestratorProvider?: string } }

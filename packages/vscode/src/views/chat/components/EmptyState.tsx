@@ -7,8 +7,12 @@ interface EmptyStateProps {
   onLoadSession?: () => void;
   /** The user's autonomy level and run settings (ADR-0030); absent until the host sends them. */
   runSettings?: HostRunSettings | null;
-  /** The selected coding agent's login verdict, when it is signed out: flagged here, never blocking. */
-  signedOut?: { label: string };
+  /**
+   * The selected coding agent's login verdict, when it is signed out: flagged
+   * here, never blocking. `onLogIn` runs that agent's own login in a terminal,
+   * and the other two are its progress and the reason it did not finish.
+   */
+  signedOut?: { label: string; onLogIn?: () => void; pending?: boolean; failure?: string };
 }
 
 /** One Setup row: what is set, and the command that changes it. */
@@ -93,10 +97,27 @@ export default function EmptyState({ onLoadSession, runSettings, signedOut }: Em
       {signedOut && (
         <div className="planner-auth-warning" role="status" aria-live="polite">
           <span className="planner-auth-dot" aria-hidden="true" />
-          <span className="planner-auth-warning-text">
-            <span className="planner-auth-warning-agent">{signedOut.label}</span>
-            {' is not logged in. You can sign in from this chat.'}
-          </span>
+          <div className="planner-auth-warning-body">
+            <span className="planner-auth-warning-text">
+              <span className="planner-auth-warning-agent">{signedOut.label}</span>
+              {' is not logged in. You can sign in from this chat.'}
+            </span>
+            {/* Inline, on the same row: the retry is this button, now enabled. */}
+            {signedOut.failure && <span className="planner-auth-failure">{signedOut.failure}</span>}
+          </div>
+          {signedOut.onLogIn && (
+            <button
+              type="button"
+              className="planner-login-btn"
+              onClick={signedOut.onLogIn}
+              disabled={signedOut.pending}
+              aria-busy={signedOut.pending ? true : undefined}
+            >
+              {signedOut.pending
+                ? <><span className="planner-login-spinner" aria-hidden="true" />Signing in…</>
+                : 'Log in'}
+            </button>
+          )}
         </div>
       )}
       {onLoadSession && (

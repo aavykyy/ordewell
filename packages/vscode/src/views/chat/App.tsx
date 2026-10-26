@@ -98,6 +98,10 @@ export default function App() {
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
   const [setupCollapsed, setSetupCollapsed] = useState(false);
   const [runExpanded, setRunExpanded] = useState(false);
+  /** The coding agent whose login is running, by runner id: only its action waits. */
+  const [pendingLogin, setPendingLogin] = useState<string | null>(null);
+  /** The last login that did not finish, and why: shown inline on the row or pill that asked. */
+  const [loginFailure, setLoginFailure] = useState<{ runner: string; message: string } | null>(null);
 
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const dockBodyRef = useRef<HTMLDivElement>(null);
@@ -136,7 +140,15 @@ export default function App() {
   useEffect(() => {
     const handler = (event: MessageEvent<HostToWebview>) => {
       lastActivityRef.current = Date.now();
-      dispatch({ ...event.data, now: Date.now() });
+      const msg = event.data;
+      // The login is this surface's own state, not the session's: it ends here
+      // rather than in the reducer that mirrors the host.
+      if (msg.type === 'plannerLoginEnded') {
+        setPendingLogin((current) => (msg.runner === undefined || msg.runner === current ? null : current));
+        setLoginFailure(msg.ok ? null : { runner: msg.runner ?? '', message: msg.message ?? 'Sign-in did not finish.' });
+        return;
+      }
+      dispatch({ ...msg, now: Date.now() });
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
@@ -633,8 +645,30 @@ export default function App() {
   // Only the agent that will actually plan can warn the empty state: an unused
   // signed-out harness, or a vendor planner, says nothing about this session.
   const activeBackend = planner.backends.find((b) => b.id === activePlanner);
+  /** The runner behind the active planner, which is whose login the empty state runs. */
+  const activeRunnerId = activeBackend ? activeBackend.runner ?? activeBackend.id : null;
+
+  /** The empty state's button: the active planner, resolved by the host if it moved. */
+  const handleActivePlannerLogin = useCallback(() => {
+    setLoginFailure(null);
+    setPendingLogin(activeRunnerId);
+    vscode.postMessage({ type: 'loginPlanner' });
+  }, [activeRunnerId]);
+
+  /** A pill's own action: that agent's login, without switching the planner to it. */
+  const handleRunnerLogin = useCallback((runner: string) => {
+    setLoginFailure(null);
+    setPendingLogin(runner);
+    vscode.postMessage({ type: 'loginPlanner', runner });
+  }, []);
+
   const signedOutPlanner = activeBackend?.kind === 'harness' && activeBackend.auth?.state === 'signed-out'
-    ? { label: activeBackend.label }
+    ? {
+        label: activeBackend.label,
+        onLogIn: handleActivePlannerLogin,
+        pending: pendingLogin !== null && pendingLogin === activeRunnerId,
+        failure: loginFailure && loginFailure.runner === activeRunnerId ? loginFailure.message : undefined,
+      }
     : undefined;
 
   const runnerLabelMap = useMemo<Record<string, string>>(() => {
@@ -654,6 +688,8 @@ export default function App() {
   );
 
   const hasContent = blocks.length > 0 || isResearchActive || isExecuting || !!error;
+  /** The first screen is on show, with its signed-out row: the pill bar need not repeat that login. */
+  const emptyStateShown = !hasContent && isReady && canPlan;
   /** The one usage block, drawn pinned below the conversation rather than scrolling in it. */
   const usageBlock = useMemo(() => blocks.find((b) => b.type === 'usage'), [blocks]);
 
@@ -839,18 +875,47 @@ export default function App() {
           {offeredBackends.length > 0 ? (
             <>
               <div className="planner-backends">
-                {offeredBackends.map((b) => (
-                  <button
-                    key={b.id}
-                    type="button"
-                    className={`planner-pill${b.id === activePlanner ? ' active' : ''}${b.auth?.state === 'signed-out' ? ' signed-out' : ''}${pendingPlanner === b.id ? ' pending' : ''}`}
-                    title={b.auth?.state === 'signed-out' ? 'Not logged in — sign in from this chat' : b.reason}
-                    onClick={() => handlePlannerChange(b.id)}
-                  >
-                    {b.auth?.state === 'signed-out' && <span className="planner-auth-dot" aria-hidden="true" />}
-                    {b.label}
-                  </button>
-                ))}
+                {offeredBackends.map((b) => {
+                  const runnerId = b.runner ?? b.id;
+                  const signingIn = pendingLogin === runnerId;
+                  // The empty state's row signs the active planner in; once it is
+                  // gone, its pill is the only place left that can. A pill's
+                  // action never selects the planner (ADR-0009).
+                  const canLogIn = b.auth?.state === 'signed-out' && (b.id !== activePlanner || !emptyStateShown);
+                  return (
+                    <span className="planner-pill-group" key={b.id}>
+                      <span className="planner-pill-row">
+                        <button
+                          type="button"
+                          className={`planner-pill${b.id === activePlanner ? ' active' : ''}${b.auth?.state === 'signed-out' ? ' signed-out' : ''}${pendingPlanner === b.id ? ' pending' : ''}`}
+                          title={b.auth?.state === 'signed-out' ? 'Not logged in — sign in from this chat' : b.reason}
+                          onClick={() => handlePlannerChange(b.id)}
+                        >
+                          {b.auth?.state === 'signed-out' && <span className="planner-auth-dot" aria-hidden="true" />}
+                          {b.label}
+                        </button>
+                        {canLogIn && (
+                          <button
+                            type="button"
+                            className="planner-pill-login"
+                            aria-label={`Sign in to ${b.label}`}
+                            title={`Sign in to ${b.label}`}
+                            disabled={signingIn}
+                            aria-busy={signingIn ? true : undefined}
+                            onClick={() => handleRunnerLogin(runnerId)}
+                          >
+                            {signingIn
+                              ? <><span className="planner-login-spinner" aria-hidden="true" />Signing in…</>
+                              : 'Log in'}
+                          </button>
+                        )}
+                      </span>
+                      {!signingIn && loginFailure?.runner === runnerId && (
+                        <span className="planner-pill-login-failure" role="status">{loginFailure.message}</span>
+                      )}
+                    </span>
+                  );
+                })}
               </div>
               {/* A harness planner has no API provider to filter by, and its models
                   are never in the vendor mapping — passing either would empty the
@@ -968,7 +1033,7 @@ export default function App() {
           <GetStarted runnerNames={agentNames} onConfigure={handleConfigureApiKey} runSettings={host.runSettings} />
         )}
 
-        {!hasContent && isReady && canPlan && (
+        {emptyStateShown && (
           <EmptyState onLoadSession={handleLoadSession} runSettings={host.runSettings} signedOut={signedOutPlanner} />
         )}
 

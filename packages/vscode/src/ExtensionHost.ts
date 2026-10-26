@@ -10,6 +10,7 @@ import { handleSlashCommand, type SlashDeps } from './commands/SlashParser';
 import { confirmRisks } from './commands/runSettings';
 import { handleApprovePlan, handleSessionMessage, handleStartPlanning, type PlanManagerDeps } from './plan/PlanManager';
 import { routeWebviewMessage, sendNextHeldPrompt, type WebviewRouterDeps } from './plan/webviewRouter';
+import { loginPlanner } from './plan/PlannerLogin';
 import { saveCurrentSession, restoreState, persistState, type PersistenceDeps } from './state/StatePersistence';
 import { ModelDiscovery, sendModelConfig } from './ModelDiscovery';
 import { PlannerSelection } from './PlannerSelection';
@@ -250,6 +251,19 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       openFile: (path) => { void openWorkspaceFile(path); },
       setPlanDockHeight: (height) => { void services.context.globalState.update(PLAN_DOCK_HEIGHT_KEY, height); },
       changeSettings,
+      loginPlanner: (runner) => loginPlanner({
+        runnerInstallation: services.runnerInstallation,
+        runnerRegistry: services.runnerRegistry,
+        config: services.config,
+        workspaceRoot: () => services.fsAdapter.getWorkspaceRoot(),
+        // The fresh probe is what redraws the pill and the empty state; signing
+        // in some other agent leaves who plans exactly where it was.
+        sendState: () => planner.sendState(),
+        post: (msg) => services.chatProvider.postMessage(msg),
+        notifications: services.notifications,
+        window: vscodeApi.window,
+        log,
+      }, runner),
       enableRunner: async (runnerId) => {
         const saved = await enableRunner(
           {

@@ -23,6 +23,8 @@ const signedInClaude: PlannerBackend = {
 
 const pill = () => document.querySelector<HTMLButtonElement>('.planner-pill')!;
 const warning = () => document.querySelector('.planner-auth-warning');
+const loginButton = () => document.querySelector<HTMLButtonElement>('.planner-login-btn')!;
+const pillLogins = () => [...document.querySelectorAll<HTMLButtonElement>('.planner-pill-login')];
 
 /**
  * A signed-out agent is still a working choice — the login is the fix — so it
@@ -84,5 +86,93 @@ describe('a signed-out planner', () => {
     post({ type: 'setPlannerBackends', backends: [signedInClaude, codex], provider: 'claude-code', runner: 'claude-code' });
 
     expect(warning()).toBeNull();
+  });
+
+  it('signs the active planner in from the empty state, and waits on that button alone', () => {
+    post({ type: 'setPlannerBackends', backends: [signedOutClaude], provider: 'claude-code', runner: 'claude-code' });
+    api.postMessage.mockClear();
+
+    fireEvent.click(loginButton());
+
+    // No runner: the host resolves the active planner, which may have moved.
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'loginPlanner' });
+    expect(loginButton()).toBeDisabled();
+    expect(loginButton().getAttribute('aria-busy')).toBe('true');
+    expect(loginButton().textContent).toContain('Signing in…');
+
+    post({ type: 'plannerLoginEnded', runner: 'claude-code', ok: true });
+
+    expect(loginButton()).not.toBeDisabled();
+    expect(loginButton().getAttribute('aria-busy')).toBeNull();
+  });
+
+  it('signs in a signed-out pill without switching the planner to it', () => {
+    const codex: PlannerBackend = {
+      id: 'codex',
+      label: 'Codex',
+      kind: 'harness',
+      runner: 'codex',
+      usable: true,
+      auth: { state: 'signed-out', loginCommand: ['codex', 'login'] },
+    };
+    post({ type: 'setPlannerBackends', backends: [signedInClaude, codex], provider: 'claude-code', runner: 'claude-code' });
+    api.postMessage.mockClear();
+
+    expect(pillLogins()).toHaveLength(1);
+    fireEvent.click(pillLogins()[0]);
+
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'loginPlanner', runner: 'codex' });
+    expect(api.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'setPlanner' }));
+    expect(pillLogins()[0]).toBeDisabled();
+    expect(pillLogins()[0].getAttribute('aria-busy')).toBe('true');
+    // Only that agent's action waits: the pill bar stays usable.
+    for (const p of document.querySelectorAll<HTMLButtonElement>('.planner-pill')) expect(p).not.toBeDisabled();
+    expect(pill().className).toContain('active');
+  });
+
+  it('offers the active agent its login on the pill once the empty state is gone', () => {
+    post({ type: 'setPlannerBackends', backends: [signedOutClaude], provider: 'claude-code', runner: 'claude-code' });
+    // A planner turn in flight: there is a conversation now, so the first
+    // screen with its login row is not drawn.
+    post({ type: 'plannerTurn', active: true });
+    expect(warning()).toBeNull();
+    api.postMessage.mockClear();
+
+    expect(pillLogins()).toHaveLength(1);
+    fireEvent.click(pillLogins()[0]);
+
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'loginPlanner', runner: 'claude-code' });
+    expect(api.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'setPlanner' }));
+  });
+
+  it('shows a pill login failure under that pill, leaving the empty state alone', () => {
+    const codex: PlannerBackend = {
+      id: 'codex',
+      label: 'Codex',
+      kind: 'harness',
+      runner: 'codex',
+      usable: true,
+      auth: { state: 'signed-out', loginCommand: ['codex', 'login'] },
+    };
+    post({ type: 'setPlannerBackends', backends: [signedInClaude, codex], provider: 'claude-code', runner: 'claude-code' });
+    fireEvent.click(pillLogins()[0]);
+
+    post({ type: 'plannerLoginEnded', runner: 'codex', ok: false, message: 'Sign-in did not finish in time.' });
+
+    expect(document.querySelector('.planner-pill-login-failure')?.textContent).toBe('Sign-in did not finish in time.');
+    expect(pillLogins()[0]).not.toBeDisabled();
+    // The failure belongs to Codex, not to the planner this session uses.
+    expect(warning()).toBeNull();
+  });
+
+  it('shows why a login did not finish, inline, and lets the button be tried again', () => {
+    post({ type: 'setPlannerBackends', backends: [signedOutClaude], provider: 'claude-code', runner: 'claude-code' });
+    fireEvent.click(loginButton());
+
+    post({ type: 'plannerLoginEnded', runner: 'claude-code', ok: false, message: 'The terminal closed before sign-in finished.' });
+
+    expect(document.querySelector('.planner-auth-failure')?.textContent).toBe('The terminal closed before sign-in finished.');
+    expect(loginButton()).not.toBeDisabled();
+    expect(loginButton().getAttribute('aria-busy')).toBeNull();
   });
 });

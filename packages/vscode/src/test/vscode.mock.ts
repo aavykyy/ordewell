@@ -101,6 +101,50 @@ export class ThemeIcon {
   constructor(readonly id: string) {}
 }
 
+export interface FakeTerminal {
+  /** What the terminal was opened as, for a test that checks its name, cwd or env. */
+  options: { name?: string; cwd?: string; env?: Record<string, string> };
+  /** Every line typed into it, in order. */
+  sent: string[];
+  shown: number;
+  exitStatus: { code: number | undefined } | undefined;
+  sendText(text: string): void;
+  show(): void;
+  hide(): void;
+  dispose(): void;
+}
+
+/** Terminals created via `window.createTerminal`, in creation order. */
+export const __terminals: FakeTerminal[] = [];
+const terminalCloseListeners: Array<(terminal: FakeTerminal) => void> = [];
+
+/** The user (or the login's own shell) closed the terminal. */
+export function __closeTerminal(terminal: FakeTerminal = __terminals[__terminals.length - 1]): void {
+  terminal.exitStatus = { code: 0 };
+  for (const cb of [...terminalCloseListeners]) cb(terminal);
+}
+
+export function __resetTerminals(): void {
+  __terminals.length = 0;
+  terminalCloseListeners.length = 0;
+}
+
+function createFakeTerminal(options: FakeTerminal['options']): FakeTerminal {
+  const terminal: FakeTerminal = {
+    options,
+    sent: [],
+    shown: 0,
+    exitStatus: undefined,
+    sendText(text: string) { terminal.sent.push(text); },
+    show() { terminal.shown += 1; },
+    hide() {},
+    // Disposing closes the pane, which is the same word a user closing it sends.
+    dispose() { __closeTerminal(terminal); },
+  };
+  __terminals.push(terminal);
+  return terminal;
+}
+
 export const ViewColumn = { Active: -1, Beside: -2 } as const;
 
 /** A fake asset URI; `joinPath` keeps the parts readable in assertions. */
@@ -265,6 +309,11 @@ export const window = {
   })) as never,
   createWebviewPanel: vi.fn((viewType: string, title: string) => createFakeWebviewPanel(viewType, title)) as never,
   registerWebviewPanelSerializer: vi.fn(() => ({ dispose: vi.fn() })) as never,
+  createTerminal: vi.fn((options: FakeTerminal['options']) => createFakeTerminal(options)) as never,
+  onDidCloseTerminal: vi.fn((cb: (terminal: FakeTerminal) => void) => {
+    terminalCloseListeners.push(cb);
+    return { dispose: () => { const i = terminalCloseListeners.indexOf(cb); if (i >= 0) terminalCloseListeners.splice(i, 1); } };
+  }) as never,
 };
 
 export const env = {

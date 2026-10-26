@@ -88,6 +88,7 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
       setPlanDockHeight: vi.fn(),
       changeSettings: vi.fn(async () => {}),
       enableRunner: vi.fn(async () => {}),
+      loginPlanner: vi.fn(async () => {}),
     },
     getPendingRunners: () => pending,
     setPendingRunners: (r) => { pending = r; },
@@ -549,6 +550,9 @@ describe('webview messages reach the session through one entry point each', () =
     [{ type: 'setPlanDockHeight', height: 320 }, 'setPlanDockHeight', [320]],
     [{ type: 'changeSettings', change: { run: { autorun: true } } }, 'changeSettings', [{ run: { autorun: true } }]],
     [{ type: 'enableRunner', runnerId: 'codex' }, 'enableRunner', ['codex']],
+    [{ type: 'loginPlanner', runner: 'codex' }, 'loginPlanner', ['codex']],
+    // No runner is the active planner's login, which the host resolves.
+    [{ type: 'loginPlanner' }, 'loginPlanner', [undefined]],
   ] as const)('hands %o to the extension', async (msg, handler, args) => {
     await h.route(msg as WebviewToHost);
 
