@@ -1101,6 +1101,27 @@ describe('runner login', () => {
     expect(messageOf(h.actions, 'notice')).toContain('Claude Code is signed in.');
     expect(messageOf(h.actions, 'notice')).toContain('could not be refreshed');
   });
+
+  it('does not claim a sign-in the fresh probe still contradicts', async () => {
+    // The child's exit code is not the runner's own verdict: a login can print
+    // success and still leave the account signed out. Claiming success here
+    // leaves the red welcome line and the planner gate disagreeing with the
+    // notice the user just read.
+    const h = harness({
+      getRunners: vi.fn().mockResolvedValue({
+        runners: [{
+          id: 'claude-code', name: 'Claude Code', enabled: true,
+          auth: { state: 'signed-out', loginCommand: ['claude', 'auth', 'login'] },
+        }],
+        orchestratorModel: '',
+      }),
+    }, { login: vi.fn(async () => ({ ok: true })) });
+
+    await runEffect(loginEffect, h.deps);
+
+    expect(messageOf(h.actions, 'notice')).not.toBe('Claude Code is signed in.');
+    expect(messageOf(h.actions, 'notice')).toMatch(/still|not logged in/i);
+  });
 });
 
 describe('settings', () => {

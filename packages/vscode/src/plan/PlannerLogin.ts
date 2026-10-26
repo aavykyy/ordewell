@@ -9,6 +9,7 @@ const TIMEOUT_MS = 5 * 60_000;
 const CLOSED_MESSAGE = 'The terminal closed before sign-in finished.';
 const TIMEOUT_MESSAGE = 'Sign-in did not finish in time.';
 const TERMINAL_FAILED_MESSAGE = 'The login terminal could not be opened.';
+const TERMINAL_LOST_MESSAGE = 'The login terminal stopped before sign-in finished.';
 
 export interface PlannerLoginDeps {
   runnerInstallation: Pick<RunnerInstallation, 'plannerUsability' | 'refresh'>;
@@ -136,6 +137,7 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
     deps.notifications.warn(`Ordewell could not confirm the ${label} login. ${message ?? 'It ended without an answer.'}`);
   };
 
+  let outcome: { ok: boolean; message?: string };
   try {
     terminal.show();
     terminal.sendText(commandLine(command));
@@ -154,12 +156,17 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
         break;
       }
     }
-    if (signedIn) {
-      await end(true);
-      return;
-    }
-    await end(false, closed || terminal.exitStatus !== undefined ? CLOSED_MESSAGE : TIMEOUT_MESSAGE);
+    outcome = signedIn
+      ? { ok: true }
+      : { ok: false, message: closed || terminal.exitStatus !== undefined ? CLOSED_MESSAGE : TIMEOUT_MESSAGE };
+  } catch (err) {
+    // A terminal disposed between create and send (or a poll that throws) must
+    // still end the attempt: the webview clears its pending button only on
+    // `plannerLoginEnded`, and would leave it disabled until a reload.
+    deps.log?.(`The ${label} login terminal failed: ${err instanceof Error ? err.message : String(err)}`);
+    outcome = { ok: false, message: TERMINAL_LOST_MESSAGE };
   } finally {
     closedListener.dispose();
   }
+  await end(outcome.ok, outcome.message);
 }

@@ -199,6 +199,19 @@ describe('loginPlanner', () => {
     expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'claude-code', ok: true });
     expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining('probe failed'));
   });
+
+  // The webview clears its pending button only on `plannerLoginEnded`. A throw
+  // after the terminal exists (a terminal disposed between create and send, say)
+  // must still end the attempt, or the button stays disabled until a reload.
+  it('ends the attempt as a failure when writing to the terminal throws', async () => {
+    const h = harness();
+    h.terminal.sendText = () => { throw new Error('terminal was disposed'); };
+
+    await loginPlanner(h.deps);
+
+    expect(h.ended()).toMatchObject({ type: 'plannerLoginEnded', runner: 'claude-code', ok: false });
+    expect((h.ended() as { message?: string }).message).toBeTruthy();
+  });
 });
 
 describe('commandLine', () => {

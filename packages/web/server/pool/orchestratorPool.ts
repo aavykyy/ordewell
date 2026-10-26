@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn } from 'child_process';
 import { randomUUID } from 'crypto';
+import { resolve } from 'path';
 import { WebSocket } from 'ws';
 import {
   Session,
@@ -115,6 +116,13 @@ export class OrchestratorPool {
   private registry: CoreRunnerRegistry = new RunnerRegistry();
   private modelResolver: ModelResolver;
   private runnerInstallation: RunnerInstall;
+  /**
+   * A host that supplied its own probe (a test, or a surface that owns one).
+   * Everything else asks {@link installationFor}, which keys a real probe by
+   * the workspace whose account it is judging (ADR-0016).
+   */
+  private suppliedRunnerInstallation: RunnerInstall | undefined;
+  private workspaceInstallations = new Map<string, RunnerInstall>();
   private cachedProviderLists: Record<string, string[]> | undefined;
   private settingsService = new SettingsService();
   private plannerModelMemory = new PlannerModelMemory(this.settingsService);
@@ -133,11 +141,10 @@ export class OrchestratorPool {
     const pluginNotice = removedPluginNotice();
     if (pluginNotice) console.warn(pluginNotice);
     this.runner = deps.runner ?? new StructuredRunner();
-    // The login probe must ask the account the planner will use (ADR-0016),
-    // and the daemon's default workspace is its cwd — the same fallback every
-    // route takes when a request names none. A workspace that chooses another
-    // account through `.envrc`/`.ordewell/env` is judged there, before a
-    // session exists to name it.
+    // The login probe must ask the account the planner will use (ADR-0016).
+    // This installation is the daemon's own cwd for detection; a runner list
+    // request naming a workspace is judged by that workspace's own probe.
+    this.suppliedRunnerInstallation = deps.runnerInstallation;
     this.runnerInstallation = deps.runnerInstallation
       ?? new RunnerInstallation(this.registry, undefined, undefined, { env: () => workspaceEnvOf(process.cwd()) });
     this.modelResolver = deps.modelResolver ?? new ModelResolver(this.registry, new WebConfig());
@@ -561,23 +568,42 @@ export class OrchestratorPool {
   }
 
   /**
+   * The probe that judges a login for `workspace`, cached so its install and
+   * auth verdicts survive between runner-list refreshes. Without a workspace
+   * the daemon's cwd is what the request would plan with anyway.
+   */
+  private installationFor(workspace: string | undefined): RunnerInstall {
+    if (this.suppliedRunnerInstallation) return this.suppliedRunnerInstallation;
+    if (!workspace) return this.runnerInstallation;
+    const key = resolve(workspace);
+    let installation = this.workspaceInstallations.get(key);
+    if (!installation) {
+      installation = new RunnerInstallation(this.registry, undefined, undefined, { env: () => workspaceEnvOf(key) });
+      this.workspaceInstallations.set(key, installation);
+    }
+    return installation;
+  }
+
+  /**
    * Runners whose CLI is actually installed on the host, with display name and
    * enabled state. Only these should be offered for selection — an uninstalled
-   * runner can't be spawned.
+   * runner can't be spawned. `workspace` names whose account the auth verdict
+   * is about; without it the daemon's cwd stands in.
    */
-  async getInstalledRunners(): Promise<RunnersResponse['runners']> {
+  async getInstalledRunners(workspace?: string): Promise<RunnersResponse['runners']> {
     // The runner list is the one place a user who just fixed their host looks
     // again, so every cached answer is asked afresh: the Codex sandbox, the
     // install verdicts, and the agent detection behind the no-choice defaults.
     await this.codexSandbox.refresh();
-    this.runnerInstallation.refresh?.();
+    const installation = this.installationFor(workspace);
+    installation.refresh?.();
     await this.detectInstalledPlanner();
 
     const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride() });
     const enabled = new Set(config.enabledRunners);
     const runners = this.registry.list();
     const installedIds = new Set(
-      await this.runnerInstallation.filterInstalled(runners.map((p) => p.manifest.name)),
+      await installation.filterInstalled(runners.map((p) => p.manifest.name)),
     );
     // The auth verdict rides along, never gating the list: a signed-out agent
     // is installed and offered, and a surface flags it. The probe was just
@@ -586,7 +612,7 @@ export class OrchestratorPool {
       runners
         .filter((p) => installedIds.has(p.manifest.name))
         .map(async (p) => {
-          const { auth } = await this.runnerInstallation.plannerUsability(p.manifest.name);
+          const { auth } = await installation.plannerUsability(p.manifest.name);
           return {
             id: p.manifest.name,
             name: p.manifest.displayName,

@@ -23,6 +23,8 @@ export interface SlashDeps {
   plannerBackends(): Promise<PlannerBackend[]>;
   /** Re-push planner provider/model/effort to the webview after a change. */
   refreshPlannerState(): Promise<void>;
+  /** Hand the terminal to a runner's own login; omitted names the active planner. */
+  loginPlanner(runner?: string): Promise<void>;
   runnerRegistry: { list(): { manifest: { displayName: string; name: string } }[] };
   chatProvider: ChatViewProvider;
   settingsService: { getModelAllowlist(runner: string): string[] | undefined; setModelAllowlist(runner: string, ids: string[] | undefined): void; };
@@ -84,6 +86,20 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
   }
   if (cmd === '/planner') {
     await pickPlanner(args[0], deps);
+    return;
+  }
+  if (cmd === '/login') {
+    // Joined, not just `args[0]`: a display label is two words ("Claude Code").
+    const named = args.join(' ').trim();
+    const runner = named
+      ? deps.runnerRegistry.list().find(({ manifest }) => manifest.name === named
+        || manifest.displayName.toLowerCase() === named.toLowerCase())?.manifest.name
+      : undefined;
+    if (named && !runner) {
+      vscode.window.showWarningMessage(`Unknown coding agent: ${named}. Run /planner to see the coding agents.`);
+      return;
+    }
+    await deps.loginPlanner(runner);
     return;
   }
   if (cmd === '/key') {

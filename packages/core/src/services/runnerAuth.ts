@@ -75,6 +75,11 @@ export async function readRunnerAuth(manifest: RunnerManifest, options: ReadRunn
     return { state: 'unknown', loginCommand };
   }
 
+  // `defaultExec` answers -1 when the child timed out, was signalled or could
+  // not start. That is no exit status, so whatever it printed before dying is
+  // not an answer: a slow status command must not be read as signed-out.
+  if (answer.code < 0) return { state: 'unknown', loginCommand };
+
   const output = `${answer.stdout}\n${answer.stderr}`;
   let state: 'signed-in' | 'signed-out' | null;
   try {

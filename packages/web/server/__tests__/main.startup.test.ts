@@ -68,6 +68,45 @@ describe('daemon startup', () => {
     }
   });
 
+  it('keeps an owned daemon alive through a SIGINT, so cancelling a login does not stop it', async () => {
+    // The TUI ignores Ctrl-C while its login child owns the tty, but the tty
+    // delivers SIGINT to the whole foreground group — this daemon included.
+    // Treating it as a stop would kill every in-memory session under the login
+    // the user only meant to cancel.
+    const home = mkdtempSync(join(tmpdir(), 'ordewell-daemon-sigint-'));
+    mkdirSync(join(home, '.ordewell'));
+    const port = await freePort();
+    const pidFile = join(home, '.ordewell', `server-${port}.pid`);
+    const child = spawn(process.execPath, [
+      resolve(__dirname, '../../dist/server/main.js'),
+      '--port', String(port),
+      '--pid-file', pidFile,
+      '--watch-parent', String(process.pid),
+    ], {
+      env: { HOME: home, USERPROFILE: home, PATH: '', AI_PROVIDER: 'codex', ORDEWELL_ENABLED_RUNNERS: 'codex' },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let closed = false;
+    child.once('close', () => { closed = true; });
+    try {
+      await waitFor(() => {
+        try { return readFileSync(pidFile, 'utf8').trim() === String(child.pid); } catch { return false; }
+      });
+
+      child.kill('SIGINT');
+      await new Promise((resolveTick) => setTimeout(resolveTick, 500));
+
+      expect(closed).toBe(false);
+      expect(readFileSync(pidFile, 'utf8').trim()).toBe(String(child.pid));
+
+      child.kill('SIGTERM');
+      await new Promise<void>((resolveExit) => child.once('close', () => resolveExit()));
+    } finally {
+      child.kill('SIGKILL');
+      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it('preserves the listening daemon token when another daemon cannot bind its port', async () => {
     const home = mkdtempSync(join(tmpdir(), 'ordewell-daemon-start-'));
     const incumbent = createServer((_req, res) => res.end('incumbent'));

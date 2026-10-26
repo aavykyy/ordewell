@@ -345,8 +345,11 @@ export class ApiClient {
     return planOf<PlanResponse>(await this.turn('POST', route, 'Send now failed', { message }), route).plan;
   }
 
-  getRunners(): Promise<RunnersResponse> {
-    return this.call('GET', '/api/runners', 'Failed to fetch runners');
+  getRunners(workspace?: string): Promise<RunnersResponse> {
+    // The login verdict is asked about the account the planner will use, so a
+    // daemon started elsewhere judges this workspace's `.envrc`, not its cwd's.
+    const qs = `?workspace=${encodeURIComponent(workspace ?? this.workspace)}`;
+    return this.call('GET', `/api/runners${qs}`, 'Failed to fetch runners');
   }
 
   /** The full provider catalog the daemon has discovered (used by the TUI model picker). */

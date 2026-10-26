@@ -11,6 +11,7 @@ export interface SlashCommandSpec {
 
 export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   { label: '/planner', detail: 'Pick the planner: harness, model and effort in one flow', insertText: '/planner' },
+  { label: '/login', detail: 'Sign the active planner in; /login <runner> signs in a named agent', insertText: '/login' },
   { label: '/key set ', detail: 'Set an API key for a provider', insertText: '/key set ' },
   { label: '/sessions', detail: 'Browse and load saved sessions', insertText: '/sessions' },
   { label: '/new', detail: 'Start a new session (clears current plan)', insertText: '/new' },

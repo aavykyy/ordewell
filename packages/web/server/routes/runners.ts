@@ -8,8 +8,10 @@ export function runnersRoute(pool: OrchestratorPool) {
 
   router.get('/', async (c) => {
     // getInstalledRunners re-probes the host first, so the state read after it
-    // reflects the fresh answer rather than the stale default.
-    const runners = await pool.getInstalledRunners();
+    // reflects the fresh answer rather than the stale default. A workspace's
+    // own `.envrc` can choose the account, so the probe is asked about the one
+    // that will plan rather than the daemon's cwd.
+    const runners = await pool.getInstalledRunners(c.req.query('workspace'));
     const state = pool.getRunnerState();
     return c.json({
       runners,

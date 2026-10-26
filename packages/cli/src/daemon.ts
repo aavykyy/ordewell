@@ -138,7 +138,7 @@ export async function isDaemonRunning(port: number = DEFAULT_PORT): Promise<bool
 
 export async function startDaemon(
   port: number = DEFAULT_PORT,
-  opts?: { detached?: boolean; quiet?: boolean },
+  opts?: { detached?: boolean; quiet?: boolean; cwd?: string },
 ): Promise<void> {
   // A raw-mode full-screen client cannot afford stray writes to stdout: they
   // land inside the frame it is painting. `quiet` is for a revive that happens
@@ -183,6 +183,9 @@ export async function startDaemon(
     detached,
     stdio: ['ignore', logFd, logFd],
     env: { ...process.env },
+    // A daemon owned by a workspace client must ask that workspace's account
+    // about a login (ADR-0016), not the directory the client was launched from.
+    ...(opts?.cwd ? { cwd: opts.cwd } : {}),
   });
 
   if (detached) child.unref();
@@ -272,7 +275,7 @@ export async function ensureDaemon(port?: number): Promise<number> {
  */
 export async function ensureDaemonOwned(
   port?: number,
-  opts?: { detached?: boolean; quiet?: boolean },
+  opts?: { detached?: boolean; quiet?: boolean; cwd?: string },
 ): Promise<{ port: number; owned: boolean }> {
   const p = port || DEFAULT_PORT;
   if (await isDaemonRunning(p)) return { port: p, owned: false };

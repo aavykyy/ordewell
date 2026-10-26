@@ -22,6 +22,7 @@ function makeDeps(overrides: Partial<SlashDeps> = {}): SlashDeps {
     },
     plannerBackends: async () => [],
     refreshPlannerState: async () => {},
+    loginPlanner: async () => {},
     runnerRegistry: { list: () => [] },
     chatProvider: {} as SlashDeps['chatProvider'],
     settingsService: { getModelAllowlist: () => undefined, setModelAllowlist: () => {} },
@@ -69,11 +70,45 @@ describe('/planner', () => {
   });
 });
 
-describe('isKnownSlashCommand', () => {
-  it('recognizes every extension slash command regardless of case', () => {
+describe('/login', () => {
+  // The same logins the pill and the empty state offer: `/login` is the active
+  // planner, `/login <runner>` a named agent, without switching to it.
+  it('with no argument signs in the active planner', async () => {
+    const loginPlanner = vi.fn(async () => {});
+
+    await handleSlashCommand('/login', makeDeps({ loginPlanner }));
+
+    expect(loginPlanner).toHaveBeenCalledWith(undefined);
+  });
+
+  it('signs in a runner named by id or display label', async () => {
+    const loginPlanner = vi.fn(async () => {});
+    const runnerRegistry = { list: () => [{ manifest: { name: 'codex', displayName: 'Codex' } }] };
+
+    await handleSlashCommand('/login codex', makeDeps({ loginPlanner, runnerRegistry }));
+    expect(loginPlanner).toHaveBeenLastCalledWith('codex');
+
+    await handleSlashCommand('/login Codex', makeDeps({ loginPlanner, runnerRegistry }));
+    expect(loginPlanner).toHaveBeenLastCalledWith('codex');
+  });
+
+  it('refuses an agent the registry does not hold instead of running nothing', async () => {
+    const loginPlanner = vi.fn(async () => {});
+    const warning = window.showWarningMessage as unknown as ReturnType<typeof vi.fn>;
+    warning.mockClear();
+
+    await handleSlashCommand('/login nope', makeDeps({ loginPlanner }));
+
+    expect(loginPlanner).not.toHaveBeenCalled();
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('nope'));
+  });
+});
+
+describe('isKnownSlashCommand', () => {  it('recognizes every extension slash command regardless of case', () => {
     expect(isKnownSlashCommand('/PLANNER')).toBe(true);
     expect(isKnownSlashCommand('/refresh')).toBe(true);
     expect(isKnownSlashCommand('/settings')).toBe(true);
+    expect(isKnownSlashCommand('/login')).toBe(true);
   });
 
   it('recognizes the conversation-editing commands', () => {
@@ -139,7 +174,7 @@ describe('conversation-editing slash commands', () => {
     await handleSlashCommand('/help', makeDeps());
     const text = info.mock.calls[0][0] as string;
     const lines = text.split('\n');
-    for (const command of ['/refresh', '/planner', '/key', '/sessions', '/allowlist', '/help', '/new', '/fork', '/rewind', '/compact', '/settings']) {
+    for (const command of ['/refresh', '/planner', '/login', '/key', '/sessions', '/allowlist', '/help', '/new', '/fork', '/rewind', '/compact', '/settings']) {
       expect(isKnownSlashCommand(command)).toBe(true);
       expect(lines.some((line) => line.startsWith(command))).toBe(true);
     }

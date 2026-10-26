@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { readRunnerAuth, signedOutFromFailure, type RunnerAuthExec } from '../runnerAuth';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
@@ -110,6 +113,25 @@ describe('readRunnerAuth', () => {
     expect(await readRunnerAuth(OPENCODE_MANIFEST, { exec })).toEqual({ state: 'unknown' });
     expect(exec).not.toHaveBeenCalled();
   });
+
+  // A timeout is not an answer: execFile kills the child and hands back no
+  // exit status, so whatever it printed before hanging must not be judged.
+  it.skipIf(process.platform === 'win32')('reports unknown, not signed out, when a status probe times out after printing its line', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-auth-timeout-'));
+    const cli = join(dir, 'codex');
+    writeFileSync(cli, '#!/bin/sh\necho "Not logged in" >&2\nexec sleep 5\n');
+    chmodSync(cli, 0o755);
+    try {
+      const manifest = { ...CODEX_MANIFEST, runner: { command: cli } };
+
+      expect(await readRunnerAuth(manifest, { timeoutMs: 1000 })).toEqual({
+        state: 'unknown',
+        loginCommand: [cli, 'login'],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('signedOutFromFailure', () => {
@@ -129,6 +151,15 @@ describe('signedOutFromFailure', () => {
   it('leaves an unrelated failure, and a runner that declares no login, unjudged', () => {
     expect(signedOutFromFailure(CLAUDE_CODE_MANIFEST, 'The repository is not a git repository')).toBeUndefined();
     expect(signedOutFromFailure(OPENCODE_MANIFEST, 'Not logged in · Please run /login')).toBeUndefined();
+  });
+
+  // The phrase alone is not the runner's own verdict: a failed turn may quote
+  // another tool (GitHub CLI, an MCP server) that is not logged in. Recording
+  // that as the agent's state walls the planner until the next probe.
+  it('leaves an unrelated failure that merely mentions a login elsewhere', () => {
+    const passage = 'gh: You are not logged in to any GitHub hosts.';
+    expect(signedOutFromFailure(CLAUDE_CODE_MANIFEST, passage)).toBeUndefined();
+    expect(signedOutFromFailure(CODEX_MANIFEST, passage)).toBeUndefined();
   });
 
   it("never throws when a runner's reader cannot judge a failure", () => {

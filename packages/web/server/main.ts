@@ -81,7 +81,12 @@ process.on('unhandledRejection', (reason) => {
   console.error(`[web] unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`);
 });
 
-process.on('SIGINT', () => { shutdown(); });
+// A daemon this CLI owns shares its foreground process group. Ctrl-C while a
+// login child holds the terminal is a SIGINT to that whole group, and the TUI
+// ignores it so the child alone is cancelled; shutting down here would take
+// every in-memory session with it. The owner stops us with SIGTERM, and the
+// parent watch below still catches an owner that dies.
+process.on('SIGINT', () => { if (!watchParentPid) shutdown(); });
 process.on('SIGTERM', () => { shutdown(); });
 process.on('SIGHUP', () => { shutdown(); });
 

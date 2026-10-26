@@ -131,7 +131,7 @@ describe('handleTui', () => {
     void handleTui([]);
 
     await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
-    expect(daemon.ensureDaemonOwned).toHaveBeenCalledWith(4000, { detached: false });
+    expect(daemon.ensureDaemonOwned).toHaveBeenCalledWith(4000, { detached: false, cwd: process.cwd() });
     // With its workspace, so a session a restarted daemon dropped is re-adopted from there.
     expect(apiClient.ApiClient).toHaveBeenCalledWith(4000, process.cwd());
     const frame = fakeTerminal.draw.mock.calls[0][0] as string[];
@@ -166,6 +166,21 @@ describe('handleTui', () => {
     expect(daemon.resolvePort).not.toHaveBeenCalled();
   });
 
+  it('starts its private daemon in the workspace, so the login probe asks that account', async () => {
+    // The daemon judges a login from its own cwd's environment; started from
+    // the shell's directory instead of `--workspace`, `/login` signs one
+    // account in while the probe and the gate keep reporting the other out.
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-tui-workspace-'));
+    try {
+      void handleTui(['--workspace', workspace]);
+
+      await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
+      expect(daemon.ensureDaemonOwned).toHaveBeenCalledWith(4000, { detached: false, cwd: workspace });
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it('drives the well-known daemon instead when --port is passed explicitly', async () => {
     daemon.resolvePort.mockReturnValueOnce(3742);
     void handleTui(['--port', '3742']);
@@ -173,7 +188,7 @@ describe('handleTui', () => {
     await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
     expect(daemon.resolvePort).toHaveBeenCalledWith(['--port', '3742']);
     expect(daemon.findFreePort).not.toHaveBeenCalled();
-    expect(daemon.ensureDaemonOwned).toHaveBeenCalledWith(3742, { detached: false });
+    expect(daemon.ensureDaemonOwned).toHaveBeenCalledWith(3742, { detached: false, cwd: process.cwd() });
   });
 
   it('honours ORDEWELL_AUTONOMOUS_MODE=false from the environment', async () => {
