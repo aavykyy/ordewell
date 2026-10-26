@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, act, fireEvent, cleanup } from '@testing-library/react';
-import { EMPTY_TASK_LOG, EMPTY_TASK_LOG_FOLLOW, taskLogHeaderView, type AttemptUsage, type DisplayBlock, type RunnerCommand, type StructuredTurnEnd, type TaskLogFollow, type TaskLogHeaderTask, type TaskUsageSummary, type UsageTotals } from '@ordewell/core';
+import { EMPTY_TASK_LOG, EMPTY_TASK_LOG_FOLLOW, taskLogHeaderView, type AccountLimitSnapshot, type AttemptUsage, type DisplayBlock, type RunnerCommand, type StructuredTurnEnd, type TaskLogFollow, type TaskLogHeaderTask, type TaskUsageSummary, type UsageTotals } from '@ordewell/core';
 import { replayTaskLog } from '@ordewell/core/plan-utils';
 import TaskLogApp from '../TaskLogApp';
 import type { HostToTaskLog, TaskLogStatus } from '../../../shared/taskLogProtocol';
@@ -91,6 +91,12 @@ const message = (id: string, text: string): DisplayBlock => ({ type: 'message', 
 function init(overrides: StatusOverrides = {}, blocks: DisplayBlock[] = [message('b1', 'hello from the agent')]): void {
   send({ type: 'init', status: status(overrides), blocks });
 }
+
+const claudeLimits: AccountLimitSnapshot = {
+  harness: 'claude-code', label: 'Claude Code', status: 'fresh', plan: 'Pro',
+  buckets: [{ id: 'claude-code', windows: [{ slot: 'primary', usedPercent: 18, durationMinutes: 300, resetsAt: null }] }],
+  readAt: '2026-03-02T10:00:00.000Z',
+};
 
 describe('the task log tab (ADR-0018, V1)', () => {
   beforeEach(() => {
@@ -213,6 +219,24 @@ describe('the task log tab (ADR-0018, V1)', () => {
 
     const lines = [...document.querySelectorAll('.usage-line')].map((el) => el.textContent);
     expect(lines).toEqual(['attempt 1: ctx 10k (5%) · $0.50', 'task total: ctx 50k (25%) · $1.50']);
+  });
+
+  it('keeps runner limits with the selected attempt context once across an attempt and task-total pair', () => {
+    render(<TaskLogApp />);
+    send({ type: 'accountLimits', limits: [claudeLimits] });
+    init({
+      attempt: 1, attempts: [1, 2],
+      usage: { totals: { inputTokens: 1000, reportedCost: { USD: 0.5 } }, contextFill: { usedTokens: 10_000, windowTokens: 200_000 } },
+      usageTotal: { totals: { inputTokens: 1500, reportedCost: { USD: 1.5 } }, contextFill: { usedTokens: 50_000, windowTokens: 200_000 } },
+    });
+
+    expect(document.querySelectorAll('.account-limit')).toHaveLength(1);
+
+    init({ attempt: 2, attempts: [1, 2], usage: { totals: { inputTokens: 500, reportedCost: { USD: 1 } }, contextFill: { usedTokens: 40_000, windowTokens: 200_000 } } });
+    expect(document.querySelectorAll('.account-limit')).toHaveLength(1);
+    const lines = [...document.querySelectorAll('.usage-line')];
+    expect(document.querySelector('.account-limit')?.textContent).toBe('Claude Code 5h 18% used');
+    expect(document.querySelector('.account-limit')?.closest('.usage-line')).toBe(lines[0]);
   });
 
   it('completes only the runner commands and sends a command with arguments', () => {
