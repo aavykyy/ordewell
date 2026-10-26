@@ -783,9 +783,10 @@ describe('loops in the conversation prompt (ADR-0045)', () => {
 
   it.each(variants)('places loops under the build and the failure to explain, and as a kind of goal of their own (%o)', ({ harness, execution }) => {
     const strategy = section(prompt(harness, { execution }), 'STRATEGY:');
-    expect(strategy).toMatch(/- A build with known steps:.*end it with a loop, under LOOPS below\./);
-    expect(strategy).toMatch(/- A failure to explain:.*make it the check of a loop whose body is the fix, under LOOPS below\./);
-    expect(strategy).toMatch(/- A goal that is done only when something passes \("until the tests pass", "until the review finds nothing"\): a loop, under LOOPS below\./);
+    expect(strategy).toMatch(/- A build with known steps:.*Its tests, type checks and self-review belong inside its implementation tasks; a loop is for what LOOPS below allows\./);
+    expect(strategy).toMatch(/- A failure to explain:.*A simple fix reproduces and validates its regression within its own task; a loop is for what LOOPS below allows\./);
+    expect(strategy).not.toMatch(/end it with a loop|make it the check of a loop/);
+    expect(strategy).toMatch(/- A goal the user states as done only when something passes \("until the tests pass", "review and fix until there are no confirmed issues"\): a loop, under LOOPS below\./);
   });
 
   it.each(variants)('teaches the loop field, its check and its body (%o)', ({ harness, execution }) => {
@@ -793,6 +794,8 @@ describe('loops in the conversation prompt (ADR-0045)', () => {
     expect(p.indexOf('\nLOOPS:\n')).toBeGreaterThan(p.indexOf('\nBUILD PLANS:\n'));
     const loops = section(p, 'LOOPS:');
     expect(loops).toMatch(/Ordewell runs the rounds itself, with no turn of yours in between/);
+    expect(loops).toMatch(/Use one only for an explicit iterate-until goal .* or a specific acceptance condition that needs independent repeated checking and fixing\. Routine tests, type checks and self-review belong inside the implementation tasks; tests that exist, a command that can be rerun or code that changed never make a loop\. When you infer a loop the user did not ask for, give its reason in the outline\./);
+    expect(loops).not.toMatch(/a plan without such a bar/);
     expect(loops).toContain('"loop": { "body": ["fix-id", ...], "maxRounds": 3 }');
     expect(loops).toMatch(/Each depends on the check, and otherwise only on what the check depends on or on other tasks of the body/);
     expect(loops).toMatch(/A loop's body cannot depend on a research task directly\. When the fix acts on a research task's findings, make the check depend on the research task: the body may then depend on it too, and reads its report with `read_task` \(WHO EXPLORES\)\./);
