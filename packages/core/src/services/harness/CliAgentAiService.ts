@@ -30,7 +30,10 @@ import { settleReply, type ReplyAttempt } from '../settleReply';
 import { ReplySplitter } from '../replyStream';
 import { redactSecrets } from '../../utils/redactSecrets';
 import { abortScope } from '../../utils/abortScope';
-import { runnerForProvider } from '../ProviderRegistry';
+import { providerForRunner, runnerForProvider } from '../ProviderRegistry';
+import { recordRunnerAuth, signedOutFromFailure } from '../runnerAuth';
+import { describePlannerNotReady, TERMINAL_UI_COMMANDS, type PlannerNotReady } from '../plannerReadiness';
+import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
 import { collectResearchContext } from '../ContextCollector';
 import { sensitiveEnvValues } from '../outboundSecrets';
 import type { AgentAdapter, AgentEvent, AgentProcessDeps, PlannerStartOptions, UsageLimitSignal } from './AgentAdapter';
@@ -671,10 +674,32 @@ export class CliAgentAiService implements IAiService {
     if (error || signal?.aborted) session.stop();
 
     if (error) {
-      const failure = reply.fail(error);
+      const failure = this.explainSignedOut(reply.fail(error));
       return { text: reply.text, runs: reply.runs(), researchLog: settledLog(), error: failure, usageLimit, aborted: signal?.aborted, backgroundAgents };
     }
     return { text: reply.text, runs: reply.runs(), researchLog: settledLog(), error, aborted: signal?.aborted, backgroundAgents };
+  }
+
+  /**
+   * A turn that failed because the runner's own account is signed out is
+   * recorded for the synchronous planner gate, and the failure opens with the
+   * same two ways back in the gate would give (ADR-0009). Only a phrase the
+   * runner's manifest declares; any other failure is returned untouched.
+   */
+  private explainSignedOut(failure: string): string {
+    const manifest = BUILTIN_MANIFESTS.find((candidate) => candidate.name === this.runner);
+    const auth = manifest ? signedOutFromFailure(manifest, failure) : undefined;
+    if (!manifest || !auth) return failure;
+    recordRunnerAuth(this.runner, auth);
+    const reason: PlannerNotReady = {
+      code: 'signed_out',
+      provider: providerForRunner(this.runner) ?? this.config.aiProvider,
+      label: manifest.displayName,
+      runner: this.runner,
+      loginCommand: auth.loginCommand,
+    };
+    const guidance = describePlannerNotReady(reason, TERMINAL_UI_COMMANDS);
+    return failure.startsWith(guidance) ? failure : `${guidance}\n\n${failure}`;
   }
 
   // --- Process lifecycle ---

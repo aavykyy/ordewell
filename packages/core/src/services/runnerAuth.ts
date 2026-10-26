@@ -78,7 +78,7 @@ export async function readRunnerAuth(manifest: RunnerManifest, options: ReadRunn
   const output = `${answer.stdout}\n${answer.stderr}`;
   let state: 'signed-in' | 'signed-out' | null;
   try {
-    state = spec.read ? spec.read(output, answer.code) : verdictFromExit(spec, output, answer.code);
+    state = verdictOf(spec, output, answer.code);
   } catch {
     // A reader that cannot make sense of the output answered nothing.
     return { state: 'unknown', loginCommand };
@@ -86,6 +86,37 @@ export async function readRunnerAuth(manifest: RunnerManifest, options: ReadRunn
   if (state === 'signed-in') return { state, loginCommand };
   if (state === 'signed-out') return { state, loginCommand, detail: 'not logged in' };
   return { state: 'unknown', loginCommand };
+}
+
+/** A signed-out verdict always carries the command that fixes it; a failure fallback leans on that. */
+export type SignedOutAuth = RunnerAuth & { state: 'signed-out'; loginCommand: string[] };
+
+/**
+ * A failed turn's own words as the runner's signed-out verdict. Only a phrase
+ * the manifest declares — its `signedOut` line, or a reader that can judge the
+ * message — so an unrelated failure is never turned into a login wall. It asks
+ * nothing: the turn has already told us.
+ */
+export function signedOutFromFailure(manifest: RunnerManifest, message: string): SignedOutAuth | undefined {
+  const spec = manifest.auth;
+  if (!spec) return undefined;
+  let state: 'signed-in' | 'signed-out' | null;
+  try {
+    state = spec.signedOut?.test(message) ? 'signed-out' : verdictOf(spec, message, 1);
+  } catch {
+    return undefined;
+  }
+  if (state !== 'signed-out') return undefined;
+  return {
+    state,
+    loginCommand: [manifest.runner.command, ...spec.loginArgs],
+    detail: 'not logged in',
+  };
+}
+
+function verdictOf(spec: RunnerAuthSpec, output: string, code: number): 'signed-in' | 'signed-out' | null {
+  if (spec.read) return spec.read(output, code);
+  return verdictFromExit(spec, output, code);
 }
 
 function verdictFromExit(spec: RunnerAuthSpec, output: string, code: number): 'signed-in' | 'signed-out' | null {
