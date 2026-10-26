@@ -3,7 +3,8 @@ import { FakeWorktreeIsolation } from '../../testing';
 import type { ExecutionRecord } from '../../models/Execution';
 import type { SessionMessage } from '../SessionMessage';
 import { WAKE_DEBOUNCE_MS } from '../Supervisor';
-import { ctx, NOW, prose, settled, supervised, task, until, waitForInput, type Env, type Options } from './supervisorTestKit';
+import { changeSettings, ctx, heldPlanner, NOW, prose, recordingRunner, settled, supervised, task, until, waitForInput, type Env, type Options } from './supervisorTestKit';
+import { makeSession, saves } from './sessionTestKit';
 
 /**
  * With merge automatically on, the run's end
@@ -31,7 +32,7 @@ const merges = (iso: FakeWorktreeIsolation) => iso.calls.filter((c) => c.op === 
 const runUpdate = (message: string) => message.slice(message.indexOf('Run update:')).split('\n\n')[0];
 
 /** An Act run over `tasks`, isolated, whose planner is live from a user turn before the run starts. */
-async function liveAct(tasks = [task('t1', 1)], mergeAtGatesAutomatically = true, isolation = new FakeWorktreeIsolation(), over: Options = {}, start: 'plan' | 'each task' = 'plan') {
+async function liveAct(tasks = [task('t1', 1)], mergeAtGatesAutomatically = true, isolation = new FakeWorktreeIsolation(), over: Options = {}, start: 'plan' | 'each task' | 'first task' = 'plan') {
   const env = await supervised(tasks, {
     settings: { supervisorLevel: 'act', mergeAtGatesAutomatically }, isolation, config: { worktreeIsolation: true }, execute: false, ...over,
   });
@@ -41,7 +42,7 @@ async function liveAct(tasks = [task('t1', 1)], mergeAtGatesAutomatically = true
   await chatted;
   expect(env.planner.state.live).toBe(true);
   if (start === 'plan') await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
-  else for (const t of tasks) expect(await env.session.execute({ command: 'run_task', task: t.id }, { kind: 'user' })).toMatchObject({ ok: true });
+  else for (const t of start === 'each task' ? tasks : tasks.slice(0, 1)) expect(await env.session.execute({ command: 'run_task', task: t.id }, { kind: 'user' })).toMatchObject({ ok: true });
   return { ...env, isolation };
 }
 
@@ -74,6 +75,7 @@ describe('the Act supervisor after an automatic Merge all closed the run', () =>
     expect(runUpdate(woken.message)).toMatch(/merged/i);
     // 2. a merge_all that finds it merged is not a refusal the user is told of.
     expect(merge.isError).toBeFalsy();
+    expect(JSON.parse(merge.text)).toEqual({ ok: true, result: expect.stringMatching(/^Nothing to merge/) });
     expect(actions(env).map((a) => a.text)).not.toContain(refusedLine);
     expect(records(env).filter((r) => r.command === 'merge_all' && r.outcome === 'refused')).toEqual([]);
     expect(merges(env.isolation)).toBe(1);
@@ -131,11 +133,70 @@ describe('the Act supervisor after an automatic Merge all closed the run', () =>
     const merge = await env.planner.tools().mergeAll!({}, ctx);
     // The digest was right when it went out, so only the seam can answer this one.
     expect(merge.isError).toBeFalsy();
-    expect(records(env).filter((r) => r.command === 'merge_all' && r.outcome === 'refused')).toEqual([]);
+    expect(JSON.parse(merge.text)).toEqual({ ok: true, result: expect.stringMatching(/^Nothing to merge/) });
+    expect(records(env).filter((r) => r.command === 'merge_all')).toEqual([]);
+    expect(actions(env).map((a) => a.text).filter((t) => /merge/i.test(t))).toEqual([]);
+    expect(merges(env.isolation)).toBe(1);
+  });
+});
+
+describe('a run that closed merged, across a daemon restart', () => {
+  it('still answers merge_all as nothing to merge, and the redelivered wake-up still says the work is merged', async () => {
+    const env = await liveAct();
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.planner.calls.length === 2);
+    const saved = structuredClone(saves(env.session).mock.calls.at(-1)![0]);
+    expect(saved.isolation).toBeUndefined();
+    env.session.destroy();
+
+    const planner = heldPlanner();
+    const isolation = new FakeWorktreeIsolation();
+    const messages: SessionMessage[] = [];
+    const restarted = makeSession({
+      aiService: planner.aiService, runner: recordingRunner().runner, isolation, workspaceRoot: () => '/repo', broadcast: (m) => messages.push(m),
+    });
+    restarted.loadPlan(saved, 'build it', '/repo', { sessionId: env.session.sessionId });
+    await settled();
+
+    expect(await restarted.execute({ command: 'merge_all' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: true, message: expect.stringMatching(/^Nothing to merge/) });
+    expect(merges(isolation)).toBe(0);
+    expect(messages.filter((m) => m.type === 'execution_action')).toEqual([]);
+    expect(restarted.planState!.conversationHistory!.filter((e) => e.execution?.command === 'merge_all')).toEqual([]);
+
+    // The wake-up its turn never answered goes with the user's next message, still saying so.
+    const sent = restarted.continueConversation('what happened?');
+    await until(() => planner.calls.length === 1);
+    expect(runUpdate(planner.calls[0].message)).toMatch(/everything it landed is merged into the user's branch/);
+    planner.calls[0].finish(prose('The run merged.'));
+    await sent;
   });
 });
 
 describe('controls a correction must keep', () => {
+  it('a later run with landed work waiting: the earlier run\'s merge hides none of it, and merge_all merges it', async () => {
+    const env = await liveAct([task('t1', 1), task('t2', 2)], true, new FakeWorktreeIsolation(), {}, 'first task');
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.planner.calls.length === 2);
+    expect(runUpdate(env.planner.calls[1].message)).toMatch(/nothing to merge/);
+    env.planner.calls[1].finish(prose('Merged already.'));
+    await settled();
+
+    changeSettings(env, { mergeAtGatesAutomatically: false });
+    expect(await env.session.execute({ command: 'run_task', task: 't2' }, { kind: 'user' })).toMatchObject({ ok: true });
+    env.run.of('t2').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.planner.calls.length === 3);
+    expect(env.session.runMergeView()).not.toBeNull();
+    expect(runUpdate(env.planner.calls[2].message)).toMatch(/its landed work waits for Merge all/);
+    expect(runUpdate(env.planner.calls[2].message)).not.toMatch(/nothing to merge/);
+
+    const merge = await env.planner.tools().mergeAll!({}, ctx);
+    expect(merge.isError).toBeFalsy();
+    expect(JSON.parse(merge.text).result).toMatch(/^Merged the run's landed work/);
+    expect(merges(env.isolation)).toBe(2);
+    expect(records(env).filter((r) => r.command === 'merge_all').map((r) => [r.actor, r.outcome])).toEqual([['supervisor', 'done']]);
+  });
+
+
   it('merge automatically off: the run is handed over with landed work, and the supervisor\'s merge_all merges it', async () => {
     const env = await liveAct([task('t1', 1)], false);
     env.run.of('t1').reportComplete({ status: 'done', summary: '' });
@@ -178,6 +239,25 @@ describe('controls a correction must keep', () => {
     expect(JSON.parse(merge.text).reason).toMatch(/^Merge all stopped: .*conflict/i);
     expect(records(env).filter((r) => r.command === 'merge_all').map((r) => [r.actor, r.outcome])).toEqual([['supervisor', 'refused']]);
     expect(merges(isolation)).toBe(2);
+  });
+
+  it('a later run in the shared workspace root: the earlier run\'s merge no longer answers for it, and merge_all is refused as before', async () => {
+    const env = await liveAct([task('t1', 1), task('t2', 2)], true, new FakeWorktreeIsolation(), {}, 'first task');
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.planner.calls.length === 2);
+    env.planner.calls[1].finish(prose('Merged already.'));
+    await settled();
+
+    env.isolation.availability = { active: false, reason: 'not-git' };
+    expect(await env.session.execute({ command: 'run_task', task: 't2' }, { kind: 'user' })).toMatchObject({ ok: true });
+    env.run.of('t2').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.planner.calls.length === 3);
+    expect(runUpdate(env.planner.calls[2].message)).not.toMatch(/merge/i);
+
+    const merge = await env.planner.tools().mergeAll!({}, ctx);
+    expect(merge.isError).toBe(true);
+    expect(JSON.parse(merge.text).reason).toBe('This plan has no isolated run');
+    expect(merges(env.isolation)).toBe(1);
   });
 
   it('a run that never isolated: merge_all is still refused as having no isolated run', async () => {

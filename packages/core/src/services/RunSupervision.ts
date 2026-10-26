@@ -42,6 +42,12 @@ export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pu
   tasks(): readonly Task[];
   /** What a task waiting at a checkpoint asked, if it said. */
   checkpointQuestion(taskId: string): string | undefined;
+  /**
+   * Where the work the run landed stands: merged into the user's branch with
+   * the run cleared up, waiting for Merge all, or null: the run did not
+   * isolate, or landed nothing.
+   */
+  landedWork(): 'merged' | 'pending' | null;
   /** The last few lines a task's runner wrote. */
   recentOutput(taskId: string): string | undefined;
   /** The tail of a task's output a report carries; see {@link taskReport}. */
@@ -216,12 +222,20 @@ export class RunSupervision {
       ? { kind: 'supervisor', level: this.level } : { kind: 'planner-turn' });
   }
 
-  /** The run finished; a handoff deferred to the supervisor is resent once its wake-up turn on it is over. */
+  /**
+   * The run finished; a handoff deferred to the supervisor is resent once its
+   * wake-up turn on it is over. The update says whether its landed work is
+   * merged already: an automatic Merge all at the run's end comes before it,
+   * and a live planner is told of that nowhere else (ADR-0029).
+   */
   runFinished(): void {
     // A skip of a body task stops its loop and settles nothing.
     this.reportStoppedLoops(repeatingChecks([...this.host.tasks()]));
     const { total, completed, failed, blocked, skipped } = executionSummary(flattenTasks([...this.host.tasks()]));
-    this.supervisor.observe({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}${blocked > 0 ? `, ${blocked} blocked` : ''}${skipped > 0 ? `, ${skipped} skipped` : ''}` });
+    const landed = this.host.landedWork();
+    const merge = landed === 'merged' ? '; everything it landed is merged into the user\'s branch, so there is nothing to merge'
+      : landed === 'pending' ? '; its landed work waits for Merge all' : '';
+    this.supervisor.observe({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}${blocked > 0 ? `, ${blocked} blocked` : ''}${skipped > 0 ? `, ${skipped} skipped` : ''}${merge}` });
     if (!this.supervisor.awaitsRunEnd) this.handOver();
   }
 
