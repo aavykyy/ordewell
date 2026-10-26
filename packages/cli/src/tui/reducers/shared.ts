@@ -1,5 +1,5 @@
 import type { AccountLimitSnapshot } from '@ordewell/core';
-import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskLogEvent, TaskStatus } from '@ordewell/core';
+import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, IsolationPreview, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskLogEvent, TaskStatus } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -89,6 +89,8 @@ export type Effect =
   | { type: 'loadRunners' }
   /** The enabled runners and the allowlist, as they are saved now: what flags a task and ticks a picker. */
   | { type: 'loadScope' }
+  /** A read-only look at this workspace's repositories, branches and isolation, for the welcome. */
+  | { type: 'loadIsolationPreview' }
   | { type: 'exit' };
 
 export type ChatRestored = { type: 'chatRestored'; history: SerializedConversationMessage[]; researchLog?: ResearchLogEntry[]; plannerUsage?: PlannerUsage; pendingTurns?: SerializedPendingTurn[]; sessionId?: string };
@@ -173,6 +175,12 @@ export type Action =
   | { type: 'inputPrefilled'; text: string; sessionId?: string }
   | { type: 'rewindTargetsLoaded'; targets: RewindTargetView[]; sessionId?: string; pick?: number }
   | { type: 'runnersLoaded'; runners: RunnerView[]; orchestratorModel?: string }
+  /** The welcome's repositories and branches: `read` is the request this answers, so an older one cannot land on a newer. */
+  | { type: 'isolationPreviewLoading'; read: number }
+  | { type: 'isolationPreviewLoaded'; preview: IsolationPreview; read: number }
+  | { type: 'isolationPreviewFailed'; message: string; read: number }
+  /** The daemon answered again after a revive: what it serves for this workspace may have changed with it. */
+  | { type: 'daemonReconnected' }
   /** Another surface saved the settings file the runners and the allowlist live in. */
   | { type: 'sharedSettingsChanged' }
   /**

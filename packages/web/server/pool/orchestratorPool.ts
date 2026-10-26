@@ -64,6 +64,9 @@ import {
   PlannerTurnDiscardedError,
   PlannerTurnStoppedError,
   type LeaseHost,
+  createIsolationPreview,
+  type IIsolationPreview,
+  type IsolationPreview,
 } from '@ordewell/core';
 import { WebConfig, type PlannerPick } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
@@ -108,6 +111,11 @@ export interface OrchestratorPoolDeps {
    * unless a test runs two pools as two hosts.
    */
   leaseHost?: LeaseHost;
+  /**
+   * The read-only repository look a surface shows before any run. Defaulted to
+   * one built from the daemon's config; tests inject a fake so no real git runs.
+   */
+  isolationPreview?: IIsolationPreview;
 }
 
 export class OrchestratorPool {
@@ -143,6 +151,7 @@ export class OrchestratorPool {
   /** One probe per daemon, asked again whenever the runner list is refreshed (ADR-0033). */
   private codexSandbox: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
   private readonly leaseHost: LeaseHost | undefined;
+  private readonly isolationPreview: IIsolationPreview;
 
   constructor(deps: OrchestratorPoolDeps = {}) {
     const pluginNotice = removedPluginNotice();
@@ -153,6 +162,10 @@ export class OrchestratorPool {
     this.codexSandbox = deps.codexSandbox
       ?? new CodexSandboxAvailability(this.registry, { spawn: nodeSpawn, fetch: globalThis.fetch }, { cwd: process.cwd(), env: process.env });
     this.leaseHost = deps.leaseHost;
+    // What worktreeIsolation and workspaceRepos mean here, which is the config
+    // the sessions plan with: the daemon's own environment, not a guess from
+    // the workspace a request happens to name.
+    this.isolationPreview = deps.isolationPreview ?? createIsolationPreview({ config: new WebConfig() });
     this.accountLimitCollectors = deps.accountLimitCollectors ?? ((workspace) => {
       const workspaceRoot = () => workspace;
       const isInstalled = (runner: string) => async () => (await this.runnerInstallation.filterInstalled([runner])).includes(runner);
@@ -182,6 +195,16 @@ export class OrchestratorPool {
    */
   detectInstalledPlanner(): Promise<PlannerBackendId | null> {
     return detectInstalledPlanner(this.runnerInstallation);
+  }
+
+  /**
+   * A read-only look at the repositories and branches a run would isolate in
+   * `workspace`. Free of side effects on purpose: a first screen may ask before
+   * any plan or run exists, and asking must not create one.
+   */
+  previewIsolation(workspace: string): Promise<IsolationPreview> {
+    assertWorkspaceExists(workspace);
+    return this.isolationPreview.preview(workspace);
   }
 
   /**

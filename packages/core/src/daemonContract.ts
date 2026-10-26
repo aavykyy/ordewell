@@ -1,6 +1,6 @@
 import type { ApprovalDecision } from './interfaces/IApproval';
 import type { AiProvider, PlannerBackendId } from './interfaces/IConfig';
-import type { IsolationMergeResult } from './interfaces/IWorktreeIsolation';
+import type { IsolationMergeResult, IsolationPreview } from './interfaces/IWorktreeIsolation';
 import type { SessionMeta } from './models/Session';
 import type { DiscoveredModel } from './models/Task';
 import type { PlannerNotReady } from './services/plannerReadiness';
@@ -297,6 +297,15 @@ export interface CommandsResponse {
 
 export interface WorkspacesResponse {
   workspaces: string[];
+}
+
+/**
+ * The repositories and branches a run would isolate, as a surface shows them
+ * before there is a run. Read-only: nothing about it is authoritative once a
+ * run starts, which reads the base branch again.
+ */
+export interface IsolationPreviewResponse {
+  preview: IsolationPreview;
 }
 
 export interface ApprovalsResponse {

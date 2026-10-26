@@ -117,6 +117,13 @@ function fakeDaemon() {
       ],
       providerErrors: {},
     })),
+    getIsolationPreview: vi.fn(async () => ({
+      preview: {
+        status: 'ready' as const,
+        repos: [{ path: '.', head: { kind: 'branch' as const, branch: 'main', commit: 'a1b2c3d' }, dirty: false }],
+        shared: [],
+      },
+    })),
     streamPlanning: vi.fn((_id: string, onEvent: (event: unknown) => void) => {
       log.push('streamPlanning');
       planningListener = onEvent;
@@ -1155,7 +1162,7 @@ describe('TUI end to end', () => {
       expect(h.daemon.mocks.getSettings).toHaveBeenCalled();
       expect(h.daemon.mocks.getModels).toHaveBeenCalled();
     });
-    expect(h.screen()).not.toContain('Refreshed runners, settings and models.');
+    expect(h.screen()).not.toContain('Refreshed runners, settings, models and repositories.');
     expect(isMark(topBodyRow(h.screen()))).toBe(true);
 
     // A goal starts a conversation that asks a clarifying question before any

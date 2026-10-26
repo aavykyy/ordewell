@@ -460,6 +460,33 @@ function reduceAction(state: TuiState, action: Action): Step {
         orchestratorModel: action.orchestratorModel ?? state.orchestratorModel,
       }, ['set-task-runner']))));
 
+    // The preview's reads can overlap: a launch refresh and a settings change
+    // both ask, and the daemon may answer the first one last. Only an answer
+    // from the newest read may touch the welcome.
+    case 'isolationPreviewLoading':
+      return action.read < state.isolationPreviewRead
+        ? step(state)
+        : step({ ...state, isolationPreview: null, isolationPreviewRead: action.read });
+
+    case 'isolationPreviewLoaded':
+      return action.read < state.isolationPreviewRead
+        ? step(state)
+        : step({ ...state, isolationPreview: action.preview, isolationPreviewRead: action.read });
+
+    case 'isolationPreviewFailed':
+      return action.read < state.isolationPreviewRead
+        ? step(state)
+        : step({
+          ...state,
+          isolationPreview: { status: 'failed', repos: [], shared: [], error: action.message },
+          isolationPreviewRead: action.read,
+        });
+
+    // A replacement daemon may serve another configuration and another
+    // workspace tree; the welcome asks again rather than keeping the old one.
+    case 'daemonReconnected':
+      return step(state, [{ type: 'loadIsolationPreview' }]);
+
     case 'failed': {
       // A failed call may have been the task view's log read; the view falls
       // back to whatever the live stream sent rather than waiting forever.
