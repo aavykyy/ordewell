@@ -111,6 +111,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: 'runActivity', activity, ...(requestId !== undefined ? { requestId } : {}) });
   }
 
+  /** Answer one Runners pill request with what the shared list now holds for that runner. */
+  acknowledgeRunnerChoice(requestId: string, runnerId: RunnerId, enabled: boolean): void {
+    this.postMessage({ type: 'runnerChoiceSaved', requestId, runnerId, enabled });
+  }
+
   /** Drop the handoff card and every per-task isolation indicator. */
   clearIsolationHandoff(): void {
     this.run.clearIsolation();

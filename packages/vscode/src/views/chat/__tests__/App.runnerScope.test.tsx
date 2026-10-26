@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import App from '../App';
-import type { HostToWebview, RunnerMeta } from '../../../shared/protocol';
+import type { RunnerMeta } from '../../../shared/protocol';
 import { api, post } from './hostBridge';
 
 const NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', opencode: 'OpenCode' };
@@ -34,13 +34,9 @@ type RunnerRequest = { type: 'setRunnerEnabled'; runnerId: string; enabled: bool
 const runnerRequests = (): RunnerRequest[] =>
   api.postMessage.mock.calls.map(([msg]) => msg as { type: string }).filter((m): m is RunnerRequest => m.type === 'setRunnerEnabled');
 
-/**
- * The host's answer to one request: the state the shared list now holds for
- * that runner, under the id the click carried. The reply type does not exist
- * until the fix adds it, hence the cast.
- */
+/** The host's answer to one request: the state the shared list now holds for that runner, under the id the click carried. */
 const answer = (request: Pick<RunnerRequest, 'requestId' | 'runnerId'>, enabled: boolean): void =>
-  post({ type: 'runnerChoiceSaved', requestId: request.requestId, runnerId: request.runnerId, enabled } as unknown as HostToWebview);
+  post({ type: 'runnerChoiceSaved', requestId: request.requestId, runnerId: request.runnerId, enabled });
 
 /** The runners the next message to the planner would name. */
 const runnersSentWith = (text: string): unknown => {

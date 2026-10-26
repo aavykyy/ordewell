@@ -1068,8 +1068,7 @@ describe('a runner pill click persists to the one saved list', () => {
       settingsPath: path.join(dir, 'settings.json'),
       /** The webview asks for `runnerId` on or off, under a request id of its own; returns the id. */
       setRunnerEnabled: (runnerId: string, enabled: boolean, requestId = `req-${++requestCount}`): string => {
-        // `requestId` joins the protocol with the fix, so the message is built untyped here.
-        chat.send({ type: 'setRunnerEnabled', runnerId, enabled, requestId } as WebviewToHost);
+        chat.send({ type: 'setRunnerEnabled', runnerId, enabled, requestId });
         return requestId;
       },
       /** Every save acknowledgement the webview was sent, in order: the one message that settles a pill click. */
