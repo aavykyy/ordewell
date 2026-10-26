@@ -8,7 +8,7 @@ import PlannerResendBar from './components/PlannerResendBar';
 import PlannerPauseBar from './components/PlannerPauseBar';
 import DockResizeHandle from './components/DockResizeHandle';
 import { ConversationBlocks } from './components/ChatMessage';
-import { reduceHost, INITIAL_HOST_STATE, type HostState } from './hostState';
+import { reduceHost, runnersOn, INITIAL_HOST_STATE, type HostState } from './hostState';
 import ModelSelector, { API_PROVIDER_LABELS } from './components/ModelSelector';
 import PlanCardGroup from './components/PlanCardGroup';
 import UsageLine from './components/UsageLine';
@@ -68,17 +68,20 @@ export default function App() {
   const [host, dispatch] = useReducer(reduceHost, INITIAL_HOST_STATE);
   const {
     conversation, plan, isExecuting, isResearchActive, error, models, modelsByRunner,
-    runnerList, enabledRunnerIds, modelAllowlist, runners, held, unsent, modesByRunner, runnerNotice, modelConfig,
+    runnerList, enabledRunnerIds, pendingRunners, modelAllowlist, held, unsent, modesByRunner, runnerNotice, modelConfig,
     modelOptions, configuredProviders, planner, plannerKnown, runnersKnown, isReady, modelDiscoveryErrors,
     skills, taskSkills, checkpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest, accountLimits,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
   const setError = useCallback((v: string) => dispatch({ type: 'patchError', error: v }), []);
   const setIsReady = useCallback((v: boolean) => dispatch({ type: 'patchReady', ready: v }), []);
-  const setRunners = useCallback((v: Updatable<RunnerId[]>) => dispatch({ type: 'patchRunners', runners: v }), []);
   const setDockHeight = useCallback((v: number | undefined) => dispatch({ type: 'patchDockHeight', height: v }), []);
   const setDockExpanded = useCallback((v: Updatable<boolean>) => dispatch({ type: 'patchDockExpanded', expanded: v }), []);
   const blocks = useMemo(() => patchedBlocks(conversation), [conversation]);
+  const runners = useMemo(
+    () => runnersOn({ runnerList, enabledRunnerIds, pendingRunners }),
+    [runnerList, enabledRunnerIds, pendingRunners],
+  );
   // The planner compacting holds the conversation as a turn does: Stop stops
   // it, a message waits for it, and the draft stays. Read from the blocks, so
   // a webview that reconnects mid-compaction knows it from what it is sent.
@@ -231,22 +234,13 @@ export default function App() {
     vscode.postMessage({ type: 'sendMessage', text, runners, typed: true });
   }, [runners, handleNewSession, showNewSessionConfirm, plannerBusy]);
 
-  const handleToggleRunner = useCallback((runnerId: RunnerId) => {
-    setRunners((prev) => {
-      if (prev.includes(runnerId)) {
-        const next = prev.filter((r) => r !== runnerId);
-        return next.length > 0 ? next : prev;
-      }
-      return [...prev, runnerId];
-    });
-  }, []);
-
-  const handleEnableRunner = useCallback((runnerId: RunnerId) => {
-    // Optimistic here as well as at the host: the save is quick but the
-    // discovery behind the re-sent list can take a while, and the click has to
-    // read as done.
-    dispatch({ type: 'enableRunnerRequested', runnerId });
-    vscode.postMessage({ type: 'enableRunner', runnerId });
+  // The pills are the saved choice every surface and planner turn reads
+  // (ADR-0043), so a click asks the host to save it. The request names the
+  // state wanted, which keeps a quick second click or a repeat from flipping
+  // it back; the pill shows the click until the host's list answers.
+  const handleRunnerPill = useCallback((runnerId: RunnerId, enabled: boolean) => {
+    dispatch({ type: 'runnerChoiceRequested', runnerId, enabled });
+    vscode.postMessage({ type: 'setRunnerEnabled', runnerId, enabled });
   }, []);
 
   const handleConfigureApiKey = useCallback(() => {
@@ -884,24 +878,24 @@ export default function App() {
         <section className="setup-block">
           <div className="setup-block-title">Runners</div>
           <div className="setup-block-hint">
-            Coding agents that execute the plan's tasks. Toggle which ones the planner may assign; click a disabled agent to enable it on every surface.
+            Coding agents that execute the plan's tasks. The planner assigns only the ones switched on;
+            a click switches one on or off for every plan, here and in the terminal.
           </div>
           <div className="runner-pills">
             {runnerList.map((r) => {
-              if (!enabledRunnerIds.includes(r.id)) {
-                return (
-                  <button key={r.id} className="runner-pill disabled"
-                    onClick={() => handleEnableRunner(r.id)}
-                    title={`Click to enable ${r.displayName} as a runner on every surface`}>
-                    <span className="runner-dot" /> {r.displayName}
-                  </button>
-                );
-              }
-              const isToggled = runners.includes(r.id);
+              const on = runners.includes(r.id);
+              // Never emptied from here: with no runner on, no surface could assign a task.
+              const last = on && runners.length === 1;
+              const title = last
+                ? `${r.displayName} is the only runner on: switch another on first`
+                : on
+                  ? `Stop assigning tasks to ${r.displayName}, on every surface`
+                  : `Click to enable ${r.displayName} as a runner on every surface`;
               return (
-                <button key={r.id} className={`runner-pill ${isToggled ? 'on' : 'off'}`}
-                  onClick={() => handleToggleRunner(r.id)}
-                  title={`${isToggled ? 'Stop assigning' : 'Assign'} tasks to ${r.displayName}`}>
+                <button key={r.id} className={`runner-pill ${on ? 'on' : 'disabled'}${r.id in pendingRunners ? ' pending' : ''}`}
+                  onClick={() => { if (!last) handleRunnerPill(r.id, !on); }}
+                  aria-pressed={on}
+                  title={title}>
                   <span className="runner-dot" /> {r.displayName}
                 </button>
               );

@@ -159,11 +159,11 @@ export type WebviewToHost =
   /** The plan dock's dragged height in px, saved on release so every later session opens at it. */
   | { type: 'setPlanDockHeight'; height: number }
   /**
-   * A click on an installed runner that is off: enable it in the settings file
-   * every surface shares and re-send the runner list. Add-only by design, so a
-   * repeated or stale click can never turn a runner off.
+   * A Runners pill clicked: save the runner on or off in the settings file every
+   * surface shares (ADR-0043), then re-send the runner list. It names the state
+   * wanted, so a repeated or stale click can never flip a newer choice back.
    */
-  | { type: 'enableRunner'; runnerId: RunnerId }
+  | { type: 'setRunnerEnabled'; runnerId: RunnerId; enabled: boolean }
   /** Who plans (ADR-0009) — a vendor provider id or one of the harness planners. */
   | { type: 'setPlanner'; provider: string }
   /** The planner's own model and thinking effort, a pair so neither can outlive the other. */

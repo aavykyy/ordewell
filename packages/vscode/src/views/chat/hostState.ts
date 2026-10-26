@@ -38,14 +38,14 @@ export interface HostState {
   modelsByRunner: Partial<Record<string, DiscoveredModel[]>>;
   modelAllowlist: Record<string, string[]>;
   runnerList: RunnerInfo[];
+  /** The runners the settings file every surface shares holds on (ADR-0043), as the host last reported them. */
   enabledRunnerIds: string[];
-  runners: RunnerId[];
   /**
-   * Runners the user just turned on from the Runners block, until a list from
-   * the host reports them on. The host re-discovers the whole runner list, so
-   * a list produced before its settings save can arrive in between.
+   * A Runners pill clicked, on or off, until the host's next runner list
+   * answers it. The host sends one after every request, saved or not, so the
+   * list that follows is the truth either way.
    */
-  pendingRunnerEnables: RunnerId[];
+  pendingRunners: Partial<Record<RunnerId, boolean>>;
   /** Queued prompts: what the host is holding for the next planner turn. */
   held: PromptHold;
   /** The last queued text the host gave back; `seq` makes a repeat of the same words land again. */
@@ -133,8 +133,7 @@ export const INITIAL_HOST_STATE: HostState = {
   modelAllowlist: {},
   runnerList: [],
   enabledRunnerIds: [...DEFAULT_RUNNERS],
-  runners: [...DEFAULT_RUNNERS],
-  pendingRunnerEnables: [],
+  pendingRunners: {},
   held: EMPTY_HOLD,
   unsent: null,
   modesByRunner: {},
@@ -183,8 +182,7 @@ export type HostAction =
   | { type: 'turnLost' }
   | { type: 'patchError'; error: string }
   | { type: 'patchReady'; ready: boolean }
-  | { type: 'patchRunners'; runners: Updatable<RunnerId[]> }
-  | { type: 'enableRunnerRequested'; runnerId: RunnerId }
+  | { type: 'runnerChoiceRequested'; runnerId: RunnerId; enabled: boolean }
   | { type: 'checkpointAnswered' }
   | { type: 'patchDockHeight'; height: number | undefined }
   | { type: 'patchDockExpanded'; expanded: Updatable<boolean> };
@@ -227,6 +225,13 @@ export function resetSession(state: HostState, kind: SessionResetKind): HostStat
   return next;
 }
 
+/** The runners shown on: the saved list, with any pill click the host has not answered yet. */
+export function runnersOn(state: Pick<HostState, 'runnerList' | 'enabledRunnerIds' | 'pendingRunners'>): RunnerId[] {
+  const on = (id: RunnerId) => state.pendingRunners[id] ?? state.enabledRunnerIds.includes(id);
+  const listed = state.runnerList.map((r) => r.id);
+  return [...new Set([...listed, ...state.enabledRunnerIds])].filter(on);
+}
+
 function resolve<T>(value: Updatable<T>, prev: T): T {
   return typeof value === 'function' ? (value as (p: T) => T)(prev) : value;
 }
@@ -260,21 +265,8 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     case 'patchReady':
       return { ...state, isReady: action.ready };
 
-    case 'patchRunners':
-      return { ...state, runners: resolve(action.runners, state.runners) };
-
-    case 'enableRunnerRequested': {
-      if (state.enabledRunnerIds.includes(action.runnerId)) return state;
-      // Shown on at once: the host re-discovers every runner before it answers,
-      // which a cold CLI can hold up for a while, and the click has to read as
-      // done. `pendingRunnerEnables` keeps an older list from taking it back.
-      return {
-        ...state,
-        enabledRunnerIds: [...state.enabledRunnerIds, action.runnerId],
-        runners: state.runners.includes(action.runnerId) ? state.runners : [...state.runners, action.runnerId],
-        pendingRunnerEnables: [...state.pendingRunnerEnables, action.runnerId],
-      };
-    }
+    case 'runnerChoiceRequested':
+      return { ...state, pendingRunners: { ...state.pendingRunners, [action.runnerId]: action.enabled } };
 
     case 'checkpointAnswered':
       // The question is answered here, before the run says so: remember it so
@@ -434,29 +426,11 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'setRunners': {
       const list = action.runners ?? [];
-      const reported = list.filter((r: RunnerMeta) => r.enabled).map((r: RunnerMeta) => r.id);
-      // A list discovery produced before the host saved the click still says
-      // the runner is off; the click stands until a list reports it on.
-      const pending = state.pendingRunnerEnables.filter((id) => !reported.includes(id));
-      const ids = [...new Set([...reported, ...pending])];
-      let runners: RunnerId[];
-      if (ids.length === 1) runners = ids;
-      else if (ids.length === 0) runners = [...DEFAULT_RUNNERS];
-      else {
-        const valid = state.runners.filter((r) => ids.includes(r));
-        runners = valid.length > 0 ? valid : ids;
-      }
-      // The runner the user turned on is the one they want assigned next, and
-      // an older list must not have taken it out of the per-plan set.
-      for (const id of pending) {
-        if (state.runners.includes(id) && !runners.includes(id)) runners.push(id);
-      }
       return {
         ...state,
         runnerList: list.map((r: RunnerMeta) => ({ id: r.id, displayName: r.displayName })),
-        enabledRunnerIds: ids,
-        runners,
-        pendingRunnerEnables: pending,
+        enabledRunnerIds: list.filter((r: RunnerMeta) => r.enabled).map((r: RunnerMeta) => r.id),
+        pendingRunners: {},
         runnersKnown: true,
       };
     }
