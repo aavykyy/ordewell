@@ -221,23 +221,32 @@ was written, past those 90%), the summary could not be written, or your message
 is too long by itself
 ([ADR-0002](adr/planner/0002-planner-as-conversation-loop.md)). Only the planner
 pauses: running tasks carry on and finish. What the call was to send is kept,
-and so is your message, so nothing is cut to fit and no command runs twice.
+and so is your message, so nothing is cut to fit.
 
-- **Retry compaction** condenses again and sends the call once, whatever the
-  estimate, carrying the turn on. Switch the
-  planner to a model with a larger window first if the same one paused twice.
-  In the terminal UI it is `/compact retry`, from the shell
-  `ordewell compact retry`, and in VS Code the button above the composer.
+- **Retry compaction** attempts recovery: it condenses again and sends the
+  call once, whatever the estimate. Switch the planner to a model with a
+  larger window first if the same one paused twice. It does not promise the
+  turn continues: if the call still does not fit it pauses again, and in the
+  cases below it stays paused. In the terminal UI it is `/compact retry`, from
+  the shell `ordewell compact retry`, and in VS Code the button above the
+  composer.
 - **Stop** drops the paused turn and its message; send a shorter one.
 
-Messages you send while it is paused wait behind it. After a reload, a switch
-of provider or a switch to a model whose window Ordewell does not know, the
-planner no longer holds what the paused turn did. A turn that only read files
-starts again from the conversation. One that ran a command, read the web or
-started a task is not started again, since that could do it twice: Retry
+Messages you send while it is paused wait behind it. On the live context, a
+retry sends the held results without running the turn's completed commands
+again, and a call a turn condensed away is answered "not run again" if the
+planner asks for it a second time within that turn. Nothing guards a fresh
+request you make yourself: if you deliberately ask the planner to do the same
+thing again in an intact context, it may.
+
+After a reload, a switch of provider or a switch to a model whose window
+Ordewell does not know, the planner no longer holds what the paused turn did. A
+turn that only read files starts again from the conversation, its reads made
+again. One that ran a command, read the web or started a task is not started
+again from a note of what it did, since that could do it twice: Retry
 compaction stays paused and lists what already ran. Switch to a model whose
-window is known if you only switched models, or **Stop** and tell the planner
-where to pick up.
+window is known if you only switched models and the live context is still
+there, or **Stop** and tell the planner where to pick up.
 
 This needs the model's window: a model whose catalog states none gets no
 automatic compaction. A refusal pauses it at once, and Retry compaction uses the

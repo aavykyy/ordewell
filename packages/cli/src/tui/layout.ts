@@ -518,7 +518,7 @@ function plannerResendRow(state: TuiState, cols: number): string[] {
 function plannerPauseRow(state: TuiState, cols: number): string[] {
   const { plannerPause } = state;
   if (!plannerPause || plannerInFlight(state)) return [];
-  return [style.yellow(truncate(`⏸ Planner paused: its context does not fit ${plannerPause.model}'s window · /compact retry condenses it and carries on · /stop drops the turn`, cols))];
+  return [style.yellow(truncate(`⏸ Planner paused: its context does not fit ${plannerPause.model}'s window · /compact retry attempts recovery · /stop drops the turn`, cols))];
 }
 
 const tokenRow = (blocks: readonly DisplayBlock[], cols: number): string[] => {

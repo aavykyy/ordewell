@@ -188,7 +188,7 @@ describe('ordewell rewind', () => {
 });
 
 describe('ordewell compact retry', () => {
-  const pause = { model: 'vendor/model', at: '2026-10-25T10:00:00Z', reason: "vendor/model refused the planner's call as too long for its window. The planner is paused: Retry compaction condenses its context and carries the turn on, or stop it to drop the turn.", inputs: ['turn-1'] };
+  const pause = { model: 'vendor/model', at: '2026-10-25T10:00:00Z', reason: "vendor/model refused the planner's call as too long for its window. The planner is paused: Retry compaction tries to condense its context and continue the turn, or stop it to drop the turn.", inputs: ['turn-1'] };
 
   it('retries the paused turn and says it carried on', async () => {
     const srv = await daemon(({ url }) => url.includes('/load') ? { body: { ...adopted, plan: { tasks: [], plannerContextPause: pause } } } : { body: { plan: { tasks: [] } } });

@@ -283,7 +283,7 @@ describe('a provider refusal of a planner call as too long', () => {
     expect(reason).toMatch(/^What the planner's last tool calls returned is too long for vendor\/model's window by itself/);
     // No compaction makes room for what is too long by itself: Retry on this model would only pause again.
     expect(reason).toMatch(/switch it to a model with a larger window, then Retry compaction, or stop it to drop the turn\.$/);
-    expect(reason).not.toMatch(/carries the turn on/);
+    expect(reason).not.toMatch(/tries to condense/);
     expect(reads()).toHaveLength(8);
   });
 });
@@ -762,7 +762,7 @@ describe('a planner model whose window no catalog states', () => {
     provider.replies = [callsTool('bash_again', 'bash', { command: 'make step0' }), says('Carrying on from the steps that ran.')];
     const from = provider.requests.length;
 
-    await expect(session.retryPlannerCompaction()).rejects.toMatchObject({ name: 'ConversationEditError', message: expect.stringMatching(/already ran .*Stop it to drop the turn.*switch it to one it knows: Retry compaction then carries the turn on.*Already ran:\n- bash\(\{"command":"make step0"\}\)/s) });
+    await expect(session.retryPlannerCompaction()).rejects.toMatchObject({ name: 'ConversationEditError', message: expect.stringMatching(/already ran .*Stop it to drop the turn.*switch it to one it knows: Retry compaction can then continue the turn.*Already ran:\n- bash\(\{"command":"make step0"\}\)/s) });
 
     expect(provider.requests).toHaveLength(from);
     expect(ran(bash)).toEqual(commands);

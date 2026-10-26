@@ -13,7 +13,7 @@ import { api, hostBridge, post } from './hostBridge';
 
 const pause = {
   model: 'vendor/model', at: '2026-10-25T10:00:00Z', inputs: ['turn-1'],
-  reason: "vendor/model refused the planner's call as too long for its window. The planner is paused: Retry compaction condenses its context and carries the turn on, or stop it to drop the turn.",
+  reason: "vendor/model refused the planner's call as too long for its window. The planner is paused: Retry compaction tries to condense its context and continue the turn, or stop it to drop the turn.",
 };
 const plan = (over: Partial<LegacyPlanState> = {}): LegacyPlanState => ({ tasks: [], generatedAt: '', lastUpdated: '', status: 'draft', runners: [], ...over });
 const showPlan = (p: LegacyPlanState) => post({ type: 'planUpdated', plan: p });
