@@ -6,6 +6,22 @@ import EmptyState from '../EmptyState';
 
 const withAutorun = (autorun: boolean) => ({ autonomous: false, run: { ...RUN_SETTINGS_DEFAULTS, autorun } });
 
+describe('EmptyState — signed-out planner', () => {
+  it('names the agent and says it can be signed in from this chat', () => {
+    const { container } = render(<EmptyState signedOut={{ label: 'Claude Code' }} />);
+    const warning = container.querySelector('.planner-auth-warning');
+    expect(warning?.getAttribute('role')).toBe('status');
+    expect(warning?.textContent).toContain('Claude Code is not logged in.');
+    expect(warning?.textContent).toContain('sign in from this chat');
+    expect(warning?.querySelector('.planner-auth-dot')?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('says nothing when the planner is signed in', () => {
+    const { container } = render(<EmptyState />);
+    expect(container.querySelector('.planner-auth-warning')).toBeNull();
+  });
+});
+
 describe('EmptyState — plan approval', () => {
   it('says neither before the host has sent run settings, since autorun may be on', () => {
     for (const runSettings of [undefined, null]) {

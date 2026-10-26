@@ -630,6 +630,12 @@ export default function App() {
   // (ADR-0009).
   const agentNames = planner.backends.filter((b) => b.kind === 'harness').map((b) => b.label);
   const offeredBackends = planner.backends.filter((b) => b.usable);
+  // Only the agent that will actually plan can warn the empty state: an unused
+  // signed-out harness, or a vendor planner, says nothing about this session.
+  const activeBackend = planner.backends.find((b) => b.id === activePlanner);
+  const signedOutPlanner = activeBackend?.kind === 'harness' && activeBackend.auth?.state === 'signed-out'
+    ? { label: activeBackend.label }
+    : undefined;
 
   const runnerLabelMap = useMemo<Record<string, string>>(() => {
     const m: Record<string, string> = {};
@@ -837,10 +843,11 @@ export default function App() {
                   <button
                     key={b.id}
                     type="button"
-                    className={`planner-pill ${b.id === activePlanner ? 'active' : ''}${pendingPlanner === b.id ? ' pending' : ''}`}
-                    title={b.reason}
+                    className={`planner-pill${b.id === activePlanner ? ' active' : ''}${b.auth?.state === 'signed-out' ? ' signed-out' : ''}${pendingPlanner === b.id ? ' pending' : ''}`}
+                    title={b.auth?.state === 'signed-out' ? 'Not logged in — sign in from this chat' : b.reason}
                     onClick={() => handlePlannerChange(b.id)}
                   >
+                    {b.auth?.state === 'signed-out' && <span className="planner-auth-dot" aria-hidden="true" />}
                     {b.label}
                   </button>
                 ))}
@@ -962,7 +969,7 @@ export default function App() {
         )}
 
         {!hasContent && isReady && canPlan && (
-          <EmptyState onLoadSession={handleLoadSession} runSettings={host.runSettings} />
+          <EmptyState onLoadSession={handleLoadSession} runSettings={host.runSettings} signedOut={signedOutPlanner} />
         )}
 
         {error && (

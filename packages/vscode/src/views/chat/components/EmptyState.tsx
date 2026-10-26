@@ -7,6 +7,8 @@ interface EmptyStateProps {
   onLoadSession?: () => void;
   /** The user's autonomy level and run settings (ADR-0030); absent until the host sends them. */
   runSettings?: HostRunSettings | null;
+  /** The selected coding agent's login verdict, when it is signed out: flagged here, never blocking. */
+  signedOut?: { label: string };
 }
 
 /** One Setup row: what is set, and the command that changes it. */
@@ -31,7 +33,7 @@ function RunValue({ run }: { run: GlobalRunSettings }) {
   );
 }
 
-export default function EmptyState({ onLoadSession, runSettings }: EmptyStateProps) {
+export default function EmptyState({ onLoadSession, runSettings, signedOut }: EmptyStateProps) {
   return (
     <div className="empty-state">
       <div className="empty-state-logo">
@@ -86,6 +88,15 @@ export default function EmptyState({ onLoadSession, runSettings }: EmptyStatePro
         <div className="empty-state-setup">
           <SetupRow label="Autonomy" value={runSettings.autonomous ? 'Full' : 'Guarded'} warn={runSettings.autonomous} command="/settings" />
           <SetupRow label="Run" value={<RunValue run={runSettings.run} />} command="/settings" />
+        </div>
+      )}
+      {signedOut && (
+        <div className="planner-auth-warning" role="status" aria-live="polite">
+          <span className="planner-auth-dot" aria-hidden="true" />
+          <span className="planner-auth-warning-text">
+            <span className="planner-auth-warning-agent">{signedOut.label}</span>
+            {' is not logged in. You can sign in from this chat.'}
+          </span>
         </div>
       )}
       {onLoadSession && (
