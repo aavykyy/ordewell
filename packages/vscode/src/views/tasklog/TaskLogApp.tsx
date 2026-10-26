@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { ConversationBlocks } from '../chat/components/ChatMessage';
 import { OpenPatchContext } from '../chat/openPatch';
 import { useFollowOutput } from '../chat/followOutput';
-import { contextMeterTitle } from '@ordewell/core/plan-utils';
+import { contextMeterTitle, hasAccountLimits } from '@ordewell/core/plan-utils';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type PatchedView } from '../../shared/conversationPatch';
 import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../../shared/taskLogProtocol';
 import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
@@ -50,6 +50,7 @@ export default function TaskLogApp() {
   const blocks = useMemo(() => patchedBlocks(view), [view]);
   const followRef = useFollowOutput<HTMLDivElement>(blocks);
   const header = status?.header;
+  const shownLimits = limits.filter(hasAccountLimits);
   const state = header?.state;
   const commands = header?.commands ?? [];
   const completion = useRunnerCommands(text, setText, commands);
@@ -222,12 +223,13 @@ export default function TaskLogApp() {
       </div>
 
       {header?.usage.map((row, i) => (
-        <div key={i} className={i === 0 ? 'usage-line' : 'usage-line usage-line-total'} role="status">
-          <span title={row.contextFill ? contextMeterTitle(row.contextFill) : undefined}>{row.text}</span>
+        <div key={i} className={i === 0 ? 'usage-line' : 'usage-line usage-line-total'}>
+          <span className="usage-line-measures" role="status" title={row.contextFill ? contextMeterTitle(row.contextFill) : undefined}>{row.text}</span>
+          {i === 0 && shownLimits.length > 0 && <>{' · '}<AccountLimitRows limits={shownLimits} /></>}
         </div>
       ))}
 
-      <AccountLimitRows limits={limits} />
+      {!header?.usage.length && shownLimits.length > 0 && <div className="usage-line"><AccountLimitRows limits={shownLimits} /></div>}
 
       {stopArmed && <div className="stop-hint" role="status">Press Esc again to stop</div>}
 

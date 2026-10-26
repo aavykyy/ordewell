@@ -692,7 +692,7 @@ describe('a message the runner reads mid-turn (ADR-0023)', () => {
     expect(screen.getByText('then add tests')).toBeTruthy();
   });
 
-  it('draws its runner\'s account limits under the task\'s own spend, and keeps them across an attempt switch', () => {
+  it('draws its runner\'s account limits beside the task\'s own spend, and keeps them across an attempt switch', () => {
     render(<TaskLogApp />);
     init({ usage: { totals: { inputTokens: 10, reportedCost: { USD: 1.5 } }, contextFill: { usedTokens: 50_000, windowTokens: 200_000 } } });
     send({ type: 'accountLimits', limits: [{
@@ -701,7 +701,7 @@ describe('a message the runner reads mid-turn (ADR-0023)', () => {
       readAt: '2026-03-02T10:00:00.000Z',
     }] });
 
-    expect(document.querySelector('.usage-line')!.textContent).toBe('ctx 50k (25%) · $1.50');
+    expect(document.querySelector('.usage-line-measures')!.textContent).toBe('ctx 50k (25%) · $1.50');
     expect(document.querySelector('.account-limit')!.textContent).toBe('Claude Code 5h 24% used · Weekly 61% used');
 
     init({ attempt: 1, attempts: [1, 2] });

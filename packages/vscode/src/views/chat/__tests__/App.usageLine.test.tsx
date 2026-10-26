@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { cleanup, fireEvent, render } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { AccountLimitSnapshot, SessionMessage } from '@ordewell/core';
@@ -244,7 +244,25 @@ describe('account limits under the planner', () => {
     const row = document.querySelector<HTMLElement>('.account-limit')!;
     expect(getComputedStyle(row).textOverflow).toBe('ellipsis');
     expect(getComputedStyle(row).whiteSpace).toBe('nowrap');
-    expect(row.getAttribute('title')).toContain('Weekly 61% used');
+    expect(row.getAttribute('title')).toContain('Weekly: 61% used');
+  });
+
+  it('shows full details in an overlay on keyboard focus and dismisses it with Escape', () => {
+    host.planner([{ id: 'codex', label: 'Codex', kind: 'harness', runner: 'codex', usable: true }], 'codex', 'codex');
+    host.provider.setAccountLimits([codexLimits()]);
+    const style = document.createElement('style');
+    style.textContent = readFileSync(resolve(process.cwd(), 'src/views/chat/styles.css'), 'utf8');
+    document.head.append(style);
+    const row = document.querySelector<HTMLElement>('.account-limit')!;
+    fireEvent.focus(row);
+
+    const tooltip = screen.getByRole('tooltip');
+    expect(tooltip.textContent).toMatch(/Codex 5h: 24% used, resets.+Weekly: 61% used, resets.+Plan: plus.+Read/s);
+    expect(tooltip.closest('.usage-line')).toBeNull();
+    expect(getComputedStyle(tooltip).position).toBe('fixed');
+    fireEvent.keyDown(row, { key: 'Escape' });
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    expect(document.querySelectorAll('.usage-line')).toHaveLength(1);
   });
 
   it('keeps a focused footer compact when the account read refreshes', () => {

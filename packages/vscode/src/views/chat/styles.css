@@ -5416,8 +5416,11 @@ body.vscode-high-contrast-light .pending-message {
 .usage-line {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 3px;
   flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
   padding: 3px 14px;
   font-size: 10px;
   /* --text-muted falls below WCAG AA (4.5:1) at this font-size in both
@@ -5427,7 +5430,14 @@ body.vscode-high-contrast-light .pending-message {
   border-top: 1px solid var(--border-subtle);
 }
 
+.usage-line-measures {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .usage-line-subagents {
+  flex-shrink: 0;
   padding: 0 6px;
   border-radius: var(--radius-full);
   background: var(--bg-secondary);
@@ -5439,20 +5449,20 @@ body.vscode-high-contrast-light .pending-message {
   border-top: none;
 }
 
-/* Account limits: one row per runner, wrapping rather than clipping in a
-   narrow sidebar. Under a usage line they share its rule. */
-.usage-line.account-limits {
-  flex-wrap: wrap;
-  row-gap: 1px;
-}
-
-.usage-line + .usage-line.account-limits {
-  border-top: none;
+/* Full details stay in the description and hover, so polling never changes
+   the footer's height, even while a label is focused. */
+.account-limits {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .account-limit {
+  display: block;
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .account-limit.stale {
@@ -5461,22 +5471,32 @@ body.vscode-high-contrast-light .pending-message {
 
 .account-limit:focus-visible {
   outline: 1px solid var(--vscode-focusBorder, var(--accent));
-  outline-offset: 1px;
+  outline-offset: -1px;
   border-radius: 2px;
 }
 
-/* Hidden until its row is focused or tapped, yet still the row's description:
-   then it takes a line of its own, so a narrow view wraps it rather than clip. */
 .account-limit-details {
   display: none;
 }
 
-.account-limit:focus + .account-limit-details {
-  display: flex;
-  flex-direction: column;
-  flex-basis: 100%;
-  min-width: 0;
+/* The keyboard hover lives outside the clipped footer, so it takes no space
+   from context or limits. Mouse users have the same text in the native title. */
+.account-limit-tooltip {
+  position: fixed;
+  left: 8px;
+  z-index: 1000;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 11px;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
+  pointer-events: none;
 }
 
 /* ---- Task log tab (ADR-0018, V1) ---- */

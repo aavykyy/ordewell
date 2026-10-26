@@ -12,14 +12,13 @@ import { reduceHost, INITIAL_HOST_STATE, type HostState } from './hostState';
 import ModelSelector, { API_PROVIDER_LABELS } from './components/ModelSelector';
 import PlanCardGroup from './components/PlanCardGroup';
 import UsageLine from './components/UsageLine';
-import AccountLimitRows from './components/AccountLimitRows';
 import PendingMessages, { type PendingMessage } from './components/PendingMessages';
 import HandoffCard from './components/HandoffCard';
 import CheckpointPanel from './components/CheckpointPanel';
 import RunSettingsBlock from './components/RunSettingsBlock';
 import type { TaskDraft } from './components/NewTaskCard';
 import type { CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId } from '@ordewell/core';
-import { compactionText, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
+import { accountLimitsOf, compactionText, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 import { planSummaryLabel, nextDock } from './planDock';
 import { OpenPatchContext } from './openPatch';
 import { useFollowOutput } from './followOutput';
@@ -983,9 +982,7 @@ export default function App() {
 
       {renderPlanDock()}
 
-      {usageBlock && <UsageLine block={usageBlock} />}
-      {/* Not inside the usage line: limits are known before the planner's first call, and with a planner that reports none. */}
-      <AccountLimitRows limits={accountLimits} />
+      <UsageLine block={usageBlock} limits={accountLimitsOf(accountLimits, planner.runner, modelConfig?.orchestrator)} />
 
       {/* Pinned rather than the list's last row, and drawn for the whole turn:
           a turn can go minutes with nothing new to show, its thinking block
