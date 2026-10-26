@@ -1055,6 +1055,7 @@ describe('a runner pill click persists to the one saved list', () => {
     Object.assign(h.services.notifications, { error: vi.fn() });
     Object.defineProperty(h.config.config, 'enabledRunners', { get: () => file.getEnabledRunners() ?? defaultEnabledRunners() });
     const posted = vi.spyOn(chat.provider, 'postMessage');
+    let requestCount = 0;
     /** What the webview was last told about the runners: the ids it draws on. */
     const shown = (): string[] | undefined => {
       const lists = posted.mock.calls.flatMap(([msg]) => (msg.type === 'setRunners' ? [msg.runners] : []));
@@ -1065,10 +1066,14 @@ describe('a runner pill click persists to the one saved list', () => {
       /** What another process reading the same file would find. */
       saved: () => new SettingsService(path.join(dir, 'settings.json')).getEnabledRunners(),
       settingsPath: path.join(dir, 'settings.json'),
-      /** The webview asks for `runnerId` on or off. */
-      setRunnerEnabled: (runnerId: string, enabled: boolean) => {
-        chat.send({ type: 'setRunnerEnabled', runnerId, enabled });
+      /** The webview asks for `runnerId` on or off, under a request id of its own; returns the id. */
+      setRunnerEnabled: (runnerId: string, enabled: boolean, requestId = `req-${++requestCount}`): string => {
+        // `requestId` joins the protocol with the fix, so the message is built untyped here.
+        chat.send({ type: 'setRunnerEnabled', runnerId, enabled, requestId } as WebviewToHost);
+        return requestId;
       },
+      /** Every save acknowledgement the webview was sent, in order: the one message that settles a pill click. */
+      acks: (): unknown[] => posted.mock.calls.flatMap(([msg]) => ((msg as { type: string }).type === 'runnerChoiceSaved' ? [msg] : [])),
       send: (text: string, runners: string[]) => chat.send({ type: 'sendMessage', text, runners, typed: true }),
     };
   }
@@ -1201,5 +1206,79 @@ describe('a runner pill click persists to the one saved list', () => {
 
     await vi.waitFor(() => expect(p.shown()).toEqual(ALL));
     expect(p.saved()).toEqual(ALL);
+  });
+
+  // The webview keeps a pill click until the host answers that request by id,
+  // so a runner list alone, however late, can neither settle it nor undo it.
+  describe('acknowledges each request by its id with the saved state of that runner', () => {
+    it('answers a saved click with the request id, the runner, and the state the file now holds', async () => {
+      const p = pillHost();
+      await p.h.host.start();
+
+      const id = p.setRunnerEnabled('codex', false);
+
+      await vi.waitFor(() => expect(p.acks()).toEqual([{ type: 'runnerChoiceSaved', requestId: id, runnerId: 'codex', enabled: false }]));
+      expect(p.saved()).toEqual(ALLOWED);
+    });
+
+    it('answers a rejected save with the state the file still holds, so the pill can go back', async () => {
+      const p = pillHost();
+      await p.h.host.start();
+      vi.spyOn(p.file, 'updateEnabledRunners').mockImplementation(() => { throw new Error('EACCES: settings file is read-only'); });
+
+      const id = p.setRunnerEnabled('codex', false);
+
+      await vi.waitFor(() => expect(p.acks()).toEqual([{ type: 'runnerChoiceSaved', requestId: id, runnerId: 'codex', enabled: true }]));
+      expect(p.saved()).toEqual(ALL);
+    });
+
+    it('answers a refused switch-off of the last saved runner with that runner still on', async () => {
+      const p = pillHost();
+      await p.h.host.start();
+      p.file.setEnabledRunners(['claude-code']);
+
+      const id = p.setRunnerEnabled('claude-code', false);
+
+      await vi.waitFor(() => expect(p.acks()).toEqual([{ type: 'runnerChoiceSaved', requestId: id, runnerId: 'claude-code', enabled: true }]));
+    });
+
+    it('answers an id that names no runner with it off, and writes nothing', async () => {
+      const p = pillHost();
+      await p.h.host.start();
+
+      const id = p.setRunnerEnabled('no-such-agent', true);
+
+      await vi.waitFor(() => expect(p.acks()).toEqual([{ type: 'runnerChoiceSaved', requestId: id, runnerId: 'no-such-agent', enabled: false }]));
+      expect(p.saved()).toEqual(ALL);
+    });
+
+    it('answers a repeated request with an acknowledgement of its own, not the first one\'s', async () => {
+      const p = pillHost();
+      await p.h.host.start();
+
+      const first = p.setRunnerEnabled('codex', false);
+      const again = p.setRunnerEnabled('codex', false);
+
+      await vi.waitFor(() => expect(p.acks()).toHaveLength(2));
+      expect(p.acks()).toEqual([
+        { type: 'runnerChoiceSaved', requestId: first, runnerId: 'codex', enabled: false },
+        { type: 'runnerChoiceSaved', requestId: again, runnerId: 'codex', enabled: false },
+      ]);
+    });
+
+    it('answers two runners\' requests each under its own id', async () => {
+      const p = pillHost();
+      await p.h.host.start();
+
+      const codex = p.setRunnerEnabled('codex', false);
+      const opencode = p.setRunnerEnabled('opencode', false);
+
+      await vi.waitFor(() => expect(p.acks()).toHaveLength(2));
+      expect(p.acks()).toEqual([
+        { type: 'runnerChoiceSaved', requestId: codex, runnerId: 'codex', enabled: false },
+        { type: 'runnerChoiceSaved', requestId: opencode, runnerId: 'opencode', enabled: false },
+      ]);
+      expect(p.saved()).toEqual(['claude-code']);
+    });
   });
 });

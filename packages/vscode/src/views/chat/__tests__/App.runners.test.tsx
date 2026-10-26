@@ -44,7 +44,7 @@ describe('the Runners block', () => {
 
     fireEvent.click(pill('OpenCode')!);
 
-    expect(api.postMessage).toHaveBeenCalledWith({ type: 'setRunnerEnabled', runnerId: 'opencode', enabled: true });
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'setRunnerEnabled', runnerId: 'opencode', enabled: true, requestId: expect.any(String) });
     expect(pill('OpenCode')!.className).toContain('on');
   });
 

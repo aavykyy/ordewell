@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { EMPTY_RUN, type LegacyPlanState, type RunTask, type RunView } from '@ordewell/core';
-import { reduceHost, resetSession, runnersOn, INITIAL_HOST_STATE, type HostState, type HostMessage } from '../hostState';
+import { reduceHost, resetSession, runnersOn, INITIAL_HOST_STATE, type HostState, type HostMessage, type HostAction } from '../hostState';
 
 const NOW = 1_000;
-const msg = (m: { type: HostMessage['type'] } & Record<string, unknown>): HostMessage => ({ now: NOW, ...m }) as HostMessage;
+const msg = (m: { type: string } & Record<string, unknown>): HostMessage => ({ now: NOW, ...m }) as HostMessage;
 
 function planWith(status: string): LegacyPlanState {
   return { status, tasks: [] } as unknown as LegacyPlanState;
@@ -164,32 +164,129 @@ describe('reduceHost runView isolation', () => {
   });
 });
 
+// A pill click stays until the host acknowledges that request by id: a runner
+// list names no request, so however stale it is, it cannot settle or undo one.
 describe('a Runners pill clicked', () => {
+  const ALL = ['claude-code', 'codex', 'opencode'];
   const installed = (enabled: string[]) => [
     { id: 'claude-code', displayName: 'Claude Code', enabled: enabled.includes('claude-code') },
     { id: 'codex', displayName: 'Codex', enabled: enabled.includes('codex') },
+    { id: 'opencode', displayName: 'OpenCode', enabled: enabled.includes('opencode') },
   ];
+  const listed = (state: HostState, enabled: string[]): HostState => reduceHost(state, msg({ type: 'setRunners', runners: installed(enabled) }));
+  // The request id and the acknowledgement are the contract under test: the
+  // action and message types do not exist until the fix adds them.
+  const click = (state: HostState, runnerId: string, enabled: boolean, requestId: string): HostState =>
+    reduceHost(state, { type: 'runnerChoiceRequested', runnerId, enabled, requestId } as unknown as HostAction);
+  const ack = (state: HostState, requestId: string, runnerId: string, enabled: boolean): HostState =>
+    reduceHost(state, msg({ type: 'runnerChoiceSaved', requestId, runnerId, enabled }));
+  const pendingIds = (state: HostState): string[] => Object.keys(state.pendingRunners).sort();
 
-  it('shows the click at once, and the host\'s next list settles it as saved', () => {
-    const known = reduceHost(INITIAL_HOST_STATE, msg({ type: 'setRunners', runners: installed(['claude-code']) }));
+  it('shows the click at once, and the host\'s acknowledgement settles it as saved', () => {
+    const known = listed(INITIAL_HOST_STATE, ['claude-code']);
 
-    const enabling = reduceHost(known, { type: 'runnerChoiceRequested', runnerId: 'codex', enabled: true });
+    const enabling = click(known, 'codex', true, 'r1');
     expect(runnersOn(enabling)).toEqual(['claude-code', 'codex']);
     expect(enabling.enabledRunnerIds).toEqual(['claude-code']);
 
-    const saved = reduceHost(enabling, msg({ type: 'setRunners', runners: installed(['claude-code', 'codex']) }));
+    const saved = ack(enabling, 'r1', 'codex', true);
     expect(runnersOn(saved)).toEqual(['claude-code', 'codex']);
+    expect(saved.enabledRunnerIds).toEqual(['claude-code', 'codex']);
     expect(saved.pendingRunners).toEqual({});
   });
 
-  it('goes back to the saved list when the host answers without the change', () => {
-    const known = reduceHost(INITIAL_HOST_STATE, msg({ type: 'setRunners', runners: installed(['claude-code', 'codex']) }));
+  it('keeps Codex off and pending when a stale runner list that still holds it lands before the acknowledgement', () => {
+    const disabling = click(listed(INITIAL_HOST_STATE, ALL), 'codex', false, 'r1');
+    expect(runnersOn(disabling)).toEqual(['claude-code', 'opencode']);
 
-    const disabling = reduceHost(known, { type: 'runnerChoiceRequested', runnerId: 'codex', enabled: false });
-    expect(runnersOn(disabling)).toEqual(['claude-code']);
+    const stale = listed(disabling, ALL);
 
-    const refused = reduceHost(disabling, msg({ type: 'setRunners', runners: installed(['claude-code', 'codex']) }));
-    expect(runnersOn(refused)).toEqual(['claude-code', 'codex']);
+    expect(runnersOn(stale)).toEqual(['claude-code', 'opencode']);
+    expect(pendingIds(stale)).toEqual(['codex']);
+  });
+
+  it('clears the click only on the acknowledgement of that request, whatever lists came between', () => {
+    const disabling = click(listed(INITIAL_HOST_STATE, ALL), 'codex', false, 'r1');
+    const stale = listed(listed(disabling, ALL), ALL);
+
+    const saved = ack(stale, 'r1', 'codex', false);
+
+    expect(runnersOn(saved)).toEqual(['claude-code', 'opencode']);
+    expect(saved.enabledRunnerIds).toEqual(['claude-code', 'opencode']);
+    expect(saved.pendingRunners).toEqual({});
+  });
+
+  it('goes back to the saved state when the acknowledgement says the save did not take', () => {
+    const known = listed(INITIAL_HOST_STATE, ALL);
+    const disabling = click(known, 'codex', false, 'r1');
+    expect(runnersOn(disabling)).toEqual(['claude-code', 'opencode']);
+
+    const refused = ack(disabling, 'r1', 'codex', true);
+
+    expect(runnersOn(refused)).toEqual(ALL);
+    expect(refused.pendingRunners).toEqual({});
+  });
+
+  it('does not take an ordinary runner list for a refusal', () => {
+    const disabling = click(listed(INITIAL_HOST_STATE, ALL), 'codex', false, 'r1');
+
+    const ordinary = listed(disabling, ALL);
+
+    expect(runnersOn(ordinary)).not.toContain('codex');
+    expect(ordinary.pendingRunners).not.toEqual({});
+  });
+
+  it('keeps the click through an unrelated list that changes another runner', () => {
+    const disabling = click(listed(INITIAL_HOST_STATE, ALL), 'codex', false, 'r1');
+
+    // Another surface switched OpenCode off while the click was with the host.
+    const other = listed(disabling, ['claude-code', 'codex']);
+
+    expect(runnersOn(other)).toEqual(['claude-code']);
+    expect(pendingIds(other)).toEqual(['codex']);
+  });
+
+  it('settles two runners\' clicks one by one, whichever acknowledgement comes first', () => {
+    const both = click(click(listed(INITIAL_HOST_STATE, ALL), 'codex', false, 'r1'), 'opencode', false, 'r2');
+    expect(runnersOn(both)).toEqual(['claude-code']);
+
+    const secondFirst = ack(both, 'r2', 'opencode', false);
+    expect(runnersOn(secondFirst)).toEqual(['claude-code']);
+    expect(pendingIds(secondFirst)).toEqual(['codex']);
+
+    const firstLast = ack(secondFirst, 'r1', 'codex', false);
+    expect(runnersOn(firstLast)).toEqual(['claude-code']);
+    expect(firstLast.enabledRunnerIds).toEqual(['claude-code']);
+    expect(firstLast.pendingRunners).toEqual({});
+  });
+
+  it('keeps a newer click on the same runner when the older click\'s acknowledgement comes first', () => {
+    const off = click(listed(INITIAL_HOST_STATE, ALL), 'codex', false, 'r1');
+    const backOn = click(off, 'codex', true, 'r2');
+
+    const older = ack(backOn, 'r1', 'codex', false);
+
+    expect(runnersOn(older)).toContain('codex');
+    expect(pendingIds(older)).toEqual(['codex']);
+
+    const settled = ack(older, 'r2', 'codex', true);
+    expect(runnersOn(settled)).toEqual(ALL);
+    expect(settled.pendingRunners).toEqual({});
+  });
+
+  it('ignores an acknowledgement that arrives twice, or for a request this page never made', () => {
+    const off = click(listed(INITIAL_HOST_STATE, ALL), 'codex', false, 'r1');
+    const backOn = click(off, 'codex', true, 'r2');
+    const settled = ack(ack(backOn, 'r1', 'codex', false), 'r2', 'codex', true);
+
+    expect(ack(settled, 'r1', 'codex', false)).toEqual(settled);
+    expect(ack(settled, 'r2', 'codex', true)).toEqual(settled);
+    expect(ack(settled, 'never-asked', 'codex', false)).toEqual(settled);
+  });
+
+  it('starts with no click pending in a page that is built anew', () => {
+    expect(INITIAL_HOST_STATE.pendingRunners).toEqual({});
+    expect(runnersOn(listed(INITIAL_HOST_STATE, ['claude-code', 'opencode']))).toEqual(['claude-code', 'opencode']);
   });
 });
 
