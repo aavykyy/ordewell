@@ -67,6 +67,23 @@ export const CLAUDE_CODE_MANIFEST: RunnerManifest = {
     ],
   },
 
+  auth: {
+    statusArgs: ['auth', 'status'],
+    loginArgs: ['auth', 'login'],
+    // The status command prints JSON; an older CLI prints prose instead, which
+    // must stay unknown rather than claiming the user is signed out.
+    read: (output, code) => {
+      if (code === 0) return 'signed-in';
+      try {
+        const parsed: unknown = JSON.parse(output.trim());
+        if (parsed && typeof parsed === 'object' && (parsed as { authMethod?: unknown }).authMethod === 'none') return 'signed-out';
+      } catch {
+        // Not JSON: nothing here says why the command failed.
+      }
+      return null;
+    },
+  },
+
   contextFile: 'CLAUDE.md',
   contextFileAltPath: '.claude/CLAUDE.md',
 

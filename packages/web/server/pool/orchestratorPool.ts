@@ -56,6 +56,7 @@ import {
   PlannerTurnDiscardedError,
   PlannerTurnStoppedError,
   type LeaseHost,
+  workspaceEnvOf,
 } from '@ordewell/core';
 import { WebConfig, type PlannerPick } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
@@ -132,7 +133,13 @@ export class OrchestratorPool {
     const pluginNotice = removedPluginNotice();
     if (pluginNotice) console.warn(pluginNotice);
     this.runner = deps.runner ?? new StructuredRunner();
-    this.runnerInstallation = deps.runnerInstallation ?? new RunnerInstallation(this.registry);
+    // The login probe must ask the account the planner will use (ADR-0016),
+    // and the daemon's default workspace is its cwd — the same fallback every
+    // route takes when a request names none. A workspace that chooses another
+    // account through `.envrc`/`.ordewell/env` is judged there, before a
+    // session exists to name it.
+    this.runnerInstallation = deps.runnerInstallation
+      ?? new RunnerInstallation(this.registry, undefined, undefined, { env: () => workspaceEnvOf(process.cwd()) });
     this.modelResolver = deps.modelResolver ?? new ModelResolver(this.registry, new WebConfig());
     this.codexSandbox = deps.codexSandbox
       ?? new CodexSandboxAvailability(this.registry, { spawn: nodeSpawn, fetch: globalThis.fetch }, { cwd: process.cwd(), env: process.env });
@@ -572,13 +579,22 @@ export class OrchestratorPool {
     const installedIds = new Set(
       await this.runnerInstallation.filterInstalled(runners.map((p) => p.manifest.name)),
     );
-    return runners
-      .filter((p) => installedIds.has(p.manifest.name))
-      .map((p) => ({
-        id: p.manifest.name,
-        name: p.manifest.displayName,
-        enabled: enabled.has(p.manifest.name),
-      }));
+    // The auth verdict rides along, never gating the list: a signed-out agent
+    // is installed and offered, and a surface flags it. The probe was just
+    // asked above and its answer is cached, so this costs no second spawn.
+    return Promise.all(
+      runners
+        .filter((p) => installedIds.has(p.manifest.name))
+        .map(async (p) => {
+          const { auth } = await this.runnerInstallation.plannerUsability(p.manifest.name);
+          return {
+            id: p.manifest.name,
+            name: p.manifest.displayName,
+            enabled: enabled.has(p.manifest.name),
+            ...(auth ? { auth } : {}),
+          };
+        }),
+    );
   }
 
   async generatePlan(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<PlanState> {

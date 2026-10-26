@@ -41,6 +41,25 @@ describe('plannerBackendEntries', () => {
     expect(codex.reason).toBe(HARNESS_PLANNER_UNAVAILABLE_REASON);
   });
 
+  it('keeps a signed-out harness planner offered, carrying the verdict and its login as the reason', () => {
+    const auth = { state: 'signed-out' as const, loginCommand: ['claude', 'auth', 'login'], detail: 'not logged in' };
+    const claude = plannerBackendEntries({ 'claude-code': { usable: true, auth } }, [])
+      .find((e) => e.id === 'claude-code')!;
+
+    expect(claude.usable).toBe(true);
+    expect(claude.auth).toEqual(auth);
+    expect(claude.reason).toBe('not logged in');
+  });
+
+  it('carries a signed-in verdict without changing the usual no-key reason', () => {
+    const auth = { state: 'signed-in' as const, loginCommand: ['claude', 'auth', 'login'] };
+    const claude = plannerBackendEntries({ 'claude-code': { usable: true, auth } }, [])
+      .find((e) => e.id === 'claude-code')!;
+
+    expect(claude.auth).toEqual(auth);
+    expect(claude.reason).toBe(HARNESS_PLANNER_REASON);
+  });
+
   it('offers vendors with their API-key variable as the reason, always usable', () => {
     const vendors = plannerBackendEntries({}, ['openrouter', 'google'])
       .filter((e) => e.kind === 'vendor');
