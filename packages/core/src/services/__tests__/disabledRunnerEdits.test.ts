@@ -20,7 +20,7 @@ const MODES = [{ id: 'build', label: 'Build', description: '' }, { id: 'agent', 
  */
 function scopeWith(tasks: Task[], enabled: RunnerId[]) {
   const planRunners: RunnerId[] = ['codex', 'claude-code', 'opencode', 'gemini'];
-  const live = { tasks, enabled, held: [] as TaskOp[], skills: undefined as SkillLookup | undefined };
+  const live = { tasks, enabled, skills: undefined as SkillLookup | undefined };
   const catalog = new SessionCatalog({
     config: { enabledRunners: [], autonomousMode: true, aiProvider: 'openrouter' },
     registry: { getManifest: (id: string) => ({ name: id, displayName: id, runner: { command: id }, features: {}, modelDiscovery: { method: 'hardcoded' }, modes: MODES }) as never },
@@ -32,7 +32,6 @@ function scopeWith(tasks: Task[], enabled: RunnerId[]) {
     tasks: () => live.tasks,
     runners: (kind) => catalog.runnersFor(kind === 'plan' ? 'plan' : 'edit') ?? [],
     catalog: (runners) => catalog.edit([...new Set([...planRunners, ...runners])]),
-    held: () => live.held,
     skills: () => live.skills ?? { findSkill: () => undefined, searchedDirs: () => [] },
   };
   return { live, catalog, check: new PlanChangeCheck(scope) };

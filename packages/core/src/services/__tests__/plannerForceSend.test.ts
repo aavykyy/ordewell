@@ -147,7 +147,8 @@ describe('planner force send', () => {
     expect(env.session.isExecuting).toBe(true);
   });
 
-  it('reports a start the stopped turn queued behind its edit as not done, and runs nothing of it', async () => {
+  // ADR-0022 P2: what a tool committed in the stopped turn stays; the retry it asked for was handed to the run then.
+  it('keeps the edit the stopped turn committed, and the retry it handed the run', async () => {
     const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' }, config: { autonomousMode: true } });
     env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
     await until(() => taskOf(env.session, 't1')!.status === 'failed');
@@ -155,17 +156,17 @@ describe('planner force send', () => {
     await until(() => env.planner.calls.length === 1);
     await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, importing from ./lib' } }] }, ctx);
     const retry = await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx);
-    expect(JSON.parse(retry.text).result).toMatch(/^Queued: retry task #1 "Task t1" happens once your edit lands/);
+    expect(JSON.parse(retry.text).result).toBe('Task #1 "Task t1" is back in the run and starts when a slot is free.');
 
     const forced = env.session.forceSendPrompt('leave task 1 failed');
     await until(() => env.planner.calls.length === 2);
     env.planner.calls[1].finish(prose('Leaving it.'));
     await forced;
     await answered;
-    await settled();
+    await until(() => env.run.spawnedIds().length === 2);
 
-    expect(taskOf(env.session, 't1')).toMatchObject({ prompt: 'do t1', status: 'failed' });
-    expect(env.run.spawnedIds()).toEqual(['t1']);
-    expect(env.notices).toContainEqual(expect.objectContaining({ level: 'warn', message: 'Not done: retry task #1 "Task t1" waited for an edit that did not land.' }));
+    expect(taskOf(env.session, 't1')!.prompt).toBe('do t1, importing from ./lib');
+    expect(env.run.runner.spawn.mock.calls[1][0].prompt).toContain('do t1, importing from ./lib');
+    expect(env.notices.filter((n) => n.message.startsWith('Not done:'))).toEqual([]);
   });
 });

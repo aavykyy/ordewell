@@ -236,7 +236,7 @@ stopped, the conversation freed at once, and whatever it settles is discarded
 (`PlannerTurnDiscardedError`) instead of committed. So is a hung wake-up whose
 conversation the supervisor takes back (ADR-0029), but its plan stays. An
 abandoned turn's end is announced as it is abandoned, and nothing of it reaches
-a surface after — no streamed text, no held edit, no second end — since its
+a surface after — no streamed text, no second end — since its
 call settles whenever it settles, while the next turn runs. Nothing resets the
 planner's backend under a turn: a planner switch, or a settings change its
 client was built from, waits for the turn in flight to end (`PlannerBackend`,
@@ -264,16 +264,30 @@ streamed span a surface draws under one `turnId`: every user turn is a planner
 turn, but a compaction or a one-shot generation streams no Turn.
 
 **Turn effects** (`TurnEffects`) — what one planner turn leaves for its end:
-the starts it deferred behind its own held task edit (ADR-0029), whether that
-edit landed, and whether the planner submitted a whole plan, which autorun
-starts (ADR-0030). Made fresh for each reply and for the conversation's
-opening, and settled once in a `finally`, however the turn ends: when its edit
-landed, the deferred starts go through the command seam again, as edited;
-when it did not — the turn stopped, failed, was discarded, or its edit was
-refused as it landed — each is reported "Not done: … waited for an edit that
-did not land." A plan scope ending abandons them the same way, whether the
-edit landed or not, so none runs on the next plan. Nothing of one turn's
-effects carries into the next.
+whether the planner committed a whole plan in it, which autorun starts once the
+turn lands (ADR-0030). Made fresh for each reply and for the conversation's
+opening, so nothing of one turn carries into the next. No start waits on a
+turn's edit: a tool's edit is in the plan as its call answers (*Tool commit*).
+
+**Tool commit** (`PlannerConversation.commitFromTool`) — how a planner tool's
+plan change lands (ADR-0022, P2): a successful `submit_plan` or `edit_plan` is
+held to the *Plan change check* and adopted, saved and broadcast in one step,
+before the call answers and while the turn is still open, so `task_query`, the
+next call, every surface and the saved session read the changed plan. Its
+answer names the tasks it produced by id and reference, and the task each
+handle names. Each `edit_plan` call is a batch of its own, whole or not at
+all, against the plan as it stands; a later call, `run_task` or `retry_task`
+of the same turn names a task an earlier call added by its handle
+(`PlannerConversation.turnHandle`). The first commit lands the turn's inputs
+with it and takes them from the pending turns, so a turn that later stops,
+fails or hits a usage limit keeps the change and the message that asked for
+it, and nothing is sent again to make it twice. A call whose turn was stopped,
+superseded or abandoned, or whose plan was replaced, while it waited on its
+check is refused and changes nothing. The reply that ends the turn lands
+beside what committed, never over it: an envelope in it is not read, and an
+empty one adds no line. It approves nothing and lifts no start hold.
+*Avoid:* "held edit", "pending edit" or "proposed tasks" for a tool's change —
+nothing is held between the call and the plan.
 
 **Planner briefing** (`PlannerBriefing`) — what the planner is told once per
 change rather than in every turn: that autorun was switched (ADR-0030), that
@@ -1056,7 +1070,7 @@ planner's research shell, inside the planner's envelope (ADR-0026); `fetch`
 and `web_search`, behind the *web-read policy* (ADR-0027); and
 `submit_plan` and `edit_plan`, the only writes, which
 go through the same validation and commit path as the plan and `taskOps`
-envelopes. A token can hide planner tools a runner already has natively:
+envelopes and commit as they answer (*Tool commit*). A token can hide planner tools a runner already has natively:
 Claude Code's hides `fetch` and `web_search`, Codex's hides `web_search`
 while its own search is on. Revoked when the planner process is disposed.
 *Avoid:* "session token", "admin token", and describing the planner as
@@ -2149,14 +2163,14 @@ the planner wrote by substitution — what it may not have is refused.
 **Plan change check** (`PlanChangeCheck`, `services/PlanChangeCheck.ts`) — the
 one check a planner's change to the plan meets: a whole plan or a batch of task
 ops, on either route (`submit_plan` and the plan envelope, `edit_plan` and
-`taskOps`), at both ends of its turn — *submit*, as the planner makes it, where
-an edit joins the ops its turn already holds, and *land*, as the turn commits
-it. Every rule reads one scope, the session's live catalog and plan (or a
+`taskOps`), as it commits — *land*: a tool call as it answers, an envelope as
+its reply settles — and a whole plan's JSON as it is submitted too, *submit*.
+Every rule reads one scope, the session's live catalog and plan (or a
 one-shot planner's request): the runners `assignableRunners` allows, their modes,
-the *Assignment resolver*, `applyTaskOps`, the attached skills, and an Act
-supervisor's oscillation guard. So a change accepted at submit is refused at
-landing only for something that moved in between, a runner switched off say,
-and the adjustments shown at submit are the ones landing makes. The skill
+the *Assignment resolver*, `applyTaskOps`, the attached skills, the handles the
+turn's committed edits gave, and an Act supervisor's oscillation guard. So a
+plan accepted at submit is refused as it commits only for something that moved
+in between, a runner switched off say. The skill
 lookup is its one wait and comes first; what passed is handed on in the tick its
 rules read the plan, so nothing moves the plan between the check and what
 lands. Refusals are structured (`PlanChangeError`: the task and field, or the
@@ -2915,8 +2929,8 @@ or on the switch being turned on while a plan waits — and starts ops tasks too
 Independent of the Supervisor level and of Full/Guarded. Recorded as `run_plan`
 with autorun as who asked. With autorun on and Full, the planner may also start
 a task it added after the plan was approved, when it asks; both are read at the
-start. A task the planner adds in the user's turn is approved as it lands when
-autorun is on, in Full and in Guarded alike, read as the edit lands.
+start. A task the planner adds in the user's turn is approved as its edit
+commits when autorun is on, in Full and in Guarded alike, read as it commits.
 *Avoid:* "auto-execute", "auto-approve" (approval is a consequence, not the
 setting), "autopilot".
 
@@ -3009,11 +3023,10 @@ plan, kept by `ApprovalRecord` and read through `Session.isApproved`); a start f
 for a task outside that set, and the scheduler starts nothing outside it
 either (ADR-0035), so a task the planner added since *waits for approval to
 start*. A start the seam lets through is approved before it acts.
-A task an Act supervisor adds is approved as its edit lands. A start a planner
-turn asks for after editing that task in the same reply waits for the held
-edit to land, then goes through the seam again; an edit that never lands — the
-turn stopped, or the edit refused as it landed — drops the start, with a
-notice, rather than running it on the unedited plan. `merge_all` is refused in a
+A task an Act supervisor adds is approved as its edit commits. A start a
+planner turn asks for after editing that task in the same reply goes through
+the seam at once, against the plan as edited (*Tool commit*); what it hands
+the run waits for the turn's start hold. `merge_all` is refused in a
 user-started turn — the user presses Merge all — and allowed to the supervisor
 only at Act; so are `skip_task`, which needs a reason from anyone but the
 user, and `answer_checkpoint`, which needs one to reject; a checkpoint that asks
@@ -3027,8 +3040,8 @@ allow for the task, or deny with a note.
 commands and `ordewell` subcommands); *Avoid:* "action API".
 
 **Start admission** (`StartAdmission`, `TaskOrchestrator.admitStart`) — a start
-asked for and not yet claimed: one queued behind a planner turn's held edit,
-one waiting on its approval card, one still opening its run. Stop counts it as
+asked for and not yet claimed: one waiting on its approval card, or one still
+opening its run. Stop counts it as
 live work, so `stop_run` is never refused, or answered "stopped", while one
 could still start. The user's Stop bumps the *Stop generation*, and a start
 admitted under an older one never takes its claim: it is kept as refused and
@@ -3054,7 +3067,7 @@ and the answer names what it waits for; it does go past a failed dependency, one
 blocked behind that failure, or the merge gate the user confirmed, but still
 waits for what such a blocked one waits on, and for a planner turn's start
 hold. A Stop withdraws a queued start, with or without a run. With *Autorun* on, a task the planner adds in the user's turn is
-approved as its edit lands and never waits. Derived from the plan and its
+approved as its edit commits and never waits. Derived from the plan and its
 record, never stored as a status.
 *Avoid:* "awaiting approval" — that is a *Runner approval* a running task
 waits on.

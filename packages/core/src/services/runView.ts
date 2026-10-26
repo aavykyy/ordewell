@@ -136,8 +136,6 @@ export function reduceRun(view: RunView, input: RunInput): RunView {
       const tasks = changeTask(view.tasks, input.taskId, (task) => (input.type === 'task_started' ? startTask(task) : patchTask(task, input.changes)));
       return tasks === view.tasks ? view : { ...view, tasks };
     }
-    case 'plan_edit_held':
-      return { ...view, heldEdit: input.held ?? undefined };
     case 'isolation_handoff':
       return { ...view, handoff: handoffOf(input) };
     case 'isolation_merge':

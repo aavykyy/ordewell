@@ -62,7 +62,7 @@ export type SchedulerRunSettings = Pick<RunSettings, 'mergeAtGatesAutomatically'
 /**
  * A start someone asked for, from the moment it was admitted until it has
  * taken its claim or been let go (ADR-0029): a start waiting on the user's
- * answer, on a held edit, or on the run to open. Stop counts it as live work,
+ * answer, or on the run to open. Stop counts it as live work,
  * and a Stop since it was admitted refuses its claim.
  */
 export interface StartAdmission {
@@ -617,8 +617,8 @@ export class TaskOrchestrator {
   }
 
   /**
-   * Admit a start that will wait before it claims — on the user's answer, a
-   * held edit, the run opening. Until it is released, Stop counts it as live
+   * Admit a start that will wait before it claims — on the user's answer, or
+   * the run opening. Until it is released, Stop counts it as live
    * work; once a Stop comes it is no longer current, and its claim is refused.
    */
   admitStart(): StartAdmission {
@@ -787,8 +787,7 @@ export class TaskOrchestrator {
   /**
    * Every reason a task cannot start now, from the one start rule
    * (ADR-0034); none when it can. `forced` judges a start the user forced.
-   * Takes the task, not its id: the command seam judges one as a held edit
-   * leaves it.
+   * Takes the task, not its id: the one the command seam located.
    */
   startWaits(task: Readonly<Task>, forced?: ForcedStart): StartWait[] {
     return startWaits(task, this.startRule(), forced);

@@ -70,7 +70,7 @@ export function taskOpsProtocol(executionNote = '', tools = false): string[] {
     '"research": true on a read-only top-level AI task makes it a research task, whose task_complete report wakes you when it ends; "research": false lifts it. Lifting "readOnly" lifts it too. It is never a subtask, an ops task or a loop\'s body.',
     '"loop" makes a task the check of a loop (see LOOPS in your instructions): {"body": ["<id, #order or handle>", ...], "maxRounds"?: 1 to 10}; null drops the loop. A handle cannot be referenced before the op that defines it, so adding a loop takes three ops in this order: "add" the check without "loop", with a "handle"; "add" each body task, depending on the check\'s handle, with a handle of its own; then "update" the check, by its handle, with "loop": {"body": [the body handles]}.',
     'Keep dependencies consistent: no cycles, no references to removed tasks, and never touch running or completed tasks — "rearm" is the one exception, below.',
-    ...(tools ? ['edit_plan checks the batch when you call it and answers with what it will change, or with the error to fix — call it again in the same reply. The edit is applied when your reply ends; edits you make in one reply join one batch.'] : []),
+    ...(tools ? ['edit_plan checks the batch when you call it and applies it at once, whole or not at all: it answers with what it changed and the id and ref of each task it added, or with the error to fix, having changed nothing — call it again in the same reply. Each call is a batch of its own against the plan as it then stands, and a later call, run_task or retry_task in the same reply may name a task an earlier call added by the handle it gave.'] : []),
     'Just declare the dependencies you want — display order is repaired for you afterwards, so a rewire or a newly added prerequisite never needs a "reorder" op. Only a task that is running or completed cannot be shifted, so an edit that would need one to move is rejected.' + executionNote,
     'Flipping "type" between "ai", "user" and "script" is a content change, not just a label: an update to "user" needs "userSteps" in the SAME op, an update to "ai" needs "prompt", and an update to "script" needs "commands" or "script" — the fields the old type had and the new one does not are cleared automatically (flipping to "user" also makes the task HITL). Only a task that has not started can flip to or from "script".',
     'A script task ("type":"script", top-level only) is run by Ordewell with no model: "commands" is a list of argument vectors run in order with no shell, stopping at the first that fails (e.g. [["git","push","origin","main"]]), or "script" is one script for the shell; "timeoutMs" is its time limit (ten minutes when left out). Give it exactly one of "commands" or "script", and never "prompt", "assignedRunner", "assignedModel", "skills", "readOnly" or "ops". Writing one body replaces the other. Changing its body or time limit takes it out of what the user approved, so it waits for their approval again.',
@@ -143,6 +143,7 @@ function resolveRef(
   handleOwner: Map<string, number>,
   handleId: Map<string, string>,
   opIndex: number,
+  earlierHandles: ReadonlyMap<string, string>,
 ): RefResolution {
   if (typeof ref !== 'string' && typeof ref !== 'number') return { error: `invalid reference "${String(ref)}"` };
   const s = String(ref).trim();
@@ -156,6 +157,8 @@ function resolveRef(
     if (!id) return { error: `handle "${s}" was never resolved` };
     return { id };
   }
+  const earlier = earlierHandles.get(s);
+  if (earlier !== undefined) return findInTasks(liveTree, earlier) ? { id: earlier } : { error: `handle "${s}" names a task that is no longer in the plan` };
 
   if (findInTasks(liveTree, s)) return { id: s };
   const task = resolveTaskRef(originalTree, s);
@@ -258,19 +261,15 @@ function pinnedRefusal(other: Task, pin: Task, side: 'before' | 'after'): string
   return `"${other.title}" would have to run ${side} "${pin.title}", which is ${word} and cannot be moved`;
 }
 
-/**
- * Which op of a batch a refusal is about: its number among the ops the call
- * wrote, from 1, or among those the turn already held when `earlier`.
- */
+/** Which op of a batch a refusal is about: its number among the ops the call wrote, from 1. */
 export interface OpRef {
   number: number;
   kind: string;
-  earlier?: boolean;
 }
 
 /** How a refusal names its op, as the planner reads it: "op 2 (update)". */
 export function opLabel(ref: OpRef): string {
-  return `${ref.earlier ? 'earlier op' : 'op'} ${ref.number} (${ref.kind})`;
+  return `op ${ref.number} (${ref.kind})`;
 }
 
 /** One reason a batch was refused, and the op it is about; absent for the batch as a whole, its order say. */
@@ -384,47 +383,23 @@ function changedFields(target: Task, written: Partial<Task>, landed: Partial<Tas
 const NO_CATALOG: AssignmentCatalog = { modelsByRunner: {} };
 
 /**
- * The ids an op's new tasks get, made once and kept for the op: the open
- * turn's held edit is applied again at each read of the plan as edited and
- * once more as it lands, and a start queued behind it names the task by the
- * id it read.
- */
-const keptIds = new WeakMap<object, string[]>();
-
-function idsOf(op: unknown): () => string {
-  if (typeof op !== 'object' || op === null) return uuidv4;
-  const ids = keptIds.get(op) ?? [];
-  keptIds.set(op, ids);
-  let next = 0;
-  return () => {
-    if (next === ids.length) ids.push(uuidv4());
-    return ids[next++];
-  };
-}
-
-/**
  * Apply task ops to a snapshot of the plan, atomically: either every op
  * applies and the result validates (deps resolve, no cycles, running and
  * completed tasks untouched), or nothing is returned and `errors` explains
  * why. The caller commits `tasks` on ok.
  *
- * `addedPast` are tasks put in the plan past the turn's held edit, as
- * `run_script` puts its own (ADR-0035): a `reorder` may leave them out, as
- * one written before they were added could not list them, and they then
- * keep their place after the tasks it lists.
+ * `earlierHandles` are the handles an earlier batch of the same planner turn
+ * gave, each with the id of the task it made (ADR-0022 P2): this batch may
+ * name those tasks by them, and may not give one of them again.
  */
 export function applyTaskOps(
   currentTasks: readonly Task[],
-  newOps: TaskOp[],
+  ops: TaskOp[],
   runners: RunnerId[],
   catalog?: AssignmentCatalog,
-  held: readonly TaskOp[] = [],
-  addedPast: ReadonlySet<string> = new Set(),
+  earlierHandles: ReadonlyMap<string, string> = new Map(),
 ): ApplyTaskOpsResult {
-  // Ops already accepted earlier in the batch apply first; errors number only
-  // the new ones, as the planner wrote them in the call it is answered for.
-  const ops = [...held, ...newOps];
-  const opLabel = (i: number): OpRef => (i < held.length ? { number: i + 1, kind: ops[i].op, earlier: true } : { number: i - held.length + 1, kind: ops[i].op });
+  const opLabel = (i: number): OpRef => ({ number: i + 1, kind: ops[i].op });
   let tasks: Task[] = JSON.parse(JSON.stringify(currentTasks));
   const errors: OpRefusal[] = [];
   const summary: string[] = [];
@@ -447,6 +422,10 @@ export function applyTaskOps(
       errors.push({ op: opLabel(i), message: `handle "${handle}" is already used earlier in this batch` });
       continue;
     }
+    if (earlierHandles.has(handle)) {
+      errors.push({ op: opLabel(i), message: `handle "${handle}" already names a task an earlier edit in this reply added: choose another` });
+      continue;
+    }
     if (resolveTaskRef(currentTasks, handle)) {
       errors.push({ op: opLabel(i), message: `handle "${handle}" collides with an existing task reference` });
       continue;
@@ -460,7 +439,7 @@ export function applyTaskOps(
     const bad: string[] = [];
     const liveFlat = flattenTasks(tasks);
     for (const d of Array.isArray(deps) ? deps : []) {
-      const r = resolveRef(d, currentTasks, tasks, handleOwner, handleId, opIndex);
+      const r = resolveRef(d, currentTasks, tasks, handleOwner, handleId, opIndex, earlierHandles);
       if ('error' in r) { bad.push(`${String(d)} (${r.error})`); continue; }
       if (!liveFlat.some((t) => t.id === r.id)) { bad.push(`${String(d)} (no longer exists in this batch)`); continue; }
       ids.push(r.id);
@@ -519,7 +498,7 @@ export function applyTaskOps(
     audience: TaskEditActor,
     refuseRunning = false,
   ): { target: Task; changes: Partial<Task>; fields: string[]; check: TaskEditCheck } | { error: string } => {
-    const ref = resolveRef(op.taskId, currentTasks, tasks, handleOwner, handleId, opIndex);
+    const ref = resolveRef(op.taskId, currentTasks, tasks, handleOwner, handleId, opIndex, earlierHandles);
     if ('error' in ref) return { error: ref.error };
     const target = findInTasks(tasks, ref.id);
     if (!target) return { error: `task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)` };
@@ -600,7 +579,7 @@ export function applyTaskOps(
 
   for (const [i, op] of ops.entries()) {
     const label = opLabel(i);
-    const newId = idsOf(op);
+    const newId = uuidv4;
     switch (op.op) {
       case 'update': {
         const prep = prepareEdit(op, i, 'planner');
@@ -632,7 +611,7 @@ export function applyTaskOps(
         break;
       }
       case 'remove': {
-        const ref = resolveRef(op.taskId, currentTasks, tasks, handleOwner, handleId, i);
+        const ref = resolveRef(op.taskId, currentTasks, tasks, handleOwner, handleId, i, earlierHandles);
         if ('error' in ref) { errors.push({ op: label, message: `${ref.error}` }); break; }
         const target = findInTasks(tasks, ref.id);
         if (!target) { errors.push({ op: label, message: `task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)` }); break; }
@@ -645,13 +624,12 @@ export function applyTaskOps(
         break;
       }
       case 'reorder': {
-        const refs = (op.taskIds ?? []).map((r) => resolveRef(r, currentTasks, tasks, handleOwner, handleId, i));
+        const refs = (op.taskIds ?? []).map((r) => resolveRef(r, currentTasks, tasks, handleOwner, handleId, i, earlierHandles));
         const badRef = refs.find((r): r is { error: string } => 'error' in r);
         if (badRef) { errors.push({ op: label, message: `${badRef.error}` }); break; }
         const resolved = (refs as { id: string }[]).map((r) => findTopLevel(tasks, r.id));
         if (resolved.some((t) => !t)) { errors.push({ op: label, message: `unknown task in reorder list` }); break; }
-        const listed = resolved.map((t) => t!.id);
-        const orderIds = [...listed, ...tasks.filter((t) => addedPast.has(t.id) && !listed.includes(t.id)).map((t) => t.id)];
+        const orderIds = resolved.map((t) => t!.id);
         if (orderIds.length !== tasks.length || new Set(orderIds).size !== tasks.length) {
           errors.push({ op: label, message: `reorder must list every top-level task exactly once (${tasks.length} tasks)` });
           break;
@@ -662,7 +640,7 @@ export function applyTaskOps(
         break;
       }
       case 'merge': {
-        const refs = (op.taskIds ?? []).map((r) => resolveRef(r, currentTasks, tasks, handleOwner, handleId, i));
+        const refs = (op.taskIds ?? []).map((r) => resolveRef(r, currentTasks, tasks, handleOwner, handleId, i, earlierHandles));
         const badRef = refs.find((r): r is { error: string } => 'error' in r);
         if (badRef) { errors.push({ op: label, message: `${badRef.error}` }); break; }
         const resolved = (refs as { id: string }[]).map((r) => findTopLevel(tasks, r.id));
@@ -725,7 +703,7 @@ export function applyTaskOps(
         break;
       }
       case 'split': {
-        const ref = resolveRef(op.taskId, currentTasks, tasks, handleOwner, handleId, i);
+        const ref = resolveRef(op.taskId, currentTasks, tasks, handleOwner, handleId, i, earlierHandles);
         if ('error' in ref) { errors.push({ op: label, message: `${ref.error}` }); break; }
         const target = findTopLevel(tasks, ref.id);
         if (!target) { errors.push({ op: label, message: `task "${op.taskId}" not found` }); break; }

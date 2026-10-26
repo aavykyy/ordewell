@@ -872,20 +872,6 @@ describe('a chat webview reloaded while the planner waits for an answer', () => 
     await expect(answer).resolves.toBe(true);
   });
 
-  it('keeps the preview of an edit the planner holds, outside a turn this window started', async () => {
-    chat.send({ type: 'sendMessage', text: 'build a parser', typed: true });
-    await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalled());
-    // A supervisor's wake-up turn holds an edit: this window has no turn of its own out.
-    const task = createTask({ id: 't9', order: 2, title: 'Add a cache', prompt: 'add a cache', assignedRunner: 'claude-code' });
-    const heldEdit = { turnId: 'wake-1', tasks: [{ label: '2', mark: 'added' as const, task: { ...task, subtasks: [] } }] };
-    (h.session.spies as unknown as { planState: unknown }).planState = {};
-    h.session.spies.runSnapshot = vi.fn(() => ({ tasks: [], runMerge: null, handoff: null, mergeResult: null, heldEdit } as unknown as RunView));
-
-    chat.reload();
-
-    await vi.waitFor(() => expect(chat.provider.run.current.heldEdit?.tasks.map((t) => t.task.title)).toEqual(['Add a cache']));
-  });
-
   it('drops the card of a request answered elsewhere while the webview was away, and does not answer it again', async () => {
     const answer = startAsked();
     const [{ id }] = approvals.outstanding();
