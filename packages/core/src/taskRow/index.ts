@@ -1,4 +1,4 @@
-export { isTaskRunning, taskStatusKind, awaitingLabel, approvalLabel, resumeLabel, resumeTime, blockedByLabel, holdLabel, skippedLabel, NOT_STARTED, WAITS_FOR_APPROVAL_LABEL } from './status';
+export { isTaskRunning, taskStatusKind, awaitingLabel, approvalLabel, receiptLabel, resumeLabel, resumeTime, blockedByLabel, holdLabel, skippedLabel, NOT_STARTED, WAITS_FOR_APPROVAL_LABEL } from './status';
 export type { TaskStatusKind } from './status';
 export { cardEditable, cardEditNeedsUnstarted, editableWhileRunning, runHoldsEditors } from './editability';
 export type { TaskRunFacts } from './editability';

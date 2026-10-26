@@ -123,6 +123,12 @@ interface TaskAttempt extends EndedAttempt {
   web: TaskWebReader | null;
   /** The patch it last saved (ADR-0050), which its handoff names. */
   patch: HandoffPatch | null;
+  /**
+   * What its runner's accepted `task_complete` call reported, while the report
+   * still stands (ADR-0018, L1): a receipt for surfaces, never a verdict. A new
+   * turn or a message the runner reads voids it, as it voids the report.
+   */
+  receipt: Verdict['reported'] | null;
 }
 
 const DEFAULT_GIT: GitInvoker = { exec: defaultExecFile, resolvePath: () => augmentedPath() };
@@ -380,6 +386,11 @@ export class Attempts {
     return this.verifier.getIdleSince(taskId);
   }
 
+  /** What the live attempt's runner reported through `task_complete`, while its report stands; null otherwise. */
+  receipt(taskId: string): Verdict['reported'] | null {
+    return this.live.get(taskId)?.receipt ?? null;
+  }
+
   /** The kind a task's next attempt starts as, short of a repair or a continue: what is weighed before one exists. */
   nextKind(taskId: string): AttemptKind {
     const task = this.deps.store.get(taskId);
@@ -421,6 +432,7 @@ export class Attempts {
       shell: null,
       web: null,
       patch: null,
+      receipt: null,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.live.set(task.id, attempt);
@@ -715,6 +727,9 @@ export class Attempts {
     this.deps.output.attach(task.id, session);
     this.verifier.watch(task, session);
     session.onEvent((event) => {
+      if (event.type === 'completion_received' || event.type === 'turn_start' || event.type === 'message_delivered') {
+        this.noteReceipt(task.id, attempt, event.type === 'completion_received' ? event.status : null);
+      }
       if (event.type === 'turn_start') {
         attempt.turnError = null;
         attempt.turnOutputFrom = session.getOutput().length;
@@ -728,6 +743,13 @@ export class Attempts {
       }
     });
     session.onTurnEnd((reason) => this.turnEnded(task.id, attempt, session, reason));
+  }
+
+  /** Only the task's current attempt shows a receipt: a runner from an earlier one, still winding down, changes nothing. */
+  private noteReceipt(taskId: string, attempt: TaskAttempt, receipt: TaskAttempt['receipt']): void {
+    if (this.live.get(taskId) !== attempt || attempt.receipt === receipt) return;
+    attempt.receipt = receipt;
+    this.host.emit('onTaskChanged');
   }
 
   /**

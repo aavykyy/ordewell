@@ -3,7 +3,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { StructuredRunner } from '../StructuredRunner';
 import { VerdictEngine } from '../VerdictEngine';
-import { createTask, type Verdict } from '../../models/Task';
+import { createTask, type LegacyPlanState, type Verdict } from '../../models/Task';
+import type { SessionMessage } from '../SessionMessage';
+import { makeSession, taskOf, testWorkspace } from './sessionTestKit';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import type { IRunnerSession, StructuredEvent, StructuredTurnEnd } from '../../interfaces/IRunner';
@@ -562,6 +564,29 @@ describe('the Ordewell task tools (ADR-0022)', () => {
     expect(adapters[0].interrupts).toBe(0);
   });
 
+  it('says a report was received as the call returns, while the report itself waits for the turn to close', async () => {
+    const { runner, adapters } = served(() => {}, 1_000);
+    const session = await runner.spawn(options());
+    const { events } = observe(session);
+    const reports: unknown[] = [];
+    session.onTaskComplete((report) => reports.push(report));
+    const client = await connect(servedConfig(adapters[0]));
+
+    const refused = await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Done.', artifacts: [{ kind: 'url', url: 'javascript:alert(1)' }] } });
+    expect(refused).toMatchObject({ isError: true });
+    expect(events.filter((e) => e.type === 'completion_received')).toEqual([]);
+
+    await client.callTool({ name: 'task_complete', arguments: { status: 'blocked', summary: 'No schema.', reason: 'the schema file is missing' } });
+    expect(events.filter((e) => e.type === 'completion_received')).toEqual([{ type: 'completion_received', status: 'blocked' }]);
+    expect(reports).toEqual([]);
+    expect(session.turnState()).toBe('working');
+
+    adapters[0].endTurn();
+    await until(() => reports.length === 1);
+    expect(events.filter((e) => e.type === 'completion_received')).toHaveLength(1);
+    session.kill();
+  });
+
   it('publishes a completion whose turn never closes after the interrupt grace', async () => {
     const { runner, adapters } = served(() => {}, 10);
     const session = await runner.spawn(options());
@@ -711,6 +736,108 @@ describe('the Ordewell task tools (ADR-0022)', () => {
     expect(verdicts[0].outcome).toBe('fail');
     expect(verdicts[0].reason).toContain('Assertion failed');
     engine.reset();
+  });
+
+  describe('the receipt of a report on a running plan (ADR-0018, L1)', () => {
+    const plan = (): LegacyPlanState => ({
+      tasks: [
+        createTask({ id: 'a1', order: 1, title: 'First', prompt: 'Do the task', taskMode: 'acceptEdits' }),
+        createTask({ id: 'b2', order: 2, title: 'Second', prompt: 'Then this', taskMode: 'acceptEdits', dependencies: ['a1'] }),
+      ],
+      generatedAt: '2026-10-26T00:00:00Z', lastUpdated: '2026-10-26T00:00:00Z', status: 'approved', runners: ['claude-code'],
+    });
+
+    async function running(configure: (adapter: HandAdapter) => void = () => {}) {
+      const { runner, adapters } = served(configure, 1_000);
+      const messages: SessionMessage[] = [];
+      const session = makeSession({ runner, broadcast: (m) => messages.push(m) });
+      session.loadPlan(plan(), 'goal', testWorkspace);
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
+      await until(() => adapters[0]?.sent.length === 1);
+      const client = await connect(servedConfig(adapters[0]));
+      const row = (taskId: string) => session.runSnapshot().tasks.find((t) => t.id === taskId)!;
+      const lastStatus = (taskId: string) => messages.filter((m) => m.type === 'status_update').at(-1)?.tasks.find((t) => t.id === taskId);
+      return { session, adapters, client, row, lastStatus };
+    }
+
+    it('shows the report received at once, with no verdict, landing or dependent until its turn closes', async () => {
+      const { session, adapters, client, row, lastStatus } = await running();
+
+      await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Built it.' } });
+
+      expect(row('a1')).toMatchObject({ status: 'in_progress', completionReceived: 'done', verdict: null });
+      expect(lastStatus('a1')).toMatchObject({ status: 'in_progress', completionReceived: 'done' });
+      expect(taskOf(session, 'a1')?.handoff).toBeUndefined();
+      expect(taskOf(session, 'b2')?.status).toBe('approved');
+      expect(adapters).toHaveLength(1);
+
+      adapters[0].emit({ type: 'usage', record: { source: 'claude-code', inputTokens: 1234 } });
+      adapters[0].endTurn();
+      await until(() => taskOf(session, 'a1')?.status === 'completed');
+
+      expect(row('a1').completionReceived).toBeUndefined();
+      expect(lastStatus('a1')?.completionReceived).toBeUndefined();
+      expect(taskOf(session, 'a1')?.verdict?.outcome).toBe('pass');
+      expect(taskOf(session, 'a1')?.attemptUsage?.[0].totals.inputTokens).toBe(1234);
+      await until(() => adapters.length === 2);
+      await session.execute({ command: 'stop_run' }, { kind: 'user' });
+    });
+
+    it('receives a failed or blocked report as what it said, and the verdict that follows fails', async () => {
+      for (const status of ['failed', 'blocked'] as const) {
+        const { session, adapters, client, row } = await running();
+
+        await client.callTool({ name: 'task_complete', arguments: { status, summary: 'Could not.', reason: 'the schema file is missing' } });
+        expect(row('a1')).toMatchObject({ status: 'in_progress', completionReceived: status, verdict: null });
+
+        adapters[0].endTurn();
+        await until(() => taskOf(session, 'a1')?.status === 'failed');
+        expect(row('a1').completionReceived).toBeUndefined();
+        expect(adapters).toHaveLength(1);
+        await session.execute({ command: 'stop_run' }, { kind: 'user' });
+      }
+    });
+
+    it('takes the receipt back when the runner reads a message after reporting', async () => {
+      const { session, adapters, client, row } = await running();
+      await session.execute({ command: 'message_task', task: 'a1', text: 'Also add tests' }, { kind: 'user' });
+      const [message] = row('a1').queued ?? [];
+
+      await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Built it.' } });
+      expect(row('a1').completionReceived).toBe('done');
+      adapters[0].emit({ type: 'message_delivered', id: message.id });
+
+      expect(row('a1').completionReceived).toBeUndefined();
+      adapters[0].endTurn();
+      await tick();
+      expect(taskOf(session, 'a1')?.status).toBe('in_progress');
+      await session.execute({ command: 'stop_run' }, { kind: 'user' });
+    });
+
+    it('keeps the receipt while a queued message waits, and takes it back once that message opens a turn', async () => {
+      const { session, adapters, client, row } = await running();
+      await session.execute({ command: 'message_task', task: 'a1', text: 'Also add tests' }, { kind: 'user' });
+
+      await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Built it.' } });
+      expect(row('a1').completionReceived).toBe('done');
+
+      adapters[0].endTurn();
+      await until(() => adapters[0].sent.length === 2);
+      expect(row('a1')).toMatchObject({ status: 'in_progress', verdict: null });
+      expect(row('a1').completionReceived).toBeUndefined();
+      await session.execute({ command: 'stop_run' }, { kind: 'user' });
+    });
+
+    it('drops the receipt when the run is stopped before the report settles', async () => {
+      const { session, client, row } = await running();
+      await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Built it.' } });
+      expect(row('a1').completionReceived).toBe('done');
+
+      await session.execute({ command: 'stop_run' }, { kind: 'user' });
+
+      expect(row('a1').completionReceived).toBeUndefined();
+      expect(taskOf(session, 'a1')?.status).not.toBe('completed');
+    });
   });
 
   it('holds a checkpoint call open until the session answers it, and returns the answer', async () => {

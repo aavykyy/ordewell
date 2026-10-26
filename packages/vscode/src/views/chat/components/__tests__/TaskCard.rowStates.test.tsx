@@ -46,6 +46,25 @@ describe('a task card, pinned before its rules move to core', () => {
     expect(document.querySelector('.task-check')?.getAttribute('title')).toBe('Stalled: no output recently');
   });
 
+  it('says a running task\'s report was received until the run takes it back, never Done (ADR-0018, L1)', () => {
+    const task = makeTask({ status: 'in_progress', attempted: true });
+    const { rerender } = render(<TaskCard task={task} models={[]} isExecuting run={{ completionReceived: 'done' }} />);
+    expect(badge()?.textContent).toBe('Completion received');
+    expect(badge()?.className).toBe('task-status-badge status-running');
+
+    rerender(<TaskCard task={task} models={[]} isExecuting run={{ completionReceived: 'blocked' }} />);
+    expect(badge()?.textContent).toBe('Blocked report received');
+
+    rerender(<TaskCard task={task} models={[]} isExecuting run={{}} />);
+    expect(badge()?.textContent).toBe('Running');
+  });
+
+  it('says a running subtask\'s report was received as its parent card does', () => {
+    const parent = makeTask({ id: 'p1', order: 2, title: 'Parent' });
+    render(<SubTaskCard task={makeTask({ status: 'in_progress', attempted: true })} parentTask={parent} models={[]} isExecuting run={{ completionReceived: 'failed' }} />);
+    expect(badge()?.textContent).toBe('Failure report received');
+  });
+
   it.each([
     ['completed', 'Executed'],
     ['in_progress', 'Running'],

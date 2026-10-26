@@ -176,6 +176,40 @@ describe('Attempts: a verdict is reported, never applied', () => {
     expect(env.task().verdict).toBeUndefined();
   });
 
+  it('keeps a report\'s receipt through its landing, with no verdict on the task until the attempt ends', async () => {
+    let land!: (outcome: LandingOutcome) => void;
+    const env = setup({ landPassed: () => new Promise((resolve) => { land = resolve; }) });
+    await env.start();
+
+    env.sessions[0].emitEvent({ type: 'completion_received', status: 'done' });
+    expect(env.attempts.receipt('t1')).toBe('done');
+    env.sessions[0].reportComplete({ status: 'done', summary: 'Did it.' });
+    await vi.waitFor(() => expect(env.landing.landPassed).toHaveBeenCalled());
+
+    expect(env.attempts.receipt('t1')).toBe('done');
+    expect(env.task().verdict).toBeUndefined();
+    expect(env.ended).toEqual([]);
+
+    land({ kind: 'nothing-to-land', messages: [] });
+    await vi.waitFor(() => expect(env.ended).toHaveLength(1));
+    expect(env.attempts.receipt('t1')).toBeNull();
+  });
+
+  it('shows only the current attempt\'s receipt, whatever an earlier runner still says', async () => {
+    const env = setup();
+    await env.start();
+    env.attempts.end('t1', 'retry');
+    await env.start();
+    const [earlier, current] = env.sessions;
+
+    earlier.emitEvent({ type: 'completion_received', status: 'done' });
+    expect(env.attempts.receipt('t1')).toBeNull();
+
+    current.emitEvent({ type: 'completion_received', status: 'failed' });
+    earlier.emitEvent({ type: 'turn_start', text: 'late' });
+    expect(env.attempts.receipt('t1')).toBe('failed');
+  });
+
   it('drops a verdict that arrives once its attempt has ended', async () => {
     const env = setup();
     await env.start();

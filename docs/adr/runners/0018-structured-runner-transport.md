@@ -183,7 +183,15 @@ and completion evidence.
   is published once it closes; if it is still open at the grace, the report is
   published then, and the stop the verdict orders gives the runner one more
   grace to close before it is killed. In the common path the attempt lands only
-  after the reporting turn has closed. What the runner reports as that turn closes still
+  after the reporting turn has closed. The call itself is acknowledged at once:
+  as it is accepted on the attempt's token, the task's status says the report
+  was received (`completionReceived`, read as "Completion received", or a
+  failed or blocked report received), and keeps saying so through the
+  attempt's wind-down and landing. That receipt is no verdict: nothing lands,
+  no dependent starts and no handoff is published on it, and it is never
+  saved. A refused call shows none; a turn or a message the runner reads after
+  reporting voids it with the report; it goes with the attempt, and an earlier
+  attempt's runner never sets it. What the runner reports as that turn closes still
   belongs to the attempt that ended: Claude Code states a turn's cost and its
   model's window only on its `result` line, which comes after the
   `task_complete` call. The attempt's output is the call's summary, which the
@@ -497,3 +505,4 @@ transport is retained for take-over.
 - 2026-10-24 — U1: the three ways a limit arrives — an exit mid-turn, a failed turn, a refused start — are one pause, owned by `LimitPauses`; a refused start now settles as a verdict does.
 - 2026-10-24 — U1: a pause also holds a run that ended on a failure, which it goes back to once released; the hold is an event of the run's state (`nextRunState`).
 - 2026-10-25 — the VS Code task-log control reads "Open chat" and appears once an attempt has started.
+- 2026-10-26 — L1: an accepted `task_complete` call is shown received at once, while its turn closes and its attempt winds down; the receipt is no verdict and is never saved.
