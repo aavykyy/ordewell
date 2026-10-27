@@ -92,9 +92,9 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
   const editingTask = state.expandedTaskId ? findTask(state.tasks, state.expandedTaskId) : undefined;
   if (editingTask && state.taskEditor) return handleTaskEditKey(state, editingTask, state.taskEditor, key);
 
-  // Expanded without an open editor: the cursor is browsing a parent's
-  // revealed subtask rows. Escape backs out of that one step at a time,
-  // rather than leaving the plan pane entirely.
+  // The focused side backs out first: Escape collapses what the plan pane has
+  // open — a parent's revealed subtask rows here, the prompt editor above —
+  // before it means anything to the task chat or hands focus to it.
   if (key.name === 'escape') {
     if (state.expandedTaskId) return step(settlePlan({ ...state, expandedTaskId: null }));
     return step({ ...state, focus: 'chat' });

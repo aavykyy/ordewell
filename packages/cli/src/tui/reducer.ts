@@ -5,7 +5,7 @@ import { activeToken, composerCompletions, findCommand, parseRunnerCommand, pars
 import { applyKey, commit } from './editor';
 import { endRunningCompactions, hear, say, wiped } from './transcript';
 import { blockedPicker, handoffArrived, showDiff } from './handoff';
-import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, scriptTaskView, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, scriptTaskView, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { syncApprovals } from './reducers/approvals';
@@ -669,10 +669,12 @@ function handleKey(state: TuiState, key: Key): Step {
   // stream in full as it lands is where full detail matters most.
   if (key.name === 'ctrl-o' && state.focus === 'chat' && !state.overlay) return toggleDetail(state);
 
-  // In the task view, Esc backs out the same way: a draft clears first, then
-  // the view closes and the plan pane takes focus on that task. An open
-  // overlay still owns Esc ahead of it, so /help closes before the view does.
-  if (key.name === 'escape' && state.taskView && !state.overlay) {
+  // ESC backs out of whichever side the TAB selection is on. While the plan
+  // pane has something of its own open, Esc collapses that first and the task
+  // view is left as it was; otherwise a task-chat Esc clears the draft, then
+  // closes the view onto the plan with the cursor on that task. An open overlay
+  // still owns Esc ahead of both, so /help closes before either.
+  if (key.name === 'escape' && state.taskView && !state.overlay && !planPaneOpen(state)) {
     if (state.editor.text) return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
     return step(returnToPlan(state, state.taskView.taskId));
   }
