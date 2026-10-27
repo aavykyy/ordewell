@@ -119,7 +119,7 @@ export default function EmptyState({ onLoadSession, runSettings, signedOut, isol
                     last attempt's result after one. The retry is the same
                     button beside it. */}
                 {row.failure
-                  ? <span className="planner-auth-failure">{row.failure}</span>
+                  ? <span className="planner-auth-failure" title={row.failure}>{row.failure}</span>
                   : (
                     <span className="planner-auth-warning-text">
                       <span className="planner-auth-warning-agent">{row.label}</span>

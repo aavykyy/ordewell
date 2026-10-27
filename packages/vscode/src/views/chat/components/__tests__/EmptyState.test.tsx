@@ -82,6 +82,19 @@ describe('EmptyState — signed-out planners', () => {
     expect(container.querySelector('.planner-auth-row[data-runner="codex"] .planner-auth-failure')).toBeNull();
   });
 
+  it('gives the row one dot, one sentence and one action, in that order', () => {
+    const { container } = render(
+      <EmptyState signedOut={[{ runner: 'claude-code', label: 'Claude Code', onLogIn: () => {} }]} />,
+    );
+
+    const rowEl = container.querySelector('.planner-auth-row')!;
+    expect([...rowEl.children].map((el) => el.className)).toEqual([
+      'planner-auth-dot',
+      'planner-auth-warning-body',
+      'planner-login planner-login-btn',
+    ]);
+  });
+
   it('gives a signed-out agent with no login command a row and no button', () => {
     const { container } = render(<EmptyState signedOut={[{ runner: 'codex', label: 'Codex' }]} />);
 

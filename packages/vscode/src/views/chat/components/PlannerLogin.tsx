@@ -13,21 +13,26 @@ interface PlannerLoginActionProps {
  * The one login action the signed-out surface offers. The empty-state row and
  * a pill's own action draw the same words, spinner and busy state so a login
  * cannot look like two different controls depending on where it started.
+ *
+ * `.planner-login` carries that shared look; the caller's class only chooses
+ * where it sits (a pill segment or a row's action).
  */
 export default function PlannerLoginAction({ onLogIn, pending, className, ariaLabel, title }: PlannerLoginActionProps) {
   return (
     <button
       type="button"
-      className={className}
+      className={`planner-login ${className}`}
       onClick={onLogIn}
       disabled={pending}
       aria-busy={pending ? true : undefined}
       aria-label={ariaLabel}
       title={title}
     >
-      {pending
-        ? <><span className="planner-login-spinner" aria-hidden="true" />Signing in…</>
-        : 'Log in'}
+      <span className="planner-login-state">
+        {pending
+          ? <><span className="planner-login-spinner" aria-hidden="true" />Signing in…</>
+          : 'Log in'}
+      </span>
     </button>
   );
 }

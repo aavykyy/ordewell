@@ -152,6 +152,35 @@ describe('a signed-out planner', () => {
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'loginPlanner', runner: 'codex' });
   });
 
+  it('keeps the name and its login in one capsule, the name first', () => {
+    post({ type: 'setPlannerBackends', backends: [signedOutClaude], provider: 'claude-code', runner: 'claude-code' });
+
+    const group = pill().closest('.planner-pill-group')!;
+    const segments = [...group.querySelectorAll<HTMLButtonElement>('button')];
+    expect(segments).toHaveLength(2);
+    expect(segments[0].className).toContain('planner-pill');
+    expect(segments[1].className).toContain('planner-pill-login');
+    // The shared class is what gives both placements one look.
+    expect(segments[1].className).toContain('planner-login');
+    expect(segments[0].textContent).toBe('Claude Code');
+    expect(segments[1].textContent).toBe('Log in');
+    // The login is still the agent's own action, not a second way to select it.
+    expect(segments[1].getAttribute('aria-label')).toBe('Log in to Claude Code');
+  });
+
+  it('flags the signed-out active planner in the collapsed Settings summary too', () => {
+    post({ type: 'setPlannerBackends', backends: [signedOutClaude], provider: 'claude-code', runner: 'claude-code' });
+    const toggle = [...document.querySelectorAll<HTMLButtonElement>('.setup-panel-toggle')]
+      .find((b) => b.textContent?.includes('Settings'))!;
+
+    fireEvent.click(toggle);
+
+    const summary = document.querySelector('.setup-panel-summary');
+    expect(summary?.querySelector('.planner-auth-dot')).not.toBeNull();
+    expect(summary?.textContent).toContain('not logged in:');
+    expect(summary?.textContent).toContain('Claude Code');
+  });
+
   it('signs in a signed-out pill without switching the planner to it', () => {
     post({ type: 'setPlannerBackends', backends: [signedInClaude, signedOutCodex], provider: 'claude-code', runner: 'claude-code' });
     api.postMessage.mockClear();

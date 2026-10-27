@@ -1013,6 +1013,14 @@ body.vscode-high-contrast-light .disclosure:hover {
   letter-spacing: normal;
 }
 
+/* The collapsed panel still says the active planner is signed out: the same
+   dot the pill uses, inline so the summary keeps its ellipsis. */
+.setup-panel-summary .planner-auth-dot {
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
 .setup-panel-body {
   display: flex;
   flex-direction: column;
@@ -1099,8 +1107,8 @@ body.vscode-high-contrast-light .disclosure:hover {
   gap: 6px;
 }
 
-/* One runner is one control: its name toggles the runner, and a signed-out
-   agent's own login sits in the same border rather than beside it. */
+/* One runner is one capsule: its name toggles the runner, and a signed-out
+   agent's own login is a segment of it, never a second pill beside it. */
 .runner-pill-item {
   display: inline-flex;
   flex-direction: column;
@@ -1112,10 +1120,11 @@ body.vscode-high-contrast-light .disclosure:hover {
 .runner-pill-group {
   display: inline-flex;
   align-items: stretch;
+  min-width: 0;
   border-radius: var(--radius-full);
   border: 1px solid transparent;
   background: transparent;
-  transition: all var(--transition-fast);
+  transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 
 .runner-pill {
@@ -1124,16 +1133,23 @@ body.vscode-high-contrast-light .disclosure:hover {
   gap: 6px;
   padding: 4px 11px;
   border: 0;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-full) 0 0 var(--radius-full);
   background: transparent;
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 500;
+  line-height: 1.4;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--transition-fast), background var(--transition-fast);
   font-family: inherit;
   letter-spacing: -0.01em;
   white-space: nowrap;
+  outline: none;
+}
+
+/* No login segment: the name is the whole capsule, so it keeps both round ends. */
+.runner-pill:only-child {
+  border-radius: var(--radius-full);
 }
 
 .runner-pill .runner-dot {
@@ -1141,11 +1157,11 @@ body.vscode-high-contrast-light .disclosure:hover {
   height: 6px;
   border-radius: 50%;
   background: var(--text-muted);
-  transition: background var(--transition-fast);
+  transition: background var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .runner-pill-group.on {
-  border-color: rgba(57, 197, 207, 0.35);
+  border-color: color-mix(in srgb, var(--cyan) 35%, transparent);
   background: var(--cyan-subtle);
 }
 
@@ -1181,35 +1197,6 @@ body.vscode-high-contrast-light .disclosure:hover {
   box-shadow: inset 0 0 0 1px var(--text-muted);
 }
 
-.runner-pill.disabled:hover {
-  color: var(--cyan);
-}
-
-.runner-pill.disabled:hover .runner-dot {
-  box-shadow: inset 0 0 0 1px var(--cyan);
-}
-
-/* Signed out is its own quiet flag, not the on/off state: the dot stays red
-   whichever way the runner is switched. */
-.runner-pill-group.signed-out {
-  border-style: solid;
-  border-color: color-mix(in srgb, var(--red) 32%, var(--border-color));
-  background: var(--bg-secondary);
-}
-
-.runner-pill.signed-out {
-  color: var(--text-secondary);
-}
-
-.runner-pill.signed-out .runner-dot {
-  background: var(--red);
-  box-shadow: none;
-}
-
-.runner-pill-group.signed-out:hover {
-  border-color: var(--red);
-}
-
 .runner-pill:hover {
   background: var(--bg-hover);
 }
@@ -1218,14 +1205,58 @@ body.vscode-high-contrast-light .disclosure:hover {
   background: rgba(57, 197, 207, 0.14);
 }
 
+.runner-pill.disabled:hover {
+  color: var(--cyan);
+}
+
+.runner-pill.disabled:hover .runner-dot {
+  box-shadow: inset 0 0 0 1px var(--cyan);
+}
+
+/* Signed out is its own flag, not the on/off state: the dot stays red
+   whichever way the runner is switched. The capsule owns the red tint and
+   border, so the login segment is visibly part of the same object. */
+.runner-pill-group.signed-out {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+
+.runner-pill.signed-out,
+.runner-pill.on.signed-out {
+  color: var(--text-primary);
+}
+
+/* Later and more specific than the cyan .on dot: signing in, not switching
+   the runner on, is what clears this red. */
+.runner-pill.signed-out .runner-dot,
+.runner-pill.on.signed-out .runner-dot,
+.runner-pill.disabled.signed-out .runner-dot {
+  background: var(--red);
+  box-shadow: none;
+}
+
+.runner-pill.signed-out:hover:not(:disabled),
+.runner-pill.on.signed-out:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.runner-pill.disabled.signed-out:hover {
+  color: var(--text-primary);
+}
+
+.runner-pill.disabled.signed-out:hover .runner-dot {
+  box-shadow: none;
+}
+
 .planner-backends {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
 }
 
-/* One planner is one control: the name selects it, and a signed-out agent's
-   own login sits inside the same border rather than beside it as a second pill. */
+/* One planner is one capsule: the name selects it, and a signed-out agent's
+   own login is a segment of that capsule, never a second chip beside it. */
 .planner-pill-item {
   display: inline-flex;
   flex-direction: column;
@@ -1234,42 +1265,69 @@ body.vscode-high-contrast-light .disclosure:hover {
   min-width: 0;
 }
 
-/* The group owns the shape: border, tint and radius. Each segment is its own
-   button, so a login never means also choosing that agent as planner. */
+/* The group owns the one border, tint and radius. Both segments sit inside
+   it, so a login never means also choosing that agent as planner (ADR-0009). */
 .planner-pill-group {
   display: inline-flex;
   align-items: stretch;
   min-width: 0;
   border: 1px solid var(--border-color);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--bg-secondary);
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 
 .planner-pill {
-  padding: 3px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
   border: 0;
-  border-radius: 999px 0 0 999px;
+  border-radius: var(--radius-full) 0 0 var(--radius-full);
   background: transparent;
   color: var(--text-secondary);
   font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
   font-family: inherit;
+  white-space: nowrap;
   cursor: pointer;
   outline: none;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
-/* No login segment: the name is the whole chip, so it keeps both round ends. */
+/* No login segment: the name is the whole capsule, so it keeps both round ends. */
 .planner-pill:only-child {
-  border-radius: 999px;
+  border-radius: var(--radius-full);
 }
 
-.planner-pill:hover:not(:disabled) {
+/* One hover surface per segment: the group's border never changes on hover,
+   which is what used to make the login look like a separate chip. */
+.planner-pill:hover:not(:disabled):not(.active) {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
+
+/* Picked, but the host has not confirmed it yet — it resolves the target's
+   model catalog first, which can be a cold CLI spawn (ADR-0009). */
+.planner-pill.pending {
+  opacity: 0.7;
+}
+
+/* A signed-out agent is offered, not blocked: the login is the fix. The dot
+   says it quietly; the capsule's tint and border say it at a glance. */
+.planner-pill.signed-out {
   color: var(--text-primary);
 }
 
-.planner-pill-group:hover {
-  border-color: var(--accent);
+.planner-pill-group.signed-out {
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+
+.planner-pill.signed-out:not(.active):hover:not(:disabled) {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
 }
 
 .planner-pill.active {
@@ -1281,36 +1339,27 @@ body.vscode-high-contrast-light .disclosure:hover {
   border-color: var(--accent);
 }
 
-/* Picked, but the host has not confirmed it yet — it resolves the target's
-   model catalog first, which can be a cold CLI spawn (ADR-0009). */
-.planner-pill.pending {
-  opacity: 0.7;
-}
-
-/* A signed-out agent is offered, not blocked: the login is the fix. The dot
-   says it quietly, and the sentence on the empty state says it in words. */
-.planner-pill.signed-out {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
-}
-
-.planner-pill.signed-out:not(.active):hover:not(:disabled) {
+/* Still the selected planner, so the name carries a stronger tint of the same
+   red. The accent fill stays reserved for a signed-in planner: a signed-out
+   selection never looks like an accent chip, and the login beside it never
+   looks like a second selection. */
+.planner-pill-group.signed-out .planner-pill.active {
+  background: color-mix(in srgb, var(--red) 30%, transparent);
   color: var(--text-primary);
 }
 
-.planner-pill-group.signed-out {
-  border-color: color-mix(in srgb, var(--red) 32%, var(--border-color));
+/* The signed-out capsule keeps its red boundary even when selected; the name
+   tint above is what marks the selection. */
+.planner-pill-group.active.signed-out {
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
 }
 
-.planner-pill-group.signed-out:hover {
-  border-color: var(--red);
-}
-
-.planner-pill:focus-visible {
+/* Keyboard focus stays inside the capsule: an inset ring cannot be mistaken
+   for the group's border or spill outside the segment it belongs to. */
+.planner-pill:focus-visible,
+.runner-pill:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
 .planner-auth-dot {
@@ -1321,57 +1370,92 @@ body.vscode-high-contrast-light .disclosure:hover {
   flex-shrink: 0;
 }
 
-/* The login is part of the agent's chip, not another chip: a divider and the
-   same tint, inside the group's border. Fixed width for the same reason as the
-   empty state's action: the label is longer while a login runs, and the pill
-   bar must not reflow around it. */
-.planner-pill-login {
+/* One login look in both places: the row's variant below is only larger. Same
+   fill, weight and colour, so both read as the same action. */
+.planner-login {
+  display: inline-grid;
+  align-items: center;
+  justify-items: center;
+  border: 0;
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+/* The visible label and the wider pending label share one cell: the hidden
+   generated copy reserves the width, so a login never reflows its capsule or
+   its row when "Log in" becomes "Signing in…". */
+.planner-login-state {
+  grid-area: 1 / 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  flex: 0 0 auto;
-  min-width: 104px;
-  padding: 3px 10px;
-  border: 0;
-  border-left: 1px solid var(--border-color);
-  border-radius: 0 999px 999px 0;
-  background: transparent;
-  color: var(--text-primary);
-  font-family: inherit;
-  font-size: 10.5px;
-  line-height: 1.4;
-  cursor: pointer;
-  outline: none;
-  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
 }
 
-.planner-pill-login:hover:not(:disabled) {
-  color: var(--text-primary);
-  background: var(--bg-hover);
+.planner-login::after {
+  grid-area: 1 / 1;
+  content: 'Signing in…';
+  padding-left: 14px; /* the spinner and its gap in the pending state */
+  visibility: hidden;
 }
 
-.planner-pill-login:focus-visible {
+.planner-login:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 24%, transparent);
+}
+
+.planner-login:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-.planner-pill-login:disabled {
-  color: var(--text-secondary);
-  border-left-color: color-mix(in srgb, var(--accent) 22%, var(--border-color));
+.planner-login:disabled {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
   cursor: default;
 }
 
-.runner-pill-login {
-  min-width: 82px;
+/* The menu's login segment: flush with the name, its divider inset from the
+   capsule's top and bottom and owned by this segment, not a second border. */
+.planner-pill-login {
+  position: relative;
   padding: 4px 9px;
-  font-size: 10px;
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+  font-size: 10.5px;
 }
 
-/* Why a login did not finish, under the pill that asked: one line, no dialog.
-   The slot is always there so the line appearing cannot move the pills below
-   it (or the first screen under the settings panel), and it never widens the
-   chip it belongs to: an overlong reason is elided rather than wrapped. */
+.planner-pill-login::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 25%;
+  bottom: 25%;
+  width: 1px;
+  background: color-mix(in srgb, var(--red) 35%, var(--border-color));
+}
+
+.planner-pill-login:focus-visible {
+  outline-offset: -2px;
+}
+
+/* The row's variant: the same tonal action, sized for the text line it shares. */
+.planner-login-btn {
+  justify-self: end;
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  font-size: 11.5px;
+}
+
+/* Why a login did not finish, under the capsule that asked: one line, no
+   dialog. The slot is always there so the line appearing cannot move the pills
+   below it (or the first screen under the settings panel), and it never widens
+   the capsule it belongs to: an overlong reason is elided rather than wrapped. */
 .planner-pill-item.has-login,
 .runner-pill-item.has-login {
   position: relative;
@@ -1400,9 +1484,23 @@ body.vscode-high-contrast-light .disclosure:hover {
   color: var(--text-hint);
 }
 
-body.vscode-high-contrast .planner-pill-login,
-body.vscode-high-contrast-light .planner-pill-login {
-  border-left-color: var(--vscode-contrastBorder, var(--text-primary));
+/* High contrast trades the tint for the theme's own boundary: the capsule and
+   its divider stay visible on black and on white. */
+body.vscode-high-contrast .planner-pill-group.signed-out,
+body.vscode-high-contrast-light .planner-pill-group.signed-out,
+body.vscode-high-contrast .runner-pill-group.signed-out,
+body.vscode-high-contrast-light .runner-pill-group.signed-out {
+  border-color: var(--vscode-contrastBorder, var(--red));
+}
+
+body.vscode-high-contrast .planner-login,
+body.vscode-high-contrast-light .planner-login {
+  background: color-mix(in srgb, var(--red) 20%, transparent);
+}
+
+body.vscode-high-contrast .planner-pill-login::before,
+body.vscode-high-contrast-light .planner-pill-login::before {
+  background: var(--vscode-contrastBorder, var(--red));
 }
 
 /* ---- Run settings (Settings panel) ---- */
@@ -1497,6 +1595,8 @@ body.vscode-high-contrast-light .planner-pill-login {
 .empty-state-setup {
   display: grid;
   gap: 4px;
+  width: 100%;
+  max-width: 360px;
   margin: 12px 0;
   font-size: 12px;
   text-align: left;
@@ -1527,7 +1627,8 @@ body.vscode-high-contrast-light .planner-pill-login {
 
 /* Not a banner: one status line per signed-out agent on the first screen, the
    dot carrying the colour and each sentence carrying its meaning. No tint or
-   box, so the rows sit with the setup rows instead of interrupting them. */
+   box, so the rows sit with the setup rows instead of interrupting them. The
+   column is the setup column, so every row in the first screen shares an edge. */
 .planner-auth-rows {
   display: flex;
   flex-direction: column;
@@ -1537,12 +1638,15 @@ body.vscode-high-contrast-light .planner-pill-login {
   margin: 10px 0 0;
 }
 
+/* The row is one line: the dot, the sentence and the action share it. The dot
+   is positioned out of flow so the body's baseline is the sentence's own. */
 .planner-auth-row {
+  position: relative;
   display: flex;
-  align-items: flex-start;
+  align-items: baseline;
   gap: 10px;
   width: 100%;
-  padding: 0;
+  padding: 0 0 0 16px;
   border: 0;
   background: none;
   font-size: 12px;
@@ -1551,10 +1655,13 @@ body.vscode-high-contrast-light .planner-pill-login {
   color: var(--text-secondary);
 }
 
-/* On the first line's centre. The row is anchored to the top so the action
-   beside it keeps its slot through every state. */
+/* On the first line's centre. The row is one line high, so the middle of the
+   row is the middle of that line in every state. */
 .planner-auth-row .planner-auth-dot {
-  margin-top: 6px;
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .planner-auth-warning-text {
@@ -1565,66 +1672,23 @@ body.vscode-high-contrast-light .planner-pill-login {
    reason. Replacing it rather than adding a line keeps the row and the action
    beside it exactly where they were. */
 .planner-auth-warning-body {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 0;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
 .planner-auth-failure {
-  font-size: 11px;
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 12px;
   line-height: 1.5;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--text-hint);
 }
 
-/* The row's one strong control: it acts, the sentence explains. Its width is
-   reserved for "Signing in…" so the row does not jump when a login starts. */
-.planner-login-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  flex: 0 0 auto;
-  min-width: 104px;
-  margin-top: -4px;
-  padding: 4px 12px;
-  border-radius: var(--radius-sm);
-  /* A tonal primary: the accent is the theme's own action colour, but the
-     fill stays low enough that the sentence, not the button, is what reads
-     first. The text keeps the foreground's contrast. */
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-  background: var(--accent-subtle);
-  color: var(--text-primary);
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.4;
-  cursor: pointer;
-  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
-}
-
-.planner-login-btn:hover:not(:disabled) {
-  background: var(--accent-glow);
-  border-color: var(--accent);
-}
-
-.planner-login-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.planner-login-btn:disabled {
-  background: color-mix(in srgb, var(--accent) 4%, transparent);
-  color: var(--text-secondary);
-  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
-  cursor: default;
-}
-
-body.vscode-high-contrast .planner-login-btn,
-body.vscode-high-contrast-light .planner-login-btn {
-  background: transparent;
-  border-color: var(--vscode-contrastBorder, var(--text-primary));
-}
+/* The row's action is the menu segment, one size up: .planner-login supplies
+   the fill, weight and colour both share. */
 
 /* The only motion in the login: the ring says the row is waiting on the
    terminal. The text says it too, for a reader who asked for less motion; see
@@ -6394,7 +6458,11 @@ body.vscode-high-contrast-light .pending-message {
 
   .planner-pill,
   .planner-pill-login,
-  .planner-login-btn {
+  .planner-login,
+  .planner-login-btn,
+  .planner-pill-group,
+  .runner-pill,
+  .runner-pill-group {
     transition: none;
   }
 }

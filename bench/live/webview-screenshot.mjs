@@ -530,12 +530,83 @@ async function reloadScenario(page) {
 
 const loginBox = (page, selector) => page.locator(selector).boundingBox();
 
+/** A colour expression as the page's current theme resolves it. */
+function resolvedColour(page, css) {
+  return page.evaluate((value) => {
+    const probe = document.createElement('div');
+    probe.style.backgroundColor = value;
+    document.body.appendChild(probe);
+    const out = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return out;
+  }, css);
+}
+
+/** The first non-empty text node inside `selector`, as one client rect. */
+function firstTextRect(page, selector) {
+  return page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return null;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let node = null;
+    while (walker.nextNode()) {
+      if (walker.currentNode.nodeValue?.trim()) { node = walker.currentNode; break; }
+    }
+    if (!node) return null;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const rect = range.getClientRects()[0];
+    return rect ? { x: rect.x, y: rect.y, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height } : null;
+  }, selector);
+}
+
 /**
- * The signed-out agent treatment: every signed-out pill's dot and its own
- * login segment in the Planner menu, the empty state's one status row per
- * agent with its own action, pending and failed states, then the same actions
- * once the first screen is gone. Each state is checked for the jump a pending
- * label is most likely to cause, and for a theme-blind focus ring.
+ * One segmented capsule's geometry and paint: the group's one border and fill,
+ * the name and login segments' own boxes (which may own no border at all), the
+ * dot, and the divider the login segment draws between them.
+ */
+function segmented(page, groupSel, nameSel, loginSel) {
+  return page.evaluate(([g, n, l]) => {
+    const group = document.querySelector(g);
+    if (!group) return null;
+    const name = group.querySelector(n);
+    const login = group.querySelector(l);
+    const dot = group.querySelector('.planner-auth-dot');
+    const box = (el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
+    const paint = (el) => {
+      const s = getComputedStyle(el);
+      return { fill: s.backgroundColor, color: s.color, border: s.borderTopWidth, borderColour: s.borderTopColor };
+    };
+    const gs = getComputedStyle(group);
+    const divider = login ? getComputedStyle(login, '::before') : null;
+    return {
+      group: { ...box(group), ...paint(group), borderStyle: gs.borderTopStyle },
+      name: name ? { ...box(name), ...paint(name) } : null,
+      login: login ? { ...box(login), ...paint(login) } : null,
+      dot: dot ? { ...box(dot), ...paint(dot) } : null,
+      divider: divider
+        ? { width: divider.width, background: divider.backgroundColor, top: divider.top, bottom: divider.bottom }
+        : null,
+    };
+  }, [groupSel, nameSel, loginSel]);
+}
+
+/** The paint both login variants must share: one action in two places. */
+function loginLook(page, selector) {
+  return page.evaluate((sel) => {
+    const s = getComputedStyle(document.querySelector(sel));
+    return { colour: s.color, weight: s.fontWeight, fill: s.backgroundColor };
+  }, selector);
+}
+
+const solid = (value) => value !== 'rgba(0, 0, 0, 0)' && value !== 'transparent';
+
+/**
+ * The signed-out agent treatment: one capsule per agent, its name and its own
+ * login segments of the same border, the empty state's one status row per
+ * agent with the same action, pending and failed states, then the same actions
+ * once the first screen is gone. Each state is checked for the reflow a pending
+ * label is most likely to cause, and every theme for its focus ring.
  */
 async function signedOutPlanner(width, theme) {
   const label = `${width}/${theme}`;
@@ -570,6 +641,112 @@ async function signedOutPlanner(width, theme) {
   check(JSON.stringify(runnerLogins) === JSON.stringify(['Log in to Claude Code', 'Log in to Codex']),
     `planner-auth ${label}: each signed-out runner carries its own login (${runnerLogins.join(' | ')})`);
 
+  // The one capsule look, resolved by this theme rather than assumed: the
+  // group paints the red tint and boundary, neither segment owns a border, and
+  // the dot, fill and text are the same tokens everywhere.
+  const highContrast = theme.startsWith('high-contrast');
+  const red = await resolvedColour(page, 'var(--red)');
+  const tint = await resolvedColour(page, 'color-mix(in srgb, var(--red) 10%, transparent)');
+  const border = highContrast
+    ? await resolvedColour(page, 'var(--vscode-contrastBorder)')
+    : await resolvedColour(page, 'color-mix(in srgb, var(--red) 45%, transparent)');
+  const loginTint = await resolvedColour(page, highContrast
+    ? 'color-mix(in srgb, var(--red) 20%, transparent)'
+    : 'color-mix(in srgb, var(--red) 16%, transparent)');
+  const selectedTint = await resolvedColour(page, 'color-mix(in srgb, var(--red) 30%, transparent)');
+  const textPrimary = await resolvedColour(page, 'var(--text-primary)');
+  const textSecondary = await resolvedColour(page, 'var(--text-secondary)');
+
+  for (const runner of ['claude-code', 'codex']) {
+    const planner = await segmented(page,
+      `.planner-pill-item[data-runner="${runner}"] .planner-pill-group`,
+      '.planner-pill', '.planner-pill-login');
+    check(!!planner?.name && !!planner.login, `planner-auth ${label}: ${runner}'s planner capsule has both segments`);
+    if (!planner?.name || !planner.login) continue;
+    check(planner.group.border === '1px' && planner.group.borderStyle === 'solid'
+      && planner.name.border === '0px' && planner.login.border === '0px',
+    `planner-auth ${label}: ${runner}'s planner capsule owns the one border, not either segment (${planner.group.border} ${planner.group.borderStyle}; ${planner.name.border}, ${planner.login.border})`);
+    check(planner.group.fill === tint && planner.group.borderColour === border,
+      `planner-auth ${label}: ${runner}'s planner capsule is the signed-out tint and boundary (${planner.group.fill} / ${planner.group.borderColour})`);
+    check(planner.dot?.fill === red, `planner-auth ${label}: ${runner}'s planner dot is the theme's red (${planner.dot?.fill})`);
+    check(planner.login.fill === loginTint, `planner-auth ${label}: ${runner}'s login segment has the one login fill (${planner.login.fill})`);
+    check(planner.name.color === textPrimary, `planner-auth ${label}: ${runner}'s signed-out name is text-primary (${planner.name.color})`);
+    check(Math.abs(planner.name.h - planner.login.h) <= 0.5
+      && Math.abs(planner.name.x + planner.name.w - planner.login.x) <= 0.5,
+    `planner-auth ${label}: ${runner}'s planner segments are equal height and flush (${planner.name.h} vs ${planner.login.h}; ${planner.name.x + planner.name.w} → ${planner.login.x})`);
+    check(planner.divider?.width === '1px' && solid(planner.divider.background)
+      && parseFloat(planner.divider.top) > 0 && parseFloat(planner.divider.bottom) > 0,
+    `planner-auth ${label}: ${runner}'s divider is one inset line between the segments (${JSON.stringify(planner.divider)})`);
+
+    const runnerCapsule = await segmented(page,
+      `.runner-pill-item[data-runner="${runner}"] .runner-pill-group`,
+      '.runner-pill', '.runner-pill-login');
+    check(!!runnerCapsule?.name && !!runnerCapsule.login, `planner-auth ${label}: ${runner}'s runner capsule has both segments`);
+    if (!runnerCapsule?.name || !runnerCapsule.login) continue;
+    check(runnerCapsule.group.border === '1px' && runnerCapsule.name.border === '0px' && runnerCapsule.login.border === '0px',
+      `planner-auth ${label}: ${runner}'s runner capsule owns the one border too`);
+    check(runnerCapsule.group.fill === tint && runnerCapsule.group.borderColour === border,
+      `planner-auth ${label}: ${runner}'s runner capsule is the signed-out tint and boundary (${runnerCapsule.group.fill})`);
+    check(runnerCapsule.dot?.fill === red, `planner-auth ${label}: ${runner}'s runner dot stays red in the on state (${runnerCapsule.dot?.fill})`);
+    check(runnerCapsule.name.color === textPrimary, `planner-auth ${label}: ${runner}'s signed-out runner name is text-primary`);
+    check(Math.abs(runnerCapsule.name.h - runnerCapsule.login.h) <= 0.5
+      && Math.abs(runnerCapsule.name.x + runnerCapsule.name.w - runnerCapsule.login.x) <= 0.5,
+    `planner-auth ${label}: ${runner}'s runner segments are equal height and flush`);
+    check(runnerCapsule.divider?.width === '1px' && solid(runnerCapsule.divider.background)
+      && parseFloat(runnerCapsule.divider.top) > 0 && parseFloat(runnerCapsule.divider.bottom) > 0,
+    `planner-auth ${label}: ${runner}'s runner divider is one inset line`);
+  }
+
+  // Only the active agent's name takes the stronger tint; the login beside it
+  // is the same fill as every other login, never a second selection.
+  const activePlannerCapsule = await segmented(page,
+    '.planner-pill-item[data-runner="claude-code"] .planner-pill-group', '.planner-pill', '.planner-pill-login');
+  const idlePlannerCapsule = await segmented(page,
+    '.planner-pill-item[data-runner="codex"] .planner-pill-group', '.planner-pill', '.planner-pill-login');
+  check(activePlannerCapsule?.name?.fill === selectedTint,
+    `planner-auth ${label}: the active signed-out name carries the stronger red tint (${activePlannerCapsule?.name?.fill})`);
+  check(idlePlannerCapsule?.name?.fill === 'rgba(0, 0, 0, 0)',
+    `planner-auth ${label}: an unselected signed-out name is not filled (${idlePlannerCapsule?.name?.fill})`);
+  check(activePlannerCapsule?.login?.fill === loginTint && idlePlannerCapsule?.login?.fill === loginTint,
+    `planner-auth ${label}: both menu logins use the one fill, selected planner or not`);
+
+  // Keyboard order follows the eye: the name selects, then its login.
+  const tabOrder = await page.locator('.planner-pill-item[data-runner="claude-code"] .planner-pill-group').evaluate((group) =>
+    [...group.querySelectorAll('button')].map((b) => b.className.includes('planner-pill-login') ? 'login' : 'name'));
+  check(JSON.stringify(tabOrder) === JSON.stringify(['name', 'login']),
+    `planner-auth ${label}: the capsule's keyboard order is the name then its login (${tabOrder.join(' → ')})`);
+  const runnerTabOrder = await page.locator('.runner-pill-item[data-runner="claude-code"] .runner-pill-group').evaluate((group) =>
+    [...group.querySelectorAll('button')].map((b) => b.className.includes('runner-pill-login') ? 'login' : 'name'));
+  check(JSON.stringify(runnerTabOrder) === JSON.stringify(['name', 'login']),
+    `planner-auth ${label}: the runner capsule's keyboard order is the name then its login (${runnerTabOrder.join(' → ')})`);
+
+  // Hover belongs to the segment under the pointer: the capsule's boundary is
+  // not a hover surface of its own.
+  const boundaryBefore = await page.locator('.planner-pill-item[data-runner="claude-code"] .planner-pill-group')
+    .evaluate((el) => getComputedStyle(el).borderTopColor);
+  await plannerLogin('claude-code').hover();
+  await settle(page);
+  const boundaryOnLoginHover = await page.locator('.planner-pill-item[data-runner="claude-code"] .planner-pill-group')
+    .evaluate((el) => getComputedStyle(el).borderTopColor);
+  check(boundaryOnLoginHover === boundaryBefore,
+    `planner-auth ${label}: hovering the login leaves the capsule boundary alone (${boundaryBefore})`);
+  await page.mouse.move(0, 0);
+  await settle(page);
+
+  // The row carries the same two-part sentence, with the label's own weight
+  // and the explanation in the secondary colour.
+  const rowLabel = await page.locator(`${row('claude-code')} .planner-auth-warning-agent`).evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { colour: s.color, weight: s.fontWeight };
+  });
+  const rowSentence = await page.locator(`${row('claude-code')} .planner-auth-warning-text`).evaluate((el) => getComputedStyle(el).color);
+  check(rowLabel.colour === textPrimary && rowLabel.weight === '500' && rowSentence === textSecondary,
+    `planner-auth ${label}: the row names the agent in text-primary 500 and explains it in text-secondary (${JSON.stringify(rowLabel)}, ${rowSentence})`);
+
+  const region = await page.locator('.planner-auth-rows').evaluate((el) => ({ role: el.getAttribute('role'), live: el.getAttribute('aria-live') }));
+  check(region.role === 'status' && region.live === 'polite',
+    `planner-auth ${label}: the rows are one polite live region (${JSON.stringify(region)})`);
+
   check(await page.locator('.planner-pill.active[title="Not logged in — sign in from this chat"]').count() === 1,
     `planner-auth ${label}: the active pill's title says why`);
   for (const runner of ['claude-code', 'codex']) {
@@ -577,24 +754,73 @@ async function signedOutPlanner(width, theme) {
     const sentence = await loginBox(page, `${row(runner)} .planner-auth-warning-text`);
     check(dot?.width === 6 && dot?.height === 6, `planner-auth ${label}: ${runner}'s row dot is 6×6 (got ${dot?.width}×${dot?.height})`);
     check(!!dot && !!sentence && dot.x + dot.width <= sentence.x
-      && Math.abs((dot.y + dot.height / 2) - (sentence.y + 9)) <= 1,
-    `planner-auth ${label}: ${runner}'s dot sits before its sentence, on its first line`);
+      && dot.y + dot.height / 2 >= sentence.y && dot.y + dot.height / 2 <= sentence.y + sentence.height,
+    `planner-auth ${label}: ${runner}'s row dot sits before its sentence, on its first line`);
+
+    const pillDot = await loginBox(page, `.planner-pill-item[data-runner="${runner}"] .planner-auth-dot`);
+    const pillLabel = await firstTextRect(page, `.planner-pill-item[data-runner="${runner}"] .planner-pill`);
+    check(pillDot?.width === 6 && pillDot?.height === 6, `planner-auth ${label}: ${runner}'s planner dot is 6×6`);
+    check(!!pillDot && !!pillLabel && pillDot.x + pillDot.width <= pillLabel.x
+      && pillDot.y + pillDot.height / 2 >= pillLabel.top && pillDot.y + pillDot.height / 2 <= pillLabel.bottom,
+    `planner-auth ${label}: ${runner}'s planner dot leads its label on the first line`);
+
+    const runnerDot = await loginBox(page, `.runner-pill-item[data-runner="${runner}"] .runner-dot`);
+    const runnerLabel = await firstTextRect(page, `.runner-pill-item[data-runner="${runner}"] .runner-pill`);
+    check(runnerDot?.width === 6 && runnerDot?.height === 6, `planner-auth ${label}: ${runner}'s runner dot is 6×6`);
+    check(!!runnerDot && !!runnerLabel && runnerDot.x + runnerDot.width <= runnerLabel.x
+      && runnerDot.y + runnerDot.height / 2 >= runnerLabel.top && runnerDot.y + runnerDot.height / 2 <= runnerLabel.bottom,
+    `planner-auth ${label}: ${runner}'s runner dot leads its label on the first line`);
   }
-  const pillBox = await loginBox(page, '.planner-pill.active');
-  const pillDot = await loginBox(page, '.planner-pill.active .planner-auth-dot');
-  check(pillDot?.width === 6 && pillDot?.height === 6, `planner-auth ${label}: the pill's dot is 6×6 (got ${pillDot?.width}×${pillDot?.height})`);
-  check(!!pillBox && !!pillDot && pillDot.x >= pillBox.x && pillDot.x < pillBox.x + 20
-    && Math.abs((pillDot.y + pillDot.height / 2) - (pillBox.y + pillBox.height / 2)) <= 1,
-    `planner-auth ${label}: the pill's dot leads its label and is centred in the pill`);
+
+  const ringOf = (locator) => locator.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { visible: el.matches(':focus-visible'), width: s.outlineWidth, style: s.outlineStyle, offset: s.outlineOffset };
+  });
 
   await page.locator('.planner-pill').first().evaluate((el) => el.focus({ focusVisible: true }));
-  const pillFocus = await page.locator('.planner-pill').first().evaluate((el) => {
-    const s = getComputedStyle(el);
-    return { visible: el.matches(':focus-visible'), width: s.outlineWidth, style: s.outlineStyle };
-  });
-  check(pillFocus.visible && pillFocus.width === '2px' && pillFocus.style === 'solid',
-    `planner-auth ${label}: the planner pill has a focus ring (${JSON.stringify(pillFocus)})`);
+  const pillFocus = await ringOf(page.locator('.planner-pill').first());
+  check(pillFocus.visible && pillFocus.width === '2px' && pillFocus.style === 'solid' && pillFocus.offset === '-2px',
+    `planner-auth ${label}: the planner name has an inset focus ring (${JSON.stringify(pillFocus)})`);
   await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+
+  await plannerLogin('claude-code').evaluate((el) => el.focus({ focusVisible: true }));
+  const menuRing = await ringOf(plannerLogin('claude-code'));
+  check(menuRing.visible && menuRing.width === '2px' && menuRing.style === 'solid' && menuRing.offset === '-2px',
+    `planner-auth ${label}: the menu login has its own inset focus ring (${JSON.stringify(menuRing)})`);
+  await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+
+  await page.locator('.runner-pill').first().evaluate((el) => el.focus({ focusVisible: true }));
+  const runnerRing = await ringOf(page.locator('.runner-pill').first());
+  check(runnerRing.visible && runnerRing.width === '2px' && runnerRing.style === 'solid' && runnerRing.offset === '-2px',
+    `planner-auth ${label}: a runner name has the same inset focus ring (${JSON.stringify(runnerRing)})`);
+  await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+
+  // The same control in two places: the row's action and the menu segment
+  // share colour, weight and fill; only their sizes differ.
+  const rowLook = await loginLook(page, `${row('claude-code')} .planner-login-btn`);
+  const menuLook = await loginLook(page, '.planner-pill-item[data-runner="claude-code"] .planner-pill-login');
+  check(rowLook.colour === menuLook.colour && rowLook.weight === menuLook.weight && rowLook.fill === menuLook.fill,
+    `planner-auth ${label}: the row action and the menu segment are recognisably one login (${JSON.stringify({ rowLook, menuLook })})`);
+
+  // Right-aligned on the row's edge, its text on the sentence's baseline.
+  const rowsBox = await loginBox(page, '.planner-auth-rows');
+  const rowButtonBox = await loginBox(page, `${row('claude-code')} .planner-login-btn`);
+  check(!!rowsBox && !!rowButtonBox
+    && Math.abs((rowButtonBox.x + rowButtonBox.width) - (rowsBox.x + rowsBox.width)) <= 0.5,
+  `planner-auth ${label}: the row action is right-aligned to the row`);
+  const rowBaseline = await page.evaluate((sel) => {
+    const rowEl = document.querySelector(sel);
+    const firstRect = (el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return [...range.getClientRects()][0] ?? null;
+    };
+    const sentence = firstRect(rowEl.querySelector('.planner-auth-warning-text'));
+    const action = firstRect(rowEl.querySelector('.planner-login-state'));
+    return sentence && action ? { sentence: sentence.bottom, action: action.bottom } : null;
+  }, row('claude-code'));
+  check(!!rowBaseline && Math.abs(rowBaseline.sentence - rowBaseline.action) <= 2,
+    `planner-auth ${label}: the action sits on the sentence's baseline (${JSON.stringify(rowBaseline)})`);
 
   const rowStyle = await page.locator(row('claude-code')).evaluate((el) => {
     const s = getComputedStyle(el);
@@ -608,6 +834,10 @@ async function signedOutPlanner(width, theme) {
   const resting = await loginBox(page, `${row('claude-code')} .planner-login-btn`);
   const restingRow = await loginBox(page, row('claude-code'));
   const restingLogo = await loginBox(page, '.empty-state-logo');
+  const restingMenu = await segmented(page,
+    '.planner-pill-item[data-runner="claude-code"] .planner-pill-group', '.planner-pill', '.planner-pill-login');
+  const restingRunnerCapsule = await segmented(page,
+    '.runner-pill-item[data-runner="claude-code"] .runner-pill-group', '.runner-pill', '.runner-pill-login');
   check(await page.locator(`${row('claude-code')} .planner-login-btn`).isEnabled(), `planner-auth ${label}: Log in starts enabled`);
   check(await page.locator(`${row('claude-code')} .planner-login-btn`).getAttribute('aria-busy') === null, `planner-auth ${label}: not busy before a login`);
   check(await page.locator(`${row('claude-code')} .planner-login-btn`).getAttribute('aria-label') === 'Log in to Claude Code',
@@ -634,6 +864,12 @@ async function signedOutPlanner(width, theme) {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   check(await page.locator(`${row('claude-code')} .planner-login-spinner`).evaluate((el) => getComputedStyle(el).animationName) === 'none',
     `planner-auth ${label}: reduced motion stops the spinner`);
+  const paused = await page.evaluate(() => {
+    const durations = (sel) => getComputedStyle(document.querySelector(sel)).transitionDuration.split(',').map((d) => d.trim());
+    return { group: durations('.planner-pill-group.signed-out'), login: durations('.planner-pill-login') };
+  });
+  check(paused.group.every((d) => d === '0s') && paused.login.every((d) => d === '0s'),
+    `planner-auth ${label}: reduced motion stills the capsule's own transitions (${JSON.stringify(paused)})`);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   // The same pending state is visible on that agent's menu login and nowhere else.
   check(await plannerLogin('claude-code').isDisabled() && await plannerLogin('claude-code').getAttribute('aria-busy') === 'true',
@@ -645,6 +881,21 @@ async function signedOutPlanner(width, theme) {
   check(pendingRow?.height === restingRow?.height, `planner-auth ${label}: the row does not grow between default and pending (${restingRow?.height} → ${pendingRow?.height})`);
   check(pending?.width === resting?.width && pending?.x === resting?.x && pending?.y === resting?.y,
     `planner-auth ${label}: the action keeps its slot while pending`);
+  const pendingMenu = await segmented(page,
+    '.planner-pill-item[data-runner="claude-code"] .planner-pill-group', '.planner-pill', '.planner-pill-login');
+  const pendingRunnerCapsule = await segmented(page,
+    '.runner-pill-item[data-runner="claude-code"] .runner-pill-group', '.runner-pill', '.runner-pill-login');
+  const sameCapsule = (beforeCapsule, afterCapsule) => !!beforeCapsule?.name && !!afterCapsule?.name
+    && ['group', 'name', 'login'].every((part) => afterCapsule[part]
+      && ['x', 'y', 'w', 'h'].every((k) => Math.abs(afterCapsule[part][k] - beforeCapsule[part][k]) <= 0.5));
+  check(sameCapsule(restingMenu, pendingMenu),
+    `planner-auth ${label}: the menu capsule keeps its width through pending (${restingMenu?.group?.w} → ${pendingMenu?.group?.w})`);
+  check(sameCapsule(restingRunnerCapsule, pendingRunnerCapsule),
+    `planner-auth ${label}: the runner capsule keeps its width through pending (${restingRunnerCapsule?.group?.w} → ${pendingRunnerCapsule?.group?.w})`);
+  check((await plannerLogin('claude-code').innerText()).includes('Signing in…'),
+    `planner-auth ${label}: the menu segment shows the pending words in its reserved width`);
+  check(await page.locator('.planner-pill-item[data-runner="claude-code"] .planner-pill-login .planner-login-spinner').count() === 1,
+    `planner-auth ${label}: the pending menu segment carries the one spinner`);
   await checkContrast(page, `planner-auth ${label}`, ['.planner-auth-warning-text', '.planner-login-btn']);
   await page.screenshot({ path: path.join(OUT, `planner-auth-pending-${width}-${theme}.png`) });
 
@@ -668,6 +919,15 @@ async function signedOutPlanner(width, theme) {
     `planner-auth ${label}: a failure does not move the action`);
   check(failedRow?.height === restingRow?.height && failedLogo?.y === restingLogo?.y,
     `planner-auth ${label}: a failure does not move the empty state (${restingRow?.height} → ${failedRow?.height})`);
+  const failedMenu = await segmented(page,
+    '.planner-pill-item[data-runner="claude-code"] .planner-pill-group', '.planner-pill', '.planner-pill-login');
+  const failedRunnerCapsule = await segmented(page,
+    '.runner-pill-item[data-runner="claude-code"] .runner-pill-group', '.runner-pill', '.runner-pill-login');
+  const sameBox = (a, b) => !!a && !!b && ['x', 'y', 'w', 'h'].every((k) => Math.abs(a[k] - b[k]) <= 0.5);
+  check(sameBox(failedMenu?.group, restingMenu?.group),
+    `planner-auth ${label}: the failure's reserved line keeps the menu capsule still`);
+  check(sameBox(failedRunnerCapsule?.group, restingRunnerCapsule?.group),
+    `planner-auth ${label}: the failure's reserved line keeps the runner capsule still`);
   await checkContrast(page, `planner-auth ${label}`, ['.planner-auth-failure']);
   await page.screenshot({ path: path.join(OUT, `planner-auth-failure-${width}-${theme}.png`) });
 
@@ -690,25 +950,28 @@ async function signedOutPlanner(width, theme) {
   await settle(page);
   check(await page.locator('.planner-auth-rows').count() === 0, `planner-auth ${label}: the first screen's rows are gone`);
   check(await page.locator('.planner-backends .planner-pill-login').count() === 2, `planner-auth ${label}: each signed-out pill keeps its own login in the menu`);
+  check(await page.locator('.runner-pill-login').count() === 2,
+    `planner-auth ${label}: each signed-out runner keeps its own login in the menu after the first screen`);
+  check(await page.locator('.planner-login-btn').count() === 0,
+    `planner-auth ${label}: the row's action is the only thing that left with the first screen`);
+  check(await plannerLogin('claude-code').evaluate((el) => getComputedStyle(el).backgroundColor) === loginTint,
+    `planner-auth ${label}: the menu login keeps the one fill with the first screen gone`);
   await page.evaluate(() => window.__posted.length = 0);
   const codexLogin = plannerLogin('codex');
   const pillLogin = await codexLogin.boundingBox();
   check(await codexLogin.getAttribute('aria-label') === 'Log in to Codex', `planner-auth ${label}: a pill's login names its agent`);
   await codexLogin.evaluate((el) => el.focus({ focusVisible: true }));
-  const pillRing = await codexLogin.evaluate((el) => {
-    const s = getComputedStyle(el);
-    return { visible: el.matches(':focus-visible'), width: s.outlineWidth, style: s.outlineStyle, offset: s.outlineOffset };
-  });
-  check(pillRing.visible && pillRing.width === '2px' && pillRing.style === 'solid' && pillRing.offset === '2px',
-    `planner-auth ${label}: a pill's login has the same focus ring (${JSON.stringify(pillRing)})`);
+  const pillRing = await ringOf(codexLogin);
+  check(pillRing.visible && pillRing.width === '2px' && pillRing.style === 'solid' && pillRing.offset === '-2px',
+    `planner-auth ${label}: a pill's login has the same inset focus ring (${JSON.stringify(pillRing)})`);
   await codexLogin.click();
   await page.waitForFunction(() => document.querySelector('.planner-backends .planner-pill-login[aria-label="Signing in to Codex"]')?.getAttribute('aria-busy') === 'true');
   const pillPending = await codexLogin.boundingBox();
   check(await codexLogin.isDisabled(), `planner-auth ${label}: only the clicked pill's login waits`);
   check(await codexLogin.getAttribute('aria-label') === 'Signing in to Codex', `planner-auth ${label}: the pending pill action names its agent`);
   check(await plannerLogin('claude-code').isEnabled(), `planner-auth ${label}: the other pill's login stays usable`);
-  check(pillPending?.width === pillLogin?.width && pillPending?.x === pillLogin?.x,
-    `planner-auth ${label}: the pill action keeps its width while pending (${pillLogin?.width}×${pillLogin?.x} → ${pillPending?.width}×${pillPending?.x})`);
+  check(pillPending?.width === pillLogin?.width && pillPending?.height === pillLogin?.height && pillPending?.x === pillLogin?.x,
+    `planner-auth ${label}: the pill action keeps its slot while pending (${pillLogin?.width}×${pillLogin?.height} → ${pillPending?.width}×${pillPending?.height})`);
   const posted = await page.evaluate(() => window.__posted.map((m) => m.type));
   check(posted.includes('loginPlanner') && !posted.includes('setPlanner'), `planner-auth ${label}: a pill login does not switch the planner (${posted.join(',')})`);
   await page.screenshot({ path: path.join(OUT, `planner-auth-pill-${width}-${theme}.png`) });
