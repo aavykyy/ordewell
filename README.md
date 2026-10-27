@@ -28,11 +28,10 @@
 </p>
 
 Describe what you want to build. Ordewell explores your repository, asks clarifying
-questions, and turns your goal into a plan you can read and edit. When you're ready,
-run it: independent code tasks can work in parallel in separate worktrees when
-worktree isolation is enabled. Review the combined diff and merge it into your
-branch. By default, submitted build plans wait for your approval. Run settings
-let you automate execution and merging.
+questions, and turns your goal into a plan you can read and edit. Run independent
+tasks in parallel, review the changes, and merge into your branch. Submitted build
+plans wait for your approval by default; run settings let you automate execution
+and merging.
 
 Claude Code, Codex and OpenCode are supported out of the box, and can be mixed
 freely within one plan.
@@ -42,58 +41,18 @@ for versions available to install and their release notes.
 
 ## Features
 
-- **An editable plan.** Change any task's prompt, runner, model, effort or mode, add
-  or remove tasks, and rewire dependencies without another round trip to the model.
-- **Choose models per task.** Choose each AI task's model and thinking effort,
-  and review every assignment before execution. Planning uses your selected
-  planner model and counts against its usage too.
-- **Worktree isolation for code tasks.** With isolation enabled, code tasks work
-  in separate worktrees. Passing changes land on an integration branch for review
-  and merging. Ops tasks run in your checkout.
-- **Skills your team shares.** Write down how your team works once, as a skill in
-  your repository. The planner attaches it to the tasks it fits, whichever agent
-  runs them.
-- **Operations in the right place and order.** A deploy, a cloud CLI call or a
-  push runs as an ops task at the workspace root. With isolation enabled, it
-  waits for the changes it depends on to be merged into your branch. When the
-  planner can state the exact commands, it adds a script task: Ordewell runs it
-  with no model, under your approval and run settings. You can review its body as
-  written or pre-approve exact commands with the effect allowlist.
-- **Completion is recorded.** An AI task's `task_complete` report with status
-  `done` passes its completion check. Reports marked `failed` or `blocked`, or a
-  runner exit without a report, do not pass. Script tasks use their exit status.
-  This records the reported outcome; review the diff and test evidence before
-  merging. Each task's log is available live.
-- **Task handoffs.** Each task leaves a summary and optional numbered findings
-  with evidence. Dependents get whole findings and can pull the full handoff;
-  a loop's check sees what its fix claims and verifies it against the code.
-- **A supervisor for the run.** The planner keeps watching after you approve a
-  plan: at Watch it writes you a note when a task fails or gets stuck, and at Act
-  it may retry, stop or edit tasks itself, within limits. `/settings` sets the
-  supervisor level, merging automatically and the rest of your run settings.
-- **Read-only tasks.** A review, an audit or a prototype lands no changes; its
-  report is its result. With isolation enabled, it can test ideas through sealed
-  commands in a throwaway worktree, without network or access to your home
-  directory. Without isolation, its commands cannot write the workspace;
-  commands needing sealing are refused if no sandbox is available. A task in a
-  single-repository worktree can save a prototype as a patch for a later task.
-- **Check-and-fix loops.** A check and the tasks that fix what it finds repeat
-  until the check passes or its rounds run out, with no planner turn in
-  between.
-- **Research tasks.** A read-only task can be research: its report goes back to
-  the planner, which wakes to read it while you keep talking. The planner
-  decides how many to start, within the run's Parallel limit.
-- **A planner that cannot write.** It reads, asks, and plans. Commands that would
-  change your repository are refused, and an effect such as a push reaches the
-  world only as a script task or an ops task in the plan.
-- **No extra API key.** A coding agent you already pay for can be the planner. An API
-  key from any of 25 providers works too, and an API planner compacts its own
-  context before it overflows.
-- **Your agents' limits in view.** The footers show what your Codex, Claude Code
-  and OpenCode Go accounts have used of their plan's windows, beside context
-  and cost.
-- **Use it where you work.** A terminal UI, a VS Code extension, a CLI for scripts
-  and a local API, all sharing one core.
+<table>
+  <tr><td><b>Editable plans</b></td><td>Change prompts, dependencies and each task's runner, model, thinking effort or mode before execution.</td></tr>
+  <tr><td><b>Skills</b></td><td>Share your team's instructions in repository skills that the planner attaches to tasks across runners.</td></tr>
+  <tr><td><b>Worktree isolation</b></td><td>Use separate git worktrees for code tasks, with an integration branch for review and merging. See <a href="#how-it-works">How it works</a> for shared workspace behavior.</td></tr>
+  <tr><td><b>Read-only tasks</b></td><td>Review, audit or prototype without landing changes. Research tasks report back to the planner while you keep talking.</td></tr>
+  <tr><td><b>Check-and-fix loops</b></td><td>Repeat a check and its fixes until it passes or reaches its round limit.</td></tr>
+  <tr><td><b>Ops and scripts</b></td><td>Put deployments and other operations in the plan with dependencies. Run exact commands as script tasks without a model, under your approval and run settings.</td></tr>
+  <tr><td><b>Completion reports</b></td><td>AI tasks pass their completion check with a <code>task_complete</code> report marked <code>done</code>; scripts use exit status. Task handoffs share summaries, findings and evidence. Review the diff and test evidence before merging.</td></tr>
+  <tr><td><b>Run controls</b></td><td>Let the supervisor watch and suggest, or act within limits you set. Choose autorun and automatic merging in <code>/settings</code>.</td></tr>
+  <tr><td><b>Planner choices</b></td><td>Plan with a supported coding agent without an extra API key, or use an API provider. The planner reads your repository; changes run through tasks in the plan.</td></tr>
+  <tr><td><b>Interfaces</b></td><td>Use the terminal UI, VS Code extension, CLI or local API. Follow live task logs and see account usage limits alongside context and cost.</td></tr>
+</table>
 
 ## Installation
 
