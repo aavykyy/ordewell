@@ -1,6 +1,15 @@
 import type { RunnerManifest } from '../types';
 import { parseAnthropicModels, parseClaudeHelp } from './claudeModels';
 
+/**
+ * A turn on a signed-out account ends with this line, which the status
+ * command's JSON reader cannot parse; the reader matches it on a failed
+ * turn's words as the failure fallback. Anchored to the whole phrase: a
+ * failure can quote another tool that is not logged in, and that is not this
+ * runner's own verdict.
+ */
+const TURN_NOT_LOGGED_IN = /not logged in\s*·\s*please run \/login/i;
+
 export const CLAUDE_CODE_MANIFEST: RunnerManifest = {
   name: 'claude-code',
   displayName: 'Claude Code',
@@ -70,17 +79,16 @@ export const CLAUDE_CODE_MANIFEST: RunnerManifest = {
   auth: {
     statusArgs: ['auth', 'status'],
     loginArgs: ['auth', 'login'],
-    // A turn on a signed-out account ends with this line, which the status
-    // command's JSON reader cannot parse; the failure fallback matches it here.
-    // Anchored to the whole phrase: a failure can quote another tool that is
-    // not logged in, and that is not this runner's own verdict.
-    signedOut: /not logged in\s*·\s*please run \/login/i,
+    // The reader matches this on a failed turn's own words; the status
+    // command's JSON reader cannot parse that line.
+    signedOut: TURN_NOT_LOGGED_IN,
     // The status command prints JSON on stdout; an older CLI prints prose
     // instead, which must stay unknown rather than claiming the user is signed
     // out. stderr is read only when stdout is empty: CLI warnings go there,
     // and parsing the two streams as one document would hide a signed-out
-    // answer behind any warning beside it.
-    read: ({ stdout, stderr, code }) => {
+    // answer behind any warning beside it. A failed turn's words are never
+    // JSON: only the failure phrase is the runner's own verdict there.
+    read: ({ stdout, stderr, code, kind, output }) => {
       if (code === 0) return 'signed-in';
       const answer = stdout.trim() || stderr.trim();
       try {
@@ -89,6 +97,7 @@ export const CLAUDE_CODE_MANIFEST: RunnerManifest = {
       } catch {
         // Not JSON: nothing here says why the command failed.
       }
+      if (kind === 'turn' && TURN_NOT_LOGGED_IN.test(output)) return 'signed-out';
       return null;
     },
   },

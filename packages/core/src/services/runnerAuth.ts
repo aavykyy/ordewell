@@ -108,7 +108,7 @@ export async function readRunnerAuth(manifest: RunnerManifest, options: ReadRunn
   const output = `${answer.stdout}\n${answer.stderr}`;
   let state: 'signed-in' | 'signed-out' | null;
   try {
-    state = verdictOf(spec, { ...answer, output, env });
+    state = verdictOf(spec, { ...answer, output, env, kind: 'status' });
   } catch {
     // A reader that cannot make sense of the output answered nothing.
     return { state: 'unknown', loginCommand };
@@ -124,16 +124,20 @@ export type SignedOutAuth = RunnerAuth & { state: 'signed-out'; loginCommand: st
 /**
  * A failed turn's own words as the runner's signed-out verdict. Only a phrase
  * the manifest declares — its `signedOut` line, or a reader that can judge the
- * message — so an unrelated failure is never turned into a login wall. It asks
- * nothing: the turn has already told us.
+ * message — so an unrelated failure is never turned into a login wall. The
+ * reader judges first, with `env`, the environment the probe and the planner
+ * use for this workspace (ADR-0016): the runner's own config under a custom
+ * `CODEX_HOME`/`HOME` can make its "Not logged in" line not this user's
+ * answer. The regex is the fallback only where there is no reader to judge.
+ * It asks nothing: the turn has already told us.
  */
-export function signedOutFromFailure(manifest: RunnerManifest, message: string): SignedOutAuth | undefined {
+export function signedOutFromFailure(manifest: RunnerManifest, message: string, env: NodeJS.ProcessEnv = process.env): SignedOutAuth | undefined {
   const spec = manifest.auth;
   if (!spec) return undefined;
   let state: 'signed-in' | 'signed-out' | null;
   try {
-    state = spec.signedOut?.test(message) ? 'signed-out' : verdictOf(spec, {
-      code: 1, stdout: message, stderr: '', output: message, env: process.env,
+    state = verdictOf(spec, {
+      code: 1, stdout: message, stderr: '', output: message, env, kind: 'turn',
     });
   } catch {
     return undefined;

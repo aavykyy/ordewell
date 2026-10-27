@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readRunnerAuth, recordRunnerAuth, resetRunnerAuth, signedOutFromFailure, type RunnerAuthExec } from '../runnerAuth';
@@ -17,6 +17,32 @@ function execAnswering(answer: Answer): RunnerAuthExec & ReturnType<typeof vi.fn
     stderr: answer.stderr ?? '',
   })) as unknown as RunnerAuthExec & ReturnType<typeof vi.fn>;
 }
+
+/** A CODEX_HOME: the config file sits directly in it. */
+function codexHome(config: string): string {
+  const home = mkdtempSync(join(tmpdir(), 'ordewell-codex-home-'));
+  writeFileSync(join(home, 'config.toml'), config);
+  return home;
+}
+
+/** A fake HOME: Codex's default config path is `$HOME/.codex/config.toml`. */
+function codexHomed(config: string): string {
+  const root = mkdtempSync(join(tmpdir(), 'ordewell-codex-root-'));
+  mkdirSync(join(root, '.codex'), { recursive: true });
+  writeFileSync(join(root, '.codex', 'config.toml'), config);
+  return root;
+}
+
+const AZURE_PROVIDER = [
+  'model = "gpt-5.4"',
+  'model_provider = "azure"',
+  '[model_providers.azure]',
+  'name = "Azure"',
+  'base_url = "https://example.openai.azure.com/openai/v1"',
+  'env_key = "AZURE_OPENAI_API_KEY"',
+  'wire_api = "responses"',
+  '',
+].join('\n');
 
 describe('readRunnerAuth', () => {
   it('asks the runner its own status command and reads Claude signed in from a clean exit', async () => {
@@ -137,12 +163,6 @@ describe('readRunnerAuth', () => {
   // nothing about whether Codex can plan. Recording it as signed-out walls a
   // working enterprise setup behind an irrelevant `codex login`.
   describe('Codex with its own model provider', () => {
-    function codexHome(config: string): string {
-      const home = mkdtempSync(join(tmpdir(), 'ordewell-codex-home-'));
-      writeFileSync(join(home, 'config.toml'), config);
-      return home;
-    }
-
     const gate = () => plannerNotReadyFor({
       aiProvider: 'codex', orchestratorModel: '', planningModel: '', openaiCompatibleBaseUrl: '',
       getProviderApiKey: () => '',
@@ -223,6 +243,63 @@ describe('readRunnerAuth', () => {
         rmSync(home, { recursive: true, force: true });
       }
     });
+
+    // Without CODEX_HOME, real codex resolves `$HOME/.codex/config.toml` — the
+    // environment the probe hands it, not the daemon's. A workspace that sets
+    // HOME in `.ordewell/env` points the config lookup there (ADR-0016).
+    describe('the fallback config home is the probe environment HOME', () => {
+      it('leaves a custom provider whose config sits under HOME unknown, not signed out', async () => {
+        const home = codexHomed([
+          'model = "gpt-5.4"',
+          'model_provider = "azure"',
+          '[model_providers.azure]',
+          'name = "Azure"',
+          'base_url = "https://example.openai.azure.com/openai/v1"',
+          'env_key = "AZURE_OPENAI_API_KEY"',
+          'wire_api = "responses"',
+          '',
+        ].join('\n'));
+        try {
+          const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
+          const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { HOME: home, AZURE_OPENAI_API_KEY: 'sk-test' } });
+
+          expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'] });
+        } finally {
+          rmSync(home, { recursive: true, force: true });
+        }
+      });
+
+      it('treats an empty CODEX_HOME as unset and falls back to HOME, as codex does', async () => {
+        const home = codexHomed([
+          'model_provider = "gateway"',
+          '[model_providers.gateway]',
+          'name = "Gateway"',
+          'base_url = "https://gateway.example/v1"',
+          'env_http_headers = { "x-api-key" = "GATEWAY_KEY" }',
+          '',
+        ].join('\n'));
+        try {
+          const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
+          const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { CODEX_HOME: '', HOME: home } });
+
+          expect(auth.state).toBe('unknown');
+        } finally {
+          rmSync(home, { recursive: true, force: true });
+        }
+      });
+
+      it('keeps a default setup under HOME genuinely signed out', async () => {
+        const home = codexHomed('model = "gpt-5.4"\n');
+        try {
+          const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
+          const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { HOME: home } });
+
+          expect(auth).toEqual({ state: 'signed-out', loginCommand: ['codex', 'login'], detail: 'not logged in' });
+        } finally {
+          rmSync(home, { recursive: true, force: true });
+        }
+      });
+    });
   });
 
   // A timeout is not an answer: execFile kills the child and hands back no
@@ -273,11 +350,28 @@ describe('signedOutFromFailure', () => {
       loginCommand: ['claude', 'auth', 'login'],
       detail: 'not logged in',
     });
-    expect(signedOutFromFailure(CODEX_MANIFEST, 'Not logged in\n')).toEqual({
-      state: 'signed-out',
-      loginCommand: ['codex', 'login'],
-      detail: 'not logged in',
-    });
+  });
+
+  it('keeps a default Codex setup signed out from its failure line', () => {
+    const home = codexHomed('model = "gpt-5.4"\n');
+    try {
+      expect(signedOutFromFailure(CODEX_MANIFEST, 'Not logged in\n', { HOME: home })).toEqual({
+        state: 'signed-out',
+        loginCommand: ['codex', 'login'],
+        detail: 'not logged in',
+      });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('judges a Codex failure through its reader and the workspace env, so a custom provider is not a login wall', () => {
+    const home = codexHomed(AZURE_PROVIDER);
+    try {
+      expect(signedOutFromFailure(CODEX_MANIFEST, 'Not logged in\n', { HOME: home, AZURE_OPENAI_API_KEY: 'sk-test' })).toBeUndefined();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('leaves an unrelated failure, and a runner that declares no login, unjudged', () => {

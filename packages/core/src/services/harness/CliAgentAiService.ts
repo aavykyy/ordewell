@@ -33,6 +33,8 @@ import { abortScope } from '../../utils/abortScope';
 import { providerForRunner, runnerForProvider } from '../ProviderRegistry';
 import { recordRunnerAuth, signedOutFromFailure } from '../runnerAuth';
 import { describePlannerNotReady, TERMINAL_UI_COMMANDS, type PlannerNotReady } from '../plannerReadiness';
+import { workspaceEnvOf } from '../workspaceEnv';
+import { augmentedPath, withPath } from '../../utils/shellPath';
 import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
 import { collectResearchContext } from '../ContextCollector';
 import { sensitiveEnvValues } from '../outboundSecrets';
@@ -674,7 +676,7 @@ export class CliAgentAiService implements IAiService {
     if (error || signal?.aborted) session.stop();
 
     if (error) {
-      const failure = this.explainSignedOut(reply.fail(error));
+      const failure = await this.explainSignedOut(reply.fail(error));
       return { text: reply.text, runs: reply.runs(), researchLog: settledLog(), error: failure, usageLimit, aborted: signal?.aborted, backgroundAgents };
     }
     return { text: reply.text, runs: reply.runs(), researchLog: settledLog(), error, aborted: signal?.aborted, backgroundAgents };
@@ -685,11 +687,25 @@ export class CliAgentAiService implements IAiService {
    * recorded for the synchronous planner gate, and the failure opens with the
    * same two ways back in the gate would give (ADR-0009). Only a phrase the
    * runner's manifest declares; any other failure is returned untouched.
+   *
+   * Judged with the workspace's own environment, the same merged env the
+   * probe and the planner spawn use (ADR-0016): a custom provider's
+   * `CODEX_HOME`/`HOME` lives there, so the reader that knows the runner's
+   * "Not logged in" line is not this user's answer sees it.
    */
-  private explainSignedOut(failure: string): string {
+  private async explainSignedOut(failure: string): Promise<string> {
     const manifest = BUILTIN_MANIFESTS.find((candidate) => candidate.name === this.runner);
-    const auth = manifest ? signedOutFromFailure(manifest, failure) : undefined;
-    if (!manifest || !auth) return failure;
+    if (!manifest) return failure;
+    let env: NodeJS.ProcessEnv;
+    try {
+      const workspace = await (this.processDeps.workspaceEnv ?? workspaceEnvOf)(this.workspaceRoot());
+      env = withPath(process.env, await augmentedPath(), workspace);
+    } catch {
+      // The runner's config could not be read; its words stand as they are.
+      return failure;
+    }
+    const auth = signedOutFromFailure(manifest, failure, env);
+    if (!auth) return failure;
     recordRunnerAuth(this.runner, auth, this.workspaceRoot());
     const reason: PlannerNotReady = {
       code: 'signed_out',

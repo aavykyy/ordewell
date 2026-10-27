@@ -26,32 +26,62 @@ function config(aiProvider: PlannerBackendId, apiKey: string, planningModel: str
 describe('plannerPreflightError', () => {
   for (const provider of ['claude-code', 'codex', 'opencode']) {
     it(`lets ${provider} plan with no API key`, () => {
-      expect(plannerPreflightError(config(provider, '', 'sonnet'))).toBeNull();
+      expect(plannerPreflightError(config(provider, '', 'sonnet'), '/repo')).toBeNull();
     });
 
     it(`lets ${provider} plan with no model — the agent's default applies`, () => {
-      expect(plannerPreflightError(config(provider, '', ''))).toBeNull();
+      expect(plannerPreflightError(config(provider, '', ''), '/repo')).toBeNull();
     });
   }
 
   it('sends a vendor planner with no key to /planner first, then offers /key', () => {
-    expect(plannerPreflightError(config('openrouter', '', 'openai/gpt-5'))).toBe(
+    expect(plannerPreflightError(config('openrouter', '', 'openai/gpt-5'), '/repo')).toBe(
       'No planner is ready. Pick one with /planner: Claude Code, Codex and OpenCode plan with no API key. ' +
       'To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key.',
     );
   });
 
   it('asks an openai_compatible planner for its base URL, not a key', () => {
-    expect(plannerPreflightError(config('openai_compatible', '', 'llama3'))).toContain('OPENAI_COMPATIBLE_BASE_URL');
+    expect(plannerPreflightError(config('openai_compatible', '', 'llama3'), '/repo')).toContain('OPENAI_COMPATIBLE_BASE_URL');
   });
 
   it('still demands a model from a keyed vendor planner, in the chat\'s /planner spelling', () => {
-    expect(plannerPreflightError(config('openrouter', 'sk-or', '')))
+    expect(plannerPreflightError(config('openrouter', 'sk-or', ''), '/repo'))
       .toBe('No planner model selected for OpenRouter. Pick one with /planner.');
   });
 
   it('passes a fully configured vendor planner', () => {
-    expect(plannerPreflightError(config('openrouter', 'sk-or', 'openai/gpt-5'))).toBeNull();
+    expect(plannerPreflightError(config('openrouter', 'sk-or', 'openai/gpt-5'), '/repo')).toBeNull();
+  });
+});
+
+/**
+ * The preflight reads the signed-out verdict per workspace (ADR-0016): a
+ * future caller handed one workspace's refusal because another surface
+ * recorded its verdict unscoped — or another workspace recorded its own —
+ * would block a planner that can plan.
+ */
+describe('plannerPreflightError scopes the signed-out verdict to the workspace', () => {
+  const SIGNED_OUT = { state: 'signed-out' as const, loginCommand: ['claude', 'auth', 'login'], detail: 'not logged in' };
+
+  afterEach(() => resetRunnerAuth());
+
+  it('does not read a signed-out verdict recorded without a workspace', () => {
+    recordRunnerAuth('claude-code', SIGNED_OUT);
+
+    expect(plannerPreflightError(config('claude-code', '', 'sonnet'), '/repo')).toBeNull();
+  });
+
+  it('does not read another workspace\'s signed-out verdict', () => {
+    recordRunnerAuth('claude-code', SIGNED_OUT, '/elsewhere');
+
+    expect(plannerPreflightError(config('claude-code', '', 'sonnet'), '/repo')).toBeNull();
+  });
+
+  it('refuses on this workspace\'s own signed-out verdict', () => {
+    recordRunnerAuth('claude-code', SIGNED_OUT, '/repo');
+
+    expect(plannerPreflightError(config('claude-code', '', 'sonnet'), '/repo')).toContain('Claude Code is not logged in');
   });
 });
 
@@ -89,7 +119,7 @@ describe('plannerPreflightError on the extension\'s own config', () => {
     __setConfig({ aiProvider: 'openai', orchestratorModel: 'gpt-4o' });
     const config = new VsCodeConfig(await store({ openrouterKey: 'sk-or-secret' }));
 
-    expect(plannerPreflightError(config)).toBe(
+    expect(plannerPreflightError(config, '/repo')).toBe(
       'No planner is ready. Pick one with /planner: Claude Code, Codex and OpenCode plan with no API key. ' +
       'To plan with OpenAI instead, add OPENAI_API_KEY with /key.',
     );
@@ -99,7 +129,7 @@ describe('plannerPreflightError on the extension\'s own config', () => {
     __setConfig({ aiProvider: 'google', orchestratorModel: 'gemini-2.5-pro' });
     const config = new VsCodeConfig(await store({ openrouterKey: 'sk-or-secret' }));
 
-    expect(plannerPreflightError(config)).toContain('GEMINI_API_KEY');
+    expect(plannerPreflightError(config, '/repo')).toContain('GEMINI_API_KEY');
     expect(config.apiKey).toBe('');
   });
 
@@ -107,7 +137,7 @@ describe('plannerPreflightError on the extension\'s own config', () => {
     __setConfig({ aiProvider: 'google', orchestratorModel: 'gemini-2.5-pro', apiKey: 'g-legacy' });
     const config = new VsCodeConfig(await store({}));
 
-    expect(plannerPreflightError(config)).toBeNull();
+    expect(plannerPreflightError(config, '/repo')).toBeNull();
     expect(config.apiKey).toBe('g-legacy');
   });
 });
