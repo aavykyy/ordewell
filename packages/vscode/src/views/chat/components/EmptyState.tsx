@@ -35,7 +35,7 @@ function SetupRow({ label, value, command, warn }: { label: string; value: React
     <div className="empty-state-setup-row">
       <span className="empty-state-setup-label">{label}</span>
       <span className={`empty-state-setup-value${warn ? ' warn' : ''}`}>{value}</span>
-      <code className="empty-state-setup-command">{command}</code>
+      <code className="empty-state-setup-command command-token">{command}</code>
     </div>
   );
 }
@@ -96,11 +96,13 @@ export default function EmptyState({ onLoadSession, runSettings, signedOut, isol
           </g>
         </svg>
       </div>
-      <h2>What would you like to build?</h2>
-      <p>
-        Describe your goal and Ordewell will research your codebase,
-        generate a structured task plan, and execute it.
-      </p>
+      <div className="empty-state-hero">
+        <h2>What would you like to build?</h2>
+        <p className="empty-state-lead">Describe your goal.</p>
+        <p className="empty-state-support">
+          Ordewell will research your codebase, generate a structured task plan, and execute it.
+        </p>
+      </div>
       <PlanApprovalNote runSettings={runSettings} />
       <IsolationNotice preview={isolationPreview} />
       {runSettings && (

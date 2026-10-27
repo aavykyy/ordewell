@@ -31,7 +31,8 @@ describe('GetStarted — plan approval', () => {
   it('warns instead while autorun is known to be on', () => {
     const { container } = render(<GetStarted runnerNames={[]} onConfigure={vi.fn()} runSettings={withAutorun(true)} />);
     expect(container.textContent).not.toContain('Nothing runs until');
-    expect(container.querySelector('p.warn')?.textContent).toContain('Autorun is on');
+    expect(container.querySelector('.plan-approval-note.warn')?.textContent).toContain('Autorun is on');
+    expect(container.querySelector('.plan-approval-note .command-token')?.textContent).toBe('/settings');
   });
 
   it('says neither while the run settings are unknown', () => {

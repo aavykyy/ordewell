@@ -28,7 +28,7 @@ export default function GetStarted({ runnerNames, onConfigure, runSettings, isol
         </svg>
       </div>
       <h2>Ordewell needs something that can plan</h2>
-      <p>
+      <p className="get-started-copy">
         Install a coding agent{runnerNames.length > 0 && <> (<strong>{orNames(runnerNames)}</strong>)</>}{' '}
         and Ordewell plans on the subscription you already have.
         No API key needed.

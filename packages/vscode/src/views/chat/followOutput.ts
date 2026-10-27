@@ -3,24 +3,44 @@ import { useCallback, useLayoutEffect, useRef } from 'react';
 /** How far above the bottom still counts as reading the newest output. */
 const PIN_SLACK_PX = 50;
 
+export interface FollowOutputOptions {
+  /**
+   * Whether this surface follows its newest line right now. A first screen is
+   * not a log — it has a hero at its top — so its host turns following off
+   * until there is output to follow.
+   */
+  follow?: boolean;
+}
+
 /**
  * Keeps a live log on its newest output while the reader is at the bottom,
  * and leaves it where it is once they scroll up to read back. Every log in the
  * webviews that grows under the reader follows through this one hook.
  *
  * Returns the ref for the element that scrolls. `content` is what, on change,
- * may have added output. A newly attached element starts at its bottom.
+ * may have added output. A newly attached element starts at its bottom, unless
+ * `follow` is off: then it stays where it is, at the top a first screen opens on.
  */
-export function useFollowOutput<T extends HTMLElement>(...content: unknown[]): (el: T | null) => void {
+export function useFollowOutput<T extends HTMLElement>(
+  content: unknown[],
+  { follow = true }: FollowOutputOptions = {},
+): (el: T | null) => void {
   const elRef = useRef<T | null>(null);
   const pinnedRef = useRef(true);
+  const followRef = useRef(follow);
+  // Output arriving after a first screen follows again, whatever the reader
+  // did with the screen that came before it.
+  if (follow !== followRef.current) {
+    followRef.current = follow;
+    if (follow) pinnedRef.current = true;
+  }
   const detachRef = useRef<(() => void) | null>(null);
 
   // Instant, never smooth: a smooth scroll fires scroll events mid-animation
   // that read as "scrolled away" when a large block lands, which unpins it.
   const stick = useCallback(() => {
     const el = elRef.current;
-    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
+    if (el && followRef.current && pinnedRef.current) el.scrollTop = el.scrollHeight;
   }, []);
 
   const attach = useCallback((el: T | null) => {

@@ -6,7 +6,11 @@ import App from '../App';
 import { hostBridge, post } from './hostBridge';
 
 const notice = () => document.querySelector('.isolation-notice');
-const rows = () => [...document.querySelectorAll('.isolation-repo')].map((r) => r.textContent);
+// Name, head and commit are separate elements in the card; the row reads in that order.
+const rows = () => [...document.querySelectorAll('.isolation-repo')].map((r) => {
+  const part = (sel: string) => r.querySelector(sel)?.textContent ?? '';
+  return [part('.isolation-repo-name'), part('.isolation-repo-head'), part('.isolation-repo-commit')].filter(Boolean).join(' ');
+});
 const preview = (branch: string): IsolationPreview => ({
   status: 'ready', shared: [], repos: [{ path: '.', head: { kind: 'branch', branch, commit: 'a1b2c3d' }, dirty: false }],
 });
@@ -27,10 +31,10 @@ describe('the startup view\'s repositories and branches', () => {
 
   it('shows what the host found, and the current branch replaces an old one', () => {
     post({ type: 'isolationPreview', preview: preview('main') });
-    expect(rows()).toEqual(['This workspaceon main (a1b2c3d)']);
+    expect(rows()).toEqual(['This workspace on main a1b2c3d']);
 
     post({ type: 'isolationPreview', preview: preview('feature/x') });
-    expect(rows()).toEqual(['This workspaceon feature/x (a1b2c3d)']);
+    expect(rows()).toEqual(['This workspace on feature/x a1b2c3d']);
   });
 
   it('withdraws the old branch while the host re-reads, claiming neither a repository nor none', () => {
@@ -55,7 +59,7 @@ describe('the startup view\'s repositories and branches', () => {
     post({ type: 'restoreChat' });
     post({ type: 'setState', state: 'empty' });
 
-    expect(rows()).toEqual(['This workspaceon main (a1b2c3d)']);
+    expect(rows()).toEqual(['This workspace on main a1b2c3d']);
   });
 });
 
@@ -69,6 +73,6 @@ describe('the first screen when nothing can plan', () => {
     post({ type: 'isolationPreview', preview: preview('main') });
 
     expect(document.querySelector('.get-started')).not.toBeNull();
-    expect(rows()).toEqual(['This workspaceon main (a1b2c3d)']);
+    expect(rows()).toEqual(['This workspace on main a1b2c3d']);
   });
 });

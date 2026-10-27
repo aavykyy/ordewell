@@ -6,6 +6,18 @@ import EmptyState from '../EmptyState';
 
 const withAutorun = (autorun: boolean) => ({ autonomous: false, run: { ...RUN_SETTINGS_DEFAULTS, autorun } });
 
+describe('EmptyState — hero', () => {
+  it('keeps the wordmark and the question, with the description split into a lead and its explanation', () => {
+    const { container } = render(<EmptyState />);
+
+    expect(container.querySelector('.empty-state-wordmark')).not.toBeNull();
+    expect(container.querySelector('h2')?.textContent).toBe('What would you like to build?');
+    expect(container.querySelector('.empty-state-lead')?.textContent).toBe('Describe your goal.');
+    expect(container.querySelector('.empty-state-support')?.textContent)
+      .toBe('Ordewell will research your codebase, generate a structured task plan, and execute it.');
+  });
+});
+
 describe('EmptyState — signed-out planners', () => {
   it('lists every signed-out agent in one sentence each, with the dot the pill also uses', () => {
     const { container } = render(
@@ -114,14 +126,33 @@ describe('EmptyState — plan approval', () => {
     }
   });
 
-  it('says it while autorun is off', () => {
+  it('says it while autorun is off, as the same row in neutral grey', () => {
     const { container } = render(<EmptyState runSettings={withAutorun(false)} />);
     expect(container.textContent).toContain('Nothing runs until you approve the plan.');
+    const row = container.querySelector('.plan-approval-note');
+    expect(row?.getAttribute('data-autorun')).toBe('off');
+    expect(row?.classList.contains('warn')).toBe(false);
+    expect(row?.querySelector('.command-token')).toBeNull();
   });
 
-  it('warns instead of promising approval while autorun is on', () => {
+  it('warns instead of promising approval while autorun is on, and sets /settings as a command', () => {
     const { container } = render(<EmptyState runSettings={withAutorun(true)} />);
     expect(container.textContent).not.toContain('Nothing runs until');
-    expect(container.querySelector('p.warn')?.textContent).toContain('Autorun is on');
+    const row = container.querySelector('.plan-approval-note');
+    expect(row?.getAttribute('data-autorun')).toBe('on');
+    expect(row?.classList.contains('warn')).toBe(true);
+    // The command is a token, not the grey prose it used to be part of.
+    expect(row?.querySelector('.command-token')?.textContent).toBe('/settings');
+    expect(row?.querySelector('.plan-approval-text')?.textContent).toBe(
+      'Autorun is on. A plan starts as soon as the planner submits it. Change it in /settings.',
+    );
+  });
+
+  it('sets the setup commands and the note\'s /settings as the same command token', () => {
+    const { container } = render(<EmptyState runSettings={withAutorun(true)} />);
+    const setup = [...container.querySelectorAll('.empty-state-setup .command-token')];
+
+    expect(setup.map((token) => token.textContent)).toEqual(['/settings', '/settings']);
+    expect(container.querySelector('.plan-approval-note .command-token')?.classList.contains('command-token')).toBe(true);
   });
 });
