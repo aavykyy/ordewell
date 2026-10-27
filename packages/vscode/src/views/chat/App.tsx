@@ -877,7 +877,8 @@ export default function App() {
       <div className="setup-panel">
         <button
           type="button"
-          className="setup-panel-toggle"
+          className={`setup-panel-toggle${setupCollapsed ? '' : ' open'}`}
+          aria-expanded={!setupCollapsed}
           onClick={() => setSetupCollapsed((v) => !v)}
           title={setupCollapsed ? 'Expand settings' : 'Collapse settings'}
         >
