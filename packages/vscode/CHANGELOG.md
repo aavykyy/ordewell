@@ -2,8 +2,7 @@
 
 ## [Unreleased]
 
-Draft notes for the upcoming 0.11.0 release, covering changes since 0.10.12.
-The release heading and date will be finalized after review.
+## [0.11.0] - 2026-10-27
 
 ### Upgrade notes
 
@@ -1244,4 +1243,5 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.10.12...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/ordewell/ordewell/compare/v0.10.12...v0.11.0

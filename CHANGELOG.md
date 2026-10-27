@@ -8,10 +8,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
-Draft notes for the upcoming 0.11.0 release, covering changes since 0.10.12.
-The release heading and date will be finalized after review.
+## [0.11.0] - 2026-10-27
 
-The upcoming release lets a plan do more than run coding agents in order.
+This release lets a plan do more than run coding agents in order.
 A plan can now hold script tasks, check-and-fix loops and research tasks;
 every task hands over a structured handoff; read-only tasks work the same on
 every runner and can save a prototype as a patch. Ordewell shows your coding agents' account
@@ -3525,7 +3524,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.10.12...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/ordewell/ordewell/compare/v0.10.12...v0.11.0
 [0.4.5]: https://github.com/ordewell/ordewell/releases/tag/v0.4.5
 [0.4.4]: https://github.com/ordewell/ordewell/releases/tag/v0.4.4
 [0.4.3]: https://github.com/ordewell/ordewell/releases/tag/v0.4.3
