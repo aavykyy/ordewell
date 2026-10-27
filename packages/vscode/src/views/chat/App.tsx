@@ -617,6 +617,8 @@ export default function App() {
   const [pendingPlanner, setPendingPlanner] = useState<string | null>(null);
   useEffect(() => { setPendingPlanner(null); }, [planner]);
   const activePlanner = pendingPlanner ?? planner.provider;
+  /** The backend behind that choice, whose own auth verdict the summary carries. */
+  const activeBackend = planner.backends.find((b) => b.id === activePlanner);
 
   const handlePlannerChange = useCallback((provider: string) => {
     // Already the planner, or already asked for: a repeat would run the switch twice.
@@ -873,7 +875,13 @@ export default function App() {
             <span className="setup-panel-summary">
               {plannerKnown
                 ? <>
-                    {planner.backends.find((b) => b.id === activePlanner)?.label || 'No planner'}
+                    {activeBackend?.auth?.state === 'signed-out' && (
+                      <>
+                        <span className="planner-auth-dot" aria-hidden="true" />
+                        <span className="visually-hidden">not logged in: </span>
+                      </>
+                    )}
+                    {activeBackend?.label || 'No planner'}
                     {' · '}
                     {runners.length} runner{runners.length === 1 ? '' : 's'}
                   </>
@@ -924,7 +932,7 @@ export default function App() {
                       {canLogIn && (
                         <span className="planner-pill-failure-slot">
                           {!signingIn && loginFailure?.runner === runnerId && (
-                            <span className="planner-pill-login-failure" role="status">{loginFailure.message}</span>
+                            <span className="planner-pill-login-failure" role="status" title={loginFailure.message}>{loginFailure.message}</span>
                           )}
                         </span>
                       )}
@@ -1015,7 +1023,7 @@ export default function App() {
                   {canLogIn && (
                     <span className="planner-pill-failure-slot runner-pill-failure-slot">
                       {!signingIn && loginFailure?.runner === r.id && (
-                        <span className="planner-pill-login-failure runner-pill-login-failure" role="status">{loginFailure.message}</span>
+                        <span className="planner-pill-login-failure runner-pill-login-failure" role="status" title={loginFailure.message}>{loginFailure.message}</span>
                       )}
                     </span>
                   )}

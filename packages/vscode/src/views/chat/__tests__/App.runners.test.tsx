@@ -48,6 +48,26 @@ describe('the Runners block', () => {
     expect(pill('OpenCode')!.className).toContain('on');
   });
 
+  it('keeps a signed-out runner\'s login in its own capsule, even while the runner is on', () => {
+    post({ type: 'setRunners', runners: [{ id: 'codex', displayName: 'Codex', enabled: true }] });
+    post({
+      type: 'setPlannerBackends',
+      backends: [{ id: 'codex', label: 'Codex', kind: 'harness', runner: 'codex', usable: true, auth: { state: 'signed-out', loginCommand: ['codex', 'login'] } }],
+      provider: 'codex',
+      runner: 'codex',
+    });
+
+    const codex = pill('Codex')!;
+    const group = codex.closest('.runner-pill-group')!;
+    expect(codex.className).toContain('on');
+    expect(codex.className).toContain('signed-out');
+    expect(codex.title).toBe('Not logged in');
+    expect(group.className).toContain('signed-out');
+    expect(group.querySelectorAll('button')).toHaveLength(2);
+    expect(group.querySelector('.planner-auth-dot')).not.toBeNull();
+    expect(group.querySelector('.runner-pill-login')?.getAttribute('aria-label')).toBe('Log in to Codex');
+  });
+
   it('offers every installed runner when none is enabled, rather than claiming none is installed', () => {
     post({
       type: 'setRunners',
