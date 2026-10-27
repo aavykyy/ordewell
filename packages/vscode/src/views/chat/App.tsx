@@ -638,7 +638,7 @@ export default function App() {
   const [pendingPlanner, setPendingPlanner] = useState<string | null>(null);
   useEffect(() => { setPendingPlanner(null); }, [planner]);
   const activePlanner = pendingPlanner ?? planner.provider;
-  /** The backend behind that choice, whose own auth verdict the summary carries. */
+  /** The backend behind that choice, whose own auth verdict the Settings row carries. */
   const activeBackend = planner.backends.find((b) => b.id === activePlanner);
 
   const handlePlannerChange = useCallback((provider: string) => {
@@ -880,33 +880,28 @@ export default function App() {
           className={`setup-panel-toggle${setupCollapsed ? '' : ' open'}`}
           aria-expanded={!setupCollapsed}
           onClick={() => setSetupCollapsed((v) => !v)}
-          title={setupCollapsed ? 'Expand settings' : 'Collapse settings'}
+          title={
+            activeBackend?.auth?.state === 'signed-out'
+              ? `${activeBackend.label} is not logged in — open Settings to sign in`
+              : setupCollapsed
+                ? 'Expand settings'
+                : 'Collapse settings'
+          }
         >
           <span className="setup-panel-toggle-row">
             <span className="setup-panel-toggle-label">Settings</span>
+            {activeBackend?.auth?.state === 'signed-out' && (
+              <>
+                <span className="planner-auth-dot" aria-hidden="true" />
+                <span className="visually-hidden">not logged in: {activeBackend.label}</span>
+              </>
+            )}
             <span className={`setup-panel-chevron${setupCollapsed ? ' collapsed' : ''}`}>
               <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
                 <path d="M2 4L5.5 7.5L9 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </span>
           </span>
-          {setupCollapsed && (
-            <span className="setup-panel-summary">
-              {plannerKnown
-                ? <>
-                    {activeBackend?.auth?.state === 'signed-out' && (
-                      <>
-                        <span className="planner-auth-dot" aria-hidden="true" />
-                        <span className="visually-hidden">not logged in: </span>
-                      </>
-                    )}
-                    {activeBackend?.label || 'No planner'}
-                    {' · '}
-                    {runners.length} runner{runners.length === 1 ? '' : 's'}
-                  </>
-                : DETECTING}
-            </span>
-          )}
         </button>
         <div className={`setup-panel-body${setupCollapsed ? ' collapsed' : ''}`}>
         <section className="setup-block">
