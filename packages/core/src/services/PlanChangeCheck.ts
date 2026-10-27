@@ -7,8 +7,9 @@ import { resolveAssignments, type AssignmentAdjustment, type AssignmentCatalog }
 import { checkOpSkills, checkPlanSkills, type SkillCheck, type SkillLookup } from './taskSkills';
 
 /**
- * When a planner's change is checked: as the planner makes it, where an edit
- * joins the ops its turn already holds, or as its turn lands it, whole.
+ * When a planner's change is checked: as the planner submits it, where a
+ * whole plan is still its JSON, or as it commits — a tool's call as it
+ * answers, a reply's envelope as the reply settles.
  */
 export type CheckPhase = 'submit' | 'land';
 
@@ -66,16 +67,14 @@ export type PassedChange = Extract<CheckedChange, { ok: true }>;
 export interface PlanChangeScope {
   /** The plan's tasks as they stand. */
   tasks(): readonly Task[];
-  /** The runners a change may put a task on (`assignableRunners`): those enabled for a whole plan, the plan's own too for an edit. */
+  /** The runners a change may put a task on (`assignableRunners`): those enabled now, for a whole plan and an edit alike. */
   runners(kind: PlannerChange['kind']): RunnerId[];
-  /** What an assignment is resolved against, with the modes of `runners`. */
+  /** What an assignment is resolved against, with the modes of `runners` and of any a task may be left on. */
   catalog(runners: RunnerId[]): AssignmentCatalog & { runnerModes?: Record<RunnerId, RunnerModeInfo[]> };
   /** Where attached skill names are looked up; absent, none are. */
   skills?(): SkillLookup;
-  /** The ops the open turn already holds, which an edit made at submit joins. */
-  held?(): readonly TaskOp[];
-  /** Tasks put in the plan past the held edit, as `run_script` puts its own, which a reorder may leave out (ADR-0035). */
-  addedPast?(): ReadonlySet<string>;
+  /** The handles the open turn's committed edits gave, each with its task's id, for a later batch to name them by (ADR-0022 P2). */
+  handles?(): ReadonlyMap<string, string>;
   /** A further refusal of what the change leaves: the supervisor's oscillation guard (ADR-0029). */
   guard?(before: readonly Task[], after: readonly Task[]): string | undefined;
 }
@@ -91,11 +90,12 @@ const NO_SKILLS: SkillCheck = { errors: [], warnings: [] };
 
 /**
  * The one check a planner's change to the plan meets (ADR-0022, P2), on every
- * route and at both ends of its turn: `submit_plan` and a plan envelope, an
- * edit made through `edit_plan` and a `taskOps` reply, as it is made and as it
- * lands. Every rule reads one scope, so a change accepted at submit is refused
- * at landing only for something that moved in between, and the adjustments
- * the planner is shown at submit are the ones landing makes.
+ * route: `submit_plan` and a plan envelope, an edit made through `edit_plan`
+ * and a `taskOps` reply, each held to it as it commits, and a whole plan's
+ * JSON as it is submitted too. Every rule reads one scope, so a plan accepted
+ * at submit is refused as it commits only for something that moved in
+ * between, and the adjustments the planner is told are the ones committing
+ * made.
  */
 export class PlanChangeCheck {
   constructor(private readonly scope: PlanChangeScope) {}
@@ -154,8 +154,7 @@ export class PlanChangeCheck {
     }
 
     if (skillErrors.length > 0) return this.refused(change, skillErrors);
-    const held = phase === 'submit' ? this.scope.held?.() ?? [] : [];
-    const applied = applyTaskOps(before, change.ops, runners, catalog, held, this.scope.addedPast?.());
+    const applied = applyTaskOps(before, change.ops, runners, catalog, this.scope.handles?.());
     if (!applied.ok) return this.refused(change, applied.refusals);
     const tripped = this.scope.guard?.(before, applied.tasks);
     if (tripped) return this.refused(change, [{ message: tripped }]);

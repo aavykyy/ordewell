@@ -239,6 +239,7 @@ describe('reduceRun', () => {
     const statusOnly: [string, Partial<SerializedTaskStatus>][] = [
       ['verdict', { verdict: { outcome: 'fail', reason: 'tests failed', checks: [] } }],
       ['idleSince', { idleSince: '2026-10-13T09:05:00.000Z' }],
+      ['completionReceived', { completionReceived: 'done' }],
       ['isolation', { isolation }],
       ['queued', { queued: [{ id: 'q1', text: 'also update the docs' }] }],
       ['continuable', { continuable: true }],

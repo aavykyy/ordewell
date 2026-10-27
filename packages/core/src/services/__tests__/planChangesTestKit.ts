@@ -35,7 +35,6 @@ export function fakePlanChanges(scope: Omit<PlanChangeScope, 'skills'>) {
       then?.(withWarnings);
       return withWarnings;
     },
-    checkNow: (change, phase) => rules(change, phase),
   };
   return { planChanges, rules, real: (change: PlannerChange, phase: CheckPhase) => real.checkNow(change, phase), useSkills: (next: SkillLookup) => { lookup = next; } };
 }

@@ -1588,11 +1588,11 @@ describe('the token line', () => {
   it('sits on the chat pane\'s bottom row with how full the context is, and no token count', () => {
     const state = heard(80, { type: 'planner_message', content: 'Which database?', timestamp: '' }, usage({ contextFill: { usedTokens: 36_000, windowTokens: 200_000 } }));
 
-    expect(bottomRow(state)).toBe('ctx 36k (18%)');
+    expect(bottomRow(state)).toBe('Planner ctx 36k (18%)');
   });
 
   it('draws the used tokens without a share while the window is unknown', () => {
-    expect(bottomRow(heard(80, usage({ contextFill: { usedTokens: 36_000 } })))).toBe('ctx 36k');
+    expect(bottomRow(heard(80, usage({ contextFill: { usedTokens: 36_000 } })))).toBe('Planner ctx 36k');
   });
 
   it('draws nothing when neither the context nor a cost is known, however many tokens were counted', () => {
@@ -1602,7 +1602,7 @@ describe('the token line', () => {
   it('shows a cost only when one was reported', () => {
     const state = heard(80, usage({ totals: { inputTokens: 12_400, outputTokens: 3_100, reportedCost: { usd: 0.42 } }, contextFill: { usedTokens: 36_000, windowTokens: 200_000 } }));
 
-    expect(bottomRow(state)).toBe('ctx 36k (18%) · $0.42');
+    expect(bottomRow(state)).toBe('Planner ctx 36k (18%) · $0.42');
   });
 
   it('counts what subagents cost in the total, once', () => {
@@ -1616,7 +1616,7 @@ describe('the token line', () => {
     const back = reduce(long, { type: 'key', key: { name: 'pageup' } }).state;
 
     expect(back.scroll).toBeGreaterThan(0);
-    expect(bottomRow(back)).toBe('ctx 36k (18%)');
+    expect(bottomRow(back)).toBe('Planner ctx 36k (18%)');
     expect(render(back).map(stripAnsi).join('\n')).not.toContain('reply 39');
   });
 
@@ -1627,7 +1627,7 @@ describe('the token line', () => {
       { type: 'planner_turn_started', turnId: 'w1', prompt: '', wakeUps: ['Run update: task 1 failed'], supervisor: true },
     );
 
-    expect(bottomRow(state)).toBe('ctx 36k (18%)');
+    expect(bottomRow(state)).toBe('Planner ctx 36k (18%)');
   });
 
   it('takes no row until usage is reported', () => {
@@ -1720,7 +1720,7 @@ describe('a reloaded session', () => {
   it('draws what the live view drew, for everything the session saves', () => {
     expect(render(live).map(stripAnsi).join('\n')).toContain('∴ Thinking');
     expect(saved(reloaded)).toEqual(saved(live));
-    expect(saved(reloaded).at(-1)).toBe('ctx 3k (2%) · $0.02');
+    expect(saved(reloaded).at(-1)).toBe('Planner ctx 3k (2%) · $0.02');
   });
 
   it('draws the same in full detail too', () => {
@@ -1742,7 +1742,7 @@ describe('queued prompts with the conversation', () => {
 
     expect(rows[bubble]).toBe('◇ Use SQLite · queued · esc to unsend · ctrl-s sends now');
     expect(bubble).toBeGreaterThan(rows.findIndex((r) => r.startsWith('○ Bash(npm test)')));
-    expect(rows[bodyRows(state) - 1]).toBe('ctx 900');
+    expect(rows[bodyRows(state) - 1]).toBe('Planner ctx 900');
     expect(bubble).toBeLessThan(bodyRows(state) - 1);
   });
 });

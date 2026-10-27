@@ -2,10 +2,10 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import {
   AccountLimitMonitor, assignedRunnerOf, createSession, createSkillsService, detectInstalledPlanner, createEmptyPlan, flattenTasks, parseMaxParallel, sessionRuntimeSettings, taskRefOf,
-  type PlannerBackendId, type GlobalRunSettings, type LegacyPlanState, type RunnerId, type Session, type SessionDeps,
+  type IIsolationPreview, type PlannerBackendId, type GlobalRunSettings, type LegacyPlanState, type RunnerId, type Session, type SessionDeps,
 } from '@ordewell/core';
 import { registerCommands, type CommandDeps } from './commands/CommandRegistry';
-import { enableRunner } from './commands/enabledRunners';
+import { setRunnerEnabled } from './commands/enabledRunners';
 import { handleSlashCommand, type SlashDeps } from './commands/SlashParser';
 import { confirmRisks } from './commands/runSettings';
 import { handleApprovePlan, handleSessionMessage, handleStartPlanning, type PlanManagerDeps } from './plan/PlanManager';
@@ -69,6 +69,8 @@ export interface ExtensionServices {
    * The host starts, focuses and disposes it.
    */
   accountLimits?: AccountLimitMonitor;
+  /** Reads the workspace's repositories and branches for the startup view (ADR-0013); absent, the view shows none. */
+  isolationPreview?: IIsolationPreview;
 }
 
 export interface ExtensionHost {
@@ -274,19 +276,33 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       setPlanDockHeight: (height) => { void services.context.globalState.update(PLAN_DOCK_HEIGHT_KEY, height); },
       changeSettings,
       loginPlanner: runPlannerLogin,
-      enableRunner: async (runnerId) => {
-        const saved = await enableRunner(
-          {
-            runnerRegistry: services.runnerRegistry,
-            settingsService: services.settingsService,
-            config: services.config,
-            sendRunnerAndModels: () => discovery.refresh(),
-          },
-          runnerId,
-        );
-        // An id nothing names is a stale click or a hand-made message: no
-        // manifest owns it, so there is nothing to save.
-        if (!saved) log(`Ignored a request to enable the unknown runner "${runnerId}".`);
+      setRunnerEnabled: async (runnerId, enabled, requestId) => {
+        try {
+          const saved = await setRunnerEnabled(
+            {
+              runnerRegistry: services.runnerRegistry,
+              settingsService: services.settingsService,
+              config: services.config,
+              // Not awaited: the pill waits on the answer sent below, and a cold
+              // runner CLI can hold discovery up for tens of seconds.
+              sendRunnerAndModels: async () => {
+                discovery.refresh().catch((err) => log(`Model discovery refresh failed: ${err instanceof Error ? err.message : String(err)}`));
+              },
+            },
+            runnerId,
+            enabled,
+          );
+          // An id nothing names is a stale click or a hand-made message: no
+          // manifest owns it, so there is nothing to save.
+          if (!saved) log(`Ignored a request to switch the unknown runner "${runnerId}" ${enabled ? 'on' : 'off'}.`);
+        } finally {
+          // The pill shows the click until this request is answered, so the
+          // answer goes out whatever happened: the runner as saved now, which
+          // after a refused or failed save puts the pill back.
+          const savedList = services.config.enabledRunners;
+          services.chatProvider.acknowledgeRunnerChoice(requestId, runnerId, savedList.includes(runnerId));
+          services.chatProvider.setEnabledRunnerIds(savedList);
+        }
       },
     },
     getPendingRunners: () => state.pendingRunners,
@@ -352,7 +368,29 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     sendRunSettings();
   }
 
+  // The startup view's repositories, read in the background: a newer read
+  // supersedes an older one, and an answer for a workspace that is no longer
+  // the window's is dropped, so a slow read never shows an old branch.
+  let previewRead = 0;
+  function refreshIsolationPreview(opts: { clear?: boolean } = {}): void {
+    const reader = services.isolationPreview;
+    if (!reader) return;
+    const root = services.fsAdapter.getWorkspaceRoot();
+    const read = ++previewRead;
+    if (opts.clear) services.chatProvider.setIsolationPreview(null);
+    const current = (): boolean => read === previewRead && root === services.fsAdapter.getWorkspaceRoot();
+    reader.preview(root).then(
+      (preview) => { if (current()) services.chatProvider.setIsolationPreview(preview); },
+      (err) => {
+        const error = err instanceof Error ? err.message : String(err);
+        log(`Repository preview failed: ${error}`);
+        if (current()) services.chatProvider.setIsolationPreview({ status: 'failed', repos: [], shared: [], error });
+      },
+    );
+  }
+
   function onWebviewReady(): void {
+    refreshIsolationPreview({ clear: true });
     services.chatProvider.resendAllState();
     services.chatProvider.setPlanDockHeight(services.context.globalState.get<number>(PLAN_DOCK_HEIGHT_KEY));
     sendRunSettings();
@@ -423,7 +461,11 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
         services.chatProvider.setAccountLimits(limits);
         taskLogs.accountLimitsChanged();
       }) },
-      vscodeApi.window.onDidChangeWindowState((windowState) => accountLimits.setForeground(windowState.focused)),
+      vscodeApi.window.onDidChangeWindowState((windowState) => {
+        accountLimits.setForeground(windowState.focused);
+        // A branch is switched outside the window as often as in it.
+        if (windowState.focused) refreshIsolationPreview();
+      }),
     );
     if (vscodeApi.window.state.focused) accountLimits.setForeground(true);
     else accountLimits.refresh();
@@ -458,8 +500,12 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     services.context.subscriptions.push(taskLogs.register());
     checkPlannerSetting();
 
+    refreshIsolationPreview();
+
     services.context.subscriptions.push(services.config.onDidChange(() => {
       checkPlannerSetting();
+      // worktreeIsolation and workspaceRepos decide what the view says.
+      refreshIsolationPreview();
       sendRunSettings();
       // A raised parallel limit would otherwise wait for the next verdict to
       // be seen; a no-op while nothing runs.
@@ -490,7 +536,10 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     });
     services.context.subscriptions.push({ dispose: () => watchingSettings.dispose() });
 
-    services.context.subscriptions.push(vscodeApi.workspace.onDidChangeWorkspaceFolders(() => sendSkills()));
+    services.context.subscriptions.push(vscodeApi.workspace.onDidChangeWorkspaceFolders(() => {
+      sendSkills();
+      refreshIsolationPreview({ clear: true });
+    }));
 
     await discovery.refresh();
     sendSkills();

@@ -388,7 +388,7 @@ describe('run_script: a script still running after a minute, and its report', ()
 });
 
 describe('run_script: where and when it may run', () => {
-  it('lands a reorder the turn holds that lists every task but the script run_script added past it, keeping the script last', async () => {
+  it('adds the script after a reorder the turn committed first, keeping the script last', async () => {
     const env = await supervised([task('t1', 1), task('t2', 2)], { settings: { supervisorLevel: 'off', autorun: true } });
     await userTurn(env, 'do task 2 first, and push main');
     const edit = await env.planner.tools().editPlan!({ ops: [{ op: 'reorder', taskIds: ['#2', '#1'] }] }, ctx);
@@ -404,16 +404,17 @@ describe('run_script: where and when it may run', () => {
     expect(env.notices.filter((n) => n.level !== 'info')).toEqual([]);
   });
 
-  it('refuses a call while the turn holds a whole plan, which would leave the script out', async () => {
-    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off', autorun: true } });
+  // ADR-0022 P2: the plan is committed as submit_plan answers, so a script added after it joins that plan.
+  it('adds the script task to the plan a submit_plan of the same reply committed', async () => {
+    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off', autorun: true }, execute: false });
     await userTurn(env);
-    const submitted = await env.planner.tools().submitPlan!({ tasks: [{ title: 'Rebuild', type: 'ai', prompt: 'rebuild', assignedRunner: 'claude-code', autonomy: 'AFK', sliceType: 'AFK' }] }, ctx);
+    const submitted = await env.planner.tools().submitPlan!({ tasks: [{ id: 'r1', title: 'Rebuild', description: 'd', type: 'ai', prompt: 'rebuild', assignedRunner: 'claude-code', autonomy: 'AFK', sliceType: 'AFK', dependencies: [] }] } as never, ctx);
     expect(submitted.isError).toBeFalsy();
 
-    const reply = answer(await runScript(env));
+    void runScript(env);
+    await until(() => scriptTask(env) !== undefined);
 
-    expect(reply.reason).toMatch(/^Your submit_plan in this reply replaces the plan/);
-    expect(scriptTask(env)).toBeUndefined();
+    expect(env.session.planTasks.map((t) => t.title)).toEqual(['Rebuild', 'Push main']);
   });
 
   it('refuses a dependency that has not finished, adding nothing', async () => {

@@ -158,6 +158,28 @@ describe('ChatViewProvider.resendAllState', () => {
   });
 });
 
+describe('ChatViewProvider.setIsolationPreview', () => {
+  it('posts the preview, and a null that says the read is out', () => {
+    const { provider, posted } = providerWithCapture();
+    const preview = { status: 'no-repo' as const, repos: [], shared: [] };
+
+    provider.setIsolationPreview(preview);
+    provider.setIsolationPreview(null);
+
+    expect(posted).toEqual([{ type: 'isolationPreview', preview }, { type: 'isolationPreview', preview: null }]);
+  });
+
+  it('is not replayed to a webview that reconnects, whose branch it may no longer match', () => {
+    const { provider, posted } = providerWithCapture();
+    provider.setIsolationPreview({ status: 'no-repo', repos: [], shared: [] });
+    posted.length = 0;
+
+    provider.resendAllState();
+
+    expect(posted.map((m) => m.type)).not.toContain('isolationPreview');
+  });
+});
+
 describe('ChatViewProvider conversation reloads', () => {
   const history = [
     { role: 'user' as const, content: 'goal', timestamp: '2026-01-01T00:00:00Z' },

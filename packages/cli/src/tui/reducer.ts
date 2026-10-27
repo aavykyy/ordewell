@@ -64,6 +64,9 @@ export function reduce(state: TuiState, action: Action): Step {
 
 function reduceAction(state: TuiState, action: Action): Step {
   switch (action.type) {
+    case 'accountLimits':
+      return stale(state, action.sessionId) ? step(state) : step({ ...state, accountLimits: action.limits });
+
     case 'key':
       return handleKey(state, action.key);
 
@@ -71,7 +74,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // (`task-1`), so nothing of the last one's — a merge gate, a checkpoint, its
     // tasks — may carry over into this.
     case 'sessionStarted':
-      return step(withRun({ ...state, sessionId: action.sessionId, goal: action.goal, taskView: null, status: 'idle' }, EMPTY_RUN));
+      return step(withRun({ ...state, sessionId: action.sessionId, goal: action.goal, accountLimits: [], servedModels: {}, taskView: null, status: 'idle' }, EMPTY_RUN));
 
     // A loaded session is a different one: the turn the old one had out, the
     // prompts held behind it and a stop armed against it are not this one's.
@@ -80,6 +83,8 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'sessionLoaded':
       return step(withRun({
         ...state,
+        accountLimits: [],
+        servedModels: {},
         sessionId: action.sessionId,
         goal: action.goal,
         taskView: null,
@@ -103,6 +108,8 @@ function reduceAction(state: TuiState, action: Action): Step {
       // and the turn gate it held with it.
       return step(withRun({
         ...state,
+        accountLimits: [],
+        servedModels: {},
         sessionId: null,
         goal: '',
         taskView: null,
@@ -230,10 +237,6 @@ function reduceAction(state: TuiState, action: Action): Step {
       const status = runStatus(next, next.tasks);
       return step({ ...next, status });
     }
-
-    case 'heldEdit':
-      if (stale(state, action.sessionId)) return step(state);
-      return step(foldRun(state, { type: 'plan_edit_held', held: action.held }));
 
     case 'taskLog':
       if (stale(state, action.sessionId)) return step(state);
@@ -452,6 +455,33 @@ function reduceAction(state: TuiState, action: Action): Step {
         runnersKnown: true,
         orchestratorModel: action.orchestratorModel ?? state.orchestratorModel,
       }, ['set-task-runner']))));
+
+    // The preview's reads can overlap: a launch refresh and a settings change
+    // both ask, and the daemon may answer the first one last. Only an answer
+    // from the newest read may touch the welcome.
+    case 'isolationPreviewLoading':
+      return action.read < state.isolationPreviewRead
+        ? step(state)
+        : step({ ...state, isolationPreview: null, isolationPreviewRead: action.read });
+
+    case 'isolationPreviewLoaded':
+      return action.read < state.isolationPreviewRead
+        ? step(state)
+        : step({ ...state, isolationPreview: action.preview, isolationPreviewRead: action.read });
+
+    case 'isolationPreviewFailed':
+      return action.read < state.isolationPreviewRead
+        ? step(state)
+        : step({
+          ...state,
+          isolationPreview: { status: 'failed', repos: [], shared: [], error: action.message },
+          isolationPreviewRead: action.read,
+        });
+
+    // A replacement daemon may serve another configuration and another
+    // workspace tree; the welcome asks again rather than keeping the old one.
+    case 'daemonReconnected':
+      return step(state, [{ type: 'loadIsolationPreview' }]);
 
     case 'failed': {
       // A failed call may have been the task view's log read; the view falls

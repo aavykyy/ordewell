@@ -257,31 +257,28 @@ const turnStarts = (messages: ReadonlyArray<SessionMessage>) =>
   messages.flatMap((m) => (m.type === 'planner_turn_started' ? [m] : []));
 
 describe('a hung wake-up turn whose retry follows it', () => {
-  it('never clears the retry turn\'s held edit when it settles late', async () => {
+  it('is not retried once it committed an edit, and takes back nothing of it when it settles late', async () => {
     const env = await wokenUp({ settings: { supervisorLevel: 'act' }, config: { autonomousMode: true } });
     env.planner.state.ignoresStop = true;
     const tools = env.planner.tools();
 
-    // The turn takes an edit through its tool and holds it.
+    // The turn commits an edit through its tool as the call answers (ADR-0022 P2), and its wake-up goes with it.
     const first = await tools.editPlan!({ ops: [{ op: 'add', task: { title: 'A', prompt: 'a' } }] }, ctx);
     expect(first.isError).toBeFalsy();
-    expect(env.messages).toContainEqual(expect.objectContaining({ type: 'plan_edit_held', held: expect.objectContaining({}) }));
+    expect(env.session.planState!.pendingTurns ?? []).toEqual([]);
 
     await vi.advanceTimersByTimeAsync(WAKE_UP_TURN_TIMEOUT_MS);
     await settled();
     await vi.advanceTimersByTimeAsync(HUNG_TURN_GRACE_MS);
-    await until(() => env.planner.calls.length === 2);
+    await settled();
 
-    // The retry holds its own edit; the hung turn settling now must leave it alone.
-    const retry = await tools.editPlan!({ ops: [{ op: 'add', task: { title: 'B', prompt: 'b' } }] }, ctx);
-    expect(retry.isError).toBeFalsy();
-    const afterRetryHeld = env.messages.length;
+    // A retry on the same wake-up could make the change again.
+    expect(env.planner.calls).toHaveLength(1);
     env.planner.calls[0].finish(prose('Still looking at task 1.'));
     await settled();
 
-    expect(env.messages.slice(afterRetryHeld).filter((m) => m.type === 'plan_edit_held')).toEqual([]);
-    env.planner.calls[1].finish(prose('Task 1 needs an answer.'));
-    await settled();
+    expect(env.session.planTasks.map((t) => t.title)).toContain('A');
+    expect(env.session.planState!.conversationHistory!.map((e) => e.content)).not.toContain('Still looking at task 1.');
   });
 });
 

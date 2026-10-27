@@ -9,18 +9,17 @@ import PlannerResendBar from './components/PlannerResendBar';
 import PlannerPauseBar from './components/PlannerPauseBar';
 import DockResizeHandle from './components/DockResizeHandle';
 import { ConversationBlocks } from './components/ChatMessage';
-import { reduceHost, INITIAL_HOST_STATE, type HostState } from './hostState';
+import { reduceHost, runnersOn, INITIAL_HOST_STATE, type HostState } from './hostState';
 import ModelSelector, { API_PROVIDER_LABELS } from './components/ModelSelector';
 import PlanCardGroup from './components/PlanCardGroup';
 import UsageLine from './components/UsageLine';
-import AccountLimitRows from './components/AccountLimitRows';
 import PendingMessages, { type PendingMessage } from './components/PendingMessages';
 import HandoffCard from './components/HandoffCard';
 import CheckpointPanel from './components/CheckpointPanel';
 import RunSettingsBlock from './components/RunSettingsBlock';
 import type { TaskDraft } from './components/NewTaskCard';
 import type { CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId } from '@ordewell/core';
-import { compactionText, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
+import { accountLimitsOf, compactionText, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 import { planSummaryLabel, nextDock } from './planDock';
 import { OpenPatchContext } from './openPatch';
 import { useFollowOutput } from './followOutput';
@@ -70,17 +69,20 @@ export default function App() {
   const [host, dispatch] = useReducer(reduceHost, INITIAL_HOST_STATE);
   const {
     conversation, plan, isExecuting, isResearchActive, error, models, modelsByRunner,
-    runnerList, enabledRunnerIds, modelAllowlist, runners, held, unsent, modesByRunner, runnerNotice, modelConfig,
+    runnerList, enabledRunnerIds, pendingRunners, modelAllowlist, held, unsent, modesByRunner, runnerNotice, modelConfig,
     modelOptions, configuredProviders, planner, plannerKnown, runnersKnown, isReady, modelDiscoveryErrors,
     skills, taskSkills, checkpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest, accountLimits,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
   const setError = useCallback((v: string) => dispatch({ type: 'patchError', error: v }), []);
   const setIsReady = useCallback((v: boolean) => dispatch({ type: 'patchReady', ready: v }), []);
-  const setRunners = useCallback((v: Updatable<RunnerId[]>) => dispatch({ type: 'patchRunners', runners: v }), []);
   const setDockHeight = useCallback((v: number | undefined) => dispatch({ type: 'patchDockHeight', height: v }), []);
   const setDockExpanded = useCallback((v: Updatable<boolean>) => dispatch({ type: 'patchDockExpanded', expanded: v }), []);
   const blocks = useMemo(() => patchedBlocks(conversation), [conversation]);
+  const runners = useMemo(
+    () => runnersOn({ runnerList, enabledRunnerIds, pendingRunners }),
+    [runnerList, enabledRunnerIds, pendingRunners],
+  );
   // The planner compacting holds the conversation as a turn does: Stop stops
   // it, a message waits for it, and the draft stays. Read from the blocks, so
   // a webview that reconnects mid-compaction knows it from what it is sent.
@@ -112,6 +114,10 @@ export default function App() {
   /** A start is with the host; a second click is the same start, not another. */
   const startPendingRef = useRef(false);
   const nextStartRequest = useRef(0);
+  // Prefixed per page: a reload starts the count again, and an answer still
+  // on its way to the old page must not match a click on the new one.
+  const runnerRequestPrefix = useRef(Math.random().toString(36).slice(2));
+  const nextRunnerRequest = useRef(0);
   const lastActivityRef = useRef(Date.now());
   const planRef = useRef(plan);
   planRef.current = plan;
@@ -245,22 +251,15 @@ export default function App() {
     vscode.postMessage({ type: 'sendMessage', text, runners, typed: true });
   }, [runners, handleNewSession, showNewSessionConfirm, plannerBusy]);
 
-  const handleToggleRunner = useCallback((runnerId: RunnerId) => {
-    setRunners((prev) => {
-      if (prev.includes(runnerId)) {
-        const next = prev.filter((r) => r !== runnerId);
-        return next.length > 0 ? next : prev;
-      }
-      return [...prev, runnerId];
-    });
-  }, []);
-
-  const handleEnableRunner = useCallback((runnerId: RunnerId) => {
-    // Optimistic here as well as at the host: the save is quick but the
-    // discovery behind the re-sent list can take a while, and the click has to
-    // read as done.
-    dispatch({ type: 'enableRunnerRequested', runnerId });
-    vscode.postMessage({ type: 'enableRunner', runnerId });
+  // The pills are the saved choice every surface and planner turn reads
+  // (ADR-0043), so a click asks the host to save it. The request names the
+  // state wanted, which keeps a quick second click or a repeat from flipping
+  // it back; the pill shows the click until the host answers this request.
+  const handleRunnerPill = useCallback((runnerId: RunnerId, enabled: boolean) => {
+    nextRunnerRequest.current += 1;
+    const requestId = `${runnerRequestPrefix.current}-${nextRunnerRequest.current}`;
+    dispatch({ type: 'runnerChoiceRequested', runnerId, enabled, requestId });
+    vscode.postMessage({ type: 'setRunnerEnabled', runnerId, enabled, requestId });
   }, []);
 
   const handleConfigureApiKey = useCallback(() => {
@@ -838,7 +837,14 @@ export default function App() {
 
   return (
     <OpenPatchContext.Provider value={handleOpenPatch}>
-    <div className="chat-container">
+    {/* Focus targets for a mouse selection, never tab stops. VS Code 1.143+
+        answers a Cmd/Ctrl+C in a webview by refocusing the last-focused
+        element before it copies whenever focus sits on <body>, and here that
+        is the composer, whose focus wipes the selection. A drag in the
+        conversation or the footer now focuses one of these instead, so focus
+        never rests on <body>. The list is its own target so arrow keys and
+        Page Down still scroll it after a click. */}
+    <div className="chat-container" tabIndex={-1}>
       <div className="setup-panel">
         <button
           type="button"
@@ -953,24 +959,24 @@ export default function App() {
         <section className="setup-block">
           <div className="setup-block-title">Runners</div>
           <div className="setup-block-hint">
-            Coding agents that execute the plan's tasks. Toggle which ones the planner may assign; click a disabled agent to enable it on every surface.
+            Coding agents that execute the plan's tasks. The planner assigns only the ones switched on;
+            a click switches one on or off for every plan, here and in the terminal.
           </div>
           <div className="runner-pills">
             {runnerList.map((r) => {
-              if (!enabledRunnerIds.includes(r.id)) {
-                return (
-                  <button key={r.id} className="runner-pill disabled"
-                    onClick={() => handleEnableRunner(r.id)}
-                    title={`Click to enable ${r.displayName} as a runner on every surface`}>
-                    <span className="runner-dot" /> {r.displayName}
-                  </button>
-                );
-              }
-              const isToggled = runners.includes(r.id);
+              const on = runners.includes(r.id);
+              // Never emptied from here: with no runner on, no surface could assign a task.
+              const last = on && runners.length === 1;
+              const title = last
+                ? `${r.displayName} is the only runner on: switch another on first`
+                : on
+                  ? `Stop assigning tasks to ${r.displayName}, on every surface`
+                  : `Click to enable ${r.displayName} as a runner on every surface`;
               return (
-                <button key={r.id} className={`runner-pill ${isToggled ? 'on' : 'off'}`}
-                  onClick={() => handleToggleRunner(r.id)}
-                  title={`${isToggled ? 'Stop assigning' : 'Assign'} tasks to ${r.displayName}`}>
+                <button key={r.id} className={`runner-pill ${on ? 'on' : 'disabled'}${r.id in pendingRunners ? ' pending' : ''}`}
+                  onClick={() => { if (!last) handleRunnerPill(r.id, !on); }}
+                  aria-pressed={on}
+                  title={title}>
                   <span className="runner-dot" /> {r.displayName}
                 </button>
               );
@@ -1009,7 +1015,7 @@ export default function App() {
         </div>
       )}
 
-      <div className="message-list" ref={messageListCallbackRef}>
+      <div className="message-list" tabIndex={-1} ref={messageListCallbackRef}>
         {!hasContent && !isReady && (
           <div className="loading-state">
             <div className="loading-pulse" />
@@ -1026,11 +1032,11 @@ export default function App() {
         )}
 
         {!hasContent && isReady && !canPlan && plannerKnown && (
-          <GetStarted runnerNames={agentNames} onConfigure={handleConfigureApiKey} runSettings={host.runSettings} />
+          <GetStarted runnerNames={agentNames} onConfigure={handleConfigureApiKey} runSettings={host.runSettings} isolationPreview={host.isolationPreview} />
         )}
 
         {emptyStateShown && (
-          <EmptyState onLoadSession={handleLoadSession} runSettings={host.runSettings} signedOut={signedOutPlanner} />
+          <EmptyState onLoadSession={handleLoadSession} runSettings={host.runSettings} signedOut={signedOutPlanner} isolationPreview={host.isolationPreview} />
         )}
 
         {error && (
@@ -1051,9 +1057,7 @@ export default function App() {
 
       {renderPlanDock()}
 
-      {usageBlock && <UsageLine block={usageBlock} />}
-      {/* Not inside the usage line: limits are known before the planner's first call, and with a planner that reports none. */}
-      <AccountLimitRows limits={accountLimits} />
+      <UsageLine block={usageBlock} limits={accountLimitsOf(accountLimits, planner.runner, modelConfig?.orchestrator)} />
 
       {/* Pinned rather than the list's last row, and drawn for the whole turn:
           a turn can go minutes with nothing new to show, its thinking block

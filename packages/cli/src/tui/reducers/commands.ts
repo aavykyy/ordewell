@@ -204,6 +204,8 @@ export function newSession(state: TuiState): Step {
   return step(withRun({
     ...state,
     sessionId: null,
+    accountLimits: [],
+    servedModels: {},
     goal: '',
     taskView: null,
     planApproved: false,

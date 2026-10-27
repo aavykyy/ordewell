@@ -48,9 +48,10 @@ describe('a wake-up turn at Act', () => {
 
     expect(taskOf(env.session, 't2')!.prompt).toBe('do t2 with Postgres');
     const tail = env.session.planState!.conversationHistory!.slice(-2);
+    // Committed as the call answered, so it is said ahead of the reply that followed it.
     expect(tail.map((e) => [e.kind, e.content])).toEqual([
-      ['supervisor', 'Task 2 now uses Postgres.'],
       ['supervisor', 'Tasks updated:\n- Updated "Task t2" (prompt)'],
+      ['supervisor', 'Task 2 now uses Postgres.'],
     ]);
   });
 
@@ -173,6 +174,59 @@ describe('moving a task paused on a usage limit', () => {
   });
 });
 
+/**
+ * The supervisor woken at Act on a plan that once used Codex, the user having
+ * switched Codex off since: the plan's runners still hold it, the enabled list
+ * does not. Tasks 2 and 3 wait on task 1, and task 3 is left on Codex.
+ */
+async function codexSwitchedOff(): Promise<Env> {
+  return wokenUp(
+    { ...ACT, plan: { runners: ['codex', 'claude-code'] }, config: { enabledRunners: ['claude-code', 'opencode'] } },
+    [task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { assignedRunner: 'codex', dependencies: ['t1'] })],
+  );
+}
+
+describe('the supervisor\'s edits after a runner is switched off that the plan once used', () => {
+  it.each<[string, { op: 'add'; task: Record<string, unknown> } | { op: 'update'; taskId: string; changes: Record<string, unknown> }]>([
+    ['an added task naming it', { op: 'add', task: { title: 'Fix the import', prompt: 'fix it', assignedRunner: 'codex' } }],
+    ['a task moved onto it', { op: 'update', taskId: '#2', changes: { assignedRunner: 'codex' } }],
+  ])('refuse %s, and change nothing', async (_name, op) => {
+    const env = await codexSwitchedOff();
+
+    const edit = await env.planner.tools().editPlan!({ ops: [op] }, ctx);
+    env.planner.calls[0].finish(prose('That did not work.'));
+    await settled();
+
+    expect(edit.isError).toBe(true);
+    expect(JSON.parse(edit.text).errors[0].message).toMatch(/invalid assignedRunner "codex"\. Expected one of: claude-code, opencode/);
+    expect(env.session.planTasks.map((t) => [t.title, t.assignedRunner])).toEqual([['Task t1', 'claude-code'], ['Task t2', 'claude-code'], ['Task t3', 'codex']]);
+  });
+
+  it('put an added task that names no runner on an enabled one, as the supervisor\'s', async () => {
+    const env = await codexSwitchedOff();
+
+    const edit = await env.planner.tools().editPlan!({ ops: [{ op: 'add', task: { title: 'Fix the import', prompt: 'fix it' } }] }, ctx);
+    env.planner.calls[0].finish(prose('Added a fix.'));
+    await settled();
+
+    expect(edit.isError, edit.text).toBeFalsy();
+    expect(byTitle(env, 'Fix the import')).toMatchObject({ assignedRunner: 'claude-code', addedBy: 'supervisor' });
+  });
+
+  it('still edit the task left on it and move it off', async () => {
+    const env = await codexSwitchedOff();
+
+    const edit = await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#3', changes: { prompt: 'do t3 with Postgres' } }] }, ctx);
+    const move = await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#3', changes: { assignedRunner: 'opencode' } }] }, ctx);
+    env.planner.calls[0].finish(prose('Updated task 3.'));
+    await settled();
+
+    expect(edit.isError, edit.text).toBeFalsy();
+    expect(move.isError, move.text).toBeFalsy();
+    expect(taskOf(env.session, 't3')).toMatchObject({ prompt: 'do t3 with Postgres', assignedRunner: 'opencode' });
+  });
+});
+
 const notes = (env: Env) => env.session.planState!.conversationHistory!.filter((e) => e.kind === 'supervisor').map((e) => e.content);
 
 /** A one-task run whose task failed, with the supervisor woken to it at Act. */
@@ -256,21 +310,24 @@ describe('the loop guards', () => {
     expect(env.run.spawnedIds()).toEqual(['t1']);
   });
 
-  it('runs a retry asked for after an edit in the same reply once the edit lands, as edited', async () => {
+  // ADR-0022 P2: the edit is in the plan as its call answers, so the retry that follows it is handed to the run as edited,
+  // at once; the run starts it once the turn's start hold lets go (ADR-0029).
+  it('hands a retry asked for after an edit in the same reply to the run at once, as edited', async () => {
     const env = await failedOnce();
 
     await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, importing from ./lib' } }] }, ctx);
     const retry = await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx);
-    expect(JSON.parse(retry.text).result).toMatch(/^Queued: retry task #1 "Task t1" happens once your edit lands/);
+
+    expect(JSON.parse(retry.text).result).toBe('Task #1 "Task t1" is back in the run and starts when a slot is free.');
+    await settled();
     expect(env.run.spawnedIds()).toEqual(['t1']);
     env.planner.calls[0].finish(prose('Fixed the import in task 1 and retried it.'));
-
     await until(() => env.run.spawnedIds().length === 2);
     expect(env.run.runner.spawn.mock.calls[1][0].prompt).toContain('do t1, importing from ./lib');
-    expect(env.session.planState!.conversationHistory!.at(-1)).toMatchObject({ kind: 'execution', content: 'Retried task #1 "Task t1": by supervisor.' });
+    expect(env.session.planState!.conversationHistory!.filter((e) => e.kind === 'execution').at(-1)).toMatchObject({ content: 'Retried task #1 "Task t1": by supervisor.' });
   });
 
-  it('drops a start queued behind an edit that never landed, and says so', async () => {
+  it('keeps an edit and the retry it ran when the user stops their turn after them', async () => {
     const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' }, config: { autonomousMode: true } });
     env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
     await until(() => taskOf(env.session, 't1')!.status === 'failed');
@@ -278,41 +335,40 @@ describe('the loop guards', () => {
     await until(() => env.planner.calls.length === 1);
 
     await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, importing from ./lib' } }] }, ctx);
-    const retry = await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx);
-    expect(JSON.parse(retry.text).result).toMatch(/^Queued: retry task #1 "Task t1" happens once your edit lands/);
+    expect((await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx)).isError).toBeFalsy();
     env.session.abortPlannerTurn();
-    await answered;
-    await settled();
+    await answered.catch(() => undefined);
+    await until(() => env.run.spawnedIds().length === 2);
 
-    expect(taskOf(env.session, 't1')).toMatchObject({ prompt: 'do t1', status: 'failed' });
-    expect(env.run.spawnedIds()).toEqual(['t1']);
-    expect(env.notices).toContainEqual(expect.objectContaining({ level: 'warn', message: 'Not done: retry task #1 "Task t1" waited for an edit that did not land.' }));
+    expect(taskOf(env.session, 't1')!.prompt).toBe('do t1, importing from ./lib');
+    expect(env.run.runner.spawn.mock.calls[1][0].prompt).toContain('do t1, importing from ./lib');
+    expect(env.notices.filter((n) => n.message.startsWith('Not done:'))).toEqual([]);
   });
 
-  it('says a start queued behind an edit is not done when the wake-up turn that queued it is stopped', async () => {
+  it('keeps an edit a wake-up turn committed when the user stops that turn', async () => {
     const env = await failedOnce();
 
     await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, importing from ./lib' } }] }, ctx);
-    await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx);
     env.session.abortPlannerTurn();
     await settled();
 
-    expect(taskOf(env.session, 't1')).toMatchObject({ prompt: 'do t1', status: 'failed' });
+    expect(taskOf(env.session, 't1')).toMatchObject({ prompt: 'do t1, importing from ./lib', status: 'failed' });
     expect(env.run.spawnedIds()).toEqual(['t1']);
-    expect(env.notices).toContainEqual(expect.objectContaining({ level: 'warn', message: 'Not done: retry task #1 "Task t1" waited for an edit that did not land.' }));
   });
 
-  it('never runs a start queued behind an edit on another plan adopted before the turn ends', async () => {
+  it('commits nothing a wake-up turn edits after another plan was adopted under it', async () => {
     const env = await failedOnce();
-    await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, importing from ./lib' } }] }, ctx);
-    await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx);
 
     env.session.loadPlan(plan([task('t1', 1, { status: 'failed' })]), 'another goal', testWorkspace, { sessionId: 'other' });
+    const edit = await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, importing from ./lib' } }] }, ctx);
+    const retry = await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx);
     env.planner.calls[0].finish(prose('Fixed the import in task 1 and retried it.'));
     await settled();
 
+    expect(edit.isError).toBe(true);
+    expect(retry.isError).toBe(true);
+    expect(taskOf(env.session, 't1')!.prompt).toBe('do t1');
     expect(env.run.spawnedIds()).toEqual(['t1']);
-    expect(env.notices).toContainEqual(expect.objectContaining({ level: 'warn', message: 'Not done: retry task #1 "Task t1" waited for an edit that did not land.' }));
   });
 
   it('refuses at once, not after the turn, a retry behind an edit that could never run: the task was added after the user approved the plan', async () => {
@@ -326,26 +382,25 @@ describe('the loop guards', () => {
     expect(JSON.parse(retry.text).reason).toBe('Task #2 "Task t2" was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.');
   });
 
-  it('runs a retry queued behind an edit once the edit lands, on a run that had already finished', async () => {
+  it('runs a retry after an edit as edited, on a run that had already finished', async () => {
     const env = await finishedWithAFailure();
 
     await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#2', changes: { prompt: 'do t2, importing from ./lib' } }] }, ctx);
     const retry = await env.planner.tools().retryTask!({ task: '2', from: 'fresh' }, ctx);
-    expect(JSON.parse(retry.text).result).toMatch(/^Queued: retry task #2 "Task t2" happens once your edit lands/);
+    expect(retry.isError).toBeFalsy();
     env.planner.calls[0].finish(prose('Fixed the import in task 2 and retried it.'));
 
     await until(() => env.run.spawnedIds().length === 3);
     expect(env.run.runner.spawn.mock.calls[2][0].prompt).toContain('do t2, importing from ./lib');
   });
 
-  it('starts a task its own edit adds, asked for by title in the same reply, once the edit lands on a run that had finished', async () => {
+  it('starts at once a task its own edit adds, asked for by title in the same reply, on a run that had finished', async () => {
     const env = await finishedWithAFailure();
 
     await env.planner.tools().editPlan!({ ops: [{ op: 'add', task: { title: 'Fix the import', prompt: 'fix the import' } }] }, ctx);
     const start = await env.planner.tools().runTask!({ task: 'Fix the import' }, ctx);
     expect(start.isError, start.text).toBeFalsy();
-    expect(JSON.parse(start.text).result).toMatch(/^Queued: start task #\d+ "Fix the import" happens once your edit lands/);
-    env.planner.calls[0].finish(prose('Added a fix task and started it.'));
+    expect(JSON.parse(start.text).result).toMatch(/^Started task #\d+ "Fix the import"\.$/);
 
     await until(() => env.session.planTasks.some((t) => t.title === 'Fix the import' && env.run.spawnedIds().includes(t.id)));
     expect(env.run.runner.spawn.mock.calls.at(-1)![0].prompt).toContain('fix the import');
@@ -361,7 +416,7 @@ describe('the loop guards', () => {
     expect(JSON.parse(retry.text).reason).toMatch(/^Refused: task #1 "Fix the import" failed with this same prompt and model/);
   });
 
-  it('runs a retry queued behind an edit in the user\'s own turn once the edit lands, as edited', async () => {
+  it('runs a retry after an edit in the user\'s own turn as edited', async () => {
     const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' }, config: { autonomousMode: true } });
     env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
     await until(() => taskOf(env.session, 't1')!.status === 'failed');
@@ -370,7 +425,7 @@ describe('the loop guards', () => {
 
     await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, importing from ./lib' } }] }, ctx);
     const retry = await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx);
-    expect(JSON.parse(retry.text).result).toMatch(/^Queued: retry task #1 "Task t1" happens once your edit lands/);
+    expect(retry.isError).toBeFalsy();
     env.planner.calls[0].finish(prose('Fixed the import in task 1 and retried it.'));
 
     await until(() => env.run.spawnedIds().length === 2);
@@ -584,14 +639,14 @@ describe('skip_task at Act', () => {
     expect(env.session.planState!.supervision?.guards?.skips).toEqual({ t1: 1 });
   });
 
-  it('refuses a skip of a task its own edit adds in the same reply', async () => {
+  it('refuses a skip of a task its own edit adds in the same reply, which waits on nothing', async () => {
     const env = await blockedChain();
 
     await env.planner.tools().editPlan!({ ops: [{ op: 'add', task: { title: 'Probe the GPU', prompt: 'probe it' } }] }, ctx);
     const skip = await env.planner.tools().skipTask!({ task: 'Probe the GPU', reason: 'not needed' }, ctx);
 
     expect(skip.isError).toBe(true);
-    expect(JSON.parse(skip.text).reason).toMatch(/a task you add in this reply cannot be skipped in it/);
+    expect(JSON.parse(skip.text).reason).toBe('Task #3 "Probe the GPU" has not started and nothing blocks it: the supervisor skips only a task that failed, is blocked or is waiting for input.');
   });
 
   it('never runs a skipped task again: that is the user\'s to decide', async () => {

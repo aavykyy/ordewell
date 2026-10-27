@@ -70,14 +70,4 @@ describe('RunViewHost', () => {
     expect(posted[0].mergeResult).toBeNull();
     expect(posted[0].runMerge).toBeNull();
   });
-
-  it('shows the edit a planner turn holds, and drops it when the turn lets it go', () => {
-    const { host: h, posted } = host(planned1);
-    const held = { turnId: 'turn-1', tasks: [{ label: '2', mark: 'added' as const, task: planned('t2', 2) }] };
-
-    h.receive({ type: 'plan_edit_held', held });
-    h.receive({ type: 'plan_edit_held', held: null });
-
-    expect(posted.map((view) => view.heldEdit)).toEqual([held, undefined]);
-  });
 });

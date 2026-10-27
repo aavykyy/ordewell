@@ -1,16 +1,17 @@
+import { taskServedModel } from './accountLimits';
 import { firstGrapheme, nextBoundary, pad, previousBoundary, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
 import { cursorInLines, type CursorPosition } from './editor';
 import { assignmentFlagText, checkpointCardLines, conversationLines, tokenLine } from './blocks';
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
 import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, scriptTaskView, selectedPlanRow, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
-import { SUPERVISOR_LEVEL_LABEL, type DiscoveredModel, type HeldEditMark } from '@ordewell/core';
+import { SUPERVISOR_LEVEL_LABEL, type DiscoveredModel } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { assignedRunnerOf, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
+import { accountLimitsText, contextMeterText, accountLimitsOf, assignedRunnerOf, describeIsolationPreview, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -495,7 +496,7 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   // The usage rows are the session's (or the opened task's), not lines of the
   // transcript: they keep the pane's bottom rows while everything above them
   // scrolls — unless the pane is a single row, which belongs to the conversation.
-  const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, cols) : [...plannerPauseRow(state, cols), ...plannerResendRow(state, cols), ...tokenRow(blocks, cols)];
+  const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, cols) : [...plannerPauseRow(state, cols), ...plannerResendRow(state, cols), ...tokenRow(state, blocks, cols)];
   // The per-model rows are the expendable part: they yield to the transcript
   // so a short pane never trades its last conversation row for a breakdown.
   const footer = usage.slice(0, Math.max(1, rows - taskHeader.length - 1));
@@ -521,8 +522,10 @@ function plannerPauseRow(state: TuiState, cols: number): string[] {
   return [style.yellow(truncate(`⏸ Planner paused: its context does not fit ${plannerPause.model}'s window · /compact retry attempts recovery · /stop drops the turn`, cols))];
 }
 
-const tokenRow = (blocks: readonly DisplayBlock[], cols: number): string[] => {
-  const line = tokenLine(blocks, cols);
+const tokenRow = (state: TuiState, blocks: readonly DisplayBlock[], cols: number): string[] => {
+  const runner = runnerForProvider(state.plannerProvider);
+  const limits = accountLimitsOf(state.accountLimits, runner ?? undefined, state.orchestratorModel);
+  const line = tokenLine(blocks, cols, limits);
   return line ? [line] : [];
 };
 
@@ -534,7 +537,17 @@ const tokenRow = (blocks: readonly DisplayBlock[], cols: number): string[] => {
  * — has the log's own last usage block there instead, and still the task total.
  */
 function taskUsageFooter(state: TuiState, tv: NonNullable<TuiState['taskView']>, cols: number): string[] {
-  return logHeader(state, tv).usage.map((row) => style.grey(truncate(row.text, cols)));
+  const task = findTask(state.tasks, tv.taskId);
+  const limits = accountLimitsOf(state.accountLimits, task && assignedRunnerOf(task), task && taskServedModel(state, task))
+    .map(accountLimitsText).filter(Boolean).join(' · ');
+  const rows = logHeader(state, tv).usage;
+  const text = rows.map((row, index) => {
+    if (!limits || index !== rows.length - 1) return row.text;
+    const context = contextMeterText(row.contextFill);
+    return context ? row.text.replace(context, `${context} · ${limits}`) : `${limits} · ${row.text}`;
+  });
+  if (text.length === 0 && limits) text.push(limits);
+  return text.map((row) => style.grey(truncate(sanitize(row).replace(/\n/g, ' '), cols)));
 }
 
 /**
@@ -774,6 +787,35 @@ function welcomeLogo(restRows: number, rows: number, cols: number): string[] {
 }
 
 const DETECTING = 'Detecting coding agents…';
+const CHECKING_REPOSITORIES = 'Checking repositories…';
+
+/**
+ * What the welcome says about the repositories a run would isolate. The words
+ * are core's shared notice, so the terminal and the editor cannot drift. A
+ * ready group's note is dropped to keep the welcome compact; a dirty tree's
+ * decision and a failure's reason are the parts a run is waiting on.
+ */
+function isolationPreviewLines(state: TuiState, cols: number): string[] {
+  const room = Math.max(1, cols - 1);
+  const head = style.bold('Repositories and branches');
+  const preview = state.isolationPreview;
+  if (!preview) {
+    // `undefined` is before the first read, `null` while one is in flight:
+    // neither knows a repository, so neither may claim there is none.
+    return [head, ...wrap(style.grey(CHECKING_REPOSITORIES), room), ''];
+  }
+  const notice = describeIsolationPreview(preview);
+  const important = preview.status === 'dirty' || preview.status === 'failed';
+  const summary = important ? style.yellow(notice.summary) : notice.summary;
+  return [
+    head,
+    ...wrap(summary, room),
+    ...notice.repos.flatMap((repo) => wrap(`  ${repo.name} · ${style.grey(repo.detail)}`, room)),
+    ...(notice.shared ? wrap(style.grey(notice.shared), room) : []),
+    ...(notice.note && important ? wrap(style.grey(notice.note), room) : []),
+    '',
+  ];
+}
 
 /**
  * One quiet line under the workspace when the active planner's agent is signed
@@ -850,7 +892,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ...signedOutPlannerLine(state, cols),
   ];
 
-  const rest = ['', ...prompt, ...approval, '', ...setup, ...tail];
+  const rest = ['', ...prompt, ...approval, '', ...setup, ...isolationPreviewLines(state, cols), ...tail];
   const logo = welcomeLogo(rest.length, rows, cols);
   return logo.length > 0 ? [...logo, ...rest] : rest.slice(1);
 }
@@ -942,30 +984,9 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
     rowSpans.push({ start: taskStart, end: lines.length - 1 });
   });
 
-  lines.push(...heldEditLines(state, cols));
-
   const selected = rowSpans[state.selectedTask] ?? { start: firstRowLine, end: firstRowLine };
   const anchor = editorLine === undefined ? selected : { start: editorLine, end: editorLine };
   return { lines, rowSpans, anchor, rows, maxScroll: Math.max(0, lines.length - rows) };
-}
-
-/** Painted when drawn, not at load, so it follows whether colour is on. */
-const heldMark = (mark: HeldEditMark): string => (mark === 'added' ? style.green('+') : mark === 'changed' ? style.yellow('~') : style.red('-'));
-
-/**
- * What the open planner turn's edit would change, below the plan's own rows
- * and outside their spans: nothing here is selected, run or edited. Only the
- * tasks the edit touches, since the rest are already above. They are proposed,
- * not approved, so it says when they land and nothing about running.
- */
-function heldEditLines(state: TuiState, cols: number): string[] {
-  const rows = (state.run.heldEdit?.tasks ?? []).flatMap(({ label, mark, task }) => {
-    if (!mark) return [];
-    const title = mark === 'removed' ? style.strike(task.title) : task.title;
-    return [truncate(`  ${heldMark(mark)} ${style.grey(label.padStart(2))}  ${title}`, cols)];
-  });
-  if (rows.length === 0) return [];
-  return ['', style.dim(truncate('Proposed: lands when this reply ends', cols)), ...rows];
 }
 
 const clampOffset = (layout: PlanLayout, offset: number): number =>
@@ -1115,12 +1136,13 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   const runner = row.runner ?? '';
   const bodyPad = parent ? '      ' : '    ';
   // Only a state that wants the user gets a word: a runner approval ("enter
-  // opens it") and a task stopped at a question. Running and quiet are the
-  // status glyph's job — the spinner and the static '~' — so a running row
-  // reads `runner · model` and nothing is repeated above it.
+  // opens it") and a task stopped at a question — and a report received while
+  // its attempt winds down, which the spinner alone would hide. Running and
+  // quiet are the status glyph's job — the spinner and the static '~' — so a
+  // running row reads `runner · model` and nothing is repeated above it.
   const activity = row.approvals
     ? `${inRow(row.approvals)}: enter opens it`
-    : row.awaiting ? inRow(row.awaiting) : '';
+    : row.awaiting ? inRow(row.awaiting) : row.receipt ? inRow(row.receipt) : '';
   const skills = (task.skills ?? []).join(' · ');
   // A running row's tag says RUN, so the mark moves to the line beneath it.
   const meta = [activity, ...(row.research && row.running ? [style.cyan('research')] : []), runner, model];
@@ -1136,13 +1158,6 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   // keep the shallower `bodyPad`: they need the room more than the alignment.
   if (metaText) lines.push(style.grey(truncate(`${continuation}${metaText}`, cols)));
   if (row.loop) lines.push(...loopLines(row.loop, cols, bodyPad));
-  // What it handed over (ADR-0047): one compact row, its count first so a long
-  // summary can be cut without taking what a reader scans for with it.
-  if (row.handoff) {
-    // The commit subject and summary are the author's text, so they are cleaned here rather than in core.
-    const handed = handoffPeekParts(row.handoff).map(sanitize).join(' · ');
-    lines.push(style.grey(truncate(`${bodyPad}↳ handed over · ${handed}`, cols)));
-  }
   // The one isolation state that needs the user; every other stays out of the
   // row and shows only in the expanded detail below.
   if (row.conflict) {
@@ -1192,6 +1207,10 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
 
   let editorLine: number | undefined;
   if (expanded) {
+    if (row.handoff) {
+      // The commit subject and summary are the author's text, so they are cleaned here rather than in core.
+      lines.push(...taskText('Handoff', handoffPeekParts(row.handoff).map(sanitize).join(' · '), cols, bodyPad));
+    }
     if (skills) lines.push(style.grey(truncate(`${bodyPad}skills: ${skills}`, cols)));
     if (effort || mode) lines.push(style.grey(truncate(`${bodyPad}${[effort, mode].filter(Boolean).join(' · ')}`, cols)));
     lines.push(style.grey(`${bodyPad}${STATUS_WORD[taskStatusKind(task)]}`));

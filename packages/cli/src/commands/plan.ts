@@ -43,7 +43,7 @@ function commitNotes(plan: PlanBody): string[] {
 
 /**
  * What the user does with the plan now. Autorun (ADR-0030) starts a plan the
- * planner submits as the reply ends, and its start approves the plan before
+ * planner submits once its reply ends, and its start approves the plan before
  * the reply reaches this command — so "run it" is said only of a plan nobody
  * has approved or started, and a running one is pointed at, not run again.
  */
@@ -294,7 +294,7 @@ export async function handlePlan(
   const stream = api.streamPlanning(sessionId, (event) => {
     renderStep(event);
     // A run snapshot is not a planner message; this stream ignores it.
-    if (event.type !== 'run_snapshot') void handleApproval(event);
+    if (event.type !== 'run_snapshot' && event.type !== 'account_limits') void handleApproval(event);
   });
 
   try {

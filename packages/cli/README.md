@@ -18,10 +18,12 @@ on Windows, run the terminal UI under WSL.
 ## Usage
 
 Run `ordewell` in your project to open the terminal UI: the conversation on the
-left, the live plan on the right. The first run lets you pick a planner and runners
+left, the live plan on the right (or beneath it, below 70 columns). The first run lets you pick a planner and runners
 with `/planner` (Harness › Model › Effort, each step saved as you go) and `/runners`, and no API key is needed if you plan with a coding
 agent you already use.
 The welcome screen says it plainly: nothing runs until you approve the plan (unless autorun is on).
+It also lists the repositories and branches code tasks will use, and whether
+they get isolated worktrees.
 
 `/settings` walks autonomy, supervisor, merge automatically, autorun and parallel
 (research uses the same Parallel slots) in one panel and saves only what you changed. `/planner` walks harness, model and
@@ -36,8 +38,8 @@ and `/delete` are `ordewell sessions load|delete`; `/open` opens a task's view
 in the full-screen terminal, where a shell has no view to switch to
 (`ordewell checkpoint` answers from one); `/mouse` configures that terminal; and
 `/settings` is a panel over headless commands that remain for scripts
-(`ordewell auto`, `supervisor`, `automerge`, `trailer`, `autorun` and
-`parallel`). `/planner` has its own `ordewell planner`, and its model and effort
+(`ordewell auto`, `supervisor`, `automerge`, `autorun` and `parallel`);
+`ordewell supervisor reads` and `ordewell trailer` have no panel row. `/planner` has its own `ordewell planner`, and its model and effort
 steps are `ordewell model` and `ordewell planner-effort`.
 
 ```bash

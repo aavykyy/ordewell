@@ -5,7 +5,7 @@ import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import ModelSelector from './ModelSelector';
 import DependencyPicker from './DependencyPicker';
 import SkillChips from './SkillChips';
-import TaskHandoff, { HandoffPeek } from './TaskHandoff';
+import TaskHandoff from './TaskHandoff';
 import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
@@ -33,7 +33,7 @@ export interface RunnerOption {
  * streams — `task_started` reaches it before the plan refresh does — so the
  * card's editability reads it when present.
  */
-export type TaskCardRun = Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage'> & { status?: Task['status'] };
+export type TaskCardRun = Pick<RunTask, 'idleSince' | 'completionReceived' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage'> & { status?: Task['status'] };
 
 interface TaskCardProps {
   task: Task;
@@ -114,11 +114,12 @@ const STATUS_BADGE: Record<TaskStatusKind, { label: string; cls: string }> = {
   awaiting: { label: 'Awaiting User', cls: 'status-blocked' },
 };
 
-/** The status badge: what an awaiting task waits on, why it is held, the failure a blocked one waits on, or why one was skipped, outranks the generic word. */
-export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'blockedBy' | 'skipReason' | 'holdReason'>): { label: string; cls: string } {
+/** The status badge: what an awaiting task waits on, a report received, why it is held, the failure a blocked one waits on, or why one was skipped, outranks the generic word. */
+export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'receipt' | 'blockedBy' | 'skipReason' | 'holdReason'>): { label: string; cls: string } {
   const badge = STATUS_BADGE[row.status];
   if (row.status === 'skipped') return { ...badge, label: skippedLabel(row.skipReason) };
   if (row.awaiting) return { ...badge, label: row.awaiting };
+  if (row.receipt) return { ...badge, label: row.receipt };
   if (row.holdReason) return { ...badge, label: holdLabel(row.holdReason) };
   return { ...badge, label: row.blockedBy ? blockedByLabel(row.blockedBy) : badge.label };
 }
@@ -443,6 +444,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
     ...task,
     handoff,
     idleSince,
+    completionReceived: run?.completionReceived,
     awaitingApproval,
     isolation,
     mergeGate,
@@ -553,8 +555,6 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             )}
           </div>
         </div>
-
-        {!expanded && <HandoffPeek handoff={row.handoff} />}
 
         {/* Collapsed, the newest line is the whole signal — "which test is it on"
             without having to open the card. */}

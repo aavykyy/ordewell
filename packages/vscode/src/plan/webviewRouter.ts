@@ -22,10 +22,10 @@ export interface ExtensionHandlers {
   openFile(path: string): void;
   setPlanDockHeight(height: number): void;
   changeSettings(change: SettingsChange): Promise<void>;
-  /** Turn on an installed runner the chat header offered; the host re-sends the list when it lands. */
-  enableRunner(runnerId: RunnerId): Promise<void>;
   /** Sign a coding agent in with its own login in a terminal; no runner means the active planner. */
   loginPlanner(runner?: string): Promise<void>;
+  /** Save a Runners pill's choice; the host answers `requestId` with what was saved, whether or not the save lands. */
+  setRunnerEnabled(runnerId: RunnerId, enabled: boolean, requestId: string): Promise<void>;
 }
 
 export interface WebviewRouterDeps extends PlanManagerDeps {
@@ -157,8 +157,8 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
     case 'changeSettings':
       await deps.extension.changeSettings(msg.change);
       return;
-    case 'enableRunner':
-      await deps.extension.enableRunner(msg.runnerId);
+    case 'setRunnerEnabled':
+      await deps.extension.setRunnerEnabled(msg.runnerId, msg.enabled, msg.requestId);
       return;
     // Awaited on purpose: the flow waits on the user's own terminal, and a
     // poll that throws must still reach the user instead of vanishing.

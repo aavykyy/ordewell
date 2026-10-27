@@ -1,4 +1,4 @@
-import type { AccountLimitSnapshot, GlobalRunSettings,
+import type { AccountLimitSnapshot, GlobalRunSettings, IsolationPreview,
   AiProvider, RunnerAuth, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
   TaskModelAssignment,
 } from '@ordewell/core';
@@ -161,11 +161,12 @@ export type WebviewToHost =
   /** The plan dock's dragged height in px, saved on release so every later session opens at it. */
   | { type: 'setPlanDockHeight'; height: number }
   /**
-   * A click on an installed runner that is off: enable it in the settings file
-   * every surface shares and re-send the runner list. Add-only by design, so a
-   * repeated or stale click can never turn a runner off.
+   * A Runners pill clicked: save the runner on or off in the settings file every
+   * surface shares (ADR-0043), then re-send the runner list. It names the state
+   * wanted, so a repeated or stale click can never flip a newer choice back;
+   * `requestId` is what the host's `runnerChoiceSaved` answers.
    */
-  | { type: 'enableRunner'; runnerId: RunnerId }
+  | { type: 'setRunnerEnabled'; runnerId: RunnerId; enabled: boolean; requestId: string }
   /** Who plans (ADR-0009) — a vendor provider id or one of the harness planners. */
   | { type: 'setPlanner'; provider: string }
   /** The planner's own model and thinking effort, a pair so neither can outlive the other. */
@@ -233,6 +234,13 @@ export type HostToWebview =
   | { type: 'showError'; error: string }
   | { type: 'setModels'; models: DiscoveredModel[] }
   | { type: 'setRunners'; runners: RunnerMeta[] }
+  /**
+   * The answer to one `setRunnerEnabled`, saved, refused or failed: `enabled`
+   * is what the shared list holds for that runner now. Only this settles a
+   * pill click; a runner list names no request, so one that discovery began
+   * before the save can neither settle the click nor undo it.
+   */
+  | { type: 'runnerChoiceSaved'; requestId: string; runnerId: RunnerId; enabled: boolean }
   /** The remembered plan dock height in px; absent until the user first drags it. */
   | { type: 'planDockHeight'; height?: number }
   /** The user's autonomy level, run settings (ADR-0030) and parallel limit, sent on ready and after each change. */
@@ -271,4 +279,11 @@ export type HostToWebview =
    * them, sent on each change and on ready. Live account data: it outlives a
    * restored or new session, and is never part of the planner's usage.
    */
-  | { type: 'accountLimits'; limits: readonly AccountLimitSnapshot[] };
+  | { type: 'accountLimits'; limits: readonly AccountLimitSnapshot[] }
+  /**
+   * What the workspace's repositories and branches say about isolated worktrees,
+   * read now. `null` is "being read": sent when the answer shown belongs to a
+   * workspace or a webview that is gone, so an old branch is never shown as
+   * current. A read that failed arrives as a `failed` preview, never as null.
+   */
+  | { type: 'isolationPreview'; preview: IsolationPreview | null };
