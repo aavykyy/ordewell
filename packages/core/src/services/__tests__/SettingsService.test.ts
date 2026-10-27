@@ -207,14 +207,13 @@ describe('SettingsService', () => {
       const listener = vi.fn();
       const watching = service.watch(listener);
       try {
-        // A directory watcher arms asynchronously, and macOS may report a save
-        // written in the same turn as one event naming the directory, which
-        // the watcher ignores. Space the arming saves out until one is heard —
+        // A directory watcher arms asynchronously. Space distinct arming saves
+        // out until one is heard (same-value setters do not write) —
         // for as long as vi.waitFor would wait, since a loaded machine can take
         // past a second to arm it — then forget those calls: the counts below
         // are the saves under test.
         for (let attempt = 0; attempt < 100 && listener.mock.calls.length === 0; attempt++) {
-          new SettingsService(tempFile).setEnabledRunners(['opencode']);
+          new SettingsService(tempFile).setEnabledRunners(attempt % 2 === 0 ? ['opencode'] : ['opencode', 'codex']);
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
         expect(listener).toHaveBeenCalled();
