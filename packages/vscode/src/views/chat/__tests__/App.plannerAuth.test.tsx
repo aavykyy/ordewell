@@ -192,17 +192,34 @@ describe('a signed-out planner', () => {
     expect(login.title).toBe('Signing in to Claude Code');
   });
 
-  it('flags the signed-out active planner in the collapsed Settings summary too', () => {
+  it('flags the signed-out active planner inline in the collapsed Settings row, with no summary line', () => {
     post({ type: 'setPlannerBackends', backends: [signedOutClaude], provider: 'claude-code', runner: 'claude-code' });
     const toggle = [...document.querySelectorAll<HTMLButtonElement>('.setup-panel-toggle')]
       .find((b) => b.textContent?.includes('Settings'))!;
 
     fireEvent.click(toggle);
 
-    const summary = document.querySelector('.setup-panel-summary');
-    expect(summary?.querySelector('.planner-auth-dot')).not.toBeNull();
-    expect(summary?.textContent).toContain('not logged in:');
-    expect(summary?.textContent).toContain('Claude Code');
+    expect(toggle.textContent).not.toMatch(/\d+ runners?/);
+    expect(toggle.querySelector('.setup-panel-summary')).toBeNull();
+    const dot = toggle.querySelector('.setup-panel-toggle-row .planner-auth-dot');
+    expect(dot?.getAttribute('aria-hidden')).toBe('true');
+    expect(toggle.querySelector('.setup-panel-toggle-row .visually-hidden')?.textContent)
+      .toBe('not logged in: Claude Code');
+    expect(toggle.title).toBe('Claude Code is not logged in — open Settings to sign in');
+  });
+
+  it('keeps the collapsed Settings row to its label when the planner is signed in', () => {
+    post({ type: 'setPlannerBackends', backends: [signedInClaude], provider: 'claude-code', runner: 'claude-code' });
+    const toggle = [...document.querySelectorAll<HTMLButtonElement>('.setup-panel-toggle')]
+      .find((b) => b.textContent?.includes('Settings'))!;
+
+    fireEvent.click(toggle);
+
+    expect(toggle.textContent).not.toMatch(/\d+ runners?/);
+    expect(toggle.querySelector('.planner-auth-dot')).toBeNull();
+    expect(toggle.querySelector('.setup-panel-summary')).toBeNull();
+    expect(toggle.querySelector('.visually-hidden')).toBeNull();
+    expect(toggle.title).toBe('Expand settings');
   });
 
   it('signs in a signed-out pill without switching the planner to it', () => {

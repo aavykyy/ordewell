@@ -991,9 +991,10 @@ body.vscode-high-contrast-light .disclosure:hover {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
   width: 100%;
-  padding: 10px 10px;
+  /* One row now, so the band matches the plan-dock bar's weight; the open
+     state's inset rule still draws over the header's own bottom edge. */
+  padding: 8px 10px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
@@ -1068,12 +1069,10 @@ body.vscode-high-contrast-light .disclosure:hover {
   letter-spacing: normal;
 }
 
-/* The collapsed panel still says the active planner is signed out: the same
-   dot the pill uses, inline so the summary keeps its ellipsis. */
-.setup-panel-summary .planner-auth-dot {
-  display: inline-block;
-  margin-right: 5px;
-  vertical-align: middle;
+/* A signed-out planner rides in the Settings row as the same red dot its pill
+   carries: the row's own gap supplies the spacing. */
+.setup-panel-toggle-row .planner-auth-dot {
+  display: block;
 }
 
 .setup-panel-body {
