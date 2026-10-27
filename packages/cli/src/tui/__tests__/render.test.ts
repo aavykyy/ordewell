@@ -327,6 +327,48 @@ describe('signed-out planners', () => {
     }
   });
 
+  it('paints the selected planner\'s value red while its agent is signed out', () => {
+    style.enabled = true;
+    try {
+      const out = screen({
+        ...DETECTED, cols: 80, plannerProvider: 'claude-code', orchestratorModel: 'opus', plannerEffort: 'high',
+        models: [
+          { id: 'opus', label: 'Opus', provider: 'anthropic', runners: ['claude-code'], variants: [{ id: 'low', label: 'Low' }, { id: 'high', label: 'High effort' }] },
+        ],
+        runners: [claude('signed-out', ['claude', 'auth', 'login'])],
+      });
+      const row = out.find((l) => stripAnsi(l).trimStart().startsWith('Planner'));
+      expect(row).toBeDefined();
+      expect(row!).toContain('\x1b[31mClaude Code\x1b[0m');
+      expect(row!).toContain('\x1b[31mopus\x1b[0m');
+      expect(row!).toContain('\x1b[31mHigh effort\x1b[0m');
+      // The separators stay grey: it is one planner value, not three warnings.
+      expect(row!).toContain('\x1b[90m · \x1b[0m');
+      expect(width(row!)).toBeLessThanOrEqual(80);
+    } finally {
+      style.enabled = false;
+    }
+  });
+
+  it('leaves the selected planner\'s value plain when it is signed in, unknown, has no login, or is a vendor', () => {
+    style.enabled = true;
+    try {
+      const cases: Partial<TuiState>[] = [
+        { ...DETECTED, plannerProvider: 'claude-code', orchestratorModel: 'opus', runners: [claude('signed-in', ['claude', 'auth', 'login'])] },
+        { ...DETECTED, plannerProvider: 'claude-code', orchestratorModel: 'opus', runners: [claude('unknown', ['claude', 'auth', 'login'])] },
+        { ...DETECTED, plannerProvider: 'claude-code', orchestratorModel: 'opus', runners: [claude('signed-out')] },
+        { ...DETECTED, plannerProvider: 'openrouter', orchestratorModel: 'x/y', configuredProviders: ['openrouter'] },
+      ];
+      for (const over of cases) {
+        const row = screen({ cols: 80, ...over }).find((l) => stripAnsi(l).trimStart().startsWith('Planner'));
+        expect(row).toBeDefined();
+        expect(row!).not.toContain('\x1b[31m');
+      }
+    } finally {
+      style.enabled = false;
+    }
+  });
+
   it('keeps the Runners row inside a narrow pane', () => {
     style.enabled = true;
     try {

@@ -75,7 +75,7 @@ is synchronous and one daemon may serve workspaces whose accounts differ
 
 | Surface | The flag | Signing in |
 |---|---|---|
-| TUI | a red welcome line per signed-out agent, the active planner first, and the red name of every signed-out runner its Runners row shows; the planner picker row reads `not logged in · /login claude-code` and stays selectable | `/login` for the active planner, `/login <runner>` by id or display label |
+| TUI | a red welcome line per signed-out agent, the active planner first, and the red name of every signed-out runner its Runners row shows; the selected planner's value in the Setup block is red, and so is the confirmation notice of a pick, while its agent is signed out; the planner picker row reads `not logged in · /login claude-code` and stays selectable | `/login` for the active planner, `/login <runner>` by id or display label |
 | VS Code | a red dot and a **Log in** segment on every signed-out pill, planner or runner; the empty state lists one row per signed-out agent, the active planner first, each with its own action | that pill's or row's button, for the active planner or for another installed agent |
 
 The welcome's line names the command that fixes the agent in hand: `Claude Code
@@ -89,8 +89,9 @@ command gets no line and no button, since there is no way in to name.
 Both surfaces flag every agent whose own status says signed out, not only the
 one planning, because any of them can be signed in without moving the planner.
 The TUI keeps the row in the picker — auth never gates usability — and flags
-the agent twice in the welcome: a red line per signed-out agent, and that
-agent's name in red in the Runners row whenever the row lists it. VS
+the agent in the welcome: a red line per signed-out agent, that agent's name in
+red in the Runners row whenever the row lists it, and the Setup block's planner
+value red while it is the planner in hand. VS
 Code keeps the pill beside the others and marks it: the same action sits in the
 Settings panel's Planner and Runners blocks and as a row in the empty state, and
 none of those depends on the empty state being gone or on the pill being the
@@ -262,3 +263,6 @@ art for the TTL and the refresh trigger.
   agent and paints its Runners names red, VS Code's login is an always-present
   segment of every signed-out pill and one row per agent in the empty state, and
   the refusal drops "is".
+- 2026-10-27 — the TUI paints the selected planner's Setup value red while its
+  agent is signed out, and confirms a signed-out pick at error level instead of
+  as a plain notice.

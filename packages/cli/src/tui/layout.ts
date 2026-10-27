@@ -4,7 +4,7 @@ import { cursorInLines, type CursorPosition } from './editor';
 import { assignmentFlagText, checkpointCardLines, conversationLines, tokenLine } from './blocks';
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
-import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, scriptTaskView, selectedPlanRow, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, scriptTaskView, selectedPlanRow, signedOutWithLogin, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
 import { SUPERVISOR_LEVEL_LABEL, type DiscoveredModel } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
@@ -818,15 +818,6 @@ function isolationPreviewLines(state: TuiState, cols: number): string[] {
 }
 
 /**
- * Only a runner's own signed-out verdict, with a way in, raises an alarm:
- * `unknown` must never read as one, and a verdict without a login command has
- * nowhere to send the user (ADR-0052).
- */
-function signedOutWithLogin(row: TuiState['runners'][number]): boolean {
-  return row.auth?.state === 'signed-out' && (row.auth.loginCommand?.length ?? 0) > 0;
-}
-
-/**
  * One red line per signed-out agent, the active planner first so the row under
  * the workspace names the command that fixes the plan at hand. A named login
  * leaves the planner alone, so every other agent names its own `/login <id>`.
@@ -844,6 +835,20 @@ function signedOutPlannerLines(state: TuiState, cols: number): string[] {
     ));
 }
 
+/**
+ * The planner's value in the Setup block: harness, model and effort. A planner
+ * whose own agent says the user is signed out is painted red whole, the same
+ * alarm its Runners row carries (ADR-0052); signed in, unknown or vendor stays
+ * as it was.
+ */
+function plannerRowValue(state: TuiState, label: string): string {
+  const alarm = state.runners.find((row) => row.id === runnerForProvider(state.plannerProvider));
+  const paint = alarm && signedOutWithLogin(alarm) ? style.red : (text: string) => text;
+  const effort = plannerEffortLabel(state);
+  const model = state.orchestratorModel ? paint(state.orchestratorModel) : style.yellow('no model');
+  return [paint(label), model, ...(effort ? [paint(effort)] : [])].join(style.grey(' · '));
+}
+
 /** `rows` is the pane the welcome is painted into. */
 function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
   const planner = plannerSetup(state);
@@ -857,8 +862,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
   const plannerValue = detecting
     ? style.grey(DETECTING)
     : planner.ready
-      ? [planner.label, state.orchestratorModel || style.yellow('no model'), plannerEffortLabel(state)]
-        .filter(Boolean).join(style.grey(' · '))
+      ? plannerRowValue(state, planner.label)
       : style.yellow(planner.label === 'not set' ? 'not set' : `${planner.label} (unavailable)`);
 
   const prompt = wrap(style.bold('Describe a goal to start planning.'), Math.max(1, cols - 1));

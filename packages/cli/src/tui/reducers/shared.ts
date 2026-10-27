@@ -17,8 +17,8 @@ export type Effect =
   /** Send now in the planner chat (ADR-0023, F5): stop the turn in flight and answer `message` next. */
   | { type: 'forceSendPlannerMessage'; sessionId: string; message: string }
   | { type: 'setPlanner'; provider: string }
-  /** `/planner`'s three answers at once, so the daemon never holds a provider with the old backend's model. */
-  | { type: 'setPlannerChoice'; provider: string; modelId: string; effort: string; notice: string }
+  /** `/planner`'s three answers at once, so the daemon never holds a provider with the old backend's model. `noticeLevel` reddens the confirmation while that agent's own login is missing (ADR-0052). */
+  | { type: 'setPlannerChoice'; provider: string; modelId: string; effort: string; notice: string; noticeLevel?: 'error' }
   | { type: 'setApiKey'; provider: string; key: string }
   | { type: 'setAllowlist'; runner: string; modelIds: string[] }
   | { type: 'setRunnerEnabled'; runner: string; enabled: boolean }
