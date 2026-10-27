@@ -9,7 +9,7 @@ start during planning.
 This README describes 0.11.0. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
-![Ordewell in VS Code: a goal typed into the panel becomes a plan with a runner and model on each task, three tasks run in parallel, and the supervisor reports on the result (sped up in places)](https://raw.githubusercontent.com/ordewell/ordewell/main/assets/readme/vscode-panel-loop.gif)
+![A goal becomes a plan of three task cards for Claude Code, Codex and OpenCode, which run in parallel and come together in a diff for review before merging.](https://raw.githubusercontent.com/ordewell/ordewell/main/assets/readme/workflow.svg)
 
 ## Features
 
