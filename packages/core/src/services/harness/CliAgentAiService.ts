@@ -1,4 +1,4 @@
-import { spawnAttached } from './ordewellBinding';
+import { McpAttachError, McpAttachTimeout, spawnAttached } from './ordewellBinding';
 import { spawn as nodeSpawn } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -833,10 +833,22 @@ export class CliAgentAiService implements IAiService {
    * `thread/resume`'s `config.web_search` either way (checked live). The
    * native-shell setting is the same kind of spawn-time decision (ADR-0036
    * N1), so a change reopens the process too.
+   *
+   * Also restarted when it no longer reaches Ordewell's tools (ADR-0025). The
+   * attach check was the spawn's, but the link is the process's for its whole
+   * life: an idle rebuild, a revoked token or an MCP client that gave up can
+   * leave a live process planning without `edit_plan`, `list_runners` or any
+   * other tool, and nothing else looks again. A lost link is taken back and
+   * respawned with a fresh token, resuming the conversation, so the turn is
+   * never sent to tools that are gone.
    */
   private async ensureAdapter(session: PlannerSession): Promise<AgentAdapter> {
     const live = session.adapter;
-    if (live && !live.exited && session.nativeSearch === this.nativeSearch(session) && session.nativeShell === this.nativeShellOffered(session)) return live;
+    if (live && !live.exited && session.nativeSearch === this.nativeSearch(session) && session.nativeShell === this.nativeShellOffered(session)) {
+      // A Stop during the check takes the process back; it must not be handed
+      // to the turn it was stopped for.
+      if (await this.stillAttached(live) && session.adapter === live && !live.exited) return live;
+    }
     session.stop();
     const start = session.start;
     if (!start) throw new Error('No active planner conversation.');
@@ -852,6 +864,11 @@ export class CliAgentAiService implements IAiService {
       }
       return adapter;
     } catch (err) {
+      // A failed attach is not a failed resume: the runner refused Ordewell's
+      // server, and its own two-attempt message is the one to show. The
+      // conversation stays, so the next message tries a fresh process rather
+      // than replaying the whole transcript over a server that may be back.
+      if (err instanceof McpAttachError || err instanceof McpAttachTimeout) throw err;
       if (!resumeSessionId || session.discarded.aborted) throw err;
       // Kept, the conversation would ask for the same refused session on
       // every message. Dropped, the next one replays the transcript into a
@@ -859,6 +876,22 @@ export class CliAgentAiService implements IAiService {
       if (this.session === session) this.session = null;
       session.discard();
       throw new Error(`The ${this.runner} planner's session could not be resumed (${err instanceof Error ? err.message : String(err)}). Send your message again: the planner picks the conversation up from its transcript.`);
+    }
+  }
+
+  /**
+   * Whether a live planner still offers Ordewell's tools, as its runner
+   * reports it (ADR-0022, S4). A report that could not be read counts as lost:
+   * a respawn is cheap next to a turn planned against tools that are gone.
+   * Absent only on an adapter the spawn path already refused.
+   */
+  private async stillAttached(adapter: AgentAdapter): Promise<boolean> {
+    if (!adapter.mcpAttached) return true;
+    try {
+      const report = await adapter.mcpAttached();
+      return report === true || report === 'connected';
+    } catch {
+      return false;
     }
   }
 

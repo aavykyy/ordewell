@@ -22,13 +22,15 @@ on PATH. Keeping the obsolete path no longer serves a supported runner.
 `codex` and `opencode`. Ordewell's MCP tools must be connected for every
 coding-agent session, both task runners and coding-agent planners.**
 
-- Check the runner's MCP attach state after spawn, before sending its task or
-  planning prompt. If attachment fails, dispose the process and its token and
-  respawn once with a fresh token. A task whose runner stays alive and still
-  reports `pending` is held with that reason after the wait's generous cap,
-  not failed, so its dependents stay on the plan; a runner that reports the
+- Check the runner's MCP attach state after spawn, and a coding-agent planner's
+  again before every turn. If attachment fails, dispose the process and its
+  token and respawn once with a fresh token; a planner respawn resumes the
+  conversation from its native session id. A task whose runner stays alive and
+  still reports `pending` is held with that reason after the wait's generous
+  cap, not failed, so its dependents stay on the plan; a runner that reports the
   server `failed` still fails the task. A coding-agent planner turn fails
-  either way. Never send the prompt without tools.
+  either way, and a planner that cannot be re-attached fails its turn without
+  the prompt being sent. Never send the prompt without tools.
 - Completion evidence is only a `task_complete` call bound to the attempt's
   token. `VerdictEngine` checks the current generation; only `done` passes.
   `blocked` and `failed` end without a pass and carry a reason. A process exit,
@@ -210,3 +212,4 @@ tmux; the TUI remains unverified on native Windows (ADR-0010).
 - 2026-10-17 — ADR-0007 folded in under Considered options; D1 and D2, the two rules other ADRs cited to it, are Key properties here (D2 was its T7).
 - 2026-10-21 — a task whose runner never reports the server connected is held with a reason instead of failed, while a `failed` report still fails it; a planner turn fails either way.
 - 2026-10-25 — the VS Code control reads "Open chat", not "Open log".
+- 2026-10-27 — a coding-agent planner's attach is checked before every turn, not only after spawn: a live process whose tools are gone is respawned once on a fresh token and resumed, and a turn that cannot re-attach fails without being sent.

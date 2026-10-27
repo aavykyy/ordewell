@@ -60,6 +60,30 @@ export interface McpCredential {
 }
 
 /**
+ * Why the server refused a request before any tool ran, kept apart in the
+ * count so a planner that lost its link can be told from one that never had
+ * one: an unknown token is a stale URL or a client that was never issued one,
+ * a revoked token is a session that ended or a process that was respawned, and
+ * a wrong path is a client pointed somewhere other than `/mcp`.
+ */
+export type McpRefusal = 'unknownToken' | 'revokedToken' | 'wrongPath';
+
+/**
+ * How many revoked tokens are remembered so one is told apart from a token
+ * that never existed. A daemon runs for days and revokes one per attempt;
+ * beyond this many, an old one is counted as unknown instead of holding every
+ * token it ever issued.
+ */
+const REVOKED_TOKENS_KEPT = 1024;
+
+/** What a refusal says in the log. Never the token. */
+const REFUSAL_TEXT: Record<McpRefusal, string> = {
+  unknownToken: 'unknown token',
+  revokedToken: 'revoked token — its session ended or its process was respawned',
+  wrongPath: `wrong path (the server serves ${ORDEWELL_MCP_PATH} only)`,
+};
+
+/**
  * A token's calls in flight, by request id. Stateless, a caller's
  * cancellation arrives as a request of its own, which finds the call it names
  * only here; a reused id cancels every call of the token that carries it.
@@ -72,6 +96,9 @@ type Grant =
 
 export class OrdewellMcpServer {
   private readonly grants = new Map<string, Grant>();
+  /** Recently revoked tokens, so a request carrying one is told from a token that never existed. */
+  private readonly revokedTokens = new Set<string>();
+  private readonly refused: Record<McpRefusal, number> = { unknownToken: 0, revokedToken: 0, wrongPath: 0 };
   private http: Server | undefined;
   private listening: Promise<string> | undefined;
   private boundUrl: string | undefined;
@@ -85,6 +112,15 @@ export class OrdewellMcpServer {
   /** The listener's URL, once the first token has started it. */
   get url(): string | undefined {
     return this.boundUrl;
+  }
+
+  /**
+   * How many requests this server refused, by reason, since it started. What
+   * makes a planner whose tools went dead visible after the fact; no token,
+   * path or header is kept here.
+   */
+  refusals(): Readonly<Record<McpRefusal, number>> {
+    return { ...this.refused };
   }
 
   async issueTaskToken(scope: TaskTokenScope, handler: TaskToolHandler = {}): Promise<McpCredential> {
@@ -108,11 +144,19 @@ export class OrdewellMcpServer {
     const grant = this.grants.get(token);
     if (!grant) return;
     this.grants.delete(token);
+    this.revokedTokens.add(token);
+    if (this.revokedTokens.size > REVOKED_TOKENS_KEPT) {
+      const oldest = this.revokedTokens.values().next();
+      if (!oldest.done) this.revokedTokens.delete(oldest.value);
+    }
     grant.revoked.abort();
   }
 
   async dispose(): Promise<void> {
     for (const token of [...this.grants.keys()]) this.revoke(token);
+    // Nothing can connect once the listener closes, so the diagnostic history
+    // is not worth holding every token the server ever issued for.
+    this.revokedTokens.clear();
     const http = this.http;
     this.http = undefined;
     this.listening = undefined;
@@ -172,11 +216,11 @@ export class OrdewellMcpServer {
     const token = extractPresentedToken({ authorization: req.headers.authorization });
     const grant = token === undefined ? undefined : this.grants.get(token);
     if (!grant) {
-      reply(res, 401, 'Unauthorized');
+      this.refuse(res, token !== undefined && this.revokedTokens.has(token) ? 'revokedToken' : 'unknownToken', 401, 'Unauthorized');
       return;
     }
     if (new URL(req.url ?? '/', `http://${this.boundHost}`).pathname !== ORDEWELL_MCP_PATH) {
-      reply(res, 404, 'Not found');
+      this.refuse(res, 'wrongPath', 404, 'Not found');
       return;
     }
 
@@ -192,6 +236,13 @@ export class OrdewellMcpServer {
     });
     await mcp.connect(transport);
     await transport.handleRequest(req, res);
+  }
+
+  /** Count one refusal, and say the first of its kind once: a runner retrying a dead token must not flood the log. */
+  private refuse(res: ServerResponse, reason: McpRefusal, status: number, message: string): void {
+    this.refused[reason] += 1;
+    if (this.refused[reason] === 1) console.warn(`[ordewell-mcp] refused a request: ${REFUSAL_TEXT[reason]}`);
+    reply(res, status, message);
   }
 }
 
