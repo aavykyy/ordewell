@@ -158,6 +158,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     persistState: persist,
     saveCurrentSession: saveSession,
     sendRunSettings,
+    refreshPlannerState: () => planner.sendState(),
     log,
   };
 
@@ -553,6 +554,10 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     services.context.subscriptions.push(vscodeApi.workspace.onDidChangeWorkspaceFolders(() => {
       sendSkills();
       refreshIsolationPreview({ clear: true });
+      // The new folder can select another account (ADR-0016): ask again and
+      // redraw the flags rather than keep the previous folder's verdict.
+      services.runnerInstallation.refresh();
+      void planner.sendState().catch((err) => log(`Planner state refresh failed: ${err instanceof Error ? err.message : String(err)}`));
     }));
 
     await discovery.refresh();

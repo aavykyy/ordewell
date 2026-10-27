@@ -356,6 +356,8 @@ const PENDING_CONTRAST = ['.pending-message-text', '.pending-message-state', '.s
 async function checkContrast(page, label, selectors) {
   for (const sel of selectors) {
     const ratio = await contrastRatio(page, sel);
+    // Several scenarios pass a superset of the selectors they draw, so an
+    // absent one is skipped rather than failed.
     if (ratio === null) continue;
     check(ratio >= 4.5, `contrast ${label} ${sel}: ${ratio.toFixed(2)}:1 (WCAG AA text needs 4.5:1)`);
   }
@@ -1001,6 +1003,8 @@ async function signedOutPlanner(width, theme) {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   check(await page.locator(`${row('claude-code')} .planner-login-spinner`).evaluate((el) => getComputedStyle(el).animationName) === 'none',
     `planner-auth ${label}: reduced motion stops the spinner`);
+  check((await plannerLogin('claude-code').innerText()).includes('Signing in…'),
+    `planner-auth ${label}: reduced motion leaves the capsule's pending words visible (${JSON.stringify(await plannerLogin('claude-code').innerText())})`);
   const paused = await page.evaluate(() => {
     const durations = (sel) => getComputedStyle(document.querySelector(sel)).transitionDuration.split(',').map((d) => d.trim());
     return { group: durations('.planner-pill-group.signed-out'), login: durations('.planner-pill-login') };
@@ -1188,10 +1192,10 @@ async function firstScreen(width, theme) {
   });
   check(Math.abs(column.card.x - column.setup.x) <= 0.5 && Math.abs(column.card.w - column.setup.w) <= 0.5,
     `first-screen ${label}: the card shares the setup column's edge and width (${column.card.x}/${column.card.w} vs ${column.setup.x}/${column.setup.w})`);
-  check(column.rows.every((x) => Math.abs(x - column.rows[0]) <= 0.5),
+  check(column.rows.length > 0 && column.rows.every((x) => Math.abs(x - column.rows[0]) <= 0.5),
     `first-screen ${label}: every repo row starts on one left edge (${column.rows.join(', ')})`);
   const inside = column.card.right - 15; // the card's 1px border and 14px padding
-  check(column.parts.every((p) => p.left >= column.card.x + 14 - 0.5 && p.right <= inside + 0.5),
+  check(column.parts.length > 0 && column.parts.every((p) => p.left >= column.card.x + 14 - 0.5 && p.right <= inside + 0.5),
     `first-screen ${label}: every repo part stays inside the card's padding (${column.parts.map((p) => `${p.left}→${p.right}`).join(', ')} in ${column.card.x}→${inside})`);
 
   const hero = await page.evaluate(() => {
@@ -1279,13 +1283,13 @@ async function firstScreen(width, theme) {
     const card = document.querySelector('.isolation-notice').getBoundingClientRect();
     const parts = [...document.querySelectorAll('.isolation-repo-name, .isolation-repo-head, .isolation-repo-commit')];
     return {
-      ok: parts.every((el) => el.getBoundingClientRect().left >= card.left + 14 - 0.5
+      ok: parts.length > 0 && parts.every((el) => el.getBoundingClientRect().left >= card.left + 14 - 0.5
         && el.getBoundingClientRect().right <= card.right - 15 + 0.5),
       names: [...document.querySelectorAll('.isolation-repo-name')].map((el) => getComputedStyle(el).fontFamily),
     };
   });
   check(wrapped.ok, `first-screen ${label}: long paths and branches wrap inside the card`);
-  check(wrapped.names.every((f) => /mono|Menlo|Monaco|Courier/i.test(f)),
+  check(wrapped.names.length > 0 && wrapped.names.every((f) => /mono|Menlo|Monaco|Courier/i.test(f)),
     `first-screen ${label}: a group's repository paths are set in mono (${wrapped.names.join(' | ')})`);
   await checkContrast(page, `first-screen ${label}`, [
     '.isolation-notice[data-status="dirty"] .isolation-notice-summary', '.isolation-repo-flag',
@@ -1382,7 +1386,21 @@ async function runSettingsSegments(width, theme) {
   const selectedLabel = await paintRatio(page,
     { selector: '.run-setting-pills > .planner-pill[aria-pressed="true"]', prop: 'color' },
     '.run-setting-pills > .planner-pill[aria-pressed="true"]');
-  if (selectedLabel) console.log(`    selected label ${selectedLabel.fg} on ${selectedLabel.bg} · ${selectedLabel.ratio.toFixed(2)}:1`);
+  if (selectedLabel) {
+    console.log(`    selected label ${selectedLabel.fg} on ${selectedLabel.bg} · ${selectedLabel.ratio.toFixed(2)}:1`);
+    check(selectedLabel.ratio >= 4.5,
+      `run-settings ${label}: the selected segment's label clears AA (${selectedLabel.fg} on ${selectedLabel.bg} · ${selectedLabel.ratio.toFixed(2)}:1)`);
+  }
+
+  // A selected segment is filled with the accent, so its focus ring must not
+  // be the same colour as that fill.
+  const selectedRing = await page.locator('.run-setting-pills > .planner-pill.active').first().evaluate((el) => {
+    el.focus({ focusVisible: true });
+    const s = getComputedStyle(el);
+    return { outline: s.outlineColor, fill: s.backgroundColor, width: s.outlineWidth, visible: el.matches(':focus-visible') };
+  });
+  check(selectedRing.visible && parseFloat(selectedRing.width) >= 2 && selectedRing.outline !== selectedRing.fill,
+    `run-settings ${label}: the selected segment's focus ring stands off its fill (${selectedRing.outline} on ${selectedRing.fill})`);
 
   await page.screenshot({ path: path.join(OUT, `run-settings-${width}-${theme}.png`) });
   await page.close();

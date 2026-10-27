@@ -457,6 +457,7 @@ describe('transcript', () => {
   describe('setup rows', () => {
     const claude = {
       ...DETECTED,
+      runSettingsKnown: true,
       plannerProvider: 'claude-code',
       orchestratorModel: 'opus',
       runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }],

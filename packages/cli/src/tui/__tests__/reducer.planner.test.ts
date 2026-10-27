@@ -101,6 +101,12 @@ describe('/planner', () => {
     expect(ids).toContain('codex');
   });
 
+  it('names the agents to install when nothing can plan', () => {
+    const { state } = run('/planner', { ...ready, runners: [], configuredProviders: [] });
+
+    expect(stepperOf(state).items[0]?.detail).toContain('Claude Code, Codex or OpenCode');
+  });
+
   const saved = (provider: string, modelId: string, effort: string, notice: string, noticeLevel?: 'error') =>
     ({ type: 'setPlannerChoice', provider, modelId, effort, notice, ...(noticeLevel ? { noticeLevel } : {}) });
 

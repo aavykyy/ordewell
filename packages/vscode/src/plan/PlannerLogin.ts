@@ -10,6 +10,7 @@ const CLOSED_MESSAGE = 'The terminal closed before sign-in finished.';
 const TIMEOUT_MESSAGE = 'Sign-in did not finish in time.';
 const TERMINAL_FAILED_MESSAGE = 'The login terminal could not be opened.';
 const TERMINAL_LOST_MESSAGE = 'The login terminal stopped before sign-in finished.';
+const PROBE_FAILED_MESSAGE = "The sign-in could not be checked: the agent's status probe failed.";
 
 export interface PlannerLoginDeps {
   runnerInstallation: Pick<RunnerInstallation, 'plannerUsability' | 'refresh'>;
@@ -46,7 +47,7 @@ const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(
  * than an injection: PowerShell takes a doubled quote inside single quotes, a
  * POSIX shell a closed-then-escaped one.
  */
-export function shellQuote(arg: string): string {
+function shellQuote(arg: string): string {
   if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg)) return arg;
   if (process.platform === 'win32') return `'${arg.replace(/'/g, "''")}'`;
   return `'${arg.replace(/'/g, `'\\''`)}'`;
@@ -75,13 +76,38 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
   // login Ordewell may run.
   const manifest = runner === undefined ? undefined : deps.runnerRegistry.getManifest(runner);
   if (!runner || !manifest) {
-    deps.log?.(`Ignored a login for the unknown coding agent "${runnerId ?? deps.config.aiProvider}".`);
+    if (runnerId !== undefined) {
+      deps.log?.(`Ignored a login for the unknown coding agent "${runnerId}".`);
+      return;
+    }
+    // The active planner is a vendor: `/login` has nothing to hand a terminal.
+    const message = 'The active planner is not a coding agent; there is no login to run.';
+    deps.post({ type: 'plannerLoginEnded', ok: false, message });
+    deps.notifications.info(message);
     return;
   }
 
   const label = manifest.displayName;
-  const auth = (await deps.runnerInstallation.plannerUsability(runner)).auth;
-  const command = auth?.loginCommand ?? [];
+  let usability: Awaited<ReturnType<PlannerLoginDeps['runnerInstallation']['plannerUsability']>>;
+  try {
+    usability = await deps.runnerInstallation.plannerUsability(runner);
+  } catch (err) {
+    // A webview clears its pending button only on `plannerLoginEnded`; a throw
+    // here would leave it waiting until a reload.
+    deps.log?.(`The ${label} status probe failed before login: ${err instanceof Error ? err.message : String(err)}`);
+    deps.post({ type: 'plannerLoginEnded', runner, ok: false, message: PROBE_FAILED_MESSAGE });
+    deps.notifications.warn(`Ordewell could not check the ${label} login. ${PROBE_FAILED_MESSAGE}`);
+    return;
+  }
+  if (!usability.usable) {
+    // The CLI exists but cannot be spawned (a Windows `.cmd` shim, for one).
+    // Saying it has no login would be false: the reason is the real answer.
+    const message = usability.reason ?? `${label} is not usable as a planner.`;
+    deps.post({ type: 'plannerLoginEnded', runner, ok: false, message });
+    deps.notifications.info(message);
+    return;
+  }
+  const command = usability.auth?.loginCommand ?? [];
   if (command.length === 0) {
     // Nothing to run: say so, and still close the surface's pending state.
     const message = `Ordewell has no login for ${label}.`;
@@ -145,6 +171,7 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
     terminal.sendText(commandLine(command));
 
     let signedIn = false;
+    let probeFailed = false;
     while (!closed && terminal.exitStatus === undefined && now() < deadline) {
       await sleep(pollMs);
       // Closed while we waited: the attempt is over, and polling a terminal
@@ -153,18 +180,27 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
       // Refresh before every look: a cached verdict would hide a login that
       // finished within the last half minute.
       deps.runnerInstallation.refresh();
-      if ((await deps.runnerInstallation.plannerUsability(runner)).auth?.state === 'signed-in') {
-        signedIn = true;
+      try {
+        if ((await deps.runnerInstallation.plannerUsability(runner)).auth?.state === 'signed-in') {
+          signedIn = true;
+          break;
+        }
+      } catch (err) {
+        // The terminal is still open; only the status probe failed.
+        deps.log?.(`The ${label} status probe failed during login: ${err instanceof Error ? err.message : String(err)}`);
+        probeFailed = true;
         break;
       }
     }
     outcome = signedIn
       ? { ok: true }
-      : { ok: false, message: closed || terminal.exitStatus !== undefined ? CLOSED_MESSAGE : TIMEOUT_MESSAGE };
+      : probeFailed
+        ? { ok: false, message: PROBE_FAILED_MESSAGE }
+        : { ok: false, message: closed || terminal.exitStatus !== undefined ? CLOSED_MESSAGE : TIMEOUT_MESSAGE };
   } catch (err) {
-    // A terminal disposed between create and send (or a poll that throws) must
-    // still end the attempt: the webview clears its pending button only on
-    // `plannerLoginEnded`, and would leave it disabled until a reload.
+    // A terminal disposed between create and send must still end the attempt:
+    // the webview clears its pending button only on `plannerLoginEnded`, and
+    // would leave it disabled until a reload.
     deps.log?.(`The ${label} login terminal failed: ${err instanceof Error ? err.message : String(err)}`);
     outcome = { ok: false, message: TERMINAL_LOST_MESSAGE };
   } finally {

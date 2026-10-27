@@ -264,6 +264,8 @@ describe('a compaction after a login done outside the extension', () => {
       }),
     };
     const { deps, session, chatProvider, persistState } = setup({ runnerInstallation: installation });
+    const refreshPlannerState = vi.fn(async () => {});
+    deps.refreshPlannerState = refreshPlannerState;
     // The Session's own gate, synchronous and reading the recorded verdict.
     session.compactConversation.mockImplementation(async () => {
       if (recordedRunnerAuth('claude-code', '/ws')?.state === 'signed-out') {
@@ -274,7 +276,7 @@ describe('a compaction after a login done outside the extension', () => {
       }
       return { summary: 'the summary', keptMessages: 4 };
     });
-    return { deps, session, chatProvider, persistState, installation };
+    return { deps, session, chatProvider, persistState, installation, refreshPlannerState };
   }
 
   it('re-probes before condensing, so a login made with the runner\'s own command starts it', async () => {
@@ -288,6 +290,8 @@ describe('a compaction after a login done outside the extension', () => {
     expect(h.session.compactConversation).toHaveBeenCalledTimes(1);
     expect(h.chatProvider.showError).not.toHaveBeenCalled();
     expect(h.persistState).toHaveBeenCalledTimes(1);
+    // The pill and empty state stop offering a login the gate just accepted.
+    expect(h.refreshPlannerState).toHaveBeenCalledTimes(1);
   });
 
   it('still refuses to condense when the account is genuinely signed out', async () => {
@@ -301,6 +305,7 @@ describe('a compaction after a login done outside the extension', () => {
     expect(h.session.compactConversation).toHaveBeenCalledTimes(1);
     expect(h.chatProvider.showError).toHaveBeenCalledWith(expect.stringContaining('Claude Code not logged in'));
     expect(h.persistState).not.toHaveBeenCalled();
+    expect(h.refreshPlannerState).not.toHaveBeenCalled();
   });
 });
 

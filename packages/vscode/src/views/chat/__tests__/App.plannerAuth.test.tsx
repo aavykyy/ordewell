@@ -223,6 +223,22 @@ describe('a signed-out planner', () => {
     expect(pill().className).toContain('active');
   });
 
+  it('keeps each agent\'s login pending while another agent\'s starts', () => {
+    post({ type: 'setPlannerBackends', backends: [signedOutClaude, signedOutCodex], provider: 'claude-code', runner: 'claude-code' });
+
+    fireEvent.click(plannerLogin('Claude Code')!);
+    expect(plannerLogin('Claude Code')).toBeDisabled();
+
+    fireEvent.click(plannerLogin('Codex')!);
+    expect(plannerLogin('Claude Code')).toBeDisabled();
+    expect(plannerLogin('Codex')).toBeDisabled();
+
+    // Only the agent whose login ended comes back.
+    post({ type: 'plannerLoginEnded', runner: 'claude-code', ok: true });
+    expect(plannerLogin('Claude Code')).not.toBeDisabled();
+    expect(plannerLogin('Codex')).toBeDisabled();
+  });
+
   it('offers the agent login in the menu while the empty state shows and after, posting the same runner', () => {
     post({ type: 'setPlannerBackends', backends: [signedOutClaude], provider: 'claude-code', runner: 'claude-code' });
     expect(authRow('claude-code')).not.toBeNull();

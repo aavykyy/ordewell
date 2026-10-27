@@ -49,7 +49,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // The login probe must ask the same account the planner will use, so it
     // reads the workspace's .envrc/.ordewell/env exactly as a spawn does (ADR-0016).
     const runnerInstallation = new RunnerInstallation(runnerRegistry, undefined, undefined, {
-      env: () => workspaceEnvOf(fsAdapter.getWorkspaceRoot()),
+      env: (workspace) => workspaceEnvOf(workspace ?? fsAdapter.getWorkspaceRoot()),
       // The extension's session gates on this workspace's account, so the
       // verdict is recorded under it (ADR-0009).
       workspace: () => fsAdapter.getWorkspaceRoot(),

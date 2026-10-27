@@ -23,6 +23,18 @@ export function fail(...lines: string[]): never {
 }
 
 /**
+ * A failed turn's terminal-UI guidance said in the shell's own commands. The
+ * daemon cannot know which surface is asking, so it words a signed-out turn
+ * with `/login`; a shell has no such command ([ADR-0052](../../../../docs/adr/routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)).
+ */
+export function headlessSignedOut(message: string): string {
+  return message.replace(
+    /^(.+?) not logged in\. Sign in with \/login, or run (.+?) and try again\.$/m,
+    '$1 not logged in. Run $2 to sign in, then try again.',
+  );
+}
+
+/**
  * A planner refusal said in the shell's own commands, or null for any other
  * error. The daemon words it for the terminal UI, whose slash commands a shell
  * does not have, and sends the reason as data so a client can re-word it.

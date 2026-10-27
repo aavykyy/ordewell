@@ -1,4 +1,5 @@
 import { CLI_PROVIDERS, getProviderMeta, plannerBackendEntries, runnerForProvider, type PlannerUsability } from '@ordewell/core';
+import { runnerNamesOr } from '../../runnerNames';
 import { dependencyCandidates } from '@ordewell/core/plan-utils';
 import { findTask, titledRefFor, type ModelView, type PickerItem, type PickerState, type TuiState } from '../state';
 import { effortsForTask, modelsForRunner, modelsForTask, modesForTask } from '../taskAssignment';
@@ -225,8 +226,9 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
  * nothing can plan (ADR-0009).
  */
 export function plannerItems(state: TuiState): PickerItem[] {
-  // The daemon's runner list is the TUI's only preflight: an installed runner
-  // is usable, an absent one is dropped from the offered set.
+  // The daemon's runner list is the TUI's only preflight: it holds the
+  // installed and usable runners, and an absent one is dropped from the
+  // offered set (ADR-0009).
   const installed = new Map(state.runners.map((runner) => [runner.id, runner]));
   const usability: Record<string, PlannerUsability> = {};
   for (const id of CLI_PROVIDERS) {
@@ -239,7 +241,7 @@ export function plannerItems(state: TuiState): PickerItem[] {
 
   const offered = plannerBackendEntries(usability, state.configuredProviders).filter((entry) => entry.usable);
   if (offered.length === 0) {
-    return [{ id: '', label: 'No planner available', detail: 'install a coding agent or add a key with /key', disabled: true }];
+    return [{ id: '', label: 'No planner available', detail: `install a coding agent (${runnerNamesOr()}) or add a key with /key`, disabled: true }];
   }
   const items: PickerItem[] = offered.map((entry) => {
     // A signed-out agent stays offered — auth never gates usability — but the

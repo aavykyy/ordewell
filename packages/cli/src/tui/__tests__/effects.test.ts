@@ -135,6 +135,14 @@ describe('planning', () => {
     expect(h.api.sendConversationMessage).toHaveBeenCalledWith('s1', 'add streaming');
   });
 
+  it('reloads the runner list after a planner turn, so a login made outside the TUI clears the flag', async () => {
+    const h = harness();
+
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'carry on' }, h.deps);
+
+    expect(h.api.getRunners).toHaveBeenCalled();
+  });
+
   it('passes the turn\'s messages to the reducer as they came, one action each', async () => {
     const step = {
       id: 'rs-1', tool: 'bash', args: '{"command":"rm -rf /"}', result: 'Command refused: writes are the runners\' job.',
@@ -1065,7 +1073,13 @@ describe('runner login', () => {
     });
     h.api.getRunners.mockImplementation(async () => {
       order.push('runners');
-      return { runners: [], orchestratorModel: '' };
+      return {
+        runners: [{
+          id: 'claude-code', name: 'Claude Code', enabled: true,
+          auth: { state: 'signed-in' as const, loginCommand: ['claude', 'auth', 'login'] },
+        }],
+        orchestratorModel: '',
+      };
     });
 
     await runEffect(loginEffect, h.deps);
@@ -1077,7 +1091,7 @@ describe('runner login', () => {
     expect(messageOf(h.actions, 'notice')).toBe('Claude Code is signed in.');
   });
 
-  it('reloads the runners after a failed login too, and reports the message the login gave', async () => {
+  it('reloads the runners after a failed login too, and reports the message the login gave as context', async () => {
     const h = harness({}, {
       login: vi.fn(async () => ({ ok: false, message: 'claude exited with status 1 without finishing the login.' })),
     });
@@ -1085,7 +1099,8 @@ describe('runner login', () => {
     await runEffect(loginEffect, h.deps);
 
     expect(h.api.getRunners).toHaveBeenCalled();
-    expect(messageOf(h.actions, 'notice')).toBe('claude exited with status 1 without finishing the login.');
+    expect(messageOf(h.actions, 'notice')).toContain('Could not confirm that Claude Code is signed in');
+    expect(messageOf(h.actions, 'notice')).toContain('claude exited with status 1 without finishing the login.');
   });
 
   it('names the agent when a failed login gave no message', async () => {
@@ -1093,7 +1108,25 @@ describe('runner login', () => {
 
     await runEffect(loginEffect, h.deps);
 
-    expect(messageOf(h.actions, 'notice')).toBe('Claude Code did not finish signing in.');
+    expect(messageOf(h.actions, 'notice')).toBe('Could not confirm that Claude Code is signed in: the login did not finish');
+  });
+
+  it('believes a fresh signed-in verdict even when the child exited non-zero', async () => {
+    // The child's exit is not the runner's verdict, in either direction: a
+    // login that reports a failure can still leave the account signed in.
+    const h = harness({
+      getRunners: vi.fn().mockResolvedValue({
+        runners: [{
+          id: 'claude-code', name: 'Claude Code', enabled: true,
+          auth: { state: 'signed-in', loginCommand: ['claude', 'auth', 'login'] },
+        }],
+        orchestratorModel: '',
+      }),
+    }, { login: vi.fn(async () => ({ ok: false, message: 'claude exited with status 1' })) });
+
+    await runEffect(loginEffect, h.deps);
+
+    expect(messageOf(h.actions, 'notice')).toBe('Claude Code is signed in.');
   });
 
   it('fails the effect when the login throws, so the runtime restores the terminal', async () => {
@@ -1117,7 +1150,7 @@ describe('runner login', () => {
     await runEffect(loginEffect, h.deps);
 
     expect(login).toHaveBeenCalledTimes(1);
-    expect(messageOf(h.actions, 'notice')).toContain('Claude Code is signed in.');
+    expect(messageOf(h.actions, 'notice')).toContain('Could not confirm that Claude Code is signed in.');
     expect(messageOf(h.actions, 'notice')).toContain('could not be refreshed');
   });
 

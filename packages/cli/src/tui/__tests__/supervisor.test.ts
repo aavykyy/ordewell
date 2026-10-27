@@ -16,7 +16,7 @@ const frame = (state: TuiState): string => render(state).join('\n');
 
 const task: TaskView = { id: 't1', order: 1, title: 'Build', type: 'ai', status: 'in_progress', dependencies: [] };
 const plan = (over: Partial<TuiState> = {}): TuiState =>
-  initialState({ sessionId: 's1', rows: 40, cols: 120, focus: 'plan', tasks: [task], ...over });
+  initialState({ sessionId: 's1', rows: 40, cols: 120, focus: 'plan', tasks: [task], runSettingsKnown: true, ...over });
 /** The user's run settings as the daemon answered them (ADR-0030). */
 const loaded = (state: TuiState, run: Partial<GlobalRunSettings>): TuiState =>
   apply(state, { type: 'settingsLoaded', settings: { run: { ...RUN_SETTINGS_DEFAULTS, ...run } } }).state;

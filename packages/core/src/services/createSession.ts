@@ -2382,6 +2382,11 @@ export class Session {
     if (adopting) this.turns.restoreResend();
     this.goal = goal;
     this.workspace = workspace;
+    // A saved session is reopened after closing: it starts from the file, not
+    // the copy this window's previous session left behind (ADR-0030).
+    if (adopting && opts?.sessionId) {
+      this.runSettingsValue = { ...RUN_SETTINGS_DEFAULTS, ...(this.settingsFn().run ?? {}) };
+    }
     // Every plan-shape migration lives in one place (models/Task.ts); this load
     // only calls it. A saved pause is reset before the orchestrator clones the
     // tasks, so its copy is idle too.

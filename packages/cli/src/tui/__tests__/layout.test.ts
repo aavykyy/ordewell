@@ -108,6 +108,24 @@ describe('welcome — plan approval', () => {
     expect(text).not.toContain('Autorun is on');
   });
 
+  it('does not show the outgoing session\'s Run values after a switch, until the new read lands', () => {
+    const onA = welcome(true, {
+      sessionId: 'a',
+      runSettings: { ...chatState(0).runSettings, supervisorLevel: 'act' },
+    });
+    const onB = reduce(onA, { type: 'sessionLoaded', sessionId: 'b', goal: 'other' }).state;
+
+    expect(plain(onB)).not.toContain('supervisor Act');
+    expect(plain(onB)).not.toContain('autorun on');
+    expect(plain(onB)).toContain('Run');
+    expect(plain(onB)).toContain('…');
+
+    // The status badge makes the same claim away from the welcome.
+    const inPlan = { ...onB, tasks: tasks(1) };
+    expect(plain(inPlan)).not.toContain('supervisor Act');
+    expect(plain(inPlan)).toContain('run settings …');
+  });
+
   it('wraps in a narrow pane without losing the words', () => {
     const text = plain(welcome(true, { cols: 40, rows: 40 })).replace(/\s+/g, ' ');
     expect(text).toContain('A plan starts as soon as the planner submits it');

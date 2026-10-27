@@ -82,6 +82,10 @@ export class RunSupervision {
   private readonly guards = new SupervisionMemory();
   /** The run's handoff went out marked as an Act supervisor's, and is owed unmarked unless it merges. */
   private handoffDeferred = false;
+  /** A run is under way: only then is there a record for the user's change to reach (ADR-0030). */
+  private running = false;
+  /** The user changed a run setting after the last run ended: the next supervisor call reads their copy, not the finished run's. */
+  private changedAfterRun = false;
 
   constructor(private readonly host: RunSupervisionHost, options: SupervisorOptions = {}) {
     this.supervisor = new Supervisor({
@@ -132,6 +136,8 @@ export class RunSupervision {
       };
       this.guards.forget();
     }
+    this.running = true;
+    this.changedAfterRun = false;
     this.supervisor.runStarted(continued);
   }
 
@@ -146,6 +152,14 @@ export class RunSupervision {
     const settings = this.settings();
     if (!settings) return;
     const level = changes.supervisorLevel;
+    if (!this.running) {
+      // The run is over: its saved record keeps what it used. A lower level
+      // still releases a handoff deferred to the supervisor; the next run
+      // copies the session's new values (ADR-0030).
+      this.changedAfterRun = true;
+      if (level !== undefined && level !== 'act') this.handOver();
+      return;
+    }
     if (level !== undefined && (level !== (settings.supervisorLevel ?? 'off') || settings.unsupervised !== undefined)) {
       settings.supervisorLevel = level;
       delete settings.unsupervised;
@@ -229,6 +243,7 @@ export class RunSupervision {
    * and a live planner is told of that nowhere else (ADR-0029).
    */
   runFinished(): void {
+    this.running = false;
     // A skip of a body task stops its loop and settles nothing.
     this.reportStoppedLoops(repeatingChecks([...this.host.tasks()]));
     const { total, completed, failed, blocked, skipped } = executionSummary(flattenTasks([...this.host.tasks()]));
@@ -305,6 +320,8 @@ export class RunSupervision {
   reset(): void {
     this.supervisor.reset();
     this.handoffDeferred = false;
+    this.running = false;
+    this.changedAfterRun = false;
     this.guards.forget();
   }
 
@@ -314,7 +331,8 @@ export class RunSupervision {
 
   /** Retries an Act supervisor may make of one task (a loop guard), as the run holds them. */
   private retryLimit(): number {
-    return this.settings()?.supervisorRetryLimit ?? this.host.userSettings().supervisorRetryLimit;
+    const fromRun = this.changedAfterRun ? undefined : this.settings()?.supervisorRetryLimit;
+    return fromRun ?? this.host.userSettings().supervisorRetryLimit;
   }
 
   /**

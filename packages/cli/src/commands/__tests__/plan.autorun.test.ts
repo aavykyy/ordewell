@@ -34,7 +34,7 @@ describe('ordewell plan, once the planner has submitted the plan', () => {
   beforeEach(async () => { daemon = await liveDaemon(); });
   afterEach(async () => { await daemon.close(); });
 
-  async function plannedHeadless(): Promise<string> {
+  async function plannedHeadless(midTurn?: () => Promise<void>): Promise<string> {
     return printed(async () => {
       const planning = handlePlan(['--goal', 'Rate limiting', '--workspace', daemon.workspace], { api: daemon.client() });
       await vi.waitFor(() => expect(daemon.turns).toHaveLength(1));
@@ -42,6 +42,7 @@ describe('ordewell plan, once the planner has submitted the plan', () => {
         { title: 'Add the limiter', description: 'a token bucket', prompt: 'add the limiter', assignedRunner: 'claude-code', sliceType: 'AFK', autonomy: 'AFK' },
       ] }, toolContext);
       expect(submitted.isError, submitted.text).toBeFalsy();
+      await midTurn?.();
       daemon.turns[0].finish('Here is the plan.');
       await planning;
     });
@@ -65,5 +66,13 @@ describe('ordewell plan, once the planner has submitted the plan', () => {
 
     expect(out).toMatch(/Run 'ordewell run' to execute/);
     expect(out).not.toMatch(/Autorun/);
+  });
+
+  it("says autorun started it from this session's copy, though another surface turned the file off mid-turn", async () => {
+    await daemon.client().updateRunSettings({ autorun: true });
+
+    const out = await plannedHeadless(async () => { await daemon.client().updateRunSettings({ autorun: false }); });
+
+    expect(out).toMatch(/Autorun started the plan/);
   });
 });

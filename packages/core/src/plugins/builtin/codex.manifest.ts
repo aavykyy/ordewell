@@ -11,11 +11,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Whether the selected `model_provider` carries a credential of its own, so
- * `codex login status` saying "Not logged in" is not this user's answer. That
- * command only knows the credentials Codex itself stores; a custom provider
- * (Azure, an enterprise gateway, Bedrock) authenticates with an environment
- * key, environment headers or an auth helper declared in config.toml.
+ * Whether `codex login status` saying "Not logged in" is not this user's
+ * answer. That command only knows the credentials Codex itself stores. Codex
+ * authenticates some working setups another way: `OPENAI_API_KEY` on the
+ * default provider, or any custom `model_provider` that does not delegate to
+ * Codex's login (Azure, an enterprise gateway, a credential-less local server).
  *
  * Read from the probe's own environment, not `process.env`: a workspace can
  * point `CODEX_HOME` or `HOME` at another account (ADR-0016). Real codex
@@ -23,7 +23,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * unset — an empty one counts as unset — so the fallback walks the probe's
  * HOME, not the daemon's.
  */
-function providerHasOwnCredential(env: NodeJS.ProcessEnv): boolean {
+function statusCannotJudgeLogin(env: NodeJS.ProcessEnv): boolean {
+  if (env.OPENAI_API_KEY) return true;
   let config: Record<string, unknown>;
   try {
     const home = env.CODEX_HOME ? resolve(env.CODEX_HOME) : join(env.HOME ?? homedir(), '.codex');
@@ -38,14 +39,7 @@ function providerHasOwnCredential(env: NodeJS.ProcessEnv): boolean {
   if (!provider) return false;
   // This provider delegates to Codex's own login, which is what the status
   // command asked about, so its answer stands.
-  if (provider.requires_openai_auth === true) return false;
-  return (
-    (typeof provider.env_key === 'string' && provider.env_key.length > 0) ||
-    (isRecord(provider.env_http_headers) && Object.keys(provider.env_http_headers).length > 0) ||
-    isRecord(provider.auth) ||
-    isRecord(provider.aws) ||
-    (typeof provider.experimental_bearer_token === 'string' && provider.experimental_bearer_token.length > 0)
-  );
+  return provider.requires_openai_auth !== true;
 }
 
 export const CODEX_MANIFEST: RunnerManifest = {
@@ -119,13 +113,13 @@ export const CODEX_MANIFEST: RunnerManifest = {
     // a clean exit is the only other answer it gives. Anchored to its own line:
     // a failure can quote another tool that is not logged in.
     signedOut: NOT_LOGGED_IN,
-    // But it only knows the credentials Codex stores itself. A custom
-    // `model_provider` with its own key is not signed out in any sense this
-    // command can see, so leave that answer unknown rather than wall it.
+    // But it only knows the credentials Codex stores itself. A key or a custom
+    // provider that authenticates another way is not signed out in any sense
+    // this command can see, so leave that answer unknown rather than wall it.
     read: ({ output, code, env }) => {
       if (code === 0) return 'signed-in';
       if (!NOT_LOGGED_IN.test(output)) return null;
-      return providerHasOwnCredential(env) ? null : 'signed-out';
+      return statusCannotJudgeLogin(env) ? null : 'signed-out';
     },
   },
 

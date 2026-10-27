@@ -706,6 +706,9 @@ const SETUP_VALUE_COLS = 32;
 
 /** The run settings (ADR-0030), the settings that let Ordewell act unasked drawn as a warning. */
 function runSettingsValue(state: TuiState): string {
+  // After a switch the previous session's values are not this one's; say
+  // nothing rather than paint a guess until its own read lands.
+  if (!state.runSettingsKnown) return style.grey('…');
   const { supervisorLevel, mergeAtGatesAutomatically, autorun } = state.runSettings;
   const level = `supervisor ${SUPERVISOR_LEVEL_LABEL[supervisorLevel]}`;
   return [

@@ -108,10 +108,10 @@ export default function App() {
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
   const [setupCollapsed, setSetupCollapsed] = useState(false);
   const [runExpanded, setRunExpanded] = useState(false);
-  /** The coding agent whose login is running, by runner id: only its action waits. */
-  const [pendingLogin, setPendingLogin] = useState<string | null>(null);
-  /** The last login that did not finish, and why: shown inline on the row or pill that asked. */
-  const [loginFailure, setLoginFailure] = useState<{ runner: string; message: string } | null>(null);
+  /** The coding agent whose login is running, by runner id: each action waits on its own. */
+  const [pendingLogin, setPendingLogin] = useState<Record<string, true>>({});
+  /** Each login that did not finish and why, by runner id: shown inline on the row or pill that asked. */
+  const [loginFailure, setLoginFailure] = useState<Record<string, string>>({});
 
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const dockBodyRef = useRef<HTMLDivElement>(null);
@@ -158,8 +158,22 @@ export default function App() {
       // The login is this surface's own state, not the session's: it ends here
       // rather than in the reducer that mirrors the host.
       if (msg.type === 'plannerLoginEnded') {
-        setPendingLogin((current) => (msg.runner === undefined || msg.runner === current ? null : current));
-        setLoginFailure(msg.ok ? null : { runner: msg.runner ?? '', message: msg.message ?? 'Sign-in did not finish.' });
+        // Each agent's login is its own: one ending neither clears another's
+        // pending action nor overwrites its failure.
+        setPendingLogin((current) => {
+          if (msg.runner === undefined) return {};
+          const next = { ...current };
+          delete next[msg.runner];
+          return next;
+        });
+        setLoginFailure((current) => {
+          if (msg.ok) {
+            const next = { ...current };
+            if (msg.runner !== undefined) delete next[msg.runner];
+            return next;
+          }
+          return { ...current, [msg.runner ?? '']: msg.message ?? 'Sign-in did not finish.' };
+        });
         return;
       }
       dispatch({ ...msg, now: Date.now() });
@@ -657,8 +671,12 @@ export default function App() {
 
   /** A pill's own action: that agent's login, without switching the planner to it. */
   const handleRunnerLogin = useCallback((runner: string) => {
-    setLoginFailure(null);
-    setPendingLogin(runner);
+    setLoginFailure((current) => {
+      const next = { ...current };
+      delete next[runner];
+      return next;
+    });
+    setPendingLogin((current) => ({ ...current, [runner]: true }));
     vscode.postMessage({ type: 'loginPlanner', runner });
   }, []);
 
@@ -676,8 +694,8 @@ export default function App() {
           id: b.id,
           runner,
           label: b.label,
-          pending: pendingLogin === runner,
-          failure: loginFailure?.runner === runner ? loginFailure.message : undefined,
+          pending: Boolean(pendingLogin[runner]),
+          failure: loginFailure[runner],
           ...(b.auth?.loginCommand?.length ? { onLogIn: () => handleRunnerLogin(runner) } : {}),
         };
       });
@@ -901,7 +919,7 @@ export default function App() {
               <div className="planner-backends">
                 {offeredBackends.map((b) => {
                   const runnerId = b.runner ?? b.id;
-                  const signingIn = pendingLogin === runnerId;
+                  const signingIn = Boolean(pendingLogin[runnerId]);
                   const signedOut = b.auth?.state === 'signed-out';
                   // The login is this agent's own and never selects the planner
                   // (ADR-0009); it stays offered here even while the empty state
@@ -931,8 +949,8 @@ export default function App() {
                       </span>
                       {canLogIn && (
                         <span className="planner-pill-failure-slot">
-                          {!signingIn && loginFailure?.runner === runnerId && (
-                            <span className="planner-pill-login-failure" role="status" title={loginFailure.message}>{loginFailure.message}</span>
+                          {!signingIn && loginFailure[runnerId] !== undefined && (
+                            <span className="planner-pill-login-failure" role="status" title={loginFailure[runnerId]}>{loginFailure[runnerId]}</span>
                           )}
                         </span>
                       )}
@@ -989,7 +1007,7 @@ export default function App() {
               const last = on && runners.length === 1;
               const auth = runnerAuth[r.id];
               const signedOut = auth?.state === 'signed-out';
-              const signingIn = pendingLogin === r.id;
+              const signingIn = Boolean(pendingLogin[r.id]);
               // A login never switches the runner on or off: it only signs that
               // agent in, exactly as the planner pill beside it does.
               const canLogIn = signedOut && (auth?.loginCommand?.length ?? 0) > 0;
@@ -1021,8 +1039,8 @@ export default function App() {
                   </span>
                   {canLogIn && (
                     <span className="planner-pill-failure-slot runner-pill-failure-slot">
-                      {!signingIn && loginFailure?.runner === r.id && (
-                        <span className="planner-pill-login-failure runner-pill-login-failure" role="status" title={loginFailure.message}>{loginFailure.message}</span>
+                      {!signingIn && loginFailure[r.id] !== undefined && (
+                        <span className="planner-pill-login-failure runner-pill-login-failure" role="status" title={loginFailure[r.id]}>{loginFailure[r.id]}</span>
                       )}
                     </span>
                   )}

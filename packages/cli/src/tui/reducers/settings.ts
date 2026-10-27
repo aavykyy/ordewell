@@ -33,7 +33,7 @@ const supervisorOff = (_state: TuiState, choices: StepChoices): boolean => choic
 export const SETTINGS: StepperDefinition = {
   title: 'Settings',
   afterSave: 'stay',
-  hint: 'Saved for this run and every later one. Each choice is saved when you press enter.',
+  hint: 'Supervisor, automerge and autorun apply to this session; your last change is the default for new ones. Autonomy and Parallel tasks apply to every session.',
   steps: [
     {
       id: 'autonomy',
@@ -141,7 +141,7 @@ function saveChoices(state: TuiState, choices: StepChoices): Step {
       kind: 'confirm',
       title: 'Save this setting?',
       message: effect.message,
-      note: `${risks.join('\n')}\nIt applies to this session's run now, and to every later run.`,
+      note: `${risks.join('\n')}\nIt applies to this session's run now, and is the default for new ones.`,
       action: { kind: 'save-settings', effect, ...(state.overlay?.kind === 'stepper' ? { menu: state.overlay.stepper } : {}) },
     },
   });

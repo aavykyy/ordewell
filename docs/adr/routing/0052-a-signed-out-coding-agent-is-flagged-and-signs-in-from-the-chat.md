@@ -43,7 +43,7 @@ declare:
 | Runner | Status | Login | Signed-out answer |
 |---|---|---|---|
 | Claude Code | `claude auth status` | `claude auth login` | its JSON `authMethod: none`; an older CLI's prose stays unknown |
-| Codex | `codex login status` | `codex login` | "Not logged in" and exit 1, unless the selected provider holds its own credential |
+| Codex | `codex login status` | `codex login` | "Not logged in" and exit 1, unless `OPENAI_API_KEY` is set or the selected provider does not sign in through Codex itself |
 | OpenCode | — | — | none declared, so always unknown |
 
 `readRunnerAuth` runs the status args over the same augmented PATH and the
@@ -55,9 +55,9 @@ runner's short wording, never its output. The verdict is `signed-in`,
 throwing reader or a manifest with no spec is `unknown`.
 
 Only `signed-out`, and only with a login command available, flags or blocks an
-agent. `unknown` neither flags nor blocks: an older or offline CLI, a custom
-provider with its own key, or an answer no reader can judge must not cost the
-user work that will succeed.
+agent. `unknown` neither flags nor blocks: an older or offline CLI, an API-key or
+custom-provider setup Codex can use without its stored login, or an answer no
+reader can judge must not cost the user work that will succeed.
 
 ### Where the verdict lives
 
@@ -266,3 +266,6 @@ art for the TTL and the refresh trigger.
 - 2026-10-27 — the TUI paints the selected planner's Setup value red while its
   agent is signed out, and confirms a signed-out pick at error level instead of
   as a plain notice.
+- 2026-10-27 — Codex's status answer is only the user's when the setup signs in
+  through Codex itself: `OPENAI_API_KEY` or a custom provider that does not
+  delegate to that login leaves it unknown.

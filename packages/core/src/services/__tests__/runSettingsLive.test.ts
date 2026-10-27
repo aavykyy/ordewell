@@ -63,6 +63,38 @@ describe('the session\'s own run settings', () => {
     expect(session.runSettings()).toMatchObject({ supervisorLevel: 'watch', autorun: true });
   });
 
+  it('reopens a saved session from the file, not the copy the window kept for its previous one', () => {
+    // Loading a session from history is reopening it after closing (ADR-0030).
+    const saved: GlobalRunSettings = { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'watch', autorun: true };
+    const session = makeSession({ settings: () => ({ run: saved }) });
+    saved.supervisorLevel = 'act';
+    saved.autorun = false;
+
+    session.loadPlan(plan([task('t1', 1)]), 'build it', testWorkspace, { sessionId: 'saved-session', persist: false });
+
+    expect(session.runSettings()).toMatchObject({ supervisorLevel: 'act', autorun: false });
+  });
+
+  it('leaves a finished run\'s record and transcript alone when a setting changes before the next run', () => {
+    // The next run copies the session's new values, but the saved record of
+    // the run that already happened must keep saying what it used.
+    const session = makeSession();
+    session.loadPlan(plan([task('t1', 1)], { runSettings: {
+      supervisorLevel: 'act',
+      mergeAtGatesAutomatically: true,
+      supervisorRetryLimit: 4,
+      wakeUpReadBudget: 7,
+    } }), 'build it', testWorkspace);
+    const transcript = session.planState!.conversationHistory?.length ?? 0;
+
+    session.applyRunSettings({ mergeAtGatesAutomatically: false, supervisorRetryLimit: 1 });
+
+    expect(session.planState!.runSettings).toMatchObject({ mergeAtGatesAutomatically: true, supervisorRetryLimit: 4 });
+    expect(saves(session).mock.calls.at(-1)![0].runSettings).toMatchObject({ mergeAtGatesAutomatically: true, supervisorRetryLimit: 4 });
+    expect(session.planState!.conversationHistory).toHaveLength(transcript);
+    expect(session.runSettings()).toMatchObject({ mergeAtGatesAutomatically: false, supervisorRetryLimit: 1 });
+  });
+
   it('ignores a field a client sends that is not a run setting', () => {
     const session = makeSession();
     const before = session.runSettings();

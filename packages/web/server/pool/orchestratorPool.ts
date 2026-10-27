@@ -720,11 +720,14 @@ export class OrchestratorPool {
     // The auth verdict rides along, never gating the list: a signed-out agent
     // is installed and offered, and a surface flags it. The probe was just
     // asked above and its answer is cached, so this costs no second spawn.
-    return Promise.all(
+    // Its `usable` does gate: an installed CLI that cannot be spawned (a
+    // Windows `.cmd` shim) must not be offered (ADR-0009).
+    const rows = await Promise.all(
       runners
         .filter((p) => installedIds.has(p.manifest.name))
-        .map(async (p) => {
-          const { auth } = await installation.plannerUsability(p.manifest.name);
+        .map(async (p): Promise<RunnersResponse['runners'][number] | null> => {
+          const { usable, auth } = await installation.plannerUsability(p.manifest.name);
+          if (!usable) return null;
           return {
             id: p.manifest.name,
             name: p.manifest.displayName,
@@ -733,6 +736,7 @@ export class OrchestratorPool {
           };
         }),
     );
+    return rows.filter((row): row is RunnersResponse['runners'][number] => row !== null);
   }
 
   async generatePlan(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<PlanState> {

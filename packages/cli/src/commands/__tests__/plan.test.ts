@@ -90,8 +90,30 @@ afterEach(() => {
   }
 });
 
-describe('handlePlan — a planner call whose reply never comes back', () => {
-  /** Takes the request, then drops the connection without answering: the outcome is the daemon's alone. */
+describe('handlePlan — a turn that fails signed out', () => {
+  it("rewords the terminal UI's /login sentence in the shell's own command", async () => {
+    const srv = await startServer((req, res) => {
+      if ((req.url || '').includes('/api/runners')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify(RUNNERS));
+      }
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Claude Code not logged in. Sign in with /login, or run claude auth login and try again.' }));
+    });
+    const { handlePlan } = await import('../plan');
+    const { stderr, exitCode } = await capture(() => handlePlan(
+      ['--goal', 'ship it', '--no-chat', '--workspace', '/tmp'],
+      { api: new ApiClient(srv.port) },
+    ));
+    srv.close();
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('Claude Code not logged in. Run claude auth login to sign in, then try again.');
+    expect(stderr).not.toContain('/login');
+  });
+});
+
+describe('handlePlan — a planner call whose reply never comes back', () => {  /** Takes the request, then drops the connection without answering: the outcome is the daemon's alone. */
   async function hangUpOn(fragment: string, hits: string[], answer: unknown = COMMITTED) {
     return startServer((req, res) => {
       const url = req.url || '';
