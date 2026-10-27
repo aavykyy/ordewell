@@ -75,12 +75,16 @@ export const CLAUDE_CODE_MANIFEST: RunnerManifest = {
     // Anchored to the whole phrase: a failure can quote another tool that is
     // not logged in, and that is not this runner's own verdict.
     signedOut: /not logged in\s*·\s*please run \/login/i,
-    // The status command prints JSON; an older CLI prints prose instead, which
-    // must stay unknown rather than claiming the user is signed out.
-    read: (output, code) => {
+    // The status command prints JSON on stdout; an older CLI prints prose
+    // instead, which must stay unknown rather than claiming the user is signed
+    // out. stderr is read only when stdout is empty: CLI warnings go there,
+    // and parsing the two streams as one document would hide a signed-out
+    // answer behind any warning beside it.
+    read: ({ stdout, stderr, code }) => {
       if (code === 0) return 'signed-in';
+      const answer = stdout.trim() || stderr.trim();
       try {
-        const parsed: unknown = JSON.parse(output.trim());
+        const parsed: unknown = JSON.parse(answer);
         if (parsed && typeof parsed === 'object' && (parsed as { authMethod?: unknown }).authMethod === 'none') return 'signed-out';
       } catch {
         // Not JSON: nothing here says why the command failed.

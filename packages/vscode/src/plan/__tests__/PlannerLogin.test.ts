@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { delimiter } from 'node:path';
 import { RunnerRegistry, type RunnerAuth } from '@ordewell/core';
 import { commandLine, loginPlanner, type PlannerLoginDeps } from '../PlannerLogin';
 
@@ -98,7 +99,7 @@ describe('loginPlanner', () => {
     expect(h.createTerminal).toHaveBeenCalledWith({
       name: 'Claude Code login',
       cwd: '/ws',
-      env: { CLAUDE_CONFIG_DIR: '/accounts/other' },
+      env: expect.objectContaining({ CLAUDE_CONFIG_DIR: '/accounts/other' }),
     });
     expect(h.terminal.shown).toBe(1);
     // The manifest's own argv, typed into the terminal exactly once.
@@ -108,6 +109,25 @@ describe('loginPlanner', () => {
     expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'claude-code', ok: true });
     expect(h.deps.notifications.info).toHaveBeenCalledWith('Signed in to Claude Code.');
     expect(h.deps.notifications.warn).not.toHaveBeenCalled();
+  });
+
+  it('opens the login terminal on the same augmented PATH the probe found the agent with', async () => {
+    // A GUI-launched extension host inherits a minimal PATH; the terminal the
+    // login runs in must see the directories the probe resolved, or the agent
+    // it just found is ENOENT in its own login.
+    const h = harness({ verdict: (probe) => (probe >= 3 ? { ...SIGNED_OUT_CLAUDE, state: 'signed-in' } : SIGNED_OUT_CLAUDE) });
+
+    await loginPlanner(h.deps);
+
+    const env = h.terminal.options.env as Record<string, string>;
+    const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
+    expect(env[pathKey]).toBeTruthy();
+    // Augmented, not merely inherited: every inherited directory survives (the
+    // resolver de-duplicates, so compare segments).
+    const segments = env[pathKey].split(delimiter);
+    for (const dir of (process.env.PATH ?? '').split(delimiter).filter(Boolean)) expect(segments).toContain(dir);
+    // The workspace's own account still rides along (ADR-0016).
+    expect(env.CLAUDE_CONFIG_DIR).toBe('/accounts/other');
   });
 
   it('signs in a named runner without making it the planner', async () => {

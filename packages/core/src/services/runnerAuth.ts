@@ -1,6 +1,6 @@
 import { execFile } from 'child_process';
 import { resolve } from 'path';
-import type { RunnerManifest, RunnerAuthSpec } from '../plugins/types';
+import type { RunnerManifest, RunnerAuthSpec, RunnerAuthStatus } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
 
 /**
@@ -43,15 +43,38 @@ export interface ReadRunnerAuthOptions {
 
 const AUTH_TIMEOUT_MS = 8000;
 
+/**
+ * `execFile`'s own timeout sends SIGTERM and then waits for the child and its
+ * pipes. A status command that ignores SIGTERM, or leaves a child holding the
+ * pipes, would keep the probe pending past its budget and stall the runner
+ * list and every turn that rechecks a signed-out planner. The hard timer
+ * answers `unknown` on the budget's own edge and kills what is left.
+ */
 const defaultExec: RunnerAuthExec = (command, args, options) =>
   new Promise((resolve) => {
-    execFile(command, args, { timeout: options.timeout, env: options.env, encoding: 'utf8' }, (err, stdout, stderr) => {
+    let settled = false;
+    const settle = (result: RunnerAuthExecResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const child = execFile(command, args, { timeout: options.timeout, env: options.env, encoding: 'utf8' }, (err, stdout, stderr) => {
       const raw = (err as { code?: unknown } | null)?.code;
       // A signal or a spawn failure has no numeric code; either way nothing
       // trustworthy came back, so it is not an exit status to read.
       const code = err ? (typeof raw === 'number' ? raw : -1) : 0;
-      resolve({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
+      settle({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
     });
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      // A pipe held open by a grandchild would keep execFile's callback
+      // waiting even after the kill, so close our ends and answer now.
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      settle({ code: -1, stdout: '', stderr: '' });
+    }, options.timeout);
+    timer.unref?.();
   });
 
 /**
@@ -66,8 +89,9 @@ export async function readRunnerAuth(manifest: RunnerManifest, options: ReadRunn
   const loginCommand = [command, ...spec.loginArgs];
 
   let answer: RunnerAuthExecResult;
+  let env: NodeJS.ProcessEnv;
   try {
-    const env = withPath(process.env, await augmentedPath(), options.env ?? {});
+    env = withPath(process.env, await augmentedPath(), options.env ?? {});
     answer = await (options.exec ?? defaultExec)(command, spec.statusArgs, {
       timeout: options.timeoutMs ?? AUTH_TIMEOUT_MS,
       env,
@@ -84,7 +108,7 @@ export async function readRunnerAuth(manifest: RunnerManifest, options: ReadRunn
   const output = `${answer.stdout}\n${answer.stderr}`;
   let state: 'signed-in' | 'signed-out' | null;
   try {
-    state = verdictOf(spec, output, answer.code);
+    state = verdictOf(spec, { ...answer, output, env });
   } catch {
     // A reader that cannot make sense of the output answered nothing.
     return { state: 'unknown', loginCommand };
@@ -108,7 +132,9 @@ export function signedOutFromFailure(manifest: RunnerManifest, message: string):
   if (!spec) return undefined;
   let state: 'signed-in' | 'signed-out' | null;
   try {
-    state = spec.signedOut?.test(message) ? 'signed-out' : verdictOf(spec, message, 1);
+    state = spec.signedOut?.test(message) ? 'signed-out' : verdictOf(spec, {
+      code: 1, stdout: message, stderr: '', output: message, env: process.env,
+    });
   } catch {
     return undefined;
   }
@@ -120,9 +146,9 @@ export function signedOutFromFailure(manifest: RunnerManifest, message: string):
   };
 }
 
-function verdictOf(spec: RunnerAuthSpec, output: string, code: number): 'signed-in' | 'signed-out' | null {
-  if (spec.read) return spec.read(output, code);
-  return verdictFromExit(spec, output, code);
+function verdictOf(spec: RunnerAuthSpec, answer: RunnerAuthStatus): 'signed-in' | 'signed-out' | null {
+  if (spec.read) return spec.read(answer);
+  return verdictFromExit(spec, answer.output, answer.code);
 }
 
 function verdictFromExit(spec: RunnerAuthSpec, output: string, code: number): 'signed-in' | 'signed-out' | null {

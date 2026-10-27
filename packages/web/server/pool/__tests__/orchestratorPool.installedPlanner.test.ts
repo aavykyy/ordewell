@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { delimiter, join, resolve } from 'path';
 import {
   CliAgentAiService, OpenAiService, Session, clearAugmentedPathCache, getProviderMeta, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PROVIDER_DETECT_PRIORITY,
-  RunnerInstallation, createTask, resetInstalledPlanner, resetRunnerAuth, saveSession, type ConversationTurn, type IRunner, type LegacyPlanState,
+  RunnerInstallation, createTask, recordedRunnerAuth, recordRunnerAuth, resetInstalledPlanner, resetRunnerAuth, saveSession, type ConversationTurn, type IRunner, type LegacyPlanState,
   type PlannerUsability, type RunnerSpawnOptions,
 } from '@ordewell/core';
 import { FakeRunnerSession } from '@ordewell/core/testing';
@@ -492,6 +492,96 @@ describe('OrchestratorPool default planner', () => {
       agentTransport();
 
       await expect(pool.startPlanning('s1', 'ship it', ['claude-code'], ws)).resolves.toBeDefined();
+    } finally {
+      pool.destroyAll();
+    }
+  });
+
+  /**
+   * A reply, a force send and a compaction are planner turns too. After a
+   * mid-conversation signed-out failure the refusal offers the runner's own
+   * login, which runs outside this process: every one of these paths must ask
+   * the account again instead of keeping the stale verdict until a runner-list
+   * refresh.
+   */
+  it('sees a login completed outside Ordewell before a reply, a force send and a compaction', async () => {
+    fakeClaudeAgent();
+    const account = accountDir('reply', true);
+    const ws = workspaceWithAccount('workspace-reply', account);
+    const pool = new OrchestratorPool({
+      codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
+    });
+    try {
+      resetRunnerAuth();
+      await pool.detectInstalledPlanner();
+      await pool.getInstalledRunners(ws);
+      agentTransport();
+      // The summary turn needs the tagged reply a harness planner answers with.
+      vi.spyOn(CliAgentAiService.prototype, 'continueConversation').mockImplementation(async (message: string) => ({
+        kind: 'message',
+        text: message.includes('<conversation_summary>')
+          ? '<conversation_summary>The database and its CSV export were decided.</conversation_summary>'
+          : 'Noted.',
+        researchLog: [],
+      }));
+      await pool.startPlanning('s1', 'ship it', ['claude-code'], ws);
+
+      const signedOut = { state: 'signed-out' as const, loginCommand: ['claude', 'auth', 'login'], detail: 'not logged in' };
+      // The failed turn recorded signed out; the runner's own login rewrites
+      // the account file, and no runner list has been read since.
+      const signInAgain = (): void => {
+        recordRunnerAuth('claude-code', signedOut, ws);
+        writeFileSync(`${account}.logged-in`, '');
+      };
+      signInAgain();
+      await expect(pool.continuePlanning('s1', 'Use Postgres')).resolves.toBeDefined();
+
+      signInAgain();
+      await expect(pool.forceSendPrompt('s1', 'Use SQLite instead')).resolves.toBeDefined();
+
+      await pool.continuePlanning('s1', 'And stream the export');
+      signInAgain();
+      await expect(pool.compactConversation('s1')).resolves.toMatchObject({
+        summary: 'The database and its CSV export were decided.',
+      });
+
+      // A paused compaction's retry is a planner turn too, and reads the same
+      // recorded verdict: it must see the login before the session gates it.
+      const session = pool.session('s1');
+      const retry = vi.spyOn(session, 'retryPlannerCompaction').mockImplementation(async () => {
+        expect(recordedRunnerAuth('claude-code', ws)?.state).toBe('signed-in');
+        return session.planState!;
+      });
+      signInAgain();
+      await pool.retryPlannerCompaction('s1');
+      expect(retry).toHaveBeenCalledTimes(1);
+    } finally {
+      pool.destroyAll();
+    }
+  });
+
+  it('still refuses those turns when the account is genuinely signed out', async () => {
+    fakeClaudeAgent();
+    const account = accountDir('reply-out', false);
+    const ws = workspaceWithAccount('workspace-reply-out', account);
+    const pool = new OrchestratorPool({
+      codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
+    });
+    try {
+      resetRunnerAuth();
+      await pool.detectInstalledPlanner();
+      await pool.getInstalledRunners(ws);
+      agentTransport();
+      // Start while signed in, so a live conversation exists to reply in.
+      writeFileSync(`${account}.logged-in`, '');
+      await pool.startPlanning('s1', 'ship it', ['claude-code'], ws);
+      // Logged out in another terminal: the next reads find that out.
+      rmSync(`${account}.logged-in`, { force: true });
+      recordRunnerAuth('claude-code', { state: 'signed-out', loginCommand: ['claude', 'auth', 'login'] }, ws);
+
+      await expect(pool.continuePlanning('s1', 'Use Postgres')).rejects.toBeInstanceOf(PlannerNotReadyError);
+      await expect(pool.forceSendPrompt('s1', 'Use SQLite instead')).rejects.toBeInstanceOf(PlannerNotReadyError);
+      await expect(pool.compactConversation('s1')).rejects.toBeInstanceOf(PlannerNotReadyError);
     } finally {
       pool.destroyAll();
     }

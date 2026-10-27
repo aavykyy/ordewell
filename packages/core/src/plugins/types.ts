@@ -13,6 +13,18 @@ export interface RunnerManifest {
   auth?: RunnerAuthSpec;
 }
 
+/** What a runner's status command answered, with both streams kept apart. */
+export interface RunnerAuthStatus {
+  /** The exit status; never negative, since a timeout or a failed spawn is not an answer. */
+  code: number;
+  stdout: string;
+  stderr: string;
+  /** stdout and stderr together, for a reader that matches a line on either. */
+  output: string;
+  /** The merged probe environment, so a reader can consult the config the command read. */
+  env: NodeJS.ProcessEnv;
+}
+
 /**
  * A runner's own answer to "is the user signed in?" — the CLI args that ask,
  * the args that log in, and how to read the answer. Declared here because a
@@ -32,10 +44,11 @@ export interface RunnerAuthSpec {
   signedOut?: RegExp;
   /**
    * A runner-specific reader that overrides the exit-code/regex rule. `null`
-   * means the output answered nothing, which stays `unknown` rather than
-   * guessing from an exit code.
+   * means the answer said nothing about the login, which stays `unknown`
+   * rather than guessing from an exit code or from a line meant for another
+   * credential route.
    */
-  read?: (output: string, code: number) => 'signed-in' | 'signed-out' | null;
+  read?: (answer: RunnerAuthStatus) => 'signed-in' | 'signed-out' | null;
 }
 
 export interface RunnerFeatures {

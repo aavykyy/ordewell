@@ -1,6 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { plannerPreflightError, recheckSignedOutPlanner, type PlanManagerDeps } from '../PlanManager';
-import { getProviderMeta, PROVIDER_DETECT_PRIORITY, recordRunnerAuth, resetRunnerAuth, type PlannerBackendId } from '@ordewell/core';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import {
+  handleContinueConversation, handleSendMessageNow, plannerPreflightError, recheckSignedOutPlanner, type PlanManagerDeps,
+} from '../PlanManager';
+import {
+  getProviderMeta, PROVIDER_DETECT_PRIORITY, PlannerNotReadyError, recordRunnerAuth, recordedRunnerAuth, resetRunnerAuth,
+  type LegacyPlanState, type PlannerBackendId,
+} from '@ordewell/core';
 import { VsCodeConfig } from '../../adapters/VsCodeConfig';
 import { SecretStore } from '../../adapters/SecretStore';
 import { __setConfig, __resetConfig } from '../../test/vscode.mock';
@@ -154,5 +162,104 @@ describe('recheckSignedOutPlanner', () => {
     await recheckSignedOutPlanner(h.deps);
 
     expect(h.plannerUsability).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The reply and the force send are planner turns too, and the signed-out
+ * refusal's own way back — the runner's login — runs outside the extension
+ * host. Both must ask the workspace's account again before the session gate
+ * judges, or the user who just logged in stays refused until a runner list.
+ */
+describe('a turn after a login done outside the extension', () => {
+  const SIGNED_OUT = { state: 'signed-out' as const, loginCommand: ['claude', 'auth', 'login'], detail: 'not logged in' };
+  const SIGNED_IN = { state: 'signed-in' as const, loginCommand: ['claude', 'auth', 'login'] };
+  let workspace: string;
+
+  beforeEach(() => { workspace = mkdtempSync(join(tmpdir(), 'ordewell-vscode-recheck-')); });
+  afterEach(() => {
+    resetRunnerAuth();
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  function emptyPlan(): LegacyPlanState {
+    const now = new Date().toISOString();
+    return { tasks: [], generatedAt: now, status: 'draft', runners: ['claude-code'], lastUpdated: now };
+  }
+
+  function turnHost(options: { signsIn: boolean }) {
+    const installation = {
+      refresh: vi.fn(),
+      plannerUsability: vi.fn(async () => {
+        // What the re-probe records when the account was signed in since.
+        if (options.signsIn) recordRunnerAuth('claude-code', SIGNED_IN, workspace);
+        return { usable: true };
+      }),
+    };
+    // The Session's own gate, synchronous and reading the recorded verdict.
+    const gate = (): void => {
+      if (recordedRunnerAuth('claude-code', workspace)?.state !== 'signed-out') return;
+      throw new PlannerNotReadyError({
+        code: 'signed_out', provider: 'claude-code', label: 'Claude Code', runner: 'claude-code',
+        loginCommand: ['claude', 'auth', 'login'],
+      });
+    };
+    const session = {
+      sessionId: 's1',
+      continueConversation: vi.fn(async () => { gate(); return emptyPlan(); }),
+      forceSendPrompt: vi.fn(async () => { gate(); return emptyPlan(); }),
+    };
+    const chatProvider = { showError: vi.fn(), showPlan: vi.fn(), setState: vi.fn() };
+    const deps = {
+      session,
+      chatProvider,
+      config: config('claude-code', '', 'sonnet'),
+      fsAdapter: { getWorkspaceRoot: () => workspace },
+      runnerInstallation: installation,
+      getCurrentPlan: emptyPlan,
+      setCurrentPlan: vi.fn(),
+      getCurrentGoal: () => '',
+      setCurrentGoal: vi.fn(),
+      isGeneratingPlan: () => false,
+      persistState: vi.fn(),
+      saveCurrentSession: vi.fn(),
+      log: vi.fn(),
+    } as unknown as PlanManagerDeps;
+    return { installation, session, chatProvider, deps };
+  }
+
+  it('re-probes before a reply, so a login made with the runner\'s own command starts it', async () => {
+    recordRunnerAuth('claude-code', SIGNED_OUT, workspace);
+    const h = turnHost({ signsIn: true });
+
+    await handleContinueConversation('Use Postgres', h.deps);
+
+    expect(h.installation.refresh).toHaveBeenCalledTimes(1);
+    expect(h.installation.plannerUsability).toHaveBeenCalledWith('claude-code');
+    expect(h.session.continueConversation).toHaveBeenCalledWith('Use Postgres');
+    expect(h.chatProvider.showError).not.toHaveBeenCalled();
+  });
+
+  it('re-probes before a force send too', async () => {
+    recordRunnerAuth('claude-code', SIGNED_OUT, workspace);
+    const h = turnHost({ signsIn: true });
+
+    await handleSendMessageNow('Use SQLite instead', h.deps);
+
+    expect(h.installation.refresh).toHaveBeenCalledTimes(1);
+    expect(h.session.forceSendPrompt).toHaveBeenCalledWith('Use SQLite instead');
+    expect(h.chatProvider.showError).not.toHaveBeenCalled();
+  });
+
+  it('still refuses both when the account is genuinely signed out', async () => {
+    recordRunnerAuth('claude-code', SIGNED_OUT, workspace);
+    const h = turnHost({ signsIn: false });
+
+    await handleContinueConversation('Use Postgres', h.deps);
+    await handleSendMessageNow('Use SQLite instead', h.deps);
+
+    expect(h.chatProvider.showError).toHaveBeenCalledTimes(2);
+    expect(h.chatProvider.showError.mock.calls[0][0]).toContain('Claude Code is not logged in');
+    expect(h.chatProvider.showError.mock.calls[1][0]).toContain('Claude Code is not logged in');
   });
 });

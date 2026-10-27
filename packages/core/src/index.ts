@@ -295,7 +295,7 @@ export { removedPluginNotice } from './plugins/removedPluginNotice';
 export { resolveTaskRunnerFlags } from './plugins/resolveArgs';
 export { CLAUDE_CODE_MANIFEST } from './plugins/builtin/claude-code.manifest';
 export { OPENCODE_MANIFEST } from './plugins/builtin/opencode.manifest';
-export type { RunnerManifest, RunnerEntry, RunnerAuthSpec, RunnerFeatures, RunnerModelDiscovery, RunnerMode, DiscoveryCommand } from './plugins/types';
+export type { RunnerManifest, RunnerEntry, RunnerAuthSpec, RunnerAuthStatus, RunnerFeatures, RunnerModelDiscovery, RunnerMode, DiscoveryCommand } from './plugins/types';
 export * from './utils/fsHelpers';
 export * from './utils/stateStore';
 export * from './utils/sessionStore';

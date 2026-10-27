@@ -84,21 +84,21 @@ describe('login', () => {
   const opencode: RunnerView = { id: 'opencode', name: 'OpenCode', enabled: true, auth: { state: 'unknown' } };
 
   it("signs the active planner in through the command its manifest declares", () => {
-    const { state, effects } = run('/login', { plannerProvider: 'claude-code', runners: [claude] });
+    const { state, effects } = run('/login', { plannerProvider: 'claude-code', runners: [claude], runnersKnown: true });
 
     expect(effects).toEqual([{ type: 'plannerLogin', command: ['claude', 'login'], label: 'Claude Code' }]);
     expect(state.plannerProvider).toBe('claude-code');
   });
 
   it('signs in a named runner without making it the planner', () => {
-    const { state, effects } = run('/login codex', { plannerProvider: 'claude-code', runners: [claude, codex] });
+    const { state, effects } = run('/login codex', { plannerProvider: 'claude-code', runners: [claude, codex], runnersKnown: true });
 
     expect(effects).toEqual([{ type: 'plannerLogin', command: ['codex', 'login'], label: 'Codex' }]);
     expect(state.plannerProvider).toBe('claude-code');
   });
 
   it('matches a named runner by its display label too', () => {
-    const { effects } = run('/login Claude Code', { plannerProvider: 'codex', runners: [claude, codex] });
+    const { effects } = run('/login Claude Code', { plannerProvider: 'codex', runners: [claude, codex], runnersKnown: true });
 
     expect(effects).toEqual([{ type: 'plannerLogin', command: ['claude', 'login'], label: 'Claude Code' }]);
   });
@@ -106,33 +106,44 @@ describe('login', () => {
   it('offers a signed-in agent its login again, since an explicit /login may re-authenticate', () => {
     const signedIn: RunnerView = { ...claude, auth: { state: 'signed-in', loginCommand: ['claude', 'login'] } };
 
-    expect(run('/login', { plannerProvider: 'claude-code', runners: [signedIn] }).effects).toEqual([
+    expect(run('/login', { plannerProvider: 'claude-code', runners: [signedIn], runnersKnown: true }).effects).toEqual([
       { type: 'plannerLogin', command: ['claude', 'login'], label: 'Claude Code' },
     ]);
   });
 
   it('lists the agents that can sign in when the name matches none, and runs nothing', () => {
-    const { state, effects } = run('/login nobody', { plannerProvider: 'claude-code', runners: [claude, codex, opencode] });
+    const { state, effects } = run('/login nobody', { plannerProvider: 'claude-code', runners: [claude, codex, opencode], runnersKnown: true });
 
     expect(effects).toEqual([]);
     expect(lastMessage(state)?.text).toContain('claude-code, codex');
   });
 
   it('says a vendor planner has no coding agent to sign in', () => {
-    const { state, effects } = run('/login', { plannerProvider: 'openrouter', runners: [claude] });
+    const { state, effects } = run('/login', { plannerProvider: 'openrouter', runners: [claude], runnersKnown: true });
     expect(effects).toEqual([]);
     expect(lastMessage(state)?.text).toContain('not a coding agent');
   });
 
   it('says an active planner that is not installed has nothing to sign in', () => {
-    const { state, effects } = run('/login', { plannerProvider: 'claude-code', runners: [codex] });
+    const { state, effects } = run('/login', { plannerProvider: 'claude-code', runners: [codex], runnersKnown: true });
 
     expect(effects).toEqual([]);
     expect(lastMessage(state)?.text).toContain('Claude Code is not installed');
   });
 
+  // Before the daemon answers, an empty runner list is not evidence that the
+  // agent is missing: /login would otherwise tell a first-run user to install
+  // the agent they already have.
+  it('waits for the runner list instead of claiming the active agent is not installed', () => {
+    const { state, effects } = run('/login', { plannerProvider: 'claude-code', runners: [], runnersKnown: false });
+
+    expect(effects).toEqual([{ type: 'loadRunners' }]);
+    expect(lastMessage(state)?.text).toMatch(/still checking which .* installed/i);
+    expect(lastMessage(state)?.text).not.toContain('not installed');
+  });
+
   it("says OpenCode's login is not Ordewell's to manage", () => {
-    const { state, effects } = run('/login opencode', { plannerProvider: 'claude-code', runners: [claude, opencode] });
+    const { state, effects } = run('/login opencode', { plannerProvider: 'claude-code', runners: [claude, opencode], runnersKnown: true });
 
     expect(effects).toEqual([]);
     expect(lastMessage(state)?.text).toContain('OpenCode');

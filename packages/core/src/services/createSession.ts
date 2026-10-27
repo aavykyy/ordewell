@@ -62,7 +62,7 @@ import { describeHeld, describeLost, processLeaseHost, UNLEASED, type LeaseHost,
 import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
 import { recordedRunnerAuth } from './runnerAuth';
 import { installedPlannerAnswered, installedPlannerDetected } from './InstalledPlanner';
-import type { IConfig } from '../interfaces/IConfig';
+import type { IConfig, PlannerBackendId } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { INotification } from '../interfaces/INotification';
@@ -1155,6 +1155,13 @@ export class Session {
 
   /** The stable id this session persists under — matches the host's id when one was provided. */
   get sessionId(): string { return this.currentSessionId; }
+  /**
+   * The workspace whose account this session's planner gate judges, so a host
+   * can re-probe it before a turn without keeping a second copy.
+   */
+  get workspaceRoot(): string { return this.workspace; }
+  /** The planner this session's own gate reads — not whatever the host's config says now. */
+  get plannerProvider(): PlannerBackendId { return this.config.aiProvider; }
   /** Where this session's structured task logs are saved (ADR-0018, P1). */
   get taskLogLocation(): TaskLogLocation { return { baseDir: this.workspace, sessionId: this.currentSessionId }; }
 

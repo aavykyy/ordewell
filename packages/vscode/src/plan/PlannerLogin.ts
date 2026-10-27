@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import { runnerForProvider, workspaceEnvOf, type INotification, type PlannerBackendId, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
+import { augmentedPath, runnerForProvider, withPath, workspaceEnvOf, type INotification, type PlannerBackendId, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
 import type { HostToWebview } from '../shared/protocol';
 
 const POLL_MS = 2_000;
@@ -96,9 +96,11 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
     terminal = deps.window.createTerminal({
       name: `${label} login`,
       cwd: root,
-      // The agent's own account is chosen by the workspace environment (ADR-0016),
-      // so the terminal that logs in must see the same one a spawn would.
-      env: await (deps.env ?? workspaceEnvOf)(root),
+      // The agent's own account is chosen by the workspace environment
+      // (ADR-0016), so the terminal that logs in must see the same one a spawn
+      // would. The PATH is the probe's augmented one too: a GUI-launched host
+      // can find the agent with it and still not find it in a bare terminal.
+      env: withPath({}, await augmentedPath(), await (deps.env ?? workspaceEnvOf)(root)),
     });
   } catch (err) {
     // The one failure the row cannot explain by itself: nothing opened to run

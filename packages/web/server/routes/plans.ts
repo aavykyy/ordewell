@@ -324,7 +324,7 @@ export function plansRoute(pool: OrchestratorPool) {
     try {
       const { message } = await jsonObject<{ message?: string }>(c);
       if (!message) return c.json({ error: 'message is required' }, 400);
-      const plan = await pool.session(c.req.param('sessionId')).forceSendPrompt(message);
+      const plan = await pool.forceSendPrompt(c.req.param('sessionId'), message);
       return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
     } catch (err) {
       return failure(c, err, 'conversation message');
@@ -390,7 +390,7 @@ export function plansRoute(pool: OrchestratorPool) {
   // planner ends it, as it ends any turn.
   router.post('/:sessionId/conversation/compact/retry', async (c) => {
     try {
-      const plan = await pool.session(c.req.param('sessionId')).retryPlannerCompaction();
+      const plan = await pool.retryPlannerCompaction(c.req.param('sessionId'));
       return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
     } catch (err) {
       return failure(c, err, 'retry compaction');

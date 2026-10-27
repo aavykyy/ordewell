@@ -1,4 +1,49 @@
+import { readFileSync } from 'fs';
+import { homedir } from 'os';
+import { join, resolve } from 'path';
 import type { RunnerManifest } from '../types';
+import { parseToml } from '../../services/harness/toml';
+
+const NOT_LOGGED_IN = /^\s*not logged in\s*$/im;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Whether the selected `model_provider` carries a credential of its own, so
+ * `codex login status` saying "Not logged in" is not this user's answer. That
+ * command only knows the credentials Codex itself stores; a custom provider
+ * (Azure, an enterprise gateway, Bedrock) authenticates with an environment
+ * key, environment headers or an auth helper declared in config.toml.
+ *
+ * Read from the probe's own environment, not `process.env`: a workspace can
+ * point `CODEX_HOME` at another account (ADR-0016).
+ */
+function providerHasOwnCredential(env: NodeJS.ProcessEnv): boolean {
+  let config: Record<string, unknown>;
+  try {
+    const home = env.CODEX_HOME ? resolve(env.CODEX_HOME) : join(homedir(), '.codex');
+    config = parseToml(readFileSync(join(home, 'config.toml'), 'utf8'));
+  } catch {
+    // No readable config is no declared provider, so the status is the answer.
+    return false;
+  }
+  const id = typeof config.model_provider === 'string' ? config.model_provider : undefined;
+  const providers = isRecord(config.model_providers) ? config.model_providers : {};
+  const provider = id !== undefined && isRecord(providers[id]) ? providers[id] : undefined;
+  if (!provider) return false;
+  // This provider delegates to Codex's own login, which is what the status
+  // command asked about, so its answer stands.
+  if (provider.requires_openai_auth === true) return false;
+  return (
+    (typeof provider.env_key === 'string' && provider.env_key.length > 0) ||
+    (isRecord(provider.env_http_headers) && Object.keys(provider.env_http_headers).length > 0) ||
+    isRecord(provider.auth) ||
+    isRecord(provider.aws) ||
+    (typeof provider.experimental_bearer_token === 'string' && provider.experimental_bearer_token.length > 0)
+  );
+}
 
 export const CODEX_MANIFEST: RunnerManifest = {
   name: 'codex',
@@ -70,7 +115,15 @@ export const CODEX_MANIFEST: RunnerManifest = {
     // `codex login status` prints "Not logged in" and exits 1 when signed out;
     // a clean exit is the only other answer it gives. Anchored to its own line:
     // a failure can quote another tool that is not logged in.
-    signedOut: /^\s*not logged in\s*$/im,
+    signedOut: NOT_LOGGED_IN,
+    // But it only knows the credentials Codex stores itself. A custom
+    // `model_provider` with its own key is not signed out in any sense this
+    // command can see, so leave that answer unknown rather than wall it.
+    read: ({ output, code, env }) => {
+      if (code === 0) return 'signed-in';
+      if (!NOT_LOGGED_IN.test(output)) return null;
+      return providerHasOwnCredential(env) ? null : 'signed-out';
+    },
   },
 
   contextFile: 'AGENTS.md',

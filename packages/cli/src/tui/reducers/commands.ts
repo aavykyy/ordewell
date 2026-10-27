@@ -366,6 +366,11 @@ function runners(state: TuiState, args: string[]): Step {
  * is only worth saying out loud.
  */
 function login(state: TuiState, args: string[]): Step {
+  // An empty list before the daemon answers is not evidence the agent is
+  // missing; ask again and say so rather than send the user to install it.
+  if (!state.runnersKnown) {
+    return step(say(state, 'system', 'Still checking which coding agents are installed. Try /login again in a moment.'), [{ type: 'loadRunners' }]);
+  }
   // Joined, not just `args[0]`: a display label is two words ("Claude Code").
   const named = args.join(' ').trim();
   const runner = named ? matchRunner(state, named) : runnerForProvider(state.plannerProvider);
