@@ -157,6 +157,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     isGeneratingPlan: () => requireSession().isPlannerBusy,
     persistState: persist,
     saveCurrentSession: saveSession,
+    sendRunSettings,
     log,
   };
 
@@ -340,7 +341,18 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   }
 
   function sendRunSettings(): void {
-    services.chatProvider.setRunSettings(services.config.autonomousMode, services.settingsService.getRunSettings(), services.config.maxParallelSessions);
+    const session = managerDeps.session;
+    let run: GlobalRunSettings;
+    if (session.planState) {
+      // The window's own session holds the copy its Run block shows (ADR-0030).
+      run = session.runSettings();
+    } else {
+      // The bare welcome shows the file, and a session started next opens with
+      // it (ADR-0030); with no plan open there is no run this can move.
+      run = services.settingsService.getRunSettings();
+      session.applyRunSettings(run);
+    }
+    services.chatProvider.setRunSettings(services.config.autonomousMode, run, services.config.maxParallelSessions);
   }
 
   function saveAutonomy(enabled: boolean): void {
@@ -494,6 +506,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     );
 
     restoreState(persistenceDeps());
+    // A restored plan is this window's session: its Run block shows that copy.
+    sendRunSettings();
     // Open task-log tabs survive a window reload or an extension update. VS Code
     // asks the serializer during activation, so the plan must be restored first
     // or a restored tab would find no task and close itself.

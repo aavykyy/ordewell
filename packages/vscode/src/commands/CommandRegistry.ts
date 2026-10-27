@@ -39,6 +39,8 @@ export interface CommandDeps {
   runApiKeyWizard: (preselected?: ApiProvider) => Promise<void>;
   persistState: () => void;
   saveCurrentSession: () => void;
+  /** Push this window's run settings after its session is loaded or replaced (ADR-0030). */
+  sendRunSettings: () => void;
   /** Release the oldest prompt held while the planner was busy, once it no longer is. */
   sendNextHeldPrompt: () => void;
   log: (msg: string) => void;
@@ -84,6 +86,8 @@ function applyLoadedSession(
   // from the session, so isolation marks and a pending checkpoint come with it.
   deps.chatProvider.adoptRun(deps.session.runSnapshot());
   saveState(loaded.plan, deps.fsAdapter.getWorkspaceRoot(), loaded.meta.id);
+  // The Run block now speaks for the session just loaded, not the outgoing one.
+  deps.sendRunSettings();
   return true;
 }
 

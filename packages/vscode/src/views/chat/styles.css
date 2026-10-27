@@ -1124,6 +1124,11 @@ body.vscode-high-contrast-light .disclosure:hover {
   margin-top: -2px;
 }
 
+/* The Run block's second quiet line: which of its choices are machine-wide. */
+.run-settings-scope-note {
+  margin-top: 1px;
+}
+
 .setup-block-empty {
   font-size: 11px;
   color: var(--text-muted);

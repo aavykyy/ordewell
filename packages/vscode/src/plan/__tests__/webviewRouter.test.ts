@@ -76,6 +76,7 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
     isGeneratingPlan: () => session.isPlannerBusy,
     persistState: vi.fn(),
     saveCurrentSession: vi.fn(),
+    sendRunSettings: vi.fn(),
     log: () => {},
     extension: {
       ready: vi.fn(),

@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { RUN_SETTINGS_DEFAULTS,
   createTask, defaultEnabledRunners, saveState, RunnerRegistry, recordedInstalledPlanner, resetInstalledPlanner,
-  type AiProvider, type DiscoveredModel, type IRunner, type LegacyPlanState, type PlannerUsability,
+  type AiProvider, type DiscoveredModel, type GlobalRunSettings, type IRunner, type LegacyPlanState, type PlannerUsability,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
   type RunView, type Session, type SessionDeps, SettingsService, createSession, sessionRuntimeSettings,
   type ConversationRequest, type ConversationTurn,
@@ -159,16 +159,21 @@ function fakeConfig() {
 }
 
 function fakeSession() {
+  let runSettingsValue: GlobalRunSettings = { ...RUN_SETTINGS_DEFAULTS };
   const spies = {
     sessionId: 's1',
     plannerSettingsChanged: vi.fn(),
     reschedule: vi.fn(async () => {}),
-    applyRunSettings: vi.fn(),
+    applyRunSettings: vi.fn((changes: Partial<GlobalRunSettings>) => {
+      runSettingsValue = { ...runSettingsValue, ...changes };
+    }),
+    /** This window's session copy, which its panel shows (ADR-0030). */
+    runSettings: vi.fn(() => ({ ...runSettingsValue })),
     isExecuting: false,
     isConversationActive: false,
     isPlannerBusy: false,
     status: 'draft',
-    planState: null,
+    planState: null as LegacyPlanState | null,
     planTasks: [],
     runSnapshot: vi.fn(() => ({ tasks: [], runMerge: null, handoff: null, mergeResult: null })),
     taskLogAttempts: vi.fn(() => []),
@@ -196,7 +201,12 @@ function fakeSession() {
     runTask: vi.fn(async () => {}),
     announcedApprovals: vi.fn((): ApprovalRequestMessage[] => []),
   };
-  return { session: spies as unknown as Session, spies };
+  return {
+    session: spies as unknown as Session,
+    spies,
+    /** The copy this window's session opened with, or took from a change (ADR-0030). */
+    setRunSettings: (value: GlobalRunSettings) => { runSettingsValue = { ...value }; },
+  };
 }
 
 function fakeResolver(modelsByRunner: Partial<Record<string, DiscoveredModel[]>> = { 'claude-code': models }) {
@@ -781,6 +791,109 @@ describe("the Settings panel's Run block", () => {
     for (const listener of h.config.listeners) listener();
 
     expect(lastPush()).toEqual([true, RUN_SETTINGS_DEFAULTS, 9]);
+  });
+});
+
+/**
+ * The Run block speaks for the window's own session (ADR-0030), not for the
+ * settings file another window may have just saved.
+ */
+describe("the Run block speaks for this window's session", () => {
+  let h: ReturnType<typeof harness>;
+  const lastPush = () => h.chat.provider.setRunSettings.mock.calls.at(-1);
+
+  afterEach(() => {
+    h.host.dispose();
+    fs.rmSync(h.workspace, { recursive: true, force: true });
+  });
+
+  it("shows the session's own run settings, not a later save another window made to the file", async () => {
+    h = harness();
+    h.session.setRunSettings({ ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'watch', autorun: false });
+    h.session.spies.planState = planWithOneTask('build it');
+    await h.host.start();
+    // Another window turned the supervisor to Act; this one keeps what it opened with.
+    h.settings.getRunSettings.mockReturnValue({ ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act', autorun: true });
+    h.chat.provider.setRunSettings.mockClear();
+
+    h.chat.messages.fire({ type: 'ready' });
+
+    expect(lastPush()).toEqual([true, { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'watch', autorun: false }, 2]);
+  });
+
+  it("pushes the restored session's values as soon as the window starts", async () => {
+    h = harness();
+    h.session.setRunSettings({ ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act' });
+    h.session.spies.planState = planWithOneTask('restore me');
+
+    await h.host.start();
+
+    expect(lastPush()).toEqual([true, { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act' }, 2]);
+  });
+
+  it('shows the file while no session is open, which is what the next one opens with', async () => {
+    h = harness();
+    // The session this window would open keeps the values it was seeded with,
+    // but no plan has been adopted yet.
+    h.session.setRunSettings({ ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act', autorun: true });
+    await h.host.start();
+    h.settings.getRunSettings.mockReturnValue({ ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', mergeAtGatesAutomatically: true });
+    h.chat.provider.setRunSettings.mockClear();
+
+    h.chat.messages.fire({ type: 'ready' });
+
+    expect(lastPush()).toEqual([true, { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', mergeAtGatesAutomatically: true }, 2]);
+  });
+
+  it("starts the next session from the file values the bare welcome showed", async () => {
+    h = harness();
+    await h.host.start();
+    // Another window saved these while this one had no session open.
+    h.settings.getRunSettings.mockReturnValue({ ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act', autorun: true });
+    h.chat.messages.fire({ type: 'ready' });
+
+    // The same window starts its first plan: the Run block and the session agree.
+    h.session.spies.planState = planWithOneTask('build it');
+    h.chat.provider.setRunSettings.mockClear();
+    h.chat.messages.fire({ type: 'ready' });
+
+    expect(lastPush()).toEqual([true, { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act', autorun: true }, 2]);
+  });
+
+  it("keeps another window's session on its own values when this one saves a change", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-run-settings-'));
+    const file = new SettingsService(path.join(dir, 'settings.json'));
+    const other = harness({ settingsService: file });
+    h = harness({ settingsService: file });
+    try {
+      h.session.setRunSettings({ ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'watch', autorun: false });
+      h.session.spies.planState = planWithOneTask('build a parser');
+      other.session.setRunSettings({ ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act', autorun: true });
+      other.session.spies.planState = planWithOneTask('build a ledger');
+      await h.host.start();
+      await other.host.start();
+      h.chat.provider.setRunSettings.mockClear();
+      other.chat.provider.setRunSettings.mockClear();
+
+      h.chat.messages.fire({ type: 'changeSettings', change: { run: { supervisorLevel: 'off' } } });
+      await vi.waitFor(() => expect(h.chat.provider.setRunSettings).toHaveBeenCalled());
+
+      expect(lastPush()).toEqual([true, { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' }, 2]);
+      // The change is the file's too, so the next session opened anywhere starts from it.
+      expect(new SettingsService(path.join(dir, 'settings.json')).getRunSettings().supervisorLevel).toBe('off');
+
+      // The other window did not change: it shows its own session, and its own
+      // copy is unchanged even though the file moved under it.
+      other.chat.messages.fire({ type: 'ready' });
+      expect(other.chat.provider.setRunSettings.mock.calls.at(-1)).toEqual([
+        true, { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act', autorun: true }, 2,
+      ]);
+      expect(other.session.spies.applyRunSettings).not.toHaveBeenCalled();
+    } finally {
+      other.host.dispose();
+      fs.rmSync(other.workspace, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

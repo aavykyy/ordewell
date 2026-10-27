@@ -80,6 +80,7 @@ describe('a first goal waiting for the installed-agent probe', () => {
     let current: LegacyPlanState = createEmptyPlan();
     let goal = '';
     let pending: WebviewRouterDeps['getPendingRunners'] extends () => infer R ? R : never;
+    const sendRunSettings = vi.fn();
     const deps: WebviewRouterDeps = {
       session,
       chatProvider,
@@ -96,6 +97,7 @@ describe('a first goal waiting for the installed-agent probe', () => {
       isGeneratingPlan: () => session.isPlannerBusy,
       persistState: vi.fn(),
       saveCurrentSession: vi.fn(),
+      sendRunSettings,
       log: () => {},
       extension: {
         ready: vi.fn(),
@@ -115,7 +117,7 @@ describe('a first goal waiting for the installed-agent probe', () => {
     };
     const userSaid = () => (session.planState?.conversationHistory ?? []).filter((m) => m.role === 'user').map((m) => m.content);
     const errors = () => posts.filter((m) => m.type === 'showError');
-    return { session, deps, planner, asked, userSaid, errors, goal: () => goal, route: (msg: Parameters<typeof routeWebviewMessage>[0]) => routeWebviewMessage(msg, deps) };
+    return { session, deps, planner, asked, userSaid, errors, sendRunSettings, goal: () => goal, route: (msg: Parameters<typeof routeWebviewMessage>[0]) => routeWebviewMessage(msg, deps) };
   }
 
   it('holds a prompt typed during the wait behind the goal: the planner gets the goal, then the prompt, and the goal stays', async () => {
@@ -134,6 +136,8 @@ describe('a first goal waiting for the installed-agent probe', () => {
     await vi.waitFor(() => expect(h.userSaid()).toEqual(['Build an inventory service', 'Use Postgres']));
     expect(h.goal()).toBe('Build an inventory service');
     expect(h.session.currentGoal).toBe('Build an inventory service');
+    // The new plan makes this window's session the one its Run block shows.
+    expect(h.sendRunSettings).toHaveBeenCalled();
     expect(h.errors()).toEqual([]);
     h.session.destroy();
   });
@@ -166,6 +170,8 @@ describe('a first goal waiting for the installed-agent probe', () => {
 
     const start = handleStartPlanning('ship it', h.deps);
     handleNewSession(h.deps);
+    // A bare welcome shows the file's values, which the next session opens with.
+    expect(h.sendRunSettings).toHaveBeenCalled();
     probe.answer();
     await start;
     await new Promise((resolve) => setTimeout(resolve, 10));

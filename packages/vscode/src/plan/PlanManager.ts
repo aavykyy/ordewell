@@ -37,6 +37,8 @@ export interface PlanManagerDeps {
   isGeneratingPlan: () => boolean;
   persistState: () => void;
   saveCurrentSession: () => void;
+  /** Push this window's run settings after its session is restored, loaded or replaced (ADR-0030). */
+  sendRunSettings: () => void;
   log: (msg: string) => void;
 }
 
@@ -184,6 +186,8 @@ export async function handleStartPlanning(
     deps.setCurrentGoal(userDescription);
     deps.setCurrentPlan(plan);
     finishPlannerTurn(plan, deps);
+    // A plan makes this window's session the one its Run block speaks for.
+    deps.sendRunSettings();
   });
 }
 
@@ -248,7 +252,11 @@ export async function handleApprovePlan(deps: PlanManagerDeps, requestId?: numbe
     // The run_plan below is the approval, and the Session records it and readies
     // the tasks; rewriting their statuses here would approve a manual task the
     // run has not reached. Only a plan the Session does not hold yet is loaded.
-    if (!session.planState) session.loadPlan(plan, deps.getCurrentGoal(), deps.fsAdapter.getWorkspaceRoot());
+    if (!session.planState) {
+      session.loadPlan(plan, deps.getCurrentGoal(), deps.fsAdapter.getWorkspaceRoot());
+      // Adopting the plan also moves the Run block off the bare welcome's file values.
+      deps.sendRunSettings();
+    }
     deps.chatProvider.planApproved();
     saveState(plan, deps.fsAdapter.getWorkspaceRoot(), session.sessionId);
     deps.saveCurrentSession();
@@ -284,6 +292,8 @@ function ensureSessionPlan(deps: PlanManagerDeps): void {
   if (plan.tasks.length === 0 && !(plan.conversationHistory && plan.conversationHistory.length > 0)) return;
   try {
     deps.session.loadPlan(plan, deps.getCurrentGoal(), deps.fsAdapter.getWorkspaceRoot(), { persist: false });
+    // The plan that was only on the host is now the session the Run block speaks for.
+    deps.sendRunSettings();
   } catch (err) {
     deps.log(`ensureSessionPlan failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -475,7 +485,7 @@ export function handleStopPlanning(deps: PlanManagerDeps): void {
  * view and the saved state.
  */
 export function handleNewSession(deps: Pick<PlanManagerDeps,
-  'session' | 'chatProvider' | 'fsAdapter' | 'setCurrentPlan' | 'setCurrentGoal' | 'log'>): void {
+  'session' | 'chatProvider' | 'fsAdapter' | 'setCurrentPlan' | 'setCurrentGoal' | 'sendRunSettings' | 'log'>): void {
   // Abandons the planner turn in flight, or one still waiting for the probe:
   // it settles as discarded, which is not reported into the new session.
   deps.session.reset();
@@ -485,6 +495,8 @@ export function handleNewSession(deps: Pick<PlanManagerDeps,
   deps.chatProvider.conversation.reset();
   deps.chatProvider.run.reset();
   clearState(deps.fsAdapter.getWorkspaceRoot());
+  // With no session open, the Run block shows the file the next one opens with (ADR-0030).
+  deps.sendRunSettings();
   deps.log('New session started');
 }
 
