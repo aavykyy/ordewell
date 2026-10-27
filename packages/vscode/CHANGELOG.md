@@ -6,8 +6,8 @@
 
 ### Changed
 
-- **The Marketplace overview opens with the workflow diagram** instead of a
-  session recording.
+- **The Marketplace overview no longer opens with a session recording.** The
+  listing leads with the written introduction.
 - **No extension code changed.** This release carries the version bump and the
   listing text.
 
