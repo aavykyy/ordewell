@@ -160,6 +160,31 @@ describe('RunnerInstallation auth (ADR-0009 preflight)', () => {
     expect(vi.mocked(authExec).mock.calls[0][2].env.CLAUDE_CONFIG_DIR).toBe('/home/me/.claude-b');
   });
 
+  it('records an in-flight probe under the workspace it was started for', async () => {
+    // The root can move while a status command runs (a folder change). The
+    // verdict was produced with A's account, so it belongs to A, not B.
+    let workspace = '/a';
+    let release!: (answer: { code: number; stdout: string; stderr: string }) => void;
+    const authExec: RunnerAuthExec = vi.fn(() => new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => { release = resolve; }));
+    const env = vi.fn(async (root?: string) => ({ ACCOUNT: (root ?? workspace) === '/a' ? 'a' : 'b' }));
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, {
+      authExec,
+      workspace: () => workspace,
+      env,
+    });
+
+    const pending = inst.plannerUsability('claude-code');
+    await vi.waitFor(() => expect(authExec).toHaveBeenCalled());
+    workspace = '/b';
+    release({ code: 1, stdout: '{"loggedIn":false,"authMethod":"none"}', stderr: '' });
+    await pending;
+
+    expect(env).toHaveBeenCalledWith('/a');
+    expect(recordedRunnerAuth('claude-code', '/a')).toMatchObject({ state: 'signed-out' });
+    expect(recordedRunnerAuth('claude-code', '/b')).toBeUndefined();
+  });
+
   it('refresh() forgets a signed-out verdict so the next look asks again', async () => {
     let authMethod = 'none';
     const authExec: RunnerAuthExec = vi.fn(async () => ({

@@ -96,6 +96,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         stopArmed: false,
         forceSendPending: null,
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
+        runSettingsKnown: false,
       }, EMPTY_RUN));
 
     // The daemon registers a session before its opening turn runs, and drops it
@@ -120,6 +121,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         stopArmed: false,
         forceSendPending: null,
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
+        runSettingsKnown: false,
       }, EMPTY_RUN));
 
     // Deleting the session on screen stops it in the daemon; a view left on it
@@ -443,6 +445,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         stopArmed: false,
         forceSendPending: null,
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
+        runSettingsKnown: false,
       }, EMPTY_RUN));
 
     // The rewound message comes back as a draft to edit and resend, so it lands

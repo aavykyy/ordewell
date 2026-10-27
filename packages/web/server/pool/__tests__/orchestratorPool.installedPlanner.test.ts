@@ -401,6 +401,28 @@ describe('OrchestratorPool default planner', () => {
     pool.destroyAll();
   });
 
+  it('leaves an installed runner its own usability refuses out of the list', async () => {
+    // An installed CLI can still be unspawnable (a Windows `.cmd` shim).
+    // Offering it would fail at spawn; VS Code already hides it.
+    const installation = {
+      plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({
+        usable: runner === 'claude-code',
+        ...(runner === 'codex' ? { reason: 'codex is not directly spawnable' } : {}),
+      })),
+      filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => r === 'claude-code' || r === 'codex')),
+      refresh: vi.fn(),
+    };
+    const pool = new OrchestratorPool({
+      runnerInstallation: installation,
+      codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
+    });
+
+    const runners = await pool.getInstalledRunners();
+
+    expect(runners.map((r) => r.id)).toEqual(['claude-code']);
+    pool.destroyAll();
+  });
+
   it('carries each installed runner\'s auth verdict without dropping a signed-out one from the list', async () => {    const auth = { state: 'signed-out' as const, loginCommand: ['claude', 'auth', 'login'], detail: 'not logged in' };
     const installation = {
       plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({

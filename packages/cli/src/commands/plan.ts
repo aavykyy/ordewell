@@ -7,7 +7,7 @@ import { createStepLog, type LogLine } from './researchLog';
 import type { SerializedTask, DiscoveredModel } from '@ordewell/core';
 import { loopRowParts, mintSessionId, scriptTaskText, taskOrderLabel, taskRowView } from '@ordewell/core';
 import type { PlanBody, WsEvent } from '../apiClient';
-import { fail, headlessPlannerRefusal, lostReplyHint } from './shared';
+import { fail, headlessPlannerRefusal, headlessSignedOut, lostReplyHint } from './shared';
 
 // The one-shot endpoint answers with the stored plan state (`pendingTasks`),
 // the conversation with the wire plan (`tasks`); read as `tasks` alone, a
@@ -47,13 +47,15 @@ function commitNotes(plan: PlanBody): string[] {
  * the reply reaches this command — so "run it" is said only of a plan nobody
  * has approved or started, and a running one is pointed at, not run again.
  */
-async function nextStep(api: ApiClient, plan: PlanBody): Promise<string> {
+async function nextStep(api: ApiClient, plan: PlanBody, sessionId: string): Promise<string> {
   const approved = 'approved' in plan && plan.approved === true;
   // A submitted task reads `approved` before anything has run it.
   const moving = planTasks(plan).some((t) => t.status !== undefined && t.status !== 'pending' && t.status !== 'approved');
   if (!approved && !moving) return `Run 'ordewell run' to execute, 'ordewell status' to inspect, or 'ordewell tui' for the full UI.`;
   const follow = `Follow it with 'ordewell status', or 'ordewell tui' for the full UI.`;
-  const autorun = await api.getSettings().then((settings) => settings.run?.autorun === true, () => false);
+  // The session's own copy decided whether this plan started, not the file a
+  // second surface may have moved since.
+  const autorun = await api.getSettings(sessionId).then((settings) => settings.run?.autorun === true, () => false);
   return autorun ? `Autorun started the plan. ${follow}` : `The plan is running. ${follow}`;
 }
 
@@ -354,7 +356,7 @@ export async function handlePlan(
     printPlan(plan, sessionId, runners, models);
     for (const note of notes) console.log(`\n${note}`);
     saveLastSession(sessionId, goal, runnersOf(plan, runners), workspace);
-    console.log(`\n  ${await nextStep(api, plan)}`);
+    console.log(`\n  ${await nextStep(api, plan, sessionId)}`);
   } catch (err) {
     reader?.close();
     closeStream();
@@ -364,7 +366,7 @@ export async function handlePlan(
     if (refusal) {
       console.error(refusal);
     } else {
-      console.error(`Plan generation failed: ${err instanceof Error ? (err as Error).message : String(err)}`);
+      console.error(`Plan generation failed: ${err instanceof Error ? headlessSignedOut((err as Error).message) : String(err)}`);
       const hint = lostReplyHint(err, sessionId);
       if (hint) console.error(hint);
     }

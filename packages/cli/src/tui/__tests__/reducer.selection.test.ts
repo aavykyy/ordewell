@@ -26,7 +26,7 @@ const tasks: TaskView[] = [
 ];
 
 const screenState = (over: Partial<TuiState> = {}): TuiState =>
-  initialState({ rows: 24, cols: 80, tasks, ...over });
+  initialState({ rows: 24, cols: 80, tasks, runSettingsKnown: true, ...over });
 
 const mouse = (state: TuiState, name: string, col: number, row: number): Step =>
   reduce(state, { type: 'key', key: { name, col, row } });

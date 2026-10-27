@@ -209,6 +209,45 @@ describe('readRunnerAuth', () => {
       }
     });
 
+    it('leaves the default provider unknown when OPENAI_API_KEY is set, so the gate lets it plan', async () => {
+      // Codex authenticates with this key while `codex login status` still
+      // only reports its own stored login. A real key is not a signed-out host.
+      const home = codexHome('model = "gpt-5.4"\n');
+      try {
+        const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
+        const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { CODEX_HOME: home, OPENAI_API_KEY: 'sk-test' } });
+
+        expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'] });
+        recordRunnerAuth('codex', auth);
+        expect(gate()).toBeNull();
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('leaves a credential-less local provider unknown, so the gate lets it plan', async () => {
+      // Ollama and LM Studio authenticate with nothing; the provider's
+      // base_url is the only setting. Codex's login has no say over it.
+      const home = codexHome([
+        'model = "local-model"',
+        'model_provider = "local"',
+        '[model_providers.local]',
+        'name = "Local"',
+        'base_url = "http://127.0.0.1:11434/v1"',
+        '',
+      ].join('\n'));
+      try {
+        const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
+        const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { CODEX_HOME: home } });
+
+        expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'] });
+        recordRunnerAuth('codex', auth);
+        expect(gate()).toBeNull();
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
     it('keeps a default setup with no credential genuinely signed out, and the gate refuses it', async () => {
       const home = codexHome('model = "gpt-5.4"\n');
       try {

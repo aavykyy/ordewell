@@ -161,6 +161,58 @@ describe('loginPlanner', () => {
     });
   });
 
+  it('tells a vendor planner there is no coding agent to sign in', async () => {
+    const h = harness({ aiProvider: 'openrouter' });
+
+    await loginPlanner(h.deps);
+
+    expect(h.createTerminal).not.toHaveBeenCalled();
+    expect(h.deps.notifications.info).toHaveBeenCalledWith('The active planner is not a coding agent; there is no login to run.');
+    expect(h.ended()).toEqual({
+      type: 'plannerLoginEnded', ok: false, message: 'The active planner is not a coding agent; there is no login to run.',
+    });
+  });
+
+  it('names why an installed agent is not usable instead of saying it has no login', async () => {
+    const h = harness();
+    vi.mocked(h.deps.runnerInstallation.plannerUsability).mockResolvedValue({ usable: false, reason: 'claude is not directly spawnable' });
+
+    await loginPlanner(h.deps, 'claude-code');
+
+    expect(h.createTerminal).not.toHaveBeenCalled();
+    expect(h.deps.notifications.info).toHaveBeenCalledWith('claude is not directly spawnable');
+    expect(h.ended()).toEqual({
+      type: 'plannerLoginEnded', runner: 'claude-code', ok: false, message: 'claude is not directly spawnable',
+    });
+  });
+
+  it('ends the pending state when the first status probe throws', async () => {
+    const h = harness();
+    vi.mocked(h.deps.runnerInstallation.plannerUsability).mockRejectedValueOnce(new Error('probe failed'));
+
+    await loginPlanner(h.deps, 'claude-code');
+
+    expect(h.createTerminal).not.toHaveBeenCalled();
+    expect(h.ended()).toEqual({
+      type: 'plannerLoginEnded', runner: 'claude-code', ok: false, message: "The sign-in could not be checked: the agent's status probe failed.",
+    });
+    expect(h.deps.notifications.warn).toHaveBeenCalledWith("Ordewell could not check the Claude Code login. The sign-in could not be checked: the agent's status probe failed.");
+  });
+
+  it('does not blame the terminal when a poll probe throws', async () => {
+    const h = harness();
+    vi.mocked(h.deps.runnerInstallation.plannerUsability)
+      .mockResolvedValueOnce({ usable: true, auth: SIGNED_OUT_CLAUDE })
+      .mockRejectedValueOnce(new Error('probe failed'));
+
+    await loginPlanner(h.deps, 'claude-code');
+
+    expect(h.ended()).toEqual({
+      type: 'plannerLoginEnded', runner: 'claude-code', ok: false, message: "The sign-in could not be checked: the agent's status probe failed.",
+    });
+    expect(h.terminal.exitStatus).toBeUndefined();
+  });
+
   it('tells the user when no terminal can be opened at all, and closes the pending state', async () => {
     const h = harness();
     h.createTerminal.mockImplementation(() => { throw new Error('no terminals'); });

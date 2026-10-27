@@ -381,6 +381,19 @@ describe('ordewell supervisor, automerge, trailer and autorun (ADR-0030)', () =>
     d.close();
   });
 
+  it('says a run setting change is the default for new sessions, not every open one', async () => {
+    const d = await fakeDaemon({ settings: { run: RUN } });
+    const { handleSupervisor, handleAutomerge } = await import('../runSettings');
+    const supervisor = await capture(() => handleSupervisor(['act'], new ApiClient(d.port)));
+    const automerge = await capture(() => handleAutomerge(['on'], new ApiClient(d.port)));
+
+    expect(supervisor.stdout).toContain('for new sessions');
+    expect(automerge.stdout).toContain('for new sessions');
+    expect(supervisor.stdout).not.toContain("each session's next run");
+    expect(automerge.stdout).not.toContain("each session's next run");
+    d.close();
+  });
+
   it('says what Act and autorun allow when it turns them on', async () => {
     const d = await fakeDaemon({ settings: { run: RUN } });
     const { handleSupervisor, handleAutorun } = await import('../runSettings');

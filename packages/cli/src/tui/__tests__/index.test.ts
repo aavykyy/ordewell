@@ -233,6 +233,9 @@ describe('handleTui', () => {
       fs.mkdirSync(path.join(home, '.ordewell'), { recursive: true });
       vi.stubEnv('HOME', home);
       vi.stubEnv('USERPROFILE', home);
+      // SettingsService prefers this over the home directory, so an ambient
+      // override would make the fixture under HOME dead code.
+      vi.stubEnv('ORDEWELL_SETTINGS_PATH', path.join(home, '.ordewell', 'settings.json'));
       vi.stubEnv('NO_COLOR', '1');
     });
     afterEach(() => {

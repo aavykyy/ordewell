@@ -215,6 +215,7 @@ function settingsBadge(state: TuiState): string {
 }
 
 function runSettingsBadge(state: TuiState): string {
+  if (!state.runSettingsKnown) return style.grey('run settings …');
   const { supervisorLevel, mergeAtGatesAutomatically, autorun } = state.runSettings;
   const paint = (text: string, warn: boolean) => (warn ? style.yellow(text) : style.grey(text));
   const run = state.status === 'executing' ? state.runSupervisor : null;

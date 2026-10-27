@@ -79,6 +79,19 @@ describe('the session\'s own run settings', () => {
 });
 
 describe('/settings', () => {
+  it('says which values belong to this session and which apply to every session', () => {
+    const open = typed(base(), '/settings').state;
+    const hint = stepper(open).definition.hint ?? '';
+    expect(hint).toContain('apply to this session');
+    expect(hint).toContain('Autonomy and Parallel tasks apply to every session');
+
+    const ask = press(walk(open, 'tab', 'down'), 'enter');
+    expect(ask.state.overlay).toMatchObject({ kind: 'confirm' });
+    const note = ask.state.overlay?.kind === 'confirm' ? ask.state.overlay.note : '';
+    expect(note).toContain("this session's run now");
+    expect(note).toContain('default for new');
+  });
+
   it('opens on Autonomy and pre-selects every current value', () => {
     let state = typed(base({ autonomous: false, maxParallel: 3 }), '/settings').state;
     const seen: { step: string; highlighted: string | undefined }[] = [];

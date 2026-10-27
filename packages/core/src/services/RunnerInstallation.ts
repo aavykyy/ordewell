@@ -39,11 +39,12 @@ const AUTH_TTL_MS = 30_000;
 
 export interface RunnerInstallationOptions {
   /**
-   * The workspace's own variables (ADR-0016), asked afresh for each auth probe.
-   * A `.envrc` can choose another account, so the probe must ask the same
-   * account the planner will use.
+   * The workspace's own variables (ADR-0016), asked afresh for each auth probe
+   * and told which root it is for, so a folder change mid-probe cannot mix one
+   * workspace's account into another's verdict. A `.envrc` can choose another
+   * account, so the probe must ask the same account the planner will use.
    */
-  env?: () => Promise<Record<string, string>>;
+  env?: (workspace?: string) => Promise<Record<string, string>>;
   /**
    * The workspace whose account this installation judges. The verdict is
    * recorded under it, so a planner gate in that workspace reads it and one in
@@ -68,7 +69,7 @@ export class RunnerInstallation {
   private registry: RunnerRegistry;
   private execImpl: ExecImpl;
   private now: () => number;
-  private env: () => Promise<Record<string, string>>;
+  private env: (workspace?: string) => Promise<Record<string, string>>;
   private workspace: () => string | undefined;
   private authExec: RunnerAuthExec | undefined;
 
@@ -169,17 +170,21 @@ export class RunnerInstallation {
    * gate, which cannot await this.
    */
   private async authFor(runner: string, manifest: RunnerManifest): Promise<RunnerAuth> {
-    const cached = this.authCache.get(runner);
+    // Capture the scope once: the folder can move while the status command
+    // runs, and the verdict belongs to the workspace whose env produced it.
+    const workspace = this.workspace();
+    const key = `${workspace ?? ''}\u0000${runner}`;
+    const cached = this.authCache.get(key);
     if (cached && this.now() - cached.at < AUTH_TTL_MS) return cached.auth;
 
-    const existing = this.authInflight.get(runner);
+    const existing = this.authInflight.get(key);
     if (existing) return existing;
 
     const probe = (async () => {
       try {
         return await readRunnerAuth(manifest, {
           ...(this.authExec ? { exec: this.authExec } : {}),
-          env: await this.env(),
+          env: await this.env(workspace),
         });
       } catch {
         // A workspace env or status probe that fails is no answer about the
@@ -187,13 +192,13 @@ export class RunnerInstallation {
         return { state: 'unknown' as const };
       }
     })().then((auth) => {
-      this.authCache.set(runner, { auth, at: this.now() });
-      this.authInflight.delete(runner);
-      recordRunnerAuth(runner, auth, this.workspace());
+      this.authCache.set(key, { auth, at: this.now() });
+      this.authInflight.delete(key);
+      recordRunnerAuth(runner, auth, workspace);
       return auth;
     });
 
-    this.authInflight.set(runner, probe);
+    this.authInflight.set(key, probe);
     return probe;
   }
 

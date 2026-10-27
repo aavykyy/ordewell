@@ -7,9 +7,9 @@ import {
 import { connect, fail } from './shared';
 
 /**
- * The run settings (ADR-0030), saved for every session from its next run. A
- * session's run under way takes a change at once only when it is made in
- * that session, in the TUI.
+ * The run settings (ADR-0030), saved as the default for new sessions. A
+ * session already open keeps its own copy; only a change made in that session,
+ * in the TUI, moves the run under way.
  */
 
 const SUPERVISOR_USAGE = 'Usage: ordewell supervisor [off|watch|act] · ordewell supervisor retries <n> · ordewell supervisor reads <n>';
@@ -36,7 +36,7 @@ export async function handleSupervisor(subArgs: string[], injectedApi?: ApiClien
     return;
   }
   await save(api, changes);
-  if (changes.supervisorLevel) console.log(`Supervisor: ${SUPERVISOR_LEVEL_LABEL[changes.supervisorLevel]}, from each session's next run.`);
+  if (changes.supervisorLevel) console.log(`Supervisor: ${SUPERVISOR_LEVEL_LABEL[changes.supervisorLevel]}, for new sessions.`);
   if (changes.supervisorLevel === 'act') console.log(ACT_RISK);
   if (changes.supervisorRetryLimit !== undefined) console.log(`Supervisor retry limit: ${changes.supervisorRetryLimit} per task.`);
   if (changes.wakeUpReadBudget !== undefined) console.log(`Wake-up read budget: ${changes.wakeUpReadBudget} reads.`);
@@ -54,7 +54,7 @@ export async function handleAutomerge(subArgs: string[], injectedApi?: ApiClient
     return;
   }
   await save(api, { mergeAtGatesAutomatically: enabled });
-  console.log(`Merge automatically (gates, end of run): ${enabled ? 'on' : 'off'}, from each session's next run.`);
+  console.log(`Merge automatically (gates, end of run): ${enabled ? 'on' : 'off'}, for new sessions.`);
 }
 
 export async function handleTrailer(subArgs: string[], injectedApi?: ApiClient): Promise<void> {

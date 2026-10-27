@@ -39,6 +39,8 @@ export interface PlanManagerDeps {
   saveCurrentSession: () => void;
   /** Push this window's run settings after its session is restored, loaded or replaced (ADR-0030). */
   sendRunSettings: () => void;
+  /** Redraw the planner list after a re-probe changed the verdict, so the pill stops saying signed out. */
+  refreshPlannerState?: () => Promise<void>;
   log: (msg: string) => void;
 }
 
@@ -130,14 +132,19 @@ export function plannerPreflightError(config: PlanManagerDeps['config'], workspa
  * that route stays refused until a runner-list refresh.
  */
 export function recheckSignedOutPlanner(
-  deps: Pick<PlanManagerDeps, 'config' | 'fsAdapter' | 'runnerInstallation'>,
+  deps: Pick<PlanManagerDeps, 'config' | 'fsAdapter' | 'runnerInstallation' | 'refreshPlannerState'>,
 ): Promise<void> | null {
   const installation = deps.runnerInstallation;
   if (!installation) return null;
   const runner = runnerForProvider(deps.config.aiProvider);
-  if (!runner || recordedRunnerAuth(runner, deps.fsAdapter.getWorkspaceRoot())?.state !== 'signed-out') return null;
+  const root = deps.fsAdapter.getWorkspaceRoot();
+  if (!runner || recordedRunnerAuth(runner, root)?.state !== 'signed-out') return null;
   installation.refresh();
-  return installation.plannerUsability(runner).then(() => undefined);
+  return installation.plannerUsability(runner).then(async () => {
+    // The gate re-probed so the turn can go ahead; the pill and empty state
+    // must stop saying signed out too, or they offer a login already done.
+    if (recordedRunnerAuth(runner, root)?.state !== 'signed-out') await deps.refreshPlannerState?.();
+  });
 }
 
 /**

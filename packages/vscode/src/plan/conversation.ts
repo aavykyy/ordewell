@@ -13,6 +13,7 @@ export interface ConversationDeps {
   config: PlanManagerDeps['config'];
   fsAdapter: PlanManagerDeps['fsAdapter'];
   runnerInstallation?: PlanManagerDeps['runnerInstallation'];
+  refreshPlannerState?: PlanManagerDeps['refreshPlannerState'];
 }
 
 type PlanSetter = (plan: NonNullable<Session['planState']>) => void;

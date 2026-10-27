@@ -481,12 +481,16 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       }
       // The child's exit code is not the runner's verdict: a login can print
       // success and persist nothing, so the fresh probe decides what to claim.
-      const stillSignedOut = refreshed?.runners.find((r) => r.name === effect.label)?.auth?.state === 'signed-out';
-      const message = result.ok
-        ? stillSignedOut
-          ? `${effect.label} still reports not logged in.`
-          : `${effect.label} is signed in.`
-        : result.message ?? `${effect.label} did not finish signing in.`;
+      const fresh = refreshed?.runners.find((r) => r.name === effect.label)?.auth?.state;
+      const message = fresh === 'signed-in'
+        ? `${effect.label} is signed in.`
+        : fresh === 'signed-out'
+          ? `${effect.label} still reports not logged in.${
+            result.ok ? '' : ` ${result.message ?? 'The login did not finish.'}`
+          }`
+          : result.ok
+            ? `Could not confirm that ${effect.label} is signed in.`
+            : `Could not confirm that ${effect.label} is signed in: ${result.message ?? 'the login did not finish'}`;
       dispatch({
         type: 'notice',
         message: refreshed ? message : `${message} The runner list could not be refreshed: the server is not answering.`,
@@ -1031,6 +1035,14 @@ async function converse(deps: EffectDeps, sessionId: string, call: () => Promise
     deps.dispatch({ ...failedFrom(shown ? new Error(`The planner's reply arrived but could not be shown: ${explain(err)}`) : err), turn: true });
   } else if (lost !== null) {
     await settleLostReply(deps, sessionId, { opening, reason: lost });
+  }
+  // A turn's gate can have re-probed a signed-out planner and found it signed
+  // in outside the TUI; the welcome line and picker still hold the old verdict.
+  // A reload that fails is not the turn's failure.
+  try {
+    await loadRunners(deps);
+  } catch {
+    // The turn's own outcome stands; the next refresh asks again.
   }
 }
 
