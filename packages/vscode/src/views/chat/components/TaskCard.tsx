@@ -460,7 +460,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
   const conflictFiles = isolatedWork?.conflictFiles ?? [];
   const repair = isolatedWork?.repair ?? null;
 
-  const outputRef = useFollowOutput<HTMLPreElement>(output);
+  const outputRef = useFollowOutput<HTMLPreElement>([output]);
 
   const status = statusBadge(row);
   const isUserTask = task.type === 'user';

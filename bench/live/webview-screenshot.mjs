@@ -31,6 +31,9 @@
  *     its command once, in its head
  *   - a plan's task cards carry their own fill, distinct from the plan behind
  *     them, with the expanded card and its subtasks each a step apart
+ *   - the first screen is a hero, an autorun note and a repositories card: the
+ *     card has a surface of its own, `/settings` is a command token, and the
+ *     whole column keeps its edge with long paths in it
  *
  * Runs at 420px (the sidebar width) and 900px, under both a dark and a light
  * VS Code theme (bench/live/webview-harness.mjs's `?theme=`) — the full state
@@ -44,7 +47,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { chromium } from './load-playwright.mjs';
 import { createDriver } from './host-driver.mjs';
-import { MAIN_SCENARIO, RELOAD_FIXTURE, RELOAD_PLAN, SCRIPT_TASK_LOG, SIGNED_OUT_PLANNERS, SIGNED_OUT_SETUP, TASK_CARDS_PLAN, TASK_LOG_ACTIVITY, TASK_LOG_DENIED, TASK_LOG_PENDING } from './scenarios.mjs';
+import { MAIN_SCENARIO, FIRST_SCREEN, FIRST_SCREEN_AUTORUN_OFF, FIRST_SCREEN_LONG_PATHS, RELOAD_FIXTURE, RELOAD_PLAN, SCRIPT_TASK_LOG, SIGNED_OUT_PLANNERS, SIGNED_OUT_SETUP, TASK_CARDS_PLAN, TASK_LOG_ACTIVITY, TASK_LOG_DENIED, TASK_LOG_PENDING } from './scenarios.mjs';
 import { EMPTY_TASK_LOG_FOLLOW, replayTaskLog, taskLogHeaderView } from '../../packages/core/dist/plan-utils.mjs';
 
 function arg(name, fallback) {
@@ -1016,6 +1019,168 @@ async function signedOutPlanner(width, theme) {
 }
 
 /**
+ * The first screen before a word is typed: the hero, the autorun note and the
+ * repositories card, at the width a sidebar gives them and at a full-width
+ * window, in both themes. The card is the one block there with a surface of its
+ * own, so it is checked for one; `/settings` for being a command token rather
+ * than prose; and the column for holding its edge with long paths in it.
+ */
+async function firstScreen(width, theme) {
+  const label = `${width}/${theme}`;
+  const page = await browser.newPage({ viewport: { width, height: 900 } });
+  await page.goto(`${BASE}/?theme=${theme}`);
+  await page.waitForSelector('.chat-container');
+  await sendAll(page, FIRST_SCREEN.map((s) => s.post));
+  await page.waitForSelector('.isolation-notice[data-status="ready"]');
+  await settle(page);
+
+  // The list follows a log's newest line; the first screen's hero is at its top.
+  const opening = await page.evaluate(() => {
+    const list = document.querySelector('.message-list');
+    const logo = document.querySelector('.empty-state-logo').getBoundingClientRect();
+    return { scrollTop: list.scrollTop, logoTop: logo.top, logoBottom: logo.bottom, listTop: list.getBoundingClientRect().top, listHeight: list.clientHeight };
+  });
+  check(opening.scrollTop === 0 && opening.logoTop >= opening.listTop && opening.logoBottom <= opening.listTop + opening.listHeight,
+    `first-screen ${label}: the column opens at its wordmark, not at its bottom (scrollTop ${opening.scrollTop}, logo ${opening.logoTop} in ${opening.listTop}–${opening.listTop + opening.listHeight})`);
+
+  const paint = (sel) => page.locator(sel).evaluate((el) => {
+    const s = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    return { fill: s.backgroundColor, border: s.borderTopWidth, radius: s.borderTopLeftRadius, w: r.width, h: r.height };
+  });
+  const pageFill = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const card = await paint('.isolation-notice');
+  console.log(`    card ${card.fill} on page ${pageFill} · ${card.w}×${card.h}`);
+  check(solid(card.fill) && card.fill !== pageFill,
+    `first-screen ${label}: the card is filled apart from the page (${card.fill} on ${pageFill})`);
+  check(card.border === '1px' && card.radius === '12px',
+    `first-screen ${label}: the card has a 1px border and a 12px radius (${card.border}, ${card.radius})`);
+
+  // One column: the card shares the setup rows' edge, and every row in it starts there.
+  const column = await page.evaluate(() => {
+    const box = (el) => el.getBoundingClientRect();
+    const rows = [...document.querySelectorAll('.isolation-repo')];
+    const card = document.querySelector('.isolation-notice');
+    return {
+      card: { x: box(card).x, w: box(card).width, right: box(card).right },
+      setup: { x: box(document.querySelector('.empty-state-setup')).x, w: box(document.querySelector('.empty-state-setup')).width },
+      rows: rows.map((el) => box(el).x),
+      parts: [...document.querySelectorAll('.isolation-repo-name, .isolation-repo-head, .isolation-repo-commit, .isolation-repo-flag')]
+        .map((el) => ({ left: box(el).left, right: box(el).right })),
+    };
+  });
+  check(Math.abs(column.card.x - column.setup.x) <= 0.5 && Math.abs(column.card.w - column.setup.w) <= 0.5,
+    `first-screen ${label}: the card shares the setup column's edge and width (${column.card.x}/${column.card.w} vs ${column.setup.x}/${column.setup.w})`);
+  check(column.rows.every((x) => Math.abs(x - column.rows[0]) <= 0.5),
+    `first-screen ${label}: every repo row starts on one left edge (${column.rows.join(', ')})`);
+  const inside = column.card.right - 15; // the card's 1px border and 14px padding
+  check(column.parts.every((p) => p.left >= column.card.x + 14 - 0.5 && p.right <= inside + 0.5),
+    `first-screen ${label}: every repo part stays inside the card's padding (${column.parts.map((p) => `${p.left}→${p.right}`).join(', ')} in ${column.card.x}→${inside})`);
+
+  const hero = await page.evaluate(() => {
+    const box = (sel) => document.querySelector(sel).getBoundingClientRect();
+    const style = (sel) => getComputedStyle(document.querySelector(sel));
+    const lead = style('.empty-state-lead');
+    const support = style('.empty-state-support');
+    return {
+      width: box('.empty-state-hero').width,
+      lead: { size: parseFloat(lead.fontSize), line: parseFloat(lead.lineHeight) / parseFloat(lead.fontSize), width: box('.empty-state-lead').width },
+      support: { size: parseFloat(support.fontSize), width: box('.empty-state-support').width },
+      h2: parseFloat(style('.empty-state h2').fontSize),
+    };
+  });
+  check(hero.width <= 380.5 && hero.lead.width <= 380.5 && hero.support.width <= 380.5,
+    `first-screen ${label}: the hero is held to the column (${hero.width}, ${hero.lead.width}, ${hero.support.width})`);
+  check(Math.abs(hero.lead.line - 1.5) < 0.02,
+    `first-screen ${label}: the lead line sets a 1.5 line-height (${hero.lead.line.toFixed(2)})`);
+  check(hero.h2 === 18 && hero.lead.size === 13 && hero.support.size === 13,
+    `first-screen ${label}: the question is 18px over 13px copy (${hero.h2}, ${hero.lead.size}, ${hero.support.size})`);
+
+  const sizes = await page.evaluate(() => [...new Set([...document.querySelectorAll(
+    '.empty-state h2, .empty-state p, .empty-state span, .empty-state code, .empty-state button, .empty-state li',
+  )].map((el) => getComputedStyle(el).fontSize))].sort());
+  check(JSON.stringify(sizes) === JSON.stringify(['12px', '13px', '18px']),
+    `first-screen ${label}: the screen uses three type sizes (${sizes.join(', ')})`);
+
+  const token = await page.evaluate(() => {
+    const note = getComputedStyle(document.querySelector('.plan-approval-note .command-token'));
+    const setup = getComputedStyle(document.querySelector('.empty-state-setup .command-token'));
+    return {
+      text: document.querySelector('.plan-approval-note .command-token').textContent,
+      fill: note.backgroundColor, font: note.fontFamily, radius: note.borderRadius,
+      setupFill: setup.backgroundColor, setupFont: setup.fontFamily,
+    };
+  });
+  check(token.text === '/settings' && solid(token.fill) && token.fill === token.setupFill,
+    `first-screen ${label}: /settings is a command token, filled like the setup rows' (${token.text} ${token.fill})`);
+  check(/mono|Menlo|Monaco|Courier/i.test(token.font) && token.font === token.setupFont && token.radius !== '0px',
+    `first-screen ${label}: the token is set in the mono face with a radius (${token.font}, ${token.radius})`);
+
+  const note = await page.locator('.plan-approval-note').evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { autorun: el.dataset.autorun, rule: s.borderLeftWidth, colour: s.borderLeftColor, text: el.querySelector('.plan-approval-text').textContent };
+  });
+  const warning = await resolvedColour(page, 'var(--vscode-editorWarning-foreground)');
+  check(note.autorun === 'on' && note.rule === '2px' && note.colour === warning,
+    `first-screen ${label}: autorun's note carries a 2px warning rule (${note.rule} ${note.colour})`);
+  check(note.text.includes('Autorun is on') && note.text.includes('/settings.'),
+    `first-screen ${label}: the note keeps core's sentence (${JSON.stringify(note.text)})`);
+
+  await checkContrast(page, `first-screen ${label}`, [
+    '.empty-state-support', '.plan-approval-text', '.command-token',
+    '.isolation-notice-title', '.isolation-notice-summary', '.isolation-repo-name',
+    '.isolation-repo-head', '.isolation-repo-commit', '.isolation-notice-note',
+  ]);
+  // The whole column, for the picture: a sidebar taller than the first screen.
+  await page.setViewportSize({ width, height: 1200 });
+  await settle(page);
+  await page.screenshot({ path: path.join(OUT, `first-screen-${width}-${theme}.png`) });
+
+  // The other state of the same row: no warning colour, and nothing to type.
+  await send(page, FIRST_SCREEN_AUTORUN_OFF.post);
+  await page.waitForFunction(() => document.querySelector('.plan-approval-note')?.dataset.autorun === 'off');
+  const quiet = await page.locator('.plan-approval-note').evaluate((el) => ({
+    rule: getComputedStyle(el).borderLeftColor,
+    token: el.querySelector('.command-token')?.textContent ?? null,
+    text: el.textContent,
+  }));
+  check(quiet.rule !== warning && quiet.token === null && quiet.text.includes('Nothing runs until you approve the plan.'),
+    `first-screen ${label}: with autorun off the same row is quiet and promises approval (${quiet.rule}, ${JSON.stringify(quiet.text)})`);
+
+  // Long paths and branches are the case that clips a card at 420px.
+  await send(page, FIRST_SCREEN_LONG_PATHS.post);
+  await page.waitForSelector('.isolation-notice[data-status="dirty"]');
+  const wrapped = await page.evaluate(() => {
+    const card = document.querySelector('.isolation-notice').getBoundingClientRect();
+    const parts = [...document.querySelectorAll('.isolation-repo-name, .isolation-repo-head, .isolation-repo-commit')];
+    return {
+      ok: parts.every((el) => el.getBoundingClientRect().left >= card.left + 14 - 0.5
+        && el.getBoundingClientRect().right <= card.right - 15 + 0.5),
+      names: [...document.querySelectorAll('.isolation-repo-name')].map((el) => getComputedStyle(el).fontFamily),
+    };
+  });
+  check(wrapped.ok, `first-screen ${label}: long paths and branches wrap inside the card`);
+  check(wrapped.names.every((f) => /mono|Menlo|Monaco|Courier/i.test(f)),
+    `first-screen ${label}: a group's repository paths are set in mono (${wrapped.names.join(' | ')})`);
+
+  const overflow = await page.evaluate(() => {
+    const card = document.querySelector('.isolation-notice');
+    const empty = document.querySelector('.empty-state');
+    return {
+      page: document.documentElement.scrollWidth, client: document.documentElement.clientWidth,
+      cardRight: card.getBoundingClientRect().right, viewport: window.innerWidth,
+      cardScroll: card.scrollWidth, cardClient: card.clientWidth,
+      emptyScroll: empty.scrollWidth, emptyClient: empty.clientWidth,
+    };
+  });
+  check(overflow.page <= overflow.client && overflow.cardRight <= overflow.viewport
+    && overflow.cardScroll <= overflow.cardClient + 1 && overflow.emptyScroll <= overflow.emptyClient + 1,
+  `first-screen ${label}: nothing overflows sideways, long paths included (page ${overflow.page}/${overflow.client}, card ${overflow.cardScroll}/${overflow.cardClient} at ${overflow.cardRight} of ${overflow.viewport})`);
+
+  await page.close();
+}
+
+/**
  * The Settings panel's Run rows: each one segmented control, one border, its
  * dividers between options, and radii that depend only on an option's place.
  */
@@ -1164,6 +1329,11 @@ for (const combo of runs('cards') ? COMBOS : []) {
 for (const combo of runs('planner-auth') ? PLANNER_AUTH_COMBOS : []) {
   console.log(`\n== signed-out planner, ${combo.width}px, ${combo.theme} theme ==`);
   await signedOutPlanner(combo.width, combo.theme);
+}
+
+for (const combo of runs('first-screen') ? COMBOS : []) {
+  console.log(`\n== first screen, ${combo.width}px, ${combo.theme} theme ==`);
+  await firstScreen(combo.width, combo.theme);
 }
 
 for (const combo of runs('run-settings') ? COMBOS : []) {

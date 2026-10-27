@@ -9,7 +9,12 @@ const on = (path: string, branch: string, extra: Partial<PreviewRepo> = {}): Pre
 const preview = (status: IsolationPreview['status'], repos: PreviewRepo[] = [], extra: Partial<IsolationPreview> = {}): IsolationPreview => ({ status, repos, shared: [], ...extra });
 
 const notice = (container: HTMLElement) => container.querySelector('.isolation-notice');
-const rows = (container: HTMLElement) => [...container.querySelectorAll('.isolation-repo')].map((r) => r.textContent);
+// A row reads name → head → commit → flag, the parts the card sets apart.
+const rows = (container: HTMLElement) => [...container.querySelectorAll('.isolation-repo')].map((r) => {
+  const part = (sel: string) => r.querySelector(sel)?.textContent ?? '';
+  return [part('.isolation-repo-name'), part('.isolation-repo-head'), part('.isolation-repo-commit'), part('.isolation-repo-flag')]
+    .filter(Boolean).join(' ');
+});
 
 /** Both first screens draw the one notice, so the user reads the same words whichever they land on. */
 describe.each([
@@ -32,8 +37,41 @@ describe.each([
     const { container } = render(screen(preview('ready', [on('.', 'main')])));
 
     expect(notice(container)?.textContent).toContain('Code tasks run in isolated git worktrees based on the repositories and branches below.');
-    expect(rows(container)).toEqual(['This workspaceon main (a1b2c3d)']);
+    expect(rows(container)).toEqual(['This workspace on main a1b2c3d']);
     expect(notice(container)?.textContent).toContain('Ops and script tasks use your checkout.');
+  });
+
+  it('is a card: a title, the summary as a caption, and the commit set apart from its branch', () => {
+    const { container } = render(screen(preview('ready', [on('.', 'main')])));
+    const card = notice(container)!;
+    const repo = card.querySelector('.isolation-repo')!;
+
+    expect(card.querySelector('.isolation-notice-title')?.textContent).toBe('Repositories and branches');
+    expect(card.querySelector('.isolation-notice-summary')?.textContent).toContain('Code tasks run in isolated git worktrees');
+    expect(repo.querySelector('.isolation-repo-head')?.textContent).toBe('on main');
+    expect(repo.querySelector('.isolation-repo-commit')?.textContent).toBe('a1b2c3d');
+    // The workspace's one repository is named; a group's are named by path and set in mono.
+    expect(repo.querySelector('.isolation-repo-name')?.classList.contains('path')).toBe(false);
+    expect(card.querySelector('.isolation-notice-footer .isolation-notice-note')?.textContent).toContain('Ops and script tasks');
+  });
+
+  it('sets a group\'s repository paths in the mono face', () => {
+    const { container } = render(screen(preview('ready', [on('.', 'main'), on('services/billing', 'feature/x')])));
+
+    expect([...container.querySelectorAll('.isolation-repo-name')].map((n) => n.classList.contains('path')))
+      .toEqual([false, true]);
+  });
+
+  it('splits only the head shape that carries its commit, and shows an unborn head whole', () => {
+    const { container } = render(screen(preview('ready', [on('new', 'main')])));
+
+    expect(rows(container)).toEqual(['new on main a1b2c3d']);
+    expect(container.querySelector('.isolation-repo-commit')?.textContent).toBe('a1b2c3d');
+
+    const unborn = render(screen(preview('ready', [{ path: 'new', head: { kind: 'unborn', branch: 'main' } }])));
+    expect(unborn.container.querySelector('.isolation-repo-head')?.textContent)
+      .toBe('no commits yet on main; tasks share it instead of isolating it');
+    expect(unborn.container.querySelector('.isolation-repo-commit')).toBeNull();
   });
 
   it('lists every repository of a group, however many, each with its own branch', () => {
@@ -41,7 +79,7 @@ describe.each([
     const { container } = render(screen(preview('ready', repos)));
 
     expect(rows(container)).toHaveLength(12);
-    expect(rows(container)[3]).toBe('services/svc-3on feature/x (a1b2c3d)');
+    expect(rows(container)[3]).toBe('services/svc-3 on feature/x a1b2c3d');
   });
 
   it('says tasks run in the workspace without isolated worktrees when no repository is detected', () => {
@@ -72,7 +110,7 @@ describe.each([
       { path: 'new', head: { kind: 'unborn', branch: 'main' } },
     ])));
 
-    expect(rows(container)).toEqual(['apidetached HEAD at deadbee', 'newno commits yet on main; tasks share it instead of isolating it']);
+    expect(rows(container)).toEqual(['api detached HEAD at deadbee', 'new no commits yet on main; tasks share it instead of isolating it']);
   });
 
   it('is a labelled region, so a screen reader finds it', () => {

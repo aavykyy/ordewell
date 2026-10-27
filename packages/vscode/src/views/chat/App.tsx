@@ -89,6 +89,13 @@ export default function App() {
   const compaction = useMemo(() => [...blocks].reverse().find((b): b is CompactionBlock => b.type === 'compaction' && b.origin !== undefined), [blocks]);
   const compacting = compaction?.status === 'running';
   const plannerBusy = isResearchActive || compacting;
+  // An API key is one of two ways in (ADR-0009): an installed coding agent
+  // plans on its own subscription, so key-less is a working setup, not a
+  // first-run wall.
+  const canPlan = configuredProviders.length > 0 || planner.backends.some((b) => b.usable);
+  const hasContent = blocks.length > 0 || isResearchActive || isExecuting || !!error;
+  /** The first screen is on show, with every signed-out agent's own row. */
+  const emptyStateShown = !hasContent && isReady && canPlan;
   // Told as news only for a compaction this view saw run: one restored with
   // the transcript is history, already drawn where it happened.
   const seenRunning = useRef(new Set<string>());
@@ -138,7 +145,7 @@ export default function App() {
   // The pinned working line and the stack of queued prompts above the
   // composer take height from the list: each must be followed too, or the
   // newest output ends up past the fold.
-  const followRef = useFollowOutput<HTMLDivElement>(blocks, held, plannerBusy);
+  const followRef = useFollowOutput<HTMLDivElement>([blocks, held, plannerBusy], { follow: hasContent });
   const messageListCallbackRef = useCallback((el: HTMLDivElement | null) => {
     messageListRef.current = el;
     followRef(el);
@@ -633,10 +640,6 @@ export default function App() {
     [runnersKnown, enabledRunnerIds, modelAllowlist, modelsByRunner],
   );
 
-  // An API key is one of two ways in (ADR-0009): an installed coding agent
-  // plans on its own subscription, so key-less is a working setup, not a
-  // first-run wall.
-  const canPlan = configuredProviders.length > 0 || planner.backends.some((b) => b.usable);
   // The coding agents the host lists as planners are listed whether or not they
   // are installed, which `runnerList` (installed runners only) cannot say. That
   // full list is kept only to name what to install; the pills offer the usable
@@ -698,9 +701,6 @@ export default function App() {
     [plan],
   );
 
-  const hasContent = blocks.length > 0 || isResearchActive || isExecuting || !!error;
-  /** The first screen is on show, with every signed-out agent's own row. */
-  const emptyStateShown = !hasContent && isReady && canPlan;
   /** The one usage block, drawn pinned below the conversation rather than scrolling in it. */
   const usageBlock = useMemo(() => blocks.find((b) => b.type === 'usage'), [blocks]);
 

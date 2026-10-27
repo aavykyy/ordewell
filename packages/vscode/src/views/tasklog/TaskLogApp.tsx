@@ -71,7 +71,7 @@ export default function TaskLogApp() {
   const [limits, setLimits] = useState<readonly AccountLimitSnapshot[]>([]);
 
   const blocks = useMemo(() => patchedBlocks(view), [view]);
-  const followRef = useFollowOutput<HTMLDivElement>(blocks);
+  const followRef = useFollowOutput<HTMLDivElement>([blocks]);
   const header = status?.header;
   const shownLimits = limits.filter(hasAccountLimits);
   const state = header?.state;

@@ -52,6 +52,79 @@ const SETUP = [
 ];
 
 /**
+ * The first screen before a word is typed: the hero, the autorun note and the
+ * repositories card. It needs no session — the empty state is what the host
+ * draws before a turn — so the posts are the whole fixture. The workspace is
+ * one repository on a branch with a commit, and a path tasks share live, so
+ * every part of the card has something real to render.
+ */
+const FIRST_SCREEN_RUN = {
+  autonomous: false,
+  run: {
+    supervisorLevel: 'watch',
+    mergeAtGatesAutomatically: false,
+    plannedWithTrailer: true,
+    autorun: true,
+    supervisorRetryLimit: 2,
+    wakeUpReadBudget: 12,
+  },
+};
+
+export const FIRST_SCREEN = [
+  { post: { type: 'setConfiguredProviders', providers: ['openrouter'] } },
+  {
+    post: {
+      type: 'setPlannerBackends',
+      backends: [
+        { id: 'openrouter', label: 'OpenRouter', kind: 'vendor', usable: true },
+        { id: 'claude-code', label: 'Claude Code', kind: 'harness', runner: 'claude-code', usable: true },
+      ],
+      provider: 'claude-code',
+      runner: 'claude-code',
+    },
+  },
+  { post: { type: 'setModelConfig', modelConfig: { orchestrator: 'deepseek/deepseek-v4-flash' } } },
+  {
+    post: {
+      type: 'setRunners',
+      runners: [
+        { id: 'claude-code', displayName: 'Claude Code', enabled: true },
+        { id: 'codex', displayName: 'Codex', enabled: true },
+      ],
+    },
+  },
+  { post: { type: 'setRunSettings', ...FIRST_SCREEN_RUN } },
+  {
+    post: {
+      type: 'isolationPreview',
+      preview: {
+        status: 'ready',
+        repos: [{ path: '.', head: { kind: 'branch', branch: 'feat/runners_login', commit: '3a775192' }, dirty: false }],
+        shared: ['vendor/wasm', 'bench/live/screenshots'],
+      },
+    },
+  },
+];
+
+/** The same screen with autorun off: the note's other state, which must read as one quiet row. */
+export const FIRST_SCREEN_AUTORUN_OFF = { post: { type: 'setRunSettings', ...FIRST_SCREEN_RUN, run: { ...FIRST_SCREEN_RUN.run, autorun: false } } };
+
+/** A group of repositories with long paths and a long branch, for the card's wrapping. */
+export const FIRST_SCREEN_LONG_PATHS = {
+  post: {
+    type: 'isolationPreview',
+    preview: {
+      status: 'dirty',
+      repos: [
+        { path: 'packages/some-rather-long-package-name', head: { kind: 'branch', branch: 'feature/a-branch-name-long-enough-to-need-wrapping', commit: 'deadbeef123' }, dirty: true },
+        { path: 'services/billing-and-invoicing-web', head: { kind: 'branch', branch: 'main', commit: 'c7c8d96' }, dirty: false },
+      ],
+      shared: [],
+    },
+  },
+};
+
+/**
  * The first screen with a signed-out coding agent: the planner pill carries the
  * dot, and the empty state carries the sentence and the one login action.
  * `signedIn` is the same pair after a login, for the state that must redraw.

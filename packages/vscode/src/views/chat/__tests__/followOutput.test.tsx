@@ -6,8 +6,8 @@ import { useFollowOutput } from '../followOutput';
 // jsdom has no layout, so the log's geometry is faked: a 100px view onto `content` px.
 interface Geometry { content: number; top: number }
 
-function Log({ lines }: { lines: string[] }) {
-  const ref = useFollowOutput<HTMLDivElement>(lines);
+function Log({ lines, follow = true }: { lines: string[]; follow?: boolean }) {
+  const ref = useFollowOutput<HTMLDivElement>([lines], { follow });
   return (
     <div data-testid="log" ref={ref}>
       {lines.map((l) => <p key={l}>{l}</p>)}
@@ -89,5 +89,21 @@ describe('following a live log', () => {
     geometry.content = 700;
     rerender(['one', 'two', 'three']);
     expect(geometry.top).toBe(700);
+  });
+});
+
+describe('a surface that is not a log', () => {
+  it('opens at its top, and follows again once output arrives', () => {
+    cleanup();
+    const geometry: Geometry = { content: 600, top: 0 };
+    const view = render(<Log lines={['hero']} follow={false} />);
+    const log = view.getByTestId('log');
+    fake(log, geometry);
+
+    // The first screen is taller than the view, and still shows its hero.
+    expect(geometry.top).toBe(0);
+
+    view.rerender(<Log lines={['hero', 'first reply']} follow />);
+    expect(geometry.top).toBe(600);
   });
 });
