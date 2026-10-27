@@ -1099,13 +1099,32 @@ body.vscode-high-contrast-light .disclosure:hover {
   gap: 6px;
 }
 
+/* One runner is one control: its name toggles the runner, and a signed-out
+   agent's own login sits in the same border rather than beside it. */
+.runner-pill-item {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.runner-pill-group {
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+  background: transparent;
+  transition: all var(--transition-fast);
+}
+
 .runner-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 4px 11px;
+  border: 0;
   border-radius: var(--radius-full);
-  border: 1px solid transparent;
   background: transparent;
   color: var(--text-secondary);
   font-size: 11px;
@@ -1125,10 +1144,13 @@ body.vscode-high-contrast-light .disclosure:hover {
   transition: background var(--transition-fast);
 }
 
-.runner-pill.on {
+.runner-pill-group.on {
   border-color: rgba(57, 197, 207, 0.35);
-  color: var(--cyan);
   background: var(--cyan-subtle);
+}
+
+.runner-pill.on {
+  color: var(--cyan);
 }
 
 .runner-pill.on .runner-dot {
@@ -1136,14 +1158,21 @@ body.vscode-high-contrast-light .disclosure:hover {
 }
 
 /* Clicked, until the host's runner list says what it saved. */
+.runner-pill-group.pending {
+  opacity: 0.7;
+}
+
 .runner-pill.pending {
   opacity: 0.7;
 }
 
 /* Installed but off: dashed rather than filled, so it reads as offered rather than chosen. */
-.runner-pill.disabled {
+.runner-pill-group.disabled {
   border-style: dashed;
   border-color: var(--border-color);
+}
+
+.runner-pill.disabled {
   color: var(--text-muted);
 }
 
@@ -1153,12 +1182,32 @@ body.vscode-high-contrast-light .disclosure:hover {
 }
 
 .runner-pill.disabled:hover {
-  border-color: var(--cyan);
   color: var(--cyan);
 }
 
 .runner-pill.disabled:hover .runner-dot {
   box-shadow: inset 0 0 0 1px var(--cyan);
+}
+
+/* Signed out is its own quiet flag, not the on/off state: the dot stays red
+   whichever way the runner is switched. */
+.runner-pill-group.signed-out {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--red) 32%, var(--border-color));
+  background: var(--bg-secondary);
+}
+
+.runner-pill.signed-out {
+  color: var(--text-secondary);
+}
+
+.runner-pill.signed-out .runner-dot {
+  background: var(--red);
+  box-shadow: none;
+}
+
+.runner-pill-group.signed-out:hover {
+  border-color: var(--red);
 }
 
 .runner-pill:hover {
@@ -1175,11 +1224,33 @@ body.vscode-high-contrast-light .disclosure:hover {
   gap: 5px;
 }
 
-.planner-pill {
-  padding: 3px 10px;
+/* One planner is one control: the name selects it, and a signed-out agent's
+   own login sits inside the same border rather than beside it as a second pill. */
+.planner-pill-item {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* The group owns the shape: border, tint and radius. Each segment is its own
+   button, so a login never means also choosing that agent as planner. */
+.planner-pill-group {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
   border: 1px solid var(--border-color);
   border-radius: 999px;
   background: var(--bg-secondary);
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.planner-pill {
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 999px 0 0 999px;
+  background: transparent;
   color: var(--text-secondary);
   font-size: 11px;
   font-family: inherit;
@@ -1188,15 +1259,26 @@ body.vscode-high-contrast-light .disclosure:hover {
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 
+/* No login segment: the name is the whole chip, so it keeps both round ends. */
+.planner-pill:only-child {
+  border-radius: 999px;
+}
+
 .planner-pill:hover:not(:disabled) {
-  border-color: var(--accent);
   color: var(--text-primary);
+}
+
+.planner-pill-group:hover {
+  border-color: var(--accent);
 }
 
 .planner-pill.active {
   background: var(--accent);
-  border-color: var(--accent);
   color: var(--bg-primary);
+}
+
+.planner-pill-group.active {
+  border-color: var(--accent);
 }
 
 /* Picked, but the host has not confirmed it yet — it resolves the target's
@@ -1211,7 +1293,6 @@ body.vscode-high-contrast-light .disclosure:hover {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border-color: color-mix(in srgb, var(--red) 32%, var(--border-color));
   transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
 }
 
@@ -1219,7 +1300,11 @@ body.vscode-high-contrast-light .disclosure:hover {
   color: var(--text-primary);
 }
 
-.planner-pill.signed-out:hover:not(:disabled) {
+.planner-pill-group.signed-out {
+  border-color: color-mix(in srgb, var(--red) 32%, var(--border-color));
+}
+
+.planner-pill-group.signed-out:hover {
   border-color: var(--red);
 }
 
@@ -1236,34 +1321,21 @@ body.vscode-high-contrast-light .disclosure:hover {
   flex-shrink: 0;
 }
 
-/* A pill and the login that belongs to the agent it names. The action is a
-   small quiet button, not another pill: the agent stays the choice. */
-.planner-pill-group {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
-  min-width: 0;
-}
-
-.planner-pill-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-/* Fixed width for the same reason as the empty state's action: the label is
-   longer while a login runs, and the pill bar must not reflow around it. */
+/* The login is part of the agent's chip, not another chip: a divider and the
+   same tint, inside the group's border. Fixed width for the same reason as the
+   empty state's action: the label is longer while a login runs, and the pill
+   bar must not reflow around it. */
 .planner-pill-login {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
   flex: 0 0 auto;
-  min-width: 92px;
-  padding: 2px 8px;
-  border: 1px solid color-mix(in srgb, var(--text-primary) 18%, transparent);
-  border-radius: var(--radius-sm);
+  min-width: 104px;
+  padding: 3px 10px;
+  border: 0;
+  border-left: 1px solid var(--border-color);
+  border-radius: 0 999px 999px 0;
   background: transparent;
   color: var(--text-primary);
   font-family: inherit;
@@ -1277,7 +1349,6 @@ body.vscode-high-contrast-light .disclosure:hover {
 .planner-pill-login:hover:not(:disabled) {
   color: var(--text-primary);
   background: var(--bg-hover);
-  border-color: var(--accent);
 }
 
 .planner-pill-login:focus-visible {
@@ -1287,22 +1358,51 @@ body.vscode-high-contrast-light .disclosure:hover {
 
 .planner-pill-login:disabled {
   color: var(--text-secondary);
-  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-left-color: color-mix(in srgb, var(--accent) 22%, var(--border-color));
   cursor: default;
 }
 
-/* Why a login did not finish, under the pill that asked: one line, no dialog. */
-.planner-pill-login-failure {
-  max-width: 220px;
-  padding-left: 2px;
+.runner-pill-login {
+  min-width: 82px;
+  padding: 4px 9px;
+  font-size: 10px;
+}
+
+/* Why a login did not finish, under the pill that asked: one line, no dialog.
+   The slot is always there so the line appearing cannot move the pills below
+   it (or the first screen under the settings panel), and it never widens the
+   chip it belongs to: an overlong reason is elided rather than wrapped. */
+.planner-pill-item.has-login,
+.runner-pill-item.has-login {
+  position: relative;
+  padding-bottom: calc(1.45em + 3px);
+}
+
+.planner-pill-failure-slot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1.45em;
   font-size: 11px;
   line-height: 1.45;
+}
+
+.planner-pill-login-failure {
+  display: block;
+  max-width: 100%;
+  padding-left: 2px;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--text-hint);
 }
 
 body.vscode-high-contrast .planner-pill-login,
 body.vscode-high-contrast-light .planner-pill-login {
-  border-color: var(--vscode-contrastBorder, var(--text-primary));
+  border-left-color: var(--vscode-contrastBorder, var(--text-primary));
 }
 
 /* ---- Run settings (Settings panel) ---- */
@@ -1425,16 +1525,23 @@ body.vscode-high-contrast-light .planner-pill-login {
   line-height: 1.6;
 }
 
-/* Not a banner: one status line on the first screen, the dot carrying the
-   colour and the sentence carrying the meaning. No tint or box, so it sits
-   with the setup rows instead of interrupting them. */
-.planner-auth-warning {
+/* Not a banner: one status line per signed-out agent on the first screen, the
+   dot carrying the colour and each sentence carrying its meaning. No tint or
+   box, so the rows sit with the setup rows instead of interrupting them. */
+.planner-auth-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 360px;
+  margin: 10px 0 0;
+}
+
+.planner-auth-row {
   display: flex;
   align-items: flex-start;
   gap: 10px;
   width: 100%;
-  max-width: 360px;
-  margin: 10px 0 0;
   padding: 0;
   border: 0;
   background: none;
@@ -1446,7 +1553,7 @@ body.vscode-high-contrast-light .planner-pill-login {
 
 /* On the first line's centre. The row is anchored to the top so the action
    beside it keeps its slot through every state. */
-.planner-auth-warning .planner-auth-dot {
+.planner-auth-row .planner-auth-dot {
   margin-top: 6px;
 }
 

@@ -299,7 +299,7 @@ describe('a compaction after a login done outside the extension', () => {
     expect(h.installation.refresh).toHaveBeenCalledTimes(1);
     expect(h.installation.plannerUsability).toHaveBeenCalledWith('claude-code');
     expect(h.session.compactConversation).toHaveBeenCalledTimes(1);
-    expect(h.chatProvider.showError).toHaveBeenCalledWith(expect.stringContaining('Claude Code is not logged in'));
+    expect(h.chatProvider.showError).toHaveBeenCalledWith(expect.stringContaining('Claude Code not logged in'));
     expect(h.persistState).not.toHaveBeenCalled();
   });
 });

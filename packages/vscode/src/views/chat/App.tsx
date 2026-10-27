@@ -1,6 +1,6 @@
 import { TaskCommandsBridge } from './components/RunnerCommands';
 import React, { useState, useEffect, useCallback, useMemo, useReducer, useRef } from 'react';
-import EmptyState from './components/EmptyState';
+import EmptyState, { type SignedOutPlannerRow } from './components/EmptyState';
 import PlannerLoginAction from './components/PlannerLogin';
 import GetStarted from './components/GetStarted';
 import { orNames } from './runnerNames';
@@ -18,7 +18,7 @@ import HandoffCard from './components/HandoffCard';
 import CheckpointPanel from './components/CheckpointPanel';
 import RunSettingsBlock from './components/RunSettingsBlock';
 import type { TaskDraft } from './components/NewTaskCard';
-import type { CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId } from '@ordewell/core';
+import type { CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth } from '@ordewell/core';
 import { accountLimitsOf, compactionText, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 import { planSummaryLabel, nextDock } from './planDock';
 import { OpenPatchContext } from './openPatch';
@@ -642,18 +642,13 @@ export default function App() {
   // (ADR-0009).
   const agentNames = planner.backends.filter((b) => b.kind === 'harness').map((b) => b.label);
   const offeredBackends = planner.backends.filter((b) => b.usable);
-  // Only the agent that will actually plan can warn the empty state: an unused
-  // signed-out harness, or a vendor planner, says nothing about this session.
-  const activeBackend = planner.backends.find((b) => b.id === activePlanner);
-  /** The runner behind the active planner, which is whose login the empty state runs. */
-  const activeRunnerId = activeBackend ? activeBackend.runner ?? activeBackend.id : null;
 
-  /** The empty state's button: the planner on screen, named so a pending switch cannot sign in the previous one. */
-  const handleActivePlannerLogin = useCallback(() => {
-    setLoginFailure(null);
-    setPendingLogin(activeRunnerId);
-    vscode.postMessage({ type: 'loginPlanner', ...(activeRunnerId ? { runner: activeRunnerId } : {}) });
-  }, [activeRunnerId]);
+  /** What each installed coding agent's own status probe said, keyed by runner id. */
+  const runnerAuth = useMemo<Record<string, RunnerAuth | undefined>>(() => {
+    const byRunner: Record<string, RunnerAuth | undefined> = {};
+    for (const backend of planner.backends) byRunner[backend.runner ?? backend.id] = backend.auth;
+    return byRunner;
+  }, [planner.backends]);
 
   /** A pill's own action: that agent's login, without switching the planner to it. */
   const handleRunnerLogin = useCallback((runner: string) => {
@@ -662,14 +657,28 @@ export default function App() {
     vscode.postMessage({ type: 'loginPlanner', runner });
   }, []);
 
-  const signedOutPlanner = activeBackend?.kind === 'harness' && activeBackend.auth?.state === 'signed-out'
-    ? {
-        label: activeBackend.label,
-        onLogIn: handleActivePlannerLogin,
-        pending: pendingLogin !== null && pendingLogin === activeRunnerId,
-        failure: loginFailure && loginFailure.runner === activeRunnerId ? loginFailure.message : undefined,
-      }
-    : undefined;
+  /**
+   * Every signed-out coding agent, not only the one planning: the login is each
+   * one's own fix, and the active planner leads because its refusal is the one
+   * about to bite. The rows keep the host's list order after that.
+   */
+  const signedOutPlanners = useMemo<SignedOutPlannerRow[]>(() => {
+    const rows = planner.backends
+      .filter((b) => b.kind === 'harness' && b.auth?.state === 'signed-out')
+      .map((b) => {
+        const runner = b.runner ?? b.id;
+        return {
+          id: b.id,
+          runner,
+          label: b.label,
+          pending: pendingLogin === runner,
+          failure: loginFailure?.runner === runner ? loginFailure.message : undefined,
+          ...(b.auth?.loginCommand?.length ? { onLogIn: () => handleRunnerLogin(runner) } : {}),
+        };
+      });
+    // Stable sort: the active planner first, everything else as the host listed it.
+    return rows.sort((a, b) => Number(b.id === activePlanner) - Number(a.id === activePlanner));
+  }, [planner.backends, activePlanner, pendingLogin, loginFailure, handleRunnerLogin]);
 
   const runnerLabelMap = useMemo<Record<string, string>>(() => {
     const m: Record<string, string> = {};
@@ -688,7 +697,7 @@ export default function App() {
   );
 
   const hasContent = blocks.length > 0 || isResearchActive || isExecuting || !!error;
-  /** The first screen is on show, with its signed-out row: the pill bar need not repeat that login. */
+  /** The first screen is on show, with every signed-out agent's own row. */
   const emptyStateShown = !hasContent && isReady && canPlan;
   /** The one usage block, drawn pinned below the conversation rather than scrolling in it. */
   const usageBlock = useMemo(() => blocks.find((b) => b.type === 'usage'), [blocks]);
@@ -885,20 +894,21 @@ export default function App() {
                 {offeredBackends.map((b) => {
                   const runnerId = b.runner ?? b.id;
                   const signingIn = pendingLogin === runnerId;
-                  // The empty state's row signs the active planner in; once it is
-                  // gone, its pill is the only place left that can. A pill's
-                  // action never selects the planner (ADR-0009).
-                  const canLogIn = b.auth?.state === 'signed-out' && (b.id !== activePlanner || !emptyStateShown);
+                  const signedOut = b.auth?.state === 'signed-out';
+                  // The login is this agent's own and never selects the planner
+                  // (ADR-0009); it stays offered here even while the empty state
+                  // carries the same action, as long as there is a command to run.
+                  const canLogIn = signedOut && (b.auth?.loginCommand?.length ?? 0) > 0;
                   return (
-                    <span className="planner-pill-group" key={b.id}>
-                      <span className="planner-pill-row">
+                    <span className={`planner-pill-item${canLogIn ? ' has-login' : ''}`} key={b.id} data-runner={runnerId}>
+                      <span className={`planner-pill-group${signedOut ? ' signed-out' : ''}${b.id === activePlanner ? ' active' : ''}`}>
                         <button
                           type="button"
-                          className={`planner-pill${b.id === activePlanner ? ' active' : ''}${b.auth?.state === 'signed-out' ? ' signed-out' : ''}${pendingPlanner === b.id ? ' pending' : ''}`}
-                          title={b.auth?.state === 'signed-out' ? 'Not logged in — sign in from this chat' : b.reason}
+                          className={`planner-pill${b.id === activePlanner ? ' active' : ''}${signedOut ? ' signed-out' : ''}${pendingPlanner === b.id ? ' pending' : ''}`}
+                          title={signedOut ? 'Not logged in — sign in from this chat' : b.reason}
                           onClick={() => handlePlannerChange(b.id)}
                         >
-                          {b.auth?.state === 'signed-out' && <span className="planner-auth-dot" aria-hidden="true" />}
+                          {signedOut && <span className="planner-auth-dot" aria-hidden="true" />}
                           {b.label}
                         </button>
                         {canLogIn && (
@@ -911,10 +921,13 @@ export default function App() {
                           />
                         )}
                       </span>
-                      {!signingIn && loginFailure?.runner === runnerId
-                        && (b.id !== activePlanner || !emptyStateShown) && (
-                          <span className="planner-pill-login-failure" role="status">{loginFailure.message}</span>
-                        )}
+                      {canLogIn && (
+                        <span className="planner-pill-failure-slot">
+                          {!signingIn && loginFailure?.runner === runnerId && (
+                            <span className="planner-pill-login-failure" role="status">{loginFailure.message}</span>
+                          )}
+                        </span>
+                      )}
                     </span>
                   );
                 })}
@@ -967,18 +980,46 @@ export default function App() {
               const on = runners.includes(r.id);
               // Never emptied from here: with no runner on, no surface could assign a task.
               const last = on && runners.length === 1;
-              const title = last
-                ? `${r.displayName} is the only runner on: switch another on first`
-                : on
-                  ? `Stop assigning tasks to ${r.displayName}, on every surface`
-                  : `Click to enable ${r.displayName} as a runner on every surface`;
+              const auth = runnerAuth[r.id];
+              const signedOut = auth?.state === 'signed-out';
+              const signingIn = pendingLogin === r.id;
+              // A login never switches the runner on or off: it only signs that
+              // agent in, exactly as the planner pill beside it does.
+              const canLogIn = signedOut && (auth?.loginCommand?.length ?? 0) > 0;
+              const title = signedOut
+                ? 'Not logged in'
+                : last
+                  ? `${r.displayName} is the only runner on: switch another on first`
+                  : on
+                    ? `Stop assigning tasks to ${r.displayName}, on every surface`
+                    : `Click to enable ${r.displayName} as a runner on every surface`;
               return (
-                <button key={r.id} className={`runner-pill ${on ? 'on' : 'disabled'}${r.id in pendingRunners ? ' pending' : ''}`}
-                  onClick={() => { if (!last) handleRunnerPill(r.id, !on); }}
-                  aria-pressed={on}
-                  title={title}>
-                  <span className="runner-dot" /> {r.displayName}
-                </button>
+                <span className={`runner-pill-item${canLogIn ? ' has-login' : ''}`} key={r.id} data-runner={r.id}>
+                  <span className={`runner-pill-group${on ? ' on' : ' disabled'}${r.id in pendingRunners ? ' pending' : ''}${signedOut ? ' signed-out' : ''}`}>
+                    <button className={`runner-pill ${on ? 'on' : 'disabled'}${r.id in pendingRunners ? ' pending' : ''}${signedOut ? ' signed-out' : ''}`}
+                      onClick={() => { if (!last) handleRunnerPill(r.id, !on); }}
+                      aria-pressed={on}
+                      title={title}>
+                      <span className={`runner-dot${signedOut ? ' planner-auth-dot' : ''}`} aria-hidden={signedOut ? true : undefined} /> {r.displayName}
+                    </button>
+                    {canLogIn && (
+                      <PlannerLoginAction
+                        className="planner-pill-login runner-pill-login"
+                        onLogIn={() => handleRunnerLogin(r.id)}
+                        pending={signingIn}
+                        ariaLabel={signingIn ? `Signing in to ${r.displayName}` : `Log in to ${r.displayName}`}
+                        title={signingIn ? `Signing in to ${r.displayName}` : `Log in to ${r.displayName}`}
+                      />
+                    )}
+                  </span>
+                  {canLogIn && (
+                    <span className="planner-pill-failure-slot runner-pill-failure-slot">
+                      {!signingIn && loginFailure?.runner === r.id && (
+                        <span className="planner-pill-login-failure runner-pill-login-failure" role="status">{loginFailure.message}</span>
+                      )}
+                    </span>
+                  )}
+                </span>
               );
             })}
             {runnerList.length === 0 && !runnersKnown && (
@@ -1036,7 +1077,7 @@ export default function App() {
         )}
 
         {emptyStateShown && (
-          <EmptyState onLoadSession={handleLoadSession} runSettings={host.runSettings} signedOut={signedOutPlanner} isolationPreview={host.isolationPreview} />
+          <EmptyState onLoadSession={handleLoadSession} runSettings={host.runSettings} signedOut={signedOutPlanners} isolationPreview={host.isolationPreview} />
         )}
 
         {error && (

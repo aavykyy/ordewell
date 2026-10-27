@@ -142,8 +142,8 @@ export function describePlannerNotReady(reason: PlannerNotReady, commands: Plann
     // The headless CLI's own login is the runner's command; naming both would
     // read as two routes where there is one.
     return surface === own
-      ? `${reason.label} is not logged in. Run ${own} to sign in, then try again.`
-      : `${reason.label} is not logged in. Sign in with ${surface}, or run ${own} and try again.`;
+      ? `${reason.label} not logged in. Run ${own} to sign in, then try again.`
+      : `${reason.label} not logged in. Sign in with ${surface}, or run ${own} and try again.`;
   }
   if (reason.code === 'no_model') {
     // The TUI and VS Code pick the model inside `/planner`; the headless CLI

@@ -531,10 +531,11 @@ async function reloadScenario(page) {
 const loginBox = (page, selector) => page.locator(selector).boundingBox();
 
 /**
- * The signed-out planner treatment: the pill's dot, the empty state's one
- * status line and login, its pending and failed states, then the same action
- * on a pill once the first screen is gone. Each state is checked for the jump
- * the pending label is most likely to cause, and for a theme-blind focus ring.
+ * The signed-out agent treatment: every signed-out pill's dot and its own
+ * login segment in the Planner menu, the empty state's one status row per
+ * agent with its own action, pending and failed states, then the same actions
+ * once the first screen is gone. Each state is checked for the jump a pending
+ * label is most likely to cause, and for a theme-blind focus ring.
  */
 async function signedOutPlanner(width, theme) {
   const label = `${width}/${theme}`;
@@ -542,21 +543,43 @@ async function signedOutPlanner(width, theme) {
   await page.goto(`${BASE}/?theme=${theme}`);
   await page.waitForSelector('.chat-container');
   await sendAll(page, SIGNED_OUT_SETUP.map((s) => s.post));
-  await page.waitForSelector('.planner-auth-warning');
+  await page.waitForSelector('.planner-auth-rows');
   await settle(page);
 
+  const row = (runner) => `.planner-auth-row[data-runner="${runner}"]`;
+  const plannerLogin = (runner) => page.locator(`.planner-pill-item[data-runner="${runner}"] .planner-pill-login`);
+
   check(await page.locator('.planner-pill.signed-out').count() === 2, `planner-auth ${label}: both signed-out agents carry the pill flag`);
-  check((await page.locator('.planner-auth-warning-text').innerText()) === 'Claude Code is not logged in.',
-    `planner-auth ${label}: the empty state says it in one sentence (got "${await page.locator('.planner-auth-warning-text').innerText()}")`);
+  const rows = await page.locator('.planner-auth-row').evaluateAll((els) => els.map((el) => ({
+    runner: el.dataset.runner,
+    text: el.querySelector('.planner-auth-warning-text')?.textContent,
+    login: el.querySelector('.planner-login-btn')?.getAttribute('aria-label'),
+  })));
+  check(JSON.stringify(rows) === JSON.stringify([
+    { runner: 'claude-code', text: 'Claude Code not logged in.', login: 'Log in to Claude Code' },
+    { runner: 'codex', text: 'Codex not logged in.', login: 'Log in to Codex' },
+  ]), `planner-auth ${label}: one row per agent, each naming its own login (${rows.map((r) => r.text).join(' | ')})`);
+  check(await page.locator('.planner-backends .planner-pill-login').count() === 2,
+    `planner-auth ${label}: each signed-out pill carries its login in the menu while the empty state shows`);
+  check(await plannerLogin('claude-code').getAttribute('aria-label') === 'Log in to Claude Code'
+    && await plannerLogin('codex').getAttribute('aria-label') === 'Log in to Codex',
+  `planner-auth ${label}: each menu login names its agent`);
+
+  check(await page.locator('.runner-pill.signed-out').count() === 2, `planner-auth ${label}: both signed-out runners carry the flag too`);
+  const runnerLogins = await page.locator('.runner-pill-login').evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')));
+  check(JSON.stringify(runnerLogins) === JSON.stringify(['Log in to Claude Code', 'Log in to Codex']),
+    `planner-auth ${label}: each signed-out runner carries its own login (${runnerLogins.join(' | ')})`);
+
   check(await page.locator('.planner-pill.active[title="Not logged in — sign in from this chat"]').count() === 1,
     `planner-auth ${label}: the active pill's title says why`);
-  check(await page.locator('.planner-auth-warning .planner-auth-dot').count() === 1, `planner-auth ${label}: one dot on the row`);
-  const dot = await loginBox(page, '.planner-auth-warning .planner-auth-dot');
-  const sentence = await loginBox(page, '.planner-auth-warning-text');
-  check(dot?.width === 6 && dot?.height === 6, `planner-auth ${label}: the row's dot is 6×6 (got ${dot?.width}×${dot?.height})`);
-  check(!!dot && !!sentence && dot.x + dot.width <= sentence.x
-    && Math.abs((dot.y + dot.height / 2) - (sentence.y + 9)) <= 1,
-    `planner-auth ${label}: the row's dot sits before the sentence, on its first line`);
+  for (const runner of ['claude-code', 'codex']) {
+    const dot = await loginBox(page, `${row(runner)} .planner-auth-dot`);
+    const sentence = await loginBox(page, `${row(runner)} .planner-auth-warning-text`);
+    check(dot?.width === 6 && dot?.height === 6, `planner-auth ${label}: ${runner}'s row dot is 6×6 (got ${dot?.width}×${dot?.height})`);
+    check(!!dot && !!sentence && dot.x + dot.width <= sentence.x
+      && Math.abs((dot.y + dot.height / 2) - (sentence.y + 9)) <= 1,
+    `planner-auth ${label}: ${runner}'s dot sits before its sentence, on its first line`);
+  }
   const pillBox = await loginBox(page, '.planner-pill.active');
   const pillDot = await loginBox(page, '.planner-pill.active .planner-auth-dot');
   check(pillDot?.width === 6 && pillDot?.height === 6, `planner-auth ${label}: the pill's dot is 6×6 (got ${pillDot?.width}×${pillDot?.height})`);
@@ -573,46 +596,52 @@ async function signedOutPlanner(width, theme) {
     `planner-auth ${label}: the planner pill has a focus ring (${JSON.stringify(pillFocus)})`);
   await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
 
-  const row = await page.locator('.planner-auth-warning').evaluate((el) => {
+  const rowStyle = await page.locator(row('claude-code')).evaluate((el) => {
     const s = getComputedStyle(el);
     return { border: s.borderTopWidth, borderColour: s.borderTopColor, background: s.backgroundColor };
   });
-  check(row.border === '0px' && row.background === 'rgba(0, 0, 0, 0)',
-    `planner-auth ${label}: the row is a line, not a tinted banner (${row.border} ${row.borderColour}, ${row.background})`);
+  check(rowStyle.border === '0px' && rowStyle.background === 'rgba(0, 0, 0, 0)',
+    `planner-auth ${label}: the row is a line, not a tinted banner (${rowStyle.border} ${rowStyle.borderColour}, ${rowStyle.background})`);
   await checkContrast(page, `planner-auth ${label}`, ['.planner-auth-warning-text', '.planner-login-btn']);
   await page.screenshot({ path: path.join(OUT, `planner-auth-empty-${width}-${theme}.png`) });
 
-  const resting = await loginBox(page, '.planner-login-btn');
-  const restingRow = await loginBox(page, '.planner-auth-warning');
+  const resting = await loginBox(page, `${row('claude-code')} .planner-login-btn`);
+  const restingRow = await loginBox(page, row('claude-code'));
   const restingLogo = await loginBox(page, '.empty-state-logo');
-  check(await page.locator('.planner-login-btn').isEnabled(), `planner-auth ${label}: Log in starts enabled`);
-  check(await page.locator('.planner-login-btn').getAttribute('aria-busy') === null, `planner-auth ${label}: not busy before a login`);
-  check(await page.locator('.planner-login-btn').getAttribute('aria-label') === 'Log in to Claude Code',
+  check(await page.locator(`${row('claude-code')} .planner-login-btn`).isEnabled(), `planner-auth ${label}: Log in starts enabled`);
+  check(await page.locator(`${row('claude-code')} .planner-login-btn`).getAttribute('aria-busy') === null, `planner-auth ${label}: not busy before a login`);
+  check(await page.locator(`${row('claude-code')} .planner-login-btn`).getAttribute('aria-label') === 'Log in to Claude Code',
     `planner-auth ${label}: the action names the agent without losing its visible "Log in"`);
 
-  await page.locator('.planner-login-btn').evaluate((el) => el.focus({ focusVisible: true }));
-  const ring = await page.locator('.planner-login-btn').evaluate((el) => {
+  await page.locator(`${row('claude-code')} .planner-login-btn`).evaluate((el) => el.focus({ focusVisible: true }));
+  const ring = await page.locator(`${row('claude-code')} .planner-login-btn`).evaluate((el) => {
     const s = getComputedStyle(el);
     return { visible: el.matches(':focus-visible'), width: s.outlineWidth, style: s.outlineStyle, offset: s.outlineOffset };
   });
   check(ring.visible && ring.width === '2px' && ring.style === 'solid' && ring.offset === '2px',
     `planner-auth ${label}: Log in has a 2px focus ring (${JSON.stringify(ring)})`);
 
-  await page.locator('.planner-login-btn').click();
-  await page.waitForFunction(() => document.querySelector('.planner-login-btn')?.getAttribute('aria-busy') === 'true');
-  check(await page.locator('.planner-login-btn').isDisabled(), `planner-auth ${label}: Log in is disabled while signing in`);
-  check((await page.locator('.planner-login-btn').innerText()).includes('Signing in…'), `planner-auth ${label}: the pending label uses the ellipsis character`);
-  check(await page.locator('.planner-login-btn').getAttribute('aria-label') === 'Signing in to Claude Code',
+  await page.locator(`${row('claude-code')} .planner-login-btn`).click();
+  await page.waitForFunction(() => document.querySelector('.planner-auth-row[data-runner="claude-code"] .planner-login-btn')?.getAttribute('aria-busy') === 'true');
+  const claudeLogin = page.locator(`${row('claude-code')} .planner-login-btn`);
+  check(await claudeLogin.isDisabled(), `planner-auth ${label}: Log in is disabled while signing in`);
+  check((await claudeLogin.innerText()).includes('Signing in…'), `planner-auth ${label}: the pending label uses the ellipsis character`);
+  check(await claudeLogin.getAttribute('aria-label') === 'Signing in to Claude Code',
     `planner-auth ${label}: the pending action says whose login it is`);
-  check(await page.locator('.planner-login-btn .planner-login-spinner').count() === 1, `planner-auth ${label}: a small spinner accompanies the label`);
-  check(await page.locator('.planner-login-spinner').evaluate((el) => getComputedStyle(el).animationName) === 'planner-login-spin',
+  check(await page.locator(`${row('claude-code')} .planner-login-spinner`).count() === 1, `planner-auth ${label}: a small spinner accompanies the label`);
+  check(await page.locator(`${row('claude-code')} .planner-login-spinner`).evaluate((el) => getComputedStyle(el).animationName) === 'planner-login-spin',
     `planner-auth ${label}: the spinner is the only motion`);
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  check(await page.locator('.planner-login-spinner').evaluate((el) => getComputedStyle(el).animationName) === 'none',
+  check(await page.locator(`${row('claude-code')} .planner-login-spinner`).evaluate((el) => getComputedStyle(el).animationName) === 'none',
     `planner-auth ${label}: reduced motion stops the spinner`);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  const pending = await loginBox(page, '.planner-login-btn');
-  const pendingRow = await loginBox(page, '.planner-auth-warning');
+  // The same pending state is visible on that agent's menu login and nowhere else.
+  check(await plannerLogin('claude-code').isDisabled() && await plannerLogin('claude-code').getAttribute('aria-busy') === 'true',
+    `planner-auth ${label}: the menu login waits with the row`);
+  check(await plannerLogin('codex').isEnabled(), `planner-auth ${label}: another agent's menu login stays usable`);
+  check(await page.locator(`${row('codex')} .planner-login-btn`).isEnabled(), `planner-auth ${label}: another agent's row login stays usable`);
+  const pending = await loginBox(page, `${row('claude-code')} .planner-login-btn`);
+  const pendingRow = await loginBox(page, row('claude-code'));
   check(pendingRow?.height === restingRow?.height, `planner-auth ${label}: the row does not grow between default and pending (${restingRow?.height} → ${pendingRow?.height})`);
   check(pending?.width === resting?.width && pending?.x === resting?.x && pending?.y === resting?.y,
     `planner-auth ${label}: the action keeps its slot while pending`);
@@ -620,16 +649,20 @@ async function signedOutPlanner(width, theme) {
   await page.screenshot({ path: path.join(OUT, `planner-auth-pending-${width}-${theme}.png`) });
 
   await send(page, { type: 'plannerLoginEnded', runner: 'claude-code', ok: false, message: 'The terminal closed before sign-in finished.' });
-  await page.waitForSelector('.planner-auth-failure');
-  check(await page.locator('.planner-auth-failure').innerText() === 'The terminal closed before sign-in finished.', `planner-auth ${label}: a failure explains the result in one sentence`);
-  check(await page.locator('.planner-auth-warning-text').count() === 0, `planner-auth ${label}: the result takes the sentence's line rather than adding one`);
-  check(await page.locator('.planner-login-btn').isEnabled() && await page.locator('.planner-login-btn').getAttribute('aria-busy') === null,
+  await page.waitForSelector(`${row('claude-code')} .planner-auth-failure`);
+  check(await page.locator(`${row('claude-code')} .planner-auth-failure`).innerText() === 'The terminal closed before sign-in finished.', `planner-auth ${label}: a failure explains the result in one sentence`);
+  check(await page.locator(`${row('claude-code')} .planner-auth-warning-text`).count() === 0, `planner-auth ${label}: the result takes that row's sentence line rather than adding one`);
+  check(await page.locator(`${row('codex')} .planner-auth-warning-text`).count() === 1, `planner-auth ${label}: the other agent's row is untouched`);
+  check(await claudeLogin.isEnabled() && await claudeLogin.getAttribute('aria-busy') === null,
     `planner-auth ${label}: the row offers the retry once a login ends`);
-  check((await page.locator('.planner-login-btn').innerText()) === 'Log in', `planner-auth ${label}: the retry says "Log in"`);
-  check(await page.locator('.planner-pill-login-failure').count() === 0,
-    `planner-auth ${label}: the pill does not repeat a failure the empty state already tells`);
-  const failed = await loginBox(page, '.planner-login-btn');
-  const failedRow = await loginBox(page, '.planner-auth-warning');
+  check((await claudeLogin.innerText()) === 'Log in', `planner-auth ${label}: the retry says "Log in"`);
+  const plannerFailure = page.locator('.planner-pill-item[data-runner="claude-code"] .planner-pill-login-failure');
+  check(await plannerFailure.count() === 1 && await plannerFailure.innerText() === 'The terminal closed before sign-in finished.',
+    `planner-auth ${label}: the agent's menu login repeats the same failure under its own pill`);
+  check(await page.locator('.runner-pill-item[data-runner="claude-code"] .planner-pill-login-failure').innerText() === 'The terminal closed before sign-in finished.',
+    `planner-auth ${label}: the runner's login keeps the same failure under that runner`);
+  const failed = await loginBox(page, `${row('claude-code')} .planner-login-btn`);
+  const failedRow = await loginBox(page, row('claude-code'));
   const failedLogo = await loginBox(page, '.empty-state-logo');
   check(failed?.width === resting?.width && failed?.x === resting?.x && failed?.y === resting?.y,
     `planner-auth ${label}: a failure does not move the action`);
@@ -642,21 +675,23 @@ async function signedOutPlanner(width, theme) {
   check(overflow.scroll <= overflow.client, `planner-auth ${label}: the narrow layout has no horizontal overflow (${overflow.scroll} ≤ ${overflow.client})`);
 
   await send(page, SIGNED_OUT_PLANNERS.signedIn);
-  await page.waitForSelector('.planner-auth-warning', { state: 'detached' });
+  await page.waitForSelector('.planner-auth-rows', { state: 'detached' });
   check(await page.locator('.planner-pill.signed-out').count() === 0, `planner-auth ${label}: signing in redraws both pills without the flag`);
+  check(await page.locator('.planner-backends .planner-pill-login').count() === 0, `planner-auth ${label}: the menu logins leave with the flags`);
 
-  // The same login on a pill: the first screen is gone, so the active
-  // planner's own action must appear there instead. Clear the earlier failure
-  // first: the pill section measures the action's own reflow, not a line
-  // disappearing from a neighbour.
+  // The same login on a pill: the first screen is gone, and every signed-out
+  // agent keeps its own login in the menu. Clear the earlier failure first: the
+  // pill section measures the action's own reflow, not a line disappearing from
+  // a neighbour.
   await send(page, SIGNED_OUT_PLANNERS.signedOut);
   await send(page, { type: 'plannerLoginEnded', runner: 'claude-code', ok: true });
   await send(page, { type: 'plannerTurn', active: true });
   await page.waitForSelector('.empty-state', { state: 'detached' });
   await settle(page);
-  check(await page.locator('.planner-pill-login').count() === 2, `planner-auth ${label}: each signed-out pill carries its own login once the empty state is gone`);
+  check(await page.locator('.planner-auth-rows').count() === 0, `planner-auth ${label}: the first screen's rows are gone`);
+  check(await page.locator('.planner-backends .planner-pill-login').count() === 2, `planner-auth ${label}: each signed-out pill keeps its own login in the menu`);
   await page.evaluate(() => window.__posted.length = 0);
-  const codexLogin = page.locator('.planner-pill-login').nth(1);
+  const codexLogin = plannerLogin('codex');
   const pillLogin = await codexLogin.boundingBox();
   check(await codexLogin.getAttribute('aria-label') === 'Log in to Codex', `planner-auth ${label}: a pill's login names its agent`);
   await codexLogin.evaluate((el) => el.focus({ focusVisible: true }));
@@ -667,11 +702,11 @@ async function signedOutPlanner(width, theme) {
   check(pillRing.visible && pillRing.width === '2px' && pillRing.style === 'solid' && pillRing.offset === '2px',
     `planner-auth ${label}: a pill's login has the same focus ring (${JSON.stringify(pillRing)})`);
   await codexLogin.click();
-  await page.waitForFunction(() => document.querySelectorAll('.planner-pill-login')[1]?.getAttribute('aria-busy') === 'true');
+  await page.waitForFunction(() => document.querySelector('.planner-backends .planner-pill-login[aria-label="Signing in to Codex"]')?.getAttribute('aria-busy') === 'true');
   const pillPending = await codexLogin.boundingBox();
   check(await codexLogin.isDisabled(), `planner-auth ${label}: only the clicked pill's login waits`);
   check(await codexLogin.getAttribute('aria-label') === 'Signing in to Codex', `planner-auth ${label}: the pending pill action names its agent`);
-  check(await page.locator('.planner-pill-login').nth(0).isEnabled(), `planner-auth ${label}: the other pill's login stays usable`);
+  check(await plannerLogin('claude-code').isEnabled(), `planner-auth ${label}: the other pill's login stays usable`);
   check(pillPending?.width === pillLogin?.width && pillPending?.x === pillLogin?.x,
     `planner-auth ${label}: the pill action keeps its width while pending (${pillLogin?.width}×${pillLogin?.x} → ${pillPending?.width}×${pillPending?.x})`);
   const posted = await page.evaluate(() => window.__posted.map((m) => m.type));
@@ -679,9 +714,12 @@ async function signedOutPlanner(width, theme) {
   await page.screenshot({ path: path.join(OUT, `planner-auth-pill-${width}-${theme}.png`) });
 
   await send(page, { type: 'plannerLoginEnded', runner: 'codex', ok: false, message: 'Sign-in did not finish in time.' });
-  await page.waitForSelector('.planner-pill-login-failure');
-  check(await page.locator('.planner-pill-login-failure').innerText() === 'Sign-in did not finish in time.', `planner-auth ${label}: a pill's failure stays under that agent`);
-  check(await page.locator('.planner-pill-login').nth(1).isEnabled(), `planner-auth ${label}: the failed pill action is a retry, not a dead end`);
+  const codexFailure = page.locator('.planner-pill-item[data-runner="codex"] .planner-pill-login-failure');
+  await codexFailure.waitFor();
+  check(await codexFailure.innerText() === 'Sign-in did not finish in time.', `planner-auth ${label}: a pill's failure stays under that agent`);
+  check(await page.locator('.planner-pill-item[data-runner="claude-code"] .planner-pill-login-failure').count() === 0,
+    `planner-auth ${label}: another agent's pill does not take that failure`);
+  check(await plannerLogin('codex').isEnabled(), `planner-auth ${label}: the failed pill action is a retry, not a dead end`);
   await checkContrast(page, `planner-auth ${label}`, ['.planner-pill-login', '.planner-pill-login-failure']);
   await page.screenshot({ path: path.join(OUT, `planner-auth-pill-failure-${width}-${theme}.png`) });
 

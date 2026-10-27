@@ -143,10 +143,10 @@ describe('describePlannerNotReady', () => {
     };
 
     expect(describePlannerNotReady(reason, TERMINAL_UI_COMMANDS)).toBe(
-      'Claude Code is not logged in. Sign in with /login, or run claude auth login and try again.',
+      'Claude Code not logged in. Sign in with /login, or run claude auth login and try again.',
     );
     expect(describePlannerNotReady(reason, CHAT_COMMANDS)).toBe(
-      'Claude Code is not logged in. Sign in with /login, or run claude auth login and try again.',
+      'Claude Code not logged in. Sign in with /login, or run claude auth login and try again.',
     );
   });
 
@@ -157,7 +157,7 @@ describe('describePlannerNotReady', () => {
     };
 
     expect(describePlannerNotReady(reason, HEADLESS_CLI_COMMANDS)).toBe(
-      'Claude Code is not logged in. Run claude auth login to sign in, then try again.',
+      'Claude Code not logged in. Run claude auth login to sign in, then try again.',
     );
   });
 });
