@@ -106,7 +106,7 @@ describe('VS Code with no saved runner choice enables the installed agents', () 
       notifications: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), confirm: async () => undefined },
       getCurrentPlan: () => plan, setCurrentPlan: (value) => { plan = value; },
       getCurrentGoal: () => goal, setCurrentGoal: (value) => { goal = value; },
-      isGeneratingPlan: () => session.isPlannerBusy, persistState: () => {}, saveCurrentSession: () => {}, log: () => {},
+      isGeneratingPlan: () => session.isPlannerBusy, persistState: () => {}, saveCurrentSession: () => {}, sendRunSettings: () => {}, log: () => {},
     };
     return { deps, session, messages, config, errors: () => messages.filter((m) => m.type === 'showError') };
   }

@@ -38,6 +38,7 @@ describe('loading a session from history', () => {
       setCurrentPlan: vi.fn(),
       setCurrentGoal: vi.fn(),
       persistState: vi.fn(),
+      sendRunSettings: vi.fn(),
       log: vi.fn(),
     } as unknown as CommandDeps);
     const loadById = registerCommand.mock.calls.find(([id]) => id === 'ordewell.loadSessionById')![1] as (id: string) => Promise<void>;
@@ -46,5 +47,28 @@ describe('loading a session from history', () => {
 
     expect(session.loadPlan).toHaveBeenCalledWith(expect.anything(), 'build me a parser', workspace, { sessionId: meta.id });
     expect(loadState(workspace)?.sessionId).toBe(meta.id);
+  });
+
+  it('pushes this window\'s run settings once the loaded session is the one it shows', async () => {
+    const meta = saveSession(plan(), 'build me a parser', workspace);
+    registerCommand.mockClear();
+    const session = { loadPlan: vi.fn(), runSnapshot: vi.fn() };
+    const chatProvider = { restoreChat: vi.fn(), showPlan: vi.fn(), adoptRun: vi.fn() };
+    const sendRunSettings = vi.fn();
+    registerCommands({ subscriptions: [] } as unknown as vscode.ExtensionContext, {
+      session,
+      chatProvider,
+      fsAdapter: { getWorkspaceRoot: () => workspace },
+      setCurrentPlan: vi.fn(),
+      setCurrentGoal: vi.fn(),
+      persistState: vi.fn(),
+      sendRunSettings,
+      log: vi.fn(),
+    } as unknown as CommandDeps);
+    const loadById = registerCommand.mock.calls.find(([id]) => id === 'ordewell.loadSessionById')![1] as (id: string) => Promise<void>;
+
+    await loadById(meta.id);
+
+    expect(sendRunSettings).toHaveBeenCalledTimes(1);
   });
 });

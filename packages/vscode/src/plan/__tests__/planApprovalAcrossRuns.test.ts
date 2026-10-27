@@ -80,6 +80,7 @@ function host(workspace: string, aiService?: IAiService) {
     isGeneratingPlan: () => false,
     persistState: () => persistState(persistence()),
     saveCurrentSession: vi.fn(),
+    sendRunSettings: vi.fn(),
     log: () => {},
   } as unknown as PlanManagerDeps;
 

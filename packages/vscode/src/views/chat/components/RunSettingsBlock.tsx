@@ -131,7 +131,8 @@ function RunSettingsRows({ value, onChange }: { value: RunSettingsValue; onChang
   const { run } = value;
   return (
     <>
-      <div className="setup-block-hint">How much Ordewell does for you. Saved at once, for every session.</div>
+      <div className="setup-block-hint">Supervisor, automerge and autorun apply to this session; your last change is the default for new ones.</div>
+      <div className="setup-block-hint run-settings-scope-note">Autonomy and Parallel tasks apply to every session.</div>
       <PillRow label="Autonomy" options={AUTONOMY} current={value.autonomous} onPick={(autonomous) => onChange({ autonomous })} />
       <PillRow label="Supervisor" options={SUPERVISOR} current={run.supervisorLevel} onPick={(supervisorLevel) => onChange({ run: { supervisorLevel } })} />
       {run.supervisorLevel !== 'off' && (

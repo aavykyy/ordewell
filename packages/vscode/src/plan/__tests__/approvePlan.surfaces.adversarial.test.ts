@@ -49,6 +49,7 @@ function deps(workspace: string) {
     fsAdapter: { getWorkspaceRoot: () => workspace },
     persistState: vi.fn(),
     saveCurrentSession: vi.fn(),
+    sendRunSettings: vi.fn(),
     log: vi.fn(),
   } as unknown as PlanManagerDeps;
   return { d, clear, activity, session };

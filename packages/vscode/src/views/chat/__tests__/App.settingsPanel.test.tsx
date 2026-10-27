@@ -88,6 +88,13 @@ describe('run settings in the Settings panel', () => {
     expect(api.postMessage).not.toHaveBeenCalled();
   });
 
+  it('says which Run choices follow this session and which are machine-wide', () => {
+    const block = screen.getByRole('region', { name: 'Run' });
+
+    expect(block).toHaveTextContent(/apply to this session; your last change is the default for new ones\./);
+    expect(block).toHaveTextContent(/Autonomy and Parallel tasks apply to every session\./);
+  });
+
   it('a number commits on Enter, any whole number at or above its floor', () => {
     const parallel = screen.getByRole('spinbutton', { name: 'Parallel tasks' });
     expect(parallel).toHaveValue(5);
