@@ -6,7 +6,7 @@ By default, submitted build plans wait for your approval. Run settings let you
 automate execution and merging. Research tasks and consented script tasks can
 start during planning.
 
-This README describes 0.11.0. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.11.1. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 ![A goal becomes a plan of three task cards for Claude Code, Codex and OpenCode, which run in parallel and come together in a diff for review before merging.](https://raw.githubusercontent.com/ordewell/ordewell/main/assets/readme/workflow.svg)
