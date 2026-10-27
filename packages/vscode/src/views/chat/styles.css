@@ -973,7 +973,7 @@ body.vscode-high-contrast-light .disclosure:hover {
 /* ---- Setup panel: Planner block, then Runners block ---- */
 .setup-panel {
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-muted);
   /* When the column is over-full (settings open, plan docked), the space comes
      from here — settings are the least urgent thing on screen, and the
      alternative is the conversation or the input losing its room. */
@@ -1002,9 +1002,27 @@ body.vscode-high-contrast-light .disclosure:hover {
   text-align: center;
 }
 
+/* While open, settings take their room from the chat, plan and composer below,
+   so the toggle reads as the panel's active header. The inset rule draws over
+   the header's own bottom edge rather than adding height, and the label keeps
+   its colour and its contrast; hover below keeps its background cue. */
+.setup-panel-toggle.open {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.setup-panel-toggle.open .setup-panel-chevron {
+  color: var(--accent);
+}
+
 .setup-panel-toggle:hover {
   color: var(--text-primary);
   background: var(--bg-hover);
+}
+
+/* Inset so the panel's own overflow: hidden cannot clip it. */
+.setup-panel-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .setup-panel-toggle-row {
@@ -3720,7 +3738,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 /* ---- Chat Input ---- */
 .chat-input {
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-muted);
   background: var(--bg-primary);
 }
 
@@ -5432,7 +5450,7 @@ body.vscode-high-contrast-light .task-card.expanded {
      to give way: flex hands the overflow to the dock only once settings hit 0. */
   flex-shrink: 0.01;
   min-height: 0;
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-muted);
   background: var(--bg-primary);
 }
 
@@ -5522,6 +5540,9 @@ body.vscode-high-contrast-light .task-card.expanded {
   max-height: 45vh;
   margin: 0 14px 8px;
   width: auto;
+  /* The outline that separates the live plan from the conversation and the
+     composer; it shares the chat bubble's box, so only the edge changes. */
+  border-color: var(--border-muted);
 }
 
 /* The panel's own 14px side margin was calibrated against the message list,
@@ -6385,14 +6406,14 @@ body.vscode-high-contrast-light .pending-message {
   align-items: flex-end;
   flex-shrink: 0;
   padding: 8px 14px;
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-muted);
   background: var(--bg-primary);
 }
 
 .task-log-readonly {
   flex-shrink: 0;
   padding: 10px 14px;
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-muted);
   background: var(--bg-primary);
   color: var(--text-muted);
   font-size: 12px;

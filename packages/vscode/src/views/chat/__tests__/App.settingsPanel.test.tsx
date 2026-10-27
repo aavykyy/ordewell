@@ -70,6 +70,21 @@ describe('run settings in the Settings panel', () => {
     expect(toggle.closest('.setup-panel-body')).toBeNull();
   });
 
+  it('reports the Settings panel as expanded only while its body is shown', () => {
+    const toggle = screen.getByRole('button', { name: /^Settings/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveClass('open');
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).not.toHaveClass('open');
+    expect(document.querySelector('.setup-panel-body')).toHaveClass('collapsed');
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveClass('open');
+  });
+
   it.each([
     ['Autonomy', 'Guarded', { autonomous: false }],
     ['Supervisor', 'Off', { run: { supervisorLevel: 'off' } }],
