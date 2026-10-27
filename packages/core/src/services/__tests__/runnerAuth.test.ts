@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readRunnerAuth, signedOutFromFailure, type RunnerAuthExec } from '../runnerAuth';
+import { readRunnerAuth, recordRunnerAuth, resetRunnerAuth, signedOutFromFailure, type RunnerAuthExec } from '../runnerAuth';
+import { plannerNotReadyFor } from '../plannerReadiness';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
 import { OPENCODE_MANIFEST } from '../../plugins/builtin/opencode.manifest';
@@ -33,6 +34,22 @@ describe('readRunnerAuth', () => {
     const exec = execAnswering({
       code: 1,
       stdout: '{\n  "loggedIn": false,\n  "authMethod": "none",\n  "apiProvider": "firstParty"\n}\n',
+    });
+
+    expect(await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec })).toEqual({
+      state: 'signed-out',
+      loginCommand: ['claude', 'auth', 'login'],
+      detail: 'not logged in',
+    });
+  });
+
+  it('reads Claude signed out from the JSON on stdout even when stderr carries a warning', async () => {
+    // A CLI may warn on stderr (an update nudge, a config notice) beside the
+    // JSON answer; the reader must not parse the two together as one document.
+    const exec = execAnswering({
+      code: 1,
+      stdout: '{"loggedIn":false,"authMethod":"none"}\n',
+      stderr: 'Warning: a newer Claude Code is available\n',
     });
 
     expect(await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec })).toEqual({
@@ -114,6 +131,100 @@ describe('readRunnerAuth', () => {
     expect(exec).not.toHaveBeenCalled();
   });
 
+  // `codex login status` only knows the credentials Codex itself stores. A
+  // custom `model_provider` (Azure, an enterprise gateway, Bedrock) carries its
+  // own credential in config.toml, so the command's "Not logged in" says
+  // nothing about whether Codex can plan. Recording it as signed-out walls a
+  // working enterprise setup behind an irrelevant `codex login`.
+  describe('Codex with its own model provider', () => {
+    function codexHome(config: string): string {
+      const home = mkdtempSync(join(tmpdir(), 'ordewell-codex-home-'));
+      writeFileSync(join(home, 'config.toml'), config);
+      return home;
+    }
+
+    const gate = () => plannerNotReadyFor({
+      aiProvider: 'codex', orchestratorModel: '', planningModel: '', openaiCompatibleBaseUrl: '',
+      getProviderApiKey: () => '',
+    });
+
+    afterEach(() => resetRunnerAuth());
+
+    it('leaves a custom provider whose key comes from the environment unknown, so the gate lets it plan', async () => {
+      const home = codexHome([
+        'model = "gpt-5.4"',
+        'model_provider = "azure"',
+        '[model_providers.azure]',
+        'name = "Azure"',
+        'base_url = "https://example.openai.azure.com/openai/v1"',
+        'env_key = "AZURE_OPENAI_API_KEY"',
+        'wire_api = "responses"',
+        '',
+      ].join('\n'));
+      try {
+        const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
+        const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { CODEX_HOME: home, AZURE_OPENAI_API_KEY: 'sk-test' } });
+
+        expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'] });
+        recordRunnerAuth('codex', auth);
+        expect(gate()).toBeNull();
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('leaves a provider authenticated by env headers or an auth helper unknown too', async () => {
+      for (const table of [
+        'env_http_headers = { "x-api-key" = "GATEWAY_KEY" }',
+        'auth = { command = "print-token" }',
+      ]) {
+        const home = codexHome(['model_provider = "gateway"', '[model_providers.gateway]', 'name = "Gateway"', 'base_url = "https://gateway.example/v1"', table, ''].join('\n'));
+        try {
+          const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
+          const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { CODEX_HOME: home } });
+          expect(auth.state).toBe('unknown');
+        } finally {
+          rmSync(home, { recursive: true, force: true });
+        }
+      }
+    });
+
+    it('keeps a default setup with no credential genuinely signed out, and the gate refuses it', async () => {
+      const home = codexHome('model = "gpt-5.4"\n');
+      try {
+        const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
+        const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { CODEX_HOME: home } });
+
+        expect(auth).toEqual({ state: 'signed-out', loginCommand: ['codex', 'login'], detail: 'not logged in' });
+        recordRunnerAuth('codex', auth);
+        expect(gate()).toMatchObject({ code: 'signed_out', runner: 'codex' });
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('keeps a custom provider that still signs in through Codex itself signed out', async () => {
+      // `requires_openai_auth` delegates to the login the status command asks
+      // about, so its "Not logged in" is this user's answer.
+      const home = codexHome([
+        'model_provider = "azure"',
+        '[model_providers.azure]',
+        'name = "Azure"',
+        'base_url = "https://example.openai.azure.com/openai/v1"',
+        'env_key = "AZURE_OPENAI_API_KEY"',
+        'requires_openai_auth = true',
+        '',
+      ].join('\n'));
+      try {
+        const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
+        const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { CODEX_HOME: home } });
+        expect(auth.state).toBe('signed-out');
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+  });
+
   // A timeout is not an answer: execFile kills the child and hands back no
   // exit status, so whatever it printed before hanging must not be judged.
   it.skipIf(process.platform === 'win32')('reports unknown, not signed out, when a status probe times out after printing its line', async () => {
@@ -128,6 +239,27 @@ describe('readRunnerAuth', () => {
         state: 'unknown',
         loginCommand: [cli, 'login'],
       });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  // `execFile`'s timeout only sends SIGTERM and waits. A status command that
+  // ignores it (and holds its pipes open through a child) must not keep the
+  // probe -- and with it the runner list and a planner turn -- pending.
+  it.skipIf(process.platform === 'win32')('settles within its budget when the status child ignores SIGTERM', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-auth-stubborn-'));
+    const cli = join(dir, 'codex');
+    writeFileSync(cli, '#!/bin/sh\ntrap "" TERM\necho "Not logged in" >&2\nsleep 5\n');
+    chmodSync(cli, 0o755);
+    try {
+      const manifest = { ...CODEX_MANIFEST, runner: { command: cli } };
+      const started = Date.now();
+
+      expect(await readRunnerAuth(manifest, { timeoutMs: 500 })).toEqual({
+        state: 'unknown',
+        loginCommand: [cli, 'login'],
+      });
+      expect(Date.now() - started).toBeLessThan(3000);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

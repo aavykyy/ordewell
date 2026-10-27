@@ -187,25 +187,26 @@ describe('POST /:sessionId/converse/message', () => {
 describe('POST /:sessionId/converse/message/now', () => {
   it('force sends the message and answers the plan its turn landed, like a plain send', async () => {
     const forceSendPrompt = vi.fn().mockResolvedValue({ tasks: [] });
-    const app = appFor(poolWith({ forceSendPrompt }));
+    const app = appFor(poolWith({}, { forceSendPrompt }));
 
     const res = await post(app, 'converse/message/now', { message: 'use Postgres instead' });
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ plan: { tasks: [] } });
-    expect(forceSendPrompt).toHaveBeenCalledWith('use Postgres instead');
+    expect(forceSendPrompt).toHaveBeenCalledWith('s1', 'use Postgres instead');
   });
 
   it('needs a message', async () => {
     const forceSendPrompt = vi.fn();
-    const app = appFor(poolWith({ forceSendPrompt }));
+    const app = appFor(poolWith({}, { forceSendPrompt }));
 
     expect((await post(app, 'converse/message/now', {})).status).toBe(400);
     expect(forceSendPrompt).not.toHaveBeenCalled();
   });
 
   it('is a 404 for a session the daemon does not hold', async () => {
-    const app = appFor(poolWith({ forceSendPrompt: vi.fn() }));
+    const forceSendPrompt = vi.fn(() => { throw new SessionNotFoundError(); });
+    const app = appFor(poolWith({}, { forceSendPrompt }));
 
     const res = await app.request('/api/plans/nope/converse/message/now', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'now' }),
@@ -216,7 +217,7 @@ describe('POST /:sessionId/converse/message/now', () => {
 
   it('answers a stopped forced turn as the plain route does', async () => {
     const forceSendPrompt = vi.fn().mockRejectedValue(new PlannerTurnStoppedError());
-    const app = appFor(poolWith({ forceSendPrompt }));
+    const app = appFor(poolWith({}, { forceSendPrompt }));
 
     const res = await post(app, 'converse/message/now', { message: 'now' });
 

@@ -189,6 +189,10 @@ export async function handleContinueConversation(
   text: string,
   deps: PlanManagerDeps,
 ): Promise<void> {
+  // A reply is a planner turn too, and the signed-out refusal's way back runs
+  // in another process: ask again before the session's gate judges.
+  const recheck = recheckSignedOutPlanner(deps);
+  if (recheck) await recheck;
   await inPlannerTurn(deps, async () => {
     const prior = JSON.stringify(deps.getCurrentPlan().tasks);
     adoptTurnPlan(prior, await deps.session.continueConversation(text), deps);
@@ -205,6 +209,8 @@ export async function handleSendMessageNow(
   text: string,
   deps: PlanManagerDeps,
 ): Promise<void> {
+  const recheck = recheckSignedOutPlanner(deps);
+  if (recheck) await recheck;
   await inPlannerTurn(deps, async () => {
     const prior = JSON.stringify(deps.getCurrentPlan().tasks);
     adoptTurnPlan(prior, await deps.session.forceSendPrompt(text), deps);

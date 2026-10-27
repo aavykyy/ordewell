@@ -704,14 +704,43 @@ export class OrchestratorPool {
    * it does for every turn.
    */
   async continuePlanning(sessionId: string, message: string): Promise<LegacyPlanState> {
-    return this.session(sessionId).continueConversation(message);
+    const session = this.session(sessionId);
+    // A reply is a planner turn like any other: the signed-out refusal offers
+    // the runner's own login, which runs outside this process, so ask the
+    // workspace's account again before the session's synchronous gate judges.
+    const recheck = this.recheckSignedOutPlanner(session.workspaceRoot, session.plannerProvider);
+    if (recheck) await recheck;
+    return session.continueConversation(message);
   }
 
   /** Condense a session's conversation. The summary turn is a planner turn, so `cancelPlanning` stops it. */
   async compactConversation(sessionId: string): Promise<ConversationCompaction & { plan: LegacyPlanState }> {
     const session = this.session(sessionId);
+    const recheck = this.recheckSignedOutPlanner(session.workspaceRoot, session.plannerProvider);
+    if (recheck) await recheck;
     const compaction = await session.compactConversation();
     return { ...compaction, plan: session.planState! };
+  }
+
+  /**
+   * Send now (ADR-0023): the Session stops the planner turn in flight and
+   * answers this message in the turn that replaces it, ahead of anything
+   * waiting. The recheck is the one a reply does before the gate: a login done
+   * with the runner's own command is seen here too.
+   */
+  async forceSendPrompt(sessionId: string, message: string): Promise<LegacyPlanState> {
+    const session = this.session(sessionId);
+    const recheck = this.recheckSignedOutPlanner(session.workspaceRoot, session.plannerProvider);
+    if (recheck) await recheck;
+    return session.forceSendPrompt(message);
+  }
+
+  /** Retry a compaction paused on the planner's context: a planner turn, and gated as one. */
+  async retryPlannerCompaction(sessionId: string): Promise<LegacyPlanState> {
+    const session = this.session(sessionId);
+    const recheck = this.recheckSignedOutPlanner(session.workspaceRoot, session.plannerProvider);
+    if (recheck) await recheck;
+    return session.retryPlannerCompaction();
   }
 
   /**
