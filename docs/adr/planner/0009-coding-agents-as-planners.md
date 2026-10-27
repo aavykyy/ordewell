@@ -189,9 +189,13 @@ model's behalf, which is precisely what a coding agent replaces.
   whose report returns to the planner where the planner must decide on it, a
   plain read-only task its dependent reads otherwise ([ADR-0037](../supervision/0037-research-tasks-wake-the-planner.md), R1, R5).
 - **An unusable agent fails before the goal is typed (T9).** `RunnerInstallation`
-  probes the binary and credentials; a planner picker offers only the agents
-  that are usable, and states what to install when none is. A turn
-  whose process dies surfaces the stderr tail as a visible chat
+  probes the binary and, beside it, the runner's own login verdict; a planner
+  picker offers only the agents that are usable, and states what to install when
+  none is. A signed-out agent is usable: it stays listed, flagged, and a planner
+  turn is refused before it is sent with the way to sign in
+  ([ADR-0052](../routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)).
+  A login names one installed agent and never moves the planner, and an agent's
+  own login failure is still reworded where a stale verdict slips through. A turn whose process dies surfaces the stderr tail as a visible chat
   error — never an empty planner bubble, per the repo's fail-safe contract.
   What the preflight cannot know, the agent says itself: a startup warning —
   Codex's `configWarning` — reaches the timeline instead of being dropped for
@@ -327,9 +331,13 @@ this backend should understand they are trading speed for not holding a key.
   live ones reads as clutter and invites a click whose only outcome is why it
   did nothing. A picker now offers only the agents that can plan and states what
   to install when none can — the send-time preflight still names every agent, so
-  the missing-CLI explanation survives where it bites. Filtering inside
-  `plannerBackendEntries` was rejected too: the webview names the agents in its
-  install hint from that full list, which filtering there would erase.
+  the missing-CLI explanation survives where it bites. A signed-out agent can
+  plan once signed in, so it stays listed, flagged, with the login action beside
+  it rather than vanishing
+  ([ADR-0052](../routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)).
+  Filtering inside `plannerBackendEntries` was rejected too: the webview names the
+  agents in its install hint from that full list, which filtering there would
+  erase.
 
 ## History
 
@@ -351,7 +359,7 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-16 — a model pick belongs to the planner it was made for: once routing moves off that planner (its key removed), the model stays configured for its return but is not the detected agent's. A vendor that needs a key is detected by its key, never by a base URL alone (openai_compatible, which needs none, still is by its endpoint), and a key held outside the environment selects its own vendor.
 - 2026-10-16 — naming a coding agent (AI_PROVIDER, `aiProvider`, `/planner`) does not choose the vendor model left configured: one that is plainly a vendor's, or for OpenCode a slug its discovered catalog does not list, gives way to the agent's remembered model and effort, else its default. A pick for one planner is not another's, vendors included.
 - 2026-10-17 — the detected agent is derived again on a runner-list refresh, so a coding agent installed while a host runs becomes the planner without a restart ([ADR-0039](../routing/0038-runner-install-verdicts-expire.md#the-detected-planner-is-derived-again-on-a-refresh-adr-0039)).
-- 2026-10-17 — a planner picker offers only usable coding agents and configured vendors, with a one-line hint when none is, instead of listing unusable agents greyed-out.
+- 2026-10-17 — a planner picker offers only usable coding agents and configured vendors, with a one-line hint when none is, instead of listing unusable agents greyed-out; a signed-out agent is usable and stays listed, flagged with its login.
 - 2026-10-17 — a planner switch is shown at once and no longer waits on the target's model discovery; a failed discovery is remembered briefly instead of re-run on every switch ([ADR-0040](../routing/0040-a-slow-model-discovery-never-gates-the-planner-pick.md)).
 - 2026-10-18 — reply text arrives in runs under the runner's own ids, with no paragraph break inside the text; consumers join runs themselves.
 - 2026-10-21 — the planner performs an exact effect itself as a script task through `run_script`, a further execution tool; T1 now says repository files are the runners' alone ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
@@ -361,3 +369,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-24 — `answer_checkpoint` joins the execution tools, for the supervisor at Act ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-24 — the surface list corrected: there is no web surface, so three (VS Code, the CLI and the TUI) consume the planner's events (ADR-0006).
 - 2026-10-24 — evidence a later task acts on is a plain read-only task it depends on; only evidence the planner decides on is a research task (ADR-0037 R5).
+- 2026-10-27 — a signed-out harness planner is flagged in the welcome line, the picker and the planner pills; its turn is refused before it is sent with the way to sign in, and `/login` or the chat's Log in runs the runner's own login ([ADR-0052](../routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)).
