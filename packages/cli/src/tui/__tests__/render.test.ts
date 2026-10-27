@@ -234,39 +234,106 @@ describe('welcome mark', () => {
   });
 });
 
-describe('signed-out planner', () => {
-  const runner = (state: 'signed-in' | 'signed-out' | 'unknown') => [
-    { id: 'claude-code', name: 'Claude Code', enabled: true, auth: { state } },
-  ];
+describe('signed-out planners', () => {
+  type AuthState = 'signed-in' | 'signed-out' | 'unknown';
+  const claude = (state: AuthState, loginCommand?: string[]) => ({
+    id: 'claude-code', name: 'Claude Code', enabled: true,
+    auth: loginCommand ? { state, loginCommand } : { state },
+  });
+  const codex = (state: AuthState = 'signed-out') => ({
+    id: 'codex', name: 'Codex', enabled: true,
+    auth: { state, loginCommand: ['codex', 'login'] },
+  });
   const plain = (over: Partial<TuiState>): string[] => screen(over).map(stripAnsi).map((l) => l.trimEnd());
   const welcome = (over: Partial<TuiState>): string[] =>
     plain({ cols: 80, rows: 24, workspace: '/w', ...over });
-  const WARNING = 'Claude Code is not logged in. /login to sign in.';
-
-  it('warns directly under the workspace row when the active agent is signed out', () => {
-    const lines = welcome({ ...DETECTED, plannerProvider: 'claude-code', runners: runner('signed-out') });
+  const underWorkspace = (lines: string[]): string[] => {
     const workspace = lines.findIndex((l) => l.startsWith('/w'));
     expect(workspace).toBeGreaterThanOrEqual(0);
-    expect(lines[workspace + 1]).toBe(WARNING);
+    return lines.slice(workspace + 1).filter((l) => l.includes('not logged in'));
+  };
+  const warnings = (lines: string[]): string[] => lines.filter((l) => l.includes('not logged in'));
+  const CLAUDE = 'Claude Code not logged in. /login to sign in.';
+  const CODEX = 'Codex not logged in. /login codex to sign in.';
+
+  it('warns directly under the workspace row when the active agent is signed out', () => {
+    const lines = welcome({
+      ...DETECTED, plannerProvider: 'claude-code', runners: [claude('signed-out', ['claude', 'auth', 'login'])],
+    });
+    expect(underWorkspace(lines)[0]).toBe(CLAUDE);
   });
 
-  it('says nothing when signed in, unknown, on a vendor planner, or before detection', () => {
+  it('names every signed-out agent\'s own login, the active planner first', () => {
+    // Codex comes first in the daemon's list; the plan at hand still leads.
+    const lines = welcome({
+      ...DETECTED, plannerProvider: 'claude-code', runners: [codex(), claude('signed-out', ['claude', 'auth', 'login'])],
+    });
+    expect(warnings(lines)).toEqual([CLAUDE, CODEX]);
+    expect(lines.join('\n')).not.toContain('/login claude-code');
+  });
+
+  it('names the login of a signed-out agent that is not the planner', () => {
+    const lines = welcome({
+      ...DETECTED, plannerProvider: 'openrouter', configuredProviders: ['openrouter'], runners: [claude('signed-out', ['claude', 'auth', 'login'])],
+    });
+    expect(warnings(lines)).toEqual(['Claude Code not logged in. /login claude-code to sign in.']);
+  });
+
+  it('says nothing when signed in, unknown, without a login command, or before detection', () => {
     const cases: Partial<TuiState>[] = [
-      { ...DETECTED, plannerProvider: 'claude-code', runners: runner('signed-in') },
-      { ...DETECTED, plannerProvider: 'claude-code', runners: runner('unknown') },
-      { ...DETECTED, plannerProvider: 'openrouter', configuredProviders: ['openrouter'], runners: runner('signed-out') },
-      { ...DETECTED, runnersKnown: false, plannerProvider: 'claude-code', runners: runner('signed-out') },
+      { ...DETECTED, plannerProvider: 'claude-code', runners: [claude('signed-in', ['claude', 'auth', 'login'])] },
+      { ...DETECTED, plannerProvider: 'claude-code', runners: [claude('unknown', ['claude', 'auth', 'login'])] },
+      { ...DETECTED, plannerProvider: 'claude-code', runners: [claude('signed-out')] },
+      { ...DETECTED, plannerProvider: 'claude-code', runners: [{ id: 'opencode', name: 'OpenCode', enabled: true }] },
+      { ...DETECTED, runnersKnown: false, plannerProvider: 'claude-code', runners: [claude('signed-out', ['claude', 'auth', 'login'])] },
     ];
     for (const over of cases) expect(welcome(over).join('\n')).not.toContain('not logged in');
   });
 
-  it('paints the warning red and wraps it inside the pane', () => {
+  it('paints each warning red and keeps every line inside the pane', () => {
     style.enabled = true;
     try {
-      const out = screen({ ...DETECTED, cols: 40, rows: 24, workspace: '/w', plannerProvider: 'claude-code', runners: runner('signed-out') });
-      const painted = out.filter((l) => /not logged in|\/login/.test(stripAnsi(l)));
-      expect(painted.length).toBeGreaterThan(0);
-      for (const line of painted) expect(line).toContain('\x1b[31m');
+      for (const cols of [40, 30]) {
+        const out = screen({
+          ...DETECTED, cols, rows: 40, workspace: '/w', plannerProvider: 'claude-code',
+          runners: [codex(), claude('signed-out', ['claude', 'auth', 'login'])],
+        });
+        const painted = out.filter((l) => stripAnsi(l).includes('not logged in.'));
+        // One alarm line per agent; the rest of a wrapped sentence inherits its colour.
+        expect(painted).toHaveLength(2);
+        for (const line of painted) expect(line).toContain('\x1b[31m');
+        for (const line of out) expect(width(line)).toBeLessThanOrEqual(cols);
+      }
+    } finally {
+      style.enabled = false;
+    }
+  });
+
+  it('paints only the signed-out agent\'s name red in the Runners row', () => {
+    style.enabled = true;
+    try {
+      const out = screen({
+        ...DETECTED, cols: 80, plannerProvider: 'claude-code',
+        runners: [claude('signed-out', ['claude', 'auth', 'login']), codex('signed-in')],
+      });
+      const row = out.find((l) => stripAnsi(l).trimStart().startsWith('Runners'));
+      expect(row).toBeDefined();
+      expect(stripAnsi(row!)).toContain('Claude Code, Codex');
+      expect(row!).toContain('\x1b[31mClaude Code\x1b[0m');
+      expect(row!).not.toContain('\x1b[31mCodex');
+      expect(width(row!)).toBeLessThanOrEqual(80);
+    } finally {
+      style.enabled = false;
+    }
+  });
+
+  it('keeps the Runners row inside a narrow pane', () => {
+    style.enabled = true;
+    try {
+      const out = screen({
+        ...DETECTED, cols: 40, rows: 40, plannerProvider: 'claude-code',
+        runners: [claude('signed-out', ['claude', 'auth', 'login']), codex()],
+      });
       for (const line of out) expect(width(line)).toBeLessThanOrEqual(40);
     } finally {
       style.enabled = false;
