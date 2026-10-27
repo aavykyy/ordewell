@@ -1,6 +1,8 @@
 import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { fireEvent, render } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import App from '../App';
 import { api, post } from './hostBridge';
 
@@ -66,6 +68,60 @@ describe('the Runners block', () => {
     expect(group.querySelectorAll('button')).toHaveLength(2);
     expect(group.querySelector('.planner-auth-dot')).not.toBeNull();
     expect(group.querySelector('.runner-pill-login')?.getAttribute('aria-label')).toBe('Log in to Codex');
+  });
+
+  it('keeps a signed-out runner visibly off, and still switches it on when clicked', () => {
+    post({
+      type: 'setRunners',
+      runners: [
+        { id: 'claude-code', displayName: 'Claude Code', enabled: true },
+        { id: 'codex', displayName: 'Codex', enabled: false },
+      ],
+    });
+    post({
+      type: 'setPlannerBackends',
+      backends: [
+        { id: 'claude-code', label: 'Claude Code', kind: 'harness', runner: 'claude-code', usable: true, auth: { state: 'signed-out', loginCommand: ['claude', 'auth', 'login'] } },
+        { id: 'codex', label: 'Codex', kind: 'harness', runner: 'codex', usable: true, auth: { state: 'signed-out', loginCommand: ['codex', 'login'] } },
+      ],
+      provider: 'claude-code',
+      runner: 'claude-code',
+    });
+    const style = document.createElement('style');
+    style.textContent = readFileSync(resolve(process.cwd(), 'src/views/chat/styles.css'), 'utf8');
+    document.head.append(style);
+
+    const on = pill('Claude Code')!;
+    const off = pill('Codex')!;
+    expect(on.getAttribute('aria-pressed')).toBe('true');
+    expect(off.getAttribute('aria-pressed')).toBe('false');
+    // Auth is a flag over the on/off state, so the boundary, label and dot all
+    // still say which way the runner is switched.
+    expect(getComputedStyle(on.closest('.runner-pill-group')!).borderTopStyle).toBe('solid');
+    expect(getComputedStyle(off.closest('.runner-pill-group')!).borderTopStyle).toBe('dashed');
+    expect(getComputedStyle(on).color).not.toBe(getComputedStyle(off).color);
+    expect(getComputedStyle(on.querySelector('.runner-dot')!).boxShadow).not.toBe(getComputedStyle(off.querySelector('.runner-dot')!).boxShadow);
+
+    api.postMessage.mockClear();
+    fireEvent.click(off);
+
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'setRunnerEnabled', runnerId: 'codex', enabled: true, requestId: expect.any(String) });
+  });
+
+  it('hangs the capsule rows from their top edge, so a login slot shifts no neighbour', () => {
+    installedList();
+    post({
+      type: 'setPlannerBackends',
+      backends: [{ id: 'claude-code', label: 'Claude Code', kind: 'harness', runner: 'claude-code', usable: true, auth: { state: 'signed-out', loginCommand: ['claude', 'auth', 'login'] } }],
+      provider: 'claude-code',
+      runner: 'claude-code',
+    });
+    const style = document.createElement('style');
+    style.textContent = readFileSync(resolve(process.cwd(), 'src/views/chat/styles.css'), 'utf8');
+    document.head.append(style);
+
+    expect(getComputedStyle(document.querySelector('.runner-pills')!).alignItems).toBe('flex-start');
+    expect(getComputedStyle(document.querySelector('.planner-backends')!).alignItems).toBe('flex-start');
   });
 
   it('offers every installed runner when none is enabled, rather than claiming none is installed', () => {

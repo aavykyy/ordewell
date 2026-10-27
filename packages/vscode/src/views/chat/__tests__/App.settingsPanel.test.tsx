@@ -1,6 +1,8 @@
 import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, within, fireEvent, cleanup } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '@ordewell/core';
 import App from '../App';
 import { api, post as send } from './hostBridge';
@@ -34,6 +36,29 @@ describe('run settings in the Settings panel', () => {
     expect(runToggle()).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('group', { name: 'Autonomy' })).toBeInTheDocument();
     expect(screen.queryByText(/· 3 parallel/)).toBeNull();
+  });
+
+  it('draws each Run row as one segmented control, with its options in order', () => {
+    const style = document.createElement('style');
+    style.textContent = readFileSync(resolve(process.cwd(), 'src/views/chat/styles.css'), 'utf8');
+    document.head.append(style);
+
+    for (const name of ['Autonomy', 'Supervisor', 'Automerge', 'Autorun']) {
+      const group = screen.getByRole('group', { name });
+      expect(group.className).toContain('run-setting-pills');
+      expect(getComputedStyle(group).borderTopWidth).toBe('1px');
+      const options = within(group).getAllByRole('button');
+      expect(options.length).toBeGreaterThan(1);
+      for (const [i, option] of options.entries()) {
+        // The group owns the border, and each divider belongs to the option
+        // after the first, so a segment is one click target.
+        expect(option.parentElement).toBe(group);
+        expect(getComputedStyle(option).borderLeftWidth).toBe(i === 0 ? '0px' : '1px');
+      }
+    }
+
+    const supervisor = screen.getByRole('group', { name: 'Supervisor' });
+    expect(within(supervisor).getByRole('button', { name: 'Watch' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('leaves the Planned-with line to `ordewell trailer` and settings.json', () => {

@@ -647,6 +647,7 @@ async function signedOutPlanner(width, theme) {
   const highContrast = theme.startsWith('high-contrast');
   const red = await resolvedColour(page, 'var(--red)');
   const tint = await resolvedColour(page, 'color-mix(in srgb, var(--red) 10%, transparent)');
+  const weakerTint = await resolvedColour(page, 'color-mix(in srgb, var(--red) 4%, transparent)');
   const border = highContrast
     ? await resolvedColour(page, 'var(--vscode-contrastBorder)')
     : await resolvedColour(page, 'color-mix(in srgb, var(--red) 45%, transparent)');
@@ -671,6 +672,9 @@ async function signedOutPlanner(width, theme) {
     check(planner.dot?.fill === red, `planner-auth ${label}: ${runner}'s planner dot is the theme's red (${planner.dot?.fill})`);
     check(planner.login.fill === loginTint, `planner-auth ${label}: ${runner}'s login segment has the one login fill (${planner.login.fill})`);
     check(planner.name.color === textPrimary, `planner-auth ${label}: ${runner}'s signed-out name is text-primary (${planner.name.color})`);
+    const plannerLoginText = await firstTextRect(page, `.planner-pill-item[data-runner="${runner}"] .planner-pill-login`);
+    check(!!plannerLoginText && planner.login.w < planner.name.w && planner.login.w <= plannerLoginText.width + 20,
+      `planner-auth ${label}: ${runner}'s login segment reserves only "Log in", not the wider pending words (${planner.login.w} beside name ${planner.name.w}, text ${plannerLoginText?.width})`);
     check(Math.abs(planner.name.h - planner.login.h) <= 0.5
       && Math.abs(planner.name.x + planner.name.w - planner.login.x) <= 0.5,
     `planner-auth ${label}: ${runner}'s planner segments are equal height and flush (${planner.name.h} vs ${planner.login.h}; ${planner.name.x + planner.name.w} → ${planner.login.x})`);
@@ -685,17 +689,34 @@ async function signedOutPlanner(width, theme) {
     if (!runnerCapsule?.name || !runnerCapsule.login) continue;
     check(runnerCapsule.group.border === '1px' && runnerCapsule.name.border === '0px' && runnerCapsule.login.border === '0px',
       `planner-auth ${label}: ${runner}'s runner capsule owns the one border too`);
-    check(runnerCapsule.group.fill === tint && runnerCapsule.group.borderColour === border,
-      `planner-auth ${label}: ${runner}'s runner capsule is the signed-out tint and boundary (${runnerCapsule.group.fill})`);
-    check(runnerCapsule.dot?.fill === red, `planner-auth ${label}: ${runner}'s runner dot stays red in the on state (${runnerCapsule.dot?.fill})`);
-    check(runnerCapsule.name.color === textPrimary, `planner-auth ${label}: ${runner}'s signed-out runner name is text-primary`);
+    const switchedOn = await page.locator(`.runner-pill-item[data-runner="${runner}"] .runner-pill`).getAttribute('aria-pressed') === 'true';
+    check(runnerCapsule.group.fill === (switchedOn ? tint : weakerTint) && runnerCapsule.group.borderColour === border
+      && runnerCapsule.group.borderStyle === (switchedOn ? 'solid' : 'dashed'),
+    `planner-auth ${label}: ${runner}'s signed-out runner keeps its ${switchedOn ? 'on (solid, stronger)' : 'off (dashed, weaker)'} shape (${runnerCapsule.group.borderStyle}, ${runnerCapsule.group.fill})`);
+    check(runnerCapsule.dot?.fill === (switchedOn ? red : 'rgba(0, 0, 0, 0)'),
+      `planner-auth ${label}: ${runner}'s runner dot is ${switchedOn ? 'filled red on' : 'a hollow red ring off'} (${runnerCapsule.dot?.fill})`);
+    check(runnerCapsule.name.color === (switchedOn ? textPrimary : textSecondary),
+      `planner-auth ${label}: ${runner}'s signed-out runner name is ${switchedOn ? 'text-primary' : 'text-secondary'} (${runnerCapsule.name.color})`);
     check(Math.abs(runnerCapsule.name.h - runnerCapsule.login.h) <= 0.5
       && Math.abs(runnerCapsule.name.x + runnerCapsule.name.w - runnerCapsule.login.x) <= 0.5,
     `planner-auth ${label}: ${runner}'s runner segments are equal height and flush`);
     check(runnerCapsule.divider?.width === '1px' && solid(runnerCapsule.divider.background)
       && parseFloat(runnerCapsule.divider.top) > 0 && parseFloat(runnerCapsule.divider.bottom) > 0,
     `planner-auth ${label}: ${runner}'s runner divider is one inset line`);
+
+    const runnerLoginText = await firstTextRect(page, `.runner-pill-item[data-runner="${runner}"] .runner-pill-login`);
+    check(!!runnerLoginText && runnerCapsule.login.w < runnerCapsule.name.w && runnerCapsule.login.w <= runnerLoginText.width + 20,
+      `planner-auth ${label}: ${runner}'s runner login reserves only "Log in", not the wider pending words (${runnerCapsule.login.w} beside name ${runnerCapsule.name.w}, text ${runnerLoginText?.width})`);
   }
+
+  // An item with no login reserves no failure line, so the top edge is the
+  // only baseline every capsule can share.
+  const capsuleTops = await page.evaluate(() => [...document.querySelectorAll('.runner-pill-item')].map((item) => ({
+    runner: item.dataset.runner,
+    y: item.querySelector('.runner-pill-group')?.getBoundingClientRect().y,
+  })));
+  check(capsuleTops.length === 3 && capsuleTops.every((c) => Math.abs(c.y - capsuleTops[0].y) <= 0.5),
+    `planner-auth ${label}: on, off and login-free runner capsules start on the same top edge (${capsuleTops.map((c) => `${c.runner} ${c.y}`).join(', ')})`);
 
   // Only the active agent's name takes the stronger tint; the login beside it
   // is the same fill as every other login, never a second selection.
@@ -892,8 +913,13 @@ async function signedOutPlanner(width, theme) {
     `planner-auth ${label}: the menu capsule keeps its width through pending (${restingMenu?.group?.w} → ${pendingMenu?.group?.w})`);
   check(sameCapsule(restingRunnerCapsule, pendingRunnerCapsule),
     `planner-auth ${label}: the runner capsule keeps its width through pending (${restingRunnerCapsule?.group?.w} → ${pendingRunnerCapsule?.group?.w})`);
-  check((await plannerLogin('claude-code').innerText()).includes('Signing in…'),
-    `planner-auth ${label}: the menu segment shows the pending words in its reserved width`);
+  check((await plannerLogin('claude-code').innerText()).trim() === '',
+    `planner-auth ${label}: the pending menu segment is spinner-only, not the wider pending words (${JSON.stringify(await plannerLogin('claude-code').innerText())})`);
+  check(await page.locator('.planner-pill-item[data-runner="claude-code"] .planner-login-pending-label')
+    .evaluate((el) => getComputedStyle(el).display) === 'none',
+  `planner-auth ${label}: the capsule hides its pending words while the row keeps them`);
+  check(await plannerLogin('claude-code').getAttribute('title') === 'Signing in to Claude Code',
+    `planner-auth ${label}: the spinner-only segment names its agent in the title`);
   check(await page.locator('.planner-pill-item[data-runner="claude-code"] .planner-pill-login .planner-login-spinner').count() === 1,
     `planner-auth ${label}: the pending menu segment carries the one spinner`);
   await checkContrast(page, `planner-auth ${label}`, ['.planner-auth-warning-text', '.planner-login-btn']);
@@ -989,6 +1015,75 @@ async function signedOutPlanner(width, theme) {
   await page.close();
 }
 
+/**
+ * The Settings panel's Run rows: each one segmented control, one border, its
+ * dividers between options, and radii that depend only on an option's place.
+ */
+async function runSettingsSegments(width, theme) {
+  const label = `${width}/${theme}`;
+  const page = await browser.newPage({ viewport: { width, height: 900 } });
+  await page.goto(`${BASE}/?theme=${theme}`);
+  await page.waitForSelector('.chat-container');
+  await send(page, {
+    type: 'setRunSettings',
+    autonomous: true,
+    run: { supervisorLevel: 'watch', mergeAtGatesAutomatically: false, plannedWithTrailer: true, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12 },
+    maxParallel: 5,
+  });
+  await page.waitForSelector('.run-settings');
+  await page.locator('.run-settings-toggle').click();
+  await page.waitForSelector('.run-setting-pills');
+  await settle(page);
+
+  const rows = await page.locator('.run-setting').evaluateAll((els) => els.map((el) => {
+    const group = el.querySelector('.run-setting-pills');
+    if (!group) return null;
+    const style = getComputedStyle(group);
+    return {
+      label: group.getAttribute('aria-label'),
+      role: group.getAttribute('role'),
+      border: style.borderTopWidth,
+      buttons: [...group.querySelectorAll('button')].map((b) => {
+        const s = getComputedStyle(b);
+        return {
+          label: b.textContent,
+          pressed: b.getAttribute('aria-pressed'),
+          fill: s.backgroundColor,
+          topLeft: s.borderTopLeftRadius,
+          topRight: s.borderTopRightRadius,
+          topBorder: s.borderTopWidth,
+        };
+      }),
+    };
+  }));
+  const runRows = rows.filter(Boolean);
+  const full = '9999px';
+  for (const row of runRows) {
+    const last = row.buttons.length - 1;
+    const expectedRadii = row.buttons.map((_, i) => [i === 0 ? full : '0px', i === last ? full : '0px']);
+    check(row.role === 'group' && !!row.label && row.border === '1px',
+      `run-settings ${label}: ${row.label} is one bordered group (${row.role} ${row.border})`);
+    check(JSON.stringify(row.buttons.map((b) => [b.topLeft, b.topRight])) === JSON.stringify(expectedRadii),
+      `run-settings ${label}: ${row.label} rounds only its ends (${row.buttons.map((b) => `${b.topLeft}/${b.topRight}`).join(' ')})`);
+    check(row.buttons.every((b) => b.topBorder === '0px'),
+      `run-settings ${label}: ${row.label} options own no border of their own`);
+    const selected = row.buttons.filter((b) => b.pressed === 'true');
+    check(selected.length === 1 && solid(selected[0].fill),
+      `run-settings ${label}: ${row.label} fills its selected option (${selected.map((b) => b.label).join(', ')} ${selected[0]?.fill})`);
+  }
+  const supervisor = runRows.find((r) => r.label === 'Supervisor');
+  const watchIndex = supervisor?.buttons.findIndex((b) => b.label === 'Watch') ?? -1;
+  check(watchIndex > 0 && watchIndex < (supervisor?.buttons.length ?? 0) - 1
+    && supervisor.buttons[watchIndex].topLeft === '0px' && supervisor.buttons[watchIndex].topRight === '0px',
+  `run-settings ${label}: Watch is a middle segment, square on both sides (${supervisor?.buttons[watchIndex]?.topLeft}/${supervisor?.buttons[watchIndex]?.topRight})`);
+  const offRows = runRows.filter((r) => r.label === 'Automerge' || r.label === 'Autorun');
+  check(offRows.length === 2 && offRows.every((r) => r.buttons.at(-1).topLeft === '0px' && r.buttons.at(-1).topRight === full),
+    `run-settings ${label}: each On/Off row rounds Off on its right end`);
+
+  await page.screenshot({ path: path.join(OUT, `run-settings-${width}-${theme}.png`) });
+  await page.close();
+}
+
 const COMBOS = [
   { width: 420, theme: 'dark', primary: true },
   { width: 900, theme: 'dark' },
@@ -1069,6 +1164,11 @@ for (const combo of runs('cards') ? COMBOS : []) {
 for (const combo of runs('planner-auth') ? PLANNER_AUTH_COMBOS : []) {
   console.log(`\n== signed-out planner, ${combo.width}px, ${combo.theme} theme ==`);
   await signedOutPlanner(combo.width, combo.theme);
+}
+
+for (const combo of runs('run-settings') ? COMBOS : []) {
+  console.log(`\n== run settings, ${combo.width}px, ${combo.theme} theme ==`);
+  await runSettingsSegments(combo.width, combo.theme);
 }
 
 await browser.close();

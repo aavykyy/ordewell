@@ -86,9 +86,12 @@ export const SIGNED_OUT_SETUP = [
   {
     post: {
       type: 'setRunners',
+      // One signed-out runner on and one off, beside an agent with no login:
+      // the three capsule shapes the baseline and auth composition must align.
       runners: [
         { id: 'claude-code', displayName: 'Claude Code', enabled: true },
-        { id: 'codex', displayName: 'Codex', enabled: true },
+        { id: 'codex', displayName: 'Codex', enabled: false },
+        { id: 'opencode', displayName: 'OpenCode', enabled: true },
       ],
     },
   },
