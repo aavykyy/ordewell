@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-27
+
+### Changed
+
+- **The Marketplace overview opens with the workflow diagram** instead of a
+  session recording.
+- **No extension code changed.** This release carries the version bump and the
+  listing text.
+
 ## [0.11.0] - 2026-10-27
 
 ### Upgrade notes
@@ -1243,5 +1252,6 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/ordewell/ordewell/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/ordewell/ordewell/compare/v0.10.12...v0.11.0

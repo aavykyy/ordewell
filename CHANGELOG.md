@@ -8,6 +8,15 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-27
+
+### Changed
+
+- **The VS Code Marketplace and Open VSX overview opens with the
+  plan-and-task-cards diagram** instead of a session recording.
+- **No runtime code changed.** This release carries the version bump and the
+  listing text.
+
 ## [0.11.0] - 2026-10-27
 
 This release lets a plan do more than run coding agents in order.
@@ -3524,7 +3533,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/ordewell/ordewell/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/ordewell/ordewell/compare/v0.10.12...v0.11.0
 [0.4.5]: https://github.com/ordewell/ordewell/releases/tag/v0.4.5
 [0.4.4]: https://github.com/ordewell/ordewell/releases/tag/v0.4.4

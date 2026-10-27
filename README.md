@@ -36,7 +36,7 @@ and merging.
 Claude Code, Codex and OpenCode are supported out of the box, and can be mixed
 freely within one plan.
 
-This README describes 0.11.0. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.11.1. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 ## Features
