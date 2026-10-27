@@ -47,6 +47,37 @@ const marked = (state: TuiState): string | undefined => stepper(state).items.fin
 const save = (run: object, message: string, extra: object = {}) =>
   ({ type: 'saveSettings', run, ...extra, message, sessionId: 's1' });
 
+describe('the session\'s own run settings', () => {
+  it('drops an answer for a session the user has left, however new the read', () => {
+    const onB = base({ sessionId: 'b', settingsRead: 2, runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } });
+
+    const lateForA = reduce(onB, {
+      type: 'settingsLoaded', sessionId: 'a', read: 3,
+      settings: { run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act' } },
+    });
+    expect(lateForA.state.runSettings.supervisorLevel).toBe('off');
+
+    const forB = reduce(onB, {
+      type: 'settingsLoaded', sessionId: 'b', read: 3,
+      settings: { run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'watch' } },
+    });
+    expect(forB.state.runSettings.supervisorLevel).toBe('watch');
+  });
+
+  it('does not let an answer for the session left behind drop the current session\'s read', () => {
+    const onB = base({ sessionId: 'b', settingsRead: 1, runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } });
+
+    const oldForA = reduce(onB, { type: 'settingsLoaded', sessionId: 'a', read: 5, settings: {} });
+    expect(oldForA.state.settingsRead).toBe(1);
+
+    const currentForB = reduce(oldForA.state, {
+      type: 'settingsLoaded', sessionId: 'b', read: 2,
+      settings: { run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act' } },
+    });
+    expect(currentForB.state.runSettings.supervisorLevel).toBe('act');
+  });
+});
+
 describe('/settings', () => {
   it('opens on Autonomy and pre-selects every current value', () => {
     let state = typed(base({ autonomous: false, maxParallel: 3 }), '/settings').state;

@@ -467,6 +467,8 @@ export interface TuiState {
    * first frame painted before the daemon answers.
    */
   runSettingsKnown: boolean;
+  /** The newest settings read this surface started; an older answer is dropped. */
+  settingsRead: number;
   /**
    * Whether the daemon has named who plans and listed the installed runners.
    * It answers both only once its probe for coding agents has, so until then
@@ -741,6 +743,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     autonomous: false,
     runSettings: { ...RUN_SETTINGS_DEFAULTS },
     runSettingsKnown: false,
+    settingsRead: 0,
     plannerKnown: false,
     runnersKnown: false,
     providersKnown: false,

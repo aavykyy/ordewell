@@ -273,7 +273,10 @@ export interface SettingsResponse {
   maxParallel: number;
   modelAllowlist: UserSettings['modelAllowlist'];
   plannerModels: UserSettings['plannerModels'];
-  /** The user's run settings (ADR-0030), each at its default until set. */
+  /**
+   * The run settings (ADR-0030): the named open session's own copy when one is
+   * asked about, else the file's values, each at its default until set.
+   */
   run: GlobalRunSettings;
 }
 

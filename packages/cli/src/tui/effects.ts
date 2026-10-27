@@ -190,13 +190,18 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
         // The daemon registers a session before the opening turn runs, so a
         // stopped one — by a force send, whose forced turn carries on — leaves
         // a session the next reply belongs to.
-        if (err instanceof DaemonError && err.code === 'planner_turn_stopped') throw err;
+        if (err instanceof DaemonError && err.code === 'planner_turn_stopped') {
+          await reloadSettings(deps, sessionId);
+          throw err;
+        }
         // What reaches here is a refusal the daemon answered, or a request that
         // never went out (a lost reply is settled inside `converse`, the
         // session kept). Neither leaves a conversation a reply could continue,
         // so the id is let go: keeping it would 404 every following message.
         unfollow(deps, sessionId);
         dispatch({ type: 'sessionCleared' });
+        // The welcome is not any session: its run settings are the file's again (ADR-0030).
+        await reloadSettings(deps);
         // Offer to initialize instead of just reporting failure — but only
         // once: a rejection on the confirmed retry (allowInit already true)
         // falls through to the generic error path instead of looping the
@@ -207,6 +212,10 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
         }
         throw err;
       }
+      // Outside the block above: a settings read that fails must not take a
+      // session that opened. The session holds its own run settings, seeded from
+      // the file as it stood when the daemon opened it (ADR-0030).
+      await reloadSettings(deps, sessionId);
       return;
     }
 
@@ -394,10 +403,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       const settings = await api.updateSettings({ env });
       const recall = plannerSwitchRecall(settings);
       persistAfterDaemon(deps, { ...env, ORCHESTRATOR_MODEL: recall.model, ORDEWELL_PLANNER_EFFORT: recall.effort });
-      dispatch({
-        type: 'settingsLoaded',
-        settings: { aiProvider: effect.provider, orchestratorModel: recall.model, plannerThinkingEffort: recall.effort },
-      });
+      dispatchSettings(deps, { aiProvider: effect.provider, orchestratorModel: recall.model, plannerThinkingEffort: recall.effort });
       dispatch({
         type: 'notice',
         message: `${isCliProvider(effect.provider)
@@ -416,14 +422,11 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       const env = { AI_PROVIDER: effect.provider, ORCHESTRATOR_MODEL: effect.modelId, ORDEWELL_PLANNER_EFFORT: effect.effort };
       const settings = await api.updateSettings({ env });
       persistAfterDaemon(deps, env);
-      dispatch({
-        type: 'settingsLoaded',
-        settings: {
-          ...settings,
-          aiProvider: effect.provider,
-          orchestratorModel: effect.modelId,
-          plannerThinkingEffort: effect.effort,
-        },
+      dispatchSettings(deps, {
+        ...settings,
+        aiProvider: effect.provider,
+        orchestratorModel: effect.modelId,
+        plannerThinkingEffort: effect.effort,
       });
       dispatch({ type: 'notice', message: effect.notice, ...(effect.noticeLevel ? { level: effect.noticeLevel } : {}) });
       return;
@@ -445,7 +448,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       // settings.json as a lingering no-op restriction.
       const ids = effect.modelIds.length > 0 ? effect.modelIds : null;
       const settings = await api.updateSettings({ modelAllowlist: { [effect.runner]: ids } });
-      dispatch({ type: 'settingsLoaded', settings });
+      dispatchSettings(deps, settings);
       dispatch({
         type: 'notice',
         message: effect.modelIds.length
@@ -505,7 +508,9 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     case 'saveSettings': {
       if (Object.keys(effect.run).length > 0) {
         const settings = await api.updateRunSettings(effect.run, effect.sessionId);
-        dispatch({ type: 'settingsLoaded', settings });
+        // Numbered when it answers: the save is newer than any read already in
+        // flight, and must not be dropped by one that started before it.
+        dispatchSettings(deps, settings, effect.sessionId);
         if (effect.sessionId) await refreshPlan(deps, effect.sessionId);
       }
       if (effect.maxParallel !== undefined) await saveMaxParallel(deps, effect.maxParallel);
@@ -577,6 +582,9 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       // and an end heard meanwhile frees the turn or compaction just joined.
       // All in one synchronous pass, so no key lands in between.
       inbound.releaseSnapshot(true);
+      // The restored session has its own run settings, seeded when it opened;
+      // the file's values belong to whatever session starts next (ADR-0030).
+      await reloadSettings(deps, effect.sessionId);
       dispatch({ type: 'notice', message: `Loaded "${goal || effect.sessionId}".` });
       return;
     }
@@ -589,6 +597,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       dispatch({ type: 'sessionForked', sessionId: fork.sessionId, goal: fork.goal });
       dispatch(restoredChat(fork.plan, fork.sessionId));
       dispatch({ type: 'planUpdated', plan: fork.plan, sessionId: fork.sessionId });
+      await reloadSettings(deps, fork.sessionId);
       dispatch({ type: 'notice', message: `Forked ${effect.sessionId} into ${fork.sessionId}: you are in the fork now. /sessions to go back.` });
       return;
     }
@@ -611,6 +620,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       dispatch({ type: 'sessionForked', sessionId: fork.sessionId, goal: fork.goal });
       dispatch(restoredChat(fork.plan, fork.sessionId));
       dispatch({ type: 'planUpdated', plan: fork.plan, sessionId: fork.sessionId });
+      await reloadSettings(deps, fork.sessionId);
       dispatch({ type: 'inputPrefilled', text: fork.rewoundMessage, sessionId: fork.sessionId });
       dispatch({ type: 'notice', message: `Forked ${effect.sessionId} into ${fork.sessionId} from before that message: the original is kept (/sessions to go back). The message is ready to edit and resend.` });
       return;
@@ -727,6 +737,8 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       } catch {
         // ignore
       }
+      // Back on the welcome, which shows the file's values, not the closed session's (ADR-0030).
+      await reloadSettings(deps);
       return;
 
     case 'loadRunners':
@@ -734,7 +746,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       return;
 
     case 'loadScope':
-      await Promise.all([loadRunners(deps), loadSettings(deps), loadIsolationPreview(deps)]);
+      await Promise.all([loadRunners(deps), loadSettings(deps, effect.sessionId), loadIsolationPreview(deps)]);
       return;
 
     case 'loadIsolationPreview':
@@ -742,7 +754,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       return;
 
     case 'refresh':
-      await Promise.all([loadRunners(deps), loadSettings(deps), loadModels(deps), loadIsolationPreview(deps)]);
+      await Promise.all([loadRunners(deps), loadSettings(deps, effect.sessionId), loadModels(deps), loadIsolationPreview(deps)]);
       if (effect.announce) dispatch({ type: 'notice', message: 'Refreshed runners, settings, models and repositories.' });
       return;
 
@@ -861,6 +873,21 @@ const followFailures = new WeakMap<object, number>();
 const followRetryTimers = new WeakMap<object, { sessionId: string; timer: ReturnType<typeof setTimeout> }>();
 /** Per client, the newest preview read it started; answers carry the number they answer. */
 const previewReads = new WeakMap<object, number>();
+/** Per client, the newest settings read it started; an older answer must not paint over a newer one (ADR-0030). */
+const settingsReads = new WeakMap<object, number>();
+
+type SettingsAnswer = Awaited<ReturnType<OrdewellApi['getSettings']>>;
+
+function nextSettingsRead(api: object): number {
+  const read = (settingsReads.get(api) ?? 0) + 1;
+  settingsReads.set(api, read);
+  return read;
+}
+
+/** One settings answer, numbered so an older read cannot replace a newer one. */
+function dispatchSettings(deps: EffectDeps, settings: Partial<SettingsAnswer>, sessionId?: string, read = nextSettingsRead(deps.api)): void {
+  deps.dispatch({ type: 'settingsLoaded', settings, read, ...(sessionId ? { sessionId } : {}) });
+}
 const FOLLOW_RETRY_MS = 500;
 const FOLLOW_RETRY_MAX_MS = 8_000;
 
@@ -1051,6 +1078,9 @@ async function readBackSession(deps: EffectDeps, sessionId: string, how: { openi
       type: 'turnReconciled', plan, plannerTurnId, ...(plannerCompaction ? { plannerCompaction } : {}),
       chat: restoredChat(plan, sessionId), sessionId, ...(how.reason ? { reason: how.reason } : {}),
     });
+    // A daemon that had dropped the session re-adopted it from the file: its
+    // run settings may be the file's now, not the copy this view held (ADR-0030).
+    await reloadSettings(deps, sessionId);
   } catch (err) {
     if (err instanceof DaemonError && err.code === 'session_not_found' && how.opening) {
       unfollow(deps, sessionId);
@@ -1136,8 +1166,22 @@ async function loadRunners(deps: EffectDeps): Promise<RunnersResponse> {
   return state;
 }
 
-async function loadSettings(deps: EffectDeps): Promise<void> {
-  deps.dispatch({ type: 'settingsLoaded', settings: await deps.api.getSettings() });
+async function loadSettings(deps: EffectDeps, sessionId?: string): Promise<void> {
+  const read = nextSettingsRead(deps.api);
+  const settings = await deps.api.getSettings(sessionId);
+  dispatchSettings(deps, settings, sessionId, read);
+}
+
+/**
+ * A lifecycle's own settings read. The session already opened, adopted or
+ * closed, so a read that fails must not undo that: a later refresh asks again.
+ */
+async function reloadSettings(deps: EffectDeps, sessionId?: string): Promise<void> {
+  try {
+    await loadSettings(deps, sessionId);
+  } catch {
+    // The session itself is the operation that mattered; the panel keeps what it has.
+  }
 }
 
 /**

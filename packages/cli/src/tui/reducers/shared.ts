@@ -86,11 +86,11 @@ export type Effect =
   /** The checkpoint a task waits at, answered; only a rejection carries a reason. */
   | { type: 'answerTaskCheckpoint'; sessionId: string; taskId: string; answer: 'approve' | 'reject'; reason?: string }
   /** Startup refreshes silently; only a typed `/refresh` sets `announce`. */
-  | { type: 'refresh'; announce?: boolean }
+  | { type: 'refresh'; announce?: boolean; sessionId?: string }
   /** The runners alone, as the daemon has them saved. */
   | { type: 'loadRunners' }
   /** The enabled runners and the allowlist, as they are saved now: what flags a task and ticks a picker. */
-  | { type: 'loadScope' }
+  | { type: 'loadScope'; sessionId?: string }
   /** A read-only look at this workspace's repositories, branches and isolation, for the welcome. */
   | { type: 'loadIsolationPreview' }
   | { type: 'exit' };
@@ -169,7 +169,8 @@ export type Action =
   | { type: 'followLost'; sessionId: string }
   /** A standing subscription opened; on a reconnect this is what reads a lost turn's end back. */
   | { type: 'followRestored'; sessionId: string }
-  | { type: 'settingsLoaded'; settings: Partial<SettingsResponse> }
+  /** `read` and `sessionId` say which read this answers, so a late one cannot paint another session's values (ADR-0030). */
+  | { type: 'settingsLoaded'; settings: Partial<SettingsResponse>; read?: number; sessionId?: string }
   | { type: 'modelsLoaded'; models: ModelView[]; orchestratorModels?: ModelView[]; providers?: AiProvider[]; providerErrors?: Record<string, string>; modesByRunner?: Record<string, ModeView[]> }
   | { type: 'sessionsLoaded'; sessions: SessionView[] }
   | { type: 'sessionForked'; sessionId: string; goal: string }

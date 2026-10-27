@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LegacyPlanState } from '../../models/Task';
-import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
+import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '../SettingsService';
 import { makeSession, saves, testWorkspace } from './sessionTestKit';
 import { WAKE_DEBOUNCE_MS } from '../Supervisor';
 import { WAKE_UP_RATE } from '../LoopGuards';
@@ -34,6 +34,42 @@ describe('run settings', () => {
     expect(saved).not.toHaveProperty('mergeAtGatesAutomatically');
     expect(saved).not.toHaveProperty('supervisorRetryLimit');
     expect(saved).not.toHaveProperty('wakeUpReadBudget');
+  });
+});
+
+describe('the session\'s own run settings', () => {
+  it('starts a run from the values the session opened with, not a file another session changed', async () => {
+    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'act' }, execute: false });
+
+    env.settings.supervisorLevel = 'off';
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
+
+    expect(env.session.planState!.runSettings).toMatchObject({ supervisorLevel: 'act' });
+  });
+
+  it('gives the session its own copy when it opens, and only a change made here moves it', () => {
+    const saved: GlobalRunSettings = { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act', autorun: true };
+    const session = makeSession({ settings: () => ({ run: saved }) });
+    expect(session.runSettings()).toMatchObject({ supervisorLevel: 'act', autorun: true });
+
+    // Another surface changes the file: this session already has its values.
+    saved.supervisorLevel = 'off';
+    saved.autorun = false;
+
+    expect(session.runSettings()).toMatchObject({ supervisorLevel: 'act', autorun: true });
+
+    session.applyRunSettings({ supervisorLevel: 'watch' });
+
+    expect(session.runSettings()).toMatchObject({ supervisorLevel: 'watch', autorun: true });
+  });
+
+  it('ignores a field a client sends that is not a run setting', () => {
+    const session = makeSession();
+    const before = session.runSettings();
+
+    session.applyRunSettings({ notASetting: true } as unknown as Partial<GlobalRunSettings>);
+
+    expect(session.runSettings()).toEqual(before);
   });
 });
 

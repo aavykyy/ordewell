@@ -772,8 +772,9 @@ export class ApiClient {
     return { ready, close: () => { closed = true; socket.close(); } };
   }
 
-  getSettings(): Promise<SettingsResponse> {
-    return this.call('GET', '/api/settings', 'Failed to fetch settings');
+  getSettings(sessionId?: string): Promise<SettingsResponse> {
+    const route = sessionId ? `/api/settings?sessionId=${encodeURIComponent(sessionId)}` : '/api/settings';
+    return this.call('GET', route, 'Failed to fetch settings');
   }
 
   /** Save run settings (ADR-0030); with `sessionId`, that session's run takes them at once. */

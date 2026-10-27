@@ -68,7 +68,7 @@ describe('submitting while a planner turn is in flight', () => {
 
   it('plain slash commands still run while a turn is in flight', () => {
     const { effects, state } = run('/refresh', planningState());
-    expect(effects).toEqual([{ type: 'refresh', announce: true }]);
+    expect(effects).toEqual([{ type: 'refresh', announce: true, sessionId: 'session-1' }]);
     expect(state.queuedPrompts).toEqual([]);
   });
 });

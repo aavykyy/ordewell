@@ -2,7 +2,7 @@ import { describe, it, expect, vi, type Mock, type Mocked } from 'vitest';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action } from '../reducer';
 import type { Effect } from '../reducer';
-import { fromTranscript, type IsolationPreview, type SessionMessage } from '@ordewell/core';
+import { fromTranscript, RUN_SETTINGS_DEFAULTS, type IsolationPreview, type SessionMessage } from '@ordewell/core';
 import { DaemonError } from '../../apiClient';
 import type { TuiState } from '../state';
 import { chatOf, messagesOf } from './chat';
@@ -92,6 +92,16 @@ describe('planning', () => {
 
     expect(h.api.startConversation).toHaveBeenCalledWith('session-new', 'ship it', undefined, '/ws', undefined);
     expect(h.actions[0]).toEqual({ type: 'sessionStarted', sessionId: 'session-new', goal: 'ship it' });
+  });
+
+  it('reads the new session\'s settings once it exists, not the file\'s for the next one', async () => {
+    const run = { ...RUN_SETTINGS_DEFAULTS, autorun: true };
+    const h = harness({ getSettings: vi.fn().mockResolvedValue({ run }) });
+
+    await runEffect({ type: 'startConversation', goal: 'ship it' }, h.deps);
+
+    expect(h.api.getSettings).toHaveBeenCalledWith('session-new');
+    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'settingsLoaded', sessionId: 'session-new', settings: { run } }));
   });
 
   /** A harness whose planning socket the test drives from inside the REST call. */
@@ -944,10 +954,10 @@ describe('planner switch', () => {
 
     await runEffect({ type: 'setPlanner', provider: 'claude-code' }, h.deps);
 
-    expect(h.actions).toContainEqual({
+    expect(h.actions).toContainEqual(expect.objectContaining({
       type: 'settingsLoaded',
       settings: { aiProvider: 'claude-code', orchestratorModel: 'sonnet', plannerThinkingEffort: 'high' },
-    });
+    }));
   });
 
   it('says which model it restored, when the daemon remembered one', async () => {
@@ -1206,6 +1216,14 @@ describe('settings', () => {
     expect(h.actions).toContainEqual({ type: 'notice', message: 'Runners enabled: OpenCode.' });
   });
 
+  it('reads the settings of the session on screen when the scope reloads', async () => {
+    const h = harness();
+    await runEffect({ type: 'loadScope', sessionId: 's1' }, h.deps);
+
+    expect(h.api.getSettings).toHaveBeenCalledWith('s1');
+    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'settingsLoaded', sessionId: 's1' }));
+  });
+
   it('/settings saves the run settings in one update, then parallel and autonomy, with one notice', async () => {
     const run = { supervisorLevel: 'watch', mergeAtGatesAutomatically: false, autorun: true, supervisorRetryLimit: 3, wakeUpReadBudget: 12 };
     const saved: boolean[] = [];
@@ -1218,7 +1236,7 @@ describe('settings', () => {
       message: 'Settings: Autonomy Guarded · Supervisor retries 3 · Autorun on · Parallel 3', sessionId: 's1',
     }, h.deps);
     expect(h.api.updateRunSettings.mock.calls).toEqual([[{ autorun: true, supervisorRetryLimit: 3 }, 's1']]);
-    expect(h.actions).toContainEqual({ type: 'settingsLoaded', settings: { run } });
+    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'settingsLoaded', settings: { run } }));
     expect(h.api.updateSettings).toHaveBeenCalledWith({ env: { ORDEWELL_MAX_PARALLEL: '3' } });
     expect(h.env.ORDEWELL_MAX_PARALLEL).toBe('3');
     expect(saved).toEqual([false]);
@@ -1344,6 +1362,30 @@ describe('catalogs and sessions', () => {
 
     expect(h.actions).toContainEqual({ type: 'sessionLoaded', sessionId: 's9', goal: 'Rate limiting' });
     expect(h.actions).toContainEqual({ type: 'planUpdated', plan: { tasks: [{ id: 't1' }] }, sessionId: 's9' });
+  });
+
+  it('re-reads the loaded session\'s own run settings, not the file\'s', async () => {
+    const run = { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act' as const };
+    const h = harness({ getSettings: vi.fn().mockResolvedValue({ run }) });
+
+    await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
+
+    expect(h.api.getSettings).toHaveBeenCalledWith('s9');
+    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'settingsLoaded', sessionId: 's9', settings: { run } }));
+  });
+
+  it('shows the loaded session\'s values once its settings answer lands', async () => {
+    const run = { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act' as const };
+    const h = harness({ getSettings: vi.fn().mockResolvedValue({ run }) });
+
+    await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
+    const state = h.actions.reduce(
+      (s, action) => reduce(s, action).state,
+      initialState({ sessionId: 's1', runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }),
+    );
+
+    expect(state.sessionId).toBe('s9');
+    expect(state.runSettings.supervisorLevel).toBe('act');
   });
 
   it('says the session is live once it is loaded', async () => {
@@ -1771,6 +1813,7 @@ describe('conversation fork and rewind effects', () => {
       { type: 'sessionForked', sessionId: 'session-fork', goal: 'build me a parser' },
       { type: 'chatRestored', history, sessionId: 'session-fork' },
       { type: 'planUpdated', plan, sessionId: 'session-fork' },
+      { type: 'settingsLoaded', settings: {}, read: 1, sessionId: 'session-fork' },
       { type: 'notice', message: expect.stringMatching(/Forked session-1.*session-fork/) },
     ]);
   });
@@ -1814,6 +1857,7 @@ describe('conversation fork and rewind effects', () => {
       { type: 'sessionForked', sessionId: 'session-fork', goal: 'build me a parser' },
       { type: 'chatRestored', history, sessionId: 'session-fork' },
       { type: 'planUpdated', plan, sessionId: 'session-fork' },
+      { type: 'settingsLoaded', settings: {}, read: 1, sessionId: 'session-fork' },
       { type: 'inputPrefilled', text: 'JSON only', sessionId: 'session-fork' },
       { type: 'notice', message: expect.stringMatching(/session-1.*session-fork.*from before that message.*original is kept.*\/sessions.*ready to edit and resend/) },
     ]);

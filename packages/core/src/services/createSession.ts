@@ -109,7 +109,7 @@ export interface SessionRuntimeSettings {
   modelAllowlist?: Record<string, string[]>;
   /** Absent means the user never chose, and `config.enabledRunners` (the host's defaults) decides. */
   enabledRunners?: RunnerId[];
-  /** The user's run settings (ADR-0030); absent means every default. */
+  /** The user's saved run settings (ADR-0030), which seed a new session; absent means every default. */
   run?: GlobalRunSettings;
   /** Whether an API planner compacts its own context before a call that would not fit; absent means on. */
   plannerAutoCompaction?: boolean;
@@ -174,7 +174,11 @@ export interface SessionDeps {
   onNotice?: (notice: SessionNotice) => void;
   /** Shared across sessions — sole producer of model catalogs and routing lists. */
   modelResolver: ModelResolver;
-  /** Live runtime settings (enabled runners). Read at each operation that needs them. */
+  /**
+   * Live runtime settings (enabled runners). Its run values seed a session
+   * when it opens; a later change reaches an open session through
+   * {@link Session.applyRunSettings}.
+   */
   settings: () => SessionRuntimeSettings;
   /**
    * Host-assigned session id. When set, every persist writes under this id so
@@ -563,6 +567,11 @@ export class Session {
   private readonly taskLogs: SessionParts['taskLogs'];
   private readonly fetcher: IWebFetcher;
   private readonly settingsFn: () => SessionRuntimeSettings;
+  /**
+   * This session's copy of the user's run settings (ADR-0030), seeded when it
+   * opens. Another session's change writes the file but does not move this one.
+   */
+  private runSettingsValue: GlobalRunSettings;
   private readonly save: SaveSession;
   /** One live host per session (ADR-0049): no save, and no run, without it. */
   private readonly lease: SessionLease;
@@ -645,6 +654,7 @@ export class Session {
     this.fsAdapter.setNotice?.((message) => this.notice('warn', message));
     this.modelResolver = parts.modelResolver;
     this.settingsFn = parts.settings;
+    this.runSettingsValue = { ...RUN_SETTINGS_DEFAULTS, ...(parts.settings().run ?? {}) };
     this.hostSessionId = parts.hostSessionId;
     this.currentSessionId = parts.hostSessionId ?? mintSessionId();
     this.backend = parts.backend;
@@ -1030,12 +1040,18 @@ export class Session {
 
   /** Whether the commits Ordewell writes carry the Planned-with trailer now; the user's setting, not the run's copy, so a change reaches the next landing. */
   plannedWithTrailer(): boolean {
-    return this.userRunSettings().plannedWithTrailer;
+    return this.settingsFn().run?.plannedWithTrailer ?? this.runSettingsValue.plannedWithTrailer;
   }
 
-  /** The user's run settings as they stand now (ADR-0030). */
+  /** The run settings this session shows and starts its runs with (ADR-0030): its own copy, not the file's. */
+  runSettings(): GlobalRunSettings {
+    // The Planned-with line keeps no copy: every landing reads the user's saved setting (ADR-0030).
+    return { ...this.runSettingsValue, plannedWithTrailer: this.plannedWithTrailer() };
+  }
+
+  /** The user's run settings as they stand for this session (ADR-0030). */
   private userRunSettings(): GlobalRunSettings {
-    return this.settingsFn().run ?? RUN_SETTINGS_DEFAULTS;
+    return this.runSettingsValue;
   }
 
   /** A call at the seam, in the transcript where it happened and on every surface at once. */
@@ -1898,13 +1914,25 @@ export class Session {
     }
   }
 
+  /** Merge the run settings this session owns, ignoring a field it does not know from a client's body. */
+  private mergeRunSettings(changes: Partial<GlobalRunSettings>): void {
+    const next: GlobalRunSettings = { ...this.runSettingsValue };
+    for (const key of Object.keys(next) as (keyof GlobalRunSettings)[]) {
+      const value = (changes as Partial<Record<keyof GlobalRunSettings, unknown>>)[key];
+      if (value !== undefined) (next as Record<keyof GlobalRunSettings, unknown>)[key] = value;
+    }
+    this.runSettingsValue = next;
+  }
+
   /**
    * The user changed run settings in this session (ADR-0030), which the host
    * has already saved: the run under way takes them at once, in either
    * direction — the wake-up turn under way too, since the seam reads the run's
-   * level at each call. Other sessions' runs keep theirs until they end.
+   * level at each call. Other sessions keep the values they opened with.
    */
   applyRunSettings(changes: Partial<GlobalRunSettings>): void {
+    // This session's copy first: with no run yet, it is what the next run starts from.
+    this.mergeRunSettings(changes);
     this.supervision.apply(changes);
     // The scheduler reads the setting as it decides; a gate already reached merges now, not at the next event.
     if (changes.mergeAtGatesAutomatically) this.orchestrator.runSettingsChanged();

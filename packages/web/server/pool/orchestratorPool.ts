@@ -436,9 +436,10 @@ export class OrchestratorPool {
     });
   }
 
-  getSettings(): SettingsResponse {
+  getSettings(sessionId?: string): SettingsResponse {
     const config = this.plannerConfig();
     const userSettings = this.settingsService.getAll();
+    const live = sessionId ? this.sessions.get(sessionId) : undefined;
     return {
       orchestratorModel: config.orchestratorModel,
       // Who plans (ADR-0009) — a vendor id, or one of the three harness
@@ -454,20 +455,22 @@ export class OrchestratorPool {
       // The model remembered per planner backend (this task), so a surface can
       // render what's remembered without a second round-trip.
       plannerModels: userSettings.plannerModels,
-      run: this.settingsService.getRunSettings(),
+      // An open session shows what it was opened with; a closed or unknown id
+      // falls back to the file, which is what a new session starts from (ADR-0030).
+      run: live?.runSettings() ?? this.settingsService.getRunSettings(),
     };
   }
 
   /**
    * Save the user's run settings, and apply them at once to `sessionId`'s run
-   * when that session is open here (ADR-0030). Other sessions' runs keep
-   * theirs. Throws a {@link RunSettingsError}, saving nothing, for a value
-   * out of range.
+   * when that session is open here (ADR-0030). Other sessions keep the values
+   * they were opened with. Throws a {@link RunSettingsError}, saving nothing,
+   * for a value out of range.
    */
   updateRunSettings(changes: Partial<GlobalRunSettings>, sessionId?: string): SettingsResponse {
     this.settingsService.updateRunSettings(changes);
     if (sessionId) this.sessions.get(sessionId)?.applyRunSettings(changes);
-    return this.getSettings();
+    return this.getSettings(sessionId);
   }
 
   /**
@@ -494,7 +497,7 @@ export class OrchestratorPool {
     return this.plannerConfig().aiProvider;
   }
 
-  updateSettings(changes: Record<string, unknown>): SettingsUpdateResponse {
+  updateSettings(changes: Record<string, unknown>, sessionId?: string): SettingsUpdateResponse {
     // Read before any of this call's changes land, so a switch is judged
     // against what was actually in effect a moment ago. The model and effort
     // too, with where they came from: a detected agent does not plan with a
@@ -598,7 +601,7 @@ export class OrchestratorPool {
     // wrote it to `.env` on the strength of this response, and would otherwise
     // reinstate the refusal as the next daemon's startup environment.
     const rejectedEnvKeys = admission?.rejected ?? [];
-    const settings: SettingsUpdateResponse = this.getSettings();
+    const settings: SettingsUpdateResponse = this.getSettings(sessionId);
     if (rejectedEnvKeys.length > 0) settings.rejectedEnvKeys = rejectedEnvKeys;
     if (selection?.recall) settings.switchRecall = selection.recall;
     return settings;

@@ -31,7 +31,7 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
     case 'quit':
       return step({ ...state, exiting: true }, [{ type: 'exit' }]);
     case 'refresh':
-      return step(state, [{ type: 'refresh', announce: true }]);
+      return step(state, [{ type: 'refresh', announce: true, ...(state.sessionId ? { sessionId: state.sessionId } : {}) }]);
 
     case 'run':
       return withSession(state, (sessionId) => startPlan(state, sessionId));

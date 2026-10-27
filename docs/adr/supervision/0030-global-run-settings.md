@@ -3,7 +3,7 @@ status: accepted
 amends: ["0001", "0013", "0020", "0029"]
 ---
 
-# 0030 — Run settings are global, saved and live; autorun
+# 0030 — Run settings are saved once and live per session; autorun
 
 **Amends:** ADR-0029 — the supervisor level, merge at gates automatically, the
 retry limit and the wake-up read budget stop being per-plan settings saved at
@@ -44,30 +44,39 @@ on one machine can disagree.
 ## Decision
 
 **Full/Guarded, the supervisor level, merge at gates automatically, autorun,
-the retry limit and the wake-up read budget are machine-wide user settings,
-saved in `settings.json`.** Full/Guarded, the supervisor level, the merge
+the retry limit and the wake-up read budget are the user's settings, saved
+machine-wide in `settings.json`.** Full/Guarded, the supervisor level, the merge
 setting, autorun and the retry limit are changed through `/settings` (or the
 headless commands behind it). The wake-up read budget and the Planned-with line
 have no panel row: only `ordewell supervisor reads <n>` or an edit of the file
 sets the budget, and only `ordewell trailer` or an edit of the file sets the
-line. A change made through `/settings` applies at once to the session it is
-made in, and to every other session from its next run, except the Planned-with
-line, which every session reads as it writes a commit, so a change reaches the
-next landing in any session. Autorun, a new setting, starts the plan when the
-planner submits it.**
+line. A change made through `/settings` is saved to the file and applies at once
+to the session it is made in. Every other open session keeps the values it
+opened with; the file is the default a new session (or one reopened after
+closing) starts from, so the last change made anywhere is what the next session
+opens with. The Planned-with line is the exception: every session reads it from
+the user's setting as it writes a commit, so a change reaches the next landing in
+any session. Autorun, a new setting, starts the plan when the planner submits
+it. Full/Guarded and the parallel limit are not run settings and stay
+machine-wide: every open session sees a change to them.**
 
-### One store, machine-wide
+### One store, and a copy per open session
 
 `settings.json` in the global data dir (`SettingsService`) holds every value.
 There is no per-plan value and no per-workspace override.
 
+- **An open session holds its own copy of the run settings.** It is seeded from
+  the file when the session opens, created or adopted, and only a change made in
+  that session moves it. It is not saved with the session: closing drops it, and
+  reopening reads the file, as a new session does.
 - **The plan stores none of them.** Older plans' `supervisorLevel`,
   `mergeAtGatesAutomatically`, `supervisorRetryLimit` and `wakeUpReadBudget`
   are ignored on load and dropped on the next save. A plan once set to Act
-  opens under the global level: the safe direction, accepted rather than
+  opens under the session's level: the safe direction, accepted rather than
   migrated.
-- **A run keeps its own copy, `runSettings`.** It is what the run actually used,
-  the record behind the timeline, and the value a guard or a failure lowers.
+- **A run keeps its own copy, `runSettings`, taken from the session's copy.**
+  It is what the run actually used, the record behind the timeline, and the
+  value a guard or a failure lowers.
 - **Full/Guarded moves too.** On first start, a value in `~/.ordewell/.env` or
   a non-default `ordewell.autonomousMode` is copied into `settings.json` once,
   so nobody's level flips; the VS Code setting is removed from the extension.
@@ -90,7 +99,7 @@ There is no per-plan value and no per-workspace override.
 Watch becomes the default because it only reads and writes notes to the user:
 it never acts, and it makes the planner's watching of a run something a new
 user has without asking. Its cost is planner usage on each wake-up. Older
-plans that loaded as Off follow the global value like any other.
+plans that loaded as Off follow the session's value like any other.
 
 ### Panels, not plan controls
 
@@ -144,10 +153,14 @@ two rows: **Autonomy** (Full/Guarded) and **Run** (supervisor level, auto-merge,
 autorun), both pointing at `/settings`. Act and autorun on are drawn as a
 warning, as the autonomous mode's `⚡` is. A status badge shows the same values
 at all times, not only during a run, and during a run shows the run's level
-where it differs from the global one: `Act → Watch` once the wake-up-rate guard
-has lowered it, with the reason in the supervisor's note. In the TUI the badge
-sits at the right end of the status row and is left off the bare welcome screen,
-whose Setup block already shows the same values.
+where it differs from the session's one: `Act → Watch` once the wake-up-rate
+guard has lowered it, with the reason in the supervisor's note. In the TUI the
+badge sits at the right end of the status row and is left off the bare welcome
+screen, whose Setup block already shows the same values.
+
+While a session is open both rows show that session's own copy. The bare welcome
+shows the file's values, which the session a user starts next will open with.
+Full/Guarded and Parallel are machine-wide in either case.
 
 The status row it shares with the badge speaks for the chat on screen and for
 nothing else: whether that chat is planning, condensing, working or paused on a
@@ -160,8 +173,8 @@ the other four are the **run settings**.
 
 ### When a change applies
 
-A change in `/settings` updates **the saved global value and the session it was
-made in, at once, in either direction.**
+A change in `/settings` updates **the saved file and the session it was made in,
+at once, in either direction.**
 
 - **The session's run, if one is under way, takes the new value now.** Its
   `runSettings` is updated and the next merge gate, wake-up, retry or read is
@@ -171,11 +184,13 @@ made in, at once, in either direction.**
   ADR-0029 already says, and may use a raise at once; its prompt still carries
   the rules it was given, so a raised turn may only suggest. The next turn is
   told the new rules.
-- **Other sessions with a run under way keep their run's values until it
-  ends.** Their next run starts from the global values. A raise made in one
-  repository never reaches a run the user was not looking at.
-- **Sessions with no run read the global values when they next need them**: a
-  planner turn reads autorun and Full/Guarded, a run start copies the rest.
+- **Every other open session keeps the values it opened with, its next run
+  included.** It does not read the file again while it is open. A raise or a
+  lowering made in one window therefore never reaches a run the user was not
+  looking at, nor the next one in that window.
+- **A new session, or one reopened after closing, starts from the file**, so
+  the last change made anywhere is what it opens with. A closed session keeps no
+  copy: a surface showing it reads the file, as a new session would.
 
 There is no "lower every run everywhere" from one window; lowering a run is done
 in its session, or by stopping it.
@@ -260,9 +275,12 @@ refused, and the task waited for a person the user had said was not needed.
 
 ### API
 
-`GET /api/settings` answers every run setting and the autonomy level;
-`PATCH /api/settings` changes any of them, and with a `sessionId` also applies
-the change to that session at once, as a change in `/settings` does. The per-plan
+`GET /api/settings` answers every run setting and the autonomy level; with
+`?sessionId=` it answers that open session's own copy, and an unknown or closed
+id falls back to the file rather than erroring. `PATCH /api/settings` changes
+any of them, writes the file, and with a `sessionId` also applies the change to
+that session at once and answers with that session's values, as a change in
+`/settings` does. The per-plan
 `PATCH /api/plans/:sessionId/settings` and
 `POST /api/plans/:sessionId/supervisor/lower` are removed: their only client is
 the CLI's own `apiClient`, and the project is before 1.0.
@@ -288,6 +306,13 @@ the daemon reads it from there at generation.
 - **Rejected: a change reaches every session's run at once.** It would raise a
   run in another repository, perhaps one with ops tasks, to Act without the
   user looking at it.
+- **Rejected: every open session reads the file live.** A change made in one
+  window moved another window's panel while that window's run kept its own
+  values, so the panel and the run disagreed. The session now holds the copy its
+  panel shows.
+- **Rejected: keep one session's change in every open session's panel but not
+  its run.** The same disagreement, with a second rule to explain why a shown
+  value is not what will run.
 - **Rejected: raises apply only to the typing session, lowerings everywhere.**
   Safer for a "stop everything", at the cost of an asymmetry no other setting
   has. Sessions keep what they started with, as in other agent tools.
@@ -328,11 +353,11 @@ the daemon reads it from there at generation.
 
 ## Consequences
 
-- `UserSettings` holds these values; the plan loses four fields and keeps
-  `runSettings`, which one module owns (`RunSupervision`): it copies them at
-  a run the user starts, keeps them for a run that continues, and applies the
-  user's change to the run under way (`Session.applyRunSettings`). The
-  scheduler keeps no value of its own: it reads the run's `runSettings` as it
+- `UserSettings` holds these values; the plan keeps `runSettings`, which one
+  module owns (`RunSupervision`): a session seeds its own copy when it opens, a
+  run the user starts copies them, keeps them for a run that continues, and
+  applies the user's change to the run under way (`Session.applyRunSettings`).
+  The scheduler keeps no value of its own: it reads the run's `runSettings` as it
   decides each automatic merge.
 - The TUI and VS Code gain `/settings` and the Setup rows, and lose `G`, `W`,
   `L` and the plan-card controls. VS Code's `ordewell.autonomousMode` goes.
@@ -387,3 +412,4 @@ the daemon reads it from there at generation.
   and VS Code: it has no panel row and is set with `ordewell supervisor reads
   <n>` or in `settings.json`, which the headless command still writes.
 - 2026-10-26 — a start in the reply that adds the task goes through at once: the edit commits as its call answers (ADR-0022, P2).
+- 2026-10-27 — an open session shows and keeps its own run settings, seeded from `settings.json` when it opens; another session's change no longer moves its panel, and the file is the default the next session opens with.

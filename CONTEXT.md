@@ -2849,7 +2849,7 @@ tripped wake-up-rate guard or a failed supervisor lowers it for the rest of the
 run; the user's `/settings` sets it, up or down, at once in the session it is
 changed in, lifting such a lowering with the guards' memory kept. A run the
 supervisor restarts itself, or a usage-limit reset resumes, keeps the level the
-run had; a start of the user's copies the global value afresh (see **Run
+run had; a start of the user's copies the session's value afresh (see **Run
 origin**). A slim precursor of the mandate (#23): Watch is `observe`, Act
 becomes `control` + `replan`.
 *Avoid:* "autonomous", "autonomy" or "auto" for it — those name the runner
@@ -2857,17 +2857,21 @@ permission modes and the Full/Guarded autonomy level (ADR-0001), a separate
 setting; a Guarded session can have an Act supervisor. *Avoid:* "mandate" until
 #23 defines one.
 
-**Run settings** — the machine-wide user settings that say how a run is
+**Run settings** — the user settings that say how a run is
 started, watched and merged: **Supervisor level**, **Auto-merge at gates**,
 **Autorun**, the supervisor's retry limit (ADR-0030) and the wake-up read
 budget (`wakeUpReadBudget`). The budget has no row in the UI: it is set only by
 `ordewell supervisor reads <n>` or in `settings.json`, never by `/settings`.
 All of them are saved in `settings.json` beside the Planned-with trailer, which
 is not a panel value; the rows `/settings` shows are changed only by the user
-there, a headless command, or `PATCH /api/settings`, never by the planner. A
-change applies at once to the session it is made in; another session's run
-under way keeps its values until it ends. A run's own copy is `runSettings` on
-the plan, which only **Run supervision** writes; the plan stores no other copy.
+there, a headless command, or `PATCH /api/settings`, never by the planner. Every
+open session holds its own copy, seeded from the file when it opens
+(`Session.runSettings()`); a change applies at once to the session it is made
+in, and every other open session keeps the values it opened with, its next run
+included. The file is the default a new session (or one reopened after closing)
+starts from, so the last change made anywhere is what the next session opens
+with. A run's own copy is `runSettings` on the plan, which only **Run
+supervision** writes; the plan stores no other copy.
 *Avoid:* "autonomy" or "autonomy settings" for them — *autonomy* is the
 Full/Guarded level only, shown on its own Setup row; *Avoid:* "plan settings"
 (they stopped being per plan).

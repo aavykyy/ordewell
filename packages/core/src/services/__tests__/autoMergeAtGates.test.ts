@@ -28,6 +28,11 @@ let userSettings: GlobalRunSettings;
 beforeEach(() => { userSettings = { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' }; });
 afterEach(() => { while (cleanup.length) cleanup.pop()!(); });
 const mergesAtGates = (enabled = false) => { userSettings.mergeAtGatesAutomatically = enabled; };
+/** The user's change in this session: saved to the file and applied to the session it is made in (ADR-0030). */
+const mergesAtGatesIn = (session: ReturnType<typeof makeSession>, enabled = false) => {
+  mergesAtGates(enabled);
+  session.applyRunSettings({ mergeAtGatesAutomatically: enabled });
+};
 
 function harness(isolation: IWorktreeIsolation = new FakeWorktreeIsolation(), workspace = '/repo', disk = false) {
   const sessions: FakeRunnerSession[] = [];
@@ -54,7 +59,7 @@ describe('Merge at gates automatically', () => {
   it.each([ops, user])('merges for the gate of $type task without a supervisor and records the actor', async (gated) => {
     const iso = new FakeWorktreeIsolation();
     const { session, pass, messages } = harness(iso);
-    mergesAtGates(true);
+    mergesAtGatesIn(session, true);
     session.loadPlan(plans([change, gated]), 'goal', '/repo');
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
@@ -70,7 +75,7 @@ describe('Merge at gates automatically', () => {
   it('merges for a gate that waits on work behind a skipped dependency', async () => {
     const iso = new FakeWorktreeIsolation();
     const { session, sessions, pass, messages } = harness(iso);
-    mergesAtGates(true);
+    mergesAtGatesIn(session, true);
     const verify = createTask({ id: 'v2', order: 2, title: 'Verify', prompt: 'verify', dependencies: ['c1'] });
     const pack = createTask({ id: 'o3', order: 3, title: 'Pack', prompt: 'pack', ops: true, dependencies: ['v2'] });
     // Still running, so the failure below does not end the run and merge at its end.
@@ -105,12 +110,11 @@ describe('Merge at gates automatically', () => {
   it.each([false, true])('changed from %s mid-run in this session, applies to the run under way at once', async (initial) => {
     const iso = new FakeWorktreeIsolation();
     const { session, pass } = harness(iso);
-    mergesAtGates(initial);
+    mergesAtGatesIn(session, initial);
     session.loadPlan(plans([change, user]), 'goal', '/repo');
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    mergesAtGates(!initial);
-    session.applyRunSettings({ mergeAtGatesAutomatically: !initial });
+    mergesAtGatesIn(session, !initial);
     pass();
     await vi.waitFor(() => expect(session.planTasks[0].status).toBe('completed'));
     await session.reschedule();
@@ -140,7 +144,7 @@ describe('Merge at gates automatically', () => {
     const second = createTask({ id: 'c3', order: 3, prompt: 'second', dependencies: ['u2'] });
     const last = createTask({ id: 'u4', order: 4, type: 'user', dependencies: ['c3'] });
     const parallel = createTask({ id: 'c5', order: 5, prompt: 'parallel' });
-    mergesAtGates(true);
+    mergesAtGatesIn(session, true);
     session.loadPlan(plans([change, user, second, last, parallel]), 'goal', '/repo');
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     if (first !== 'clean') iso.mergeResult = { outcome: 'conflict', repo: '.' };
@@ -170,7 +174,7 @@ describe('Merge at gates automatically', () => {
     const iso = new FakeWorktreeIsolation();
     const { session, pass } = harness(iso);
     const next = createTask({ id: 'c2', order: 2, prompt: 'next', dependencies: ['c1'] });
-    mergesAtGates(true);
+    mergesAtGatesIn(session, true);
     session.loadPlan(plans([change, next]), 'goal', '/repo');
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
@@ -183,7 +187,7 @@ describe('Merge at gates automatically', () => {
     const iso = new FakeWorktreeIsolation();
     const { session, pass } = harness(iso);
     const unrelated = createTask({ id: 'o3', order: 3, ops: true, prompt: 'other ops' });
-    mergesAtGates(true);
+    mergesAtGatesIn(session, true);
     session.loadPlan(plans([change, ops, unrelated]), 'goal', '/repo');
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
@@ -235,7 +239,7 @@ describe('Merge all at the end of the run', () => {
   it('merges what landed when the run settles, emits no handoff, and clears the run', async () => {
     const iso = new FakeWorktreeIsolation();
     const { session, pass, messages } = harness(iso);
-    mergesAtGates(true);
+    mergesAtGatesIn(session, true);
     session.loadPlan(plans([change, next]), 'goal', '/repo');
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
@@ -255,7 +259,7 @@ describe('Merge all at the end of the run', () => {
     const iso = new FakeWorktreeIsolation();
     const { session, sessions, pass, messages, notices } = harness(iso);
     const failing = createTask({ id: 'c3', order: 3, prompt: 'fails' });
-    mergesAtGates(true);
+    mergesAtGatesIn(session, true);
     session.loadPlan(plans([change, failing]), 'goal', '/repo');
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
@@ -274,7 +278,7 @@ describe('Merge all at the end of the run', () => {
     const iso = new FakeWorktreeIsolation();
     iso.mergeResult = { outcome: 'conflict', repo: '.' };
     const { session, pass, messages, notices } = harness(iso);
-    mergesAtGates(true);
+    mergesAtGatesIn(session, true);
     session.loadPlan(plans([change]), 'goal', '/repo');
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
@@ -304,7 +308,7 @@ describe('Merge all at the end of the run', () => {
     const iso = new FakeWorktreeIsolation();
     iso.mergeResult = { outcome: 'conflict', repo: '.' };
     const { session, pass, messages } = harness(iso);
-    mergesAtGates(true);
+    mergesAtGatesIn(session, true);
     session.loadPlan(plans([change, user]), 'goal', '/repo');
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
@@ -319,7 +323,7 @@ describe('Merge all at the end of the run', () => {
   it('leaves a run merged in full at its gates as before: cleared, with nothing more to merge', async () => {
     const iso = new FakeWorktreeIsolation();
     const { session, pass, messages } = harness(iso);
-    mergesAtGates(true);
+    mergesAtGatesIn(session, true);
     session.loadPlan(plans([change, user]), 'goal', '/repo');
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
@@ -366,6 +370,7 @@ describe('who opened the run', () => {
     };
     const { session, pass, messages } = harness(iso);
     userSettings.supervisorLevel = 'act';
+    session.applyRunSettings({ supervisorLevel: 'act' });
     session.loadPlan(plans([change, other]), 'goal', '/repo');
     await session.execute({ command: 'run_task', task: 'c1' }, { kind: 'user' });
     pass();
@@ -373,6 +378,7 @@ describe('who opened the run', () => {
     expect(session.planState!.runSettings).toMatchObject({ supervisorLevel: 'act', supervisorRetryLimit: 2 });
 
     Object.assign(userSettings, { supervisorLevel: 'watch', supervisorRetryLimit: 5 });
+    session.applyRunSettings({ supervisorLevel: 'watch', supervisorRetryLimit: 5 });
     const merging = session.execute({ command: 'merge_all' }, { kind: 'supervisor', level: 'act' });
     await vi.waitFor(() => expect(release).toBeDefined());
     const executing = session.execute({ command: 'run_plan' }, { kind: 'user' });
@@ -408,7 +414,7 @@ describe('automatic gate merging with real git', () => {
     const root = repo();
     const iso = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
     const { session, spawn, pass, notices } = harness(iso, root);
-    mergesAtGates(true);
+    mergesAtGatesIn(session, true);
     session.loadPlan(plans(), 'goal', root);
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     const cwd = spawn.mock.calls[0][0].cwd!;
@@ -433,7 +439,7 @@ describe('automatic gate merging with real git', () => {
   it('persists the run\'s own copy and restores it, and the next run reads the user\'s setting', async () => {
     const root = repo();
     const { session } = harness(new FakeWorktreeIsolation(), root, true);
-    mergesAtGates(true);
+    mergesAtGatesIn(session, true);
     session.loadPlan(plans(), 'goal', root);
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     const loaded = loadSession(session.sessionId, root)!;
