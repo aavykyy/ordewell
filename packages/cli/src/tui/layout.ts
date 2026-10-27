@@ -818,24 +818,36 @@ function isolationPreviewLines(state: TuiState, cols: number): string[] {
 }
 
 /**
- * One quiet line under the workspace when the active planner's agent is signed
- * out. Only the runner's own verdict raises it: `unknown` must never read as an
- * alarm, and a vendor planner has no login of its own (ADR-0009).
+ * Only a runner's own signed-out verdict, with a way in, raises an alarm:
+ * `unknown` must never read as one, and a verdict without a login command has
+ * nowhere to send the user (ADR-0052).
  */
-function signedOutPlannerLine(state: TuiState, cols: number): string[] {
+function signedOutWithLogin(row: TuiState['runners'][number]): boolean {
+  return row.auth?.state === 'signed-out' && (row.auth.loginCommand?.length ?? 0) > 0;
+}
+
+/**
+ * One red line per signed-out agent, the active planner first so the row under
+ * the workspace names the command that fixes the plan at hand. A named login
+ * leaves the planner alone, so every other agent names its own `/login <id>`.
+ */
+function signedOutPlannerLines(state: TuiState, cols: number): string[] {
   if (!state.plannerKnown || !state.runnersKnown) return [];
-  const runner = runnerForProvider(state.plannerProvider);
-  if (!runner) return [];
-  const auth = state.runners.find((r) => r.id === runner)?.auth;
-  if (auth?.state !== 'signed-out') return [];
-  const label = getProviderMeta(state.plannerProvider)?.label ?? runner;
-  return wrap(style.red(`${label} is not logged in. /login to sign in.`), Math.max(1, cols - 1));
+  const planned = runnerForProvider(state.plannerProvider);
+  const flagged = state.runners.filter(signedOutWithLogin);
+  const active = flagged.find((row) => row.id === planned);
+  const room = Math.max(1, cols - 1);
+  return (active ? [active, ...flagged.filter((row) => row !== active)] : flagged)
+    .flatMap((row) => wrap(
+      style.red(`${row.name} not logged in. ${row === active ? '/login' : `/login ${row.id}`} to sign in.`),
+      room,
+    ));
 }
 
 /** `rows` is the pane the welcome is painted into. */
 function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
   const planner = plannerSetup(state);
-  const enabledRunners = state.runners.filter((r) => r.enabled).map((r) => r.name);
+  const enabledRunners = state.runners.filter((r) => r.enabled);
   const canPlan = planner.ready
     || state.runners.length > 0
     || state.configuredProviders.length > 0;
@@ -863,7 +875,11 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     setupRow('Planner', plannerValue, '/planner', cols),
     setupRow(
       'Runners',
-      detecting ? style.grey(DETECTING) : enabledRunners.length > 0 ? enabledRunners.join(', ') : style.yellow('none enabled'),
+      detecting
+        ? style.grey(DETECTING)
+        : enabledRunners.length > 0
+          ? enabledRunners.map((row) => (signedOutWithLogin(row) ? style.red(row.name) : row.name)).join(', ')
+          : style.yellow('none enabled'),
       '/runners',
       cols,
     ),
@@ -889,7 +905,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ...versionCheck,
     style.grey('/help   all commands'),
     workspaceLine(state.workspace, cols),
-    ...signedOutPlannerLine(state, cols),
+    ...signedOutPlannerLines(state, cols),
   ];
 
   const rest = ['', ...prompt, ...approval, '', ...setup, ...isolationPreviewLines(state, cols), ...tail];
