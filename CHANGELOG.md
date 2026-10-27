@@ -418,6 +418,13 @@ Before you upgrade from 0.10, note what changes for existing setups:
 
 ### Fixed
 
+- **A planner keeps Ordewell's plan tools for the whole conversation.** The
+  attach is checked before every turn, not only when the agent starts: one whose
+  running process lost its connection is restarted once on a fresh credential,
+  its conversation resumed, instead of replying `No tool named … is currently
+  available` and promising plan edits it cannot make
+  ([ADR-0025](docs/adr/runners/0025-structured-only-runners.md)). A turn that
+  still cannot attach says so and sends nothing.
 - **Copying selected chat text works again in VS Code 1.143.** Cmd+C, Ctrl+C
   and context-menu Copy of text selected with the mouse in the planner
   conversation or the `Planner ctx` footer copied nothing once the composer had

@@ -152,6 +152,32 @@ describe('OrdewellMcpServer', () => {
     expect((await rawRequest(credential, {})).status).toBe(401);
   });
 
+  it('tells an unknown token, a revoked token and a wrong path apart in its refusal count, never printing the token', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const server = newServer();
+      const revoked = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 });
+      const unknown = { url: revoked.url, token: 'not-a-token' };
+      const live = await server.issueTaskToken({ sessionId: 's1', taskId: 't2', attempt: 1 });
+
+      expect((await rawRequest(unknown, {})).status).toBe(401);
+      server.revoke(revoked.token);
+      expect((await rawRequest(revoked, {})).status).toBe(401);
+      expect((await rawRequest({ url: live.url.replace(/\/mcp$/, '/other'), token: live.token }, {})).status).toBe(404);
+
+      expect(server.refusals()).toEqual({ unknownToken: 1, revokedToken: 1, wrongPath: 1 });
+      const said = warn.mock.calls.map((call) => call.join(' ')).join('\n');
+      expect(said).toContain('unknown token');
+      expect(said).toContain('revoked token');
+      expect(said).toContain('wrong path');
+      expect(said).not.toContain(revoked.token);
+      expect(said).not.toContain(live.token);
+      expect(said).not.toContain(unknown.token);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('refuses a call to a tool outside the token\'s role', async () => {
     const server = newServer();
     const submitPlan = vi.fn(async () => ({ text: 'ok' }));
