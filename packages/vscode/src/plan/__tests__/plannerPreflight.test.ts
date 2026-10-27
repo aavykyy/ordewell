@@ -81,7 +81,7 @@ describe('plannerPreflightError scopes the signed-out verdict to the workspace',
   it('refuses on this workspace\'s own signed-out verdict', () => {
     recordRunnerAuth('claude-code', SIGNED_OUT, '/repo');
 
-    expect(plannerPreflightError(config('claude-code', '', 'sonnet'), '/repo')).toContain('Claude Code is not logged in');
+    expect(plannerPreflightError(config('claude-code', '', 'sonnet'), '/repo')).toContain('Claude Code not logged in');
   });
 });
 
@@ -289,7 +289,7 @@ describe('a turn after a login done outside the extension', () => {
     await handleSendMessageNow('Use SQLite instead', h.deps);
 
     expect(h.chatProvider.showError).toHaveBeenCalledTimes(2);
-    expect(h.chatProvider.showError.mock.calls[0][0]).toContain('Claude Code is not logged in');
-    expect(h.chatProvider.showError.mock.calls[1][0]).toContain('Claude Code is not logged in');
+    expect(h.chatProvider.showError.mock.calls[0][0]).toContain('Claude Code not logged in');
+    expect(h.chatProvider.showError.mock.calls[1][0]).toContain('Claude Code not logged in');
   });
 });

@@ -2834,7 +2834,7 @@ describe('CliAgentAiService — a turn that says the agent is signed out', () =>
       kind: 'message',
       failed: true,
       text:
-        'Claude Code is not logged in. Sign in with /login, or run claude auth login and try again.\n\n' +
+        'Claude Code not logged in. Sign in with /login, or run claude auth login and try again.\n\n' +
         'Not logged in · Please run /login',
     });
     expect(recordedRunnerAuth('claude-code', '/repo')).toEqual({

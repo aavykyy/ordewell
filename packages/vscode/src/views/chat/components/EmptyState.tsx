@@ -6,16 +6,25 @@ import IsolationNotice from './IsolationNotice';
 import PlanApprovalNote, { type HostRunSettings } from './PlanApprovalNote';
 import PlannerLoginAction from './PlannerLogin';
 
+export interface SignedOutPlannerRow {
+  /** The runner whose login the row's action runs; also the key of its pending and failure state. */
+  runner: string;
+  label: string;
+  onLogIn?: () => void;
+  pending?: boolean;
+  failure?: string;
+}
+
 interface EmptyStateProps {
   onLoadSession?: () => void;
   /** The user's autonomy level and run settings (ADR-0030); absent until the host sends them. */
   runSettings?: HostRunSettings | null;
   /**
-   * The selected coding agent's login verdict, when it is signed out: flagged
-   * here, never blocking. `onLogIn` runs that agent's own login in a terminal,
-   * and the other two are its progress and the reason it did not finish.
+   * Every coding agent whose own status command says it is signed out, the
+   * active planner first. Each row's login runs that agent's own terminal
+   * login; the other two are its progress and the reason it did not finish.
    */
-  signedOut?: { label: string; onLogIn?: () => void; pending?: boolean; failure?: string };
+  signedOut?: SignedOutPlannerRow[];
   /** The repositories and branches the host found; see {@link IsolationNotice}. */
   isolationPreview?: IsolationPreview | null;
 }
@@ -100,29 +109,34 @@ export default function EmptyState({ onLoadSession, runSettings, signedOut, isol
           <SetupRow label="Run" value={<RunValue run={runSettings.run} />} command="/settings" />
         </div>
       )}
-      {signedOut && (
-        <div className="planner-auth-warning" role="status" aria-live="polite">
-          <span className="planner-auth-dot" aria-hidden="true" />
-          <div className="planner-auth-warning-body">
-            {/* One line, always: the state before a login, the last attempt's
-                result after one. The retry is the same button beside it. */}
-            {signedOut.failure
-              ? <span className="planner-auth-failure">{signedOut.failure}</span>
-              : (
-                <span className="planner-auth-warning-text">
-                  <span className="planner-auth-warning-agent">{signedOut.label}</span>
-                  {' is not logged in.'}
-                </span>
+      {signedOut && signedOut.length > 0 && (
+        <div className="planner-auth-rows" role="status" aria-live="polite">
+          {signedOut.map((row) => (
+            <div className="planner-auth-row" data-runner={row.runner} key={row.runner}>
+              <span className="planner-auth-dot" aria-hidden="true" />
+              <div className="planner-auth-warning-body">
+                {/* One line per agent, always: the state before a login, the
+                    last attempt's result after one. The retry is the same
+                    button beside it. */}
+                {row.failure
+                  ? <span className="planner-auth-failure">{row.failure}</span>
+                  : (
+                    <span className="planner-auth-warning-text">
+                      <span className="planner-auth-warning-agent">{row.label}</span>
+                      {' not logged in.'}
+                    </span>
+                  )}
+              </div>
+              {row.onLogIn && (
+                <PlannerLoginAction
+                  className="planner-login-btn"
+                  onLogIn={row.onLogIn}
+                  pending={row.pending}
+                  ariaLabel={row.pending ? `Signing in to ${row.label}` : `Log in to ${row.label}`}
+                />
               )}
-          </div>
-          {signedOut.onLogIn && (
-            <PlannerLoginAction
-              className="planner-login-btn"
-              onLogIn={signedOut.onLogIn}
-              pending={signedOut.pending}
-              ariaLabel={signedOut.pending ? `Signing in to ${signedOut.label}` : `Log in to ${signedOut.label}`}
-            />
-          )}
+            </div>
+          ))}
         </div>
       )}
       {onLoadSession && (
