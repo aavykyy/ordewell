@@ -3233,13 +3233,35 @@ PowerShell shims are considered even when PATHEXT omits `.ps1`.
 decides which runners are on this machine before any surface offers one: the
 runner's `<command> --version` over the augmented PATH, a clean exit meaning
 installed and a throw meaning not. The verdict is shallow on purpose — it says
-the binary answers, never that its login works, which the agent's own first
-turn reports. An *installed* verdict is kept for the process; a *missing* one
-expires and is forgotten at once by `refresh()`, which a runner-list refresh
+the binary answers, never that its login works; that is the **Runner auth**
+verdict beside it. An *installed* verdict is kept for the process; a *missing*
+one expires and is forgotten at once by `refresh()`, which a runner-list refresh
 calls, so a CLI installed while the daemon or the extension host runs is offered
 without a restart (ADR-0038).
 *Avoid:* "health check" — that is the **Attach state** a runner reports about
 itself, not this probe of ours.
+
+**Runner auth** (`runnerAuth.ts`, `RunnerAuth`) — what a runner's own status
+command says about the user's login: `signed-in`, `signed-out` or `unknown`. The
+manifest declares how to ask and how to log in (`RunnerAuthSpec`: `statusArgs`,
+`loginArgs`, an optional `signedOut` line and an optional `read`), so a surface
+runs the command the agent's own CLI would; `claude auth status` and `codex login
+status` are the built-ins, and OpenCode declares neither and is therefore always
+`unknown`. The probe runs with the same augmented PATH and per-workspace
+environment as the planner spawn (ADR-0016), never reads a credential, and
+answers `unknown` — not signed out — for a timeout, a failed spawn, an
+unparseable answer or a reader that cannot judge one: only the runner can say its
+user is logged out. `unknown` never blocks and is never flagged, because an
+older or offline CLI, a custom provider with its own key and a changed output
+shape must not cost work that will succeed. `signed-out` rides beside *usable*,
+never inside it: the agent stays listed and choosable, is flagged, and a planner
+turn is refused before it is sent with the *login command* the manifest declares;
+the TUI's `/login` (or `/login <runner>`) and VS Code's Log in run that command
+in a real terminal and then ask again, and naming another agent signs it in
+without moving the planner (ADR-0052). The verdict is recorded per runner and
+workspace for the synchronous planner gate and cached 30 seconds; a runner-list
+refresh asks again (ADR-0038). A failed turn's own words are read through the
+same spec, so a stale signed-in verdict is corrected rather than repeated.
 
 **Well-known bin dirs** (`utils/shellPath.ts`, `wellKnownBinDirs`) — where a
 runner might be, when PATH does not say. On Windows there is no login shell to

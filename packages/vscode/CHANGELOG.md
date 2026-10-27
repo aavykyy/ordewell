@@ -4,6 +4,11 @@
 
 ### Added
 
+- **Sign in to a coding agent from the planner chat.** A signed-out Claude Code
+  or Codex stays in the planner pills with a **Log in** action, and the empty
+  state offers one for the active planner. Each runs the agent's own login in an
+  integrated terminal and asks its status again; signing in another agent does
+  not change who plans.
 - **Task handoffs.** Task cards show the summary, numbered findings with
   severity and evidence, artifacts and a count of findings left in the log.
   Dependents can pull the full handoff, and a loop's check gets its fix's
