@@ -1032,6 +1032,14 @@ describe('planner choice', () => {
       { type: 'notice', message: 'Planner: Claude Code · Claude Opus 5.5 · High effort' },
     ]);
   });
+
+  it('shows a signed-out pick at error level, the words unchanged', async () => {
+    const h = harness();
+    await runEffect({ ...choice, noticeLevel: 'error' }, h.deps);
+    expect(h.actions.filter((a) => a.type === 'notice')).toEqual([
+      { type: 'notice', message: 'Planner: Claude Code · Claude Opus 5.5 · High effort', level: 'error' },
+    ]);
+  });
 });
 
 describe('runner login', () => {

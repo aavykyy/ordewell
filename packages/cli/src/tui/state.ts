@@ -140,6 +140,15 @@ export interface RewindTargetView {
 /** The daemon's runner row, as `getRunners` hands it over — auth included, never restated. */
 export type RunnerView = RunnersResponse['runners'][number];
 
+/**
+ * Only a runner's own signed-out verdict, with a way in, raises an alarm:
+ * `unknown` must never read as one, and a verdict without a login command has
+ * nowhere to send the user (ADR-0052).
+ */
+export function signedOutWithLogin(row: RunnerView): boolean {
+  return row.auth?.state === 'signed-out' && (row.auth.loginCommand?.length ?? 0) > 0;
+}
+
 export interface SessionView {
   id: string;
   goal: string;

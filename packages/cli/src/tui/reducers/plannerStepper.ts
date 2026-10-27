@@ -1,5 +1,5 @@
-import { getProviderMeta } from '@ordewell/core';
-import type { PickerItem, TuiState } from '../state';
+import { getProviderMeta, runnerForProvider } from '@ordewell/core';
+import { signedOutWithLogin, type PickerItem, type TuiState } from '../state';
 import { DEFAULT_EFFORT, plannerEffortItems, plannerHarnessModel, plannerItems, plannerModelItems } from './pickers';
 import { step } from './shared';
 import type { StepChoices, StepperDefinition } from './stepper';
@@ -77,6 +77,10 @@ export const plannerStepper: StepperDefinition = {
       model?.label ?? modelId,
       ...(effort ? [effortLabel(level?.label ?? effort)] : []),
     ];
+    const active = state.runners.find((row) => row.id === runnerForProvider(provider));
+    // The confirmation is the only word on a pick, so it carries the same alarm
+    // as the Setup row: a planner that cannot plan must not read as settled.
+    const noticeLevel = active && signedOutWithLogin(active) ? 'error' as const : undefined;
     // Taken ahead of the daemon's answer so the rows mark it at once; the
     // answer carries the same values, the daemon remembering the pick per
     // backend just as this does.
@@ -86,6 +90,6 @@ export const plannerStepper: StepperDefinition = {
       orchestratorModel: modelId,
       plannerEffort: effort,
       plannerModels: { ...state.plannerModels, [provider]: effort ? { model: modelId, effort } : { model: modelId } },
-    }, [{ type: 'setPlannerChoice', provider, modelId, effort, notice: `Planner: ${parts.join(' · ')}` }]);
+    }, [{ type: 'setPlannerChoice', provider, modelId, effort, notice: `Planner: ${parts.join(' · ')}`, ...(noticeLevel ? { noticeLevel } : {}) }]);
   },
 };

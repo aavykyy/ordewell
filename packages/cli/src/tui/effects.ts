@@ -425,7 +425,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
           plannerThinkingEffort: effect.effort,
         },
       });
-      dispatch({ type: 'notice', message: effect.notice });
+      dispatch({ type: 'notice', message: effect.notice, ...(effect.noticeLevel ? { level: effect.noticeLevel } : {}) });
       return;
     }
 
