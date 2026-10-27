@@ -20,7 +20,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://www.npmjs.com/package/@ordewell/cli"><img src="https://img.shields.io/npm/v/@ordewell/cli" alt="npm"></a>
   <a href="https://github.com/ordewell/ordewell/actions/workflows/ci.yml"><img src="https://github.com/ordewell/ordewell/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/ordewell/ordewell/stargazers"><img src="https://img.shields.io/github/stars/ordewell/ordewell?style=social" alt="GitHub stars"></a>
+  <a href="https://github.com/ordewell/ordewell"><img src="https://img.shields.io/github/stars/ordewell/ordewell?style=social" alt="GitHub stars"></a>
 </p>
 
 <p align="center">
@@ -29,34 +29,41 @@
 
 Describe what you want to build. Ordewell explores your repository, asks clarifying
 questions, and turns your goal into a plan you can read and edit. When you're ready,
-run it: independent tasks work in parallel, each on its own branch. Review the
-combined diff and choose when to merge it into your branch. Nothing runs until you
-approve the plan.
+run it: independent code tasks can work in parallel in separate worktrees when
+worktree isolation is enabled. Review the combined diff and merge it into your
+branch. By default, submitted build plans wait for your approval. Run settings
+let you automate execution and merging.
 
 Claude Code, Codex and OpenCode are supported out of the box, and can be mixed
 freely within one plan.
+
+This README describes 0.11.0. See the [published releases](https://github.com/ordewell/ordewell/releases)
+for versions available to install and their release notes.
 
 ## Features
 
 - **An editable plan.** Change any task's prompt, runner, model, effort or mode, add
   or remove tasks, and rewire dependencies without another round trip to the model.
-- **The right model for each task.** A security refactor and a README update get
-  different models, and you see every assignment before a token is spent.
-- **Isolated execution.** Every task that changes code works on its own branch.
-  Passing work lands on one integration branch in plan order, and you choose when
-  to merge it.
+- **Choose models per task.** Choose each AI task's model and thinking effort,
+  and review every assignment before execution. Planning uses your selected
+  planner model and counts against its usage too.
+- **Worktree isolation for code tasks.** With isolation enabled, code tasks work
+  in separate worktrees. Passing changes land on an integration branch for review
+  and merging. Ops tasks run in your checkout.
 - **Skills your team shares.** Write down how your team works once, as a skill in
   your repository. The planner attaches it to the tasks it fits, whichever agent
   runs them.
 - **Operations in the right place and order.** A deploy, a cloud CLI call or a
-  push runs as an ops task in your own checkout, and waits until the change it
-  depends on is merged into your branch. When the planner can state the exact
-  commands, it adds a script task instead: Ordewell runs them with no model, and
-  you approve what will run as written, or pre-approve exact commands with the
-  effect allowlist.
-- **Done means reported.** A task finishes when its agent reports it done through
-  Ordewell's own tools, never because a model thinks the work looks finished. You
-  see which tasks passed, failed or need you, and can read each one's log live.
+  push runs as an ops task at the workspace root. With isolation enabled, it
+  waits for the changes it depends on to be merged into your branch. When the
+  planner can state the exact commands, it adds a script task: Ordewell runs it
+  with no model, under your approval and run settings. You can review its body as
+  written or pre-approve exact commands with the effect allowlist.
+- **Completion is recorded.** An AI task's `task_complete` report with status
+  `done` passes its completion check. Reports marked `failed` or `blocked`, or a
+  runner exit without a report, do not pass. Script tasks use their exit status.
+  This records the reported outcome; review the diff and test evidence before
+  merging. Each task's log is available live.
 - **Task handoffs.** Each task leaves a summary and optional numbered findings
   with evidence. Dependents get whole findings and can pull the full handoff;
   a loop's check sees what its fix claims and verifies it against the code.
@@ -64,11 +71,12 @@ freely within one plan.
   plan: at Watch it writes you a note when a task fails or gets stuck, and at Act
   it may retry, stop or edit tasks itself, within limits. `/settings` sets the
   supervisor level, merging automatically and the rest of your run settings.
-- **Read-only tasks.** A review, an audit or a prototype reads with its agent's
-  own tools, and a command that would need your approval runs sealed, with no
-  network and none of your credentials, in the task's own throwaway worktree.
-  It lands nothing: its report is its result, and a prototype it tried can be
-  saved as a patch for a later task to apply.
+- **Read-only tasks.** A review, an audit or a prototype lands no changes; its
+  report is its result. With isolation enabled, it can test ideas through sealed
+  commands in a throwaway worktree, without network or access to your home
+  directory. Without isolation, its commands cannot write the workspace;
+  commands needing sealing are refused if no sandbox is available. A task in a
+  single-repository worktree can save a prototype as a patch for a later task.
 - **Check-and-fix loops.** A check and the tasks that fix what it finds repeat
   until the check passes or its rounds run out, with no planner turn in
   between.
@@ -158,14 +166,21 @@ Tried it? [Tell us how your first run went](https://github.com/ordewell/ordewell
 1. **Describe your goal.** The planner explores your workspace without modifying
    it and asks clarifying questions.
 2. **Review the plan.** Read the tasks and their dependencies. Edit prompts, agent
-   assignments and models before running. To skip this step, turn autorun on in
-   `/settings` and each plan starts as soon as the planner submits it.
-3. **Run the tasks.** Each task starts a fresh coding agent session. Independent
-   tasks run in parallel; dependent tasks wait for the work they need. Code changes
-   stay on separate branches, and you can follow each task's progress.
+   assignments and models before execution. To automate execution, turn autorun
+   on in `/settings` and submitted build plans start automatically. Script tasks
+   still follow their consent rules.
+3. **Run the tasks.** Each AI task starts a coding agent session; script tasks
+   run their commands without a model. Independent tasks run in parallel;
+   dependent tasks wait for the work they need. With worktree isolation enabled,
+   code changes stay on separate branches. Follow each task's progress live.
 4. **Review and merge.** Ordewell combines the changes for your review. Read the
-   diff, then merge it into your branch or discard the run. If a task or a merge
-   needs your attention, Ordewell shows you where.
+   diff and test evidence, then merge into your branch or discard the run. You
+   can also enable automatic merging or allow an Act supervisor to merge in
+   `/settings`. If a task or a merge needs your attention, Ordewell shows you where.
+
+Autorun and automatic merging are off by default, and the supervisor starts at
+Watch. During planning, research tasks can start without build-plan approval,
+and script tasks can run with consent under your approval and run settings.
 
 The commits Ordewell writes (a task's merge, work a task left uncommitted, a
 conflict repair, the merge into your branch) end with a `Planned-with: Ordewell`
@@ -180,8 +195,12 @@ gives it the runner's autonomous mode. For exactly what each part can touch and
 what to use for untrusted repositories, see
 [SECURITY.md](SECURITY.md#what-each-part-can-touch).
 
-Folders containing several repositories are handled as one workspace: each task
-gets a worktree of every repository and lands in all of them or none. See
+Without a git repository, or when isolation is disabled, tasks share the workspace
+folder. With isolation enabled, a code task in a workspace containing several
+repositories gets a worktree of each isolated repository; its changes land in all
+of them or none. Ops and script tasks run at the workspace root. Dependencies,
+environment files and loose files beside a repository group can still be shared
+between worktrees. See
 [isolation and handoff](https://ordewell.ai/docs#isolation) for details.
 
 ## Documentation
@@ -196,7 +215,7 @@ sandbox cannot start on your machine, see [troubleshooting](docs/troubleshooting
 ## Where it's going
 
 - **Next:** bounded, standing consent for running on its own ([#23](https://github.com/ordewell/ordewell/issues/23)), an escalation inbox across surfaces ([#30](https://github.com/ordewell/ordewell/issues/30)) and a daemon that resumes plans after a restart ([#31](https://github.com/ordewell/ordewell/issues/31)).
-- **Shipped in 0.11:** a planner that does small things itself. It runs an exact command you consent to as a script task ([#107](https://github.com/ordewell/ordewell/issues/107)), reads with a sandboxed shell that can loop and script ([#64](https://github.com/ordewell/ordewell/issues/64), [#109](https://github.com/ordewell/ordewell/issues/109)), keeps talking while research tasks report back ([#111](https://github.com/ordewell/ordewell/issues/111)), and plans check-and-fix loops ([#118](https://github.com/ordewell/ordewell/issues/118)).
+- **In 0.11.0:** a planner that can start consented script tasks ([#107](https://github.com/ordewell/ordewell/issues/107)), read with a sandboxed shell that can loop and script ([#64](https://github.com/ordewell/ordewell/issues/64), [#109](https://github.com/ordewell/ordewell/issues/109)), keep talking while research tasks report back ([#111](https://github.com/ordewell/ordewell/issues/111)), and plan check-and-fix loops ([#118](https://github.com/ordewell/ordewell/issues/118)).
 - **Shipped in 0.10:** the supervisor, which watches a run and, if you let it, acts within limits you set.
 
 The full roadmap, and where to help, is in [#21](https://github.com/ordewell/ordewell/issues/21).

@@ -1,8 +1,13 @@
 # Ordewell for VS Code
 
 **Plan once, run it across Claude Code, Codex and OpenCode, and review one branch.**
-One goal becomes an ordered plan of tasks, each on the runner and model that fits it.
-Nothing runs until you approve the plan.
+One goal becomes an editable plan with a runner and model assigned to each AI task.
+By default, submitted build plans wait for your approval. Run settings let you
+automate execution and merging. Research tasks and consented script tasks can
+start during planning.
+
+This README describes 0.11.0. See the [published releases](https://github.com/ordewell/ordewell/releases)
+for versions available to install and their release notes.
 
 ![Ordewell in VS Code: a goal typed into the panel becomes a plan with a runner and model on each task, three tasks run in parallel, and the supervisor reports on the result (sped up in places)](https://raw.githubusercontent.com/ordewell/ordewell/main/assets/readme/vscode-panel-loop.gif)
 
@@ -12,23 +17,27 @@ Nothing runs until you approve the plan.
   and mode. Change any of them, add or remove tasks, and rewire dependencies without
   losing completed work.
 - **A planner that talks back.** It researches your workspace without modifying it,
-  asks when your goal is vague, and then hands you the plan.
-- **The right model for each task.** Assignments are made across the whole plan and
-  shown to you before anything runs.
-- **Isolated execution.** Each task that changes code works in its own git
-  worktree, and passing work lands on one integration branch. A handoff card at the end lets you review the
-  diff, merge it, or discard it.
+  asks clarifying questions, and then hands you the plan.
+- **Choose models per task.** Review and edit each AI task's model and thinking
+  effort before execution. Planning uses the selected planner model too.
+- **Worktree isolation for code tasks.** With isolation enabled, code tasks run
+  in separate worktrees and passing changes land on an integration branch for
+  review. Ops and script tasks run at the workspace root. Without a git repository,
+  or with isolation disabled, tasks share your workspace folder.
 - **Skills your team shares.** Write a skill once and commit it. The planner
   attaches it to the tasks it fits, and it shows as a chip on each task card.
-- **More than coding tasks.** A script task runs exact commands you approve as
-  written, a check-and-fix loop repeats until its check passes, and a research
-  task reports back to the planner while you keep talking. A read-only task
-  lands nothing, and can save a prototype as a patch for a later task.
+- **More than coding tasks.** A script task runs exact commands under your
+  approval and run settings, a check-and-fix loop repeats until its check passes
+  or its rounds run out, and a research task reports back to the planner while
+  you keep talking. A read-only task lands nothing; in a single-repository
+  worktree, it can save a prototype as a patch for a later task.
 - **Limits and context in view.** The footers show your Codex, Claude Code or
   OpenCode Go account's plan limits beside context and cost, and an API planner
   compacts its own context before it overflows.
-- **Done means reported.** A task completes when its agent reports it done through
-  Ordewell's own tools, never because a model thinks the work looks finished.
+- **Completion is recorded.** An AI task's `task_complete` report with status
+  `done` passes its completion check. Reports marked `failed` or `blocked`, or a
+  runner exit without a report, do not pass. Script tasks use their exit status.
+  Review the diff and test evidence before merging.
 - **No extra API key.** Claude Code, Codex or OpenCode can be the planner, using the
   subscription you already have.
 
@@ -39,6 +48,11 @@ Nothing runs until you approve the plan.
 3. Type a goal. With Claude Code, Codex or OpenCode installed, the first usable one
    plans for you with no API key. Choose another planner in the planner bar.
 4. Review the plan, then approve it to run.
+
+Autorun and automatic merging are off by default, and the supervisor starts at
+Watch. In `/settings`, you can enable autorun, automatic merging or an Act
+supervisor that can merge. The handoff card lets you review the combined diff,
+merge it or discard the run.
 
 To plan with an API key instead, set `ordewell.openAiApiKey` (OpenRouter) or
 `ordewell.apiKey` (Gemini), or export `OPENROUTER_API_KEY` or `GEMINI_API_KEY`. A key
