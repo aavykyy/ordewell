@@ -2,26 +2,36 @@
 
 ## [Unreleased]
 
+Draft notes for the upcoming 0.11.0 release, covering changes since 0.10.12.
+The release heading and date will be finalized after review.
+
+### Upgrade notes
+
+New installations now start in Guarded autonomy. A read-only task can test
+changes in its own throwaway worktree and lands nothing, and the planner's
+plan edits apply as it makes them. A saved autonomy level or `ORDEWELL_AUTONOMOUS_MODE`
+override is kept. Run settings now apply to the session on screen and set the
+defaults for new or reopened sessions; other open sessions keep their values.
+Autonomy, Parallel tasks and the Planned-with trailer remain shared.
+
+The inert `ordewell.researchEnabled` setting has been removed. See the
+[project changelog](https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md)
+for daemon and API upgrade information.
+
 ### Added
 
-- **Sign in to a coding agent from the planner chat.** A signed-out Claude Code
-  or Codex stays in the planner pills, marked with a red dot and **Log in**
-  beside its name; the Runners pills and the first screen carry the same action
-  for every signed-out agent, the planner first. Each runs that agent's own
-  login in an integrated terminal and asks its status again, and the action
-  stays available whether or not the chat is empty. Signing in another agent
-  does not change who plans.
-
-## [0.11.0] - 2026-10-26
-
-New installations now start in Guarded autonomy, a read-only task can change
-files only in its own throwaway worktree, and the planner's plan edits apply
-as it makes them. See the full changelog for daemon and API changes.
-
-### Added
-
-- **Task handoffs.** Task cards show the summary, numbered findings with
-  severity and evidence, artifacts and a count of findings left in the log.
+- **Sign in to a coding agent from the chat.** A signed-out Claude Code or
+  Codex stays selectable, with a red dot and **Log in** on its Planner and
+  Runners pills and its own row on the first screen, with the active planner
+  first. The action remains available after the chat starts. It runs that
+  agent's login in an integrated terminal with the workspace's environment and
+  confirms its status afterwards;
+  signing in another agent leaves the planner choice alone. A confirmed
+  signed-out planner is refused before a turn is sent, with its login command
+  in the message; task runners are not blocked by this preflight. Unknown
+  status never blocks, including Codex API-key or custom-provider setups its
+  status command cannot judge. OpenCode has no declared status or login command
+  and stays unflagged.
 - **Account limits in the footers.** When Codex, Claude Code or OpenCode Go
   plans, the planner footer shows what that account has used of its plan's
   windows (five hours, a week, a month) beside the planner's context and cost,
@@ -32,18 +42,23 @@ as it makes them. See the full changelog for daemon and API changes.
   stays on one line, with reset times in the hover. They are never saved and
   never pause work.
 - **An API planner compacts its own context.** An OpenAI, OpenRouter,
-  OpenAI-compatible or Gemini planner keeps each call inside 90% of its
+  OpenAI-compatible or Gemini planner targets a prompt budget of 90% of its
   model's known window, first trimming older file reads, then condensing the
-  conversation. The chat shows a Compacting status with Stop, then one quiet
-  "Context compacted automatically" marker whose summary opens on demand. If
-  a call still cannot fit, only the planner pauses, with your message kept and
+  conversation. The original history is kept, including after a manual
+  `/compact`. The context meter says when automatic compaction is unavailable because the
+  window is unknown or the setting is off. The chat shows a Compacting status
+  with Stop, then one quiet "Context compacted automatically" marker whose
+  summary opens on demand. If a call still cannot fit, only the planner pauses,
+  with your message kept and
   tasks still running, and a Retry compaction button above the composer
   attempts recovery. `"plannerAutoCompaction": false` in
   `~/.ordewell/settings.json` turns it off.
-- **The first screen shows the repositories and branches tasks will use**,
-  with each one's commit, any uncommitted changes, and whether code tasks get
-  isolated worktrees. It only reads, and refreshes on focus and on a settings
-  or workspace change.
+- **The first screen shows the repositories and branches tasks will use**
+  in a repository card, with each one's commit, any uncommitted changes, and
+  whether code tasks get isolated worktrees. It only reads, and refreshes on
+  focus and on a settings or workspace change. The screen also explains
+  whether plan submission waits for approval or starts automatically with
+  autorun.
 - **"Completion received" as soon as a task reports.** The card says so at
   once while the attempt winds down; the verdict still comes when it ends.
 - **Read-only and research tasks can read the web** through Ordewell's own
@@ -58,14 +73,18 @@ as it makes them. See the full changelog for daemon and API changes.
 - **A read-only task's saved patch.** A task that tried a change can keep it as
   a patch. Its task card and its log show how many files and lines the patch
   changes, where it is saved and what it left out, with an Open patch button
-  that opens the file in an editor tab.
+  that opens the file in an editor tab. Saving requires an isolated worktree in
+  a single repository and a working sandbox. A dependent change task can apply
+  it with `apply_patch`, resolve any conflicts and validate it at its own base.
 - **Script tasks.** A plan can hold a task with no runner and no model, a list
   of commands or one script that Ordewell runs at the workspace root; its exit
   status is its verdict. The plan shows its body, read-only, in place of a
   prompt.
 - **The planner can carry out a small effect in your turn** with
-  `run_script`: a push, a tag or one cloud setting, as a script task you
-  approve on the approval card, which shows exactly what will run.
+  `run_script`: a push, a tag or one cloud setting, as a script task. In a
+  user turn, its approval card shows exactly what will run, unless the effect
+  allowlist covers it or Full with autorun permits it on an approved plan.
+  A supervisor at Act may run it without asking; Watch can only suggest it.
 - **`ordewell.effectAllowlist` names script tasks that run without asking.**
   A rule matches the whole command, flags included, and a task runs unasked
   only when every command is covered. It has no built-in rules.
@@ -82,8 +101,8 @@ as it makes them. See the full changelog for daemon and API changes.
   its budgets.
 - **Planner skills `diagnose` and `explore`**, for a failure to explain and an
   open problem. Type `/diagnose` or `/explore`, or let the planner load one.
-- **Sealed runs.** Where the planner's sandbox runs, a command it would have
-  had to ask about runs sealed instead: the workspace read-only, no network,
+- **Sealed runs.** Where the planner's sandbox runs, a command its rules would
+  refuse without asking can run sealed instead: the workspace read-only, no network,
   no home directory and none of your credentials.
 - **`ordewell.plannerNativeShell` lets a Claude Code or OpenCode 2.x planner on
   macOS use its own shell**, off by default and on checked versions only, with
@@ -104,12 +123,22 @@ as it makes them. See the full changelog for daemon and API changes.
 - **A `Planned-with: Ordewell` trailer** ends the commits Ordewell writes. Turn
   it off with `ordewell trailer off` (it is not in the settings panel).
 - **Installed coding agents that are switched off now show in the Runners
-  block.** Clicking one enables it in the shared settings file and in the next
-  plan's runner set; before, it could only be enabled from the command palette
-  or the TUI.
+  block.** Clicking one saves it in the shared enabled-runner list, so the
+  planner can use it on the next turn, including in an existing conversation.
 
 ### Changed
 
+- **Run settings belong to this window's open session.** The Run block shows
+  and changes its supervisor level, auto-merge at gates, autorun and retry
+  limit. Changes apply to its active run and are saved in
+  `~/.ordewell/settings.json` as defaults for new or reopened sessions. Other
+  open sessions keep their values, including for their next run. Headless
+  settings commands and file edits set defaults for sessions opened afterwards;
+  use `ordewell supervisor reads <n>` or the file for the wake-up read budget.
+  Autonomy and Parallel tasks apply across sessions; the Planned-with setting
+  is read at each commit.
+- **Settings makes its open state clearer.** The collapsed header is simpler,
+  and the first screen and sign-in controls follow light themes.
 - **New installations start in Guarded autonomy.** A settings file with no
   level used to mean Full; tasks now run in their runner's safe mode and
   a planner request the allowlist does not cover asks you. A level you saved
@@ -164,7 +193,7 @@ as it makes them. See the full changelog for daemon and API changes.
   message names the window or process that holds it. Before, a second window
   loaded the session as well, and the two removed each other's task worktrees
   and overwrote its file
-  ([ADR-0049](docs/adr/isolation/0049-a-session-has-one-live-host.md)).
+  ([ADR-0049](../../docs/adr/isolation/0049-a-session-has-one-live-host.md)).
 - **A plan marker and a handoff preview use the terminal's words.** The marker
   reads `Plan generated · 3 tasks`, and the preview names the findings count,
   severity, commit and the first line of the summary.
@@ -173,9 +202,15 @@ as it makes them. See the full changelog for daemon and API changes.
 
 ### Fixed
 
+- **A coding-agent planner keeps Ordewell's tools across turns.** A lost
+  connection is checked before the next turn and recovered by restarting once
+  and resuming the conversation. If the tools still cannot attach, the turn
+  fails visibly without being sent.
+- **Copying selected chat text works in VS Code 1.143.** Mouse selections in
+  the planner conversation and `Planner ctx` footer keep focus for Cmd+C,
+  Ctrl+C and context-menu Copy after the composer has been used.
 - **A supervisor's Merge all after a run that merged itself no longer shows a
   refusal**; the run update says the work is already merged.
-
 - **A Runners pill click is saved.** Switching a runner off or on in the chat
   header now saves it in the enabled runners every surface shares, so the
   planner stops offering it on the next turn of a conversation already under
@@ -1208,3 +1243,5 @@ First public release.
 
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
+
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.10.12...HEAD
