@@ -326,6 +326,25 @@ describe('the lost-reply warning says why the request failed', () => {
     expect(t.state.queuedPrompts).toEqual(['and the tests']);
   });
 
+  it('names a timeout on a turn that had no bound at all, without claiming one', async () => {
+    delete process.env[TIMEOUT_ENV];
+    const { api, counts } = realApi((options) => String(options.path).includes('/converse/message')
+      ? { kind: 'timeout', afterMs: 60 }
+      : { kind: 'answer', body: JSON.stringify({ ok: true, plan: PLAN, goal: 'g', plannerTurnId: 't1' }) });
+    const t = tui(api, { sessionId: 's1', planner: 'planning' });
+    await t.run({ type: 'sendMessage', sessionId: 's1', message: 'go on' });
+
+    const line = diagnostics(t);
+    expect(line).toMatch(/lost on the way/i);
+    expect(line).toMatch(/tim(?:ed out|eout)/i);
+    expect(line).toMatch(ELAPSED);
+    // A turn has no idle bound unless ORDEWELL_HTTP_TIMEOUT_MS set one, so the
+    // line must not name a limit (it used to claim the 15 minutes it never had).
+    expect(line).not.toMatch(/\blimit\b/i);
+    expect(counts.send).toBe(1);
+    expect(t.state.planner).toBe('awaiting');
+  });
+
   it('names a reset, not a timeout, and how long it waited, without the prompt', async () => {
     process.env[TIMEOUT_ENV] = '1200';
     const prompt = 'SECRET-PROMPT-MUST-NOT-LEAK';
