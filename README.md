@@ -43,15 +43,15 @@ for versions available to install and their release notes.
 
 <table>
   <tr><td><b>Editable plans</b></td><td>Change prompts, dependencies and each task's runner, model, thinking effort or mode before execution.</td></tr>
-  <tr><td><b>Skills</b></td><td>Share your team's instructions in repository skills that the planner attaches to tasks across runners.</td></tr>
   <tr><td><b>Worktree isolation</b></td><td>Use separate git worktrees for code tasks, with an integration branch for review and merging. See <a href="#how-it-works">How it works</a> for shared workspace behavior.</td></tr>
-  <tr><td><b>Read-only tasks</b></td><td>Review, audit or prototype without landing changes. Research tasks report back to the planner while you keep talking.</td></tr>
   <tr><td><b>Loops</b></td><td>Repeat tasks in response to a check until it passes or reaches its round limit.</td></tr>
   <tr><td><b>Ops and scripts</b></td><td>Put deployments and other operations in the plan with dependencies. Run exact commands as script tasks without a model, under your approval and run settings.</td></tr>
+  <tr><td><b>Read-only tasks</b></td><td>Review, audit or prototype without landing changes. Research tasks report back to the planner while you keep talking.</td></tr>
   <tr><td><b>Completion reports</b></td><td>AI tasks pass their completion check with a <code>task_complete</code> report marked <code>done</code>; scripts use exit status. Task handoffs share summaries, findings and evidence. Review the diff and test evidence before merging.</td></tr>
   <tr><td><b>Run controls</b></td><td>Let the supervisor watch and suggest, or act within limits you set. Choose autorun and automatic merging in <code>/settings</code>.</td></tr>
   <tr><td><b>Planner choices</b></td><td>Plan with a supported coding agent without an extra API key, or use an API provider. The planner reads your repository; changes run through tasks in the plan.</td></tr>
   <tr><td><b>Interfaces</b></td><td>Use the terminal UI, VS Code extension, CLI or local API. Follow live task logs and see account usage limits alongside context and cost.</td></tr>
+  <tr><td><b>Skills</b></td><td>Share your team's instructions in repository skills that the planner attaches to tasks across runners.</td></tr>
 </table>
 
 ## Installation
