@@ -894,7 +894,7 @@ export default function App() {
           <div className="setup-block-title">Planner</div>
           <div className="setup-block-hint">
             Researches your codebase and writes the plan. A coding agent plans on its own
-            subscription. No API key needed.
+            subscription.
           </div>
           {offeredBackends.length > 0 ? (
             <>
@@ -980,8 +980,7 @@ export default function App() {
         <section className="setup-block">
           <div className="setup-block-title">Runners</div>
           <div className="setup-block-hint">
-            Coding agents that execute the plan's tasks. The planner assigns only the ones switched on;
-            a click switches one on or off for every plan, here and in the terminal.
+            Coding agents that execute the plan's tasks. The planner assigns only the ones switched on.
           </div>
           <div className="runner-pills">
             {runnerList.map((r) => {
