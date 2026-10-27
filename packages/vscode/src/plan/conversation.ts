@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { CHAT_COMMANDS, describePlannerNotReady, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type Session } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
+import { recheckSignedOutPlanner, type PlanManagerDeps } from './PlanManager';
 
 export interface ConversationDeps {
   session: Pick<Session, 'sessionId' | 'isExecuting' | 'planState' | 'forkConversation' | 'rewindTargets' | 'rewindConversation' | 'compactConversation'>;
@@ -8,6 +9,10 @@ export interface ConversationDeps {
   setCurrentPlan: PlanSetter;
   persistState: () => void;
   isGeneratingPlan: () => boolean;
+  /** For {@link recheckSignedOutPlanner}: a compaction is a planner turn. */
+  config: PlanManagerDeps['config'];
+  fsAdapter: PlanManagerDeps['fsAdapter'];
+  runnerInstallation?: PlanManagerDeps['runnerInstallation'];
 }
 
 type PlanSetter = (plan: NonNullable<Session['planState']>) => void;
@@ -103,7 +108,11 @@ export async function rewindConversation(deps: ConversationDeps, arg?: string): 
  */
 export async function compactConversation(deps: ConversationDeps): Promise<void> {
   if (plannerIsAnswering(deps)) return;
+  // A compaction is a planner turn too, and the signed-out refusal's login
+  // runs outside this host: ask the account again before the gate judges.
+  const recheck = recheckSignedOutPlanner(deps);
   try {
+    if (recheck) await recheck;
     await deps.session.compactConversation();
     const plan = deps.session.planState;
     if (!plan) return;

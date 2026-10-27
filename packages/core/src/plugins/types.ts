@@ -23,6 +23,13 @@ export interface RunnerAuthStatus {
   output: string;
   /** The merged probe environment, so a reader can consult the config the command read. */
   env: NodeJS.ProcessEnv;
+  /**
+   * What the answer is: the status command's output, or a failed turn's own
+   * words. A reader that parses the status output (JSON, say) cannot parse
+   * the turn's message, and one that judges a turn's words by the runner's
+   * config must not let the probe's exit code guess for it.
+   */
+  kind: 'status' | 'turn';
 }
 
 /**
@@ -46,7 +53,10 @@ export interface RunnerAuthSpec {
    * A runner-specific reader that overrides the exit-code/regex rule. `null`
    * means the answer said nothing about the login, which stays `unknown`
    * rather than guessing from an exit code or from a line meant for another
-   * credential route.
+   * credential route. The reader owns both kinds of answer — the status
+   * command's output and a failed turn's own words — told apart by
+   * {@link RunnerAuthStatus.kind}; where the reader exists, it is the only
+   * judge of either.
    */
   read?: (answer: RunnerAuthStatus) => 'signed-in' | 'signed-out' | null;
 }

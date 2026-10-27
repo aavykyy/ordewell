@@ -18,12 +18,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * key, environment headers or an auth helper declared in config.toml.
  *
  * Read from the probe's own environment, not `process.env`: a workspace can
- * point `CODEX_HOME` at another account (ADR-0016).
+ * point `CODEX_HOME` or `HOME` at another account (ADR-0016). Real codex
+ * resolves the config at `$HOME/.codex/config.toml` when `CODEX_HOME` is
+ * unset — an empty one counts as unset — so the fallback walks the probe's
+ * HOME, not the daemon's.
  */
 function providerHasOwnCredential(env: NodeJS.ProcessEnv): boolean {
   let config: Record<string, unknown>;
   try {
-    const home = env.CODEX_HOME ? resolve(env.CODEX_HOME) : join(homedir(), '.codex');
+    const home = env.CODEX_HOME ? resolve(env.CODEX_HOME) : join(env.HOME ?? homedir(), '.codex');
     config = parseToml(readFileSync(join(home, 'config.toml'), 'utf8'));
   } catch {
     // No readable config is no declared provider, so the status is the answer.

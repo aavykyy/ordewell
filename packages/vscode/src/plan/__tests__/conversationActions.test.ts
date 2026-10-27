@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as vscode from 'vscode';
-import { ConversationEditError, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError } from '@ordewell/core';
+import { ConversationEditError, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, recordRunnerAuth, recordedRunnerAuth, resetRunnerAuth } from '@ordewell/core';
 import { forkConversation, rewindConversation, compactConversation, type ConversationDeps } from '../conversation';
 
 const showQuickPick = vscode.window.showQuickPick as unknown as ReturnType<typeof vi.fn>;
@@ -14,7 +14,11 @@ const HISTORY = [
   { role: 'assistant', content: 'a reply', timestamp: '2026-01-01T00:00:01Z' },
 ];
 
-function setup(overrides: { generating?: boolean; executing?: boolean } = {}) {
+function setup(overrides: {
+  generating?: boolean;
+  executing?: boolean;
+  runnerInstallation?: ConversationDeps['runnerInstallation'];
+} = {}) {
   const current = { status: 'draft', tasks: [], conversationHistory: HISTORY };
   const session = {
     sessionId: 'sess-original',
@@ -39,6 +43,9 @@ function setup(overrides: { generating?: boolean; executing?: boolean } = {}) {
     setCurrentPlan,
     persistState,
     isGeneratingPlan: () => overrides.generating ?? false,
+    config: { aiProvider: 'claude-code' },
+    fsAdapter: { getWorkspaceRoot: () => '/ws' },
+    runnerInstallation: overrides.runnerInstallation,
   } as unknown as ConversationDeps;
   return { deps, session, chatProvider, setCurrentPlan, persistState };
 }
@@ -232,6 +239,68 @@ describe('compact', () => {
     await compactConversation(deps);
 
     expect(session.compactConversation).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * A compaction is a planner turn too, and the signed-out refusal's own way
+ * back — the runner's login — runs outside the extension host. The turn must
+ * ask the workspace's account again before the session gate judges, or the
+ * user who just logged in stays refused until a runner-list refresh.
+ */
+describe('a compaction after a login done outside the extension', () => {
+  const SIGNED_OUT = { state: 'signed-out' as const, loginCommand: ['claude', 'auth', 'login'], detail: 'not logged in' };
+  const SIGNED_IN = { state: 'signed-in' as const, loginCommand: ['claude', 'auth', 'login'] };
+
+  afterEach(() => resetRunnerAuth());
+
+  function host(signsIn: boolean) {
+    const installation = {
+      refresh: vi.fn(),
+      plannerUsability: vi.fn(async () => {
+        // What the re-probe records when the account was signed in since.
+        if (signsIn) recordRunnerAuth('claude-code', SIGNED_IN, '/ws');
+        return { usable: true };
+      }),
+    };
+    const { deps, session, chatProvider, persistState } = setup({ runnerInstallation: installation });
+    // The Session's own gate, synchronous and reading the recorded verdict.
+    session.compactConversation.mockImplementation(async () => {
+      if (recordedRunnerAuth('claude-code', '/ws')?.state === 'signed-out') {
+        throw new PlannerNotReadyError({
+          code: 'signed_out', provider: 'claude-code', label: 'Claude Code', runner: 'claude-code',
+          loginCommand: ['claude', 'auth', 'login'],
+        });
+      }
+      return { summary: 'the summary', keptMessages: 4 };
+    });
+    return { deps, session, chatProvider, persistState, installation };
+  }
+
+  it('re-probes before condensing, so a login made with the runner\'s own command starts it', async () => {
+    recordRunnerAuth('claude-code', SIGNED_OUT, '/ws');
+    const h = host(true);
+
+    await compactConversation(h.deps);
+
+    expect(h.installation.refresh).toHaveBeenCalledTimes(1);
+    expect(h.installation.plannerUsability).toHaveBeenCalledWith('claude-code');
+    expect(h.session.compactConversation).toHaveBeenCalledTimes(1);
+    expect(h.chatProvider.showError).not.toHaveBeenCalled();
+    expect(h.persistState).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses to condense when the account is genuinely signed out', async () => {
+    recordRunnerAuth('claude-code', SIGNED_OUT, '/ws');
+    const h = host(false);
+
+    await compactConversation(h.deps);
+
+    expect(h.installation.refresh).toHaveBeenCalledTimes(1);
+    expect(h.installation.plannerUsability).toHaveBeenCalledWith('claude-code');
+    expect(h.session.compactConversation).toHaveBeenCalledTimes(1);
+    expect(h.chatProvider.showError).toHaveBeenCalledWith(expect.stringContaining('Claude Code is not logged in'));
+    expect(h.persistState).not.toHaveBeenCalled();
   });
 });
 

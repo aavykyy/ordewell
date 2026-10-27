@@ -1,5 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { realpathSync } from 'fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { createAiService } from '../AiService';
 import { fakeConfig, fakeFileSystem } from '../../testing';
@@ -2806,12 +2808,21 @@ describe('CliAgentAiService — compactions of the planner\'s own context', () =
 });
 
 describe('CliAgentAiService — a turn that says the agent is signed out', () => {
-  function failing(error: string, provider: IConfig['aiProvider'] = 'claude-code'): CliAgentAiService {
+  function failing(error: string, provider: IConfig['aiProvider'] = 'claude-code', workspaceEnv?: () => Promise<Record<string, string>>): CliAgentAiService {
     return new CliAgentAiService(fakeConfig({ aiProvider: provider }), {
       createAdapter: scriptedAdapter([[{ type: 'error', message: error }, { type: 'turn_end' }]]),
       workspaceRoot: () => '/repo',
+      ...(workspaceEnv ? { workspaceEnv } : {}),
       mcpServer: fakeMcpServer(),
     });
+  }
+
+  /** A HOME whose `~/.codex/config.toml` holds the given content. */
+  function codexHomed(config: string): string {
+    const root = mkdtempSync(join(tmpdir(), 'ordewell-service-codex-'));
+    mkdirSync(join(root, '.codex'), { recursive: true });
+    writeFileSync(join(root, '.codex', 'config.toml'), config);
+    return root;
   }
 
   afterEach(() => resetRunnerAuth());
@@ -2845,5 +2856,48 @@ describe('CliAgentAiService — a turn that says the agent is signed out', () =>
 
     expect(turn).toMatchObject({ kind: 'message', failed: true, text: 'Not logged in · Please run /login' });
     expect(recordedRunnerAuth('opencode', '/repo')).toBeUndefined();
+  });
+
+  // Codex's own status only knows the credentials it stores itself. A custom
+  // model_provider authenticates with its own env key, so the turn's "Not
+  // logged in" is not this user's answer: recording it would wall a working
+  // enterprise setup behind an irrelevant `codex login` (ADR-0016).
+  it('leaves a Codex custom-provider failure alone, with no wrong login guidance', async () => {
+    const home = codexHomed([
+      'model = "gpt-5.4"',
+      'model_provider = "azure"',
+      '[model_providers.azure]',
+      'name = "Azure"',
+      'base_url = "https://example.openai.azure.com/openai/v1"',
+      'env_key = "AZURE_OPENAI_API_KEY"',
+      'wire_api = "responses"',
+      '',
+    ].join('\n'));
+    try {
+      const turn = await failing('Not logged in\n', 'codex', () => Promise.resolve({ HOME: home, AZURE_OPENAI_API_KEY: 'sk-test' }))
+        .startConversation(request({ runners: ['codex'] }));
+
+      expect(turn).toMatchObject({ kind: 'message', failed: true, text: 'Not logged in\n' });
+      expect(recordedRunnerAuth('codex', '/repo')).toBeUndefined();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('records a default Codex setup signed out from its failure line', async () => {
+    const home = codexHomed('model = "gpt-5.4"\n');
+    try {
+      const turn = await failing('Not logged in\n', 'codex', () => Promise.resolve({ HOME: home }))
+        .startConversation(request({ runners: ['codex'] }));
+
+      expect(turn).toMatchObject({ kind: 'message', failed: true });
+      expect(recordedRunnerAuth('codex', '/repo')).toEqual({
+        state: 'signed-out',
+        loginCommand: ['codex', 'login'],
+        detail: 'not logged in',
+      });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

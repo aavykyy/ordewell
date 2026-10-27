@@ -112,10 +112,12 @@ export function reportPlannerError(err: unknown, deps: PlanManagerDeps): void {
  * The rule the session's own planner gate applies to every turn (a harness
  * planner needs no key, ADR-0009), worded with the chat's own commands. Read
  * per provider, as the vendor transport reads its key: a fallback to another
- * vendor's key passed here only for the transport to refuse the turn.
+ * vendor's key passed here only for the transport to refuse the turn. The
+ * signed-out verdict is this workspace's own (ADR-0016): one daemon serves
+ * several workspaces, whose accounts differ.
  */
-export function plannerPreflightError(config: PlanManagerDeps['config']): string | null {
-  const reason = plannerNotReadyFor(config);
+export function plannerPreflightError(config: PlanManagerDeps['config'], workspace: string): string | null {
+  const reason = plannerNotReadyFor(config, (runner) => recordedRunnerAuth(runner, workspace));
   return reason ? describePlannerNotReady(reason, CHAT_COMMANDS) : null;
 }
 
@@ -580,6 +582,11 @@ export async function handleSystemCommand(
       // A planner turn: it streams to the chat as any does, and fails as one.
       case 'retryPlannerCompaction':
         try {
+          // The retry is a planner turn too, and the signed-out refusal's
+          // login runs outside this host: ask the account again before the
+          // session's gate judges.
+          const recheck = recheckSignedOutPlanner(deps);
+          if (recheck) await recheck;
           await deps.session.retryPlannerCompaction();
         } catch (err) {
           reportPlannerError(err, deps);
