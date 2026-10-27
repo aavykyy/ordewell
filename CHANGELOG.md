@@ -12,7 +12,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
-- **The VS Code Marketplace and Open VSX overview opens with the
+- **The overview on the VS Code Marketplace and Open VSX opens with the
   plan-and-task-cards diagram** instead of a session recording.
 - **No runtime code changed.** This release carries the version bump and the
   listing text.
