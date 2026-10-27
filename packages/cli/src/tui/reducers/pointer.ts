@@ -1,5 +1,5 @@
 import {
-  bodyPanes, bottomRowInView, type BodyPanes, chatScrollMax, planOffset, planScrollExtent, revealOffset, rowNearestView, selectionArea, stackedPaneAtRow,
+  bodyPanes, bottomRowInView, type BodyPanes, chatScrollMax, planOffset, planScrollExtent, revealOffset, rowNearestView, selectionArea, selectionColumns, stackedPaneAtRow,
   topRowInView,
 } from '../layout';
 import { selectedText } from '../render';
@@ -151,19 +151,19 @@ export function scrollPlan(state: TuiState, delta: number, paged: boolean): Step
 // ── Selection ────────────────────────────────────────────────────────────────
 
 /**
- * Where a mouse report lands *within a pane*: the reported cell, pulled back
- * inside that pane's area in both directions. This is what stops a drag that
- * wandered across the divider — or off the bottom of the transcript into the
- * plan — from selecting the neighbour: it extends down the origin pane instead,
- * which is the only way a copied line can be one pane's text rather than a
- * splice of both.
+ * Where a mouse report lands *within the region the drag belongs to*: the
+ * reported cell, pulled back inside that region in both directions. This is
+ * what stops a drag that wandered across the divider — or off the bottom of the
+ * transcript into the plan — from selecting the neighbour: it extends down the
+ * origin pane instead, which is the only way a copied line can be one pane's
+ * text rather than a splice of both. A drag that starts on the chrome under the
+ * body has no pane to pin to, so it takes whole frame rows instead.
  */
-function selectionCell(state: TuiState, pane: Focus, key: Key, panes: BodyPanes): Cell {
-  const area = selectionArea(state, pane, panes);
-  return {
-    col: clampRange(key.col ?? area.firstCol, area.firstCol, area.lastCol),
-    row: clampRange(key.row ?? area.firstRow, area.firstRow, area.lastRow),
-  };
+function selectionCell(state: TuiState, pane: Focus, from: number, key: Key, panes: BodyPanes): Cell {
+  const area = selectionArea(state, pane, from, panes);
+  const row = clampRange(key.row ?? area.firstRow, area.firstRow, area.lastRow);
+  const { firstCol, lastCol } = selectionColumns(area, row);
+  return { col: clampRange(key.col ?? firstCol, firstCol, lastCol), row };
 }
 
 function clampRange(value: number, low: number, high: number): number {
@@ -178,13 +178,11 @@ export function handleMouseSelect(state: TuiState, key: Key): Step {
   if (key.name === 'mousedown') {
     // The pane is decided once, here, and carried for the whole drag —
     // `pointerPane` is the same aim the wheel uses, divider fallback included.
+    // Under the body there is no pane to aim at, but the row still decides the
+    // region, so the composer is selectable whole in either layout.
     const panes = bodyPanes(state);
-    const pointed = pointedPane(panes, key);
-    // Stacked, a press on the chrome under the body has no pane to pin to, and
-    // one pinned to the focused pane would start its range at that pane's edge.
-    if (panes.mode === 'stacked' && pointed === null) return step({ ...state, selection: null });
-    const pane = pointed ?? state.focus;
-    const cell = selectionCell(state, pane, key, panes);
+    const pane = pointedPane(panes, key) ?? state.focus;
+    const cell = selectionCell(state, pane, key.row ?? 1, key, panes);
     return step({ ...state, selection: { anchor: cell, head: cell, pane } });
   }
 
@@ -193,7 +191,7 @@ export function handleMouseSelect(state: TuiState, key: Key): Step {
   // owned the mouse (a tmux reattach mid-drag), not the tail of a selection.
   if (!selection) return step(state);
 
-  const moved = { ...selection, head: selectionCell(state, selection.pane, key, bodyPanes(state)) };
+  const moved = { ...selection, head: selectionCell(state, selection.pane, selection.anchor.row, key, bodyPanes(state)) };
   if (key.name === 'mousedrag') return step({ ...state, selection: moved });
 
   // A click with no movement is how the user dismisses a selection; treating it

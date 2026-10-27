@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { initialState, reduce, type Effect, type Step } from '../reducer';
-import { style, width } from '../ansi';
+import { stripAnsi, style, width } from '../ansi';
+import { bodyRows } from '../layout';
 import { render } from '../render';
 import type { TaskView, TuiState } from '../state';
 import { chatOf } from './chat';
@@ -133,6 +134,102 @@ describe('what a release copies', () => {
 
     expect(copied(released.effects)).toContain('PANECHAT');
     expect(released.state.selection).toBeNull();
+  });
+});
+
+describe('a drag across the composer', () => {
+  // The chat pane is 43 columns wide here, so a draft this long can only be
+  // copied whole by a selection that reaches past the pane it starts in.
+  const DRAFT = 'DEAR SELF: this draft runs well past the chat pane and out to the far edge';
+
+  const composing = (): TuiState => {
+    const base = twoPanes();
+    return { ...base, editor: { ...base.editor, text: DRAFT, cursor: 0 } };
+  };
+
+  /** The 1-based frame row the composer paints the draft on. */
+  const composerRow = (state: TuiState): number =>
+    render(state).findIndex((line) => stripAnsi(line).includes(DRAFT)) + 1;
+
+  it('copies the whole line, not the chat pane\'s half, when the plan pane is open', () => {
+    const state = composing();
+    const row = composerRow(state);
+    expect(row).toBeGreaterThan(0);
+    const painted = stripAnsi(render(state)[row - 1]).trimEnd();
+
+    const text = copied(drag(state, [1, row], [state.cols, row]).effects);
+
+    expect(text).toBe(painted);
+    expect(text).toContain(DRAFT);
+  });
+
+  it('still stops a body row at the pane edge', () => {
+    const state = twoPanes();
+    const text = copied(drag(state, [10, 6], [80, 9]).effects);
+    const lines = text.split('\n');
+
+    // The composer's rows are the whole frame now, but the body's are not: a
+    // drag that wanders across the divider still stops at the chat pane.
+    for (const line of lines) expect(width(line)).toBeLessThanOrEqual(CHAT_LAST);
+    expect(text).not.toContain('PANEPLAN');
+  });
+
+  it('clamps the body rows of a body-to-composer drag and widens only the chrome', () => {
+    const state = composing();
+    const frame = render(state);
+    const row = composerRow(state);
+    const body = bodyRows(state);
+    const lines = copied(drag(state, [10, 6], [state.cols, row]).effects).split('\n');
+    const status = body + 1 - 6;
+
+    expect(lines).toHaveLength(row - 6 + 1);
+    // Rows 6..body stay inside the chat pane; never one line of the plan's.
+    for (let r = 6; r <= body; r++) {
+      expect(lines[r - 6]).toBe(stripAnsi(frame[r - 1]).slice(r === 6 ? 9 : 0, CHAT_LAST).trimEnd());
+    }
+    // The status row is chrome: its badge sits past the chat pane's edge.
+    expect(lines[status]).toBe(stripAnsi(frame[body]).trimEnd());
+    expect(lines[status]).toContain('supervisor');
+    // The composer row itself, whole.
+    expect(lines.at(-1)).toBe(stripAnsi(frame[row - 1]).trimEnd());
+  });
+
+  it('treats the reverse drag, composer to body, the same way', () => {
+    const state = composing();
+    const frame = render(state);
+    const row = composerRow(state);
+    const body = bodyRows(state);
+    // Column 80 is in the plan pane's half of the body, and the press decides
+    // the pane for the whole drag, so the body rows stay in that pane.
+    const lines = copied(drag(state, [state.cols, row], [10, 6]).effects).split('\n');
+    const status = body + 1 - 6;
+
+    expect(lines).toHaveLength(row - 6 + 1);
+    for (let r = 6; r <= body; r++) {
+      expect(lines[r - 6]).toBe(stripAnsi(frame[r - 1]).slice(PLAN_FIRST - 1, state.cols).trimEnd());
+    }
+    expect(lines[status]).toBe(stripAnsi(frame[body]).trimEnd());
+    expect(lines[status]).toContain('supervisor');
+    expect(lines.at(-1)).toBe(stripAnsi(frame[row - 1]).trimEnd());
+  });
+
+  it('inverts every painted column of the line, past the chat pane', () => {
+    // The caret's own inverse comes and goes inside the range; the row is
+    // highlighted exactly when one range covers all of its visible text.
+    const highlighted = (line: string): string => stripAnsi(line.split('\x1b[7m').slice(1).join('').split('\x1b[27m')[0]);
+    style.enabled = true;
+    try {
+      const state = composing();
+      const row = composerRow(state);
+      const plain = render(state)[row - 1];
+      const down = mouse(state, 'mousedown', 1, row).state;
+      const dragged = mouse(down, 'mousedrag', state.cols, row).state;
+
+      expect(highlighted(render(dragged)[row - 1])).toBe(stripAnsi(plain));
+      expect(stripAnsi(plain)).toContain(DRAFT);
+    } finally {
+      style.enabled = false;
+    }
   });
 });
 
