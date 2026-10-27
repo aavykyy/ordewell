@@ -1010,11 +1010,13 @@ async function converse(deps: EffectDeps, sessionId: string, call: () => Promise
 /**
  * Why a request that went out got no answer, in a few words and without the
  * request: the error's name or code, how long it waited and, for a timeout, the
- * bound it hit. What the user needs to tell a configured bound from a reset.
+ * bound it hit — when the request had one. What the user needs to tell a
+ * configured bound from a reset, and a turn's own end from either.
  */
 function describeLoss(err: unknown, elapsedMs: number): string {
   const waited = `after ${formatElapsed(elapsedMs)}`;
   if (err instanceof RequestTimeoutError) {
+    if (err.timeoutMs === undefined) return `timed out ${waited}, no bound configured`;
     const bound = `${formatElapsed(err.timeoutMs)}${err.viaEnv ? ' from ORDEWELL_HTTP_TIMEOUT_MS' : ''}`;
     return `timed out ${waited}, limit ${bound}`;
   }

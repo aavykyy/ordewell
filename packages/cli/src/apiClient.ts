@@ -50,6 +50,14 @@ import type {
 
 const DEFAULT_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
 
+/**
+ * The one agent every daemon call uses. `http.globalAgent` carries a 5000 ms
+ * socket timer of its own, which a request that asked for no bound inherits and
+ * times out under; `timeout: 0` keeps no timer here, so only a request's own
+ * `timeout` bounds its socket idleness.
+ */
+const daemonAgent = new http.Agent({ keepAlive: true, timeout: 0 });
+
 export interface PlanResult {
   sessionId: string;
   plan: SurfacePlanState;
@@ -113,10 +121,14 @@ export class UnreadableResponseError extends Error {
   }
 }
 
-/** A request the client gave up on after `timeoutMs`, which `viaEnv` says `ORDEWELL_HTTP_TIMEOUT_MS` set. */
+/**
+ * A request the client gave up on after `timeoutMs`, or one that had no bound
+ * at all — `undefined` for a planner turn, which only Stop ends. `viaEnv` says
+ * `ORDEWELL_HTTP_TIMEOUT_MS` set the bound.
+ */
 export class RequestTimeoutError extends Error {
   readonly code = 'ETIMEDOUT';
-  constructor(readonly timeoutMs: number, readonly viaEnv: boolean) {
+  constructor(readonly timeoutMs: number | undefined, readonly viaEnv: boolean) {
     super('Request timed out');
     this.name = 'RequestTimeoutError';
   }
@@ -260,20 +272,20 @@ export class ApiClient {
       const configuredTimeout = Number.parseInt(process.env.ORDEWELL_HTTP_TIMEOUT_MS || '', 10);
       const hasConfiguredTimeout = Number.isFinite(configuredTimeout) && configuredTimeout > 0;
       const token = this.token();
+      // The env override is explicit, so it bounds a turn too; without it a
+      // turn has no idle bound (see `turn`) and anything else gets the default.
+      const idleBoundMs = hasConfiguredTimeout ? configuredTimeout : turn ? undefined : DEFAULT_HTTP_TIMEOUT_MS;
       const options: http.RequestOptions = {
         hostname: url.hostname,
         port: url.port,
         path: url.pathname + url.search,
         method,
+        agent: daemonAgent,
         headers: {
           ...(body ? { 'Content-Type': 'application/json' } : {}),
           ...(token ? { Authorization: bearerHeaderValue(token) } : {}),
         },
-        // The env override is explicit, so it bounds a turn too; without it a
-        // turn has no idle bound (see `turn`) and anything else gets the default.
-        ...(hasConfiguredTimeout
-          ? { timeout: configuredTimeout }
-          : turn ? {} : { timeout: DEFAULT_HTTP_TIMEOUT_MS }),
+        ...(idleBoundMs !== undefined ? { timeout: idleBoundMs } : {}),
       };
       const req = http.request(options, (res) => {
         // Decoded once at the end: per-chunk decoding turns a character split
@@ -293,7 +305,7 @@ export class ApiClient {
       req.on('error', reject);
       req.on('timeout', () => {
         req.destroy();
-        reject(new RequestTimeoutError(hasConfiguredTimeout ? configuredTimeout : DEFAULT_HTTP_TIMEOUT_MS, hasConfiguredTimeout));
+        reject(new RequestTimeoutError(idleBoundMs, hasConfiguredTimeout));
       });
       if (body) req.write(JSON.stringify(body));
       req.end();

@@ -360,11 +360,14 @@ describe('ApiClient — endpoints the TUI drives', () => {
       else process.env.ORDEWELL_HTTP_TIMEOUT_MS = previous;
     });
 
-    /** Answers `{}` and records the `timeout` option each request was given. */
-    function recordTimeouts(): Array<number | undefined> {
-      const seen: Array<number | undefined> = [];
+    /** The socket timer an agent names for itself; `http.Agent` does not type its options. */
+    const agentTimeout = (agent: unknown): number | undefined => (agent as { options?: { timeout?: number } }).options?.timeout;
+
+    /** Answers `{}` and records the `timeout` option and the agent each request was given. */
+    function recordTimeouts(): Array<{ timeout: number | undefined; agent: unknown }> {
+      const seen: Array<{ timeout: number | undefined; agent: unknown }> = [];
       vi.spyOn(http, 'request').mockImplementation(((options: http.RequestOptions, respond: (res: http.IncomingMessage) => void) => {
-        seen.push(options.timeout);
+        seen.push({ timeout: options.timeout, agent: options.agent });
         const req = new EventEmitter() as EventEmitter & http.ClientRequest;
         req.write = vi.fn();
         req.destroy = vi.fn();
@@ -391,19 +394,47 @@ describe('ApiClient — endpoints the TUI drives', () => {
       ['generatePlan', (c) => c.generatePlan('goal')],
     ];
 
+    // A turn answers only when it ends, and one that waits on exploration
+    // agents idles past five seconds routinely. Node's global agent carries a
+    // 5000 ms socket timer of its own, which cut such a turn off and reported
+    // the 15 minutes it never had.
+    it('waits out a planner turn that stays silent past five seconds', async () => {
+      delete process.env.ORDEWELL_HTTP_TIMEOUT_MS;
+      const srv = await startCustomServer((req, res) => {
+        req.on('data', () => {});
+        req.on('end', () => {
+          setTimeout(() => {
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ plan: { tasks: [] } }));
+          }, 5200);
+        });
+      });
+      servers.push(srv);
+
+      await expect(new ApiClient(srv.port).sendConversationMessage('s1', 'hi')).resolves.toEqual({ tasks: [] });
+    }, 20_000);
+
     it.each(turnCalls)('does not bound %s by socket idleness', async (_name, call) => {
       delete process.env.ORDEWELL_HTTP_TIMEOUT_MS;
       const seen = recordTimeouts();
       await call(new ApiClient(3742));
       expect(seen).toHaveLength(1);
-      expect(seen[0] ?? 0).toBe(0);
+      expect(seen[0].timeout ?? 0).toBe(0);
+      // Asking for no bound is not enough on its own: unnamed, the request
+      // takes `http.globalAgent`, whose 5000 ms socket timer re-arms idleness
+      // on it anyway. The client's own agent names none.
+      expect(seen[0].agent).toBeInstanceOf(http.Agent);
+      expect(seen[0].agent).not.toBe(http.globalAgent);
+      expect(agentTimeout(seen[0].agent)).toBe(0);
     });
 
-    it('still bounds a short call by the default idle timeout', async () => {
+    it('still bounds a short call by the default idle timeout, on that same agent', async () => {
       delete process.env.ORDEWELL_HTTP_TIMEOUT_MS;
       const seen = recordTimeouts();
       await new ApiClient(3742).getRunners();
-      expect(seen).toEqual([900_000]);
+      expect(seen.map((s) => s.timeout)).toEqual([900_000]);
+      expect(seen[0].agent).toBeInstanceOf(http.Agent);
+      expect(seen[0].agent).not.toBe(http.globalAgent);
     });
 
     it('lets ORDEWELL_HTTP_TIMEOUT_MS override both', async () => {
@@ -412,7 +443,8 @@ describe('ApiClient — endpoints the TUI drives', () => {
       const client = new ApiClient(3742);
       await client.getRunners();
       await client.sendConversationMessage('s1', 'hi');
-      expect(seen).toEqual([1234, 1234]);
+      expect(seen.map((s) => s.timeout)).toEqual([1234, 1234]);
+      expect(seen[1].agent).toBe(seen[0].agent);
     });
   });
 });
