@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { SettingsService, type SettingsResponse } from '@ordewell/core';
+import { RUN_SETTINGS_DEFAULTS, SettingsService, type SettingsResponse } from '@ordewell/core';
 import { OrchestratorPool } from '../../pool/orchestratorPool';
 import { settingsRoute } from '../settings';
 import { plansRoute } from '../plans';
@@ -57,12 +57,39 @@ describe('run settings over /api/settings', () => {
   });
 
   it('applies the change to the named session\'s run at once', async () => {
-    const applyRunSettings = vi.fn();
-    (pool as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', { applyRunSettings, destroy: vi.fn() });
+    let run = { ...RUN_SETTINGS_DEFAULTS };
+    const applyRunSettings = vi.fn((changes: Partial<typeof RUN_SETTINGS_DEFAULTS>) => { run = { ...run, ...changes }; });
+    (pool as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', { runSettings: () => run, applyRunSettings, destroy: vi.fn() });
 
-    await patch({ run: { mergeAtGatesAutomatically: true }, sessionId: 's1' });
+    const res = await patch({ run: { mergeAtGatesAutomatically: true }, sessionId: 's1' });
 
     expect(applyRunSettings).toHaveBeenCalledWith({ mergeAtGatesAutomatically: true });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as SettingsResponse).run).toMatchObject({ mergeAtGatesAutomatically: true });
+  });
+
+  it('answers a live session with its own values, and an unknown or missing id with the file’s', async () => {
+    const run = { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act' as const, autorun: true };
+    (pool as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', { runSettings: () => run, destroy: vi.fn() });
+    new SettingsService().updateRunSettings({ supervisorLevel: 'off' });
+
+    const live = await (await app.request('/api/settings?sessionId=s1')).json() as SettingsResponse;
+    const unknown = await (await app.request('/api/settings?sessionId=closed')).json() as SettingsResponse;
+    const none = await (await app.request('/api/settings')).json() as SettingsResponse;
+
+    expect(live.run).toMatchObject({ supervisorLevel: 'act', autorun: true });
+    expect(unknown.run).toMatchObject({ supervisorLevel: 'off', autorun: false });
+    expect(none.run).toMatchObject({ supervisorLevel: 'off', autorun: false });
+  });
+
+  it('answers the session\'s values even when the same write changes a global setting', async () => {
+    const run = { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act' as const };
+    (pool as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', { runSettings: () => run, destroy: vi.fn() });
+
+    const res = await patch({ modelAllowlist: { opencode: ['a/b'] }, sessionId: 's1' });
+
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as SettingsResponse).run).toMatchObject({ supervisorLevel: 'act' });
   });
 
   it('refuses a value outside its range, saving nothing and applying nothing', async () => {

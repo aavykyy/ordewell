@@ -69,7 +69,7 @@ describe('autorun', () => {
     env.planner.calls[0].finish(prose('Which database?'));
     await planned;
 
-    env.settings.autorun = true;
+    env.session.applyRunSettings({ autorun: true });
     void env.session.continueConversation('Postgres');
     await until(() => env.planner.calls.length === 2);
     env.planner.calls[1].finish(prose('Noted.'));
@@ -78,7 +78,7 @@ describe('autorun', () => {
     await until(() => env.planner.calls.length === 3);
     env.planner.calls[2].finish(prose('Noted.'));
     await settled();
-    env.settings.autorun = false;
+    env.session.applyRunSettings({ autorun: false });
     void env.session.continueConversation('wait');
     await until(() => env.planner.calls.length === 4);
 
@@ -94,7 +94,7 @@ describe('autorun', () => {
     env.planner.calls[0].finish(prose('Which database?'));
     await planned;
 
-    env.settings.autorun = false;
+    env.session.applyRunSettings({ autorun: false });
     const failed = env.session.continueConversation('Postgres');
     await until(() => env.planner.calls.length === 2);
     env.planner.calls[1].fail(new Error('backend down'));

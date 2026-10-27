@@ -247,6 +247,18 @@ describe('ApiClient', () => {
     refused.close();
   });
 
+  it('getSettings names the session whose values it wants', async () => {
+    const srv = await startCustomServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ path: req.url }));
+    });
+    servers.push(srv);
+
+    const result = await new ApiClient(srv.port).getSettings('s1');
+
+    expect((result as { path?: string }).path).toBe('/api/settings?sessionId=s1');
+  });
+
   it('updateSettings sends PATCH to /api/settings with the payload', async () => {
     const srv = await startCustomServer((req, res) => {
       let body = '';

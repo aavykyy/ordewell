@@ -155,7 +155,7 @@ export function foldRun(state: TuiState, input: RunInput): TuiState {
   return run === state.run ? state : withRun(state, run);
 }
 
-export function applySettings(state: TuiState, settings: Partial<SettingsResponse>): TuiState {
+export function applySettings(state: TuiState, settings: Partial<SettingsResponse>, applyRun = true): TuiState {
   return {
     ...state,
     orchestratorModel:
@@ -172,8 +172,8 @@ export function applySettings(state: TuiState, settings: Partial<SettingsRespons
       settings.modelAllowlist && typeof settings.modelAllowlist === 'object'
         ? (settings.modelAllowlist as Record<string, string[]>)
         : state.allowlist,
-    runSettings: settings.run ?? state.runSettings,
-    runSettingsKnown: state.runSettingsKnown || settings.run !== undefined,
+    runSettings: applyRun && settings.run ? settings.run : state.runSettings,
+    runSettingsKnown: state.runSettingsKnown || (applyRun && settings.run !== undefined),
   };
 }
 

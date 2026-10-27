@@ -384,9 +384,22 @@ function reduceAction(state: TuiState, action: Action): Step {
       });
     }
 
-    case 'settingsLoaded':
+    case 'settingsLoaded': {
       // An open /settings or /planner marks the current value from what the daemon now holds.
-      return step(refreshStepper(applySettings(state, action.settings)));
+      if (action.read !== undefined && action.read < state.settingsRead) return step(state);
+      // A read names the session it answers for. One for a session the user
+      // has left may still carry global settings, but must not paint that
+      // session's run values over this one's, nor advance this session's
+      // watermark and drop a read that is still on its way (ADR-0030).
+      const forThisSession = action.sessionId === undefined
+        ? action.read === undefined || state.sessionId === null
+        : action.sessionId === state.sessionId;
+      const next = applySettings(state, action.settings, forThisSession);
+      return step(refreshStepper({
+        ...next,
+        settingsRead: action.read !== undefined && forThisSession ? Math.max(state.settingsRead, action.read) : state.settingsRead,
+      }));
+    }
 
     case 'modelsLoaded':
       return step(refreshStepper(
@@ -443,7 +456,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       });
 
     case 'sharedSettingsChanged':
-      return step(state, [{ type: 'loadScope' }]);
+      return step(state, [{ type: 'loadScope', ...(state.sessionId ? { sessionId: state.sessionId } : {}) }]);
 
     case 'runnersLoaded':
       // Installed runners are `/planner`'s preflight signal, so a stepper

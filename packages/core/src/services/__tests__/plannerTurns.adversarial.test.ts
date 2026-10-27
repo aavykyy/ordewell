@@ -208,6 +208,7 @@ describe('a settings change during a wake-up turn', () => {
     // The user turns autorun off while the turn runs, then stops the turn: it
     // never answered, so the next turn must say so again.
     settings.autorun = false;
+    session.applyRunSettings({ autorun: false });
     session.abortPlannerTurn();
     await first;
 

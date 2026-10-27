@@ -88,6 +88,7 @@ function tui(api: Partial<OrdewellApi>, start: Partial<TuiState> = {}) {
       forceSendPlannerMessage: vi.fn(async () => ({ tasks: [] })),
       compactConversation: vi.fn(async () => ({ plan: { tasks: [] }, summary: '' })),
       adoptSession: vi.fn(async () => ({ plan: PLAN, goal: 'g' })),
+      getSettings: vi.fn(async () => ({})),
       streamPlanning: vi.fn(() => ({ ready: Promise.resolve(), close: () => {} })),
       followSession: vi.fn(() => ({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: () => {} }) as SessionFollow),
       ...api,
