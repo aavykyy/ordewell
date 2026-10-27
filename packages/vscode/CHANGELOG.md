@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Sign in to a coding agent from the planner chat.** A signed-out Claude Code
+  or Codex stays in the planner pills, marked with a red dot and **Log in**
+  beside its name; the Runners pills and the first screen carry the same action
+  for every signed-out agent, the planner first. Each runs that agent's own
+  login in an integrated terminal and asks its status again, and the action
+  stays available whether or not the chat is empty. Signing in another agent
+  does not change who plans.
+
 ## [0.11.0] - 2026-10-26
 
 New installations now start in Guarded autonomy, a read-only task can change
@@ -10,11 +20,6 @@ as it makes them. See the full changelog for daemon and API changes.
 
 ### Added
 
-- **Sign in to a coding agent from the planner chat.** A signed-out Claude Code
-  or Codex stays in the planner pills with a **Log in** action, and the empty
-  state offers one for the active planner. Each runs the agent's own login in an
-  integrated terminal and asks its status again; signing in another agent does
-  not change who plans.
 - **Task handoffs.** Task cards show the summary, numbered findings with
   severity and evidence, artifacts and a count of findings left in the log.
 - **Account limits in the footers.** When Codex, Claude Code or OpenCode Go

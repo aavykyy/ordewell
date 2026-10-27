@@ -8,6 +8,27 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **A signed-out coding agent is flagged before it plans, and you can sign in
+  from the chat.** The preflight asks the agent's own status command, so a
+  Claude Code or Codex without a login stays in the planner picker, marked
+  instead of vanishing, and a planner turn is refused before it is sent with
+  the way in: `Claude Code not logged in. Sign in with /login, or run claude
+  auth login and try again.` Every signed-out agent is flagged, not only the one
+  planning. The TUI prints a red welcome line per agent (`Codex not logged in.
+  /login codex to sign in.`) and reddens the signed-out names in the welcome's
+  Runners row; VS Code marks every signed-out pill, planner and
+  runner alike, with a red dot and its own **Log in** beside the name, and gives
+  each agent its own row, with **Log in**, on the first screen, the active
+  planner first. Those logins stay there whether or not the chat is empty and
+  whether or not the agent is the planner. `/login` signs the active planner in
+  and `/login <runner>` signs another installed agent in without switching the
+  planner, as does that agent's own **Log in**. The agent's interactive login
+  runs in your terminal, then Ordewell asks its status again. An agent whose CLI
+  declares no status command, such as OpenCode, is left unflagged
+  ([ADR-0052](docs/adr/routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)).
+
 ## [0.11.0] - 2026-10-26
 
 0.11 lets a plan do more than run coding agents in order. A plan can now
@@ -35,17 +56,6 @@ Before you upgrade from 0.10, note what changes for existing setups:
 
 ### Added
 
-- **A signed-out coding agent is flagged before it plans, and you can sign in
-  from the chat.** The preflight asks the agent's own status command, so a
-  Claude Code or Codex without a login stays in the planner picker, marked
-  instead of vanishing, and a planner turn is refused before it is sent with
-  the way in. In the TUI, `/login` signs the active planner in and
-  `/login <runner>` signs another installed agent in without switching the
-  planner; in VS Code, the empty state offers **Log in** and every signed-out
-  planner pill has its own. The agent's interactive login runs in your terminal,
-  then Ordewell asks its status again. An agent whose CLI declares no status
-  command, such as OpenCode, is left unflagged
-  ([ADR-0052](docs/adr/routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)).
 - **Account limits for your coding agents.** Ordewell reads what your Codex,
   Claude Code and OpenCode Go accounts have used of their plan's windows (five
   hours, a week, a month) from each runner's own account protocol, never from

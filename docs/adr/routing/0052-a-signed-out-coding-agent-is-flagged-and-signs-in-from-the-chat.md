@@ -75,14 +75,26 @@ is synchronous and one daemon may serve workspaces whose accounts differ
 
 | Surface | The flag | Signing in |
 |---|---|---|
-| TUI | a red welcome line, `Claude Code is not logged in. /login to sign in.`; the planner picker row reads `not logged in · /login claude-code` and stays selectable | `/login` for the active planner, `/login <runner>` by id or display label |
-| VS Code | the signed-out pill carries a dot and its own **Log in**; the empty state carries the active planner's line and **Log in** | that button, for the active planner or for that pill's runner |
+| TUI | a red welcome line per signed-out agent, the active planner first, and the red name of every signed-out runner its Runners row shows; the planner picker row reads `not logged in · /login claude-code` and stays selectable | `/login` for the active planner, `/login <runner>` by id or display label |
+| VS Code | a red dot and a **Log in** segment on every signed-out pill, planner or runner; the empty state lists one row per signed-out agent, the active planner first, each with its own action | that pill's or row's button, for the active planner or for another installed agent |
 
-Both surfaces flag the agent where the planner is picked and where a turn is
-typed. The TUI keeps the row in the picker — auth never gates usability — and
-the warning styling marks it without a second list. VS Code keeps the pill
-beside the others, marks it, and gives the empty state the active planner's one
-action; once the empty state is gone, the active pill gets its own action too.
+The welcome's line names the command that fixes the agent in hand: `Claude Code
+not logged in. /login to sign in.` for the planner, then one more for every
+other signed-out agent in the runner list's order, `Codex not logged in. /login
+codex to sign in.` VS Code renders the login as the second segment of the pill's
+own capsule, beside the name, and as a button on the empty-state row, so one
+agent's fix never reads as a second control. An agent whose verdict has no login
+command gets no line and no button, since there is no way in to name.
+
+Both surfaces flag every agent whose own status says signed out, not only the
+one planning, because any of them can be signed in without moving the planner.
+The TUI keeps the row in the picker — auth never gates usability — and flags
+the agent twice in the welcome: a red line per signed-out agent, and that
+agent's name in red in the Runners row whenever the row lists it. VS
+Code keeps the pill beside the others and marks it: the same action sits in the
+Settings panel's Planner and Runners blocks and as a row in the empty state, and
+none of those depends on the empty state being gone or on the pill being the
+active planner.
 
 ### The refusal
 
@@ -93,9 +105,9 @@ before it opens — a conversation turn, a plan generation, a compaction retry �
 and a host may call it first to refuse before it builds on the session. Nothing
 is sent to the agent.
 
-The message keeps the way in. The terminal UI and the chat say `Claude Code is
-not logged in. Sign in with /login, or run claude auth login and try again.` The
-headless CLI, which has no `/login`, says `Claude Code is not logged in. Run
+The message keeps the way in. The terminal UI and the chat say `Claude Code not
+logged in. Sign in with /login, or run claude auth login and try again.` The
+headless CLI, which has no `/login`, says `Claude Code not logged in. Run
 claude auth login to sign in, then try again.`
 
 ### When the verdict is stale
@@ -118,11 +130,11 @@ A login is always one runner's. The TUI's `/login` resolves the active planner;
 the manifest's login args in this terminal: the alt screen and raw mode are
 suspended, the child inherits stdio, cwd, PATH and the workspace environment,
 and the TUI resumes in a `finally` so a failed spawn cannot leave the terminal
-behind. Ctrl-C belongs to the child while it runs. VS Code's Log in opens an
-integrated terminal named `<Label> login` with the workspace's cwd and
-environment, sends the argv once, and polls the runner's status verdict every
-two seconds for up to five minutes; a login the probe does not confirm, or whose
-terminal closes, ends as a visible failure.
+behind. Ctrl-C belongs to the child while it runs. VS Code's Log in, on any pill
+or empty-state row, opens an integrated terminal named `<Label> login` with the
+workspace's cwd and environment, sends the argv once, and polls the runner's
+status verdict every two seconds for up to five minutes; a login the probe does
+not confirm, or whose terminal closes, ends as a visible failure.
 
 Neither path writes the planner choice: signing a named agent in leaves
 `aiProvider` alone, so "Claude plans while Codex signs in" works. Success is
@@ -139,8 +151,8 @@ say so.
 - **Only signed out blocks, and only with a way in.** A signed-out verdict
   without a login command is not a refusal; `unknown` never is one.
 - **A signed-out agent is flagged, never hidden.** Usability stays about the
-  binary and the connector; the login is a flag with the action that fixes it on
-  the same row.
+  binary and the connector; the login is a flag with the action that fixes it
+  beside it, for every flagged agent and not only the planner.
 - **A login names one runner and never moves the planner.** The command comes
   from that runner's manifest, and no path writes the planner choice.
 - **The probe reads no credential.** It runs the runner's status command and
@@ -191,6 +203,14 @@ art for the TTL and the refresh trigger.
 - **Treat `unknown` as signed-out.** Rejected: an older or offline CLI, an
   unparseable answer or a custom provider with its own key would be refused work
   it can do.
+- **Flag and sign in only the agent that plans.** The design until 2026-10-27:
+  the TUI printed one welcome line for the active planner, and VS Code's empty
+  state carried that planner's action while a pill's login appeared only once
+  the empty state was gone. Dropped: a signed-out agent that is not the planner
+  still has no way in, and it is one click from planning; and a login that shows
+  up only after the chat fills, or only on the selected pill, reads as a
+  different control from the one the empty state offered. Each runner owns its
+  login anyway, so every flagged agent carries its own.
 - **Block every turn on a fresh probe.** Rejected: the gate is synchronous and
   cannot await a spawn, and one spawn per turn would change the planner's
   latency for a fact that rarely changes. A stale signed-in verdict is caught by
@@ -237,3 +257,8 @@ art for the TTL and the refresh trigger.
 ## History
 
 - 2026-10-27 — accepted and implemented.
+- 2026-10-27 — every signed-out agent is flagged on a line of its own and signs
+  in with its own login, not only the planner: the welcome lists one line per
+  agent and paints its Runners names red, VS Code's login is an always-present
+  segment of every signed-out pill and one row per agent in the empty state, and
+  the refusal drops "is".
