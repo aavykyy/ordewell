@@ -34,10 +34,14 @@
  *   - the first screen is a hero, an autorun note and a repositories card: the
  *     card has a surface of its own, `/settings` is a command token, and the
  *     whole column keeps its edge with long paths in it
+ *   - every colour that carries a state or a word is measured, not eyeballed:
+ *     body text is held to 4.5:1, a state cue to 3:1, and a decorative surface
+ *     step to being visible at all (see paintRatio/checkCue/checkSurface)
  *
- * Runs at 420px (the sidebar width) and 900px, under both a dark and a light
- * VS Code theme (bench/live/webview-harness.mjs's `?theme=`) — the full state
- * tour at 420/dark, a representative subset at the other three combinations.
+ * Runs at 420px (the sidebar width) and 900px, under a dark, a light and a
+ * light high-contrast VS Code theme (bench/live/webview-harness.mjs's
+ * `?theme=`) — the full state tour at 420/dark, a representative subset at the
+ * other combinations.
  *
  * Usage:
  *   node bench/live/webview-harness.mjs &
@@ -143,6 +147,84 @@ async function contrastRatio(page, selector) {
     const [l1, l2] = [luminance(blended), luminance(bg)].sort((a, b) => b - a);
     return (l1 + 0.05) / (l2 + 0.05);
   }, selector);
+}
+
+/**
+ * The painted colours of two surfaces and the WCAG ratio between them. `fg` is
+ * an element property (`{ selector, prop }`) or a raw colour (`{ css }`), and is
+ * composited over the surface `bg` paints; that surface is itself composited
+ * from its translucent layers down to the first opaque one. A border sits on
+ * its own element's fill, so `prop: 'borderTopColor'` measures the edge the eye
+ * sees rather than the declared alpha.
+ */
+async function paintRatio(page, fg, bgSelector) {
+  return page.evaluate(([spec, bgSel]) => {
+    const toRgba = (s) => {
+      const rgb = s.match(/rgba?\(([^)]+)\)/);
+      if (rgb) {
+        const [r, g, b, a = 1] = rgb[1].split(',').map((n) => parseFloat(n));
+        return [r, g, b, a];
+      }
+      const fn = s.match(/color\(srgb\s+([^)]+)\)/);
+      if (fn) {
+        const parts = fn[1].split('/');
+        const [r, g, b] = parts[0].trim().split(/\s+/).map((n) => parseFloat(n) * 255);
+        const a = parts[1] !== undefined ? parseFloat(parts[1]) : 1;
+        return [r, g, b, a];
+      }
+      return null;
+    };
+    const blend = ([r, g, b, a], [br, bg, bb]) => [
+      r * a + br * (1 - a), g * a + bg * (1 - a), b * a + bb * (1 - a),
+    ];
+    const luminance = ([r, g, b]) => {
+      const f = (c) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+    };
+    const hex = ([r, g, b]) => `#${[r, g, b].map((n) => Math.round(n).toString(16).padStart(2, '0')).join('')}`;
+    // Every background the element shows, floor to ceiling, as one colour.
+    const painted = (el) => {
+      const layers = [];
+      for (let node = el; node; node = node.parentElement) {
+        const rgba = toRgba(getComputedStyle(node).backgroundColor);
+        if (rgba && rgba[3] > 0) layers.push(rgba);
+        if (rgba && rgba[3] >= 1) break;
+      }
+      return layers.reverse().reduce((under, layer) => blend(layer, under), [255, 255, 255]);
+    };
+    const fgEl = spec.selector ? document.querySelector(spec.selector) : null;
+    const bgEl = document.querySelector(bgSel);
+    if (!bgEl || (spec.selector && !fgEl)) return null;
+    const bg = painted(bgEl);
+    const declared = spec.css ? toRgba(spec.css) : toRgba(getComputedStyle(fgEl)[spec.prop ?? 'color']);
+    if (!declared) return null;
+    const fg = declared[3] < 1 ? blend(declared, fgEl ? painted(fgEl) : bg) : declared;
+    const [l1, l2] = [luminance(fg), luminance(bg)].sort((a, b) => b - a);
+    return { ratio: (l1 + 0.05) / (l2 + 0.05), fg: hex(fg), bg: hex(bg) };
+  }, [fg, bgSelector]);
+}
+
+/**
+ * A cue that carries a state — a dot, a selected fill, a warning rule, the only
+ * edge of a tintless high-contrast card: WCAG 1.4.11 asks 3:1 of it.
+ */
+async function checkCue(page, label, what, fg, bgSelector) {
+  const painted = await paintRatio(page, fg, bgSelector);
+  if (!painted) return;
+  check(painted.ratio >= 3,
+    `contrast ${label} ${what}: ${painted.ratio.toFixed(2)}:1 ${painted.fg} on ${painted.bg} (WCAG 1.4.11 needs 3:1)`);
+}
+
+/**
+ * A decorative surface step — the tint inside a capsule, the rule of a quiet
+ * note, a card's hairline: it has to be a visible step, but it is not the only
+ * thing identifying a control, so 1.4.11's 3:1 does not apply to it.
+ */
+async function checkSurface(page, label, what, fg, bgSelector, min = 1.1) {
+  const painted = await paintRatio(page, fg, bgSelector);
+  if (!painted) return;
+  check(painted.ratio >= min,
+    `surface ${label} ${what}: ${painted.ratio.toFixed(2)}:1 ${painted.fg} on ${painted.bg} (needs ${min}:1 to read as a step)`);
 }
 
 async function assertMark(page, mark) {
@@ -578,7 +660,7 @@ function segmented(page, groupSel, nameSel, loginSel) {
     const box = (el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
     const paint = (el) => {
       const s = getComputedStyle(el);
-      return { fill: s.backgroundColor, color: s.color, border: s.borderTopWidth, borderColour: s.borderTopColor };
+      return { fill: s.backgroundColor, color: s.color, border: s.borderTopWidth, borderColour: s.borderTopColor, shadow: s.boxShadow };
     };
     const gs = getComputedStyle(group);
     const divider = login ? getComputedStyle(login, '::before') : null;
@@ -653,7 +735,7 @@ async function signedOutPlanner(width, theme) {
   const weakerTint = await resolvedColour(page, 'color-mix(in srgb, var(--red) 4%, transparent)');
   const border = highContrast
     ? await resolvedColour(page, 'var(--vscode-contrastBorder)')
-    : await resolvedColour(page, 'color-mix(in srgb, var(--red) 45%, transparent)');
+    : await resolvedColour(page, 'var(--red-boundary)');
   const loginTint = await resolvedColour(page, highContrast
     ? 'color-mix(in srgb, var(--red) 20%, transparent)'
     : 'color-mix(in srgb, var(--red) 16%, transparent)');
@@ -710,6 +792,32 @@ async function signedOutPlanner(width, theme) {
     const runnerLoginText = await firstTextRect(page, `.runner-pill-item[data-runner="${runner}"] .runner-pill-login`);
     check(!!runnerLoginText && runnerCapsule.login.w < runnerCapsule.name.w && runnerCapsule.login.w <= runnerLoginText.width + 20,
       `planner-auth ${label}: ${runner}'s runner login reserves only "Log in", not the wider pending words (${runnerCapsule.login.w} beside name ${runnerCapsule.name.w}, text ${runnerLoginText?.width})`);
+
+    // The red, measured as painted: the capsule's edge and its divider are
+    // reinforcement (a surface step), the dot is the cue that carries the state
+    // and must clear 3:1 against the tint it sits on. On a white page the edge
+    // itself is also held to 3:1, which is what the light themes' stronger mix
+    // buys; dark keeps its quieter 45% because the dot already carries it.
+    await checkSurface(page, `planner-auth ${label}`, `${runner}'s capsule edge`,
+      { selector: `.planner-pill-item[data-runner="${runner}"] .planner-pill-group`, prop: 'borderTopColor' }, 'body', 1.5);
+    if (theme.endsWith('light')) {
+      await checkCue(page, `planner-auth ${label}`, `${runner}'s capsule boundary`,
+        { selector: `.planner-pill-item[data-runner="${runner}"] .planner-pill-group`, prop: 'borderTopColor' }, 'body');
+    }
+    await checkSurface(page, `planner-auth ${label}`, `${runner}'s login divider`,
+      { css: planner.divider.background }, `.planner-pill-item[data-runner="${runner}"] .planner-pill-login`, 1.3);
+    await checkCue(page, `planner-auth ${label}`, `${runner}'s signed-out dot`,
+      { selector: `.planner-pill-item[data-runner="${runner}"] .planner-auth-dot`, prop: 'backgroundColor' },
+      `.planner-pill-item[data-runner="${runner}"] .planner-pill-group`);
+    if (runnerCapsule.dot?.fill === 'rgba(0, 0, 0, 0)') {
+      check(runnerCapsule.dot.shadow.includes(red),
+        `planner-auth ${label}: ${runner}'s hollow off dot is a ring in the theme's red (${runnerCapsule.dot.shadow})`);
+      await checkCue(page, `planner-auth ${label}`, `${runner}'s hollow off ring`, { css: red }, `.runner-pill-item[data-runner="${runner}"] .runner-pill-group`);
+    } else {
+      await checkCue(page, `planner-auth ${label}`, `${runner}'s runner dot`,
+        { selector: `.runner-pill-item[data-runner="${runner}"] .runner-dot`, prop: 'backgroundColor' },
+        `.runner-pill-item[data-runner="${runner}"] .runner-pill-group`);
+    }
   }
 
   // An item with no login reserves no failure line, so the top edge is the
@@ -770,6 +878,8 @@ async function signedOutPlanner(width, theme) {
   const region = await page.locator('.planner-auth-rows').evaluate((el) => ({ role: el.getAttribute('role'), live: el.getAttribute('aria-live') }));
   check(region.role === 'status' && region.live === 'polite',
     `planner-auth ${label}: the rows are one polite live region (${JSON.stringify(region)})`);
+  await checkCue(page, `planner-auth ${label}`, 'the first-screen row dot',
+    { selector: '.planner-auth-row .planner-auth-dot', prop: 'backgroundColor' }, '.empty-state');
 
   check(await page.locator('.planner-pill.active[title="Not logged in — sign in from this chat"]').count() === 1,
     `planner-auth ${label}: the active pill's title says why`);
@@ -805,18 +915,21 @@ async function signedOutPlanner(width, theme) {
   const pillFocus = await ringOf(page.locator('.planner-pill').first());
   check(pillFocus.visible && pillFocus.width === '2px' && pillFocus.style === 'solid' && pillFocus.offset === '-2px',
     `planner-auth ${label}: the planner name has an inset focus ring (${JSON.stringify(pillFocus)})`);
+  await checkCue(page, `planner-auth ${label}`, 'the planner focus ring', { selector: '.planner-pill', prop: 'outlineColor' }, '.empty-state');
   await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
 
   await plannerLogin('claude-code').evaluate((el) => el.focus({ focusVisible: true }));
   const menuRing = await ringOf(plannerLogin('claude-code'));
   check(menuRing.visible && menuRing.width === '2px' && menuRing.style === 'solid' && menuRing.offset === '-2px',
     `planner-auth ${label}: the menu login has its own inset focus ring (${JSON.stringify(menuRing)})`);
+  await checkCue(page, `planner-auth ${label}`, 'the login focus ring', { selector: '.planner-pill-login', prop: 'outlineColor' }, '.empty-state');
   await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
 
   await page.locator('.runner-pill').first().evaluate((el) => el.focus({ focusVisible: true }));
   const runnerRing = await ringOf(page.locator('.runner-pill').first());
   check(runnerRing.visible && runnerRing.width === '2px' && runnerRing.style === 'solid' && runnerRing.offset === '-2px',
     `planner-auth ${label}: a runner name has the same inset focus ring (${JSON.stringify(runnerRing)})`);
+  await checkCue(page, `planner-auth ${label}`, 'the runner focus ring', { selector: '.runner-pill', prop: 'outlineColor' }, '.empty-state');
   await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
 
   // The same control in two places: the row's action and the menu segment
@@ -1050,9 +1163,13 @@ async function firstScreen(width, theme) {
   });
   const pageFill = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   const card = await paint('.isolation-notice');
-  console.log(`    card ${card.fill} on page ${pageFill} · ${card.w}×${card.h}`);
-  check(solid(card.fill) && card.fill !== pageFill,
-    `first-screen ${label}: the card is filled apart from the page (${card.fill} on ${pageFill})`);
+  const cardSurface = await paintRatio(page, { selector: '.isolation-notice', prop: 'backgroundColor' }, '.empty-state');
+  const cardEdge = await paintRatio(page, { selector: '.isolation-notice', prop: 'borderTopColor' }, '.empty-state');
+  console.log(`    card ${card.fill} on page ${pageFill} · surface ${cardSurface?.ratio.toFixed(2)}:1 · edge ${cardEdge?.ratio.toFixed(2)}:1 · ${card.w}×${card.h}`);
+  // A card is a surface, not a control: its fill has to be a step off the page
+  // (or, in high contrast, which draws no tints, its edge a full boundary).
+  check((cardSurface?.ratio ?? 0) >= 1.08 || (cardEdge?.ratio ?? 0) >= 3,
+    `first-screen ${label}: the card reads as a surface off the page (fill ${cardSurface?.ratio.toFixed(2)}:1, edge ${cardEdge?.ratio.toFixed(2)}:1)`);
   check(card.border === '1px' && card.radius === '12px',
     `first-screen ${label}: the card has a 1px border and a 12px radius (${card.border}, ${card.radius})`);
 
@@ -1125,12 +1242,18 @@ async function firstScreen(width, theme) {
     `first-screen ${label}: autorun's note carries a 2px warning rule (${note.rule} ${note.colour})`);
   check(note.text.includes('Autorun is on') && note.text.includes('/settings.'),
     `first-screen ${label}: the note keeps core's sentence (${JSON.stringify(note.text)})`);
+  await checkCue(page, `first-screen ${label}`, 'the autorun rule', { selector: '.plan-approval-note', prop: 'borderLeftColor' }, '.empty-state');
 
   await checkContrast(page, `first-screen ${label}`, [
-    '.empty-state-support', '.plan-approval-text', '.command-token',
+    '.empty-state h2', '.empty-state-lead', '.empty-state-support', '.plan-approval-text', '.command-token',
+    '.empty-state-setup-label', '.empty-state-setup .warn',
     '.isolation-notice-title', '.isolation-notice-summary', '.isolation-repo-name',
-    '.isolation-repo-head', '.isolation-repo-commit', '.isolation-notice-note',
+    '.isolation-repo-head', '.isolation-repo-commit', '.isolation-notice-shared', '.isolation-notice-note',
   ]);
+  // The muted caption and footer are small text on the card's own tint, not on
+  // the page: measure them against the surface they sit on rather than assume.
+  await checkSurface(page, `first-screen ${label}`, 'the card hairline', { selector: '.isolation-notice', prop: 'borderTopColor' }, '.empty-state', 1.1);
+  await checkSurface(page, `first-screen ${label}`, 'the card footer hairline', { selector: '.isolation-notice-footer', prop: 'borderTopColor' }, '.isolation-notice', 1.1);
   // The whole column, for the picture: a sidebar taller than the first screen.
   await page.setViewportSize({ width, height: 1200 });
   await settle(page);
@@ -1146,6 +1269,8 @@ async function firstScreen(width, theme) {
   }));
   check(quiet.rule !== warning && quiet.token === null && quiet.text.includes('Nothing runs until you approve the plan.'),
     `first-screen ${label}: with autorun off the same row is quiet and promises approval (${quiet.rule}, ${JSON.stringify(quiet.text)})`);
+  await checkSurface(page, `first-screen ${label}`, 'the quiet note’s rule', { selector: '.plan-approval-note', prop: 'borderLeftColor' }, '.empty-state', 1.1);
+  await checkContrast(page, `first-screen ${label}`, ['.plan-approval-note[data-autorun="off"] .plan-approval-text']);
 
   // Long paths and branches are the case that clips a card at 420px.
   await send(page, FIRST_SCREEN_LONG_PATHS.post);
@@ -1162,6 +1287,10 @@ async function firstScreen(width, theme) {
   check(wrapped.ok, `first-screen ${label}: long paths and branches wrap inside the card`);
   check(wrapped.names.every((f) => /mono|Menlo|Monaco|Courier/i.test(f)),
     `first-screen ${label}: a group's repository paths are set in mono (${wrapped.names.join(' | ')})`);
+  await checkContrast(page, `first-screen ${label}`, [
+    '.isolation-notice[data-status="dirty"] .isolation-notice-summary', '.isolation-repo-flag',
+  ]);
+  await checkSurface(page, `first-screen ${label}`, 'the card row separator', { selector: '.isolation-repo + .isolation-repo', prop: 'borderTopColor' }, '.isolation-notice', 1.1);
 
   const overflow = await page.evaluate(() => {
     const card = document.querySelector('.isolation-notice');
@@ -1245,6 +1374,16 @@ async function runSettingsSegments(width, theme) {
   check(offRows.length === 2 && offRows.every((r) => r.buttons.at(-1).topLeft === '0px' && r.buttons.at(-1).topRight === full),
     `run-settings ${label}: each On/Off row rounds Off on its right end`);
 
+  // The selected option is the state cue, so its fill has to stand off the
+  // group it sits in; its label is then read against that fill and reported.
+  await checkCue(page, `run-settings ${label}`, 'the selected segment',
+    { selector: '.run-setting-pills > .planner-pill[aria-pressed="true"]', prop: 'backgroundColor' },
+    '.run-setting-pills');
+  const selectedLabel = await paintRatio(page,
+    { selector: '.run-setting-pills > .planner-pill[aria-pressed="true"]', prop: 'color' },
+    '.run-setting-pills > .planner-pill[aria-pressed="true"]');
+  if (selectedLabel) console.log(`    selected label ${selectedLabel.fg} on ${selectedLabel.bg} · ${selectedLabel.ratio.toFixed(2)}:1`);
+
   await page.screenshot({ path: path.join(OUT, `run-settings-${width}-${theme}.png`) });
   await page.close();
 }
@@ -1256,6 +1395,8 @@ const COMBOS = [
   { width: 900, theme: 'light' },
 ];
 const PLANNER_AUTH_COMBOS = [...COMBOS, { width: 420, theme: 'high-contrast' }, { width: 420, theme: 'high-contrast-light' }];
+/** The first screen also gets the light high-contrast theme both widths: its white page is where the light tokens have to hold. */
+const FIRST_SCREEN_COMBOS = [...COMBOS, { width: 420, theme: 'high-contrast-light' }, { width: 900, theme: 'high-contrast-light' }];
 const REPRESENTATIVE = new Set(['plan-marker', 'approval-pending', 'usage-line', 'subagent-collapsed']);
 const CONTRAST_SELECTORS = ['.chat-msg-content', '.cmd-row-head', '.usage-line-measures', '.approval-card-subject', '.plan-revision-chip', '.activity-group-summary'];
 
@@ -1331,7 +1472,7 @@ for (const combo of runs('planner-auth') ? PLANNER_AUTH_COMBOS : []) {
   await signedOutPlanner(combo.width, combo.theme);
 }
 
-for (const combo of runs('first-screen') ? COMBOS : []) {
+for (const combo of runs('first-screen') ? FIRST_SCREEN_COMBOS : []) {
   console.log(`\n== first screen, ${combo.width}px, ${combo.theme} theme ==`);
   await firstScreen(combo.width, combo.theme);
 }
