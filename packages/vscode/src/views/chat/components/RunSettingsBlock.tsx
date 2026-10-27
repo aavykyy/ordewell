@@ -18,9 +18,9 @@ interface PillOption<T> {
 function PillRow<T>({ label, options, current, onPick }: { label: string; options: PillOption<T>[]; current: T; onPick(value: T): void }) {
   const hint = options.find((o) => o.value === current)?.hint;
   return (
-    <div className="run-setting" role="group" aria-label={label}>
+    <div className="run-setting">
       <span className="run-setting-label">{label}</span>
-      <div className="planner-backends">
+      <div className="run-setting-pills" role="group" aria-label={label}>
         {options.map((o) => (
           <button
             key={o.label}

@@ -1100,9 +1100,12 @@ body.vscode-high-contrast-light .disclosure:hover {
   font-size: 10px;
 }
 
+/* Capsules hang from the top edge: an item with a login reserves a failure
+   line below it, and centring would push every shorter capsule half a line
+   down. */
 .runner-pills {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   flex-wrap: wrap;
   gap: 6px;
 }
@@ -1133,7 +1136,9 @@ body.vscode-high-contrast-light .disclosure:hover {
   gap: 6px;
   padding: 4px 11px;
   border: 0;
-  border-radius: var(--radius-full) 0 0 var(--radius-full);
+  /* A standalone pill keeps both round ends; only a capsule's first segment
+     squares its right edge against the login. */
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--text-secondary);
   font-size: 11px;
@@ -1147,8 +1152,12 @@ body.vscode-high-contrast-light .disclosure:hover {
   outline: none;
 }
 
+.runner-pill-group > .runner-pill {
+  border-radius: var(--radius-full) 0 0 var(--radius-full);
+}
+
 /* No login segment: the name is the whole capsule, so it keeps both round ends. */
-.runner-pill:only-child {
+.runner-pill-group > .runner-pill:only-child {
   border-radius: var(--radius-full);
 }
 
@@ -1213,30 +1222,44 @@ body.vscode-high-contrast-light .disclosure:hover {
   box-shadow: inset 0 0 0 1px var(--cyan);
 }
 
-/* Signed out is its own flag, not the on/off state: the dot stays red
-   whichever way the runner is switched. The capsule owns the red tint and
-   border, so the login segment is visibly part of the same object. */
-.runner-pill-group.signed-out {
+/* Signed out is its own flag and composes with the on/off state: auth chooses
+   the palette, never which capsule shape the runner has. The capsule owns the
+   red tint and border, so the login segment is visibly part of the same
+   object. */
+.runner-pill-group.signed-out.on {
   border-style: solid;
   border-color: color-mix(in srgb, var(--red) 45%, transparent);
   background: color-mix(in srgb, var(--red) 10%, transparent);
 }
 
-.runner-pill.signed-out,
+/* Still offered, still off: the dashed boundary and the hollow dot survive the
+   red, and only the tint is weaker than a signed-out runner that is on. */
+.runner-pill-group.signed-out.disabled {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  background: color-mix(in srgb, var(--red) 4%, transparent);
+}
+
 .runner-pill.on.signed-out {
   color: var(--text-primary);
 }
 
+.runner-pill.disabled.signed-out {
+  color: var(--text-secondary);
+}
+
 /* Later and more specific than the cyan .on dot: signing in, not switching
    the runner on, is what clears this red. */
-.runner-pill.signed-out .runner-dot,
-.runner-pill.on.signed-out .runner-dot,
-.runner-pill.disabled.signed-out .runner-dot {
+.runner-pill.on.signed-out .runner-dot {
   background: var(--red);
   box-shadow: none;
 }
 
-.runner-pill.signed-out:hover:not(:disabled),
+.runner-pill.disabled.signed-out .runner-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--red);
+}
+
 .runner-pill.on.signed-out:hover:not(:disabled) {
   background: color-mix(in srgb, var(--red) 8%, transparent);
 }
@@ -1246,11 +1269,12 @@ body.vscode-high-contrast-light .disclosure:hover {
 }
 
 .runner-pill.disabled.signed-out:hover .runner-dot {
-  box-shadow: none;
+  box-shadow: inset 0 0 0 1px var(--red);
 }
 
 .planner-backends {
   display: flex;
+  align-items: flex-start;
   flex-wrap: wrap;
   gap: 5px;
 }
@@ -1283,7 +1307,9 @@ body.vscode-high-contrast-light .disclosure:hover {
   gap: 6px;
   padding: 4px 10px;
   border: 0;
-  border-radius: var(--radius-full) 0 0 var(--radius-full);
+  /* Un-grouped, the pill is a pill: the Run rows draw their own segmented
+     container, and a standalone planner chip keeps both round ends. */
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--text-secondary);
   font-size: 11px;
@@ -1296,8 +1322,12 @@ body.vscode-high-contrast-light .disclosure:hover {
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 
+.planner-pill-group > .planner-pill {
+  border-radius: var(--radius-full) 0 0 var(--radius-full);
+}
+
 /* No login segment: the name is the whole capsule, so it keeps both round ends. */
-.planner-pill:only-child {
+.planner-pill-group > .planner-pill:only-child {
   border-radius: var(--radius-full);
 }
 
@@ -1425,9 +1455,24 @@ body.vscode-high-contrast-light .disclosure:hover {
    capsule's top and bottom and owned by this segment, not a second border. */
 .planner-pill-login {
   position: relative;
-  padding: 4px 9px;
+  /* As tight as the name segment's rhythm: the divider is this segment's own
+     edge, so the label does not need a second inset on top of it. */
+  padding: 4px 8px;
   border-radius: 0 var(--radius-full) var(--radius-full) 0;
   font-size: 10.5px;
+}
+
+/* A capsule reserves the resting label only: once the wait starts the words
+   leave and the spinner alone holds the slot, so the capsule never grows for
+   a pending state it may never show. The row's action below keeps its wider
+   "Signing in…" reservation. */
+.planner-pill-login::after {
+  content: 'Log in';
+  padding-left: 0;
+}
+
+.planner-pill-login .planner-login-pending-label {
+  display: none;
 }
 
 .planner-pill-login::before {
@@ -1519,6 +1564,44 @@ body.vscode-high-contrast-light .planner-pill-login::before {
 .run-setting-label {
   font-size: 11px;
   color: var(--text-secondary);
+}
+
+/* One segmented control per row: the container owns the border, the options
+   after the first own the dividers, and the ends alone are rounded. */
+.run-setting-pills {
+  display: inline-flex;
+  align-items: stretch;
+  justify-self: start;
+  width: fit-content;
+  max-width: 100%;
+  border-width: 1px;
+  border-style: solid;
+  border-color: var(--border-color);
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.run-setting-pills > .planner-pill {
+  border-radius: 0;
+}
+
+.run-setting-pills > .planner-pill + .planner-pill {
+  border-left-width: 1px;
+  border-left-style: solid;
+  border-left-color: var(--border-color);
+}
+
+.run-setting-pills > .planner-pill:first-child {
+  border-radius: var(--radius-full) 0 0 var(--radius-full);
+}
+
+.run-setting-pills > .planner-pill:last-child {
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+}
+
+.run-setting-pills > .planner-pill:only-child {
+  border-radius: var(--radius-full);
 }
 
 .run-setting-hint {

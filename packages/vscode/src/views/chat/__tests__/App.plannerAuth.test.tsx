@@ -1,6 +1,8 @@
 import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { fireEvent, render } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import App from '../App';
 import { api, post } from './hostBridge';
 import type { PlannerBackend } from '../../../shared/protocol';
@@ -166,6 +168,28 @@ describe('a signed-out planner', () => {
     expect(segments[1].textContent).toBe('Log in');
     // The login is still the agent's own action, not a second way to select it.
     expect(segments[1].getAttribute('aria-label')).toBe('Log in to Claude Code');
+  });
+
+  it('keeps the capsule login to the "Log in" width and spins alone while pending', () => {
+    post({ type: 'setPlannerBackends', backends: [signedOutClaude], provider: 'claude-code', runner: 'claude-code' });
+    const style = document.createElement('style');
+    style.textContent = readFileSync(resolve(process.cwd(), 'src/views/chat/styles.css'), 'utf8');
+    document.head.append(style);
+
+    const login = plannerLogin('Claude Code')!;
+    expect(getComputedStyle(login).paddingLeft).toBe('8px');
+    expect(getComputedStyle(login).paddingRight).toBe('8px');
+
+    fireEvent.click(login);
+
+    const capsuleLabel = login.querySelector('.planner-login-pending-label')!;
+    const rowLabel = rowLogin('claude-code')!.querySelector('.planner-login-pending-label')!;
+    expect(getComputedStyle(capsuleLabel).display).toBe('none');
+    expect(getComputedStyle(rowLabel).display).not.toBe('none');
+    expect(login.querySelector('.planner-login-spinner')).not.toBeNull();
+    expect(login.getAttribute('aria-busy')).toBe('true');
+    expect(login.getAttribute('aria-label')).toBe('Signing in to Claude Code');
+    expect(login.title).toBe('Signing in to Claude Code');
   });
 
   it('flags the signed-out active planner in the collapsed Settings summary too', () => {
