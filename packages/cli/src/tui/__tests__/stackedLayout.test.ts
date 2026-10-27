@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { initialState, reduce, type Effect, type Step } from '../reducer';
 import { render } from '../render';
-import { style, width } from '../ansi';
+import { style, stripAnsi, width } from '../ansi';
 import { stackRows, taskEditorRoom } from '../geometry';
 import { bodyPanes, bodyRows, chatScrollMax } from '../layout';
 import { cursorPosition } from '../editor';
@@ -328,11 +328,14 @@ describe('selecting in a stacked body', () => {
     }
   });
 
-  it('starts nothing from a press on the composer rows', () => {
-    const state = stacked();
-    const after = press(state, 'mousedown', { col: 4, row: state.rows - 3 }).state;
+  it('selects the whole composer line from a drag that stays on it', () => {
+    const state = screen(50, 30, { editor: { ...initialState().editor, text: 'STACKED DRAFT', cursor: 0 } });
+    const frame = render(state);
+    const row = frame.findIndex((line) => stripAnsi(line).includes('STACKED DRAFT')) + 1;
 
-    expect(after.selection).toBeNull();
+    const text = copied(drag(state, [1, row], [state.cols, row]).effects);
+
+    expect(text).toBe(stripAnsi(frame[row - 1]).trimEnd());
   });
 
   it('copies wide and emoji titles by cluster', () => {

@@ -609,25 +609,73 @@ export function stackedPaneAtRow(panes: BodyPanes, row: number): Focus | null {
 
 /**
  * The screen cells a selection pinned to `pane` may cover, inclusive and
- * 1-based. Side by side the panes share rows, so columns alone keep a copy from
- * splicing them; stacked they share columns, so rows do — a drag out of the
- * transcript stops at its last row instead of picking up the plan's first.
- * Beside the chat (or alone) a pane's rows run the whole frame, composer included.
- * With no plan to pin to, a `'plan'` gets the chat's area rather than an empty one.
+ * 1-based: the rows it can span, the columns a body row takes, and the columns
+ * a chrome row takes. Side by side the panes share rows, so columns alone keep
+ * a copy from splicing them; stacked they share columns, so rows do — a drag
+ * out of the transcript stops at its last row instead of picking up the plan's
+ * first. With no plan to pin to, a `'plan'` gets the chat's area rather than an
+ * empty one.
  */
 export interface SelectionArea {
   firstRow: number;
   lastRow: number;
+  /** The pane's columns, taken by the rows in `bodyFirstRow`..`bodyLastRow`. */
   firstCol: number;
   lastCol: number;
+  /** The rows of the range that are a pane's own body; every other row is chrome. */
+  bodyFirstRow: number;
+  bodyLastRow: number;
+  /** The frame's columns, taken by a chrome row. */
+  frameFirstCol: number;
+  frameLastCol: number;
 }
 
-export function selectionArea(state: TuiState, pane: Focus, panes: BodyPanes = bodyPanes(state)): SelectionArea {
+/**
+ * `from` is the row the press landed on, which decides whether the drag is a
+ * pane's or the chrome's — the composer, its grey band and the rows below are
+ * drawn across the whole frame, so a selection covering them takes every
+ * column. Stacked the two never mix: the rows between a pane and the chrome
+ * belong to its neighbour.
+ */
+export function selectionArea(state: TuiState, pane: Focus, from: number, panes: BodyPanes = bodyPanes(state)): SelectionArea {
   const rect = pane === 'plan' && panes.plan ? panes.plan : panes.chat;
+  const bodyLast = bodyRows(state);
+  const chromeFirst = bodyLast + 1;
+  const firstCol = rect.col;
+  const lastCol = rect.col + rect.cols - 1;
   if (panes.mode === 'stacked') {
-    return { firstRow: rect.row, lastRow: Math.max(rect.row, rect.row + rect.rows - 1), firstCol: rect.col, lastCol: rect.col + rect.cols - 1 };
+    if (from >= chromeFirst) {
+      // A stacked pane's rows are the only ones that may be mixed with its
+      // neighbour's, and those of the body are not: the press landed under
+      // them, so nothing of either pane is in reach.
+      return {
+        firstRow: chromeFirst, lastRow: state.rows, firstCol, lastCol,
+        bodyFirstRow: chromeFirst, bodyLastRow: bodyLast,
+        frameFirstCol: 1, frameLastCol: state.cols,
+      };
+    }
+    const lastPaneRow = Math.max(rect.row, rect.row + rect.rows - 1);
+    return {
+      firstRow: rect.row, lastRow: lastPaneRow, firstCol, lastCol,
+      bodyFirstRow: rect.row, bodyLastRow: lastPaneRow,
+      frameFirstCol: 1, frameLastCol: state.cols,
+    };
   }
-  return { firstRow: 1, lastRow: state.rows, firstCol: rect.col, lastCol: rect.col + rect.cols - 1 };
+  // Side by side the pane's rows run all the way down, through the chrome: the
+  // columns are what keep the two panes apart, so only rows past the body take
+  // the whole frame.
+  return {
+    firstRow: 1, lastRow: state.rows, firstCol, lastCol,
+    bodyFirstRow: 1, bodyLastRow: bodyLast,
+    frameFirstCol: 1, frameLastCol: state.cols,
+  };
+}
+
+/** The columns a selected row may take: its pane's, or the whole frame on the chrome. */
+export function selectionColumns(area: SelectionArea, row: number): { firstCol: number; lastCol: number } {
+  return row >= area.bodyFirstRow && row <= area.bodyLastRow
+    ? { firstCol: area.firstCol, lastCol: area.lastCol }
+    : { firstCol: area.frameFirstCol, lastCol: area.frameLastCol };
 }
 
 /** How far back the chat pane can be scrolled at the size it is about to be painted. */

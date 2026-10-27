@@ -2,7 +2,7 @@ import { firstGrapheme, graphemes, pad, stripAnsi, style, truncate, width, wrap 
 import { cursorInLines } from './editor';
 import { activeToken, composerCompletions, runnerCommandFor, skillMatchKind, slashTokens } from './slash';
 import {
-  approvalLayout, bodyPanes, bodyRows, composerView, selectionArea, chatLayout, footerHints, helpLayout, type HelpSheet, packHints, planLayout, planOffset,
+  approvalLayout, bodyPanes, bodyRows, composerView, selectionArea, selectionColumns, chatLayout, footerHints, helpLayout, type HelpSheet, packHints, planLayout, planOffset,
   stopHint,
   chatActivity,
   runnerStoppable,
@@ -60,12 +60,16 @@ interface SelectionSpan {
   to: number;
 }
 
+const clampCol = (col: number, firstCol: number, lastCol: number): number =>
+  Math.max(firstCol, Math.min(lastCol, col));
+
 /**
  * The selection as painted rows. Both ends are inclusive, and every row between
- * the first and the last takes the *whole* of its pane's width — never the whole
- * terminal, which is the splice this exists to prevent. The rows themselves are
- * pulled into the pane's area too, so a selection a resize or a stale report
- * left past it paints and copies nothing of the neighbour.
+ * the first and the last takes the *whole* of its region's width — a pane's,
+ * never the terminal's, which is the splice this exists to prevent, while the
+ * chrome under the body takes the whole frame. The rows themselves are pulled
+ * into that region too, so a selection a resize or a stale report left past it
+ * paints and copies nothing of the neighbour.
  */
 function selectionSpans(state: TuiState, panes: BodyPanes): SelectionSpan[] {
   const { selection } = state;
@@ -73,16 +77,17 @@ function selectionSpans(state: TuiState, panes: BodyPanes): SelectionSpan[] {
   const { anchor, head } = selection;
   const forwards = anchor.row < head.row || (anchor.row === head.row && anchor.col <= head.col);
   const [start, end] = forwards ? [anchor, head] : [head, anchor];
-  const area = selectionArea(state, selection.pane, panes);
+  const area = selectionArea(state, selection.pane, anchor.row, panes);
 
   const spans: SelectionSpan[] = [];
   const firstRow = Math.max(start.row, area.firstRow);
   const lastRow = Math.min(end.row, area.lastRow);
   for (let row = firstRow; row <= lastRow; row++) {
+    const { firstCol, lastCol } = selectionColumns(area, row);
     spans.push({
       row,
-      from: row === start.row ? start.col : area.firstCol,
-      to: row === end.row ? end.col : area.lastCol,
+      from: row === start.row ? clampCol(start.col, firstCol, lastCol) : firstCol,
+      to: row === end.row ? clampCol(end.col, firstCol, lastCol) : lastCol,
     });
   }
   return spans;

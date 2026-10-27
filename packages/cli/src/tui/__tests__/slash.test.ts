@@ -233,4 +233,15 @@ describe('/mouse', () => {
     expect(description).toMatch(/pane/i);
     expect(description).toMatch(/select/i);
   });
+
+  // Selection is per-pane only where the panes share rows. The composer is
+  // chrome across the frame, and the sheet has to say so, or a user who drags
+  // it and gets the whole line reads the old label as a promise it broke.
+  it('says the composer is selected whole rather than per pane', () => {
+    const description = findCommand('mouse')!.description;
+    expect(description).toMatch(/body/i);
+    expect(description).toMatch(/composer/i);
+    expect(description).toMatch(/on/);
+    expect(description).toMatch(/off/);
+  });
 });
