@@ -224,7 +224,8 @@ export class SettingsService {
       fs.mkdirSync(dir, { recursive: true });
       watcher = fs.watch(dir, (_event, changed) => {
         if (dead) return;
-        if (changed && changed !== name) return;
+        // macOS can name the watched directory rather than the replaced file.
+        if (changed && changed !== name && changed !== path.basename(dir)) return;
         // One save is several events; the stamp tells whether the file really moved.
         clearTimeout(timer);
         timer = setTimeout(() => {
