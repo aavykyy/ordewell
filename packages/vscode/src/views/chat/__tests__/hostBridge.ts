@@ -2,7 +2,7 @@ import { act, fireEvent } from '@testing-library/react';
 import type * as vscode from 'vscode';
 import type { SessionMessage } from '@ordewell/core';
 import { ChatViewProvider } from '../../../providers/ChatViewProvider';
-import type { HostToWebview } from '../../../shared/protocol';
+import type { HostToWebview, PlannerBackend } from '../../../shared/protocol';
 
 export function post(msg: HostToWebview): void {
   act(() => {
@@ -20,6 +20,12 @@ export function hostBridge() {
   provider.postMessage = post;
   return {
     provider,
+    planner(backends: PlannerBackend[], providerId: string, runner?: string): void {
+      provider.setPlannerBackends(backends, providerId, runner);
+    },
+    plannerModel(orchestrator: string, orchestratorProvider?: string): void {
+      provider.setModelConfig({ orchestrator, ...(orchestratorProvider ? { orchestratorProvider } : {}) });
+    },
     session(...msgs: SessionMessage[]): void {
       for (const msg of msgs) provider.conversation.receive(msg);
       provider.conversation.flush();

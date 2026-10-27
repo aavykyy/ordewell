@@ -8,7 +8,7 @@ import {
   OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, OUTPUT_TAIL_MAX_CHARS, TASK_QUERY_TASK_FIELDS, TASK_READ_ANSWER_OR_EDIT,
   type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog, type TaskQueryField,
 } from './TaskQuery';
-import { opLabel, type TaskOp } from './TaskOps';
+import type { TaskOp } from './TaskOps';
 import type { CheckedChange, PlanChangeError } from './PlanChangeCheck';
 import type { PlanChange, ToolRead } from './PlannerConversation';
 import { commandReply, type McpToolReply, type PlannerToolHandler } from './mcp/tools';
@@ -28,17 +28,17 @@ import { resolveTaskRef, taskRefOf } from './TaskRefs';
  */
 export interface PlannerToolsHost {
   skills(): readonly SkillInfo[];
-  /** The open planner turn's id: a call hands its plan or edit only to the turn it was made in. */
+  /** The open planner turn's id: a call commits its plan or edit only in the turn it was made in. */
   turnId(): string | undefined;
   recordSkillLoad(skill: SkillLoad): boolean;
   /** Enabled runners, their modes and their allowlisted models, as of now. */
   liveCatalog(): Promise<TaskQueryCatalog>;
   /** A submitted plan held to the one check of a plan change (`PlanChangeCheck`), against the live catalog. */
   checkPlan(tasks: unknown): Promise<CheckedChange>;
-  /** Hand a checked plan to the open planner turn. False when no turn is open. */
-  submitPlan(tasks: Task[]): boolean;
-  /** Check a batch against the live catalog and hand it to the open planner turn, which commits it as it settles. */
-  editPlan(ops: TaskOp[]): Promise<PlanEditOutcome>;
+  /** Commit a checked plan now, in the planner turn `turn` the call was made in (ADR-0022 P2). */
+  submitPlan(tasks: Task[], turn: string): Promise<PlanEditOutcome>;
+  /** Check a batch against the live catalog and commit it now, whole or not at all, in the planner turn `turn` the call was made in. */
+  editPlan(ops: TaskOp[], turn: string): Promise<PlanEditOutcome>;
   /** The plan's tasks as they are now. */
   tasks(): readonly Task[];
   /** Spend one read of the open turn's budget, shared with the envelope's reads, and answer it. */
@@ -68,16 +68,32 @@ export interface PlannerToolsHost {
 
 /**
  * Refused when the turn a call was made in ends while the call waits on a
- * catalog or skill check: the next turn would settle on a plan or edit it
- * never asked for.
+ * catalog or skill check: a plan or edit committed then would land in a turn
+ * that never asked for it.
  */
-export const PLANNER_TURN_ENDED = 'The planning turn this call was made in has ended, so nothing was submitted.';
+export const PLANNER_TURN_ENDED = 'The planning turn this call was made in has ended, so nothing was changed.';
 
-/** What an edit made through the tool came to. */
+/** A task as a planner tool's answer names it, by the id and the reference a later call can read or start it by. */
+export interface TaskHead {
+  id: string;
+  ref: string;
+  title: string;
+}
+
+/** What a plan or an edit made through the tool came to: committed, or refused with nothing changed. */
 export type PlanEditOutcome =
-  // An edit's tasks get their ids as it lands, so what its assignments were adjusted to is named by title.
-  | { ok: true; summary: string[]; coerced?: Omit<AssignmentAdjustment, 'taskId'>[]; warnings?: string[] }
-  | { ok: false; errors: PlanChangeError[] };
+  | {
+    ok: true;
+    /** What an edit changed; empty for a plan. */
+    summary: string[];
+    coerced?: AssignmentAdjustment[];
+    warnings?: string[];
+    /** A plan's tasks, or the tasks an edit added. */
+    tasks: TaskHead[];
+    /** The task each handle the edit gave names. */
+    handles?: Record<string, TaskHead>;
+  }
+  | { ok: false; errors: PlanChangeError[]; runners?: RunnerId[] };
 
 /** The runners a set of tasks runs on. A user task runs on none, and a script task on no runner (ADR-0035). */
 export function runnersOf(tasks: readonly Task[]): RunnerId[] {
@@ -172,22 +188,24 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       const refused = host.editsRefused('plan');
       if (refused) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: refused }] }) };
       const turn = host.turnId();
+      if (turn === undefined) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: 'No planning turn is open to take the plan.' }] }) };
       const checked = await host.checkPlan(tasks);
       if (host.turnId() !== turn) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: PLANNER_TURN_ENDED }] }) };
-      if (!checked.ok) {
+      const outcome = checked.ok ? await host.submitPlan(checked.tasks, turn) : checked;
+      if (!outcome.ok) {
         // A rule a task breaks names what would be accepted; a skill is the skill catalog's, which is not the runners'.
-        const skills = checked.errors.every((e) => e.field === 'skills');
-        return { isError: true, text: JSON.stringify({ ok: false, errors: checked.errors.map(planErrorReply), ...(skills ? {} : { enabledRunners: checked.runners }) }) };
+        const skills = outcome.errors.every((e) => e.field === 'skills');
+        const runners = skills ? undefined : outcome.runners;
+        return { isError: true, text: JSON.stringify({ ok: false, errors: outcome.errors.map(planErrorReply), ...(runners ? { enabledRunners: runners } : {}) }) };
       }
-      if (!host.submitPlan(checked.tasks)) {
-        return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: 'No planning turn is open to take the plan.' }] }) };
-      }
+      // What reading its JSON warned of, and what committing it did: a skill checked at both says so once.
+      const warnings = [...new Set([...(checked.ok ? checked.warnings : []), ...outcome.warnings ?? []])];
       return answer({
         ok: true,
-        tasks: checked.tasks.length,
-        coerced: checked.adjustments,
-        ...(checked.warnings.length > 0 ? { warnings: checked.warnings } : {}),
-        next: 'The plan is committed when this reply ends. Tell the user briefly what you submitted; do not repeat the plan as JSON.',
+        tasks: outcome.tasks,
+        coerced: outcome.coerced ?? [],
+        ...(warnings.length > 0 ? { warnings } : {}),
+        next: 'The plan is committed: it is the current plan now, and the user is shown it. Tell them briefly what you submitted; do not repeat the plan as JSON.',
       });
     },
 
@@ -246,14 +264,18 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       const taskOps = ops as unknown as TaskOp[];
       const refused = host.editsRefused('edit');
       if (refused) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ message: refused }] }) };
-      const outcome = await host.editPlan(taskOps);
+      const turn = host.turnId();
+      if (turn === undefined) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ message: 'No planning turn is open to take the edit.' }] }) };
+      const outcome = await host.editPlan(taskOps, turn);
       if (!outcome.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: outcome.errors.map(opErrorReply) }) };
       return answer({
         ok: true,
         summary: outcome.summary,
+        ...(outcome.tasks.length > 0 ? { added: outcome.tasks } : {}),
+        ...(outcome.handles ? { handles: outcome.handles } : {}),
         ...(outcome.coerced?.length ? { coerced: outcome.coerced } : {}),
         ...(outcome.warnings?.length ? { warnings: outcome.warnings } : {}),
-        next: 'The edit is applied when this reply ends, and the user is shown what changed. Tell them briefly; do not repeat it as JSON.',
+        next: 'The edit is applied: the plan holds it now, and the user is shown what changed. A further edit_plan call is a batch of its own, against the plan as it is now. Tell the user briefly; do not repeat it as JSON.',
       });
     },
   };
@@ -264,14 +286,9 @@ function planErrorReply({ taskId, field, message }: PlanChangeError): { taskId?:
   return { ...(taskId !== undefined ? { taskId } : {}), field: field ?? 'tasks', message };
 }
 
-/**
- * An edit's refusal pinned to the op of this call it is about, so the planner
- * can fix that one. An op an earlier call made is named in the message, since
- * this call's numbers do not reach it.
- */
+/** An edit's refusal pinned to the op of this call it is about, so the planner can fix that one. */
 function opErrorReply({ op, message }: PlanChangeError): { op?: number; kind?: string; message: string } {
-  if (!op) return { message };
-  return op.earlier ? { message: `${opLabel(op)}: ${message}` } : { op: op.number, kind: op.kind, message };
+  return op ? { op: op.number, kind: op.kind, message } : { message };
 }
 
 /** A read through the budget the envelope's reads share, and what the planner is told when it is spent. */

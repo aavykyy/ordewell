@@ -1,4 +1,5 @@
-import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskLogEvent, TaskStatus } from '@ordewell/core';
+import type { AccountLimitSnapshot } from '@ordewell/core';
+import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, IsolationPreview, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskLogEvent, TaskStatus } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -90,6 +91,8 @@ export type Effect =
   | { type: 'loadRunners' }
   /** The enabled runners and the allowlist, as they are saved now: what flags a task and ticks a picker. */
   | { type: 'loadScope' }
+  /** A read-only look at this workspace's repositories, branches and isolation, for the welcome. */
+  | { type: 'loadIsolationPreview' }
   | { type: 'exit' };
 
 export type ChatRestored = { type: 'chatRestored'; history: SerializedConversationMessage[]; researchLog?: ResearchLogEntry[]; plannerUsage?: PlannerUsage; pendingTurns?: SerializedPendingTurn[]; sessionId?: string };
@@ -136,6 +139,7 @@ export type Action =
   /** One planner message from the session, as it came: core's conversation view decides what it shows. */
   | { type: 'sessionMessage'; message: SessionMessage; sessionId?: string }
   /** The next events of a structured task's attempt, live (ADR-0018, P1). */
+  | { type: 'accountLimits'; limits: readonly AccountLimitSnapshot[]; sessionId: string }
   | { type: 'taskLog'; position?: StreamStamp; taskId: string; attempt: number; events: TaskLogEvent[]; sessionId?: string }
   /** A structured task's saved log, read when its view opens or an attempt is switched to. `attempts` is omitted when a switch already knows the list. */
   | { type: 'taskLogLoaded'; position?: StreamStamp; taskId: string; attempts?: number[]; attempt: number; events: TaskLogEvent[]; sessionId?: string }
@@ -150,7 +154,6 @@ export type Action =
   /** The run as the daemon sends it when a socket connects, before the next update. */
   | { type: 'runSnapshot'; view: RunView; approvals?: ApprovalRequestMessage[]; sessionId?: string }
   /** The edit the open planner turn holds, as it would leave the plan; null once it landed or was dropped. */
-  | { type: 'heldEdit'; held: HeldEdit | null; sessionId?: string }
   | { type: 'isolationBlocked'; message: string; repos?: string[]; sessionId?: string }
   | { type: 'isolationHandoff'; handoff: HandoffView; sessionId?: string }
   | { type: 'handoffDiff'; diff: string; sessionId?: string }
@@ -173,6 +176,12 @@ export type Action =
   | { type: 'inputPrefilled'; text: string; sessionId?: string }
   | { type: 'rewindTargetsLoaded'; targets: RewindTargetView[]; sessionId?: string; pick?: number }
   | { type: 'runnersLoaded'; runners: RunnerView[]; orchestratorModel?: string }
+  /** The welcome's repositories and branches: `read` is the request this answers, so an older one cannot land on a newer. */
+  | { type: 'isolationPreviewLoading'; read: number }
+  | { type: 'isolationPreviewLoaded'; preview: IsolationPreview; read: number }
+  | { type: 'isolationPreviewFailed'; message: string; read: number }
+  /** The daemon answered again after a revive: what it serves for this workspace may have changed with it. */
+  | { type: 'daemonReconnected' }
   /** Another surface saved the settings file the runners and the allowlist live in. */
   | { type: 'sharedSettingsChanged' }
   /**

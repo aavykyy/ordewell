@@ -18,6 +18,12 @@ interface StubAnswers {
   account?: unknown;
   limits?: unknown;
   limitsError?: { code: number; message: string };
+  /** Raw lines written when `initialized` arrives, so before `account/read` is even asked. */
+  afterInitialized?: unknown[];
+  /** Raw lines written when `account/read` arrives, before its answer. */
+  beforeAccount?: unknown[];
+  /** Raw lines written in the same write as the `account/read` answer, after it. */
+  afterAccount?: unknown[];
   /** Raw lines written before the rate-limit answer. */
   before?: unknown[];
   hang?: 'initialize' | 'limits';
@@ -37,7 +43,9 @@ lines.on('line', (line) => {
   const msg = JSON.parse(line);
   fs.appendFileSync(${JSON.stringify(log)}, msg.method + (msg.id === undefined ? '' : '#' + msg.id) + ' ' + JSON.stringify(msg.params ?? null) + '\\n');
   if (msg.method === 'initialize') { if (answers.hang !== 'initialize') send({ id: msg.id, result: { userAgent: 'stub' } }); return; }
-  if (msg.method === 'account/read') return send({ id: msg.id, result: answers.account ?? { account: null, requiresOpenaiAuth: true } });
+  if (msg.method === 'initialized') { for (const extra of answers.afterInitialized ?? []) send(extra); return; }
+  if (msg.method === 'account/read') for (const extra of answers.beforeAccount ?? []) send(extra);
+  if (msg.method === 'account/read') return process.stdout.write([{ id: msg.id, result: answers.account ?? { account: null, requiresOpenaiAuth: true } }, ...(answers.afterAccount ?? [])].map((v) => JSON.stringify(v) + '\\n').join(''));
   if (msg.method === 'account/rateLimits/read') {
     for (const extra of answers.before ?? []) send(extra);
     if (answers.hang === 'limits') return;
@@ -162,6 +170,81 @@ describe('the Codex account-limit collector', () => {
     }));
 
     expect(reading).toEqual({ kind: 'account_changed' });
+    expect(methods().some((m) => m.startsWith('account/rateLimits/read'))).toBe(true);
+  });
+
+  describe('the account announcement Codex makes on its own at startup', () => {
+    // What a real app-server was observed to send, on every start, while the
+    // first account/read was still unanswered. Synthetic values throughout.
+    const STARTUP_ANNOUNCEMENT = { method: 'account/updated', params: { authMode: 'chatgpt', planType: 'plus' } };
+    const LIMITS = { rateLimits: { limitId: 'codex', planType: 'plus', primary: { usedPercent: 24, windowDurationMins: 300, resetsAt: 2_000_000_000 }, secondary: { usedPercent: 61, windowDurationMins: 10080, resetsAt: 2_000_400_000 } } };
+    const LIMITS_READING = {
+      kind: 'limits',
+      owner: expect.any(String),
+      plan: 'plus',
+      buckets: [{
+        id: 'codex',
+        windows: [
+          { slot: 'primary', usedPercent: 24, durationMinutes: 300, resetsAt: '2033-05-18T03:33:20.000Z' },
+          { slot: 'secondary', usedPercent: 61, durationMinutes: 10080, resetsAt: '2033-05-22T18:40:00.000Z' },
+        ],
+      }],
+    };
+
+    it('still yields the limits when it arrives while account/read is unanswered', async () => {
+      const reading = await read(collector({ account: SIGNED_IN, beforeAccount: [STARTUP_ANNOUNCEMENT], limits: LIMITS }));
+
+      expect(reading).toEqual(LIMITS_READING);
+    });
+
+    it('still yields the limits when it arrives right after initialized, before account/read is asked', async () => {
+      const reading = await read(collector({ account: SIGNED_IN, afterInitialized: [STARTUP_ANNOUNCEMENT], limits: LIMITS }));
+
+      expect(reading).toEqual(LIMITS_READING);
+    });
+
+    it('does not hide a change announced later, while the limits are being read', async () => {
+      const reading = await read(collector({
+        account: SIGNED_IN,
+        beforeAccount: [STARTUP_ANNOUNCEMENT],
+        before: [{ method: 'account/updated', params: { authMode: null, planType: null } }],
+        limits: LIMITS,
+      }));
+
+      expect(reading).toEqual({ kind: 'account_changed' });
+    });
+
+    it('does not take a later announcement for a non-change because its authMode and planType match the account read', async () => {
+      // They carry no identity: another ChatGPT account on the same plan sends exactly this.
+      const reading = await read(collector({
+        account: SIGNED_IN,
+        before: [{ method: 'account/updated', params: { authMode: 'chatgpt', planType: 'plus' } }],
+        limits: LIMITS,
+      }));
+
+      expect(reading).toEqual({ kind: 'account_changed' });
+    });
+
+    it('does not hide a change announced right after the account/read answer, in the same output chunk', async () => {
+      const reading = await read(collector({
+        account: SIGNED_IN,
+        afterAccount: [{ method: 'account/updated', params: { authMode: null, planType: null } }],
+        limits: LIMITS,
+      }));
+
+      expect(reading).toEqual({ kind: 'account_changed' });
+    });
+
+    it('does not take a later announcement for a non-change after a startup one with the same fields', async () => {
+      const reading = await read(collector({
+        account: SIGNED_IN,
+        afterInitialized: [STARTUP_ANNOUNCEMENT],
+        before: [STARTUP_ANNOUNCEMENT],
+        limits: LIMITS,
+      }));
+
+      expect(reading).toEqual({ kind: 'account_changed' });
+    });
   });
 
   it('asks for one more read when a sparse rate-limit update arrives during this one, without folding it in', async () => {

@@ -12,6 +12,7 @@ import {
   createTask,
   mintDaemonToken,
   saveSession,
+  type AccountLimitCollector,
   type ConversationRequest,
   type ConversationTurn,
   type IConfig,
@@ -81,7 +82,7 @@ export interface Tui {
   api: ApiClient;
 }
 
-export async function liveDaemon() {
+export async function liveDaemon(accountLimitCollectors: (workspace: string) => readonly AccountLimitCollector[] = () => []) {
   const dir = mkdtempSync(join(tmpdir(), 'ordewell-live-'));
   const workspace = join(dir, 'ws');
   mkdirSync(join(workspace, '.git'), { recursive: true });
@@ -108,6 +109,7 @@ export async function liveDaemon() {
   vi.spyOn(GeminiService.prototype, 'startConversation').mockImplementation(open);
 
   const pool = new OrchestratorPool({
+    accountLimitCollectors,
     modelResolver: inertResolver(),
     runner: holdingRunner(),
     // Installation must agree with the fake runner even on a host with no agents.

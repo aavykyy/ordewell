@@ -30,7 +30,7 @@ describe('closing a session', () => {
     mkdirSync(join(workspace, '.git'));
     // The session's runners are the user's settings: not the developer's own.
     vi.stubEnv('ORDEWELL_SETTINGS_PATH', join(workspace, 'settings.json'));
-    const pool = new OrchestratorPool();
+    const pool = new OrchestratorPool({ accountLimitCollectors: () => [] });
     hangingPlanner();
     const destroySpy = vi.spyOn(Session.prototype, 'destroy');
 
@@ -58,7 +58,7 @@ describe('re-planning under a live session id', () => {
     mkdirSync(join(workspace, '.git'));
     // The session's runners are the user's settings: not the developer's own.
     vi.stubEnv('ORDEWELL_SETTINGS_PATH', join(workspace, 'settings.json'));
-    const pool = new OrchestratorPool();
+    const pool = new OrchestratorPool({ accountLimitCollectors: () => [] });
     const destroySpy = vi.spyOn(Session.prototype, 'destroy');
     hangingPlanner();
 
@@ -96,7 +96,7 @@ describe('deleting a session under a live subscriber', () => {
   it('sends a notice, closes the socket, and drops the subscriber set', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'ordewell-destroy-subscriber-'));
     mkdirSync(join(workspace, '.git'));
-    const pool = new OrchestratorPool();
+    const pool = new OrchestratorPool({ accountLimitCollectors: () => [] });
     const { planSpy, startSpy } = stubPlanning();
 
     try {
@@ -106,8 +106,8 @@ describe('deleting a session under a live subscriber', () => {
 
       pool.destroy('s1', { notifyClients: true });
 
-      expect(ws.send).toHaveBeenCalledTimes(1);
-      expect(JSON.parse(ws.send.mock.calls[0][0] as string)).toMatchObject({ type: 'notice', message: 'Session closed.' });
+      expect(ws.send).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(ws.send.mock.calls[1][0] as string)).toMatchObject({ type: 'notice', message: 'Session closed.' });
       expect(ws.close).toHaveBeenCalledWith(1001, 'Session closed');
       expect((pool as unknown as { clients: Map<string, unknown> }).clients.has('s1')).toBe(false);
     } finally {
@@ -121,7 +121,7 @@ describe('deleting a session under a live subscriber', () => {
   it('keeps subscribers when the session is replaced under the same id', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'ordewell-replace-subscriber-'));
     mkdirSync(join(workspace, '.git'));
-    const pool = new OrchestratorPool();
+    const pool = new OrchestratorPool({ accountLimitCollectors: () => [] });
     const { planSpy, startSpy } = stubPlanning();
 
     try {
@@ -146,7 +146,7 @@ describe('subscribing to a session', () => {
   it('sends a new socket nothing of the transcript: every client reads the conversation over REST, and a turn opens a socket each time', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'ordewell-subscribe-'));
     mkdirSync(join(workspace, '.git'));
-    const pool = new OrchestratorPool();
+    const pool = new OrchestratorPool({ accountLimitCollectors: () => [] });
     const history = [{ role: 'user' as const, content: 'ship it', timestamp: '2026-01-01T00:00:00Z' }];
     const planSpy = vi.spyOn(Session.prototype, 'planState', 'get').mockReturnValue({ conversationHistory: history } as unknown as LegacyPlanState);
     const startSpy = vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue({} as LegacyPlanState);
@@ -156,7 +156,8 @@ describe('subscribing to a session', () => {
       const ws = { OPEN: 1, readyState: 1, send: vi.fn() };
       pool.subscribe('s1', ws as unknown as Parameters<OrchestratorPool['subscribe']>[1]);
 
-      expect(ws.send).not.toHaveBeenCalled();
+      expect(ws.send).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(ws.send.mock.calls[0][0] as string)).toMatchObject({ type: 'account_limits', limits: [] });
     } finally {
       planSpy.mockRestore();
       startSpy.mockRestore();

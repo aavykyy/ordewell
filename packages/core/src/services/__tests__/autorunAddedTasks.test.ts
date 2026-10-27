@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { taskOf } from './sessionTestKit';
-import { EMPTY_CONVERSATION, reduceConversation } from '../../conversation';
 import { changeSettings, ctx, NOW, prose, settled, supervised, task, until, type Env, type Options } from './supervisorTestKit';
 
 /**
@@ -60,39 +59,37 @@ describe('a task the planner adds after approval, with autorun on and Full', () 
     expect(executionLines(env).at(-1)).toBe(`The planner started task #2 "Add a cache".`);
   });
 
-  it('starts once the edit lands when the planner adds it and asks in the same reply', async () => {
+  // ADR-0022 P2: the edit is in the plan as its call answers, so the start that follows it runs it as edited, at once.
+  it('starts at once when the planner adds it and asks in the same reply', async () => {
     const env = await finishedRun();
     await addCache(env);
 
-    const queued = await env.planner.tools().runTask!({ task: 'Add a cache' }, ctx);
-    expect(JSON.parse(queued.text).result).toMatch(/^Queued: start task #2 "Add a cache" happens once your edit lands/);
-    expect(env.run.spawnedIds()).toEqual(['t1']);
-    await landEdit(env);
+    const started = await env.planner.tools().runTask!({ task: 'Add a cache' }, ctx);
 
+    expect(started.isError).toBeFalsy();
+    // Before the reply ends: nothing waits for it.
     await until(() => env.run.spawnedIds().includes(added(env)!.id));
   });
 
-  it('starts a task named by the handle the same reply\'s edit gave it, once the edit lands', async () => {
+  it('starts a task named by the handle the same reply\'s edit gave it', async () => {
     const env = await finishedRun();
     const edit = await env.planner.tools().editPlan!({ ops: [{ op: 'add', task: { title: 'Add a cache', prompt: 'add a cache' }, handle: 'cache' }] }, ctx);
     expect(edit.isError).toBeFalsy();
 
-    const queued = await env.planner.tools().runTask!({ task: 'cache' }, ctx);
-    expect(JSON.parse(queued.text).result).toMatch(/^Queued: start task #2 "Add a cache" happens once your edit lands/);
-    await landEdit(env);
+    expect((await env.planner.tools().runTask!({ task: 'cache' }, ctx)).isError).toBeFalsy();
 
     await until(() => env.run.spawnedIds().includes(added(env)!.id));
     expect(executionLines(env).at(-1)).toBe(`The planner started task #2 "Add a cache".`);
   });
 
-  it('refuses at once, rather than queueing, a start naming no task the plan has or the edit adds', async () => {
+  it('refuses at once a start naming no task the plan has', async () => {
     const env = await finishedRun();
     await addCache(env);
 
     const start = await env.planner.tools().runTask!({ task: 'no-such-task' }, ctx);
 
     expect(start.isError).toBe(true);
-    expect(JSON.parse(start.text).reason).toBe('No task matches "no-such-task" in the current plan. Your edit does not add it either. Name it by id, "#order" (a subtask "#order.sub") or exact title.');
+    expect(JSON.parse(start.text).reason).toBe('No task matches "no-such-task" in the current plan. Name it by id, "#order" (a subtask "#order.sub"), exact title, or the handle an edit_plan call of this reply gave it.');
   });
 
   it('refuses at once a start of a task the same reply\'s edit removes', async () => {
@@ -104,7 +101,7 @@ describe('a task the planner adds after approval, with autorun on and Full', () 
     const start = await env.planner.tools().runTask!({ task: 'warm' }, ctx);
 
     expect(start.isError).toBe(true);
-    expect(JSON.parse(start.text).reason).toMatch(/^No task matches "warm" in the current plan\. Your edit does not add it either\./);
+    expect(JSON.parse(start.text).reason).toMatch(/^No task matches "warm" in the current plan\./);
     await landEdit(env);
     await settled();
     expect(env.run.spawnedIds()).toEqual(['t1']);
@@ -124,50 +121,19 @@ describe('a task the planner adds after approval, with autorun on and Full', () 
     expect(env.run.spawnedIds()).toEqual(['t1']);
   });
 
-  it('says a start queued behind the edit that is refused once it lands, to the user and to the next turn', async () => {
+  it('starts a task its edit added under autorun though autorun is off by the start, and queues nothing', async () => {
     const env = await finishedRun();
     await addCache(env);
-    const queued = await env.planner.tools().runTask!({ task: 'Add a cache' }, ctx);
-    expect(JSON.parse(queued.text).result).toMatch(/^Queued: start task #2 "Add a cache"/);
-    // Read at the start: the user turns autorun off before the reply ends.
+    // Read at the start: the user turns autorun off between the edit and the start.
     changeSettings(env, { autorun: false });
 
+    const start = await env.planner.tools().runTask!({ task: 'Add a cache' }, ctx);
+
+    // Approved as the edit committed, autorun still on then: the user's yes for what the planner writes in their turn.
+    expect(start.isError).toBeFalsy();
+    await until(() => env.run.spawnedIds().includes(added(env)!.id));
     await landEdit(env);
-    await settled();
-
-    const refusal = 'Task #2 "Add a cache" was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.';
-    const history = env.session.planState!.conversationHistory!;
-    expect(history.filter((e) => e.execution?.outcome === 'refused').map((e) => e.execution!.detail)).toEqual([refusal]);
-    expect(history.at(-1)).toMatchObject({ kind: 'system', content: `The queued start of task #2 "Add a cache" did not run: ${refusal}` });
-    // The chat surfaces fold the session's messages into this view; VS Code and the TUI draw its system lines.
-    const view = env.messages.reduce((v, message) => reduceConversation(v, message), EMPTY_CONVERSATION);
-    expect(view.blocks.filter((b) => b.type === 'message' && b.role === 'system').map((b) => b.type === 'message' && b.text))
-      .toContain(`The queued start of task #2 "Add a cache" did not run: ${refusal}`);
-    void env.session.continueConversation('is it running?');
-    await until(() => env.planner.calls.length === 2);
-    expect(env.planner.calls[1].message).toContain(`Run update:\n- The queued start of task #2 "Add a cache" did not run: ${refusal}`);
-    env.planner.calls[1].finish(prose('No.'));
-    void env.session.continueConversation('and now?');
-    await until(() => env.planner.calls.length === 3);
-    expect(env.planner.calls[2].message).not.toContain('The queued start');
-  });
-
-  it('tells the next turn again of a start that did not run when the turn that told it never got an answer', async () => {
-    const env = await finishedRun();
-    await addCache(env);
-    await env.planner.tools().runTask!({ task: 'Add a cache' }, ctx);
-    changeSettings(env, { autorun: false });
-    await landEdit(env);
-    await settled();
-
-    const failed = env.session.continueConversation('is it running?');
-    await until(() => env.planner.calls.length === 2);
-    env.planner.calls[1].fail(new Error('backend down'));
-    await expect(failed).rejects.toThrow('backend down');
-    void env.session.continueConversation('is it running now?');
-    await until(() => env.planner.calls.length === 3);
-
-    expect(env.planner.calls[2].message).toContain('Run update:\n- The queued start of task #2 "Add a cache" did not run: ');
+    expect((env.session.planState!.conversationHistory ?? []).some((e) => e.content.startsWith('The queued start'))).toBe(false);
   });
 
   it('starts an added ops task too', async () => {
@@ -215,10 +181,10 @@ describe('a task the planner adds after approval waits for the user', () => {
     expect(await refusedStart(env)).toMatch(/was added after the user approved the plan/);
   });
 
-  it('when autorun is turned off before the edit lands: the setting is read as it lands', async () => {
+  it('when autorun is turned off before the edit is made: the setting is read as it commits', async () => {
     const env = await finishedRun();
-    await addCache(env);
     changeSettings(env, { autorun: false });
+    await addCache(env);
     await landEdit(env);
     void env.session.continueConversation('run it');
     await until(() => env.planner.calls.length === 2);

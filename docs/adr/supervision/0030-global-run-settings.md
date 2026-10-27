@@ -240,8 +240,8 @@ refused, and the task waited for a person the user had said was not needed.
 - **The planner starts it, when it asks** — `run_task`, or `run_plan` over a
   plan with added tasks. Nothing starts on its own: adding a task for later
   stays possible, and autorun still fires on a whole submitted plan only.
-- **A start in the reply that adds the task waits for the edit to land**, as a
-  start of a task the reply edits already does (ADR-0029).
+- **A start in the reply that adds the task goes through at once**, since the
+  edit is in the plan as its `edit_plan` call answers (ADR-0022, P2; ADR-0029).
 - **Both settings are read at the start**, not when the task was added, so
   turning autorun off or going to Guarded stops it at once. A start that goes
   through approves the task, as the user's own start does.
@@ -386,3 +386,4 @@ the daemon reads it from there at generation.
 - 2026-10-25 — the wake-up read budget leaves the `/settings` panels in the TUI
   and VS Code: it has no panel row and is set with `ordewell supervisor reads
   <n>` or in `settings.json`, which the headless command still writes.
+- 2026-10-26 — a start in the reply that adds the task goes through at once: the edit commits as its call answers (ADR-0022, P2).

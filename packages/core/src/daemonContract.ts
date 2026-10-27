@@ -1,12 +1,12 @@
 import type { ApprovalDecision } from './interfaces/IApproval';
 import type { AiProvider, PlannerBackendId } from './interfaces/IConfig';
-import type { IsolationMergeResult } from './interfaces/IWorktreeIsolation';
+import type { IsolationMergeResult, IsolationPreview } from './interfaces/IWorktreeIsolation';
 import type { SessionMeta } from './models/Session';
 import type { DiscoveredModel } from './models/Task';
 import type { PlannerNotReady } from './services/plannerReadiness';
 import type { SessionHeld } from './services/sessionLease';
 import type { PendingApproval } from './services/PendingApprovals';
-import type { RunView, SessionMessage, SessionNotice, SurfacePlan, SurfacePlanState } from './services/SessionMessage';
+import type { AccountLimitsMessage, RunView, SessionMessage, SessionNotice, SurfacePlan, SurfacePlanState } from './services/SessionMessage';
 import type { ConversationCompaction, RewindTarget } from './services/PlannerConversation';
 import type { PlannerModelRecall } from './services/PlannerModelMemory';
 import type { OrchestratorOption } from './services/ProviderRouting';
@@ -302,6 +302,15 @@ export interface WorkspacesResponse {
   workspaces: string[];
 }
 
+/**
+ * The repositories and branches a run would isolate, as a surface shows them
+ * before there is a run. Read-only: nothing about it is authoritative once a
+ * run starts, which reads the base branch again.
+ */
+export interface IsolationPreviewResponse {
+  preview: IsolationPreview;
+}
+
 export interface ApprovalsResponse {
   pending: PendingApproval[];
   approvedScopes: string[];
@@ -315,7 +324,7 @@ export interface ApprovalAnswerResponse extends OkResponse {
 /**
  * Where a frame stands in its session's broadcast stream. A client holding
  * several sockets on one session gets every broadcast on each, and a frame's
- * content is no identity: two clears of a held edit are the same JSON. `seq`
+ * content is no identity: two identical status frames are the same JSON. `seq`
  * rises by one per broadcast of the session for as long as the daemon runs,
  * whichever Session object holds the id; `stream` names the daemon process,
  * so a restarted daemon's numbering is never compared with the last one's.
@@ -332,10 +341,11 @@ export type ApprovalRequestMessage = Extract<SessionMessage, { type: 'approval_r
 
 /**
  * What a session's socket sends right after `connected`: its run as it stands,
- * so a client that joins mid-run has the run view before the next update —
- * the held edit's preview included — and the planner's approval requests
+ * so a client that joins mid-run has the run view before the next update,
+ * and the planner's approval requests
  * still waiting, which no later frame would announce again. `seq` is the last
- * broadcast it accounts for. Every frame after it is a {@link SessionFrame}.
+ * broadcast it accounts for. Session broadcasts are {@link SessionFrame}s;
+ * host-owned account limits have their own snapshot and revision.
  */
 export interface RunSnapshotFrame extends Partial<StreamStamp> {
   type: 'run_snapshot';
@@ -343,4 +353,11 @@ export interface RunSnapshotFrame extends Partial<StreamStamp> {
   view: RunView;
   /** Absent from a daemon older than the field: nothing is known, not "none waiting". */
   approvals?: ApprovalRequestMessage[];
+}
+
+/** Independent of run snapshot stamps: quota reads have their own revision. */
+export interface AccountLimitsFrame extends AccountLimitsMessage {
+  sessionId: string;
+  stream: string;
+  revision: number;
 }

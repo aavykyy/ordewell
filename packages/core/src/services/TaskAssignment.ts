@@ -100,14 +100,13 @@ export function liveRunnerRefusal(task: Pick<Task, 'title'>): string {
 }
 
 /**
- * The runners a writer may put a task on (ADR-0003, V1): a submitted plan the
- * runners enabled now; a planner edit the plan's own as well, so an edit is
- * checked as it is made and as it lands against one set; a user any runner.
- * Undefined means any.
+ * The runners a writer may put a task on (ADR-0003, V1): the planner's, a
+ * submitted plan or an edit, the runners enabled now; a user any runner.
+ * Undefined means any. A task an edit leaves on a runner switched off since is
+ * not put there by the edit, so it stands (`applyTaskOps`, ADR-0043).
  */
-export function assignableRunners(writer: AssignmentWriter, enabled: readonly RunnerId[], planRunners: readonly RunnerId[]): RunnerId[] | undefined {
-  if (writer === 'plan') return [...enabled];
-  if (writer === 'edit') return [...new Set([...planRunners, ...enabled])];
+export function assignableRunners(writer: AssignmentWriter, enabled: readonly RunnerId[]): RunnerId[] | undefined {
+  if (writer === 'plan' || writer === 'edit') return [...enabled];
   return undefined;
 }
 

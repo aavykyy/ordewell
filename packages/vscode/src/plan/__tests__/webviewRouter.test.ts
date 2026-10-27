@@ -87,7 +87,7 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
       openFile: vi.fn(),
       setPlanDockHeight: vi.fn(),
       changeSettings: vi.fn(async () => {}),
-      enableRunner: vi.fn(async () => {}),
+      setRunnerEnabled: vi.fn(async () => {}),
       loginPlanner: vi.fn(async () => {}),
     },
     getPendingRunners: () => pending,
@@ -549,7 +549,7 @@ describe('webview messages reach the session through one entry point each', () =
     [{ type: 'openFile', path: '.ordewell/sessions/s1/tasks/t1/1.patch' }, 'openFile', ['.ordewell/sessions/s1/tasks/t1/1.patch']],
     [{ type: 'setPlanDockHeight', height: 320 }, 'setPlanDockHeight', [320]],
     [{ type: 'changeSettings', change: { run: { autorun: true } } }, 'changeSettings', [{ run: { autorun: true } }]],
-    [{ type: 'enableRunner', runnerId: 'codex' }, 'enableRunner', ['codex']],
+    [{ type: 'setRunnerEnabled', runnerId: 'codex', enabled: false, requestId: 'req-1' }, 'setRunnerEnabled', ['codex', false, 'req-1']],
     [{ type: 'loginPlanner', runner: 'codex' }, 'loginPlanner', ['codex']],
     // No runner is the active planner's login, which the host resolves.
     [{ type: 'loginPlanner' }, 'loginPlanner', [undefined]],

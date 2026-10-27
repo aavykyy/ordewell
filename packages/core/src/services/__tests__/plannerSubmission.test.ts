@@ -80,20 +80,23 @@ async function sessionAnswering(answer: (session: Session, tools: PlannerToolHan
  * no prose to keep.
  */
 function committed(session: Session, broadcast: ReturnType<typeof vi.fn<(msg: SessionMessage) => void>>, said?: string) {
-  const last = session.planState?.conversationHistory?.at(-1);
+  const outcome = session.planState?.conversationHistory?.filter((m) => m.content !== said).at(-1);
   return {
     tasks: session.planTasks,
     runners: session.planState?.runners,
-    lastMessage: { role: last?.role, content: last?.content, kind: last?.kind },
-    // The preview of a held edit is the tool channel's alone: an envelope reply holds nothing until it settles.
-    broadcasts: broadcast.mock.calls.filter(([msg]) => !(msg.type === 'planner_message' && msg.content === said) && msg.type !== 'plan_edit_held').map(([msg]) => msg.type),
+    lastMessage: { role: outcome?.role, content: outcome?.content, kind: outcome?.kind },
+    broadcasts: broadcast.mock.calls.filter(([msg]) => !(msg.type === 'planner_message' && msg.content === said)).map(([msg]) => msg.type),
   };
 }
 
-/** The reply prose the turn kept: in the transcript just before its outcome, and broadcast as a planner message. */
+/**
+ * The reply prose the turn kept: in the transcript just after the outcome the
+ * tool committed as it answered (ADR-0022 P2), and broadcast as a planner
+ * message.
+ */
 function kept(session: Session, broadcast: ReturnType<typeof vi.fn<(msg: SessionMessage) => void>>, said: string) {
   return {
-    transcript: session.planState?.conversationHistory?.at(-2)?.content,
+    transcript: session.planState?.conversationHistory?.at(-1)?.content,
     broadcast: broadcast.mock.calls.some(([msg]) => msg.type === 'planner_message' && msg.content === said),
   };
 }
@@ -113,7 +116,7 @@ describe('a plan handed in during a planner turn', () => {
 });
 
 describe('what a submission wins over', () => {
-  it('a JSON plan in the same turn: the submitted one commits', async () => {
+  it('a JSON plan in the same turn: the submitted one stands', async () => {
     const other = { tasks: [{ ...PLAN.tasks[0], id: 'json-only', title: 'From the reply' }] };
     const { session } = await sessionAnswering(async (_s, tools, reply) => {
       await tools.submitPlan!(planArgs(validTasks(PLAN)), TOOL_CALL);
@@ -123,7 +126,7 @@ describe('what a submission wins over', () => {
     expect(session.planTasks.map((t) => t.id)).toEqual(['a', 'b']);
   });
 
-  it('nothing once the turn has settled', async () => {
+  it('nothing once the turn has settled: it commits nothing', async () => {
     const { session, tools } = await sessionAnswering((_s, _t, reply) => reply('Sure.'));
 
     const refused = await tools.submitPlan!(planArgs(validTasks(PLAN)), TOOL_CALL);

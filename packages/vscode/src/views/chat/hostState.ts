@@ -1,4 +1,4 @@
-import type { AccountLimitSnapshot, GlobalRunSettings } from '@ordewell/core';
+import type { AccountLimitSnapshot, GlobalRunSettings, IsolationPreview } from '@ordewell/core';
 import type { SurfacePlan, DiscoveredModel, RunnerId, RunActivity, RunView, RunTask, AiProvider } from '@ordewell/core';
 import { DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, IDLE_ACTIVITY, type PromptHold } from '@ordewell/core/plan-utils';
 import type { HostToWebview, PlannerBackend, RunnerMeta } from '../../shared/protocol';
@@ -38,14 +38,14 @@ export interface HostState {
   modelsByRunner: Partial<Record<string, DiscoveredModel[]>>;
   modelAllowlist: Record<string, string[]>;
   runnerList: RunnerInfo[];
+  /** The runners the settings file every surface shares holds on (ADR-0043), as the host last reported them. */
   enabledRunnerIds: string[];
-  runners: RunnerId[];
   /**
-   * Runners the user just turned on from the Runners block, until a list from
-   * the host reports them on. The host re-discovers the whole runner list, so
-   * a list produced before its settings save can arrive in between.
+   * A Runners pill clicked, on or off, until the host's `runnerChoiceSaved`
+   * for that request answers it, saved or not. A runner list is never the
+   * answer: discovery that began before the save would revive the old state.
    */
-  pendingRunnerEnables: RunnerId[];
+  pendingRunners: Partial<Record<RunnerId, { enabled: boolean; requestId: string }>>;
   /** Queued prompts: what the host is holding for the next planner turn. */
   held: PromptHold;
   /** The last queued text the host gave back; `seq` makes a repeat of the same words land again. */
@@ -119,6 +119,13 @@ export interface HostState {
   sessionCleared: boolean;
   /** Every installed runner's account limits: live account data, kept across a session reset. */
   accountLimits: readonly AccountLimitSnapshot[];
+  /**
+   * The workspace's repositories and branches, as the host last read them.
+   * `undefined` until the host says anything; `null` while it re-reads, after
+   * a workspace change or a reload, so an old answer is never shown as current.
+   * Not part of a session: a new or restored one keeps it.
+   */
+  isolationPreview: IsolationPreview | null | undefined;
 }
 
 export const INITIAL_HOST_STATE: HostState = {
@@ -133,8 +140,7 @@ export const INITIAL_HOST_STATE: HostState = {
   modelAllowlist: {},
   runnerList: [],
   enabledRunnerIds: [...DEFAULT_RUNNERS],
-  runners: [...DEFAULT_RUNNERS],
-  pendingRunnerEnables: [],
+  pendingRunners: {},
   held: EMPTY_HOLD,
   unsent: null,
   modesByRunner: {},
@@ -164,6 +170,7 @@ export const INITIAL_HOST_STATE: HostState = {
   turnLost: false,
   sessionCleared: false,
   accountLimits: [],
+  isolationPreview: undefined,
 };
 
 export type SessionResetKind = 'empty' | 'restore' | 'new';
@@ -183,8 +190,7 @@ export type HostAction =
   | { type: 'turnLost' }
   | { type: 'patchError'; error: string }
   | { type: 'patchReady'; ready: boolean }
-  | { type: 'patchRunners'; runners: Updatable<RunnerId[]> }
-  | { type: 'enableRunnerRequested'; runnerId: RunnerId }
+  | { type: 'runnerChoiceRequested'; runnerId: RunnerId; enabled: boolean; requestId: string }
   | { type: 'checkpointAnswered' }
   | { type: 'patchDockHeight'; height: number | undefined }
   | { type: 'patchDockExpanded'; expanded: Updatable<boolean> };
@@ -227,6 +233,13 @@ export function resetSession(state: HostState, kind: SessionResetKind): HostStat
   return next;
 }
 
+/** The runners shown on: the saved list, with any pill click the host has not answered yet. */
+export function runnersOn(state: Pick<HostState, 'runnerList' | 'enabledRunnerIds' | 'pendingRunners'>): RunnerId[] {
+  const on = (id: RunnerId) => state.pendingRunners[id]?.enabled ?? state.enabledRunnerIds.includes(id);
+  const listed = state.runnerList.map((r) => r.id);
+  return [...new Set([...listed, ...state.enabledRunnerIds])].filter(on);
+}
+
 function resolve<T>(value: Updatable<T>, prev: T): T {
   return typeof value === 'function' ? (value as (p: T) => T)(prev) : value;
 }
@@ -260,20 +273,22 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     case 'patchReady':
       return { ...state, isReady: action.ready };
 
-    case 'patchRunners':
-      return { ...state, runners: resolve(action.runners, state.runners) };
+    case 'runnerChoiceRequested': {
+      const { runnerId, enabled, requestId } = action;
+      return { ...state, pendingRunners: { ...state.pendingRunners, [runnerId]: { enabled, requestId } } };
+    }
 
-    case 'enableRunnerRequested': {
-      if (state.enabledRunnerIds.includes(action.runnerId)) return state;
-      // Shown on at once: the host re-discovers every runner before it answers,
-      // which a cold CLI can hold up for a while, and the click has to read as
-      // done. `pendingRunnerEnables` keeps an older list from taking it back.
-      return {
-        ...state,
-        enabledRunnerIds: [...state.enabledRunnerIds, action.runnerId],
-        runners: state.runners.includes(action.runnerId) ? state.runners : [...state.runners, action.runnerId],
-        pendingRunnerEnables: [...state.pendingRunnerEnables, action.runnerId],
-      };
+    case 'runnerChoiceSaved': {
+      // An answer to an older or repeated request, or to the page before a
+      // reload, leaves the newer click it would otherwise clear.
+      if (state.pendingRunners[action.runnerId]?.requestId !== action.requestId) return state;
+      const pendingRunners = { ...state.pendingRunners };
+      delete pendingRunners[action.runnerId];
+      const saved = state.enabledRunnerIds.includes(action.runnerId);
+      let enabledRunnerIds = state.enabledRunnerIds;
+      if (action.enabled && !saved) enabledRunnerIds = [...enabledRunnerIds, action.runnerId];
+      if (!action.enabled && saved) enabledRunnerIds = enabledRunnerIds.filter((id) => id !== action.runnerId);
+      return { ...state, enabledRunnerIds, pendingRunners };
     }
 
     case 'checkpointAnswered':
@@ -434,29 +449,10 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'setRunners': {
       const list = action.runners ?? [];
-      const reported = list.filter((r: RunnerMeta) => r.enabled).map((r: RunnerMeta) => r.id);
-      // A list discovery produced before the host saved the click still says
-      // the runner is off; the click stands until a list reports it on.
-      const pending = state.pendingRunnerEnables.filter((id) => !reported.includes(id));
-      const ids = [...new Set([...reported, ...pending])];
-      let runners: RunnerId[];
-      if (ids.length === 1) runners = ids;
-      else if (ids.length === 0) runners = [...DEFAULT_RUNNERS];
-      else {
-        const valid = state.runners.filter((r) => ids.includes(r));
-        runners = valid.length > 0 ? valid : ids;
-      }
-      // The runner the user turned on is the one they want assigned next, and
-      // an older list must not have taken it out of the per-plan set.
-      for (const id of pending) {
-        if (state.runners.includes(id) && !runners.includes(id)) runners.push(id);
-      }
       return {
         ...state,
         runnerList: list.map((r: RunnerMeta) => ({ id: r.id, displayName: r.displayName })),
-        enabledRunnerIds: ids,
-        runners,
-        pendingRunnerEnables: pending,
+        enabledRunnerIds: list.filter((r: RunnerMeta) => r.enabled).map((r: RunnerMeta) => r.id),
         runnersKnown: true,
       };
     }
@@ -478,6 +474,9 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'accountLimits':
       return { ...state, accountLimits: action.limits };
+
+    case 'isolationPreview':
+      return { ...state, isolationPreview: action.preview };
 
     case 'setRunSettings':
       return { ...state, runSettings: { autonomous: action.autonomous, run: action.run, maxParallel: action.maxParallel } };

@@ -224,9 +224,13 @@ check or body; a user editing a loop's `loop` field by hand from a surface.
   `planBlocks` the scheduler does: a check between rounds shows as fixing, not
   as failed. A surface asks before a removal only where core will allow it, and
   quotes core's refusal of a check's removal (L8) rather than offering it.
-- The conversation planner's prompt teaches a loop under the build and the
-  failure-to-explain strategies, prefers a script check, and has the planner
-  choose `maxRounds`; the one-shot planner's prompt does not.
+- The conversation planner's prompt teaches a loop only for an explicit
+  iterate-until goal or a specific acceptance condition that needs independent
+  repeated checking and fixing, and has it give the reason in the outline when
+  it infers one. Routine tests, type checks and self-review stay inside the
+  implementation tasks, and tests that exist, a rerunnable command or changed
+  code never make a loop. It prefers a script check and has the planner choose
+  `maxRounds`; the one-shot planner's prompt does not.
 
 ## History
 
@@ -236,3 +240,4 @@ check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-22 — an edit that leaves a check between rounds with no rounds left closes its loop (L6).
 - 2026-10-22 — decided, not built: handoffs run in both directions of a loop ([ADR-0047](0047-structured-task-handoffs.md), #120).
 - 2026-10-22 — implemented handoffs in both loop directions and scoped reads between check and body (step 3, L1; ADR-0047, #120).
+- 2026-10-26 — the planner prompt and the diagnose skill add a loop only for an explicit iterate-until goal or a specific acceptance gate, not for routine validation.

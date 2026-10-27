@@ -41,11 +41,12 @@ A hypothesis stands when its prediction was tested and held, and the rest are sh
 
 ## 5. Fix, checked against the reproduction
 
-A change task for the fix, inside a loop, so it repeats until the reproduction passes:
+A change task for the fix. It adds the reproduction as a test if the workspace lacks one, and runs it and the wider suite itself before it completes. A research task's test was thrown away, so the fix task depends on that task and reads its report with `read_task`; do not copy the test into the brief. Its brief names the cause and the files, and says to change the cause and nothing near it.
 
-- If the reproduction is not yet a test the workspace holds, a first change task adds it and changes no production code. A research task's test was thrown away, so make the loop's check depend on the research task: the body tasks may then depend on it too, and read its report with `read_task`. You do not copy the test into the brief.
+Put the fix in a loop only when the user asked to iterate until the reproduction passes, or it is a specific acceptance gate that needs independent repeated checking and fixing; say why in the outline. Then:
+
+- If the reproduction is not yet a test the workspace holds, a first change task adds it and changes no production code. Make the loop's check depend on a research task whose test was thrown away: the body tasks may then depend on it too, and read its report with `read_task`.
 - The check is a script task running the reproduction. Add the wider suite as a second command so a fix that breaks something else fails the round.
-- The fix task's brief names the cause and the files, and says to change the cause and nothing near it; it reads the evidence itself with `read_task`, so do not re-type it.
 - Choose the rounds deliberately. A check that runs out of rounds blocks what follows, which is the right outcome when the fix does not converge.
 
-When the loop ends, tell the user whether the reproduction passes and what changed.
+When the fix ends, tell the user whether the reproduction passes and what changed.

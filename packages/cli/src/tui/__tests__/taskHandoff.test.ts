@@ -7,8 +7,8 @@ import { render } from '../render';
 import { initialState, type TaskLogState, type TaskView, type TuiState } from '../state';
 
 /*
- * A task's handoff (ADR-0047) on this surface: the compact line a plan row
- * carries, and the block its task view draws, report folded until ctrl+o.
+ * A task's handoff (ADR-0047) on this surface: its expanded plan detail and
+ * the block its task view draws, report folded until ctrl+o.
  */
 
 beforeAll(() => {
@@ -56,24 +56,27 @@ const planText = (state: TuiState): string => render(state).map(stripAnsi)
 const pressed = (state: TuiState, name: string): TuiState => reduce(state, { type: 'key', key: { name } }).state;
 
 describe('a task\'s handoff in its row (ADR-0047)', () => {
-  it('shows the summary and its finding count and severity without opening the task', () => {
+  it('keeps the summary and its finding count and severity out of a collapsed task', () => {
     const state = initialState({ rows: 24, cols: 100, focus: 'plan', tasks: [task({ handoff: { ...handoff, summary: 'OK' } })] });
-
-    expect(planText(state)).toContain('handed over · 2 findings · Blocker · OK');
+    expect(planText(state)).not.toContain('OK');
+    expect(planText({ ...state, expandedTaskId: 't1' })).toContain('2 findings · Blocker · OK');
   });
 
   it('starts the summary at its first line with words', () => {
     const state = initialState({ rows: 24, cols: 140, focus: 'plan', tasks: [task({ handoff: { ...handoff, summary: '\n\n  Done, with caveats.' } })] });
 
-    expect(planText(state)).toContain('handed over · 2 findings · Blocker · Done, with caveats.');
+    expect(planText(state)).not.toContain('Done, with caveats.');
+    expect(planText({ ...state, expandedTaskId: 't1' })).toContain('2 findings · Blocker · Done, with caveats.');
   });
 
   it('leads with the commit subject, and shows a commit-only handoff', () => {
     const commit = { subject: 'Add the route' };
     const both = initialState({ rows: 24, cols: 140, focus: 'plan', tasks: [task({ handoff: { ...handoff, summary: 'OK', commit } })] });
-    expect(planText(both)).toContain('handed over · 2 findings · Blocker · Commit: Add the rou');
+    expect(planText(both)).not.toContain('Commit: Add the route');
+    expect(planText({ ...both, expandedTaskId: 't1' })).toContain('Commit: Add the route');
     const only = initialState({ rows: 24, cols: 140, focus: 'plan', tasks: [task({ handoff: { summary: '', findings: [], findingCount: 0, commit } })] });
-    expect(planText(only)).toContain('handed over · no findings · Commit: Add the route');
+    expect(planText(only)).not.toContain('Commit: Add the route');
+    expect(planText({ ...only, expandedTaskId: 't1' })).toContain('no findings · Commit: Add the route');
   });
 
   it('takes the digest from a plan refresh and from a live status update', () => {
@@ -82,14 +85,16 @@ describe('a task\'s handoff in its row (ADR-0047)', () => {
       sessionId: 's1',
       plan: { tasks: [{ id: 't1', order: 1, title: 'Add the route', type: 'ai', status: 'completed', dependencies: [], handoff }] },
     }).state;
-    expect(planText(planned)).toContain('handed over · 2 findings · Blocker');
+    expect(planText(planned)).not.toContain('Added the route.');
+    expect(planText({ ...planned, expandedTaskId: 't1' })).toContain('2 findings · Blocker · Added the route.');
 
     const live = reduce(planned, {
       type: 'statusUpdate',
       sessionId: 's1',
       tasks: [{ id: 't1', status: 'completed', verdict: null, handoff: { summary: 'Live done.', findings: [], findingCount: 0 } }],
     }).state;
-    expect(planText(live)).toContain('handed over · no findings · Live done.');
+    expect(planText(live)).not.toContain('Live done.');
+    expect(planText({ ...live, expandedTaskId: 't1' })).toContain('no findings · Live done.');
   });
 
   it('says a handoff with no findings has none, as a script and a user task leave', () => {
@@ -98,7 +103,29 @@ describe('a task\'s handoff in its row (ADR-0047)', () => {
       tasks: [task({ type: 'user', handoff: { summary: 'Completed by the user', findings: [], findingCount: 0 } })],
     });
 
-    expect(planText(state)).toContain('handed over · no findings · Completed');
+    expect(planText(state)).not.toContain('Completed by the user');
+    expect(planText({ ...state, expandedTaskId: 't1' })).toContain('no findings · Completed by the user');
+  });
+
+  it.each(['script', 'user'] as const)('keeps a %s handoff available in expanded task details', (type) => {
+    const state = initialState({ rows: 24, cols: 100, focus: 'plan', tasks: [task({
+      type, handoff: { summary: `${type} result`, findings: [], findingCount: 0 },
+    })] });
+    expect(planText(state)).not.toContain(`${type} result`);
+    expect(planText({ ...state, expandedTaskId: 't1' })).toContain(`no findings · ${type} result`);
+  });
+
+  it('shows a child handoff only when that child is expanded and keeps narrow frames exact', () => {
+    const child = task({ id: 'child', order: 1, title: 'Nested step', handoff: { ...handoff, summary: 'Child result.' } });
+    const parent = task({ id: 'parent', order: 1, title: 'Parent', subtasks: [child] });
+    const state = initialState({ rows: 20, cols: 20, focus: 'plan', tasks: [parent] });
+    expect(planText({ ...state, expandedTaskId: 'parent' })).not.toContain('Child result.');
+    expect(planText({ ...state, expandedTaskId: 'child' })).toContain('Child result.');
+    for (const expandedTaskId of [null, 'parent', 'child']) {
+      const frame = render({ ...state, expandedTaskId, cols: 20, rows: 20 });
+      expect(frame).toHaveLength(20);
+      for (const line of frame) expect(width(line)).toBeLessThanOrEqual(20);
+    }
   });
 });
 
@@ -201,7 +228,7 @@ describe('a task\'s handoff in its view (ADR-0047)', () => {
     expect(out).not.toContain('Artifacts:');
   });
 
-  it('names the patch in the plan row\'s handoff peek, before the summary', () => {
+  it('names the patch in expanded plan details, before the summary', () => {
     const saved: HandoffPatch = {
       kind: 'patch', path: '.ordewell/sessions/s1/tasks/t1/1.patch', attempt: 1,
       base: 'a'.repeat(40), files: 2, added: 9, removed: 1, binary: 0, bytes: 900, sha256: 'f'.repeat(64),
@@ -211,7 +238,8 @@ describe('a task\'s handoff in its view (ADR-0047)', () => {
       tasks: [task({ handoff: { summary: 'Tried it.', findings: [], findingCount: 0, artifacts: [saved] } })],
     });
 
-    expect(planText(state)).toContain('handed over · no findings · patch: 2 files, +9 -1');
+    expect(planText(state)).not.toContain('patch: 2 files, +9 -1');
+    expect(planText({ ...state, expandedTaskId: 't1' })).toContain('no findings · patch: 2 files, +9 -1');
   });
 
   it('draws a script task\'s handoff after the step it ran', () => {

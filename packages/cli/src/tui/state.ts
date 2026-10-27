@@ -1,5 +1,5 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type AccountLimitSnapshot, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type IsolationPreview, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { RunnersResponse } from '../apiClient';
 import type { SaveSettingsEffect } from './reducers/settings';
@@ -35,6 +35,8 @@ export interface TaskView {
   status: string;
   /** Advisory silence timestamp from VerdictEngine — set while the task's runner has gone quiet. */
   idleSince?: string | null;
+  /** What its runner reported through `task_complete`, received while the attempt winds down (ADR-0018, L1). */
+  completionReceived?: RunTask['completionReceived'];
   dependencies: string[];
   assignedRunner?: string;
   taskMode?: string;
@@ -367,6 +369,8 @@ export interface TuiState {
    * `SessionMessage` and every line the TUI adds itself as a `LocalEntry`.
    */
   conversation: ConversationView;
+  accountLimits: readonly AccountLimitSnapshot[];
+  servedModels: Record<string, { attempt: number; model?: string; assignment?: string }>;
   /** Set while the chat pane is drawing a structured task's log; null is the planner chat. */
   taskView: TaskLogState | null;
   /** The planner turn the conversation has open, and the one the user stopped — core's stop rule. */
@@ -464,6 +468,16 @@ export interface TuiState {
   runnersKnown: boolean;
   /** Whether `configuredProviders` came from the catalog; until then a key may be set and not yet reported. */
   providersKnown: boolean;
+  /**
+   * The repositories and branches the daemon would isolate, with the run
+   * settings that decide it: `undefined` before the launch read has been
+   * asked for or answered, `null` while a read is in flight, then the answer.
+   * Not cleared when a plan exists: the welcome owns it only while no plan
+   * has been produced, and only a run's own start check is authoritative.
+   */
+  isolationPreview: IsolationPreview | null | undefined;
+  /** The newest preview read this surface started; an older answer is dropped. */
+  isolationPreviewRead: number;
   /** The version check's one-time notice (ADR-0048), on the one start that shows it; empty on every other. */
   versionCheckNotice: string;
   runAutoMerge: boolean | null;
@@ -683,6 +697,8 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
   return {
     editor: emptyEditor(),
     conversation: EMPTY_CONVERSATION,
+    accountLimits: [],
+    servedModels: {},
     taskView: null,
     turnGate: NO_TURN,
     detailAll: false,
@@ -719,6 +735,8 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     plannerKnown: false,
     runnersKnown: false,
     providersKnown: false,
+    isolationPreview: undefined,
+    isolationPreviewRead: 0,
     versionCheckNotice: '',
     runAutoMerge: null,
     runSupervisor: null,

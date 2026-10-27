@@ -91,6 +91,12 @@ body {
   overflow: hidden;
 }
 
+/* Mouse focus targets only (App.tsx); a ring around the whole view would be noise. */
+.chat-container:focus,
+.message-list:focus {
+  outline: none;
+}
+
 /* ---- New Session Confirm ---- */
 .new-session-confirm {
   display: flex;
@@ -1129,8 +1135,9 @@ body.vscode-high-contrast-light .disclosure:hover {
   background: var(--cyan);
 }
 
-.runner-pill.off {
-  opacity: 0.5;
+/* Clicked, until the host's runner list says what it saved. */
+.runner-pill.pending {
+  opacity: 0.7;
 }
 
 /* Installed but off: dashed rather than filled, so it reads as offered rather than chosen. */
@@ -1533,6 +1540,55 @@ body.vscode-high-contrast-light .planner-login-btn {
 .planner-auth-warning-agent {
   color: var(--text-primary);
   font-weight: 500;
+}
+
+/* Repositories and branches on the first screens: stacked rows that wrap, so a
+   long path or branch stays whole in a narrow sidebar, and selectable to copy. */
+.isolation-notice {
+  width: 100%;
+  max-width: 360px;
+  margin: 8px 0;
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
+.isolation-notice-checking {
+  color: var(--vscode-descriptionForeground);
+}
+
+.isolation-notice[data-status='failed'] .isolation-notice-summary,
+.isolation-notice[data-status='dirty'] .isolation-notice-summary {
+  color: var(--vscode-editorWarning-foreground);
+}
+
+.isolation-notice p {
+  margin: 0 0 4px;
+  max-width: none;
+  font-size: 12px;
+}
+
+.isolation-repos {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.isolation-repo {
+  display: flex;
+  flex-direction: column;
+  padding-left: 8px;
+  border-left: 2px solid var(--border-muted);
+}
+
+.isolation-repo-name {
+  color: var(--text-primary);
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.isolation-repo-detail {
+  color: var(--vscode-descriptionForeground);
 }
 
 .load-session-btn {
@@ -2233,39 +2289,6 @@ body.vscode-high-contrast-light .planner-login-btn {
   gap: 4px;
 }
 
-/* The held edit: dashed and quiet, so it reads as not yet part of the plan. */
-.proposed-tasks {
-  margin-top: 6px;
-  padding: 6px 8px;
-  border: 1px dashed var(--border-color);
-  border-radius: 4px;
-}
-.proposed-tasks-title {
-  color: var(--text-secondary);
-  font-size: 11px;
-  margin-bottom: 4px;
-}
-.proposed-tasks ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.proposed-task {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  padding: 2px 0;
-}
-.proposed-task-mark {
-  min-width: 56px;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-.proposed-task[data-mark='added'] .proposed-task-mark { color: var(--green); }
-.proposed-task[data-mark='changed'] .proposed-task-mark { color: var(--orange); }
-.proposed-task[data-mark='removed'] .proposed-task-mark { color: var(--red); }
-.proposed-task-order { color: var(--text-muted); }
-
 /* ---- Plan Research Log ---- */
 .plan-research-log {
   border-top: 1px solid var(--border-subtle);
@@ -2589,15 +2612,6 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 .task-output-peek:hover {
   color: var(--text-secondary);
-}
-
-.task-handoff-peek {
-  padding: 3px 14px 6px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .task-handoff {
@@ -5633,8 +5647,11 @@ body.vscode-high-contrast-light .pending-message {
 .usage-line {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 3px;
   flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
   padding: 3px 14px;
   font-size: 10px;
   /* --text-muted falls below WCAG AA (4.5:1) at this font-size in both
@@ -5644,7 +5661,14 @@ body.vscode-high-contrast-light .pending-message {
   border-top: 1px solid var(--border-subtle);
 }
 
+.usage-line-measures {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .usage-line-subagents {
+  flex-shrink: 0;
   padding: 0 6px;
   border-radius: var(--radius-full);
   background: var(--bg-secondary);
@@ -5656,20 +5680,20 @@ body.vscode-high-contrast-light .pending-message {
   border-top: none;
 }
 
-/* Account limits: one row per runner, wrapping rather than clipping in a
-   narrow sidebar. Under a usage line they share its rule. */
-.usage-line.account-limits {
-  flex-wrap: wrap;
-  row-gap: 1px;
-}
-
-.usage-line + .usage-line.account-limits {
-  border-top: none;
+/* Full details stay in the description and hover, so polling never changes
+   the footer's height, even while a label is focused. */
+.account-limits {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .account-limit {
+  display: block;
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .account-limit.stale {
@@ -5678,22 +5702,32 @@ body.vscode-high-contrast-light .pending-message {
 
 .account-limit:focus-visible {
   outline: 1px solid var(--vscode-focusBorder, var(--accent));
-  outline-offset: 1px;
+  outline-offset: -1px;
   border-radius: 2px;
 }
 
-/* Hidden until its row is focused or tapped, yet still the row's description:
-   then it takes a line of its own, so a narrow view wraps it rather than clip. */
 .account-limit-details {
   display: none;
 }
 
-.account-limit:focus + .account-limit-details {
-  display: flex;
-  flex-direction: column;
-  flex-basis: 100%;
-  min-width: 0;
+/* The keyboard hover lives outside the clipped footer, so it takes no space
+   from context or limits. Mouse users have the same text in the native title. */
+.account-limit-tooltip {
+  position: fixed;
+  left: 8px;
+  z-index: 1000;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 11px;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
+  pointer-events: none;
 }
 
 /* ---- Task log tab (ADR-0018, V1) ---- */

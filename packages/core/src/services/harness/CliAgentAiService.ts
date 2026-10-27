@@ -419,7 +419,7 @@ export class CliAgentAiService implements IAiService {
     try {
       // No `classify`: this planner plans only through Ordewell's tools
       // (ADR-0025), so its reply is prose whatever JSON it shows, and a plan
-      // or edit lands only from a submission the conversation accepted.
+      // or edit lands only from a tool call the conversation committed.
       const turn = await settleReply({
         // The turn's own input carries the budgets, not the system prompt, which stays cacheable.
         message: withTurnBudgets(this.turnBudgets, message),

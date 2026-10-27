@@ -7,9 +7,11 @@ import { RUN_SETTINGS_DEFAULTS,
   createTask, defaultEnabledRunners, saveState, RunnerRegistry, recordedInstalledPlanner, resetInstalledPlanner,
   type AiProvider, type DiscoveredModel, type IRunner, type LegacyPlanState, type PlannerUsability,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
-  type RunView, type Session, type SessionDeps, type SettingsService,
+  type RunView, type Session, type SessionDeps, SettingsService, createSession, sessionRuntimeSettings,
+  type ConversationRequest, type ConversationTurn,
   PendingApprovals, approvalScopes, type ApprovalRequestMessage,
   AccountLimitMonitor, type AccountLimitCollector, type AccountLimitReading,
+  type IIsolationPreview, type IsolationPreview,
 } from '@ordewell/core';
 import { ChatViewProvider as RealChatViewProvider } from '../providers/ChatViewProvider';
 import { createExtension, type ExtensionServices } from '../ExtensionHost';
@@ -18,7 +20,7 @@ import type { SecretStore, ApiProvider } from '../adapters/SecretStore';
 import type { VsCodeConfig } from '../adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from '../adapters/VsCodeNotification';
-import type { WebviewToHost } from '../shared/protocol';
+import type { HostToWebview, WebviewToHost } from '../shared/protocol';
 import { __panels, __resetPanels, commands, createFakeWebviewPanel, window } from '../test/vscode.mock';
 
 const models: DiscoveredModel[] = [
@@ -73,6 +75,7 @@ function fakeChat() {
     reveal: vi.fn(),
     setAccountLimits: vi.fn(),
     postMessage: vi.fn(),
+    setIsolationPreview: vi.fn(),
   };
   return { messages, provider };
 }
@@ -81,6 +84,7 @@ function fakeVscodeApi() {
   const showWarningMessage = vi.fn();
   const showInformationMessage = vi.fn();
   const windowStateListeners: Array<(state: { focused: boolean }) => void> = [];
+  const folderListeners: Array<() => void> = [];
   const api = {
     window: {
       state: { focused: true },
@@ -100,7 +104,7 @@ function fakeVscodeApi() {
       registerCommand: vi.fn(() => ({ dispose: vi.fn() })),
     },
     workspace: {
-      onDidChangeWorkspaceFolders: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidChangeWorkspaceFolders: vi.fn((listener: () => void) => { folderListeners.push(listener); return { dispose: vi.fn() }; }),
     },
     QuickInputButtons: { Back: {} },
     ProgressLocation: { Notification: 15 },
@@ -111,6 +115,8 @@ function fakeVscodeApi() {
     showInformationMessage,
     /** The window gained or lost focus. */
     focus: (focused: boolean) => { for (const listener of windowStateListeners) listener({ focused }); },
+    /** A folder was added to or removed from the window's workspace. */
+    foldersChanged: () => { for (const listener of folderListeners) listener(); },
   };
 }
 
@@ -242,6 +248,10 @@ function harness(overrides: {
   runnerInstallation?: ReturnType<typeof fakeRunnerInstallation>;
   chatProvider?: ChatViewProvider;
   accountLimits?: AccountLimitMonitor;
+  /** A settings file of the test's own, in place of the fake that holds nothing. */
+  settingsService?: SettingsService;
+  sessionFactory?: ExtensionServices['sessionFactory'];
+  isolationPreview?: IIsolationPreview;
 } = {}) {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-host-'));
   const vscodeApi = fakeVscodeApi();
@@ -271,12 +281,13 @@ function harness(overrides: {
     fsAdapter: { getWorkspaceRoot: () => workspace } as unknown as VsCodeFileSystem,
     notifications: notifications as unknown as VsCodeNotification,
     runner: { stopAll: vi.fn() } as unknown as IRunner,
-    settingsService: settings as unknown as SettingsService,
+    settingsService: overrides.settingsService ?? settings as unknown as SettingsService,
     plannerModelMemory: { remember: vi.fn(), recall: vi.fn(() => ({ model: '', effort: '', source: 'default' })) } as unknown as PlannerModelMemory,
     modelResolver: resolver as unknown as ModelResolver,
     chatProvider: overrides.chatProvider ?? chat.provider as unknown as ChatViewProvider,
-    sessionFactory: (deps) => { sessionDeps.current = deps; return session.session; },
+    sessionFactory: (deps) => { sessionDeps.current = deps; return overrides.sessionFactory?.(deps) ?? session.session; },
     ...(overrides.accountLimits ? { accountLimits: overrides.accountLimits } : {}),
+    ...(overrides.isolationPreview ? { isolationPreview: overrides.isolationPreview } : {}),
   };
 
   return {
@@ -806,6 +817,7 @@ describe('the task skill chips in a repo group', () => {
 /** The chat as VS Code hosts it, on a webview that can be reloaded: what it was sent, and a way to talk back. */
 function liveChat() {
   const provider = new RealChatViewProvider({ toString: () => 'file:///ext' } as unknown as vscode.Uri);
+  const posted: HostToWebview[] = [];
   let receive: (msg: WebviewToHost) => void = () => {};
   const open = (): void => {
     provider.resolveWebviewView({
@@ -814,13 +826,15 @@ function liveChat() {
       webview: {
         options: {}, html: '', cspSource: 'vscode-resource:', asWebviewUri: (u: unknown) => u,
         onDidReceiveMessage: (fn: (msg: WebviewToHost) => void) => { receive = fn; return { dispose() {} }; },
-        postMessage: () => Promise.resolve(true),
+        postMessage: (msg: HostToWebview) => { posted.push(msg); return Promise.resolve(true); },
       },
     } as unknown as vscode.WebviewView, {} as never, {} as never);
   };
   open();
   return {
     provider,
+    /** Everything the host has posted to the webview, in order. */
+    posted,
     /** The webview is torn down and comes back, as on a window reload: it says `ready`. */
     reload: () => { open(); receive({ type: 'ready' }); },
     send: (msg: WebviewToHost) => receive(msg),
@@ -875,20 +889,6 @@ describe('a chat webview reloaded while the planner waits for an answer', () => 
     expect(chat.cards()).toEqual([[id, 'pending']]);
     chat.send({ type: 'resolveApproval', id, granted: true });
     await expect(answer).resolves.toBe(true);
-  });
-
-  it('keeps the preview of an edit the planner holds, outside a turn this window started', async () => {
-    chat.send({ type: 'sendMessage', text: 'build a parser', typed: true });
-    await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalled());
-    // A supervisor's wake-up turn holds an edit: this window has no turn of its own out.
-    const task = createTask({ id: 't9', order: 2, title: 'Add a cache', prompt: 'add a cache', assignedRunner: 'claude-code' });
-    const heldEdit = { turnId: 'wake-1', tasks: [{ label: '2', mark: 'added' as const, task: { ...task, subtasks: [] } }] };
-    (h.session.spies as unknown as { planState: unknown }).planState = {};
-    h.session.spies.runSnapshot = vi.fn(() => ({ tasks: [], runMerge: null, handoff: null, mergeResult: null, heldEdit } as unknown as RunView));
-
-    chat.reload();
-
-    await vi.waitFor(() => expect(chat.provider.run.current.heldEdit?.tasks.map((t) => t.task.title)).toEqual(['Add a cache']));
   });
 
   it('drops the card of a request answered elsewhere while the webview was away, and does not answer it again', async () => {
@@ -993,5 +993,462 @@ describe('the host\'s one account-limit monitor', () => {
 
     expect(dispose).toHaveBeenCalled();
     expect(reads).toBe(1);
+  });
+});
+
+
+/**
+ * A pill click in the chat header is the user's choice of runners, so it has to
+ * reach the one saved list every surface and every planner turn reads
+ * (ADR-0043). Driven from the webview's message through the real router, host,
+ * settings file and Session; only the planner's model is a fake.
+ */
+describe('a runner pill click persists to the one saved list', () => {
+  const ALL = ['claude-code', 'codex', 'opencode'];
+  const ALLOWED = ['claude-code', 'opencode'];
+  const ctx = { signal: new AbortController().signal };
+  const dirs: string[] = [];
+  const hosts: Array<ReturnType<typeof harness>> = [];
+
+  afterEach(() => {
+    for (const h of hosts.splice(0)) { h.host.dispose(); fs.rmSync(h.workspace, { recursive: true, force: true }); }
+    for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A planner whose turns answer at once, keeping the tools its latest turn was handed. */
+  function plannerModel() {
+    let live = false;
+    let handler: NonNullable<ConversationRequest['plannerTools']>['handler'] | undefined;
+    const reply: ConversationTurn = { kind: 'message', text: 'ok', researchLog: [] };
+    const service = {
+      startConversation: vi.fn(async (req: ConversationRequest) => { live = true; handler = req.plannerTools?.handler; return reply; }),
+      continueConversation: vi.fn(async () => reply),
+      hasActiveConversation: () => live,
+      plannerToolsAttached: () => true,
+      reset: vi.fn(() => { live = false; }),
+      restart: vi.fn(),
+    };
+    const tools = () => handler!;
+    return {
+      service,
+      listRunners: async () => (JSON.parse((await tools().listRunners!({}, ctx)).text) as { runners: Array<{ id: string }> }).runners.map((r) => r.id),
+      listModels: (runner: string) => tools().listModels!({ runner }, ctx),
+    };
+  }
+
+  /** A Session over `deps` that reads `settings` as a window of the host would, with `planner` as its model. */
+  const sessionOver = (deps: SessionDeps, settings: SettingsService, planner: ReturnType<typeof plannerModel>) => createSession({
+    ...deps,
+    // The host's fake config knows no repositories; the Session lists them to lay out skills.
+    config: Object.assign(Object.create(deps.config) as SessionDeps['config'], { workspaceRepos: [], worktreeIsolation: false }),
+    settings: () => sessionRuntimeSettings(settings.getAll()),
+    aiService: planner.service as never,
+    saveSession: vi.fn(),
+  });
+
+  /** The host with three runners installed and all three saved on, over a temporary settings file. */
+  function pillHost(options: { discovery?: Promise<void> } = {}) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-pills-'));
+    dirs.push(dir);
+    const file = new SettingsService(path.join(dir, 'settings.json'));
+    file.setEnabledRunners(ALL);
+    const planner = plannerModel();
+    const installation = fakeRunnerInstallation(ALL);
+    if (options.discovery) {
+      installation.filterInstalled.mockImplementation(async (runners: string[]) => { await options.discovery; return runners; });
+    }
+    const chat = liveChat();
+    const h = harness({
+      settingsService: file,
+      chatProvider: chat.provider,
+      runnerInstallation: installation,
+      modelResolver: fakeResolver({ 'claude-code': models, codex: models, opencode: models }),
+      sessionFactory: (deps) => sessionOver(deps, file, planner),
+    });
+    hosts.push(h);
+    // A failed request is reported to the user through the host's notifications.
+    Object.assign(h.services.notifications, { error: vi.fn() });
+    Object.defineProperty(h.config.config, 'enabledRunners', { get: () => file.getEnabledRunners() ?? defaultEnabledRunners() });
+    const posted = vi.spyOn(chat.provider, 'postMessage');
+    let requestCount = 0;
+    /** What the webview was last told about the runners: the ids it draws on. */
+    const shown = (): string[] | undefined => {
+      const lists = posted.mock.calls.flatMap(([msg]) => (msg.type === 'setRunners' ? [msg.runners] : []));
+      return lists.at(-1)?.filter((r) => r.enabled).map((r) => r.id);
+    };
+    return {
+      h, chat, file, planner, posted, shown,
+      /** What another process reading the same file would find. */
+      saved: () => new SettingsService(path.join(dir, 'settings.json')).getEnabledRunners(),
+      settingsPath: path.join(dir, 'settings.json'),
+      /** The webview asks for `runnerId` on or off, under a request id of its own; returns the id. */
+      setRunnerEnabled: (runnerId: string, enabled: boolean, requestId = `req-${++requestCount}`): string => {
+        chat.send({ type: 'setRunnerEnabled', runnerId, enabled, requestId });
+        return requestId;
+      },
+      /** Every save acknowledgement the webview was sent, in order: the one message that settles a pill click. */
+      acks: (): unknown[] => posted.mock.calls.flatMap(([msg]) => ((msg as { type: string }).type === 'runnerChoiceSaved' ? [msg] : [])),
+      send: (text: string, runners: string[]) => chat.send({ type: 'sendMessage', text, runners, typed: true }),
+    };
+  }
+
+  it('saves Codex off as exactly the two allowed runners, and tells the webview the list it now holds', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+    expect(p.shown()).toEqual(ALL);
+
+    p.setRunnerEnabled('codex', false);
+
+    await vi.waitFor(() => expect(p.saved()).toEqual(ALLOWED));
+    await vi.waitFor(() => expect(p.shown()).toEqual(ALLOWED));
+  });
+
+  it('keeps Codex out of the first planning turn: list_runners drops it and list_models refuses it', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+
+    p.setRunnerEnabled('codex', false);
+    await vi.waitFor(() => expect(p.saved()).toEqual(ALLOWED));
+    p.send('build it', ALLOWED);
+    await vi.waitFor(() => expect(p.planner.service.startConversation).toHaveBeenCalled());
+
+    expect(await p.planner.listRunners()).toEqual(ALLOWED);
+    expect(await p.planner.listModels('codex')).toMatchObject({ isError: true, text: expect.stringContaining('"codex" is not enabled') });
+    expect(await p.planner.listModels('opencode')).not.toMatchObject({ isError: true });
+  });
+
+  it('keeps Codex out of a follow-up turn of a conversation that began with all three', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+    p.send('build it', ALL);
+    await vi.waitFor(() => expect(p.planner.service.startConversation).toHaveBeenCalled());
+    expect(await p.planner.listRunners()).toEqual(ALL);
+
+    p.setRunnerEnabled('codex', false);
+    await vi.waitFor(() => expect(p.saved()).toEqual(ALLOWED));
+    p.send('add a follow-up task', ALLOWED);
+    await vi.waitFor(() => expect(p.planner.service.continueConversation).toHaveBeenCalled());
+
+    expect(await p.planner.listRunners()).toEqual(ALLOWED);
+    expect(await p.planner.listModels('codex')).toMatchObject({ isError: true });
+  });
+
+  it('is read by a second consumer of the same workspace\'s settings file, a Session of its own', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+    const second = plannerModel();
+    const secondSession = sessionOver(p.h.sessionDeps.current!, new SettingsService(p.settingsPath), second);
+    await secondSession.startPlanning('goal', ALL);
+    expect(await second.listRunners()).toEqual(ALL);
+
+    p.setRunnerEnabled('codex', false);
+
+    await vi.waitFor(async () => expect(await second.listRunners()).toEqual(ALLOWED));
+    expect(await second.listModels('codex')).toMatchObject({ isError: true });
+  });
+
+  it('says the same thing twice with the same result: the request names a state, it does not flip one', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+
+    p.setRunnerEnabled('codex', false);
+    p.setRunnerEnabled('codex', false);
+
+    await vi.waitFor(() => expect(p.saved()).toEqual(ALLOWED));
+    p.setRunnerEnabled('codex', false);
+    p.setRunnerEnabled('opencode', true);
+    await vi.waitFor(() => expect(p.shown()).toEqual(ALLOWED));
+    expect(p.saved()).toEqual(ALLOWED);
+  });
+
+  it('does not bring back a runner another surface switched off since the webview last drew', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+    // The terminal UI switched Codex off; this webview has not heard yet and asks for the same.
+    p.file.updateEnabledRunners((saved) => (saved ?? ALL).filter((r) => r !== 'codex'));
+
+    p.setRunnerEnabled('codex', false);
+    p.setRunnerEnabled('opencode', false);
+
+    await vi.waitFor(() => expect(p.saved()).toEqual(['claude-code']));
+  });
+
+  it('refuses to switch off the last saved runner, whatever the webview thought it held', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+    p.file.setEnabledRunners(['claude-code']);
+    p.posted.mockClear();
+
+    p.setRunnerEnabled('claude-code', false);
+
+    await vi.waitFor(() => expect(p.shown()).toEqual(['claude-code']));
+    expect(p.saved()).toEqual(['claude-code']);
+  });
+
+  it('writes no id that is not a runner into the shared file', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+
+    p.setRunnerEnabled('no-such-agent', true);
+    p.setRunnerEnabled('no-such-agent', false);
+    p.setRunnerEnabled('codex', false);
+
+    await vi.waitFor(() => expect(p.saved()).toEqual(ALLOWED));
+    expect(p.saved()).not.toContain('no-such-agent');
+  });
+
+  it('survives discovery that finishes after the click: the saved choice stands and the late list shows it', async () => {
+    let finishDiscovery!: () => void;
+    const p = pillHost({ discovery: new Promise<void>((resolve) => { finishDiscovery = resolve; }) });
+    const starting = p.h.host.start();
+
+    p.setRunnerEnabled('codex', false);
+    finishDiscovery();
+    await starting;
+
+    await vi.waitFor(() => expect(p.saved()).toEqual(ALLOWED));
+    await vi.waitFor(() => expect(p.shown()).toEqual(ALLOWED));
+  });
+
+  it('puts the webview back on the saved list when the save is rejected, leaving the file as it was', async () => {
+    const p = pillHost();
+    await p.h.host.start();
+    vi.spyOn(p.file, 'updateEnabledRunners').mockImplementation(() => { throw new Error('EACCES: settings file is read-only'); });
+    p.posted.mockClear();
+
+    p.setRunnerEnabled('codex', false);
+
+    await vi.waitFor(() => expect(p.shown()).toEqual(ALL));
+    expect(p.saved()).toEqual(ALL);
+  });
+
+  // The webview keeps a pill click until the host answers that request by id,
+  // so a runner list alone, however late, can neither settle it nor undo it.
+  describe('acknowledges each request by its id with the saved state of that runner', () => {
+    it('answers a saved click with the request id, the runner, and the state the file now holds', async () => {
+      const p = pillHost();
+      await p.h.host.start();
+
+      const id = p.setRunnerEnabled('codex', false);
+
+      await vi.waitFor(() => expect(p.acks()).toEqual([{ type: 'runnerChoiceSaved', requestId: id, runnerId: 'codex', enabled: false }]));
+      expect(p.saved()).toEqual(ALLOWED);
+    });
+
+    it('answers a rejected save with the state the file still holds, so the pill can go back', async () => {
+      const p = pillHost();
+      await p.h.host.start();
+      vi.spyOn(p.file, 'updateEnabledRunners').mockImplementation(() => { throw new Error('EACCES: settings file is read-only'); });
+
+      const id = p.setRunnerEnabled('codex', false);
+
+      await vi.waitFor(() => expect(p.acks()).toEqual([{ type: 'runnerChoiceSaved', requestId: id, runnerId: 'codex', enabled: true }]));
+      expect(p.saved()).toEqual(ALL);
+    });
+
+    it('answers a refused switch-off of the last saved runner with that runner still on', async () => {
+      const p = pillHost();
+      await p.h.host.start();
+      p.file.setEnabledRunners(['claude-code']);
+
+      const id = p.setRunnerEnabled('claude-code', false);
+
+      await vi.waitFor(() => expect(p.acks()).toEqual([{ type: 'runnerChoiceSaved', requestId: id, runnerId: 'claude-code', enabled: true }]));
+    });
+
+    it('answers an id that names no runner with it off, and writes nothing', async () => {
+      const p = pillHost();
+      await p.h.host.start();
+
+      const id = p.setRunnerEnabled('no-such-agent', true);
+
+      await vi.waitFor(() => expect(p.acks()).toEqual([{ type: 'runnerChoiceSaved', requestId: id, runnerId: 'no-such-agent', enabled: false }]));
+      expect(p.saved()).toEqual(ALL);
+    });
+
+    it('answers a repeated request with an acknowledgement of its own, not the first one\'s', async () => {
+      const p = pillHost();
+      await p.h.host.start();
+
+      const first = p.setRunnerEnabled('codex', false);
+      const again = p.setRunnerEnabled('codex', false);
+
+      await vi.waitFor(() => expect(p.acks()).toHaveLength(2));
+      expect(p.acks()).toEqual([
+        { type: 'runnerChoiceSaved', requestId: first, runnerId: 'codex', enabled: false },
+        { type: 'runnerChoiceSaved', requestId: again, runnerId: 'codex', enabled: false },
+      ]);
+    });
+
+    it('answers two runners\' requests each under its own id', async () => {
+      const p = pillHost();
+      await p.h.host.start();
+
+      const codex = p.setRunnerEnabled('codex', false);
+      const opencode = p.setRunnerEnabled('opencode', false);
+
+      await vi.waitFor(() => expect(p.acks()).toHaveLength(2));
+      expect(p.acks()).toEqual([
+        { type: 'runnerChoiceSaved', requestId: codex, runnerId: 'codex', enabled: false },
+        { type: 'runnerChoiceSaved', requestId: opencode, runnerId: 'opencode', enabled: false },
+      ]);
+      expect(p.saved()).toEqual(['claude-code']);
+    });
+  });
+});
+
+
+describe('the repositories and branches the startup view shows', () => {
+  let h: ReturnType<typeof harness>;
+  let reads: Array<{ root: string; answer: (preview: IsolationPreview) => void }>;
+  const ready = (branch: string): IsolationPreview => ({
+    status: 'ready', shared: [], repos: [{ path: '.', head: { kind: 'branch', branch, commit: 'a1b2c3d' }, dirty: false }],
+  });
+  const sent = () => h.chat.provider.setIsolationPreview.mock.calls.map(([preview]) => preview);
+
+  beforeEach(() => {
+    reads = [];
+    h = harness({
+      isolationPreview: { preview: (root) => new Promise((resolve) => { reads.push({ root, answer: resolve }); }) },
+    });
+  });
+  afterEach(() => {
+    h.host.dispose();
+    fs.rmSync(h.workspace, { recursive: true, force: true });
+  });
+
+  it('is read for the workspace at start without holding the start up, and sent once git has answered', async () => {
+    await h.host.start();
+
+    expect(reads.map((r) => r.root)).toEqual([h.workspace]);
+    expect(sent()).toEqual([]);
+
+    reads[0].answer(ready('main'));
+    await vi.waitFor(() => expect(sent()).toEqual([ready('main')]));
+  });
+
+  it('does not hold the model discovery or the composer behind git either', async () => {
+    await h.host.start();
+
+    // Discovery has finished and the first screen's other state is out, with git still unanswered.
+    expect(h.chat.provider.setModelsByRunner).toHaveBeenCalled();
+    expect(reads).toHaveLength(1);
+  });
+
+  it('starts over when the webview connects: the old answer is cleared, then the current one sent', async () => {
+    await h.host.start();
+    reads[0].answer(ready('main'));
+    await vi.waitFor(() => expect(sent()).toHaveLength(1));
+
+    h.chat.messages.fire({ type: 'ready' });
+
+    expect(sent()).toEqual([ready('main'), null]);
+    expect(reads).toHaveLength(2);
+    reads[1].answer(ready('feature'));
+    await vi.waitFor(() => expect(sent()).toEqual([ready('main'), null, ready('feature')]));
+  });
+
+  it.each([
+    ['the configuration changes', (hh: typeof h) => { for (const listener of hh.config.listeners) listener(); }],
+    ['the window regains focus', (hh: typeof h) => { hh.vscodeApi.focus(false); hh.vscodeApi.focus(true); }],
+  ])('is read again when %s, replacing the branch shown without blanking it first', async (_when, trigger) => {
+    await h.host.start();
+    reads[0].answer(ready('main'));
+    await vi.waitFor(() => expect(sent()).toHaveLength(1));
+
+    trigger(h);
+
+    expect(reads).toHaveLength(2);
+    reads[1].answer(ready('feature'));
+    await vi.waitFor(() => expect(sent()).toEqual([ready('main'), ready('feature')]));
+  });
+
+  it('does not read when the window loses focus', async () => {
+    await h.host.start();
+
+    h.vscodeApi.focus(false);
+
+    expect(reads).toHaveLength(1);
+  });
+
+  it('drops the previous workspace\'s answer when the folders change, and a late reply from it never shows', async () => {
+    await h.host.start();
+    reads[0].answer(ready('main'));
+    await vi.waitFor(() => expect(sent()).toHaveLength(1));
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-host-other-'));
+    try {
+      // The first read is still out when the folders change.
+      h.vscodeApi.foldersChanged();
+      expect(sent()).toEqual([ready('main'), null]);
+      vi.spyOn(h.services.fsAdapter, 'getWorkspaceRoot').mockReturnValue(other);
+      h.vscodeApi.foldersChanged();
+      expect(reads.map((r) => r.root)).toEqual([h.workspace, h.workspace, other]);
+
+      reads[1].answer(ready('old-workspace-branch'));
+      await Promise.resolve();
+      expect(sent()).toEqual([ready('main'), null, null]);
+      reads[2].answer(ready('other-branch'));
+      await vi.waitFor(() => expect(sent()).toEqual([ready('main'), null, null, ready('other-branch')]));
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it('shows the newest read when an older one answers last', async () => {
+    await h.host.start();
+    h.vscodeApi.focus(true);
+    expect(reads).toHaveLength(2);
+
+    reads[1].answer(ready('newer'));
+    await vi.waitFor(() => expect(sent()).toEqual([ready('newer')]));
+    reads[0].answer(ready('older'));
+    await Promise.resolve();
+
+    expect(sent()).toEqual([ready('newer')]);
+  });
+
+  it('is sent as a failed read, never as no repository, when the look itself rejects', async () => {
+    h.host.dispose();
+    h = harness({ isolationPreview: { preview: () => Promise.reject(new Error('git exploded')) } });
+
+    await h.host.start();
+
+    await vi.waitFor(() => expect(sent()).toEqual([{ status: 'failed', repos: [], shared: [], error: 'git exploded' }]));
+  });
+
+  it('is not asked for when the host has no isolation look to give', async () => {
+    const plain = harness();
+
+    await plain.host.start();
+
+    expect(plain.chat.provider.setIsolationPreview).not.toHaveBeenCalled();
+    plain.host.dispose();
+    fs.rmSync(plain.workspace, { recursive: true, force: true });
+  });
+});
+
+describe('the repositories notice on a webview that is reloaded', () => {
+  it('reaches the reloaded webview as null, then the current answer', async () => {
+    const chat = liveChat();
+    const answers: Array<(p: IsolationPreview) => void> = [];
+    const h = harness({ chatProvider: chat.provider, isolationPreview: { preview: () => new Promise((resolve) => { answers.push(resolve); }) } });
+    try {
+      await h.host.start();
+      const preview: IsolationPreview = { status: 'no-repo', repos: [], shared: [] };
+      answers[0](preview);
+      await vi.waitFor(() => expect(chat.posted).toContainEqual({ type: 'isolationPreview', preview }));
+      chat.posted.length = 0;
+
+      chat.reload();
+      answers[1]({ status: 'disabled', repos: [], shared: [] });
+
+      await vi.waitFor(() => expect(chat.posted.filter((m) => m.type === 'isolationPreview')).toEqual([
+        { type: 'isolationPreview', preview: null },
+        { type: 'isolationPreview', preview: { status: 'disabled', repos: [], shared: [] } },
+      ]));
+    } finally {
+      h.host.dispose();
+      fs.rmSync(h.workspace, { recursive: true, force: true });
+    }
   });
 });

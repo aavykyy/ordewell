@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { type AccountLimitSnapshot, type GlobalRunSettings, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type PlanStatus, type RunnerId, type RunActivity, type RunView } from '@ordewell/core';
+import { type AccountLimitSnapshot, type GlobalRunSettings, type IsolationPreview, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type PlanStatus, type RunnerId, type RunActivity, type RunView } from '@ordewell/core';
 import { ConversationViewHost, type SavedConversation } from '../ConversationViewHost';
 import { RunViewHost } from '../RunViewHost';
 import { renderWebviewHtml } from './webviewHtml';
@@ -111,6 +111,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: 'runActivity', activity, ...(requestId !== undefined ? { requestId } : {}) });
   }
 
+  /** Answer one Runners pill request with what the shared list now holds for that runner. */
+  acknowledgeRunnerChoice(requestId: string, runnerId: RunnerId, enabled: boolean): void {
+    this.postMessage({ type: 'runnerChoiceSaved', requestId, runnerId, enabled });
+  }
+
   /** Drop the handoff card and every per-task isolation indicator. */
   clearIsolationHandoff(): void {
     this.run.clearIsolation();
@@ -159,6 +164,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._accountLimits = limits;
     this.postMessage({ type: 'accountLimits', limits });
   }
+  /** The repositories and branches the startup view shows; `null` says the read is out. Not kept: a webview that connects asks the host for a current one. */
+  setIsolationPreview(preview: IsolationPreview | null): void { this.postMessage({ type: 'isolationPreview', preview }); }
   /** Who can plan, who does plan, and that planner's effort — one message, so the webview never renders a half-switched planner. */
   setPlannerBackends(backends: PlannerBackend[], provider: string, runner?: string, effort?: string): void {
     this._plannerState = { backends, provider, runner, effort };

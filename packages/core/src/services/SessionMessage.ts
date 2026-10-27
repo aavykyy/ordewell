@@ -1,3 +1,4 @@
+import type { AccountLimitSnapshot } from '../models/AccountLimits';
 import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, PendingPlanTurn, PlannerCompaction, ReplyRun, ResearchStep, RunnerId, RunSettings, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
 import type { SessionBilling, AttemptUsage, ContextFill, ModelUsage, PlanUsage, UsageTotals } from '../models/Usage';
 import type { ExecutionRecord } from '../models/Execution';
@@ -22,6 +23,13 @@ export type SerializedTaskStatus = {
   verdict: { outcome: 'pass' | 'fail'; reason: string; checks: Verdict['checks']; reported?: Verdict['reported'] } | null;
   /** Advisory silence timestamp from VerdictEngine — not part of task status semantics. */
   idleSince?: string | null;
+  /**
+   * What the runner reported through `task_complete`, received while its
+   * attempt winds down (ADR-0018, L1): a receipt, not the verdict, which
+   * `verdict` and `status` carry once it is decided. Absent once the attempt
+   * ends or a new turn voids the report, and never saved.
+   */
+  completionReceived?: NonNullable<Verdict['reported']>;
   /** Absent unless the plan has an isolation run, so a shared-root plan's updates are unchanged. */
   isolation?: TaskIsolation;
   /** What an `awaiting_user` task waits on, when it was saved (ADR-0018, W1). */
@@ -165,20 +173,6 @@ export type SerializedPlan = {
   prdMarkdown?: string;
 };
 
-/** What a held edit does to a task once it lands. */
-export type HeldEditMark = 'added' | 'changed' | 'removed';
-
-/**
- * The plan as the open planner turn's edit would leave it, in plan order with
- * the removed tasks where they were; flat, a subtask after its parent. `label`
- * is the task's `#2.1` reference; `mark` is absent for a task the edit leaves
- * alone. Proposed, not approved: the tasks need the user's go-ahead to run.
- */
-export interface HeldEdit {
-  turnId: string;
-  tasks: Array<{ label: string; mark?: HeldEditMark; task: SerializedTask }>;
-}
-
 /** How a planner turn ended: the reply kind it settled on, a user stop, or a failure. */
 export type PlannerTurnOutcome = 'message' | 'plan' | 'task_ops' | 'stopped' | 'error';
 
@@ -226,13 +220,6 @@ export type SessionMessage =
    */
   | { type: 'planner_turn_started'; turnId: string; prompt?: string; skills?: SkillLoadNotice[]; wakeUps?: string[]; supervisor?: true; forced?: true }
   | { type: 'planner_skill_loaded'; turnId: string; skill: SkillLoadNotice }
-  /**
-   * What the open planner turn's task edit would leave, sent whenever the
-   * edit it holds changes (ADR-0029: it lands as the reply ends). `held` is
-   * null once nothing is held: the edit landed, was refused as it landed, or
-   * the turn ended without it. The plan itself is untouched until it lands.
-   */
-  | { type: 'plan_edit_held'; held: HeldEdit | null }
   /**
    * A planner turn is over; nothing more carries its `turnId`. Emitted exactly
    * once per `planner_turn_started`, stop and failure included, after the
@@ -388,7 +375,7 @@ export type PlanSnapshot = { type: 'plan_snapshot'; plan: SurfacePlan | SurfaceP
 /** What only the status stream says about a task; a plan refresh keeps these as they were. */
 export type RunTaskStatus = Partial<Pick<
   SerializedTaskStatus,
-  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'attempted'
+  'verdict' | 'idleSince' | 'completionReceived' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'attempted'
 >>;
 
 /** A task in the run view: the plan's fields, then the status stream's. */
@@ -436,8 +423,6 @@ export interface RunView {
   usage?: PlanUsage;
   handoff: IsolationHandoff | null;
   mergeResult: IsolationMergeResult | null;
-  /** The edit the open planner turn holds, as it would leave the plan; absent when it holds none. */
-  heldEdit?: HeldEdit;
   /** What the scheduler is doing with the plan, as {@link RunActivity}. */
   activity?: RunActivity;
 }
@@ -500,6 +485,7 @@ export function serializeTaskStatus(
   checkpoint = '',
   waitsForApproval = false,
   holdReason: string | null = null,
+  completionReceived: Verdict['reported'] | null = null,
 ): SerializedTaskStatus {
   return {
     id: t.id,
@@ -509,6 +495,7 @@ export function serializeTaskStatus(
       ? { outcome: t.verdict.outcome, reason: t.verdict.reason, checks: t.verdict.checks || [], ...(t.verdict.reported ? { reported: t.verdict.reported } : {}) }
       : null,
     idleSince,
+    ...(completionReceived ? { completionReceived } : {}),
     ...(t.attempted ? { attempted: true as const } : {}),
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(isolation ? { isolation } : {}),
@@ -608,4 +595,10 @@ export function truncateCheckpointSummary(summary: string): string {
   const firstLine = summary.split('\n')[0].trim();
   if (firstLine.length <= CHECKPOINT_TRUNCATE_LENGTH) return firstLine;
   return firstLine.slice(0, CHECKPOINT_TRUNCATE_LENGTH - 1) + '…';
+}
+
+/** Host-owned live data: never part of a Session's transcript or saved plan. */
+export interface AccountLimitsMessage {
+  type: 'account_limits';
+  limits: readonly AccountLimitSnapshot[];
 }

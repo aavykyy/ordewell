@@ -63,7 +63,8 @@ runners are saved in one place.**
 - The enabled runners are saved in the settings file (`enabledRunners`), which
   the terminal UI, the daemon and VS Code all read. VS Code's own
   `ordewell.enabledRunners` is retired: a list set there is copied once, unless
-  the file already holds a choice, and the setting is cleared. An empty list is
+  the file already holds a choice, and the setting is cleared. VS Code's runner
+  pills write this same list, as the terminal UI's toggles do. An empty list is
   not copied: it was one window's "none", and as the file's choice it would
   empty the catalog of every surface on the machine.
 - A change is made on the file as it is now (`updateEnabledRunners`), never on
@@ -87,7 +88,11 @@ runners are saved in one place.**
 
 - The planner learns of a change once, on the turn after it, and again only if
   that turn did not happen.
-- Nothing is moved, blocked or refused because of a change of scope.
+- No task already in the plan is moved, blocked or refused because of a
+  change of scope, and an edit that leaves one where it is lands. New work the
+  planner writes goes only on the runners enabled now (ADR-0003, V1): a task it
+  adds, moves onto a runner switched off, or makes by splitting or merging is
+  refused there, with the enabled runners named.
 - A runner toggled in VS Code is toggled in the terminal UI and the daemon, and
   the reverse.
 
@@ -115,3 +120,4 @@ runners are saved in one place.**
 - 2026-10-17 — the stamp check and the swap are serialized across processes by a lock file; `ordewell status` flags tasks outside the scope too.
 - 2026-10-17 — the settings lock is removed only by its holder; the planner's note does not call a task whose attempt ended running.
 - 2026-10-17 — a stale lock is removed only once two looks a poll apart agree it is the same one, never moved aside to be looked at; the wait is bounded and a removal that fails is raised.
+- 2026-10-26 — a planner change may put new work only on the runners enabled now, the tasks already in the plan staying as they are; VS Code's runner pills write the shared list.

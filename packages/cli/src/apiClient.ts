@@ -19,6 +19,7 @@ import type {
   GeneratePlanResponse,
   IsolationDiffResponse,
   IsolationMergeResponse,
+  IsolationPreviewResponse,
   MergeGateEntry,
   MergeGateResponse,
   ModelsResponse,
@@ -31,6 +32,7 @@ import type {
   ResolveConflictResponse,
   RewindTarget,
   RewindTargetsResponse,
+  AccountLimitsFrame,
   RunSnapshotFrame,
   RunnersResponse,
   SessionFrame,
@@ -160,7 +162,7 @@ export type { SessionMeta };
  * broadcast carries its place in the session's stream, for a client holding
  * several sockets to tell one broadcast's copies from two broadcasts.
  */
-export type WsEvent = SessionFrame | RunSnapshotFrame;
+export type WsEvent = SessionFrame | RunSnapshotFrame | AccountLimitsFrame;
 
 /** A held subscription to a session (`followSession`). `ended` is `'lost'` unless `close` ended it. */
 export interface SessionFollow {
@@ -533,6 +535,16 @@ export class ApiClient {
   /** Aborts a planning turn in flight. A harmless no-op when the session isn't planning. */
   cancelPlanning(sessionId: string): Promise<CancelPlanningResponse> {
     return this.call('POST', `/api/plans/${sessionId}/planning/stop`, 'Cancel planning failed');
+  }
+
+  /**
+   * The repositories and branches the daemon would isolate for `workspace`,
+   * read without starting a run or touching any repository. Never rejects for
+   * a repository that cannot be read: the daemon answers a `failed` preview.
+   */
+  getIsolationPreview(workspace?: string): Promise<IsolationPreviewResponse> {
+    const qs = workspace ? `?workspace=${encodeURIComponent(workspace)}` : '';
+    return this.call('GET', `/api/workspaces/isolation-preview${qs}`, 'Failed to read the repositories');
   }
 
   getSessions(workspace?: string): Promise<SessionListResponse> {

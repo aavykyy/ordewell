@@ -14,7 +14,7 @@ function fakeSession(tasks: Task[] = []) {
     tasks,
     enabled: ['claude-code'] as RunnerId[],
     allowlist: {} as Record<string, string[]>,
-    held: [] as TaskOp[],
+    handles: new Map<string, string>(),
     skills: undefined as SkillLookup | undefined,
     guard: undefined as PlanChangeScope['guard'],
   };
@@ -23,7 +23,7 @@ function fakeSession(tasks: Task[] = []) {
     runners: (kind) => (kind === 'plan' ? [...live.enabled] : [...new Set([...live.tasks.map((t) => t.assignedRunner), ...live.enabled])]),
     catalog: () => ({ modelsByRunner: { 'claude-code': [model('sonnet'), model('opus')], codex: [model('gpt-5')] }, perRunnerAllowlist: live.allowlist }),
     skills: () => live.skills ?? { findSkill: () => undefined, searchedDirs: () => [] },
-    held: () => live.held,
+    handles: () => live.handles,
     guard: (before, after) => live.guard?.(before, after),
   };
   return { live, check: new PlanChangeCheck(scope) };
@@ -96,31 +96,27 @@ describe('a whole plan, as submitted and as it lands', () => {
   });
 });
 
-describe('an edit, as it is made and as it lands', () => {
+describe('an edit, as it commits', () => {
   const plan = () => [createTask({ id: 't1', order: 1, title: 'Build', prompt: 'p', assignedRunner: 'claude-code', assignedModel: { modelId: 'sonnet', modelLabel: 'sonnet' } })];
 
-  it('joins the held ops at submit and leaves the plan as the whole batch landing does', async () => {
-    const { live, check } = fakeSession(plan());
-    const rename: TaskOp = { op: 'update', taskId: '#1', changes: { title: 'Build it' } };
-    const add: TaskOp = { op: 'add', task: { title: 'Ship', prompt: 'ship', dependencies: ['#1'] } };
-    live.held = [rename];
+  it('names a task an earlier batch of its turn added by the handle that batch gave it', async () => {
+    const { live, check } = fakeSession([...plan(), createTask({ id: 'x2', order: 2, title: 'Ship', prompt: 'ship', assignedRunner: 'claude-code' })]);
+    live.handles = new Map([['ship', 'x2']]);
+    const rename: TaskOp = { op: 'update', taskId: 'ship', changes: { title: 'Ship it' } };
 
-    const submitted = passed(await check.check({ kind: 'ops', ops: [add] }, 'submit'));
-    const landed = passed(await check.check({ kind: 'ops', ops: [rename, add] }, 'land'));
+    const landed = passed(await check.check({ kind: 'ops', ops: [rename] }, 'land'));
 
-    expect(landed.tasks).toEqual(submitted.tasks);
-    expect(landed.adjustments).toEqual(submitted.adjustments);
-    expect(landed.tasks.map((t) => t.title)).toEqual(['Build it', 'Ship']);
+    expect(landed.tasks.map((t) => [t.id, t.title])).toEqual([['t1', 'Build'], ['x2', 'Ship it']]);
   });
 
-  it('names the op a refusal is about as data, an op the turn already held as an earlier one', async () => {
+  it('refuses a handle an earlier batch of its turn gave, naming the op as data', async () => {
     const { live, check } = fakeSession(plan());
-    live.held = [{ op: 'remove', taskId: '#9' }];
+    live.handles = new Map([['ship', 'x2']]);
 
-    const refused = await check.check({ kind: 'ops', ops: [{ op: 'update', taskId: '#1', changes: { title: 'x' } }] }, 'submit');
+    const refused = await check.check({ kind: 'ops', ops: [{ op: 'add', task: { title: 'Ship again', prompt: 'p' }, handle: 'ship' }] }, 'land');
 
-    expect(refused).toMatchObject({ ok: false, errors: [{ op: { number: 1, kind: 'remove', earlier: true } }] });
-    expect(refused.ok ? [] : refused.errors.map(planChangeErrorText)).toEqual([expect.stringMatching(/^earlier op 1 \(remove\): /)]);
+    expect(refused).toMatchObject({ ok: false, errors: [{ op: { number: 1, kind: 'add' } }] });
+    expect(refused.ok ? [] : refused.errors.map(planChangeErrorText)).toEqual([expect.stringMatching(/^op 1 \(add\): handle "ship" already names a task an earlier edit/)]);
   });
 
   it('pins a planner skill an op attaches to that op', async () => {

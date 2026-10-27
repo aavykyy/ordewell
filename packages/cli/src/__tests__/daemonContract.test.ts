@@ -124,6 +124,16 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
     return err as DaemonError;
   }
 
+  describe('workspaces', () => {
+    it('reads the repositories and branches a first screen shows, without starting or changing anything', async () => {
+      const { preview } = await client.getIsolationPreview(workspace);
+
+      expect(preview.status).toBe('no-repo');
+      expect(preview.repos).toEqual([]);
+      expect(pool.hasSession('session-preview')).toBe(false);
+    });
+  });
+
   describe('sessions', () => {
     it('adopts a saved session and answers with its plan and goal', async () => {
       saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');

@@ -18,7 +18,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-// Autorun off: with it on, what the planner adds in the user's turn is approved as it lands.
+// Autorun off: with it on, what the planner adds in the user's turn is approved as it commits.
 const GUARDED: Options = { settings: { supervisorLevel: 'off', autorun: false }, config: { autonomousMode: false, maxParallelSessions: 2 } };
 
 const FULL_AUTORUN: Options = { settings: { supervisorLevel: 'off', autorun: true }, config: { autonomousMode: true } };
@@ -32,7 +32,6 @@ const cards = (env: Env) => env.messages.flatMap((m) => (m.type === 'approval_re
 const answer = (result: { text: string }) => JSON.parse(result.text) as { result?: string; reason?: string };
 const history = (env: Env) => env.session.planState!.conversationHistory!;
 const timeline = (env: Env) => history(env).filter((e) => e.kind === 'execution').map((e) => e.content);
-const notes = (env: Env) => history(env).filter((e) => e.kind === 'system').map((e) => e.content);
 
 /** The user's turn during the run adds a task with no start tool, and ends. */
 async function addedInUsersTurn(env: Env, title = 'New unapproved work'): Promise<string> {
@@ -101,18 +100,22 @@ describe('the scheduler starts only approved tasks', () => {
 });
 
 describe('a Stop withdraws every start admitted before it', () => {
-  /** A planner turn of the user's that edits task 1 and asks to run the plan, which waits for the edit to land. */
-  async function queuedRunPlan(env: Env): Promise<void> {
+  /**
+   * A planner turn of the user's that edits task 1 and runs the plan, whose
+   * starts the turn's start hold keeps until its reply ends (ADR-0029); the
+   * edit is in the plan as its call answers (ADR-0022 P2).
+   */
+  async function heldRunPlan(env: Env): Promise<void> {
     void env.session.continueConversation('reword task 1, then run the plan');
     await until(() => env.planner.calls.length === 1);
     await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, carefully' } }] }, ctx);
-    const queued = await env.planner.tools().runPlan!({}, ctx);
-    expect(answer(queued).result).toMatch(/^Queued:/);
+    const ran = await env.planner.tools().runPlan!({}, ctx);
+    expect(answer(ran).result).toBe('The plan is running: what is ready starts once this reply ends, and the rest as their dependencies finish.');
   }
 
-  it('a run of the plan queued behind the turn\'s edit does not start after the user started and stopped the run, and says so', async () => {
+  it('a run of the plan held by the turn does not start after the user started and stopped the run', async () => {
     const env = await supervised([task('t1', 1)], { ...FULL, execute: false });
-    await queuedRunPlan(env);
+    await heldRunPlan(env);
 
     expect(await env.session.execute({ command: 'run_plan' }, USER)).toMatchObject({ ok: true });
     expect(await env.session.execute({ command: 'stop_run' }, USER)).toMatchObject({ ok: true });
@@ -122,17 +125,16 @@ describe('a Stop withdraws every start admitted before it', () => {
 
     expect(env.run.spawnedIds()).toEqual([]);
     expect(timeline(env)).toEqual([
+      'The planner started the plan.',
       'You started the plan.',
       'You stopped the run.',
-      `The planner asked to run the plan; refused: ${STOPPED}`,
     ]);
-    expect(notes(env)).toContain('Not done: the queued run of the plan was stopped before it could start.');
     expect(taskOf(env.session, 't1')!.prompt).toBe('do t1, carefully');
   });
 
-  it('a Stop with nothing running yet still withdraws a queued start, and says it stopped', async () => {
+  it('a Stop with nothing running yet still withdraws a run the turn holds', async () => {
     const env = await supervised([task('t1', 1)], { ...FULL, execute: false });
-    await queuedRunPlan(env);
+    await heldRunPlan(env);
 
     const stopped = await env.session.execute({ command: 'stop_run' }, USER);
     env.planner.calls[0].finish(prose('Reworded it.'));
@@ -150,17 +152,17 @@ describe('a Stop withdraws every start admitted before it', () => {
     void env.session.continueConversation('add a cache and run it');
     await until(() => env.planner.calls.length === 1);
     await env.planner.tools().editPlan!({ ops: [{ op: 'add', task: { title: 'Add a cache', prompt: 'add a cache' } }] }, ctx);
-    await env.planner.tools().runPlan!({}, ctx);
-    env.planner.calls[0].finish(prose('Added it.'));
+    const pending = env.planner.tools().runPlan!({}, ctx);
     await until(() => cards(env).length === 1);
 
     env.session.resolveApproval(cards(env)[0].id, true);
     env.session.stopExecution();
+    env.planner.calls[0].finish(prose('Added it.'));
     await settled();
     await settled();
 
+    expect(answer(await pending).reason).toBe(STOPPED);
     expect(env.run.spawnedIds()).toEqual(['t1']);
-    expect(notes(env)).toContain('Not done: the queued run of the plan was stopped before it could start.');
   });
 
   it('a Stop answers a start still waiting on the card as stopped, not declined, and clears the card', async () => {
@@ -182,7 +184,7 @@ describe('a Stop withdraws every start admitted before it', () => {
 
   it('lets a new start after the Stop run', async () => {
     const env = await supervised([task('t1', 1)], { ...FULL, execute: false });
-    await queuedRunPlan(env);
+    await heldRunPlan(env);
     await env.session.execute({ command: 'stop_run' }, USER);
     env.planner.calls[0].finish(prose('Reworded it.'));
     await settled();

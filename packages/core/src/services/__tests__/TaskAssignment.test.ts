@@ -273,10 +273,10 @@ describe('resolveAssignment: a manual task', () => {
 });
 
 describe('assignableRunners', () => {
-  it('is the enabled runners for a plan, the plan\'s too for an edit, and any for the user', () => {
-    expect(assignableRunners('plan', ['claude-code'], ['codex'])).toEqual(['claude-code']);
-    expect(assignableRunners('edit', ['claude-code'], ['codex'])).toEqual(['codex', 'claude-code']);
-    expect(assignableRunners('user', ['claude-code'], ['codex'])).toBeUndefined();
+  it('is the enabled runners for a plan and an edit alike, and any for the user', () => {
+    expect(assignableRunners('plan', ['claude-code'])).toEqual(['claude-code']);
+    expect(assignableRunners('edit', ['claude-code'])).toEqual(['claude-code']);
+    expect(assignableRunners('user', ['claude-code'])).toBeUndefined();
   });
 });
 

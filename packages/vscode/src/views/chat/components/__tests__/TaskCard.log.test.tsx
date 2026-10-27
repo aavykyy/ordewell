@@ -65,6 +65,17 @@ describe('task chat availability', () => {
     expect(screen.queryByRole('button', { name: 'Read full handoff' })).toBeNull();
   });
 
+  it('keeps a nested handoff hidden until its task is expanded', () => {
+    const handoff = { summary: 'Nested result', findings: [], findingCount: 0 };
+    render(<SubTaskCard task={makeTask({ id: 'child', status: 'completed', handoff })}
+      parentTask={makeTask({ id: 'parent' })} models={[]} />);
+    expect(screen.queryByText('Nested result')).toBeNull();
+    fireEvent.click(screen.getByText('Test task'));
+    expect(screen.getByText('Nested result')).toBeTruthy();
+    fireEvent.click(screen.getByText('Test task'));
+    expect(screen.queryByText('Nested result')).toBeNull();
+  });
+
   it('keeps the prompt and details openable before the task starts', () => {
     const { container } = render(<TaskCard task={makeTask({ prompt: 'Do the thing' })} models={[]} onOpenLog={() => {}} />);
     fireEvent.click(screen.getByText('Test task'));

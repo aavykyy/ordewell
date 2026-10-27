@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, act, fireEvent, cleanup } from '@testing-library/react';
-import { EMPTY_TASK_LOG, EMPTY_TASK_LOG_FOLLOW, taskLogHeaderView, type AttemptUsage, type DisplayBlock, type RunnerCommand, type StructuredTurnEnd, type TaskLogFollow, type TaskLogHeaderTask, type TaskUsageSummary, type UsageTotals } from '@ordewell/core';
+import { EMPTY_TASK_LOG, EMPTY_TASK_LOG_FOLLOW, taskLogHeaderView, type AccountLimitSnapshot, type AttemptUsage, type DisplayBlock, type RunnerCommand, type StructuredTurnEnd, type TaskLogFollow, type TaskLogHeaderTask, type TaskUsageSummary, type UsageTotals } from '@ordewell/core';
 import { replayTaskLog } from '@ordewell/core/plan-utils';
 import TaskLogApp from '../TaskLogApp';
 import type { HostToTaskLog, TaskLogStatus } from '../../../shared/taskLogProtocol';
@@ -91,6 +91,21 @@ const message = (id: string, text: string): DisplayBlock => ({ type: 'message', 
 function init(overrides: StatusOverrides = {}, blocks: DisplayBlock[] = [message('b1', 'hello from the agent')]): void {
   send({ type: 'init', status: status(overrides), blocks });
 }
+
+/** Each footer row as a reader sees it: the limits' screen-reader description is in the DOM but never drawn. */
+function visibleFooter(): string[] {
+  return [...document.querySelectorAll('.usage-line')].map((line) => {
+    const drawn = line.cloneNode(true) as Element;
+    drawn.querySelectorAll('.account-limit-details').forEach((details) => details.remove());
+    return drawn.textContent ?? '';
+  });
+}
+
+const claudeLimits: AccountLimitSnapshot = {
+  harness: 'claude-code', label: 'Claude Code', status: 'fresh', plan: 'Pro',
+  buckets: [{ id: 'claude-code', windows: [{ slot: 'primary', usedPercent: 18, durationMinutes: 300, resetsAt: null }] }],
+  readAt: '2026-03-02T10:00:00.000Z',
+};
 
 describe('the task log tab (ADR-0018, V1)', () => {
   beforeEach(() => {
@@ -193,7 +208,8 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.queryByRole('status')).toBeNull();
 
     send({ type: 'status', status: status({ usage: { totals: { inputTokens: 12400, outputTokens: 3100, cachedInputTokens: 2000, reportedCost: { USD: 0.42 } }, contextFill: { usedTokens: 36_000, windowTokens: 200_000 } } }) });
-    expect(screen.getByRole('status')).toHaveTextContent(/^ctx 36k \(18%\) · \$0\.42$/);
+    expect(visibleFooter()).toEqual(['ctx 36k (18%) · $0.42']);
+    expect(screen.getAllByRole('status').map((region) => region.textContent)).toEqual(['ctx 36k (18%)', '$0.42']);
     expect(screen.getByText(/ctx 36k/)).toHaveAttribute('title', '36,000 of 200,000 tokens');
 
     send({ type: 'status', status: status({ usage: { totals: { inputTokens: 13000, outputTokens: 3200 }, contextFill: { usedTokens: 13_000 } } }) });
@@ -213,6 +229,44 @@ describe('the task log tab (ADR-0018, V1)', () => {
 
     const lines = [...document.querySelectorAll('.usage-line')].map((el) => el.textContent);
     expect(lines).toEqual(['attempt 1: ctx 10k (5%) · $0.50', 'task total: ctx 50k (25%) · $1.50']);
+  });
+
+  it('keeps an earlier attempt\'s own row unchanged and draws live limits once, after the task total\'s context, as the TUI does', () => {
+    render(<TaskLogApp />);
+    send({ type: 'accountLimits', limits: [claudeLimits] });
+    init({
+      attempt: 1, attempts: [1, 2],
+      usage: { totals: { inputTokens: 1000, reportedCost: { USD: 0.5 } }, contextFill: { usedTokens: 10_000, windowTokens: 200_000 } },
+      usageTotal: { totals: { inputTokens: 1500, reportedCost: { USD: 1.5 } }, contextFill: { usedTokens: 50_000, windowTokens: 200_000 } },
+    });
+
+    expect(visibleFooter()).toEqual(['attempt 1: ctx 10k (5%) · $0.50', 'task total: ctx 50k (25%) · Claude Code 5h 18% used · $1.50']);
+    expect(document.querySelectorAll('.account-limit')).toHaveLength(1);
+    expect(document.querySelector('.account-limit')!.closest('.usage-line')!.className).toContain('usage-line-total');
+    expect(document.querySelector('.account-limits')!.closest('[role="status"]')).toBeNull();
+    expect(screen.getByText('task total: ctx 50k (25%)')).toHaveAttribute('title', '50,000 of 200,000 tokens');
+
+    init({ usage: { totals: { inputTokens: 500, reportedCost: { USD: 1 } }, contextFill: { usedTokens: 40_000, windowTokens: 200_000 } } });
+    expect(visibleFooter()).toEqual(['ctx 40k (20%) · Claude Code 5h 18% used · $1.00']);
+  });
+
+  it('joins only the known parts around the limits when the context, the cost or a percentage is missing', () => {
+    render(<TaskLogApp />);
+    send({ type: 'accountLimits', limits: [{ ...claudeLimits, buckets: [{ id: 'claude-code', windows: [
+      { slot: 'primary', usedPercent: 18, durationMinutes: 300, resetsAt: null },
+      { slot: 'secondary', usedPercent: null, durationMinutes: 10080, resetsAt: null },
+    ] }] }] });
+    init();
+    expect(visibleFooter()).toEqual(['Claude Code 5h 18% used']);
+
+    init({ usage: { totals: { inputTokens: 10 }, contextFill: { usedTokens: 13_000 } } });
+    expect(visibleFooter()).toEqual(['ctx 13k · Claude Code 5h 18% used']);
+
+    init({ usage: { totals: { inputTokens: 10, reportedCost: { USD: 0.42 } } } });
+    expect(visibleFooter()).toEqual(['Claude Code 5h 18% used · $0.42']);
+
+    init({ attempt: 1, attempts: [1, 2], usage: { totals: { reportedCost: { USD: 0.5 } } }, usageTotal: { totals: { reportedCost: { USD: 1.5 } } } });
+    expect(visibleFooter()).toEqual(['attempt 1: $0.50', 'Claude Code 5h 18% used · task total: $1.50']);
   });
 
   it('completes only the runner commands and sends a command with arguments', () => {
@@ -668,7 +722,7 @@ describe('a message the runner reads mid-turn (ADR-0023)', () => {
     expect(screen.getByText('then add tests')).toBeTruthy();
   });
 
-  it('draws its runner\'s account limits under the task\'s own spend, and keeps them across an attempt switch', () => {
+  it('draws its runner\'s account limits beside the task\'s own spend, and keeps them across an attempt switch', () => {
     render(<TaskLogApp />);
     init({ usage: { totals: { inputTokens: 10, reportedCost: { USD: 1.5 } }, contextFill: { usedTokens: 50_000, windowTokens: 200_000 } } });
     send({ type: 'accountLimits', limits: [{
@@ -677,8 +731,7 @@ describe('a message the runner reads mid-turn (ADR-0023)', () => {
       readAt: '2026-03-02T10:00:00.000Z',
     }] });
 
-    expect(document.querySelector('.usage-line')!.textContent).toBe('ctx 50k (25%) · $1.50');
-    expect(document.querySelector('.account-limit')!.textContent).toBe('Claude Code 5h 24% used · Weekly 61% used');
+    expect(visibleFooter()).toEqual(['ctx 50k (25%) · Claude Code 5h 24% used · Weekly 61% used · $1.50']);
 
     init({ attempt: 1, attempts: [1, 2] });
     expect(document.querySelector('.account-limit')!.textContent).toBe('Claude Code 5h 24% used · Weekly 61% used');

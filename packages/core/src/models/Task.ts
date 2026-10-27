@@ -768,6 +768,13 @@ export interface LegacyPlanState {
    * must leave it behind rather than share it.
    */
   isolation?: PlanIsolation;
+  /**
+   * The id of the plan's last isolated run, which closed with everything it
+   * landed merged into the user's branch; absent once a later run decides how
+   * it executes. With no run record left, it is what tells a Merge all asked
+   * for after that run from one in a plan that never isolated (ADR-0029).
+   */
+  mergedRun?: string;
   /** Kept so a reopened session shows the same token line (#49). */
   plannerUsage?: PlannerUsage;
   /** The windows reported over the session, so a reopened one knows each model's from its first call. */

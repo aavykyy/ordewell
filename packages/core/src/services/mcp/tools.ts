@@ -187,7 +187,7 @@ const taskOp = z.discriminatedUnion('op', [
 ]);
 
 const editPlanInput = z.object({
-  ops: z.array(taskOp).min(1).describe('Applied as one batch; every ref resolves against the plan before any op runs.'),
+  ops: z.array(taskOp).min(1).describe('Applied as one batch, whole or not at all; every ref resolves against the plan as it stands when the call is made, before any op runs.'),
 });
 
 const taskQueryInput = z.object({
@@ -577,13 +577,13 @@ const PLANNER_EXECUTES = { readOnlyHint: false };
 export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
   tool('run_plan', 'Start the whole plan, as the user\'s Execute plan does. Only a plan the user has approved; in Guarded the user is asked first.',
     runPlanInput, (h) => h.runPlan?.bind(h), PLANNER_EXECUTES),
-  tool('run_task', 'Start one task now. Refused, with the reason, for a task whose dependencies have not finished, one waiting for Merge all, or one the user has not approved; in Guarded the user is asked first. A task this reply\'s edit_plan adds may be named by the handle that edit gave it, or its title; the start waits for the edit to land as the reply ends.',
+  tool('run_task', 'Start one task now. Refused, with the reason, for a task whose dependencies have not finished, one waiting for Merge all, or one the user has not approved; in Guarded the user is asked first. A task an edit_plan call of this reply added is in the plan already: name it by the id or handle that call answered with, or its title.',
     oneTaskInput, (h) => h.runTask?.bind(h), PLANNER_EXECUTES),
   tool('stop_task', 'Stop one running task: it goes back to not started and stays held, through a run_plan too, until it is retried or force started, and its open approvals are denied.',
     oneTaskInput, (h) => h.stopTask?.bind(h), PLANNER_EXECUTES),
   tool('stop_run', 'Stop every running task and the run. The plan is kept.',
     runPlanInput, (h) => h.stopRun?.bind(h), PLANNER_EXECUTES),
-  tool('retry_task', 'Start a new attempt of a failed, stopped or waiting task: fresh from its prompt, or continuing its saved session with a message. To change what it is told, edit its prompt with edit_plan first. A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset. In Guarded the user is asked first. A task this reply\'s edit_plan adds may be named by the handle that edit gave it, or its title; the start waits for the edit to land as the reply ends.',
+  tool('retry_task', 'Start a new attempt of a failed, stopped or waiting task: fresh from its prompt, or continuing its saved session with a message. To change what it is told, edit its prompt with edit_plan first. A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset. In Guarded the user is asked first. A task an edit_plan call of this reply added is in the plan already: name it by the id or handle that call answered with, or its title.',
     retryTaskInput, (h) => h.retryTask?.bind(h), PLANNER_EXECUTES),
   tool('skip_task', 'Give up waiting for a task that failed, is blocked or is waiting for input: it ends as skipped, none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done, told your reason. It never marks work complete. Only the supervisor at Act may, in a wake-up turn; a reason is required.',
     skipTaskInput, (h) => h.skipTask?.bind(h), PLANNER_EXECUTES),
@@ -604,9 +604,9 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     listRunnersInput, (h) => h.listRunners?.bind(h), PLANNER_READ_ONLY),
   tool('list_models', 'List the models a runner may use right now, with labels and thinking-effort variants.',
     listModelsInput, (h) => h.listModels?.bind(h), PLANNER_READ_ONLY),
-  tool('submit_plan', 'Submit the whole plan. It is checked against the live runners and models; an error names the task, the field and what would be accepted.',
+  tool('submit_plan', 'Submit the whole plan. It is checked against the live runners and models and, once accepted, is the current plan at once, its tasks named in the answer; an error names the task, the field and what would be accepted, and changes nothing.',
     submitPlanInput, (h) => h.submitPlan?.bind(h), PLANNER_READ_ONLY),
-  tool('edit_plan', 'Change the current plan with task operations: update, add, remove, reorder, merge, split or rearm.',
+  tool('edit_plan', 'Change the current plan with task operations: update, add, remove, reorder, merge, split or rearm. Each call is checked and applied at once, whole or not at all, and answers with the tasks it added and the task each handle names; an error changes nothing.',
     editPlanInput, (h) => h.editPlan?.bind(h), PLANNER_READ_ONLY),
   tool('task_query', 'Read the long fields of plan tasks that the plan summary leaves out (prompt, user steps, verdict, output summary, handoff, attached skills), and optionally the live runner catalog. Read a task before you rewrite it.',
     taskQueryInput, (h) => h.taskQuery?.bind(h), PLANNER_READ_ONLY),

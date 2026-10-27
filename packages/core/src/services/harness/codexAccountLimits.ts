@@ -3,6 +3,7 @@ import type { AccountLimitBucket, AccountLimitWindow } from '../../models/Accoun
 import type { AccountLimitCollector, AccountLimitReading } from '../AccountLimitMonitor';
 import type { AgentProcessDeps } from './AgentAdapter';
 import { APP_SERVER_CLIENT_INFO, openAppServer } from './appServerModels';
+import type { RpcResponse } from './codexRpc';
 import { settleWithin } from './settleWithin';
 import { workspaceEnvOf } from '../workspaceEnv';
 
@@ -61,6 +62,7 @@ export function codexAccountLimitCollector(options: CodexAccountLimitOptions): A
 }
 
 async function readCodexAccountLimits(command: string, args: string[], options: CodexAccountLimitOptions, signal: AbortSignal): Promise<AccountLimitReading> {
+  let accountRead = false;
   let accountChanged = false;
   let followUp = false;
   let owner: string | undefined;
@@ -69,9 +71,11 @@ async function readCodexAccountLimits(command: string, args: string[], options: 
     cwd: tmpdir(),
     deps: { ...(root ? { workspaceEnv: () => workspaceEnvOf(root) } : {}), ...options.deps },
     onMessage: (message) => {
-      // No stable identity comes with it, so whatever this read says may be
-      // the account that was just replaced.
-      if (message.method === 'account/updated') accountChanged = true;
+      // Codex announces the account it resolved at startup, unprompted, and
+      // the account/read answer that follows already reflects it. After that
+      // answer, no stable identity comes with one, so whatever this read says
+      // may be the account that was just replaced.
+      if (message.method === 'account/updated') accountChanged ||= accountRead;
       // Sparse: it says something moved, not what the whole picture is.
       else if (message.method === 'account/rateLimits/updated') followUp = true;
       // Nothing this connection does gives Codex a reason to ask anything.
@@ -87,7 +91,13 @@ async function readCodexAccountLimits(command: string, args: string[], options: 
     if (!initialized.ok) return failed();
     server.notify('initialized', {});
     // `refreshToken: false`: the account as Codex holds it, without asking it to refresh anything.
-    const account = await rpc.call('account/read', { refreshToken: false });
+    // Marked on the answer's own line, where CodexRpc runs its handlers: a
+    // microtask later, an announcement on the next line of the same chunk
+    // would already have been let through.
+    const account = await new Promise<RpcResponse>((resolve) => rpc.send('account/read', { refreshToken: false }, (response) => {
+      accountRead = true;
+      resolve(response);
+    }));
     if (!account.ok) return account.code === METHOD_NOT_FOUND ? { kind: 'unsupported' } : failed();
     const who = codexAccountOwner(account.result);
     if (typeof who !== 'string') return who;

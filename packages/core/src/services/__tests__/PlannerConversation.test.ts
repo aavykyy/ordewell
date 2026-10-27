@@ -882,28 +882,51 @@ describe('PlannerConversation planner turn', () => {
     expect(conversation.isTurnInFlight).toBe(false);
   });
 
-  it('takes back the edit an abandoned turn showed at once, and tells nothing of it once another turn shows one', async () => {
+  it('commits nothing a tool hands an abandoned turn, and commits what it hands the next one at once', async () => {
     const { ai, calls } = heldBackend();
-    const { conversation, host, checks } = fakeHost(ai, threeTurnPlan());
-    checks.rules.mockReturnValue(passed({ summary: ['removed #1'] }));
-    const sent = () => vi.mocked(host.broadcast).mock.calls.map(([m]) => m);
-    const held = () => sent().flatMap((m) => (m.type === 'plan_edit_held' ? [m.held?.turnId ?? null] : []));
+    const { conversation, state, checks } = fakeHost(ai, threeTurnPlan());
+    checks.rules.mockReturnValue(passed({ summary: ['changed'] }));
+    const planned = () => state.plan!.conversationHistory!.filter((m) => m.content.startsWith('Tasks updated')).length;
 
     const abandoned = conversation.reply('Remove #1');
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    conversation.submit({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#1' }] });
+    const lateTurn = conversation.currentTurnId;
     conversation.abandonTurn();
-    expect(held().at(-1)).toBeNull();
+    expect(await conversation.commitFromTool({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#1' }] }, lateTurn)).toMatchObject({ ok: false });
+    expect(planned()).toBe(0);
 
     const next = conversation.reply('Remove #2');
     await vi.waitFor(() => expect(calls).toHaveLength(2));
-    conversation.submit({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#2' }] });
-    const nextTurn = conversation.currentTurnId;
+    expect(await conversation.commitFromTool({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#2' }] }, conversation.currentTurnId)).toMatchObject({ ok: true });
+    expect(planned()).toBe(1);
     calls[0].finish({ kind: 'message', text: 'late', researchLog: [] });
     await expect(abandoned).rejects.toThrow(PlannerTurnDiscardedError);
-
-    expect(held().at(-1)).toBe(nextTurn);
     calls[1].finish({ kind: 'message', text: 'Removed.', researchLog: [] });
+    await next;
+
+    expect(planned()).toBe(1);
+  });
+
+  it('still tells the next turn a run update that came in after a tool committed in this one', async () => {
+    const { ai, calls } = heldBackend();
+    const { conversation, checks } = fakeHost(ai, threeTurnPlan());
+    checks.rules.mockReturnValue(passed({ summary: ['changed'] }));
+    const sent = () => vi.mocked(ai.continueConversation).mock.calls.map(([message]) => message);
+
+    conversation.tellRunUpdate('task 1 failed');
+    const first = conversation.reply('Fix task 1');
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(await conversation.commitFromTool({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#2' }] }, conversation.currentTurnId)).toMatchObject({ ok: true });
+    conversation.tellRunUpdate('task 3 passed');
+    calls[0].finish({ kind: 'message', text: 'Removed task 2.', researchLog: [] });
+    await first;
+
+    const next = conversation.reply('And now?');
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(sent()[0]).toContain('task 1 failed');
+    expect(sent()[1]).toContain('task 3 passed');
+    expect(sent()[1]).not.toContain('task 1 failed');
+    calls[1].finish({ kind: 'message', text: 'All good.', researchLog: [] });
     await next;
   });
 
@@ -1143,22 +1166,22 @@ describe('PlannerConversation reply runs', () => {
   it.each([
     ['a plan', { kind: 'plan' as const, tasks: [createTask({ id: 'n1', order: 1, title: 'Parse JSON', prompt: 'p' })] }, { kind: 'plan_generated' }],
     ['an edit', { kind: 'task_ops' as const, ops: [{ op: 'remove', taskId: '#1' }] as TaskOp[] }, { content: 'Tasks updated:\n- removed #1' }],
-  ])('saves the narration before %s it submitted with the reply, ahead of what landed', async (_what, submission, marker) => {
+  ])('saves %s a tool committed as it answered ahead of the reply, which keeps its narration', async (_what, submission, marker) => {
     const submitted = run('s2', 'Submitted.', '2026-01-01T00:00:06Z');
     const ai = fakeAi({ continueConversation: vi.fn() });
     const { conversation, state, host, checks } = fakeHost(ai, threeTurnPlan());
     checks.rules.mockReturnValue(passed({ summary: ['removed #1'] }));
     vi.mocked(ai.continueConversation).mockImplementation(async () => {
-      conversation.submit(submission);
+      expect(await conversation.commitFromTool(submission, conversation.currentTurnId)).toMatchObject({ ok: true });
       return { kind: 'message', text: 'Let me look at the parser.\n\nSubmitted.', researchLog: [], runs: [looking, submitted] };
     });
 
     await conversation.reply('Plan it');
 
-    const [said, landed] = state.plan!.conversationHistory!.slice(-2);
+    const [landed, said] = state.plan!.conversationHistory!.slice(-2);
+    expect(landed).toMatchObject(marker);
     expect(said).toEqual({ role: 'assistant', content: 'Let me look at the parser.\n\nSubmitted.', timestamp: expect.any(String), runs: [saved(looking), saved(submitted)] });
-    expect(landed).toMatchObject({ timestamp: said.timestamp, ...marker });
-    expect(replies(host)[0]).toMatchObject({ content: said.content, runs: said.runs });
+    expect(replies(host).at(-1)).toMatchObject({ content: said.content, runs: said.runs });
   });
 
   it('saves a wake-up turn\'s runs with the supervisor\'s reply', async () => {

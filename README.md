@@ -64,8 +64,14 @@ freely within one plan.
   plan: at Watch it writes you a note when a task fails or gets stuck, and at Act
   it may retry, stop or edit tasks itself, within limits. `/settings` sets the
   supervisor level, merging automatically and the rest of your run settings.
-- **Read-only tasks.** A review or an audit runs without write access, so it
-  cannot change your repository.
+- **Read-only tasks.** A review, an audit or a prototype reads with its agent's
+  own tools, and a command that would need your approval runs sealed, with no
+  network and none of your credentials, in the task's own throwaway worktree.
+  It lands nothing: its report is its result, and a prototype it tried can be
+  saved as a patch for a later task to apply.
+- **Check-and-fix loops.** A check and the tasks that fix what it finds repeat
+  until the check passes or its rounds run out, with no planner turn in
+  between.
 - **Research tasks.** A read-only task can be research: its report goes back to
   the planner, which wakes to read it while you keep talking. The planner
   decides how many to start, within the run's Parallel limit.
@@ -73,7 +79,11 @@ freely within one plan.
   change your repository are refused, and an effect such as a push reaches the
   world only as a script task or an ops task in the plan.
 - **No extra API key.** A coding agent you already pay for can be the planner. An API
-  key from any of 25 providers works too.
+  key from any of 25 providers works too, and an API planner compacts its own
+  context before it overflows.
+- **Your agents' limits in view.** The footers show what your Codex, Claude Code
+  and OpenCode Go accounts have used of their plan's windows, beside context
+  and cost.
 - **Use it where you work.** A terminal UI, a VS Code extension, a CLI for scripts
   and a local API, all sharing one core.
 
@@ -164,8 +174,10 @@ made itself are not changed. To leave the line out, run `ordewell trailer off`
 (or set `"plannedWithTrailer": false` in `settings.json`); the next commit
 follows it.
 
-The planner only reads; tasks run as you, in the mode the plan assigns. For
-exactly what each part can touch and what to use for untrusted repositories, see
+The planner only reads; tasks run as you, in the mode the plan assigns. A new
+installation starts in Guarded, where a task gets its runner's safe mode; Full
+gives it the runner's autonomous mode. For exactly what each part can touch and
+what to use for untrusted repositories, see
 [SECURITY.md](SECURITY.md#what-each-part-can-touch).
 
 Folders containing several repositories are handled as one workspace: each task
@@ -183,7 +195,8 @@ sandbox cannot start on your machine, see [troubleshooting](docs/troubleshooting
 
 ## Where it's going
 
-- **Now:** a planner that does small things itself. It runs an exact command you consent to as a script task ([#107](https://github.com/ordewell/ordewell/issues/107)), reads with a sandboxed shell that can loop and script ([#64](https://github.com/ordewell/ordewell/issues/64), [#109](https://github.com/ordewell/ordewell/issues/109)), and keeps talking while research tasks report back ([#111](https://github.com/ordewell/ordewell/issues/111)).
+- **Next:** bounded, standing consent for running on its own ([#23](https://github.com/ordewell/ordewell/issues/23)), an escalation inbox across surfaces ([#30](https://github.com/ordewell/ordewell/issues/30)) and a daemon that resumes plans after a restart ([#31](https://github.com/ordewell/ordewell/issues/31)).
+- **Shipped in 0.11:** a planner that does small things itself. It runs an exact command you consent to as a script task ([#107](https://github.com/ordewell/ordewell/issues/107)), reads with a sandboxed shell that can loop and script ([#64](https://github.com/ordewell/ordewell/issues/64), [#109](https://github.com/ordewell/ordewell/issues/109)), keeps talking while research tasks report back ([#111](https://github.com/ordewell/ordewell/issues/111)), and plans check-and-fix loops ([#118](https://github.com/ordewell/ordewell/issues/118)).
 - **Shipped in 0.10:** the supervisor, which watches a run and, if you let it, acts within limits you set.
 
 The full roadmap, and where to help, is in [#21](https://github.com/ordewell/ordewell/issues/21).

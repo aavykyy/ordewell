@@ -92,7 +92,7 @@ describe('the session socket', () => {
   beforeEach(async () => {
     workspace = mkdtempSync(join(tmpdir(), 'ordewell-stream-'));
     mkdirSync(join(workspace, '.git'));
-    pool = new OrchestratorPool();
+    pool = new OrchestratorPool({ accountLimitCollectors: () => [] });
     server = http.createServer();
     const upgrade = createWsHandler(pool);
     server.on('upgrade', upgrade);
@@ -129,10 +129,10 @@ describe('the session socket', () => {
     const later = joinSocket(port, meta.id);
     // Await its connected and snapshot frames, which is when it is subscribed:
     // no broadcast of the command below can fall between the two.
-    await later.until(2);
-    const broadcast = later.until(3);
+    await later.until(3);
+    const broadcast = later.until(4);
     await pool.session(meta.id).execute({ command: 'mark_not_done', task: 't2' }, { kind: 'user' });
-    const [, again, next] = await broadcast as [unknown, RunSnapshotFrame, SessionFrame];
+    const [, again, , next] = await broadcast as [unknown, RunSnapshotFrame, unknown, SessionFrame];
     later.close();
 
     expect(snapshot.seq).toBeGreaterThan(0);
@@ -149,9 +149,9 @@ describe('the session socket', () => {
     const started = { type: 'planner_compaction', compaction: { phase: 'started', id: 'c1', origin: 'ordewell', trigger: 'manual', at: '2026-10-25T10:00:00.000Z' } } as const;
     vi.spyOn(pool, 'plannerCompaction').mockReturnValue(started);
 
-    const frames = await firstFrames(port, meta.id, 3);
+    const frames = await firstFrames(port, meta.id, 4);
 
-    expect(frames.map((f) => (f as { type: string }).type)).toEqual(['connected', 'run_snapshot', 'planner_compaction']);
+    expect(frames.map((f) => (f as { type: string }).type)).toEqual(['connected', 'run_snapshot', 'planner_compaction', 'account_limits']);
     expect(frames[2]).toEqual(started);
   });
 
@@ -161,12 +161,12 @@ describe('the session socket', () => {
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
     pool.adoptSavedSession(meta.id, workspace);
     const socket = joinSocket(port, meta.id);
-    await socket.until(2);
-    const frames = socket.until(4);
+    await socket.until(3);
+    const frames = socket.until(5);
     const broadcast = (pool as unknown as { broadcast(id: string, m: unknown): void }).broadcast.bind(pool);
     broadcast(meta.id, { type: 'planner_compaction', compaction: { phase: 'started', id: 'c1', origin: 'ordewell', trigger: 'auto', at: '2026-10-25T10:00:00.000Z' } });
     broadcast(meta.id, { type: 'planner_compaction', compaction: { phase: 'ended', id: 'c1', origin: 'ordewell', trigger: 'auto', outcome: 'condensed', at: '2026-10-25T10:00:05.000Z' } });
-    const [, , first, second] = await frames as [unknown, unknown, SessionFrame, SessionFrame];
+    const [, , , first, second] = await frames as [unknown, unknown, unknown, SessionFrame, SessionFrame];
     socket.close();
 
     expect([first, second].map((f) => f.type === 'planner_compaction' && [f.compaction.phase, f.compaction.id])).toEqual([['started', 'c1'], ['ended', 'c1']]);
@@ -177,11 +177,12 @@ describe('the session socket', () => {
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
     pool.adoptSavedSession(meta.id, workspace);
     const socket = joinSocket(port, meta.id);
-    await socket.until(2);
+    await socket.until(3);
     await new Promise((resolve) => setTimeout(resolve, 50));
-    const frames = await socket.until(2);
+    const frames = await socket.until(3);
     socket.close();
 
-    expect(frames).toHaveLength(2);
+    expect(frames).toHaveLength(3);
+    expect(frames[2]).toMatchObject({ type: 'account_limits', limits: [] });
   });
 });

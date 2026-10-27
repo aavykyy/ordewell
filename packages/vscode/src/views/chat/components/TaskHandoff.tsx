@@ -1,19 +1,10 @@
 import React from 'react';
-import type { HandoffDigest, StoredHandoff, TaskRowHandoff } from '@ordewell/core';
-import { handoffFindingsText, handoffPeekParts, handoffReferenceText, savedPatchViews, severityLabel, worstSeverity } from '@ordewell/core/plan-utils';
+import type { HandoffDigest, StoredHandoff } from '@ordewell/core';
+import { handoffFindingsText, handoffReferenceText, savedPatchViews, severityLabel, worstSeverity } from '@ordewell/core/plan-utils';
 import { useOpenPatch } from '../openPatch';
 import ReportBody from './ReportBody';
 
-export function HandoffPeek({ handoff }: { handoff: TaskRowHandoff | null }) {
-  if (!handoff) return null;
-  return (
-    <div className="task-handoff-peek" title={handoff.commit ? `${handoff.commit.subject}\n\n${handoff.summary}` : handoff.summary}>
-      Handed over · {handoffPeekParts(handoff).join(' · ')}
-    </div>
-  );
-}
-
-/** The same handoff in a plan card and an attempt log (ADR-0047); only the log carries the report. */
+/** The same handoff in expanded task details and an attempt log (ADR-0047); only the log carries the report. */
 export default function TaskHandoff({ handoff, taskName, onReadFull }: {
   handoff: HandoffDigest | StoredHandoff;
   taskName?: (id: string) => string | undefined;

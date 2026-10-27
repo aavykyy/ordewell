@@ -122,7 +122,10 @@ export class ModelDiscovery {
       displayName: p.manifest.displayName,
     }));
     d.chatProvider.setRunnerList(runnerList);
-    d.chatProvider.setEnabledRunnerIds(enabled.filter((r) => installedIds.has(r)));
+    // Read again rather than reusing `enabled`: a runner switched on or off
+    // while the CLIs answered is saved already, and a list from before it would
+    // undo the pill the user just clicked.
+    d.chatProvider.setEnabledRunnerIds(d.config.enabledRunners.filter((r) => installedIds.has(r)));
     d.chatProvider.setModelAllowlist(d.modelAllowlist());
 
     const modesByRunner: Record<string, { id: string; label: string; description: string; cliValue?: string; autonomous?: boolean; unavailable?: string }[]> = {};

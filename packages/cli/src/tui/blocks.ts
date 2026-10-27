@@ -1,5 +1,5 @@
 import {
-  approvalKindText, approvalStatusText, compactionText, diffRows, diffSummary, handoffFindingsText, handoffReferenceText, loadedSkillTokens, outputPreview, planMarkerParts, savedPatchViews, severityLabel, usageText, wakeUpItems, worstSeverity, REPORT_PREVIEW_LINES,
+  accountLimitsText, contextMeterText, type AccountLimitSnapshot, approvalKindText, approvalStatusText, compactionText, diffRows, diffSummary, handoffFindingsText, handoffReferenceText, loadedSkillTokens, outputPreview, planMarkerParts, savedPatchViews, severityLabel, usageText, wakeUpItems, worstSeverity, REPORT_PREVIEW_LINES,
   type DiffRow, type DiffStat,
   type ApprovalBlock, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
   type CommandBlock, type CommandStatus, type CompactionBlock, type RunnerLoadedBlock,
@@ -802,14 +802,16 @@ export function conversationLines(blocks: readonly DisplayBlock[], cols: number,
 }
 
 /**
- * The planner's usage as one row — `ctx 61k (6%) · $0.42` — or null when
- * neither the context nor a cost is known. Core words it, so every surface
+ * The planner's context, live limits and reported cost as one compact row.
+ * Nothing is drawn until one of them is known. Core words it, so every surface
  * agrees; the totals already count every subagent.
  */
-export function tokenLine(blocks: readonly DisplayBlock[], cols: number): string | null {
+export function tokenLine(blocks: readonly DisplayBlock[], cols: number, limits: readonly AccountLimitSnapshot[] = []): string | null {
   const usage = blocks[blocks.length - 1];
-  const text = usage?.type === 'usage' ? usageText(usage) : null;
-  return text ? style.grey(truncate(text, cols)) : null;
+  const context = usage?.type === 'usage' ? contextMeterText(usage.contextFill) : null;
+  const cost = usage?.type === 'usage' ? usageText({ totals: usage.totals }) : null;
+  const text = [context ? `Planner ${context}` : null, ...limits.map(accountLimitsText), cost].filter(Boolean).join(' · ');
+  return text ? style.grey(truncate(sanitize(text).replace(/\n/g, ' '), cols)) : null;
 }
 
 /** A flagged assignment and what it means for the task as it stands (core words it, so every surface agrees). */

@@ -199,31 +199,29 @@ the same seam through its own tool definitions.
 | `skip_task` | end a task that failed, is blocked or is waiting for input as *skipped*, with a required reason; nothing of it lands, and its dependents go ahead, told the reason. In Act wake-up turns only |
 | `run_script` | add a script task ([ADR-0035](0035-effects-are-consented-and-recorded.md)) and start it in one step; answers with its verdict and the tail of its output, or "still running" after a minute |
 
-A start the turn asks for after editing that task in the same reply — an edit
-held until the reply ends — waits for the edit to land and then goes through
-the seam again, so it runs as edited: the plan holds what runs. Before it
-waits, it is judged against the task as the held edit leaves it, with the edit
-counting as the change a retry after a failure needs: a start that could never
-run is refused while the caller still reads the answer. One refused when it
-goes through again is kept as refused, said to the user as a system line, and
-told to the planner's next turn as a run update, and to each turn after until
-one lands an answer the planner gave. An edit that
-never lands — the turn stopped, or the edit refused as it landed — drops the
-start, and the user is told; run on the unedited plan, it would not be what was
-asked. In a wake-up
+A planner's edit is in the plan as its `edit_plan` call answers
+([ADR-0022](../runners/0022-ordewell-mcp-server.md), P2), so a start the turn
+asks for after editing that task in the same reply goes through the seam at
+once, against the plan as edited: the plan holds what runs, and the edit
+counts as the change a retry after a failure needs. A task the edit added is
+named by its id, its reference, its title or the handle the edit gave it. The
+start is judged and consented to as any start is — a task the edit added is
+approved only as the rules above say, and the user is asked on the card in
+Guarded — and what it hands the run waits for the turn's start hold like any
+start of the scheduler's. Nothing is queued behind an edit, so nothing is
+replayed when the reply ends. In a wake-up
 turn at Act the supervisor edits task by task; a whole new plan is refused,
 since only edits let the user follow what changed.
 
 **A Stop withdraws every start asked for before it.** A start is admitted
 when it is asked for, and counts as live work until it claims its task:
-queued behind a held edit, waiting on its approval card, or still opening its
-run. The user's Stop — `stop_run` from any surface, or the Session's own stop —
+waiting on its approval card, or still opening its run. The user's Stop — `stop_run` from any surface, or the Session's own stop —
 stops these too, so it is never refused, or answered "stopped", while one of
 them could still start. None of them starts afterwards: each is kept in the
 timeline as refused, and said as not done, "stopped before it could start";
 a card still asking is cleared. A start asked for after the Stop is a new one,
 and runs. Every start — the scheduler's, `run_task`, a retry, a continue, a
-resume, a force start, a replayed one, a conflict repair — claims its task at
+resume, a force start, a conflict repair — claims its task at
 one point, which checks in one step that the user approved the task, that no
 Stop came since the start was admitted, that Mark complete is not landing it
 and that a slot is free, before anything is awaited. The claim takes the task
@@ -369,7 +367,14 @@ Merge all that stops is refused with that result, so the Merge all card can
 show why; whether the merge closed the run is the Session's word, `run_closed`
 ([ADR-0013](../isolation/0013-worktree-isolation.md)), never the payload's. A
 user's Stop with nothing to stop is answered ok and recorded nowhere, since
-the surface already shows the run stopped. A refusal is worded for who asked,
+the surface already shows the run stopped. So is a Merge all, from anyone
+allowed one, once the plan's last isolated run closed with everything it
+landed merged: by the automatic Merge all at its end, by an earlier Merge all,
+or as a run of tasks started one by one settled in the middle of the turn that
+asks. There is nothing left to merge, and saying "no isolated run" would read
+as a failed merge. The plan saves that run's id (`mergedRun`) until a later
+run decides how it executes, so a restart changes nothing; a plan that never
+isolated, or whose last run shared the workspace root, is still refused. A refusal is worded for who asked,
 in one place: a model is
 told the tools it calls and what to tell the user, the user the controls they
 press, and the supervisor and a planner turn are told apart where they differ,
@@ -406,9 +411,8 @@ Checked at the seam, where the action executes:
   its own edit, is refused.
 - **Skips count**: a skip of a task the supervisor retried this run counts
   against that task's retry limit, so past the limit the supervisor can
-  neither retry nor skip it; the task is the user's. A skip of a task its own
-  edit adds in the same reply is refused, and is never held for the edit to
-  land as a start is.
+  neither retry nor skip it; the task is the user's. A task its own edit
+  added has not started and nothing blocks it, so a skip of it is refused.
 - **No un-skipping**: a skipped task is never run again by the supervisor —
   not by `retry_task`, `run_task`, `run_plan` or an edit that re-arms it.
   Whether it runs again is the user's to decide.
@@ -504,7 +508,10 @@ either:
   "auto-merged" timeline entry, a notice and the `isolation_merge` broadcast.
   If that merge stops (conflict, dirty overlap, failure) the run is handed off
   to the user, and a supervisor that is watching gets an `auto_merge_stopped`
-  event. The settings key is `mergeAtGatesAutomatically`.
+  event. The settings key is `mergeAtGatesAutomatically`. The run update the
+  run's end wakes the supervisor with says where its landed work stands:
+  merged into the user's branch, with nothing to merge, or waiting for Merge
+  all. A live planner hears of the merge nowhere else.
 - **Surfaces do not open the handoff while a merge is coming,** so the overlay
   never asks about a merge Ordewell or the supervisor is about to make. With
   auto-merge on, no handoff is sent unless the automatic merge stops. With the
@@ -535,6 +542,14 @@ until #30 exists.
   is answered after it ends, and a wake-up about a failure waits behind the
   task that is still running. A queue for wake-ups beside the one for user
   messages would be two paths for one thing.
+- **Rejected: defer a start behind the turn's held edit.** Previously adopted
+  while a tool's edit was held until its reply ended: a start of a task the
+  edit changed or added was judged against a preview of the plan, queued, and
+  run again through the seam once the edit landed, told as not done when it
+  did not. It made one start two decisions apart in time, a Stop had a queue
+  to withdraw, and a reply that failed after the edit dropped both. With the
+  edit committed as its call answers (ADR-0022, P2) the start reads the plan
+  it changed and needs none of it.
 - **Rejected: pause running tasks during a planner turn.** Their work is not in
   question. Holding only new starts is enough to keep edits from racing a
   spawn.
@@ -677,3 +692,5 @@ until #30 exists.
 - 2026-10-24 — the approval record's rules live in one module, `ApprovalRecord`, and run on each change to the task tree rather than inside a save: a task that leaves the plan takes its approval, and a save only writes. Approval taken from a task is announced to surfaces as a plan update with a status, wherever the change was made. `Session.isApproved` stays the one read.
 - 2026-10-24 — a start the Act supervisor asks for of a task its own edit adds waits for the edit instead of being refused as "tell the user".
 - 2026-10-25 — Mark complete and Mark not done on an AI or script task are refused while a run could advance the task and otherwise need the user's explicit yes, in both directions; a manual task's sign-off is never held up by a run.
+- 2026-10-26 — a planner's edit commits as its `edit_plan` call answers (ADR-0022, P2), so a start asked for after it goes through the seam at once against the plan as edited; the starts deferred behind a held edit, their replay and their "not done" notices are gone.
+- 2026-10-26 — the run update at the run's end says whether its landed work is merged or waits for Merge all, and a Merge all after the plan's last isolated run closed merged is answered ok as nothing to merge, recorded nowhere, across a restart too (`mergedRun`). Seen live: an Act supervisor woken after the automatic Merge all at the run's end called `merge_all`, and the timeline said "refused: This plan has no isolated run".

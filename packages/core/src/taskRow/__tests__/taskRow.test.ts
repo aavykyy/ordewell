@@ -68,6 +68,24 @@ describe('labels', () => {
   });
 });
 
+describe('a report received while its attempt winds down (ADR-0018, L1)', () => {
+  it.each([
+    ['done', 'Completion received'],
+    ['failed', 'Failure report received'],
+    ['blocked', 'Blocked report received'],
+  ] as const)('reads a %s report as "%s" on a task still running', (reported, label) => {
+    const row = taskRowView(subject({ status: 'in_progress', completionReceived: reported }));
+    expect(row.receipt).toBe(label);
+    expect(row.status).toBe('running');
+  });
+
+  it('says nothing with no report, or once the task has left its attempt', () => {
+    expect(taskRowView(subject({ status: 'in_progress' })).receipt).toBeNull();
+    expect(taskRowView(subject({ status: 'completed', completionReceived: 'done' })).receipt).toBeNull();
+    expect(taskRowView(subject({ status: 'failed', completionReceived: 'failed' })).receipt).toBeNull();
+  });
+});
+
 describe('a task paused on a usage limit', () => {
   const now = new Date(2026, 9, 11, 17, 0);
   const paused = { status: 'awaiting_user', type: 'ai' as const, awaitingReason: 'usage-limit' as const };

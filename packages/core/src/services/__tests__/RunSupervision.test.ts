@@ -22,6 +22,7 @@ function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptio
     userSettings: () => ({ ...settings }),
     tasks: () => tasks,
     checkpointQuestion: () => undefined,
+    landedWork: () => null,
     recentOutput: () => undefined,
     reportTail: () => undefined,
     reported: vi.fn(),

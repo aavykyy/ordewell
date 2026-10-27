@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import SkillChips from './SkillChips';
 import ModelSelector from './ModelSelector';
 import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
-import TaskHandoff, { HandoffPeek } from './TaskHandoff';
+import TaskHandoff from './TaskHandoff';
 import { cardEditable, pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope } from '@ordewell/core';
 import { AssignmentFlag, IsolationBadges, StatusBadge, TaskActions, TaskCheck, TaskMarkControl, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
@@ -71,6 +71,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
     ...task,
     handoff,
     idleSince: run?.idleSince ?? null,
+    completionReceived: run?.completionReceived,
     awaitingApproval: run?.awaitingApproval ?? 0,
     isolation,
     mergeGate: run?.mergeGate,
@@ -132,8 +133,6 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
             <button className="task-remove-btn" onClick={(e) => { e.stopPropagation(); onRemoveTask(task.id); }} title="Remove subtask">&#10005;</button>
           )}
         </div>
-
-        {!expanded && <HandoffPeek handoff={row.handoff} />}
 
         {expanded && (
           <div className="subtask-card-body">
