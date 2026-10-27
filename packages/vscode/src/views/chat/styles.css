@@ -11,6 +11,14 @@
   --bg-card: color-mix(in srgb, var(--text-primary) 4%, var(--bg-secondary));
   --bg-card-raised: color-mix(in srgb, var(--text-primary) 7%, var(--bg-secondary));
   --bg-card-row-hover: color-mix(in srgb, var(--text-primary) 4%, transparent);
+  /* A card that sits on --bg-primary, not on the plan's --bg-secondary: mixed
+     from the page it sits on, the same quiet step works in either theme. Light
+     overrides the share, because white has no room left to darken into. */
+  --bg-card-page: color-mix(in srgb, var(--text-primary) 4%, var(--bg-primary));
+  --card-border: var(--border-subtle);
+  /* A separator inside a card: the panel hairline is invisible on the card's
+     own tint in light; the share is raised there to the step dark already has. */
+  --card-hairline: var(--border-muted);
   --border-color: var(--vscode-panel-border, #30363d);
   --border-muted: var(--vscode-widget-border, var(--border-color));
   --border-subtle: color-mix(in srgb, var(--border-color) 60%, transparent);
@@ -20,6 +28,11 @@
   --text-placeholder: var(--vscode-input-placeholderForeground, var(--text-muted));
   /* Small secondary text that still has to clear AA on a tinted or input background. */
   --text-hint: color-mix(in srgb, var(--text-secondary) 70%, var(--text-primary));
+  /* Warning text, as opposed to a warning marker: a light theme's
+     editorWarning.foreground is an icon colour (~3:1 on white) while the list's
+     warning colour is the one it makes readable. Dark themes set both the same,
+     so this changes nothing there. */
+  --warning-text: var(--vscode-list-warningForeground, var(--vscode-editorWarning-foreground, #d2991d));
   --accent: var(--vscode-focusBorder, #58a6ff);
   --accent-emphasis: var(--vscode-button-background, #1f6feb);
   --accent-subtle: color-mix(in srgb, var(--accent) 8%, transparent);
@@ -29,6 +42,11 @@
   --green-emphasis: var(--vscode-testing-iconPassed, #238636);
   --red: var(--vscode-testing-iconFailed, #f85149);
   --red-subtle: color-mix(in srgb, var(--red) 12%, transparent);
+  /* The edge and the segment divider a signed-out capsule draws in red. On a
+     dark page a light tint is already a 2:1 edge; on white the same mix nearly
+     disappears, so the light themes raise it (see below). */
+  --red-boundary: color-mix(in srgb, var(--red) 45%, transparent);
+  --red-divider: color-mix(in srgb, var(--red) 35%, var(--border-color));
   --orange: #d2991d;
   --orange-subtle: rgba(210, 153, 29, 0.12);
   --purple: #a371f7;
@@ -52,13 +70,28 @@
 }
 
 /* The fixed hues above are tuned for dark backgrounds and fall well short of
-   AA as text on white, and a light theme's focusBorder is often too pale to
-   read; the theme's link colour is the accent it guarantees legible. */
-body.vscode-light {
-  --accent: var(--vscode-textLink-foreground, #005fb8);
+   AA as text on white; high-contrast-light has the same white page, so it takes
+   the same ones. */
+body.vscode-light,
+body.vscode-high-contrast-light {
   --orange: #7d4e00;
   --purple: #6639ba;
   --cyan: #075e66;
+  /* 45% of the light theme's red is a 2.3:1 edge on white; 62% puts the
+     signed-out capsule's boundary over 3:1, and its divider gets the same
+     strengthening (a divider is reinforcement, not the state's only cue). */
+  --red-boundary: color-mix(in srgb, var(--red) 62%, transparent);
+  --red-divider: color-mix(in srgb, var(--red) 60%, var(--border-color));
+}
+
+/* A light theme's focusBorder is often too pale to read; the theme's link
+   colour is the accent it guarantees legible. A white page also needs its cards
+   drawn by a hairline and a 7% step, not the sidebar's grey block. */
+body.vscode-light {
+  --accent: var(--vscode-textLink-foreground, #005fb8);
+  --bg-card-page: color-mix(in srgb, var(--text-primary) 7%, var(--bg-primary));
+  --card-border: color-mix(in srgb, var(--text-primary) 16%, transparent);
+  --card-hairline: color-mix(in srgb, var(--text-primary) 12%, transparent);
 }
 
 *, *::before, *::after {
@@ -1228,7 +1261,7 @@ body.vscode-high-contrast-light .disclosure:hover {
    object. */
 .runner-pill-group.signed-out.on {
   border-style: solid;
-  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  border-color: var(--red-boundary);
   background: color-mix(in srgb, var(--red) 10%, transparent);
 }
 
@@ -1236,7 +1269,7 @@ body.vscode-high-contrast-light .disclosure:hover {
    red, and only the tint is weaker than a signed-out runner that is on. */
 .runner-pill-group.signed-out.disabled {
   border-style: dashed;
-  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  border-color: var(--red-boundary);
   background: color-mix(in srgb, var(--red) 4%, transparent);
 }
 
@@ -1351,7 +1384,7 @@ body.vscode-high-contrast-light .disclosure:hover {
 }
 
 .planner-pill-group.signed-out {
-  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  border-color: var(--red-boundary);
   background: color-mix(in srgb, var(--red) 10%, transparent);
 }
 
@@ -1381,7 +1414,7 @@ body.vscode-high-contrast-light .disclosure:hover {
 /* The signed-out capsule keeps its red boundary even when selected; the name
    tint above is what marks the selection. */
 .planner-pill-group.active.signed-out {
-  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  border-color: var(--red-boundary);
 }
 
 /* Keyboard focus stays inside the capsule: an inset ring cannot be mistaken
@@ -1482,7 +1515,7 @@ body.vscode-high-contrast-light .disclosure:hover {
   top: 25%;
   bottom: 25%;
   width: 1px;
-  background: color-mix(in srgb, var(--red) 35%, var(--border-color));
+  background: var(--red-divider);
 }
 
 .planner-pill-login:focus-visible {
@@ -1772,7 +1805,7 @@ body.vscode-high-contrast-light .planner-pill-login::before {
 }
 
 .empty-state-setup .warn {
-  color: var(--vscode-editorWarning-foreground);
+  color: var(--warning-text);
 }
 
 /* Not a banner: one status line per signed-out agent on the first screen, the
@@ -1871,8 +1904,8 @@ section.isolation-notice {
   width: 100%;
   max-width: var(--first-screen-column);
   padding: 12px 14px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
+  background: var(--bg-card-page);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
   text-align: left;
@@ -1907,7 +1940,7 @@ section.isolation-notice {
 
 .isolation-notice[data-status='failed'] .isolation-notice-summary,
 .isolation-notice[data-status='dirty'] .isolation-notice-summary {
-  color: var(--vscode-editorWarning-foreground);
+  color: var(--warning-text);
 }
 
 .isolation-repos {
@@ -1930,7 +1963,7 @@ section.isolation-notice {
 .isolation-repo + .isolation-repo {
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px solid var(--border-muted);
+  border-top: 1px solid var(--card-hairline);
 }
 
 .isolation-repo-name {
@@ -1976,7 +2009,7 @@ section.isolation-notice {
 }
 
 .isolation-repo-flag {
-  color: var(--vscode-editorWarning-foreground);
+  color: var(--warning-text);
 }
 
 /* What the card leaves to the end: what tasks share, and the ops/spread note.
@@ -1984,7 +2017,7 @@ section.isolation-notice {
 .isolation-notice-footer {
   margin-top: 10px;
   padding-top: 8px;
-  border-top: 1px solid var(--border-muted);
+  border-top: 1px solid var(--card-hairline);
 }
 
 .isolation-notice-shared,
@@ -2769,6 +2802,9 @@ body.vscode-high-contrast,
 body.vscode-high-contrast-light {
   --bg-card: transparent;
   --bg-card-raised: transparent;
+  --bg-card-page: transparent;
+  /* A tintless card keeps its boundary at the theme's full contrast colour. */
+  --card-border: var(--vscode-contrastBorder, var(--border-color));
 }
 
 body.vscode-high-contrast .task-card:hover,

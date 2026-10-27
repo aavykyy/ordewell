@@ -18,10 +18,10 @@
  *   npm run build -w packages/core -w packages/vscode   # build the bundles first
  *   node bench/live/webview-harness.mjs                 # serves on http://127.0.0.1:3798
  *
- * `?theme=dark|light` sets the `--vscode-*` custom properties a driving
- * script wants for contrast screenshots; dark is the default. `/tasklog`
- * serves the task log panel's bundle the same way: it draws nothing until a
- * driving script posts it an `init` through `window.__send`.
+ * `?theme=dark|light|high-contrast|high-contrast-light` sets the `--vscode-*`
+ * custom properties a driving script wants for contrast screenshots; dark is
+ * the default. `/tasklog` serves the task log panel's bundle the same way: it
+ * draws nothing until a driving script posts it an `init` through `__send`.
  */
 import http from 'node:http';
 import fs from 'node:fs';
@@ -51,6 +51,7 @@ const THEMES = {
     '--vscode-descriptionForeground': '#9d9d9d',
     '--vscode-errorForeground': '#f14c4c',
     '--vscode-editorWarning-foreground': '#cca700',
+    '--vscode-list-warningForeground': '#cca700',
     '--vscode-focusBorder': '#007fd4',
     '--vscode-button-background': '#0e639c',
     '--vscode-testing-iconPassed': '#73c991',
@@ -75,6 +76,7 @@ const THEMES = {
     '--vscode-descriptionForeground': '#717171',
     '--vscode-errorForeground': '#a1260d',
     '--vscode-editorWarning-foreground': '#bf8803',
+    '--vscode-list-warningForeground': '#895503',
     '--vscode-focusBorder': '#0090f1',
     '--vscode-button-background': '#005fb8',
     '--vscode-testing-iconPassed': '#388a34',
@@ -103,6 +105,7 @@ const THEMES = {
     '--vscode-descriptionForeground': '#ffffff',
     '--vscode-errorForeground': '#f48771',
     '--vscode-editorWarning-foreground': '#ffd700',
+    '--vscode-list-warningForeground': '#ffd700',
     '--vscode-focusBorder': '#f38518',
     '--vscode-button-background': '#000000',
     '--vscode-testing-iconPassed': '#73c991',
@@ -128,6 +131,7 @@ const THEMES = {
     '--vscode-descriptionForeground': '#292929',
     '--vscode-errorForeground': '#a1260d',
     '--vscode-editorWarning-foreground': '#895503',
+    '--vscode-list-warningForeground': '#895503',
     '--vscode-focusBorder': '#0f4a85',
     '--vscode-button-background': '#0f4a85',
     '--vscode-testing-iconPassed': '#388a34',
