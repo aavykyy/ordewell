@@ -1,8 +1,8 @@
 # ordewell
 
 **[Ordewell](https://ordewell.ai)** turns one goal into an ordered plan of
-coding-agent tasks, each with its own runner, model and mode, then runs and
-verifies it.
+coding-agent tasks, each with its own runner, model and mode, then runs the plan
+and records each task's reported outcome.
 
 ```bash
 npm install -g ordewell

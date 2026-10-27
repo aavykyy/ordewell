@@ -1,9 +1,13 @@
 # @ordewell/cli
 
 The command line and terminal UI for **[Ordewell](https://ordewell.ai)**, task
-orchestration for coding agents. One goal becomes an ordered plan of tasks, each on
-its own runner, model and branch. Ordewell executes the plan, verifies every task
-from evidence, and leaves the final merge to you.
+orchestration for coding agents. One goal becomes an editable plan with a runner
+and model assigned to each AI task. With worktree isolation enabled, code tasks
+run in separate worktrees; ops and script tasks run at the workspace root.
+Ordewell records task outcomes and combines code changes for review and merging.
+
+This README describes 0.11.0. See the [published releases](https://github.com/ordewell/ordewell/releases)
+for versions available to install and their release notes.
 
 ## Installation
 
@@ -21,9 +25,11 @@ Run `ordewell` in your project to open the terminal UI: the conversation on the
 left, the live plan on the right (or beneath it, below 70 columns). The first run lets you pick a planner and runners
 with `/planner` (Harness › Model › Effort, each step saved as you go) and `/runners`, and no API key is needed if you plan with a coding
 agent you already use.
-The welcome screen says it plainly: nothing runs until you approve the plan (unless autorun is on).
-It also lists the repositories and branches code tasks will use, and whether
-they get isolated worktrees.
+By default, submitted build plans wait for your approval. Autorun can start them
+automatically; research tasks and consented script tasks can start during planning.
+Automatic merging is optional, and an Act supervisor can also merge.
+The welcome screen lists the repositories and branches code tasks will use, and
+whether they get isolated worktrees.
 
 `/settings` walks autonomy, supervisor, merge automatically, autorun and parallel
 (research uses the same Parallel slots) in one panel and saves only what you changed. `/planner` walks harness, model and
