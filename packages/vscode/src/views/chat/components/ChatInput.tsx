@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { aheadOfDraft } from '@ordewell/core/plan-utils';
-import { SLASH_COMMANDS, isBuiltinSlashCommand } from '../../../commands/slashCommands';
+import { ALL_SLASH_COMMANDS, isBuiltinSlashCommand } from '../../../commands/slashCommands';
 import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 
 interface SlashSuggestion {
@@ -35,7 +35,7 @@ interface ChatInputProps {
   skills?: SkillEntry[];
 }
 
-const COMMAND_SUGGESTIONS: readonly SlashSuggestion[] = SLASH_COMMANDS;
+const COMMAND_SUGGESTIONS: readonly SlashSuggestion[] = ALL_SLASH_COMMANDS;
 
 function toSkillSuggestion(skill: SkillEntry): SlashSuggestion {
   return { label: `/${skill.name}`, detail: skill.appliesTo === 'task' ? `task skill · ${skill.description}` : skill.description, insertText: `/${skill.name}`, kind: 'skill' };

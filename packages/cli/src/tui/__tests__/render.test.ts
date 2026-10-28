@@ -935,7 +935,7 @@ describe('overlays', () => {
 
   it('names the conversation commands in the help sheet', () => {
     const sheet = helpLayout(200, 120).lines.map(stripAnsi).join('\n');
-    for (const command of ['/fork', '/rewind', '/compact']) expect(sheet).toContain(command);
+    for (const command of ['/fork', '/rewind', '/compact', '/resume']) expect(sheet).toContain(command);
   });
 
   it('names the detail-all toggle in the help sheet', () => {

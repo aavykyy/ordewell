@@ -2,7 +2,7 @@ import {
   EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, getProviderMeta, isApiProvider, isPlannerBackend, runnerForProvider, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
-import { findCommand, type ParsedCommand } from '../slash';
+import { canonicalCommandName, findCommand, type ParsedCommand } from '../slash';
 import { findTask, plannerInFlight, type PickerItem, type TuiState } from '../state';
 import { modelsForRunner } from '../taskAssignment';
 import { say } from '../transcript';
@@ -22,8 +22,12 @@ import { fail, step, withSession, type Effect, type Step, type TaskAction } from
 export const unknownCommand = (state: TuiState, name: string): Step =>
   fail(state, `Unknown command: /${name}. Type /help to see what's available.`);
 
-export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step {
-  if (!findCommand(name)) return unknownCommand(state, name);
+export function runCommand(state: TuiState, parsed: ParsedCommand): Step {
+  // An alias runs as the command it spells, resolved once here so every case
+  // below — which all read `name` — gets the canonical one and none can diverge.
+  const name = canonicalCommandName(parsed.name);
+  const { args } = parsed;
+  if (!findCommand(parsed.name)) return unknownCommand(state, parsed.name);
 
   switch (name) {
     case 'help':

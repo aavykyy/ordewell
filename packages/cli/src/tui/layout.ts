@@ -3,7 +3,7 @@ import { firstGrapheme, nextBoundary, pad, previousBoundary, sanitize, style, tr
 import { cursorInLines, type CursorPosition } from './editor';
 import { assignmentFlagText, checkpointCardLines, conversationLines, tokenLine } from './blocks';
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
-import { SLASH_COMMANDS, type SlashCategory } from './slash';
+import { slashCommandTable, type SlashCategory } from './slash';
 import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, scriptTaskView, selectedPlanRow, signedOutWithLogin, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
 import { SUPERVISOR_LEVEL_LABEL, type DiscoveredModel } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
@@ -1445,7 +1445,7 @@ function keySheetBody(cols: number): string[] {
 function commandSheetBody(cols: number): string[] {
   const body: string[] = [];
   for (const [category, title] of Object.entries(CATEGORY_TITLE) as [SlashCategory, string][]) {
-    const commands = SLASH_COMMANDS.filter((c) => c.category === category);
+    const commands = slashCommandTable().filter((c) => c.category === category);
     if (commands.length === 0) continue;
     body.push(style.bold(title));
     for (const command of commands) {
