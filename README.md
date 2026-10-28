@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  <strong>Task orchestration for coding agents.</strong><br>
-  Turn a goal into an editable plan. Run it with your coding agents. Review and merge.
+  <strong>Stop juggling agent tabs. Talk to one planner.</strong><br>
+  It runs Claude Code, Codex and OpenCode for you, in plain sight, and nothing runs until you approve.
 </p>
 
 <p align="center">
@@ -34,7 +34,11 @@ plans wait for your approval by default; run settings let you automate execution
 and merging.
 
 Claude Code, Codex and OpenCode are supported out of the box, and can be mixed
-freely within one plan.
+freely within one plan. Try it in your project, with nothing to install:
+
+```bash
+npx ordewell
+```
 
 This README describes 0.11.1. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
@@ -55,6 +59,8 @@ for versions available to install and their release notes.
 </table>
 
 ## Installation
+
+`npx ordewell` runs it without installing. To keep it:
 
 ```bash
 npm install -g ordewell
