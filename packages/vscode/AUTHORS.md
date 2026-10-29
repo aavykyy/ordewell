@@ -27,6 +27,8 @@ record of who built what, rather than `git log`.
 - [@haltingstate](https://github.com/haltingstate) — made the terminal UI's
   stepper say what a saved step does next, instead of encoding it in a
   sentinel index (#123).
+- [@Logic769](https://github.com/Logic769) — made `/resume` an alias of
+  `/sessions` in the planner chat (#139).
 
 Thank you. Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
