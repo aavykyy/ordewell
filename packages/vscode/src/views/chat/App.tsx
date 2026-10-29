@@ -254,6 +254,7 @@ export default function App() {
     }
 
     if (text.startsWith('/')) {
+      dispatch({ type: 'commandSent' });
       vscode.postMessage({ type: 'sendMessage', text, runners, typed: true });
       return;
     }
@@ -1065,7 +1066,7 @@ export default function App() {
       {showNewSessionConfirm && (
         <div className="new-session-confirm">
           <div className="new-session-confirm-text">
-            Start a new session? Current plan generation will be stopped.
+            Start a new session? The current plan and its progress are cleared: planning and any running tasks are stopped.
           </div>
           <div className="new-session-confirm-actions">
             <button className="btn-accept" onClick={() => {

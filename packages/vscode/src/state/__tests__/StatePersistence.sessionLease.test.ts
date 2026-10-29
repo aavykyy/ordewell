@@ -115,8 +115,10 @@ describe('VS Code and a session another host holds', () => {
     const before = fs.readFileSync(file, 'utf8');
     let current: LegacyPlanState = { ...plan(), tasks: [createTask({ id: 'x', order: 1, title: 'Not this window\'s', prompt: 'p', assignedRunner: 'claude-code' })] };
 
-    saveCurrentSession({ ...window().deps, session, getCurrentPlan: () => current, setCurrentPlan: (p) => { current = p; } });
+    const unsaved = saveCurrentSession({ ...window().deps, session, getCurrentPlan: () => current, setCurrentPlan: (p) => { current = p; } });
 
     expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    // Said back, so Save Session does not report a save that never happened.
+    expect(unsaved).toMatch(/another Ordewell host/);
   });
 });

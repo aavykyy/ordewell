@@ -33,6 +33,18 @@ describe('ordewell.toggleRunner', () => {
     expect(sendRunnerAndModels).toHaveBeenCalled();
   });
 
+  // An empty saved list leaves every surface with no runner to assign, as the chat header's switch knows.
+  it('keeps the last enabled runner on, and says why', async () => {
+    const showInformationMessage = vscode.window.showInformationMessage as unknown as ReturnType<typeof vi.fn>;
+    showInformationMessage.mockClear();
+    const { toggle, settingsService } = toggleOver(['codex'], ['claude-code']);
+
+    await toggle('codex');
+
+    expect(settingsService.updateEnabledRunners.mock.results[0]!.value).toEqual(['codex']);
+    expect(showInformationMessage).toHaveBeenCalledWith('codex is the only enabled runner, so it stays on: enable another runner first.');
+  });
+
   it('starts from the defaults only while the file holds no choice', async () => {
     const { toggle, settingsService } = toggleOver(undefined, ['codex', 'opencode']);
 

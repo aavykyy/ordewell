@@ -321,15 +321,25 @@ export function UsageLimitControls({ taskId, row, onResumeNow, onCancelResume }:
   );
 }
 
-/** The buttons a running plan offers on a card, in the order core lays them out. */
-export function TaskActions({ taskId, actions, labels, handlers }: {
+/**
+ * The buttons a running plan offers on a card, in the order core lays them out.
+ * `onRetry` is a failed task's fresh retry, first as in the TUI: core refuses
+ * Run Task on a failed task, so it is the task's own way back.
+ */
+export function TaskActions({ taskId, actions, labels, handlers, onRetry }: {
   taskId: string;
   actions: TaskRowAction[];
   labels: Record<TaskRowAction, string>;
   handlers: Partial<Record<TaskRowAction, (taskId: string) => void>>;
+  onRetry?: (taskId: string) => void;
 }) {
   return (
     <div className="task-actions">
+      {onRetry && (
+        <button className="task-action-btn start" onClick={(e) => { e.stopPropagation(); onRetry(taskId); }}>
+          Retry
+        </button>
+      )}
       {actions.filter((action) => action !== 'complete' && action !== 'uncomplete').map((action) => {
         const handler = handlers[action];
         return handler && (
@@ -516,6 +526,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
   // or one not yet started has none. One paused on a usage limit is reached
   // by resuming it, which needs its saved session.
   const paused = pausedOnLimit(task);
+  const failed = task.status === 'failed';
   const resumable = row.actions.includes('resume-now');
   const canMessage = task.type === 'ai'
     && (row.status === 'running' || row.status === 'quiet' || (row.status === 'awaiting' && (!paused || resumable)))
@@ -769,7 +780,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
               </label>
             )}
 
-            {!isExecuting && task.type === 'ai' && onRunTask && (
+            {!isExecuting && task.type === 'ai' && !failed && onRunTask && (
               <div className="task-run-btn-wrapper">
                 <button className="task-action-btn run" onClick={(e) => { e.stopPropagation(); onRunTask(task.id); }}>
                   Run Task
@@ -809,10 +820,13 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             {canMessage && <TaskMessageBox taskId={task.id} onSend={onSendMessage!} onSendNow={onSendMessageNow!}
               working={row.status === 'running' || row.status === 'quiet'} resumes={paused} />}
 
-            {/* A usage-limit pause holds the run, which then reads as not executing. */}
-            {(isExecuting || paused) && (
+            {/* A usage-limit pause holds the run, which then reads as not
+                executing; a failure usually ends it, and the failed task
+                still needs its Retry and Skip. */}
+            {(isExecuting || paused || failed) && (
               <TaskActions taskId={task.id} actions={row.actions} labels={ACTION_LABELS}
-                handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart }} />
+                handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart }}
+                onRetry={failed && task.type !== 'user' ? onRetry : undefined} />
             )}
 
             <TaskMarkControl taskId={task.id} row={row} runActive={runActive ?? !!isExecuting}

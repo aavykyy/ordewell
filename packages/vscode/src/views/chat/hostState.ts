@@ -115,7 +115,10 @@ export interface HostState {
    * any word from the host on the turn, or the user's own, ends the wait.
    */
   turnLost: boolean;
-  /** The user started a new session: errors from the old one's turn are dropped. */
+  /**
+   * The user started a new session: errors from the old one's turn are
+   * dropped, until the user sends anything, a typed command included.
+   */
   sessionCleared: boolean;
   /** Every installed runner's account limits: live account data, kept across a session reset. */
   accountLimits: readonly AccountLimitSnapshot[];
@@ -185,6 +188,7 @@ export type HostAction =
   | { type: 'resetSession'; kind: SessionResetKind }
   | { type: 'turnStopped' }
   | { type: 'turnRequested' }
+  | { type: 'commandSent' }
   | { type: 'startRequested'; requestId: number }
   | { type: 'patchPlan'; plan: Updatable<SurfacePlan | null> }
   | { type: 'turnLost' }
@@ -254,6 +258,11 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'turnRequested':
       return { ...state, stopped: false, sessionCleared: false, error: '', isResearchActive: true, turnLost: false };
+
+    // A command such as /fork or /compact opens no turn of the old session's,
+    // and may fail before it opens one at all: its error is the new session's.
+    case 'commandSent':
+      return state.sessionCleared ? { ...state, sessionCleared: false } : state;
 
     case 'startRequested':
       // A second click while the first is still with the host is the same

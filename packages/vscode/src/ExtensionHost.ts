@@ -138,7 +138,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     warn: (msg) => { void vscodeApi.window.showWarningMessage(msg); },
   });
   const persist = (): void => persistState(persistenceDeps());
-  const saveSession = (): void => saveCurrentSession(persistenceDeps());
+  const saveSession = (): string | null => saveCurrentSession(persistenceDeps());
 
   const managerDeps: PlanManagerDeps = {
     get session(): Session { return requireSession(); },

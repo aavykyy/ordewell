@@ -14,7 +14,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   { label: '/login', detail: 'Sign the active planner in; /login <runner> signs in a named agent', insertText: '/login' },
   { label: '/key set ', detail: 'Set an API key for a provider', insertText: '/key set ' },
   { label: '/sessions', detail: 'Browse and load saved sessions', insertText: '/sessions' },
-  { label: '/new', detail: 'Start a new session (clears current plan)', insertText: '/new' },
+  { label: '/new', detail: 'Start a new session (clears the current plan and stops a running one)', insertText: '/new' },
   { label: '/fork', detail: 'Continue in a copy of this conversation and its tasks; the original stays as it is', insertText: '/fork' },
   { label: '/rewind', detail: 'Fork the conversation from just before one of your messages (the original is kept)', insertText: '/rewind' },
   { label: '/compact', detail: 'Condense this conversation into a summary; the last two exchanges and all tasks are kept', insertText: '/compact' },

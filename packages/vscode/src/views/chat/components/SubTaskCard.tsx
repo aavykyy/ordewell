@@ -57,7 +57,7 @@ const DEFAULT_MODES: RunnerMode[] = [
   { id: 'plan', label: 'Read-only', description: 'Ordewell commands; lands nothing' },
 ];
 
-export default function SubTaskCard({ task, parentTask, tasks, models, modes, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, run, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {
+export default function SubTaskCard({ task, parentTask, tasks, models, modes, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, run, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
 
@@ -84,6 +84,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
     ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
   }, { parent: parentTask, placement: 'subtask', tasks, runnerScope });
   const status = statusBadge(row);
+  const failed = task.status === 'failed';
   // A subtask's own state decides, never its parent's: a queued subtask of a
   // running parent keeps its editors, and one that has started keeps none. The
   // run's status is the newer word: `task_started` reaches it first.
@@ -203,7 +204,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
                 onChange={canEdit ? onSkillsChange : undefined} />
             )}
 
-            {!isExecuting && task.type === 'ai' && onRunTask && (
+            {!isExecuting && task.type === 'ai' && !failed && onRunTask && (
               <div className="task-run-btn-wrapper">
                 <button className="task-action-btn run" onClick={(e) => { e.stopPropagation(); onRunTask(task.id); }}>
                   Run Task
@@ -231,11 +232,13 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
               </div>
             )}
 
-            {/* A usage-limit pause holds the run, which then reads as not executing. */}
-            {(isExecuting || pausedOnLimit(task)) && (
+            {/* A usage-limit pause holds the run, which then reads as not
+                executing; a failure usually ends it, as on a top-level card. */}
+            {(isExecuting || pausedOnLimit(task) || failed) && (
               <TaskActions taskId={task.id} actions={row.actions}
                 labels={ACTION_LABELS}
-                handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart }} />
+                handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart }}
+                onRetry={failed && task.type !== 'user' ? onRetry : undefined} />
             )}
 
             <TaskMarkControl taskId={task.id} row={row} runActive={runActive ?? !!isExecuting}

@@ -100,6 +100,17 @@ describe('a new session', () => {
     expect(working()).toBe(false);
   });
 
+  // The host's reset stops a live run too, so the confirmation must not promise only the planner's turn.
+  it('warns on /new during a run that the running tasks are stopped', () => {
+    host.provider.planApproved();
+    host.provider.showPlan({ status: 'running', tasks: [] });
+    type('/new');
+    press('Enter');
+
+    expect(document.querySelector('.new-session-confirm-text')?.textContent).toContain('any running tasks are stopped');
+    expect(posted().some((m) => m.type === 'newSession')).toBe(false);
+  });
+
   it('ends the turn on /new in the chat', () => {
     host.session(turnStarted);
     host.provider.planApproved();
