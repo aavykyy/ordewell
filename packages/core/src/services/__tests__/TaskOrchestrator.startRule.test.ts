@@ -53,6 +53,13 @@ function editWhileOpening(env: ReturnType<typeof setup>, taskId: string, changes
 }
 
 describe('an explicit start runs the task as it stands when it claims it', () => {
+  it('starts when the fake repository cannot provide a base diff', async () => {
+    const env = setup();
+    env.orchestrator.loadPlan([change('t1', 1)]);
+    await env.orchestrator.forceStartTask('t1');
+    expect(env.spawned('t1')).toHaveLength(1);
+    expect(env.orchestrator.holdReason('t1')).toBeNull();
+  });
   it('a force start, edited while its run opened', async () => {
     const env = setup();
     env.orchestrator.loadPlan([change('t1', 1)]);

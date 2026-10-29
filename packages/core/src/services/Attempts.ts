@@ -16,6 +16,7 @@ import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { IsolationRunController } from './IsolationRunController';
 import type { Landing, LandingOutcome } from './Landing';
 import { SELF_REPO } from './isolationRecord';
+import { taskStartConfig } from './taskStartConfig';
 import { taskRefOf } from './TaskRefs';
 import { classifyRunnerStop, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import type { ResearchTasks } from './ResearchTasks';
@@ -40,6 +41,12 @@ import { TaskControlError } from './TaskControlError';
 import { TaskWebReader } from './taskWebReads';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { OrchestratorObserver, StartAdmission } from './TaskOrchestrator';
+
+class TaskStartConfigError extends Error {
+  constructor(paths: string[]) {
+    super(`repository configuration ${paths.map((p) => JSON.stringify(p)).join(', ')} was added during this run; review and commit it, or remove it, before continuing`);
+  }
+}
 
 /** Where a start stands against the user's Stop (ADR-0029): no longer current once one comes. */
 export type Admitted = Pick<StartAdmission, 'current'>;
@@ -178,7 +185,7 @@ export interface AttemptNotice {
  */
 export type SpawnFailure =
   | { leaves: 'failed'; summary: TaskOutputSummary; keepWorktree: boolean; notice: AttemptNotice }
-  | { leaves: 'held'; hold: string; notice: AttemptNotice; settles: boolean }
+  | { leaves: 'held'; hold: string; notice: AttemptNotice; settles: boolean; preserveWorktree?: boolean }
   | { leaves: 'conflict'; why: string };
 
 /**
@@ -688,9 +695,17 @@ export class Attempts {
       // Resumed beside a runner still winding it down, a session would run in
       // two processes, and count from before what the first one still reports.
       if (kind.kind === 'continuation') await this.windDowns.get(task.id);
+      if (!attempt.script && kind.kind === 'repair') {
+        const paths = await taskStartConfig(runs.current, task.id, true);
+        if (paths.length) throw new TaskStartConfigError(paths);
+      }
       const { cwd, worktree, previousWork, workspace } = await attemptCwd(kind, task, runs);
       attempt.cwd = cwd;
       attempt.worktree = worktree;
+      if (!attempt.script && kind.kind !== 'repair') {
+        const paths = await taskStartConfig(runs.current, task.id, worktree);
+        if (paths.length) throw new TaskStartConfigError(paths);
+      }
       if (checksTree(kind)) attempt.snapshot = await runs.snapshotWorkspace();
       if (this.live.get(task.id) !== attempt) {
         // Ended while its worktree was being made, so whatever ended it could
@@ -790,6 +805,9 @@ export class Attempts {
       return { kind: 'usage-limited', taskId: task.id, attempt, said: { message }, output: '' };
     }
     const failed = (failure: SpawnFailure): AttemptEnded => ({ kind: 'spawn-failed', task, attempt, failure });
+    if (err instanceof TaskStartConfigError) {
+      return failed({ leaves: 'held', hold: err.message, preserveWorktree: true, settles: false, notice: { level: 'warn', text: `Task "${task.title}" is on hold: ${err.message}` } });
+    }
     if (attempt.kind.kind === 'continuation' && !attachTimeout) {
       // A runner that exits while starting on a saved session has refused it.
       const refused = err instanceof RunnerStartupExit;
