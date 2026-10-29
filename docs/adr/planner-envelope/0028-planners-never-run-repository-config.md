@@ -247,18 +247,22 @@ specifies.
   can run code or redirect the runner: `.mcp.json`, `.claude/settings.json`,
   `.claude/settings.local.json`, `.claude/hooks/`, `.claude/plugins/`,
   `.claude-plugin/`, a `plugin.json` or `marketplace.json` under `.claude/`,
-  OpenCode's `opencode.json` and plugin and tool directories, and `.codex/`
+  OpenCode's `opencode.json` and its plugin, tool and agent directories, and `.codex/`
   (the list is the runners', and holds a start for any of them whichever
   runner it launches). A difference holds the start with a reason naming each
   path, so a landing that added one stops the run's later starts.
   - *A worktree* is compared with the base commit the run recorded, at the
     repository's top and, when the workspace is below it, in the directory the
-    runner starts in. A group's loose entries, shared live with the real
-    workspace, are compared as the checkout is.
+    runner starts in. The `.claude` and `.opencode` directories a worktree
+    links from the main checkout, and a group's loose entries shared live
+    with the real workspace, are compared as the checkout is: git sees a
+    link, not what a task wrote through it.
   - *The checkout* an ops task or a shared run works in has no base commit,
     and its personal files (an ignored `.claude/settings.local.json`) predate
     the run, so it is compared with its own contents when the run first
-    launched a task there. A run that never isolates is held the same way. The
+    launched a task of any kind, before a landing can reach it, at the
+    workspace root and each level above it up to the repository's top, which
+    the runner reads too. A run that never isolates is held the same way. The
     baseline is kept in memory for the run: a restarted daemon takes it anew at
     its next launch. A Merge all that changes the checkout holds the next ops
     start, which the user lifts by removing the configuration or starting a new

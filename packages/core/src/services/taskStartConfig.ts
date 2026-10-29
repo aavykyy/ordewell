@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { createHash } from 'crypto';
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { defaultExecFile, tryGit } from './gitExec';
 import { repositoryRunnerConfigPaths, RUNNER_CONFIG_ROOTS } from './repositoryRunnerConfig';
@@ -20,13 +20,13 @@ function liveConfig(dir: string): Map<string, string> {
     if (found.size >= MAX_FILES || depth > MAX_DEPTH) return;
     const full = path.join(dir, rel);
     try {
-      // A symlinked file is read through, because a group shares its root
-      // config live that way; a symlinked directory is not followed.
-      const link = lstatSync(full);
-      const info = link.isSymbolicLink() ? statSync(full) : link;
+      // A link is read through: a group shares its root config live that way,
+      // and a worktree reaches the main checkout's `.claude` and `.opencode`
+      // through one. The depth bound ends a cycle.
+      const info = statSync(full);
       if (info.isFile()) {
         found.set(rel, createHash('sha1').update(readFileSync(full)).digest('hex'));
-      } else if (info.isDirectory() && !link.isSymbolicLink() && path.basename(rel) !== 'node_modules') {
+      } else if (info.isDirectory() && path.basename(rel) !== 'node_modules') {
         for (const name of readdirSync(full)) visit(path.posix.join(rel, name), depth + 1);
       }
     } catch { /* gone or unreadable: nothing for the runner to read either */ }
@@ -34,6 +34,26 @@ function liveConfig(dir: string): Map<string, string> {
   for (const root of RUNNER_CONFIG_ROOTS) visit(root, 0);
   const selected = new Set(repositoryRunnerConfigPaths([...found.keys()]));
   return new Map([...found].filter(([name]) => selected.has(name)));
+}
+
+/**
+ * The directories the runner reads from when a task starts in `root`, each
+ * with the prefix that names it from there: `root` and every level up to the
+ * repository's top, because Claude reads the top's `.claude/settings.local.json`
+ * and OpenCode and Codex read every level on the way.
+ */
+function readDirs(root: string): Array<{ dir: string; prefix: string }> {
+  const dirs = [{ dir: root, prefix: '' }];
+  // Found by walking up, as git does, because a subprocess here would put a
+  // wait before the spawn of every task of a plan that never isolates.
+  for (let dir = root, prefix = ''; !existsSync(path.join(dir, '.git')); ) {
+    const parent = path.dirname(dir);
+    if (parent === dir) return [dirs[0]];
+    dir = parent;
+    prefix += '../';
+    dirs.push({ dir, prefix });
+  }
+  return dirs;
 }
 
 /**
@@ -45,17 +65,28 @@ function liveConfig(dir: string): Map<string, string> {
  * a restart. A directory outside a worktree — the checkout an ops or shared
  * task runs in, a group's loose entries shared live — has no commit to
  * compare with, and its files existed before the run as often as not, so it
- * is compared with its own contents when the run first launched a task there.
+ * is compared with its own contents when the run first launched a task of any
+ * kind: before a landing can reach it. A worktree is compared that way too,
+ * through the `.claude` and `.opencode` links it holds into the main checkout,
+ * which git sees as one symlink.
  */
 export class TaskStartConfig {
   private readonly live = new Map<string, Map<string, string>>();
 
-  /** `epoch` names the run the check belongs to; a new run takes a new baseline. */
-  async check(run: IsolationRun | null, taskId: string, where: { epoch: number; cwd: string | null; worktree: boolean }): Promise<string[]> {
+  /**
+   * `epoch` names the run the check belongs to; a new run takes a new
+   * baseline. `root` is the workspace root, the checkout a worktree run lands in.
+   */
+  async check(run: IsolationRun | null, taskId: string, where: { epoch: number; root: string; cwd: string | null; worktree: boolean }): Promise<string[]> {
     const found = where.worktree ? await this.gitDifferences(run, taskId) : [];
-    // A lone repository's worktree is all of what its runner reads, and the base commit covers it.
-    const liveDir = where.worktree ? (run && !run.repos.some((r) => r.path === '.') ? run.tasks[taskId]?.workspace : undefined) : where.cwd;
-    if (liveDir) found.push(...this.liveDifferences(epochKey(run, where), liveDir));
+    const id = `${where.epoch}:${run?.id ?? ''}`;
+    const checkout = readDirs(where.root).flatMap(({ dir, prefix }) =>
+      this.liveDifferences(`${id}:checkout:${dir}`, dir).map((name) => `${prefix}${name}`));
+    if (!where.worktree) found.push(...checkout);
+    else {
+      const workspace = run?.tasks[taskId]?.workspace;
+      if (workspace) found.push(...this.liveDifferences(`${id}:worktree`, workspace));
+    }
     return [...new Set(found)].sort();
   }
 
@@ -98,8 +129,4 @@ export class TaskStartConfig {
     }
     return found;
   }
-}
-
-function epochKey(run: IsolationRun | null, where: { epoch: number; worktree: boolean }): string {
-  return `${where.epoch}:${run?.id ?? ''}:${where.worktree ? 'worktree' : 'checkout'}`;
 }

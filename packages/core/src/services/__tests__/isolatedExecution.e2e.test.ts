@@ -133,6 +133,48 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       expect(runner.spawn).toHaveBeenCalledTimes(1);
     });
 
+    it('holds an ops task for configuration a Merge all landed before it first started', async () => {
+      const root = repo();
+      const { orchestrator, runner } = run(root, [first, next({ ops: true })], { t1: { write: ['.mcp.json'] }, t2: { write: [] } });
+      await orchestrator.approveReview();
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')?.status).toBe('completed'));
+      expect(await orchestrator.mergeRun()).toEqual({ outcome: 'merged' });
+      await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('.mcp.json'));
+      expect(runner.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it('holds a dependent for configuration written through a .claude link into the main checkout', async () => {
+      const root = repo();
+      mkdirSync(join(root, '.claude'));
+      writeFileSync(join(root, '.claude', 'notes.md'), 'ignored\n');
+      writeFileSync(join(root, '.git', 'info', 'exclude'), '.claude/\n');
+      const { orchestrator, runner } = run(root, [first, next()], { t1: { write: ['.claude/settings.json'] }, t2: { write: [] } });
+      await orchestrator.approveReview();
+      await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('.claude/settings.json'));
+      expect(readFileSync(join(root, '.claude', 'settings.json'), 'utf8')).toBe('written by t1\n');
+      expect(runner.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it('holds an ops task for configuration written above the directory the run is rooted in', async () => {
+      const root = repo();
+      mkdirSync(join(root, 'sub'));
+      writeFileSync(join(root, 'sub', 'file.txt'), 'x\n');
+      git(root, 'add', '-A');
+      git(root, 'commit', '-q', '-m', 'sub');
+      const { orchestrator, runner } = run(join(root, 'sub'), [{ ...first, ops: true }, next({ ops: true })], { t1: { write: ['../.claude/settings.local.json'] }, t2: { write: [] } });
+      await orchestrator.approveReview();
+      await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('../.claude/settings.local.json'));
+      expect(runner.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it('holds a dependent for an OpenCode agent definition', async () => {
+      const root = repo();
+      const { orchestrator, runner } = run(root, [first, next()], { t1: { write: ['.opencode/agents/build.md'] }, t2: { write: [] } });
+      await orchestrator.approveReview();
+      await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('.opencode/agents/build.md'));
+      expect(runner.spawn).toHaveBeenCalledTimes(1);
+    });
+
     it('holds a task that follows one which wrote configuration into a shared run', async () => {
       const root = repo();
       writeFileSync(join(root, 'README.md'), 'edited\n');
