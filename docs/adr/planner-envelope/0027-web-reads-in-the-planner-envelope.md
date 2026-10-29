@@ -372,13 +372,20 @@ Research subagents get `fetch` and `web_search`, and still never prompt
   hold for it. The refusal names neither the command nor the destination.
 - **A remote the repository configures asks, under its whole line.** The
   grant is the command as written, `-C`, flags, remote and patterns
-  included, and the whole line when a `cd` on it picks the repository, so
+  included. It is the whole line when anything else on it could pick the
+  repository: a `cd` or `chdir`, a wrapper (`env -C`, `env -u HOME`), whose
+  own words reach no scope, or any other command that asks, which may move
+  the shell under a name no list holds (a cmd.exe drive switch, `cd..`). So
   `git ls-remote --heads origin` covers neither `upstream` nor `origin` of
   another repository, and an approval of another git command covers no
-  listing. `git.exe`, as Git Bash names it, is held to the same rules.
+  listing. A silent read beside it (`| head`) leaves the grant its own.
+  `git.exe`, as Git Bash names it, is held to the same rules.
 - **Its remote and patterns pass the outbound secret check before approval,**
   as a web command's URL does: protocol v2 sends the patterns to the server
-  as ref prefixes.
+  as ref prefixes. The check reads the words as written, so a listing the
+  shell rewrites first is refused: a variable, a substitution, a brace list,
+  an unquoted glob or a `~` anywhere in it, `-C $DIR` included. A quoted
+  pattern is sent as written and asks.
 
 GNU Wget 1.x has no curl-style host-to-address override preserving the
 original hostname for HTTP and TLS, so it still resolves again at connection
@@ -499,3 +506,4 @@ filed as its own issue.
 - 2026-10-25 — a read its caller cancels after it was allowed keeps its count; only a refused one is given back.
 - 2026-10-29 — `git ls-remote` naming its destination is refused; a configured remote asks under its whole line, its remote and patterns secret-checked.
 - 2026-10-29 — a listing after a `cd` is granted under the whole line, and `git.exe` is read as git.
+- 2026-10-29 — a listing beside a wrapper, `chdir` or anything else that asks is granted under its line; one the shell rewrites is refused.

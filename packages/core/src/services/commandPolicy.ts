@@ -843,6 +843,12 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
     if (sub === 'ls-remote' && !namesConfiguredRemote(seg, after)) {
       return `"git ls-remote" given a URL, an address or a path reaches it through git's own transport, which resolves the host itself and follows a redirect, so the origin approval, address guard and pinned connection a web read gets (ADR-0027) cannot hold for it. Name a remote the repository configures, such as "git ls-remote origin", or fetch the page with your web fetch tool.`;
     }
+    // The secret check and the grant read the words as written, and the shell
+    // sends what they expand to: `$TOKEN` passed as text and left as its value.
+    // No ref name holds a `~`, so one is only ever the home directory.
+    if (sub === 'ls-remote' && (seg.expandable || seg.globbed || after.some((a) => a.includes('~')))) {
+      return `The shell rewrites part of this "git ls-remote" before git sees it (a variable, substitution, glob or "~"), so what it sends the remote, and which repository it lists, cannot be checked for a secret or approved. Write the remote and patterns literally, in single quotes where they hold a "*", and re-run.`;
+    }
     if (sub === 'branch' || sub === 'tag') {
       const flag = seg.args.find((a) => ['-D', '-d', '-m', '-M', '--delete', '--move'].includes(a))
         ?? after.find(swallowsRefName);
@@ -1098,12 +1104,15 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   // A `cd` that runs silently still picks the repository a remote listing
   // reaches, as `-C` does, so that listing is held to the line too: under its
   // own words, approving `origin` in one repository covered `origin` in every
-  // other (ADR-0027).
+  // other (ADR-0027). So does a wrapper (`env -C`, `env -u HOME`), whose own
+  // words never reach a scope, and anything else on the line that asks: it may
+  // be a name that moves the shell no list here holds (a cmd.exe drive switch,
+  // `cd..`), and its scope keeps only its name.
   const changesDirectory = unwrapped.some(({ seg }) => seg.binary.toLowerCase() === 'cd');
   const lineScoped = nonAuto.some((u) => {
     const name = u.seg.binary.toLowerCase();
     return name === 'cd' || (name !== 'command' && SHELL_STATE_COMMANDS.has(name)) || climbsByGlob(u.seg)
-      || (changesDirectory && isRemoteListing(u.seg));
+      || (isRemoteListing(u.seg) && (changesDirectory || u.wrappers.length > 0 || nonAuto.length > 1));
   });
   const webUrls = nonAuto.flatMap((u) => webCommand(u.seg, opts.trustedWebResolves)?.urls ?? []);
   const outboundTexts = nonAuto.flatMap((u) => webCommand(u.seg, opts.trustedWebResolves)?.outboundTexts ?? remoteListingTexts(u.seg));

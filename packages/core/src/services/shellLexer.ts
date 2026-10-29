@@ -791,10 +791,11 @@ export function literalCdTarget(seg: Segment): string | undefined {
  * is the one its stages share.
  */
 export function followCd(segments: Segment[]): void {
-  if (segments.some((s) => s.joinedBy === 'other' || SHELL_STATE_COMMANDS.has(s.binary))) return;
+  if (segments.some((s) => s.joinedBy === 'other' || movesShell(s))) return;
   const inPipeline = (i: number) => segments[i].joinedBy === 'pipe' || segments[i + 1]?.joinedBy === 'pipe';
-  // A `cd` it cannot read leaves the shell somewhere unknown for the rest of the line.
-  if (segments.some((s, i) => s.binary === 'cd' && !inPipeline(i) && literalCdTarget(s) === undefined)) return;
+  // A `cd` it cannot read leaves the shell somewhere unknown for the rest of the
+  // line, and cmd.exe runs a re-cased `CD` that {@link literalCdTarget} never reads.
+  if (segments.some((s, i) => s.binary.toLowerCase() === 'cd' && !inPipeline(i) && literalCdTarget(s) === undefined)) return;
   let chain: string[] = [];
   segments.forEach((seg, i) => {
     seg.cwd = chain;
@@ -810,7 +811,7 @@ export function followCd(segments: Segment[]): void {
  * so on such a line `cd` is no longer `auto`.
  */
 function markShellState(segments: Segment[], bareSegment: boolean): void {
-  if (!bareSegment && !segments.some((s) => SHELL_STATE_COMMANDS.has(s.binary))) return;
+  if (!bareSegment && !segments.some(movesShell)) return;
   for (const seg of segments) if (seg.binary === 'cd') seg.cdSteered = true;
 }
 
@@ -818,8 +819,14 @@ function markShellState(segments: Segment[], bareSegment: boolean): void {
  * Builtins that change what a later `cd` or path means in the same shell:
  * `CDPATH` and `cdable_vars` redirect a bare-name `cd`, and the directory
  * stack, `eval` and `source` move the shell where the line does not say.
+ * `chdir` is cmd.exe's and zsh's `cd` under another name, which confinement
+ * does not follow. Matched in any case, as cmd.exe reads `CHDIR` too.
  */
 export const SHELL_STATE_COMMANDS = new Set([
   'export', 'set', 'shopt', 'declare', 'typeset', 'readonly', 'local', 'unset', 'let',
-  'source', '.', 'eval', 'exec', 'pushd', 'popd', 'alias', 'unalias', 'builtin', 'command', 'enable', 'hash', 'trap',
+  'source', '.', 'eval', 'exec', 'pushd', 'popd', 'chdir', 'alias', 'unalias', 'builtin', 'command', 'enable', 'hash', 'trap',
 ]);
+
+function movesShell(seg: Segment): boolean {
+  return SHELL_STATE_COMMANDS.has(seg.binary.toLowerCase());
+}

@@ -758,6 +758,61 @@ describe('git remote listing in the planner shell', () => {
     expect(ask).toHaveBeenCalledTimes(2);
   });
 
+  // `env -C` picks the repository as `-C` does, but a wrapper's own words
+  // never reached the scope: one approval in one repository listed another's.
+  it('asks again for a listing in a repository a wrapper changes into', async () => {
+    const fs = new TestFileSystem();
+    const ask = vi.fn().mockResolvedValue(true);
+    fs.setApproval(new ApprovalPolicy({ ask }));
+
+    expect((await fs.bash('env -C packages/web git ls-remote --heads origin')).success).toBe(true);
+    expect(ask).toHaveBeenCalledTimes(1);
+
+    expect((await fs.bash('env -C packages/evil git ls-remote --heads origin')).success).toBe(true);
+    expect(ask).toHaveBeenCalledTimes(2);
+  });
+
+  // cmd.exe's `chdir` is its `cd`; read as an unknown program, it was granted
+  // under its bare name and the directory it named dropped out.
+  it('asks again for a listing in a repository cmd.exe chdir selects', async () => {
+    const fs = new DialectFileSystem('cmd');
+    const ask = vi.fn().mockResolvedValue(true);
+    fs.setApproval(new ApprovalPolicy({ ask }));
+
+    expect((await fs.bash('chdir packages/web && git ls-remote --heads origin')).success).toBe(true);
+    expect(ask).toHaveBeenCalledTimes(1);
+
+    expect((await fs.bash('chdir packages/evil && git ls-remote --heads origin')).success).toBe(true);
+    expect(ask).toHaveBeenCalledTimes(2);
+  });
+
+  // The secret check reads the words as written, but the shell sends what
+  // they expand to: `$MY_SECRET_TOKEN` passed it as text and left as the value.
+  it('refuses a listing whose words the shell expands, before asking', async () => {
+    const fs = new TestFileSystem();
+    const ask = vi.fn().mockResolvedValue(true);
+    fs.setApproval(new ApprovalPolicy({ ask }));
+    vi.stubEnv('MY_SECRET_TOKEN', 'EnvSecret456');
+    try {
+      for (const command of [
+        'git ls-remote origin $MY_SECRET_TOKEN',
+        'git ls-remote --heads origin refs/heads/$MY_SECRET_TOKEN',
+        'git ls-remote origin "refs/heads/${MY_SECRET_TOKEN}"',
+        'git ls-remote origin $(cat .env)',
+        'git ls-remote origin `cat .env`',
+      ]) {
+        const result = await fs.bash(command);
+        expect(result.success).toBe(false);
+        expect(result.output).toContain('Command refused');
+        expect(result.output).not.toContain('EnvSecret456');
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(ask).not.toHaveBeenCalled();
+    expect(fs.bashCalls).toEqual([]);
+  });
+
   // The patterns travel to the server as ref prefixes, so they leave the machine like a URL does.
   it('withholds a listing whose patterns carry a secret, before asking and without echoing it', async () => {
     const fs = new TestFileSystem();
