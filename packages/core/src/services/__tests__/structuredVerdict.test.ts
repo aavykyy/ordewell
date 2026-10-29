@@ -1,9 +1,9 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { OrdewellMcpServer } from '../mcp';
-import { VerdictEngine } from '../VerdictEngine';
+import { IDLE_TIMEOUT_MS, VerdictEngine } from '../VerdictEngine';
 import { StructuredRunner } from '../StructuredRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { createTask } from '../../models/Task';
@@ -32,6 +32,35 @@ describe('VerdictEngine over recorded structured output', () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(verdicts).toHaveLength(1);
     expect(verdicts[0].outcome).toBe('fail');
+    runner.stopAll();
+  });
+});
+
+describe('VerdictEngine over a structured runner that never prints (#117)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('flags it quiet once the idle window passes, and neither decides nor ends its attempt', async () => {
+    const spawned = fakeSpawn([]);
+    const runner = new StructuredRunner({
+      process: { spawn: spawned.spawn, resolvePath: async () => '/usr/bin', platform: 'linux', isDirectory: () => true, exists: () => true },
+    });
+    const engine = new VerdictEngine();
+    const verdicts: Verdict[] = [];
+    engine.onVerdict((_id, verdict) => verdicts.push(verdict));
+    const session = await runner.spawn({ taskId: 't1', runner: 'claude-code', mode: 'acceptEdits', prompt: 'Do it', cwd: '/repo', registry: new RunnerRegistry() });
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    engine.watch(createTask({ id: 't1', title: 'Only' }), session);
+    vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+
+    expect(session.getOutput()).toBe('');
+    expect(session.turnState()).toBe('working');
+    expect(engine.getIdleSince('t1')).not.toBeNull();
+    expect(verdicts).toEqual([]);
+    expect(spawned.processes[0].killed).toBe(false);
+    vi.useRealTimers();
     runner.stopAll();
   });
 });

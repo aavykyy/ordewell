@@ -60,6 +60,24 @@ describe('the supervisor at Watch: what wakes it', () => {
     expect(env.planner.calls[0].message).toContain(`- task #1 "Task t1" has gone quiet (no output since ${quietSince})`);
   });
 
+  // Issue #117: a runner that never printed a line never went quiet, so nothing woke the supervisor for it.
+  it('wakes when a task has printed nothing since it started, and leaves it running', async () => {
+    const env = await supervised([task('t1', 1)]);
+
+    await vi.advanceTimersByTimeAsync(IDLE_TIMEOUT_MS + WAKE_DEBOUNCE_MS);
+
+    await until(() => env.planner.calls.length === 1);
+    const quietSince = new Date(NOW.getTime() + IDLE_TIMEOUT_MS).toISOString();
+    expect(env.planner.calls[0].message).toContain(`- task #1 "Task t1" has gone quiet (no output since ${quietSince})`);
+    expect(taskOf(env.session, 't1')!.status).toBe('in_progress');
+    expect(taskOf(env.session, 't1')!.verdict).toBeUndefined();
+    expect(env.run.of('t1').killed).toBe(false);
+
+    // Quiet is advisory: the runner's own report still settles it.
+    env.run.of('t1').reportComplete({ status: 'done', summary: 'done' });
+    await until(() => taskOf(env.session, 't1')!.status === 'completed');
+  });
+
   it('wakes at once when the run finishes, with the passes since the last wake-up', async () => {
     const env = await supervised();
 
@@ -388,7 +406,8 @@ describe('when the supervisor fails, the run does not depend on it', () => {
   });
 
   it('takes the conversation back from a turn that ignores its stop', async () => {
-    const env = await wokenUp();
+    // One task, waiting: a second, running silent past the timeout, would go quiet and wake it again.
+    const env = await wokenUp({}, [task('t1', 1)]);
     env.planner.state.ignoresStop = true;
 
     await vi.advanceTimersByTimeAsync(WAKE_UP_TURN_TIMEOUT_MS);
