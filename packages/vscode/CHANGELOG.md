@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-10-29
+
+### Fixed
+
+- **Repository configuration introduced during a run waits for your consent.**
+  A landing that adds or edits the configuration a runner loads at launch
+  holds the next task start, which names each path until the configuration is
+  committed for a new run or removed. Configuration already present when the
+  run started, and instruction files, are not held.
+- **A repository MCP server cannot take Ordewell's name.** A Claude Code change
+  or ops task does not start when its directory declares a server named
+  `ordewell`, since Claude Code does not document which server wins. Rename or
+  remove that server to start the task.
+
 ## [0.11.2] - 2026-10-29
 
 ### Added
