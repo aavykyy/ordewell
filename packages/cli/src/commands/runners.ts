@@ -64,10 +64,11 @@ export function handleAuto(subArgs: string[]): void {
 }
 
 /**
- * Re-probe runners, settings and model catalogs. The daemon does the actual
- * re-discovery inside `/api/models`; this asks for all three and prints what
- * came back, so a cold or broken catalog is visible rather than inferred from a
- * later command behaving oddly.
+ * Re-check runners and reread the daemon's cached model catalog. The runner
+ * list re-probes installs; `/api/models` returns what the daemon already holds
+ * and does not rediscover provider catalogs. This prints what came back, so a
+ * cold or broken catalog is visible rather than inferred from a later command
+ * behaving oddly.
  */
 export async function handleRefresh(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   const api = await connect(subArgs, injectedApi);
