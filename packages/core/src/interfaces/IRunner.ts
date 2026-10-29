@@ -267,6 +267,12 @@ export interface IRunner {
      * connect or the wait ends.
      */
     onAttaching?: (spawn: 1 | 2) => void;
+    /**
+     * Aborted once nobody wants the runner any more: a spawn still in flight
+     * is taken back at once instead of finishing its start for nobody. Once
+     * the spawn has resolved, the session's own stop is what ends it.
+     */
+    cancelled?: AbortSignal;
     /** The attempt's work lands as a commit (ADR-0047): its runner is told to write the message in `task_complete`. */
     commits?: true;
     /** A script task's body (ADR-0035): only the script runner reads it, and it runs nothing else. */

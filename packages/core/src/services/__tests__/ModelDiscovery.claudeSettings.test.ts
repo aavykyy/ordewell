@@ -9,6 +9,8 @@ import type { IConfig } from '../../interfaces/IConfig';
 import { createTask, type DiscoveredModel } from '../../models/Task';
 import { SessionCatalog } from '../SessionCatalog';
 import { resolveAssignment } from '../TaskAssignment';
+import { claudeManagedSettingsDir, readClaudeSettingsModels } from '../../plugins/builtin/claudeModels';
+import type { RunnerEnv } from '../../plugins/types';
 
 // Gateway models a user registers in Claude Code's own picker
 // (`modelPicker.options` in ~/.claude/settings.json) join every discovery
@@ -22,7 +24,7 @@ type Source = 'api' | 'help' | 'fallback';
 
 let home: string;
 const saved: Record<string, string | undefined> = {};
-const ENV = ['HOME', 'USERPROFILE', 'ANTHROPIC_API_KEY'];
+const ENV = ['HOME', 'USERPROFILE', 'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR'];
 
 beforeEach(() => {
   for (const key of ENV) saved[key] = process.env[key];
@@ -30,6 +32,7 @@ beforeEach(() => {
   process.env.HOME = home;
   process.env.USERPROFILE = home;
   delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.CLAUDE_CONFIG_DIR;
   fs.mkdirSync(path.join(home, '.claude'));
 });
 
@@ -41,12 +44,13 @@ afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-function writeSettings(content: unknown): void {
+function writeSettings(content: unknown, dir = path.join(home, '.claude')): void {
   const text = typeof content === 'string' ? content : JSON.stringify(content);
-  fs.writeFileSync(path.join(home, '.claude', 'settings.json'), text);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'settings.json'), text);
 }
 
-function resolverFor(source: Source) {
+function resolverFor(source: Source, env?: () => Promise<RunnerEnv>) {
   if (source === 'api') process.env.ANTHROPIC_API_KEY = 'synthetic-test-key';
   const calls = { exec: 0, fetch: 0 };
   const execImpl: ExecImpl = async () => {
@@ -64,7 +68,7 @@ function resolverFor(source: Source) {
       }] }),
     };
   }) as unknown as typeof fetch;
-  const resolver = new ModelResolver(new RunnerRegistry(), {} as IConfig, { execImpl, fetchImpl });
+  const resolver = new ModelResolver(new RunnerRegistry(), {} as IConfig, { execImpl, fetchImpl, ...(env ? { env } : {}) });
   return { resolver, calls };
 }
 
@@ -142,6 +146,50 @@ describe('Claude Code discovery — modelPicker.options in settings.json', () =>
     });
   });
 
+  it('trims the padding around a row\'s model and label', async () => {
+    writeSettings({ modelPicker: { options: [{ model: ' gproxy/default ', label: '  Gateway  ' }, { model: 'gproxy/default' }] } });
+    const { resolver } = resolverFor('help');
+
+    const added = (await claudeModels(resolver)).filter((m) => m.modelId.includes('gproxy'));
+
+    expect(added).toEqual([expect.objectContaining({ modelId: 'gproxy/default', modelLabel: 'Gateway', runnerProvider: 'gproxy' })]);
+  });
+
+  it('reads the settings CLAUDE_CONFIG_DIR moves, not the ones in ~/.claude', async () => {
+    const moved = path.join(home, 'work-account');
+    writeSettings({ modelPicker: { options: [{ model: 'gproxy/work' }] } }, moved);
+    writeSettings({ modelPicker: { options: [{ model: 'gproxy/personal' }] } });
+    process.env.CLAUDE_CONFIG_DIR = moved;
+    const { resolver } = resolverFor('help');
+
+    expect((await claudeModels(resolver)).map((m) => m.modelId)).toEqual([...BASELINE.help, 'gproxy/work']);
+  });
+
+  it('reads the config dir of the environment runners are launched with, over this process\'s', async () => {
+    const workspace = path.join(home, 'workspace-account');
+    writeSettings({ modelPicker: { options: [{ model: 'gproxy/workspace' }] } }, workspace);
+    writeSettings({ modelPicker: { options: [{ model: 'gproxy/daemon' }] } });
+    const { resolver } = resolverFor('help', async () => ({ ...process.env, CLAUDE_CONFIG_DIR: workspace }));
+
+    expect((await claudeModels(resolver)).map((m) => m.modelId)).toEqual([...BASELINE.help, 'gproxy/workspace']);
+  });
+
+  it('signs the catalog request in with the login CLAUDE_CONFIG_DIR moves', async () => {
+    const moved = path.join(home, 'work-account');
+    fs.mkdirSync(moved);
+    fs.writeFileSync(path.join(moved, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'moved-token' } }));
+    process.env.CLAUDE_CONFIG_DIR = moved;
+    const seen: Array<Record<string, string>> = [];
+    const fetchImpl = (async (_url: string, init: { headers: Record<string, string> }) => {
+      seen.push(init.headers);
+      return { ok: true, json: async () => ({ data: [{ id: 'claude-sonnet-5', display_name: 'Claude Sonnet 5' }] }) };
+    }) as unknown as typeof fetch;
+    const signed = new ModelResolver(new RunnerRegistry(), {} as IConfig, { execImpl: async () => ({ stdout: CLAUDE_HELP }), fetchImpl });
+
+    expect((await claudeModels(signed)).map((m) => m.modelId)).toEqual(BASELINE.api);
+    expect(seen.map((h) => h.Authorization)).toEqual(['Bearer moved-token']);
+  });
+
   it('serves a cached catalog until a refresh, which reads an edited settings file', async () => {
     writeSettings({ modelPicker: { options: [{ model: 'gproxy/default' }] } });
     const { resolver, calls } = resolverFor('help');
@@ -178,5 +226,53 @@ describe('Claude Code discovery — modelPicker.options in settings.json', () =>
       const outcome = resolveAssignment({ writer, before, task, catalog: catalog.edit() });
       expect(outcome.ok && outcome.task.assignedModel?.modelId).toBe('gproxy/default');
     }
+  });
+});
+
+describe('Claude Code\'s modelPicker precedence', () => {
+  /** Settings files by path, with the user's under `~/.claude`. */
+  function filesOf(byPath: Record<string, unknown>, env: RunnerEnv = {}) {
+    const text = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v));
+    return {
+      read: (file: string) => (file in byPath ? text(byPath[file]) : null),
+      list: (dir: string) => Object.keys(byPath).filter((f) => path.posix.dirname(f) === dir).map((f) => path.posix.basename(f)),
+      env,
+    };
+  }
+  const managed = claudeManagedSettingsDir('linux');
+  const picker = (...models: string[]) => ({ modelPicker: { options: models.map((model) => ({ model })) } });
+  const ids = (files: ReturnType<typeof filesOf>) => readClaudeSettingsModels(files, 'linux').map((m) => m.modelId);
+
+  it('takes the whole lineup from managed settings over the user\'s, never combining them', () => {
+    expect(ids(filesOf({
+      [`${managed}/managed-settings.json`]: picker('corp/approved'),
+      '~/.claude/settings.json': picker('gproxy/mine'),
+    }))).toEqual(['corp/approved']);
+  });
+
+  it('lets a later drop-in replace an earlier managed lineup', () => {
+    expect(ids(filesOf({
+      [`${managed}/managed-settings.json`]: picker('corp/base'),
+      [`${managed}/managed-settings.d/10-models.json`]: picker('corp/ten'),
+      [`${managed}/managed-settings.d/20-models.json`]: picker('corp/twenty'),
+      [`${managed}/managed-settings.d/30-other.json`]: { theme: 'dark' },
+      [`${managed}/managed-settings.d/.40-hidden.json`]: picker('corp/hidden'),
+      [`${managed}/managed-settings.d/50-notes.txt`]: picker('corp/text'),
+    }))).toEqual(['corp/twenty']);
+  });
+
+  it('falls to the user\'s lineup when no managed file sets one, reading it where CLAUDE_CONFIG_DIR moves it', () => {
+    expect(ids(filesOf({
+      [`${managed}/managed-settings.json`]: { permissions: { deny: [] } },
+      '~/.claude/settings.json': picker('gproxy/home'),
+      '/accounts/work/settings.json': picker('gproxy/work'),
+    }, { CLAUDE_CONFIG_DIR: '/accounts/work' }))).toEqual(['gproxy/work']);
+  });
+
+  it('offers nothing of the user\'s when a managed lineup is set but has no usable row', () => {
+    expect(ids(filesOf({
+      [`${managed}/managed-settings.json`]: { modelPicker: { options: [] } },
+      '~/.claude/settings.json': picker('gproxy/mine'),
+    }))).toEqual([]);
   });
 });

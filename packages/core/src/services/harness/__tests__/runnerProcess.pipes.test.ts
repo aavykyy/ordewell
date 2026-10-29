@@ -34,43 +34,38 @@ function runnerScript(detached: boolean, { holder = IDLE_HOLDER, last = '' } = {
 /**
  * A host with nothing of its own to keep it alive: it runs the runner through
  * {@link RunnerProcess}, waits for its end, disposes it, and says so. Loads
- * the TypeScript source through a transpiling hook, because the module graph
- * uses what type stripping alone cannot run.
+ * the TypeScript source through a CommonJS transpiling hook, because the
+ * module graph uses what type stripping alone cannot run, and the module
+ * hooks API is newer than the Node versions this package supports.
  */
 function writeHost(dir: string, detached: boolean): string {
-  const host = join(dir, 'host.mjs');
+  const host = join(dir, 'host.cjs');
   writeFileSync(host, [
-    `import { registerHooks, createRequire } from 'node:module';`,
-    `import { readFileSync } from 'node:fs';`,
-    `import { fileURLToPath } from 'node:url';`,
-    `import { spawn } from 'node:child_process';`,
+    `const Module = require('node:module');`,
+    `const { readFileSync } = require('node:fs');`,
+    `const { spawn } = require('node:child_process');`,
     `const source = ${JSON.stringify(join(__dirname, '..', 'runnerProcess.ts'))};`,
-    `const ts = createRequire(source)('typescript');`,
-    `registerHooks({`,
-    `  resolve: (specifier, context, next) => {`,
-    `    if (!specifier.startsWith('.')) return next(specifier, context);`,
-    `    for (const candidate of [specifier, specifier + '.ts', specifier + '/index.ts']) { try { return next(candidate, context); } catch { /* the next candidate */ } }`,
-    `    return next(specifier, context);`,
-    `  },`,
-    `  load: (url, context, next) => {`,
-    `    if (!url.endsWith('.ts')) return next(url, context);`,
-    `    const { outputText } = ts.transpileModule(readFileSync(fileURLToPath(url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });`,
-    `    return { format: 'module', source: outputText, shortCircuit: true };`,
-    `  },`,
-    `});`,
-    `const { RunnerProcess } = await import(source);`,
-    `const runner = new RunnerProcess({`,
-    `  spawn: (_command, _args, options) => spawn(process.execPath, ['-e', ${JSON.stringify(runnerScript(detached))}], options),`,
-    `  resolvePath: async () => process.env.PATH ?? '/usr/bin',`,
-    `  workspaceEnv: async () => ({}),`,
-    `  exists: () => true,`,
-    `});`,
-    `await runner.start(process.cwd(), () => ({ command: process.execPath, args: [] }), async () => {`,
-    `  runner.readStdout((text) => process.stdout.write('holder ' + text));`,
-    `});`,
-    `await runner.ended;`,
-    `runner.dispose();`,
-    `process.stdout.write('disposed\\n');`,
+    `const ts = Module.createRequire(source)('typescript');`,
+    `Module._extensions['.ts'] = (module, filename) => {`,
+    `  const { outputText } = ts.transpileModule(readFileSync(filename, 'utf8'), { fileName: filename, compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } });`,
+    // A CommonJS module cannot name import.meta; the build points it at the file, as tsup.config.ts says.
+    `  module._compile(outputText.replace(/import\\.meta/g, '({ url: require("node:url").pathToFileURL(__filename).href })'), filename);`,
+    `};`,
+    `(async () => {`,
+    `  const { RunnerProcess } = require(source);`,
+    `  const runner = new RunnerProcess({`,
+    `    spawn: (_command, _args, options) => spawn(process.execPath, ['-e', ${JSON.stringify(runnerScript(detached))}], options),`,
+    `    resolvePath: async () => process.env.PATH ?? '/usr/bin',`,
+    `    workspaceEnv: async () => ({}),`,
+    `    exists: () => true,`,
+    `  });`,
+    `  await runner.start(process.cwd(), () => ({ command: process.execPath, args: [] }), async () => {`,
+    `    runner.readStdout((text) => process.stdout.write('holder ' + text));`,
+    `  });`,
+    `  await runner.ended;`,
+    `  runner.dispose();`,
+    `  process.stdout.write('disposed\\n');`,
+    `})();`,
   ].join('\n'));
   return host;
 }

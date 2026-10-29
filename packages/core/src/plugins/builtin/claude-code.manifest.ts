@@ -1,5 +1,5 @@
 import type { RunnerManifest } from '../types';
-import { parseAnthropicModels, parseClaudeHelp, parseClaudeSettingsModels } from './claudeModels';
+import { claudeConfigDir, parseAnthropicModels, parseClaudeHelp, readClaudeSettingsModels } from './claudeModels';
 
 /**
  * A turn on a signed-out account ends with this line, which the status
@@ -50,7 +50,7 @@ export const CLAUDE_CODE_MANIFEST: RunnerManifest = {
     //    last-resort list when both API and CLI are unavailable.
     //
     // Whichever source answers, the models the user added to Claude's own
-    // picker (`modelPicker.options` in ~/.claude/settings.json, usually
+    // picker (`modelPicker.options` in its managed or user settings, usually
     // gateway IDs) are appended (settingsModels): the CLI accepts them as
     // `--model` values though no catalog above lists them.
     apiDiscovery: {
@@ -58,14 +58,14 @@ export const CLAUDE_CODE_MANIFEST: RunnerManifest = {
       headers: { 'anthropic-version': '2023-06-01' },
       auth: [
         { type: 'env', varName: 'ANTHROPIC_API_KEY', header: 'X-Api-Key' },
-        { type: 'file', path: '~/.claude/.credentials.json', jsonPath: 'claudeAiOauth.accessToken', header: 'Authorization', prefix: 'Bearer ' },
+        { type: 'file', path: (env) => `${claudeConfigDir(env)}/.credentials.json`, jsonPath: 'claudeAiOauth.accessToken', header: 'Authorization', prefix: 'Bearer ' },
       ],
       parser: parseAnthropicModels,
     },
     discoveryCommands: [
       { command: 'claude', args: ['--help'], parser: parseClaudeHelp },
     ],
-    settingsModels: { file: '~/.claude/settings.json', parser: parseClaudeSettingsModels },
+    settingsModels: (files) => readClaudeSettingsModels(files),
     canonicalAliases: [
       { modelId: 'opus', modelLabel: 'Opus' },
       { modelId: 'sonnet', modelLabel: 'Sonnet' },

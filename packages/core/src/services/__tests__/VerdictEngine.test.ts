@@ -394,6 +394,29 @@ describe('VerdictEngine', () => {
       expect(session.kill).not.toHaveBeenCalled();
     });
 
+    it('flags a runner silent while it is still starting, with no session to watch', () => {
+      const engine = new VerdictEngine();
+
+      engine.starting('t1');
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+
+      expect(engine.getIdleSince('t1')).not.toBeNull();
+    });
+
+    it('counts again once the started runner is watched, and stops counting once the attempt is cleared', () => {
+      const engine = new VerdictEngine();
+      engine.starting('t1');
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS - 1);
+
+      engine.watch(buildTask(), fakeSession());
+      vi.advanceTimersByTime(1);
+      expect(engine.getIdleSince('t1')).toBeNull();
+
+      engine.clear(buildTask());
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
+      expect(engine.getIdleSince('t1')).toBeNull();
+    });
+
     it.each([
       ['exits', (session: FakeRunnerSession) => session.emitExit(0)],
       ['reports', (session: FakeRunnerSession) => session.reportComplete({ status: 'done', summary: 'did it' })],

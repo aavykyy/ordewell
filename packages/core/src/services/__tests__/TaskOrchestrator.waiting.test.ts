@@ -160,6 +160,52 @@ describe('a structured turn that ends without a task_complete call', () => {
   });
 });
 
+// A runner whose start never resolves — stuck launching, or waiting for its
+// tools to attach — has no session to watch, and was never flagged quiet.
+describe('a runner that never finishes starting', () => {
+  it('is flagged quiet once it has been silent for the idle window, and no longer once the task is stopped', async () => {
+    vi.useFakeTimers();
+    try {
+      const runner = {
+        spawn: vi.fn((): Promise<IRunnerSession> => new Promise(() => {})),
+        stop: vi.fn(),
+        stopAll: vi.fn(),
+        activeCount: 0,
+      } satisfies IRunner;
+      const orchestrator = TaskOrchestrator.compose({
+        config: fakeConfig(),
+        notifications: fakeNotification(),
+        runner,
+        output: new BufferedTaskOutputSource(),
+        registry: new RunnerRegistry(),
+        workspaceRoot: () => '/repo',
+        workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
+      });
+      const quiet: string[] = [];
+      orchestrator.subscribe({ onTaskIdle: ({ taskId }) => quiet.push(taskId) });
+      orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+      void orchestrator.forceStartTask('t1');
+      // Not vi.waitFor: under fake timers it moves the clock as it polls.
+      for (let i = 0; i < 50 && runner.spawn.mock.calls.length === 0; i++) await flushMicrotasks();
+      expect(runner.spawn).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS - 1);
+      expect(orchestrator.getIdleSince('t1')).toBeNull();
+      vi.advanceTimersByTime(1);
+      expect(orchestrator.getIdleSince('t1')).not.toBeNull();
+      expect(quiet).toEqual(['t1']);
+      expect(task(orchestrator).status).toBe('in_progress');
+
+      await orchestrator.cancelTask('t1');
+      expect(orchestrator.getIdleSince('t1')).toBeNull();
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
+      expect(quiet).toEqual(['t1']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('the completion reminder', () => {
   function turnStarts(session: FakeRunnerSession) {
     const starts: Array<Extract<StructuredEvent, { type: 'turn_start' }>> = [];

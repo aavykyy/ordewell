@@ -78,9 +78,26 @@ export interface DiscoveryCommand {
   parser?: ModelDiscoveryParser;
 }
 
+/**
+ * The environment a runner is launched with: the daemon's own, under the
+ * workspace's (ADR-0016). A runner's files can move with it, as Claude Code's
+ * do under `CLAUDE_CONFIG_DIR`.
+ */
+export type RunnerEnv = Readonly<Record<string, string | undefined>>;
+
 export type ApiAuthMethod =
   | { type: 'env'; varName: string; header: string; prefix?: string }
-  | { type: 'file'; path: string; jsonPath: string; header: string; prefix?: string };
+  /** `path` is `~` expanded; a function of the runner's environment when that relocates the file. */
+  | { type: 'file'; path: string | ((env: RunnerEnv) => string); jsonPath: string; header: string; prefix?: string };
+
+/** What a runner's settings reader may look at, with `~` expanded in every path. */
+export interface RunnerSettingsFiles {
+  /** The file's content, or null when it is missing or unreadable. */
+  read(file: string): string | null;
+  /** The names of the entries in `dir`, or none when it is missing. */
+  list(dir: string): string[];
+  env: RunnerEnv;
+}
 
 export interface ApiDiscoveryConfig {
   url: string;
@@ -133,12 +150,13 @@ export interface RunnerModelDiscovery {
    */
   apiDiscovery?: ApiDiscoveryConfig;
   /**
-   * Models the user registered in the runner's own settings file (`~`
-   * expanded), such as gateway IDs no catalog lists. Appended to whatever the
-   * other methods produced, success or fallback: an ID they already offer
-   * keeps their entry. A missing or unreadable file adds nothing.
+   * Models registered in the runner's own settings, such as gateway IDs no
+   * catalog lists, read as the runner itself resolves its settings files.
+   * Appended to whatever the other methods produced, success or fallback: an
+   * ID they already offer keeps their entry. Missing or unreadable files add
+   * nothing.
    */
-  settingsModels?: { file: string; parser: ModelOutputParser };
+  settingsModels?: (files: RunnerSettingsFiles) => DiscoveredModel[];
   preferredPatterns?: { id: string; label: string }[];
   variants?: { id: string; label: string }[];
   discoveryCommands?: DiscoveryCommand[];

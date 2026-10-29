@@ -11,12 +11,17 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 ### Fixed
 
 - **Claude Code offers the models you added to its own picker.** Entries in
-  `modelPicker.options` of `~/.claude/settings.json`, such as a gateway's
+  `modelPicker.options` of Claude Code's settings, such as a gateway's
   `gproxy/default`, now appear beside the discovered Claude models and can be
-  picked for the planner and for tasks. A model Claude Code already lists keeps
-  its own label and effort levels, and a missing or malformed file changes
-  nothing. The file is read when Ordewell discovers Claude's models, so an
-  edit made while Ordewell runs shows after a restart (#117).
+  picked for the planner and for tasks. As in Claude Code, a managed settings
+  file's list replaces your own, and your own is read where
+  `CLAUDE_CONFIG_DIR` puts it. A model Claude Code already lists keeps its own
+  label and effort levels, and a missing or malformed file changes nothing.
+  The files are read when Ordewell discovers Claude's models, so an edit made
+  while Ordewell runs shows after a restart (#117).
+- **Stopping a task whose runner is still connecting Ordewell's tools stops
+  the runner at once.** It no longer finishes its wait, or respawns, after the
+  task was stopped.
 - **A task whose runner is still starting says so.** Until the runner reports
   Ordewell's tools connected, its row, its VS Code card and its task chat read
   "Connecting Ordewell's tools" instead of plain Running or Working, and

@@ -1031,12 +1031,19 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
 
     console.error(`[structured] Starting ${opts.runner} [${opts.mode ?? 'default'}] (${opts.modelId || 'default'}) for task ${opts.taskId.slice(0, 8)}`);
     this.registerSession(id, session);
+    // Until the start resolves the caller holds no session to stop, so its
+    // cancel is the only way to end a runner still waiting for its tools.
+    const cancel = () => void session.stop();
+    opts.cancelled?.addEventListener('abort', cancel, { once: true });
     try {
+      if (opts.cancelled?.aborted) cancel();
       await session.start(opts.prompt);
     } catch (err) {
       session.kill();
       this.sessions.delete(id);
       throw err;
+    } finally {
+      opts.cancelled?.removeEventListener('abort', cancel);
     }
     return session;
   }

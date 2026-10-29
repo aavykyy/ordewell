@@ -176,7 +176,10 @@ export class OrchestratorPool {
         env: () => workspaceEnvOf(process.cwd()),
         workspace: () => process.cwd(),
       });
-    this.modelResolver = deps.modelResolver ?? new ModelResolver(this.registry, new WebConfig());
+    // Read from the account the runners use, as the login probe above is.
+    this.modelResolver = deps.modelResolver ?? new ModelResolver(this.registry, new WebConfig(), {
+      env: async () => ({ ...process.env, ...(await workspaceEnvOf(process.cwd())) }),
+    });
     this.codexSandbox = deps.codexSandbox
       ?? new CodexSandboxAvailability(this.registry, { spawn: nodeSpawn, fetch: globalThis.fetch }, { cwd: process.cwd(), env: process.env });
     this.leaseHost = deps.leaseHost;

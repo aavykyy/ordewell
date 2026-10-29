@@ -137,6 +137,19 @@ export class VerdictEngine {
   }
 
   /**
+   * An attempt's runner is being started, with no session to watch yet. Its
+   * silence counts from here, so one whose start never resolves — stuck
+   * launching, or waiting for its tools to attach — is flagged quiet as well.
+   * {@link watch} starts the count again once the runner is up.
+   */
+  starting(taskId: string): void {
+    const gen = this.bumpGeneration(taskId);
+    this.idlePaused.delete(taskId);
+    this.openApprovals.delete(taskId);
+    this.touchIdle(taskId, gen);
+  }
+
+  /**
    * Attach to a spawned session. The runner's `task_complete` call on the
    * attempt's token is the only completion evidence (ADR-0022, V2); a session
    * that exits before one gets a failed verdict. A script task's session has

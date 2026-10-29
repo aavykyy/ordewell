@@ -135,6 +135,11 @@ interface TaskAttempt extends EndedAttempt {
    * Progress for surfaces: the wait itself is the runner's.
    */
   attaching: 1 | 2 | null;
+  /**
+   * Aborted as the attempt ends, so a runner still starting — waiting for its
+   * tools to attach, or respawning — is taken back then, not once it reports.
+   */
+  readonly spawning: AbortController;
 }
 
 const DEFAULT_GIT: GitInvoker = { exec: defaultExecFile, resolvePath: () => augmentedPath() };
@@ -445,6 +450,7 @@ export class Attempts {
       patch: null,
       receipt: null,
       attaching: null,
+      spawning: new AbortController(),
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.live.set(task.id, attempt);
@@ -463,7 +469,8 @@ export class Attempts {
   /**
    * The one way an attempt ends. Dropping the record is itself what
    * invalidates a spawn still in flight ({@link run} kills the session it
-   * receives for an attempt that is no longer current).
+   * receives for an attempt that is no longer current), and its cancel takes
+   * back a runner still starting meanwhile.
    *
    * A user interruption also bumps the verifier's generation *before* stopping
    * the runner: a runner may fire onExit synchronously from
@@ -479,6 +486,7 @@ export class Attempts {
     const session = attempt?.session ?? null;
     const nativeSessionId = session?.nativeSessionId() ?? null;
     if (attempt) {
+      attempt.spawning.abort();
       store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined, nativeSessionId ?? undefined);
       this.deps.output.detach(taskId);
       attempt.shell?.end();
@@ -693,6 +701,7 @@ export class Attempts {
         this.abandonSpawn(task, attempt);
         return false;
       }
+      this.verifier.starting(task.id);
       const session = attempt.script
         ? await this.spawnScript(task, attempt, cwd)
         : await this.spawnRunner(task, attempt, cwd, worktree ? workspace : undefined, previousWork);
@@ -874,6 +883,7 @@ export class Attempts {
       applyPatch: (args) => this.applyPatch(task, attempt, args),
       workspaceRoot: this.deps.workspaceRoot(),
       onNotice: (message) => this.host.tell('warn', `Task "${task.title}": ${message}`),
+      cancelled: attempt.spawning.signal,
       onAttaching: (spawn) => {
         if (this.live.get(task.id) !== attempt) return;
         attempt.attaching = spawn;
