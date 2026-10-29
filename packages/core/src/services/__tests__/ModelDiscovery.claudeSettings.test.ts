@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -14,8 +14,11 @@ import type { RunnerEnv } from '../../plugins/types';
 
 // Gateway models a user registers in Claude Code's own picker
 // (`modelPicker.options` in ~/.claude/settings.json) join every discovery
-// path. Each test runs under a fresh HOME so no real settings or credentials
-// are read.
+// path. Each test runs under a fresh HOME, with no CLAUDE_CONFIG_DIR and the
+// machine's managed settings hidden, so no real settings or credentials are
+// read.
+vi.mock('fs', async (importOriginal) =>
+  (await import('./claudeManagedSettings')).hidingClaudeManagedSettings(await importOriginal<typeof import('fs')>()));
 
 const CLAUDE_HELP = "  --model <model>   Model for the session (e.g. 'sonnet', 'opus')\n";
 const STATIC_VARIANTS = ['adaptive', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -172,6 +175,20 @@ describe('Claude Code discovery — modelPicker.options in settings.json', () =>
     const { resolver } = resolverFor('help', async () => ({ ...process.env, CLAUDE_CONFIG_DIR: workspace }));
 
     expect((await claudeModels(resolver)).map((m) => m.modelId)).toEqual([...BASELINE.help, 'gproxy/workspace']);
+  });
+
+  it('keeps a catalog per runner environment, so one workspace\'s account never serves another\'s', async () => {
+    const workspace = path.join(home, 'workspace-account');
+    writeSettings({ modelPicker: { options: [{ model: 'gproxy/workspace' }] } }, workspace);
+    writeSettings({ modelPicker: { options: [{ model: 'gproxy/daemon' }] } });
+    const { resolver, calls } = resolverFor('help');
+    const view = resolver.withRunnerEnv(async () => ({ ...process.env, CLAUDE_CONFIG_DIR: workspace }));
+
+    expect((await claudeModels(resolver)).map((m) => m.modelId)).toEqual([...BASELINE.help, 'gproxy/daemon']);
+    expect((await claudeModels(view)).map((m) => m.modelId)).toEqual([...BASELINE.help, 'gproxy/workspace']);
+    expect(view.getCachedRunnerModels('claude-code').map((m) => m.modelId)).toContain('gproxy/workspace');
+    expect(resolver.getCachedRunnerModels('claude-code').map((m) => m.modelId)).not.toContain('gproxy/workspace');
+    expect(calls.exec).toBe(2);
   });
 
   it('signs the catalog request in with the login CLAUDE_CONFIG_DIR moves', async () => {

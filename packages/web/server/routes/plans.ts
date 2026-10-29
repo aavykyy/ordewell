@@ -66,7 +66,7 @@ export function plansRoute(pool: OrchestratorPool) {
       // agents are detected the enabled default is not known yet.
       const runnerList: string[] | undefined = Array.isArray(runners) ? runners : (runners ? [runners] : (queryRunners ? queryRunners.split(',').map(s => s.trim()).filter(Boolean) : undefined));
       const plan = await pool.generatePlan(c.req.param('sessionId'), goal, runnerList, ws, model, { allowInit });
-      const { models, modelsByRunner } = await pool.getProviderModels();
+      const { models, modelsByRunner } = await pool.getProviderModels(ws);
       const notes = (pool.session(c.req.param('sessionId')).planState?.conversationHistory ?? [])
         .filter((e) => e.kind === 'system')
         .map((e) => e.content);

@@ -7,14 +7,20 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-// Claude discovery reads its settings and credentials under HOME: an empty
-// one keeps a developer's own gateway models out of the exact lists below.
+// Claude discovery reads its settings and credentials under HOME, or where
+// CLAUDE_CONFIG_DIR moves them, and the machine's managed settings: an empty
+// home, no config dir and no managed files keep a developer's own gateway
+// models out of the exact lists below.
+vi.mock('fs', async (importOriginal) =>
+  (await import('./claudeManagedSettings')).hidingClaudeManagedSettings(await importOriginal<typeof import('fs')>()));
+
 let home: string;
-const savedHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+const savedHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
 beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-discovery-'));
   process.env.HOME = home;
   process.env.USERPROFILE = home;
+  delete process.env.CLAUDE_CONFIG_DIR;
 });
 afterEach(() => {
   for (const [key, value] of Object.entries(savedHome)) {

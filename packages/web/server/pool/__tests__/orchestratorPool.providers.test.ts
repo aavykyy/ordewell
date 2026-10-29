@@ -51,3 +51,51 @@ describe('OrchestratorPool.getProviderModels — configured providers', () => {
     expect(providers).not.toContain('openrouter');
   });
 });
+
+describe('OrchestratorPool.getProviderModels — per workspace', () => {
+  let dir: string;
+  const savedSettingsPath = process.env.ORDEWELL_SETTINGS_PATH;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-pool-workspace-models-'));
+    process.env.ORDEWELL_SETTINGS_PATH = path.join(dir, 'settings.json');
+  });
+
+  afterEach(() => {
+    if (savedSettingsPath === undefined) delete process.env.ORDEWELL_SETTINGS_PATH;
+    else process.env.ORDEWELL_SETTINGS_PATH = savedSettingsPath;
+    fs.rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  // One daemon serves several workspaces, and a workspace's tasks run under its
+  // own `.ordewell/env`: the Claude catalog it is offered must come from the
+  // account that env selects, not from the one the daemon was started in.
+  it('discovers a named workspace\'s runner catalog under that workspace\'s env', async () => {
+    const ws = path.join(dir, 'workspace-b');
+    fs.mkdirSync(path.join(ws, '.ordewell'), { recursive: true });
+    fs.writeFileSync(path.join(ws, '.ordewell', 'env'), 'CLAUDE_CONFIG_DIR=/accounts/b\n');
+    const withRunnerEnv = vi.spyOn(ModelResolver.prototype, 'withRunnerEnv');
+    const askedOf: ModelResolver[] = [];
+    vi.spyOn(ModelResolver.prototype, 'modelsForRunners').mockImplementation(async function (this: ModelResolver) {
+      askedOf.push(this);
+      return {};
+    });
+    vi.spyOn(ModelResolver.prototype, 'refresh').mockResolvedValue({});
+    vi.spyOn(ModelResolver.prototype, 'pickerOptions').mockResolvedValue([]);
+    vi.spyOn(ModelResolver.prototype, 'getDiscoveryErrors').mockReturnValue({});
+    const pool = new OrchestratorPool({ codexSandbox: { ensure: async () => undefined, refresh: async () => undefined } });
+
+    await pool.getProviderModels(ws);
+    await pool.getProviderModels(ws);
+    await pool.getProviderModels();
+
+    expect(withRunnerEnv).toHaveBeenCalledTimes(1);
+    expect(await withRunnerEnv.mock.calls[0][0]()).toMatchObject({ CLAUDE_CONFIG_DIR: '/accounts/b' });
+    const view = withRunnerEnv.mock.results[0].value;
+    expect(askedOf[0]).toBe(view);
+    expect(askedOf[1]).toBe(view);
+    expect(askedOf[2]).not.toBe(view);
+    pool.destroyAll();
+  });
+});

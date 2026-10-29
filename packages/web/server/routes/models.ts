@@ -6,7 +6,8 @@ export function modelsRoute(pool: OrchestratorPool) {
   const router = new Hono();
 
   router.get('/', async (c) => {
-    const result: ModelsResponse = await pool.getProviderModels();
+    // The catalog of the workspace's own runner environment, as its login verdict is.
+    const result: ModelsResponse = await pool.getProviderModels(c.req.query('workspace'));
     return c.json(result);
   });
 

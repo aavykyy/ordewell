@@ -88,6 +88,17 @@ describe('GET /api/models', () => {
     expect(body.providerErrors.openai).toContain('401');
   });
 
+  it('asks for the catalog of the workspace the request names', async () => {
+    vi.mocked(pool.getProviderModels).mockResolvedValue({
+      models: [], modelsByRunner: {}, modesByRunner: {}, orchestratorModel: '', providers: [], orchestratorModels: [], providerErrors: {},
+    });
+
+    await app.request('/api/models?workspace=%2Fwork%2Fb', { method: 'GET' });
+    await app.request('/api/models', { method: 'GET' });
+
+    expect(vi.mocked(pool.getProviderModels).mock.calls).toEqual([['/work/b'], [undefined]]);
+  });
+
   it('returns empty models when no API keys are configured', async () => {
     vi.mocked(pool.getProviderModels).mockResolvedValue({
       models: [],
