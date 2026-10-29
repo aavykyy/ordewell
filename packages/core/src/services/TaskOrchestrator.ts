@@ -325,9 +325,12 @@ export class TaskOrchestrator {
   /**
    * Tasks Mark complete is landing after it ended their attempt, or that
    * their conflict resolver is landing, and that landing: in progress with
-   * no attempt for as long as it takes, and not orphans for it.
+   * no attempt for as long as it takes, and not orphans for it. Both can be
+   * landing one task at once, so each holds it for itself (see {@link holdWhileLanding}).
    */
-  private completing = new Map<string, Promise<LandingOutcome>>();
+  private completing = new Map<string, Set<Promise<LandingOutcome>>>();
+  /** Tasks {@link releaseTask} is tearing down once their landings have settled: none may begin another. */
+  private releasing = new Set<string>();
   /** Tasks paused on a usage limit, the run's hold on them, and each runner's wait for its reset (ADR-0018, U1). */
   private readonly limitPauses: LimitPauses;
 
@@ -1273,21 +1276,35 @@ export class TaskOrchestrator {
   }
 
   private async landResolved(resolverId: string, admission: Admitted): Promise<void> {
-    const resolved = this.landing.landResolved(resolverId);
+    const resolved = this.landing.landResolved(resolverId, (id) => this.releasing.has(id));
     if (!resolved) return;
     const { task } = resolved;
     // The conflicted task's own landing as much as Mark complete's is: a
     // delete or retry of it must not take the worktree being merged.
-    this.completing.set(task.id, resolved.outcome);
-    let outcome: LandingOutcome;
-    try {
-      outcome = await resolved.outcome;
-    } finally {
-      this.completing.delete(task.id);
-    }
+    const outcome = await this.holdWhileLanding(task.id, resolved.outcome);
+    // Mark complete, landing it alongside, has completed it already: this
+    // merge brought nothing more, and a failure of it must not undo that.
+    if (this.store.get(task.id)?.status === 'completed') return;
     await this.applyLanding(task, outcome, admission, () => {
       if (task.verdict) this.logAndArchive(task, task.verdict);
     });
+  }
+
+  /**
+   * Hold a task for as long as `landing` is merging its worktree. Its end lets
+   * go of its own hold only: another landing of the task begun meanwhile
+   * still holds it.
+   */
+  private async holdWhileLanding(taskId: string, landing: Promise<LandingOutcome>): Promise<LandingOutcome> {
+    const holds = this.completing.get(taskId) ?? new Set<Promise<LandingOutcome>>();
+    holds.add(landing);
+    this.completing.set(taskId, holds);
+    try {
+      return await landing;
+    } finally {
+      holds.delete(landing);
+      if (holds.size === 0 && this.completing.get(taskId) === holds) this.completing.delete(taskId);
+    }
   }
 
   getReadyTasks(): Task[] {
@@ -1414,23 +1431,30 @@ export class TaskOrchestrator {
    * as {@link cancelTask} does, but its worktree goes: no task is left to land
    * it into. A spawn still in flight just loses its attempt,
    * which is what makes {@link Attempts} kill the session it is about to
-   * receive. Mark complete's landing in flight settles first, so its worktree
-   * is not torn down under the merge, and a repair that landing claims is
-   * cancelled as any running attempt is. The id's cross-attempt bookkeeping
+   * receive. Every landing of it in flight — Mark complete's, its resolver's —
+   * settles first, so its worktree is not torn down under a merge, and none
+   * begins while it goes; a repair a landing claims is cancelled as any
+   * running attempt is. The id's cross-attempt bookkeeping
    * goes too — a hold or retry count kept for a task that no longer exists
    * would be inherited by nothing.
    */
   async releaseTask(taskId: string): Promise<void> {
     this.limitPauses.cancel(taskId);
-    // Its failure is Mark complete's to report.
-    await this.completing.get(taskId)?.catch(() => undefined);
-    const phase = this.attempts.phaseOf(taskId);
-    if (phase === 'running' || phase === 'integrating') await this.cancelAttempt(taskId, { keep: false });
-    else {
-      this.attempts.end(taskId, 'release');
-      // Not left in progress while its worktree goes: it is leaving the plan, not running.
-      if (this.store.get(taskId)?.status === 'in_progress') this.store.markPending(taskId);
-      await this.runs.release(taskId, { keep: false });
+    // Every landing holding it, including one begun while an earlier one
+    // settled; a failure of one is its own path's to report.
+    for (let holds = this.completing.get(taskId); holds; holds = this.completing.get(taskId)) await Promise.allSettled(holds);
+    this.releasing.add(taskId);
+    try {
+      const phase = this.attempts.phaseOf(taskId);
+      if (phase === 'running' || phase === 'integrating') await this.cancelAttempt(taskId, { keep: false });
+      else {
+        this.attempts.end(taskId, 'release');
+        // Not left in progress while its worktree goes: it is leaving the plan, not running.
+        if (this.store.get(taskId)?.status === 'in_progress') this.store.markPending(taskId);
+        await this.runs.release(taskId, { keep: false });
+      }
+    } finally {
+      this.releasing.delete(taskId);
     }
     this.onHold.delete(taskId);
     this.retryCounts.delete(taskId);
@@ -1442,7 +1466,8 @@ export class TaskOrchestrator {
     if (!task || task.status === 'completed') return;
     // A second call made while the first awaits its landing finds no attempt —
     // it was ended by the first — and would land, archive and announce again.
-    if (this.completing.has(taskId)) return;
+    // One leaving the plan would merge the worktree being torn down.
+    if (this.completing.has(taskId) || this.releasing.has(taskId)) return;
     // A repair its landing may be owed follows on from this, the user's act.
     const admission = this.admittedNow();
 
@@ -1451,13 +1476,7 @@ export class TaskOrchestrator {
     // The user vouches for the work, so it lands the way a passed verdict's
     // would — including a landing a passed verdict already has in flight.
     const landed = ended?.integration ?? this.landing.landVouched(task);
-    this.completing.set(taskId, landed);
-    let landing: LandingOutcome;
-    try {
-      landing = await landed;
-    } finally {
-      this.completing.delete(taskId);
-    }
+    const landing = await this.holdWhileLanding(taskId, landed);
 
     // Recorded before the landing settles, as a verdict is: a repair it
     // claims starts with a summary of its own, not this one.
