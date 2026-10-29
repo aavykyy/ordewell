@@ -365,8 +365,8 @@ describe('handlePlan', () => {
 
     expect(hits.slice(0, 2)).toEqual(['PATCH /api/settings', 'PATCH /api/settings']);
     // The provider is a switch; the effort is only what this process inherited, never a pick to remember.
-    expect(JSON.parse(bodies[0])).toEqual({ env: { AI_PROVIDER: 'codex' } });
-    expect(JSON.parse(bodies[1])).toEqual({ env: { ORDEWELL_PLANNER_EFFORT: 'low' }, inherited: true });
+    expect(JSON.parse(bodies[0])).toEqual({ env: { AI_PROVIDER: 'codex' }, workspace: process.cwd() });
+    expect(JSON.parse(bodies[1])).toEqual({ env: { ORDEWELL_PLANNER_EFFORT: 'low' }, inherited: true, workspace: process.cwd() });
     srv.close();
   });
 

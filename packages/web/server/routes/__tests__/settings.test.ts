@@ -79,6 +79,58 @@ describe('GET /api/settings', () => {
   });
 });
 
+describe('/api/settings — the requesting workspace', () => {
+  let app: Hono;
+  let pool: OrchestratorPool;
+
+  beforeEach(async () => {
+    pool = fakePool({ updateRunSettings: vi.fn() });
+    vi.mocked(pool.getSettings).mockReturnValue(settingsState());
+    vi.mocked(pool.updateSettings).mockReturnValue(settingsState());
+    vi.mocked(pool.updateRunSettings).mockReturnValue(settingsState());
+    const { settingsRoute } = await import('../../routes/settings');
+    app = new Hono();
+    app.route('/api/settings', settingsRoute(pool));
+  });
+
+  const patch = (body: unknown) => app.request('/api/settings', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+
+  // One daemon serves several workspaces, and the planner's model is judged
+  // against the runner catalog of the one the client is in.
+  it('reads the settings for the workspace a client names, beside its session', async () => {
+    await app.request('/api/settings?workspace=%2Fwork%2Fb', { method: 'GET' });
+    await app.request('/api/settings?sessionId=s1&workspace=%2Fwork%2Fb', { method: 'GET' });
+    await app.request('/api/settings', { method: 'GET' });
+
+    expect(vi.mocked(pool.getSettings).mock.calls).toEqual([[undefined, '/work/b'], ['s1', '/work/b'], [undefined, undefined]]);
+  });
+
+  it('judges a write for the workspace a client names, never saving the name as a setting', async () => {
+    await patch({ env: { AI_PROVIDER: 'claude-code' }, workspace: '/work/b' });
+    await patch({ run: { autorun: true }, sessionId: 's1', workspace: '/work/b' });
+
+    expect(vi.mocked(pool.updateSettings).mock.calls).toEqual([[{ env: { AI_PROVIDER: 'claude-code' } }, undefined, '/work/b']]);
+    expect(vi.mocked(pool.updateRunSettings).mock.calls).toEqual([[{ autorun: true }, 's1', '/work/b']]);
+    expect(vi.mocked(pool.getSettings).mock.calls).toEqual([['s1', '/work/b']]);
+  });
+
+  it('refuses a write that names only its workspace', async () => {
+    const res = await patch({ workspace: '/work/b' });
+
+    expect(res.status).toBe(400);
+    expect(pool.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('refuses a workspace that is not a path', async () => {
+    const res = await patch({ env: { AI_PROVIDER: 'claude-code' }, workspace: 7 });
+
+    expect(res.status).toBe(400);
+    expect(pool.updateSettings).not.toHaveBeenCalled();
+  });
+});
+
 describe('PATCH /api/settings', () => {
   let app: Hono;
   let pool: OrchestratorPool;
@@ -107,7 +159,7 @@ describe('PATCH /api/settings', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { orchestratorModel: string };
     expect(body.orchestratorModel).toBe('gemini-2.5-flash');
-    expect(pool.updateSettings).toHaveBeenCalledWith({ orchestratorModel: 'gemini-2.5-flash' });
+    expect(pool.updateSettings).toHaveBeenCalledWith({ orchestratorModel: 'gemini-2.5-flash' }, undefined, undefined);
   });
 
   it('updates modelAllowlist and returns it in settings', async () => {
@@ -127,7 +179,7 @@ describe('PATCH /api/settings', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { modelAllowlist: Record<string, string[]> };
     expect(body.modelAllowlist).toEqual({ opencode: ['model-a', 'model-b'] });
-    expect(pool.updateSettings).toHaveBeenCalledWith({ modelAllowlist: { opencode: ['model-a', 'model-b'] } });
+    expect(pool.updateSettings).toHaveBeenCalledWith({ modelAllowlist: { opencode: ['model-a', 'model-b'] } }, undefined, undefined);
   });
 
   it('returns 400 for no body', async () => {

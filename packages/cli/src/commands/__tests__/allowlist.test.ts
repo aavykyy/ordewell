@@ -71,7 +71,7 @@ describe('handleAllowlist', () => {
     expect(seen[0]).toEqual({
       method: 'PATCH',
       url: '/api/settings',
-      body: { modelAllowlist: { opencode: ['kimi-2.6', 'deepseek-v4-pro'] } },
+      body: { ...{ modelAllowlist: { opencode: ['kimi-2.6', 'deepseek-v4-pro'] } }, workspace: process.cwd() },
     });
     srv.close();
   });
@@ -122,7 +122,7 @@ describe('handleAllowlist', () => {
     expect(seen[0]).toEqual({
       method: 'PATCH',
       url: '/api/settings',
-      body: { modelAllowlist: { opencode: [] } },
+      body: { ...{ modelAllowlist: { opencode: [] } }, workspace: process.cwd() },
     });
     srv.close();
   });

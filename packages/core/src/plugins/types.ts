@@ -92,9 +92,9 @@ export type ApiAuthMethod =
 
 /** What a runner's settings reader may look at, with `~` expanded in every path. */
 export interface RunnerSettingsFiles {
-  /** The file's content, or null when it is missing or unreadable. */
+  /** The file's content, or null when it is missing or unreadable. A leading `~` is the home `env` gives the runner. */
   read(file: string): string | null;
-  /** The names of the entries in `dir`, or none when it is missing. */
+  /** The names of the entries in `dir`, or none when it is missing. A leading `~` is read as in {@link read}. */
   list(dir: string): string[];
   env: RunnerEnv;
 }
