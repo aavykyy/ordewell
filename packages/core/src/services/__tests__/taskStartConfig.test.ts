@@ -13,7 +13,7 @@ function checkout(): string {
   return dir;
 }
 
-const at = (cwd: string, epoch = 1) => ({ epoch, cwd, worktree: false });
+const at = (cwd: string, epoch = 1) => ({ epoch, root: cwd, cwd, worktree: false });
 
 it('takes what a checkout holds at its first launch as the baseline, and holds what differs at the next', async () => {
   const cwd = checkout();

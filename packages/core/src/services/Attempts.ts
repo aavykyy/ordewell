@@ -698,7 +698,7 @@ export class Attempts {
       // two processes, and count from before what the first one still reports.
       if (kind.kind === 'continuation') await this.windDowns.get(task.id);
       if (!attempt.script && kind.kind === 'repair') {
-        const paths = await this.startConfig.check(runs.current, task.id, { epoch: runs.epoch, cwd: null, worktree: true });
+        const paths = await this.startConfig.check(runs.current, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd: null, worktree: true });
         if (paths.length) throw new TaskStartConfigError(paths);
       }
       const { cwd, worktree, previousWork, workspace } = await attemptCwd(kind, task, runs);
@@ -706,7 +706,7 @@ export class Attempts {
       attempt.worktree = worktree;
       // A read-only task withholds project configuration (ADR-0046), so none reaches it.
       if (!attempt.script && kind.kind !== 'repair' && !landsNothing(kind)) {
-        const paths = await this.startConfig.check(runs.current, task.id, { epoch: runs.epoch, cwd, worktree });
+        const paths = await this.startConfig.check(runs.current, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd, worktree });
         if (paths.length) throw new TaskStartConfigError(paths);
       }
       if (checksTree(kind)) attempt.snapshot = await runs.snapshotWorkspace();

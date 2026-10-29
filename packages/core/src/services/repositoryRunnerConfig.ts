@@ -19,10 +19,12 @@ export function repositoryRunnerConfigPaths(paths: readonly string[]): string[] 
     // Plugin and marketplace manifests can select code for the runner to load.
     /^\.claude\/(?:[^/]+\/)*(?:plugin|marketplace)\.json$/.test(path) ||
     // OpenCode config declares MCP servers and plugins; its plugin and tool
-    // directories are code it loads. The rest of `.opencode/` is dependencies
-    // OpenCode installs itself, which a later launch must not be held for.
+    // directories are code it loads, and an agent definition sets the prompt,
+    // model and permissions of the built-in agent its id names, which a task
+    // launches with. The rest of `.opencode/` is dependencies OpenCode
+    // installs itself, which a later launch must not be held for.
     /^(?:\.opencode\/)?opencode\.jsonc?$/.test(path) ||
-    /^\.opencode\/(?:plugins?|tools?)\//.test(path) ||
+    /^\.opencode\/(?:plugins?|tools?|agents?)\//.test(path) ||
     // Codex project config carries MCP servers, hooks and `notify` commands.
     path.startsWith('.codex/')
   ))].sort();
