@@ -188,9 +188,10 @@ export type Action =
   /**
    * `code` is the daemon's stable reason for a refusal, when it gave one.
    * `turn` marks a failure of the planner turn's own call, the only kind that
-   * ends the turn; anything else failing mid-turn leaves it running.
+   * ends the turn; anything else failing mid-turn leaves it running. A turn's
+   * failure names the session it was for, as every other turn result does.
    */
-  | { type: 'failed'; message: string; code?: DaemonErrorCode; turn?: true }
+  | { type: 'failed'; message: string; code?: DaemonErrorCode; turn?: true; sessionId?: string }
   /** The workspace has no project marker — offer to initialize it rather than just failing. */
   | { type: 'workspaceNeedsInit'; goal: string; workspace: string }
   /**

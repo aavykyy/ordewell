@@ -51,6 +51,68 @@ describe('adversarial: leaving a session drops its turn gate and queue', () => {
   });
 });
 
+describe('adversarial: what was open on the session left behind stays with it', () => {
+  const press = (state: TuiState, name: string, char?: string) => reduce(state, { type: 'key', key: { name, ...(char ? { char } : {}) } });
+  const planOf = (title: string) => ({ tasks: [{ id: 'task-1', order: 1, title, prompt: title, type: 'ai', status: 'pending', dependencies: [] }] });
+
+  /** Session a's `task-1` with its prompt open and edited, as the right arrow opens it. */
+  const editingA = (): TuiState => {
+    const planned = reduce(initialState({ sessionId: 'a', focus: 'plan' }), { type: 'planUpdated', plan: planOf('A'), sessionId: 'a' }).state;
+    const opened = press(planned, 'right').state;
+    return press(opened, 'char', '!').state;
+  };
+
+  // Task ids are plan-local, so the loaded plan has its own `task-1`: an editor
+  // kept across the load would save a's draft over b's prompt.
+  it.each([
+    ['a load', [{ type: 'sessionLoaded', sessionId: 'b', goal: 'g' }, { type: 'planUpdated', plan: planOf('B'), sessionId: 'b' }]],
+    ['a clear', [{ type: 'sessionCleared' }]],
+  ] as [string, Action[]][])('%s closes the prompt editor, so Enter saves nothing', (_, actions) => {
+    const editing = editingA();
+    expect(editing.taskEditor?.text).toBe('A!');
+
+    const after = actions.reduce((s, action) => reduce(s, action).state, editing);
+    expect(after.expandedTaskId).toBeNull();
+    expect(after.taskEditor).toBeNull();
+    expect(press({ ...after, focus: 'plan' }, 'enter').effects).not.toContainEqual(expect.objectContaining({ type: 'updateTask' }));
+  });
+
+  it('a turn of the session left behind that fails lands nowhere: no error, no idle, no drained prompt', () => {
+    const onB = [
+      { type: 'sessionLoaded', sessionId: 'b', goal: 'g' },
+      { type: 'planUpdated', plan: planOf('B'), sessionId: 'b' },
+      { type: 'turnJoined', sessionId: 'b', turnId: 'turn-b' },
+    ] as Action[];
+    const joined = onB.reduce((s, action) => reduce(s, action).state, initialState({ sessionId: 'a', planner: 'planning' }));
+    const queued = reduce(withDraft(joined, 'queued for B'), enter).state;
+    expect(queued.queuedPrompts).toEqual(['queued for B']);
+
+    const { state, effects } = reduce(queued, { type: 'failed', message: 'Provider 500 while planning session A', turn: true, sessionId: 'a' });
+    expect(effects).toEqual([]);
+    expect(state.planner).toBe('joined');
+    expect(state.queuedPrompts).toEqual(['queued for B']);
+    expect(JSON.stringify(state.conversation)).not.toContain('Provider 500');
+
+    const own = reduce(initialState({ sessionId: 'b', planner: 'planning' }), { type: 'failed', message: 'refused', turn: true, sessionId: 'b' }).state;
+    expect(own.planner).toBe('idle');
+  });
+
+  it('/new and a clear leave no paused or resending planner on the welcome', () => {
+    const plan = { tasks: [], plannerContextPause: { model: 'vendor/model' }, plannerResend: { runner: 'claude-code', at: new Date(Date.now() + 60_000).toISOString() } };
+    const held = reduce(initialState({ sessionId: 's1' }), { type: 'planUpdated', plan, sessionId: 's1' }).state;
+    expect(held.plannerPause).not.toBeNull();
+    expect(held.plannerResend).not.toBeNull();
+
+    const fresh = reduce(withDraft(held, '/new'), enter).state;
+    const confirmed = fresh.overlay?.kind === 'confirm' ? reduce(fresh, enter).state : fresh;
+    for (const after of [confirmed, reduce(held, { type: 'sessionCleared' }).state]) {
+      expect(after.sessionId).toBeNull();
+      expect(after.plannerPause).toBeNull();
+      expect(after.plannerResend).toBeNull();
+    }
+  });
+});
+
 describe('adversarial: the run closed is the Session\'s to say (ADR-0013, ADR-0020)', () => {
   /** A run whose one task carries a conflict mark and whose handoff card is up. */
   const runWithCards = (): TuiState => {

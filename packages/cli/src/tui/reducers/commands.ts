@@ -218,6 +218,8 @@ export function newSession(state: TuiState): Step {
     planScroll: null,
     status: 'idle',
     planner: 'idle',
+    plannerPause: null,
+    plannerResend: null,
     // Prompts belong to the session that raised them; the old planner is gone
     // and its pending requests deny on their own timeout.
     pendingApprovals: [],

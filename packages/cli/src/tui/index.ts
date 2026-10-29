@@ -11,6 +11,9 @@ import { registerSkillCommands } from './slash';
 import { openTerminal } from './terminal';
 import { startCliVersionCheck } from '../versionCheck';
 
+/** Past the stop's own two-second check that the port's daemon is the one it means to signal. */
+const DAEMON_STOP_GRACE_MS = 3000;
+
 /** The one child-process seam a login needs, so a test drives it instead of starting an agent. */
 export type LoginSpawn = typeof spawn;
 
@@ -238,11 +241,22 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
   // not reconciled; the next launch respawns a fresh daemon and reloads the
   // saved plan, which normalizes any still-'in_progress' task back to
   // 'pending' so the scheduler just reruns it from scratch.
+  // The stop is awaited: exiting in the same tick abandons it before its first
+  // request, leaving the daemon to notice the parent is gone on its own. A
+  // daemon that does not answer only gets the grace below, and a second
+  // signal while it is out exits at once.
+  let exiting = false;
   function shutdown(code: number): void {
+    if (exiting) return process.exit(code);
+    exiting = true;
     watchingSettings.dispose();
     terminal?.close();
-    if (owned) stopDaemon(port).catch(() => {});
-    process.exit(code);
+    if (!owned) return process.exit(code);
+    const grace = setTimeout(() => process.exit(code), DAEMON_STOP_GRACE_MS);
+    void stopDaemon(port).catch(() => {}).finally(() => {
+      clearTimeout(grace);
+      process.exit(code);
+    });
   }
 
   // Restore the terminal even if something below us throws, the shell kills

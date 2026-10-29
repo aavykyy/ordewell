@@ -510,6 +510,14 @@ describe('planning', () => {
     expect(h.api.sendConversationMessage).toHaveBeenCalledWith('s1', 'use bcrypt');
   });
 
+  // The user can load another session while this turn runs; the reducer drops
+  // a failure that names a session no longer on screen.
+  it('names the session a failed turn was for', async () => {
+    const h = harness({ sendConversationMessage: vi.fn().mockRejectedValue(new DaemonError('planner down', 500)) });
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'use bcrypt' }, h.deps);
+    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'failed', turn: true, sessionId: 's1' }));
+  });
+
   // Turn serialization moved out of the effect layer and into the reducer:
   // a prompt submitted while a turn is in flight waits in `TuiState.queuedPrompts`
   // and only emits `sendMessage` when the turn settles. See reducer.queue.test.ts.
