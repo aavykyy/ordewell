@@ -9,8 +9,11 @@ import { say } from '../transcript';
 
 /** Side effects the runtime performs; the reducer itself stays pure. */
 export type Effect =
-  /** `allowInit` is only ever set on the retry after the user confirms the "initialize this as a new workspace?" prompt — see `workspaceNeedsInit`. */
-  | { type: 'startConversation'; goal: string; allowInit?: boolean }
+  /**
+   * `allowInit` is only ever set on the retry after the user confirms the "initialize this as a new workspace?" prompt — see `workspaceNeedsInit`.
+   * `sessionId` is only ever set on the retry after a revived daemon (`openingRevived`): the session the refused attempt minted, not revived for again.
+   */
+  | { type: 'startConversation'; goal: string; allowInit?: boolean; sessionId?: string }
   | { type: 'sendMessage'; sessionId: string; message: string }
   /** Read the session back from the daemon after a planner turn's reply was lost, and settle the turn if the daemon is done with it. */
   | { type: 'reconcileTurn'; sessionId: string }
@@ -195,13 +198,16 @@ export type Action =
    */
   | { type: 'failed'; message: string; code?: DaemonErrorCode; turn?: true; sessionId?: string }
   /** The workspace has no project marker — offer to initialize it rather than just failing. */
-  | { type: 'workspaceNeedsInit'; goal: string; workspace: string }
+  | { type: 'workspaceNeedsInit'; goal: string; workspace: string; sessionId: string }
+  /** The daemon refused an opening and has been revived: the reducer decides whether the opening is still the one on screen to retry. */
+  | { type: 'openingRevived'; sessionId: string; goal: string; allowInit?: boolean }
   /**
    * `holdPlace` is for a notice that reports on text already on screen rather
    * than moving the conversation on: it must not take a scrolled-back reader
    * to the tail. The copy count is the one such notice.
    */
-  | { type: 'notice'; message: string; level?: 'info' | 'warn' | 'error'; holdPlace?: boolean }
+  /** `sessionId` names the session a notice is about, so one the user has left is not shown on another. */
+  | { type: 'notice'; message: string; level?: 'info' | 'warn' | 'error'; holdPlace?: boolean; sessionId?: string }
   | { type: 'resize'; rows: number; cols: number }
   | { type: 'spinnerTick'; by?: number };
 

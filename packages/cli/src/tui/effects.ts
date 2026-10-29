@@ -86,7 +86,8 @@ export interface EffectDeps {
 export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void> {
   // An opening turn's session is minted before the first attempt, so its
   // failure can name it, and a revived daemon's retry opens the same one.
-  const performed: Performed = effect.type === 'startConversation' ? { ...effect, sessionId: deps.newSessionId() } : effect;
+  const performed: Performed = effect.type === 'startConversation' ? { ...effect, sessionId: effect.sessionId ?? deps.newSessionId() } : effect;
+  const opening = performed.type === 'startConversation' ? performed : null;
   const turn = isPlannerTurn(effect);
   // The user may have loaded another session while the turn ran; its failure
   // must not end that one's turn or drain that one's queue.
@@ -102,16 +103,34 @@ export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void>
 
     // Refused at the handshake means the request never reached a server, so
     // replaying it cannot be a second execution — which is the whole reason
-    // only this one errno is retried. See `isConnectionRefused`.
+    // only this one errno is retried. See `isConnectionRefused`. An opening
+    // that carries its session is already the retry after a revive.
     let revived = false;
-    try {
-      revived = await deps.reviveDaemon();
-    } catch {
-      revived = false;
+    if (effect.type !== 'startConversation' || effect.sessionId === undefined) {
+      try {
+        revived = await deps.reviveDaemon();
+      } catch {
+        revived = false;
+      }
     }
 
     if (!revived) {
+      // A refused opening kept its session for the retry; with none coming,
+      // nothing holds it, so it is let go as any refused opening is.
+      if (opening) deps.dispatch({ type: 'sessionCleared', sessionId: opening.sessionId });
       fail({ type: 'failed', message: describeConnectionRefused(deps.port) });
+      return;
+    }
+
+    if (opening) {
+      // The user may have loaded, forked or started another session while the
+      // daemon came back. Whether this opening is still the one on screen is
+      // the reducer's to say: a retry from here would take that one over.
+      deps.dispatch({ type: 'daemonReconnected' });
+      deps.dispatch({
+        type: 'openingRevived', sessionId: opening.sessionId, goal: opening.goal,
+        ...(opening.allowInit ? { allowInit: opening.allowInit } : {}),
+      });
       return;
     }
 
@@ -203,10 +222,19 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
           await reloadSettings(deps, sessionId);
           throw err;
         }
+        // Refused, it reached no server: the session stays on screen for a
+        // revived daemon's retry, so a session loaded meanwhile replaces it,
+        // and the retry can tell (`openingRevived`). `runEffect` lets it go
+        // when no retry comes.
+        if (isConnectionRefused(err)) {
+          unfollow(deps, sessionId);
+          throw err;
+        }
         // What reaches here is a refusal the daemon answered, or a request that
-        // never went out (a lost reply is settled inside `converse`, the
-        // session kept). Neither leaves a conversation a reply could continue,
-        // so the id is let go: keeping it would 404 every following message.
+        // never went out for another reason (a lost reply is settled inside
+        // `converse`, the session kept). Neither leaves a conversation a reply
+        // could continue, so the id is let go: keeping it would 404 every
+        // following message.
         unfollow(deps, sessionId);
         dispatch({ type: 'sessionCleared', sessionId });
         // The welcome is not any session: its run settings are the file's again (ADR-0030).
@@ -216,7 +244,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
         // falls through to the generic error path instead of looping the
         // prompt forever.
         if (err instanceof WorkspaceInitNeededError && !effect.allowInit) {
-          dispatch({ type: 'workspaceNeedsInit', goal: effect.goal, workspace: err.workspace });
+          dispatch({ type: 'workspaceNeedsInit', goal: effect.goal, workspace: err.workspace, sessionId });
           return;
         }
         throw err;
@@ -1115,7 +1143,7 @@ async function readBackSession(deps: EffectDeps, sessionId: string, how: { openi
       deps.dispatch({ ...failedFrom(err), turn: true, sessionId });
       return;
     }
-    deps.dispatch({ type: 'notice', level: 'error', message: `Could not read the session back from the server: ${explain(err)}` });
+    deps.dispatch({ type: 'notice', level: 'error', message: `Could not read the session back from the server: ${explain(err)}`, sessionId });
   }
 }
 
