@@ -13,7 +13,7 @@ import { handlePlanKey } from './reducers/planPane';
 import { announceApprovals, announceCheckpoint, answerCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
 import { newSession, pickRewindTarget, runCommand } from './reducers/commands';
 import { adoptCompaction, followCompaction } from './reducers/compaction';
-import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, restoreForced } from './reducers/turnQueue';
+import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, queueToEditor, restoreForced } from './reducers/turnQueue';
 import { applySettings, foldRun, followSession, planSnapshot, withRun } from './reducers/incoming';
 import { refillPicker, reseedRunnerChoice } from './reducers/pickers';
 import { refreshStepper } from './reducers/stepper';
@@ -100,6 +100,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
         stopArmed: false,
+        stopRequested: false,
         forceSendPending: null,
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
         runSettingsKnown: false,
@@ -112,10 +113,12 @@ function reduceAction(state: TuiState, action: Action): Step {
     // this: the session is the daemon's and the turn may be running (`turnLost`).
     case 'sessionCleared':
       if (stale(state, action.sessionId)) return step(state);
-      // Prompts belong to the session that raised them; the old planner is gone,
-      // and the turn gate it held with it.
+      // Approvals belong to the session that raised them; the old planner is
+      // gone, and the turn gate it held with it. The prompts typed behind its
+      // turn were never sent and are not echoed until they are, so they go back
+      // to the editor rather than vanishing with the session.
       return step(withRun({
-        ...state,
+        ...queueToEditor(state),
         accountLimits: [],
         servedModels: {},
         sessionId: null,
@@ -128,7 +131,6 @@ function reduceAction(state: TuiState, action: Action): Step {
         plannerResend: null,
         turnGate: NO_TURN,
         pendingApprovals: [],
-        queuedPrompts: EMPTY_HOLD,
         stopArmed: false,
         forceSendPending: null,
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
@@ -464,6 +466,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
         stopArmed: false,
+        stopRequested: false,
         forceSendPending: null,
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
         runSettingsKnown: false,
@@ -581,9 +584,10 @@ function reduceAction(state: TuiState, action: Action): Step {
         return step(say(state, 'system', `${restarted}. "${action.goal}" was not sent again, as it is no longer the session on screen.`));
       }
       // Stopped, or ended, while the daemon was down: the opening reached no
-      // server, so there is no turn to wait on and no session to keep.
+      // server, so there is no turn to wait on, no session to keep, and no run
+      // settings of its own that the welcome's would have to be read back over.
       if (!plannerInFlight(state) || state.stopRequested) {
-        const cleared = reduceAction(state, { type: 'sessionCleared', sessionId: action.sessionId }).state;
+        const cleared = reduceAction(state, { type: 'sessionCleared', sessionId: action.sessionId, unreached: true }).state;
         return step(say({ ...cleared, planner: 'idle', stopRequested: false }, 'system', `${restarted}. The goal was not sent again, as planning was stopped.`));
       }
       const retry: Effect = { type: 'startConversation', goal: action.goal, sessionId: action.sessionId, ...(action.allowInit ? { allowInit: true } : {}) };
