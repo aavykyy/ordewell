@@ -186,7 +186,7 @@ The refusal tier rests on one premise: a destructive verb never reaches `ask`,
 because `ask` is remembered at `scope` granularity and one approval would
 cover every later use. Wrappers (`env`, `nice`, `timeout`, `command`, `builtin`, …) are unwrapped for
 that reason, and so are commands that *run* another command and the filters
-that carry a program. Before they were, the premise had four holes, each
+that carry a program. Before they were, the premise had these holes, each
 classified as `ask` with a binary-wide scope:
 
 - `xargs rm < list`, `xargs -a list rm` — `xargs` was refused only when piped
@@ -198,6 +198,14 @@ classified as `ask` with a binary-wide scope:
   `print > file`.
 - `sed '1e rm x'`, `sed 's/x/y/e'`, and the `w`/`W` commands and `w` flag that
   write a file.
+- sed's `r`/`R` commands, awk's `getline < file` and an assignment to `ARGV`,
+  which read a file the program names where path confinement, reading only
+  the arguments, never sees it; and awk's `ENVIRON`, which reads the provider
+  keys bare `env` asks before printing.
+- `git rm`, `git mv`, `git worktree remove`, `git format-patch` and the other
+  git subcommands that write the working tree, the index, the object store or
+  a file of their own. On a host with no sandbox the classifier is the only
+  guard, and one approval of `git rm` deleted the file.
 - `enable -f lib.so name`, which loads a shared object into the shell and runs
   its code, as `source` runs a script. Refused; plain `enable` still asks.
 
@@ -223,9 +231,9 @@ How they are read, under the file's rule: when unsure, refuse.
   argument that runs a program or writes a file (`grep`, `cat`, `head`, `wc`,
   `ls`, …) may run under it. Piping into `xargs` stays refused.
 - **sed and awk programs are read.** A small parser for each finds the
-  commands above, and refuses a program it cannot read — including one loaded
-  from a file (`-f`), one the shell rewrites first, and a construct GNU and BSD
-  sed, or gawk and the one-true-awk, would end in different places.
+  commands and reads above, and refuses a program it cannot read — including
+  one loaded from a file (`-f`), one the shell rewrites first, and a construct
+  GNU and BSD sed, or gawk and the one-true-awk, would end in different places.
   Substitution, regex addresses and field work stay on the prompt tier.
 - **jq and yq programs are read.** They stay `auto`, but a program can read
   the process environment (`$ENV`, `env`, yq's `strenv` and `envsubst`), which
@@ -424,3 +432,4 @@ model's refusal to write were never security evidence.
 - 2026-10-21 — where the planner's sandbox runs, a command refused without asking, by the classifier or the approval mode, runs sealed instead, and so does what a research subagent would have asked about ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md), #109).
 - 2026-10-21 — the planner performs an exact effect itself as a script task through `run_script`, outside this envelope, and the refusals and the `allowlist` mode's refusal point there instead of at an ops task alone ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
 - 2026-10-24 — a glob that can match `..` asks under its line; jq and yq programs are read for environment access and module or file loads.
+- 2026-10-29 — sed and awk programs that read a file they name or the environment are refused, and so are git's subcommands that write.
