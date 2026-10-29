@@ -122,6 +122,34 @@ describe('a structured turn that ends without a task_complete call', () => {
     }
   });
 
+  it('does not flag a task that waits for input before it printed anything', async () => {
+    vi.useFakeTimers();
+    try {
+      const { orchestrator, structured } = await started();
+      structured.waitForInput();
+
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
+      expect(task(orchestrator)).toMatchObject({ status: 'awaiting_user', awaitingReason: 'input' });
+      expect(orchestrator.getIdleSince('t1')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never flags a task that reported before it printed anything', async () => {
+    vi.useFakeTimers();
+    try {
+      const { orchestrator, structured } = await started();
+      structured.reportComplete({ status: 'done', summary: 'did it' });
+      await vi.waitFor(() => expect(task(orchestrator).status).toBe('completed'));
+
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
+      expect(orchestrator.getIdleSince('t1')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('is ignored once its attempt was cancelled', async () => {
     const { orchestrator, structured } = await started();
     await orchestrator.cancelTask('t1');

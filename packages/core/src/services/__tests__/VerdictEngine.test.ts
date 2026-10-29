@@ -375,6 +375,57 @@ describe('VerdictEngine', () => {
       expect(idleEvents[0]).toEqual({ taskId: 't1', idleSince: engine.getIdleSince('t1') });
     });
 
+    // Issue #117: a runner that never printed anything was never flagged, however long it stayed silent.
+    it('flags a runner silent from the moment its attempt is watched, and gives no verdict for it', () => {
+      const engine = new VerdictEngine();
+      const verdicts: Verdict[] = [];
+      engine.onVerdict((_id, verdict) => verdicts.push(verdict));
+      const session = fakeSession();
+
+      engine.watch(buildTask(), session);
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS - 1);
+      expect(engine.getIdleSince('t1')).toBeNull();
+
+      vi.advanceTimersByTime(1);
+      expect(engine.getIdleSince('t1')).not.toBeNull();
+
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
+      expect(verdicts).toEqual([]);
+      expect(session.kill).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['exits', (session: FakeRunnerSession) => session.emitExit(0)],
+      ['reports', (session: FakeRunnerSession) => session.reportComplete({ status: 'done', summary: 'did it' })],
+    ])('never flags a runner that %s before it printed anything', (_how, end) => {
+      const engine = new VerdictEngine();
+      const idleEvents: (string | null)[] = [];
+      engine.onIdleChange((_id, idleSince) => idleEvents.push(idleSince));
+      const session = new FakeRunnerSession();
+
+      engine.watch(buildTask(), session);
+      end(session);
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
+
+      expect(engine.getIdleSince('t1')).toBeNull();
+      expect(idleEvents).toEqual([]);
+    });
+
+    it('never flags a session that had already ended when it was watched', () => {
+      const engine = new VerdictEngine();
+      const verdicts: string[] = [];
+      engine.onVerdict((_id, verdict) => verdicts.push(verdict.outcome));
+      const session = new FakeRunnerSession();
+      // Its exit already happened, so attaching to it hears that exit at once.
+      session.onExit = (cb) => cb(0);
+
+      engine.watch(buildTask(), session);
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
+
+      expect(verdicts).toEqual(['fail']);
+      expect(engine.getIdleSince('t1')).toBeNull();
+    });
+
     it('clears idleSince when output resumes', () => {
       const engine = new VerdictEngine();
       const idleEvents: (string | null)[] = [];
@@ -544,6 +595,33 @@ describe('VerdictEngine', () => {
       session.emitOutput('working\n');
 
       session.emitEvent({ type: 'permission_request', id: 'p1', name: 'Read', detail: '{}', decided: { decision: 'allow' } });
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+
+      expect(engine.getIdleSince('t1')).not.toBeNull();
+    });
+
+    it('does not flag a task asking for approval before it printed anything', () => {
+      const engine = new VerdictEngine();
+      const session = new FakeRunnerSession();
+      engine.watch(buildTask(), session);
+
+      session.requestPermission('p1', 'Bash', { command: 'npm test' });
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
+      expect(engine.getIdleSince('t1')).toBeNull();
+
+      session.answerPermission('p1', { decision: 'allow' });
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+      expect(engine.getIdleSince('t1')).not.toBeNull();
+    });
+
+    it('watches a new attempt afresh:the wait and the approval of the one before it are not its own', () => {
+      const engine = new VerdictEngine();
+      const before = new FakeRunnerSession('s1');
+      engine.watch(buildTask(), before);
+      before.requestPermission('p1', 'Bash', { command: 'npm test' });
+      engine.pauseIdle('t1');
+
+      engine.watch(buildTask(), new FakeRunnerSession('s2'));
       vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
 
       expect(engine.getIdleSince('t1')).not.toBeNull();

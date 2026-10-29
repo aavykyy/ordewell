@@ -146,6 +146,14 @@ export class VerdictEngine {
    */
   watch(task: Task, session: IRunnerSession): number {
     const gen = this.bumpGeneration(task.id);
+    // Silence counts from the start, not from the first output: a runner that
+    // never prints went unflagged however long it stayed quiet (#117). Armed
+    // before any listener, so an exit or verdict a session replays on attach
+    // clears it rather than leaving it to fire. What an earlier attempt waited
+    // on is not this one's to wait on.
+    this.idlePaused.delete(task.id);
+    this.openApprovals.delete(task.id);
+    this.touchIdle(task.id, gen);
     session.onOutput(() => {
       if (this.generations.get(task.id) === gen) this.touchIdle(task.id, gen);
     });

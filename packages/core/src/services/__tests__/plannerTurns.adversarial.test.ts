@@ -259,7 +259,8 @@ const turnStarts = (messages: ReadonlyArray<SessionMessage>) =>
 
 describe('a hung wake-up turn whose retry follows it', () => {
   it('is not retried once it committed an edit, and takes back nothing of it when it settles late', async () => {
-    const env = await wokenUp({ settings: { supervisorLevel: 'act' }, config: { autonomousMode: true } });
+    // One task, waiting: a second, running silent past the timeout, would go quiet and wake it again.
+    const env = await wokenUp({ settings: { supervisorLevel: 'act' }, config: { autonomousMode: true } }, [task('t1', 1)]);
     env.planner.state.ignoresStop = true;
     const tools = env.planner.tools();
 
