@@ -323,9 +323,9 @@ export class TaskOrchestrator {
   /** Conflict repairs owed with every slot taken and no scheduler to claim them: a freed slot starts them. */
   private owedRepairs = new Set<string>();
   /**
-   * Tasks Mark complete is landing after it ended their attempt, and that
-   * landing: in progress with no attempt for as long as it takes, and not
-   * orphans for it.
+   * Tasks Mark complete is landing after it ended their attempt, or that
+   * their conflict resolver is landing, and that landing: in progress with
+   * no attempt for as long as it takes, and not orphans for it.
    */
   private completing = new Map<string, Promise<LandingOutcome>>();
   /** Tasks paused on a usage limit, the run's hold on them, and each runner's wait for its reset (ADR-0018, U1). */
@@ -1273,9 +1273,18 @@ export class TaskOrchestrator {
   }
 
   private async landResolved(resolverId: string, admission: Admitted): Promise<void> {
-    const resolved = await this.landing.landResolved(resolverId);
+    const resolved = this.landing.landResolved(resolverId);
     if (!resolved) return;
-    const { task, outcome } = resolved;
+    const { task } = resolved;
+    // The conflicted task's own landing as much as Mark complete's is: a
+    // delete or retry of it must not take the worktree being merged.
+    this.completing.set(task.id, resolved.outcome);
+    let outcome: LandingOutcome;
+    try {
+      outcome = await resolved.outcome;
+    } finally {
+      this.completing.delete(task.id);
+    }
     await this.applyLanding(task, outcome, admission, () => {
       if (task.verdict) this.logAndArchive(task, task.verdict);
     });

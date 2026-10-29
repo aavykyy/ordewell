@@ -154,17 +154,23 @@ export class Landing {
    * has landed. Its branch is on the integration branch by then, so it merges
    * clean — and one the resolver did not really bring along conflicts again
    * instead of being taken at its word. Null when there is nothing to land.
+   * The task is named before its landing settles, so the caller can hold
+   * its worktree for as long as the merge is in it.
    */
-  async landResolved(resolverId: string): Promise<{ task: Readonly<Task>; outcome: LandingOutcome } | null> {
+  landResolved(resolverId: string): { task: Readonly<Task>; outcome: Promise<LandingOutcome> } | null {
     const conflictedId = this.runs.takeResolver(resolverId);
     if (!conflictedId) return null;
     const task = this.tasks.get(conflictedId);
     // Only the conflict it was added for: a task retried since has a new
     // attempt of its own, whose worktree it would merge half-done.
     if (!task || this.runs.current?.tasks[conflictedId]?.status !== 'conflict') return null;
+    return { task, outcome: this.landConflicted(task) };
+  }
+
+  private async landConflicted(task: Readonly<Task>): Promise<LandingOutcome> {
     const landing = await this.runs.integrate(task);
-    if (landing !== 'merged') return { task, outcome: this.unmerged(task, landing) };
-    return { task, outcome: { kind: 'landed', messages: [{ level: 'info', text: `Task "${task.title}" landed through its conflict resolution.` }] } };
+    if (landing !== 'merged') return this.unmerged(task, landing);
+    return { kind: 'landed', messages: [{ level: 'info', text: `Task "${task.title}" landed through its conflict resolution.` }] };
   }
 
   /** The repair a conflicted task is owed next; null when repair is off, used up, or there is no isolated run to repair it in. */
