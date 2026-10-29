@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { SurfacePlan } from '@ordewell/core';
+import type { GlobalRunSettings, SettingsResponse, SurfacePlan } from '@ordewell/core';
 import { DaemonError, WorkspaceInitNeededError, type SessionFollow } from '../../apiClient';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action, type Effect } from '../reducer';
@@ -13,10 +13,16 @@ import { messagesOf } from './chat';
  * screen, nor carry that session's queued prompt into the opening.
  */
 
-const RUN_SETTINGS = {
+const RUN_SETTINGS: GlobalRunSettings = {
   supervisorLevel: 'watch', mergeAtGatesAutomatically: false, plannedWithTrailer: true,
   autorun: false, supervisorRetryLimit: 3, wakeUpReadBudget: 0,
-} as const;
+};
+
+/** A settings answer that says only what these tests read: its run settings. */
+const settingsWith = (run: Partial<GlobalRunSettings>): SettingsResponse => ({ run: { ...RUN_SETTINGS, ...run } }) as SettingsResponse;
+
+/** A welcome whose saved run settings were read at launch, autorun among them. */
+const KNOWN_AUTORUN_WELCOME: Partial<TuiState> = { runSettings: { ...RUN_SETTINGS, autorun: true }, runSettingsKnown: true };
 
 const refused = (): Error => Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:3742'), { code: 'ECONNREFUSED' });
 
@@ -35,8 +41,8 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
 }
 
 /** The reducer and the effect runner wired as `app.ts` wires them: every effect a step returns is run. */
-function tui(api: Partial<OrdewellApi>, over: Partial<EffectDeps> = {}) {
-  let state: TuiState = initialState({ workspace: '/ws' });
+function tui(api: Partial<OrdewellApi>, over: Partial<EffectDeps> = {}, initial: Partial<TuiState> = {}) {
+  let state: TuiState = initialState({ workspace: '/ws', ...initial });
   const running = new Set<Promise<void>>();
   const deps: EffectDeps = {
     api: {
@@ -170,7 +176,7 @@ describe('an opening retried after a revived daemon', () => {
     const h = tui(
       {
         startConversation: vi.fn().mockRejectedValue(refused()),
-        getSettings: vi.fn(async () => ({ run: { ...RUN_SETTINGS, autorun: true } })),
+        getSettings: vi.fn(async () => settingsWith({ autorun: true })),
       },
       { reviveDaemon: vi.fn().mockResolvedValue(false) },
     );
@@ -187,7 +193,7 @@ describe('an opening retried after a revived daemon', () => {
   it('reads the run settings back onto the welcome when the retry is refused too', async () => {
     const h = tui({
       startConversation: vi.fn().mockRejectedValue(refused()),
-      getSettings: vi.fn(async () => ({ run: { ...RUN_SETTINGS, autorun: true } })),
+      getSettings: vi.fn(async () => settingsWith({ autorun: true })),
     });
 
     h.type('Opening goal');
@@ -198,12 +204,116 @@ describe('an opening retried after a revived daemon', () => {
     expect(h.state.runSettings.autorun).toBe(true);
   });
 
+  it('reports the refusal on an idle welcome without waiting on a settings read that never answers', async () => {
+    const h = tui(
+      {
+        startConversation: vi.fn().mockRejectedValue(refused()),
+        getSettings: vi.fn(() => new Promise<never>(() => {})),
+      },
+      { reviveDaemon: vi.fn().mockResolvedValue(false) },
+      KNOWN_AUTORUN_WELCOME,
+    );
+
+    h.type('Opening goal');
+
+    await vi.waitFor(() => expect(messagesOf(h.state).at(-1)?.text).toContain('No Ordewell server is listening on port 3742'), { timeout: 1000 });
+    expect(h.state.sessionId).toBeNull();
+    expect(h.state.planner).toBe('idle');
+    expect(h.state.runSettingsKnown).toBe(true);
+    expect(h.state.runSettings.autorun).toBe(true);
+  });
+
+  it("keeps the welcome's known run settings when the settings read is refused too", async () => {
+    const h = tui(
+      {
+        startConversation: vi.fn().mockRejectedValue(refused()),
+        getSettings: vi.fn().mockRejectedValue(refused()),
+      },
+      { reviveDaemon: vi.fn().mockResolvedValue(false) },
+      KNOWN_AUTORUN_WELCOME,
+    );
+
+    h.type('Opening goal');
+    await h.settle();
+
+    expect(h.api.getSettings).toHaveBeenCalledWith(undefined);
+    expect(h.state.sessionId).toBeNull();
+    expect(h.state.planner).toBe('idle');
+    expect(messagesOf(h.state).at(-1)?.text).toContain('No Ordewell server is listening on port 3742');
+    expect(h.state.runSettingsKnown).toBe(true);
+    expect(h.state.runSettings.autorun).toBe(true);
+  });
+
+  it('reports a refused retry on an idle welcome, its run settings kept, while the read hangs', async () => {
+    const h = tui(
+      {
+        startConversation: vi.fn().mockRejectedValue(refused()),
+        getSettings: vi.fn(() => new Promise<never>(() => {})),
+      },
+      {},
+      KNOWN_AUTORUN_WELCOME,
+    );
+
+    h.type('Opening goal');
+
+    await vi.waitFor(() => expect(messagesOf(h.state).at(-1)?.text).toContain('No Ordewell server is listening on port 3742'), { timeout: 1000 });
+    expect(h.api.startConversation).toHaveBeenCalledTimes(2);
+    expect(h.state.sessionId).toBeNull();
+    expect(h.state.planner).toBe('idle');
+    expect(h.state.runSettingsKnown).toBe(true);
+    expect(h.state.runSettings.autorun).toBe(true);
+  });
+
+  it("does not let the welcome's late settings answer paint over a session loaded after the failure", async () => {
+    const welcomeRead = deferred<SettingsResponse>();
+    const h = tui(
+      {
+        startConversation: vi.fn().mockRejectedValue(refused()),
+        getSettings: vi.fn((sessionId?: string) => sessionId === 'B'
+          ? Promise.resolve(settingsWith({ supervisorLevel: 'act' }))
+          : welcomeRead.promise),
+      },
+      { reviveDaemon: vi.fn().mockResolvedValue(false) },
+      KNOWN_AUTORUN_WELCOME,
+    );
+
+    h.type('Opening goal');
+    await vi.waitFor(() => expect(h.api.getSettings).toHaveBeenCalledWith(undefined));
+    expect(h.state.planner).toBe('idle');
+    h.fire({ type: 'loadSession', sessionId: 'B' });
+    await vi.waitFor(() => expect(h.state.runSettings.supervisorLevel).toBe('act'));
+
+    welcomeRead.resolve(settingsWith({ supervisorLevel: 'off' }));
+    await h.settle();
+
+    expect(h.state.sessionId).toBe('B');
+    expect(h.state.runSettings.supervisorLevel).toBe('act');
+    expect(h.state.runSettings.autorun).toBe(false);
+  });
+
+  it('reads an opening that opened its own run settings, as at any normal start', async () => {
+    const h = tui(
+      { getSettings: vi.fn(async (sessionId?: string) => settingsWith({ autorun: sessionId !== 'session-opening' })) },
+      {},
+      KNOWN_AUTORUN_WELCOME,
+    );
+
+    h.type('Opening goal');
+    await h.settle();
+
+    expect(h.deps.reviveDaemon).not.toHaveBeenCalled();
+    expect(h.api.getSettings).toHaveBeenLastCalledWith('session-opening');
+    expect(h.state.sessionId).toBe('session-opening');
+    expect(h.state.runSettingsKnown).toBe(true);
+    expect(h.state.runSettings.autorun).toBe(false);
+  });
+
   it("keeps the welcome's run settings off a session loaded while the daemon failed to come back", async () => {
     const revive = deferred<boolean>();
     const h = tui(
       {
         startConversation: vi.fn().mockRejectedValue(refused()),
-        getSettings: vi.fn(async (sessionId?: string) => ({ run: { ...RUN_SETTINGS, autorun: sessionId === 'B' } })),
+        getSettings: vi.fn(async (sessionId?: string) => settingsWith({ autorun: sessionId === 'B' })),
       },
       { reviveDaemon: vi.fn(() => revive.promise) },
     );

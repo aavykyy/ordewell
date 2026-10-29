@@ -117,12 +117,12 @@ export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void>
     if (!revived) {
       // A refused opening kept its session for the retry; with none coming,
       // nothing holds it, so it is let go as any refused opening is.
-      if (opening) {
-        deps.dispatch({ type: 'sessionCleared', sessionId: opening.sessionId });
-        // The welcome is not any session: its run settings are the file's again (ADR-0030).
-        await reloadSettings(deps);
-      }
+      if (opening) deps.dispatch({ type: 'sessionCleared', sessionId: opening.sessionId, unreached: true });
       fail({ type: 'failed', message: describeConnectionRefused(deps.port) });
+      // The welcome is not any session: its run settings are the file's again
+      // (ADR-0030). Read after the failure is shown, so a daemon that never
+      // answers cannot hold the welcome in planning.
+      if (opening) await reloadSettings(deps);
       return;
     }
 
