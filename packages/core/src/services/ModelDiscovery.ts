@@ -5,7 +5,7 @@ import * as fsSync from 'fs';
 import * as osMod from 'os';
 import { DiscoveredModel } from '../models/Task';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
-import type { RunnerManifest, DiscoveryCommand, ApiDiscoveryConfig, ApiAuthMethod, ModelDiscoveryParser } from '../plugins/types';
+import type { RunnerManifest, DiscoveryCommand, ApiDiscoveryConfig, ApiAuthMethod, ModelDiscoveryParser, RunnerEnv, RunnerSettingsFiles } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { globalDataDir } from '../utils/globalDataDir';
 import { discoverAppServerModels, type AppServerModel } from './harness/appServerModels';
@@ -237,25 +237,37 @@ function applyVariants(models: DiscoveredModel[], manifest: RunnerManifest): Dis
   return models.map((m) => (m.variants.length > 0 ? m : { ...m, variants }));
 }
 
+function expandHome(filePath: string): string {
+  return filePath.replace(/^~/, osMod.homedir());
+}
+
+function listDir(dir: string): string[] {
+  try {
+    return fsSync.readdirSync(expandHome(dir));
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Resolve an auth token from a manifest's `apiDiscovery.auth` list. Each method
  * is tried in order; the first that yields a non-empty token wins.
  *
- * - `env`: reads `process.env[varName]`
+ * - `env`: reads `varName` from the runner's environment
  * - `file`: reads a JSON file at `path` (with `~` expansion) and extracts the
  *   value at `jsonPath` (dot-notation, e.g. `claudeAiOauth.accessToken`)
  *
  * Returns `{ header, value }` ready to set on the fetch `headers` object, or
  * `null` when no auth method yields a token.
  */
-function resolveApiAuth(authMethods: ApiAuthMethod[]): { header: string; value: string } | null {
+function resolveApiAuth(authMethods: ApiAuthMethod[], env: RunnerEnv): { header: string; value: string } | null {
   for (const method of authMethods) {
     try {
       let token: string | undefined;
       if (method.type === 'env') {
-        token = process.env[method.varName];
+        token = env[method.varName];
       } else {
-        const filePath = method.path.replace(/^~/, osMod.homedir());
+        const filePath = expandHome(typeof method.path === 'function' ? method.path(env) : method.path);
         if (!fsSync.existsSync(filePath)) continue;
         const data = JSON.parse(fsSync.readFileSync(filePath, 'utf8'));
         token = method.jsonPath.split('.').reduce((obj: unknown, key: string) => {
@@ -281,9 +293,10 @@ function resolveApiAuth(authMethods: ApiAuthMethod[]): { header: string; value: 
 async function discoverFromApi(
   manifest: RunnerManifest,
   config: ApiDiscoveryConfig,
+  env: RunnerEnv,
   fetchImpl?: typeof fetch
 ): Promise<DiscoveredModel[] | null> {
-  const auth = resolveApiAuth(config.auth);
+  const auth = resolveApiAuth(config.auth, env);
   if (!auth) return null;
 
   try {
@@ -425,6 +438,7 @@ export class ModelDiscovery {
   private appServerClient: AppServerClientImpl;
   private readFileImpl: (path: string) => string | null;
   private now: () => number;
+  private env: () => Promise<RunnerEnv>;
 
   constructor(
     registry: RunnerRegistry,
@@ -433,15 +447,17 @@ export class ModelDiscovery {
     appServerClient: AppServerClientImpl = defaultAppServerClient,
     readFileImpl?: (path: string) => string | null,
     now: () => number = Date.now,
+    env: () => Promise<RunnerEnv> = async () => process.env,
   ) {
     this.registry = registry;
     this.execImpl = execImpl;
     this.fetchImpl = fetchImpl;
     this.appServerClient = appServerClient;
     this.now = now;
+    this.env = env;
     this.readFileImpl = readFileImpl ?? ((filePath: string) => {
       try {
-        return fsSync.readFileSync(filePath.replace(/^~/, osMod.homedir()), 'utf8');
+        return fsSync.readFileSync(expandHome(filePath), 'utf8');
       } catch {
         return null;
       }
@@ -513,14 +529,17 @@ export class ModelDiscovery {
       return [];
     }
 
-    const found = await this.discoverFromSources(manifest);
-    const models = this.withSettingsModels(found.models, manifest);
+    const { apiDiscovery, settingsModels } = manifest.modelDiscovery;
+    // Asked only of a runner whose files can move with it: it may evaluate the workspace's `.envrc`.
+    const env = apiDiscovery || settingsModels ? await this.env().catch(() => process.env) : process.env;
+    const found = await this.discoverFromSources(manifest, env);
+    const models = this.withSettingsModels(found.models, manifest, env);
     if (found.cacheable && models.length > 0) this.cache.set(runner, models);
     else this.misses.set(runner, { models, at: this.now() });
     return models;
   }
 
-  private async discoverFromSources(manifest: RunnerManifest): Promise<{ models: DiscoveredModel[]; cacheable: boolean }> {
+  private async discoverFromSources(manifest: RunnerManifest, env: RunnerEnv): Promise<{ models: DiscoveredModel[]; cacheable: boolean }> {
     let cacheable = true;
     const discovery = manifest.modelDiscovery;
 
@@ -539,7 +558,7 @@ export class ModelDiscovery {
     //    Returns null when no auth token is available or the request fails —
     //    in both cases we fall through to command-based discovery.
     if (discovery.apiDiscovery) {
-      const apiModels = await discoverFromApi(manifest, discovery.apiDiscovery, this.fetchImpl);
+      const apiModels = await discoverFromApi(manifest, discovery.apiDiscovery, env, this.fetchImpl);
       if (apiModels && apiModels.length > 0) {
         return { models: applyVariants(mergeCanonicalAliases(apiModels, manifest), manifest), cacheable };
       }
@@ -557,17 +576,16 @@ export class ModelDiscovery {
   }
 
   /**
-   * Append the models the user registered in the runner's own settings file.
-   * Read on every discovery rather than cached apart, so a refresh picks up an
-   * edit; whatever the sources already offer keeps its entry and metadata.
+   * Append the models registered in the runner's own settings. Read on every
+   * discovery rather than cached apart, so a refresh picks up an edit;
+   * whatever the sources already offer keeps its entry and metadata.
    */
-  private withSettingsModels(models: DiscoveredModel[], manifest: RunnerManifest): DiscoveredModel[] {
-    const settings = manifest.modelDiscovery.settingsModels;
-    if (!settings) return models;
-    const content = this.readFileImpl(settings.file);
-    if (!content) return models;
+  private withSettingsModels(models: DiscoveredModel[], manifest: RunnerManifest, env: RunnerEnv): DiscoveredModel[] {
+    const read = manifest.modelDiscovery.settingsModels;
+    if (!read) return models;
+    const files: RunnerSettingsFiles = { read: this.readFileImpl, list: listDir, env };
     const seen = new Set(models.map((m) => m.modelId));
-    const added = parseModelOutput(content, settings.parser, manifest).filter((m) => !seen.has(m.modelId));
+    const added = read(files).filter((m) => !seen.has(m.modelId));
     return added.length > 0 ? [...models, ...applyVariants(added, manifest)] : models;
   }
 

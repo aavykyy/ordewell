@@ -68,6 +68,21 @@ The Command Palette offers **Ordewell: Rewind Conversation**, **Fork
 Conversation** and **Compact Conversation**. Isolation can be configured under
 `ordewell.worktreeIsolation` and related settings.
 
+### On Windows
+
+The extension and its local daemon run natively on Windows. The `ordewell`
+terminal UI is not verified there; run it under
+[WSL](https://learn.microsoft.com/windows/wsl/install). Ordewell finds
+npm-installed runners (`.cmd` and `.exe` shims).
+
+Most of the Windows support is tested on Linux, through the seams that stand
+in for Windows. On a Windows host, only how npm-installed runners are launched
+has been measured, and no first run from goal to merge has been watched end to
+end. Two things are known to be open: whether Codex's read-only sandbox is
+enforced, and `%VAR%` expansion on the `cmd.exe` shim route. The planner's
+shell has no OS sandbox on Windows and relies on its command rules alone. See
+[Windows support](https://github.com/ordewell/ordewell/blob/main/docs/adr/platform/0010-windows-support.md).
+
 ## What the extension sends
 
 Once a day, the extension asks ordewell.ai whether a newer version is out. The

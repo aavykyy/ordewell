@@ -1,4 +1,6 @@
+import * as path from 'path';
 import type { DiscoveredModel } from '../../models/Task';
+import type { RunnerEnv, RunnerSettingsFiles } from '../types';
 
 // Claude Code's model sources, as its manifest reads them: the Anthropic
 // Models API, the `--model` option of `claude --help` when no credential
@@ -164,34 +166,72 @@ export function parseClaudeHelp(stdout: string): DiscoveredModel[] {
   return models;
 }
 
+/** Where Claude Code keeps its user settings and login: `CLAUDE_CONFIG_DIR` moves them from `~/.claude`. */
+export function claudeConfigDir(env: RunnerEnv): string {
+  return env.CLAUDE_CONFIG_DIR?.trim() || '~/.claude';
+}
+
+/** The system directory of Claude Code's file-based managed settings. */
+export function claudeManagedSettingsDir(platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'darwin') return '/Library/Application Support/ClaudeCode';
+  if (platform === 'win32') return 'C:\\Program Files\\ClaudeCode';
+  return '/etc/claude-code';
+}
+
 /**
- * Parse the `modelPicker.options` the user added to Claude Code's
- * `settings.json`: `{ model, label? }` rows, typically gateway IDs that only
- * the user's proxy serves and no catalog lists. A row without a usable
- * `model` string is skipped, and anything that is not that shape yields
- * nothing: a hand-edited file must never break discovery.
+ * The rows of Claude Code's model picker, gateway IDs most often, resolved as
+ * Claude resolves `modelPicker`: the highest source that sets it supplies the
+ * whole lineup, and rows from two sources never combine. The managed settings
+ * file and its `managed-settings.d/` drop-ins rank above user settings, and a
+ * later drop-in replaces an earlier lineup. Project files cannot set it, and
+ * Ordewell's `--settings` never does. Server-managed, MDM and registry policy
+ * are out of reach here, so a lineup only they set is not offered.
  */
-export function parseClaudeSettingsModels(content: string): DiscoveredModel[] {
+export function readClaudeSettingsModels(files: RunnerSettingsFiles, platform: NodeJS.Platform = process.platform): DiscoveredModel[] {
+  const managed = claudeManagedSettingsDir(platform);
+  const join = platform === 'win32' ? path.win32.join : path.posix.join;
+  const dropIns = files.list(join(managed, 'managed-settings.d'))
+    .filter((name) => name.endsWith('.json') && !name.startsWith('.'))
+    .sort()
+    .map((name) => join(managed, 'managed-settings.d', name));
+  const ranked = [...dropIns.reverse(), join(managed, 'managed-settings.json'), join(claudeConfigDir(files.env), 'settings.json')];
+  for (const file of ranked) {
+    const content = files.read(file);
+    const lineup = content === null ? null : parseClaudeSettingsModels(content);
+    if (lineup) return lineup;
+  }
+  return [];
+}
+
+/**
+ * Parse the `modelPicker.options` of one Claude Code settings file: `{ model,
+ * label? }` rows. Null when the file does not set a lineup, so a lower source
+ * may; a row without a usable `model` string is skipped. A hand-edited file
+ * must never break discovery.
+ */
+export function parseClaudeSettingsModels(content: string): DiscoveredModel[] | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(content);
   } catch {
-    return [];
+    return null;
   }
   const picker = parsed && typeof parsed === 'object' ? (parsed as { modelPicker?: unknown }).modelPicker : undefined;
   const options = picker && typeof picker === 'object' ? (picker as { options?: unknown }).options : undefined;
-  if (!Array.isArray(options)) return [];
+  if (!Array.isArray(options)) return null;
 
   const seen = new Set<string>();
   const models: DiscoveredModel[] = [];
   for (const row of options as unknown[]) {
     if (!row || typeof row !== 'object') continue;
-    const { model, label } = row as { model?: unknown; label?: unknown };
-    if (typeof model !== 'string' || !model.trim() || seen.has(model)) continue;
+    const { model: raw, label } = row as { model?: unknown; label?: unknown };
+    // Hand-typed padding would reach `--model` and the picker's provider group.
+    const model = typeof raw === 'string' ? raw.trim() : '';
+    if (!model || seen.has(model)) continue;
     seen.add(model);
     models.push({
       modelId: model,
-      modelLabel: typeof label === 'string' && label.trim() ? label : model,
+      modelLabel: typeof label === 'string' && label.trim() ? label.trim() : model,
       runnerProvider: model.includes('/') ? model.split('/')[0] : undefined,
       variants: [],
     });

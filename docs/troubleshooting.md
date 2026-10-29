@@ -177,14 +177,21 @@ An edit is refused with **Runner "claude-code" does not offer model
 
 The sources Ordewell asks for Claude Code's models, the Anthropic Models API
 and `claude --help`, list only Anthropic's models. Ordewell also offers each
-model listed in `modelPicker.options` of `~/.claude/settings.json`:
+model listed in `modelPicker.options` of Claude Code's settings:
 
 ```json
 { "modelPicker": { "options": [{ "model": "gproxy/default", "label": "Gateway" }] } }
 ```
 
-A row needs a `model` string; `label` is optional. Ordewell reads the file when
-it discovers Claude's models, so restart it after editing the file.
+A row needs a `model` string; `label` is optional. As Claude Code does,
+Ordewell takes the whole list from the highest file that sets one: the managed
+settings file (`managed-settings.json` and its `managed-settings.d/` files in
+Claude Code's system directory), then your user settings,
+`~/.claude/settings.json` or `settings.json` in `CLAUDE_CONFIG_DIR` when that
+is set. The daemon reads `CLAUDE_CONFIG_DIR` from its own environment and the
+workspace it was started in. A list your organization delivers from the
+claude.ai console or by MDM is not read. Ordewell reads the files when it
+discovers Claude's models, so restart it after editing one.
 
 ## A runner shows as switched off, and tasks are flagged
 

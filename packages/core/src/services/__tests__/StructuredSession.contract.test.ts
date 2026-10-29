@@ -1009,7 +1009,7 @@ describe('the startup while Ordewell\'s tools attach (ADR-0025)', () => {
     expect(adapters.map((a) => a.sent)).toEqual([[], []]);
   });
 
-  it('drops the progress when the task is stopped while its tools attach, and a late report starts nothing', async () => {
+  it('takes the runner back at once when the task is stopped while its tools attach, and a late report starts nothing', async () => {
     const { session, started, adapters, reports, row, lastStatus } = await attaching();
 
     await session.execute({ command: 'stop_task', task: 'a1' }, { kind: 'user' });
@@ -1017,13 +1017,15 @@ describe('the startup while Ordewell\'s tools attach (ADR-0025)', () => {
     expect(row().status).toBe('pending');
     expect(row().attaching).toBeUndefined();
     expect(lastStatus()?.attaching).toBeUndefined();
-
-    // The stop does not reach a spawn still attaching: the runner is only taken back once it reports.
-    reports[0]('connected');
+    // Before its runner reports anything: the stop reaches the spawn still attaching.
     await started;
+    expect(adapters[0].disposed).toBe(1);
+
+    // A report that would have meant a respawn comes too late to start one.
+    reports[0]('pending');
     await tick();
     expect(row().attaching).toBeUndefined();
-    expect(adapters[0].disposed).toBe(1);
+    expect(adapters).toHaveLength(1);
     expect(adapters.map((a) => a.sent)).toEqual([[]]);
   });
 });

@@ -1,6 +1,7 @@
 import { ModelDiscovery, clearGeminiCache, type ExecImpl } from './ModelDiscovery';
 import { ModelCatalog } from './ModelCatalog';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
+import type { RunnerEnv } from '../plugins/types';
 import type { IConfig } from '../interfaces/IConfig';
 import type { DiscoveredModel, RunnerId } from '../models/Task';
 import { fetchAllProviderModels, collectProviderCredentials, toOrchestratorOptions, type OrchestratorOption, type ProviderModelLists } from './ProviderRouting';
@@ -10,6 +11,8 @@ import { PROVIDER_PRIORITY, isApiProvider, prefixModelId, stripModelPrefix } fro
 export interface ModelResolverDeps {
   fetchImpl?: typeof fetch;
   execImpl?: ExecImpl;
+  /** The environment runners are launched with, which can move a runner's own files (`CLAUDE_CONFIG_DIR`). Defaults to this process's. */
+  env?: () => Promise<RunnerEnv>;
 }
 
 export class ModelResolver {
@@ -25,7 +28,7 @@ export class ModelResolver {
     private config: IConfig,
     deps: ModelResolverDeps = {}
   ) {
-    this.discovery = new ModelDiscovery(registry, deps.execImpl, deps.fetchImpl);
+    this.discovery = new ModelDiscovery(registry, deps.execImpl, deps.fetchImpl, undefined, undefined, undefined, deps.env);
     this.fetchImpl = deps.fetchImpl;
   }
 

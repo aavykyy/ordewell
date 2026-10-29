@@ -88,10 +88,13 @@ must be installed and on your `PATH`; if it is greyed out right after
 installing, reload the window. Ordewell finds npm-installed runners (`.cmd` and
 `.exe` shims) on Windows.
 
-Two things are not verified on Windows: whether Codex's read-only sandbox is
-enforced, and `%VAR%` expansion on the `cmd.exe` shim route
-([ADR-0010](docs/adr/platform/0010-windows-support.md)). The planner's shell
-also has no OS sandbox on Windows and relies on its command rules alone; see
+Most of the Windows support is tested on Linux, through the seams that stand
+in for Windows. On a Windows host, only how npm-installed runners are launched
+has been measured, and no first run from goal to merge has been watched end to
+end ([ADR-0010](docs/adr/platform/0010-windows-support.md)). Two things are
+known to be open: whether Codex's read-only sandbox is enforced, and `%VAR%`
+expansion on the `cmd.exe` shim route. The planner's shell also has no OS
+sandbox on Windows and relies on its command rules alone; see
 [troubleshooting](docs/troubleshooting.md).
 
 ## What Ordewell sends
