@@ -8,7 +8,7 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     getSettings: vi.fn(),
     discoverPlannerCatalogs: vi.fn(async () => undefined),
     setOrchestratorModel: vi.fn(),
-    updateSettings: vi.fn(),
+    writeSettings: vi.fn(),
     ...overrides,
   } as unknown as OrchestratorPool;
   return pool;
@@ -87,7 +87,7 @@ describe('/api/settings — the requesting workspace', () => {
   beforeEach(async () => {
     pool = fakePool({ updateRunSettings: vi.fn() });
     vi.mocked(pool.getSettings).mockReturnValue(settingsState());
-    vi.mocked(pool.updateSettings).mockReturnValue(settingsState());
+    vi.mocked(pool.writeSettings).mockResolvedValue(settingsState());
     vi.mocked(pool.updateRunSettings).mockReturnValue(settingsState());
     const { settingsRoute } = await import('../../routes/settings');
     app = new Hono();
@@ -113,10 +113,9 @@ describe('/api/settings — the requesting workspace', () => {
     await patch({ env: { AI_PROVIDER: 'claude-code' }, workspace: '/work/b' });
     await patch({ run: { autorun: true }, sessionId: 's1', workspace: '/work/b' });
 
-    expect(vi.mocked(pool.updateSettings).mock.calls).toEqual([[{ env: { AI_PROVIDER: 'claude-code' } }, undefined, '/work/b']]);
-    // The switch waits for the catalog it is judged against, which no client has asked for yet.
-    expect(vi.mocked(pool.discoverPlannerCatalogs).mock.calls[0]).toEqual([undefined, '/work/b', 'claude-code']);
-    expect(vi.mocked(pool.discoverPlannerCatalogs).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(pool.updateSettings).mock.invocationCallOrder[0]);
+    expect(vi.mocked(pool.writeSettings).mock.calls).toEqual([[{ env: { AI_PROVIDER: 'claude-code' } }, undefined, '/work/b']]);
+    // Whether a write waits for a catalog is the pool's to judge (ADR-0040), never the route's.
+    expect(pool.discoverPlannerCatalogs).not.toHaveBeenCalled();
     expect(vi.mocked(pool.updateRunSettings).mock.calls).toEqual([[{ autorun: true }, 's1', '/work/b']]);
     expect(vi.mocked(pool.getSettings).mock.calls).toEqual([['s1', '/work/b']]);
   });
@@ -125,14 +124,14 @@ describe('/api/settings — the requesting workspace', () => {
     const res = await patch({ workspace: '/work/b' });
 
     expect(res.status).toBe(400);
-    expect(pool.updateSettings).not.toHaveBeenCalled();
+    expect(pool.writeSettings).not.toHaveBeenCalled();
   });
 
   it('refuses a workspace that is not a path', async () => {
     const res = await patch({ env: { AI_PROVIDER: 'claude-code' }, workspace: 7 });
 
     expect(res.status).toBe(400);
-    expect(pool.updateSettings).not.toHaveBeenCalled();
+    expect(pool.writeSettings).not.toHaveBeenCalled();
   });
 });
 
@@ -148,7 +147,7 @@ describe('PATCH /api/settings', () => {
   });
 
   it('updates orchestratorModel and returns new state', async () => {
-    vi.mocked(pool.updateSettings).mockReturnValue(settingsState({
+    vi.mocked(pool.writeSettings).mockResolvedValue(settingsState({
       orchestratorModel: 'gemini-2.5-flash',
     }));
     vi.mocked(pool.getSettings).mockReturnValue(settingsState({
@@ -164,11 +163,11 @@ describe('PATCH /api/settings', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { orchestratorModel: string };
     expect(body.orchestratorModel).toBe('gemini-2.5-flash');
-    expect(pool.updateSettings).toHaveBeenCalledWith({ orchestratorModel: 'gemini-2.5-flash' }, undefined, undefined);
+    expect(pool.writeSettings).toHaveBeenCalledWith({ orchestratorModel: 'gemini-2.5-flash' }, undefined, undefined);
   });
 
   it('updates modelAllowlist and returns it in settings', async () => {
-    vi.mocked(pool.updateSettings).mockReturnValue(settingsState({
+    vi.mocked(pool.writeSettings).mockResolvedValue(settingsState({
       modelAllowlist: { opencode: ['model-a', 'model-b'] },
     }));
     vi.mocked(pool.getSettings).mockReturnValue(settingsState({
@@ -184,7 +183,7 @@ describe('PATCH /api/settings', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { modelAllowlist: Record<string, string[]> };
     expect(body.modelAllowlist).toEqual({ opencode: ['model-a', 'model-b'] });
-    expect(pool.updateSettings).toHaveBeenCalledWith({ modelAllowlist: { opencode: ['model-a', 'model-b'] } }, undefined, undefined);
+    expect(pool.writeSettings).toHaveBeenCalledWith({ modelAllowlist: { opencode: ['model-a', 'model-b'] } }, undefined, undefined);
   });
 
   it('returns 400 for no body', async () => {

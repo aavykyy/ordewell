@@ -25,7 +25,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   workspace's environment as well. A model Claude Code already lists keeps its own
   label and effort levels, and a missing or malformed file changes nothing.
   The files are read when Ordewell discovers Claude's models, so an edit made
-  while Ordewell runs shows after a restart (#117).
+  while Ordewell runs shows after a restart. Only a planner switch, or a
+  settings read whose model only the catalog can place, waits for a runner to
+  list its models; picking a model, saving a key or changing any other setting
+  does not (#117).
 - **Stopping a task whose runner is still connecting Ordewell's tools stops
   the runner at once.** It no longer finishes its wait, or respawns, after the
   task was stopped.

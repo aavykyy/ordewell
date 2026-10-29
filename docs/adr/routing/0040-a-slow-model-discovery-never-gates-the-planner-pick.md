@@ -57,6 +57,13 @@ at once.**
 - **Retry only a timeout.** The cold-start retry runs only when a command was
   killed by its own timeout — the server was still starting. A non-zero exit or
   an empty answer is an answer, and repeating it only doubles the wait.
+- **The daemon waits only where the catalog decides.** A settings write waits
+  for a catalog only when it switches planners with no model of its own, the
+  one write `selectPlanner` judges by the incoming catalog. An explicit model,
+  a key, an allowlist or a run setting lands at once, and so does an effort
+  whose catalog is already held. A settings read waits only when the model it
+  reports is one only the catalog can place. Planner writes land in the order
+  they were made, so a pick made while a switch waits is applied after it.
 
 ## Key properties
 
@@ -67,6 +74,8 @@ at once.**
   not on every switch.
 - One cold runner no longer delays another's catalog, and two overlapping
   lookups never both start the same CLI.
+- A settings change other than a planner switch never waits on a runner
+  listing its models.
 
 ## Considered options
 
@@ -81,6 +90,10 @@ at once.**
 - **Retry on every non-zero exit.** Rejected: a rejected flag or a busy port
   cannot heal on a retry, and it would double every lookup of a CLI whose first
   command always fails.
+- **Let a later pick cancel a waiting switch.** Rejected: the client that sent
+  the switch applies its answer when it arrives, so it would show the switch
+  while the daemon plans with the pick. In order, the last one made wins on
+  both.
 - **A longer or exponential window.** Rejected: unmeasured, and a refresh already
   gives the user an immediate retry.
 
@@ -89,3 +102,5 @@ at once.**
 - 2026-10-17 — accepted and implemented. OpenCode v2 dropped `models --verbose`
   (a fast non-zero exit); its manifest now asks `api model.list` second, which
   carries the same catalog with per-model variants, before the plain `models`.
+- 2026-10-29 — the web daemon's settings routes wait for a catalog only where
+  it decides the answer, and land planner writes in order.
