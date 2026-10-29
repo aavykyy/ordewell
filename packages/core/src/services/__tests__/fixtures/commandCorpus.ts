@@ -383,19 +383,14 @@ const PROMPTED: CorpusEntry[] = [
   { command: "sed 's/a/b/' file.ts", tier: 'ask', scope: 'sed' },
   { command: "awk '{print $1}' file.txt", tier: 'ask', scope: 'awk' },
   // Read-only against the repository, but it reaches the network — around the
-  // web fetcher's per-origin approval and its request-forgery guard. It prompts
-  // rather than running silently, and the destination is in the scope, so no
-  // approval of one remote carries to another.
+  // web fetcher's per-origin approval and its request-forgery guard. A
+  // configured remote prompts under its whole line, a flag before it included,
+  // so no approval of one remote or repository carries to another; a
+  // destination the line spells out is refused (see REFUSED_SUBCOMMANDS).
   { command: 'git ls-remote origin', tier: 'ask', scope: 'git ls-remote origin' },
-  { command: 'git ls-remote https://github.com/o/r', tier: 'ask', scope: 'git ls-remote https://github.com/o/r' },
-  { command: 'git ls-remote https://attacker.example/r', tier: 'ask', scope: 'git ls-remote https://attacker.example/r' },
-  // The residual of stopping at the first flag, recorded rather than hidden: a
-  // leading flag empties the lead, so this one spelling scopes to the
-  // subcommand alone and a grant for it would cover any destination. It is the
-  // same trade the log-limit rows above buy stability with. Narrowing it means
-  // walking flags to find the operands, which is what `scopeFor` deliberately
-  // does not do — see its note.
-  { command: 'git ls-remote --heads origin', tier: 'ask', scope: 'git ls-remote' },
+  { command: 'git ls-remote --heads origin', tier: 'ask', scope: 'git ls-remote --heads origin' },
+  { command: 'git -C packages/core ls-remote origin', tier: 'ask', scope: 'git -C packages/core ls-remote origin' },
+  { command: 'git -C packages/core worktree list', tier: 'ask', scope: 'git worktree list' },
   // With no residual command this prints the whole process environment,
   // provider credentials included, into the research log.
   { command: 'env', tier: 'ask', scope: 'env' },
@@ -491,6 +486,15 @@ const REFUSED_SUBCOMMANDS: CorpusEntry[] = [
   { command: 'az login', tier: 'refuse' },
   { command: 'terraform apply', tier: 'refuse' },
   { command: 'terraform destroy', tier: 'refuse' },
+  // A remote listing that names its destination: git's transport resolves it
+  // and follows a redirect, so no approval can hold it to a vetted origin.
+  { command: 'git ls-remote https://github.com/o/r', tier: 'refuse' },
+  { command: 'git ls-remote https://attacker.example/r', tier: 'refuse' },
+  { command: 'git ls-remote --heads https://trusted.example/x', tier: 'refuse' },
+  { command: 'git -C packages/core ls-remote http://169.254.169.254/latest/meta-data/', tier: 'refuse' },
+  { command: 'git ls-remote git@host.example:o/r', tier: 'refuse' },
+  // A write behind a directory named like a read stays refused.
+  { command: 'git -C list worktree add ../x', tier: 'refuse' },
 ];
 
 const REFUSED_CODE_SMUGGLING: CorpusEntry[] = [

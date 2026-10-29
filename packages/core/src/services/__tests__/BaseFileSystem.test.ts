@@ -689,6 +689,88 @@ describe('BaseFileSystem research-shell coupling', () => {
   });
 });
 
+/**
+ * `git ls-remote` reaches whatever host its destination names through git's
+ * own transport, which resolves the name itself and follows a redirect, so
+ * none of the curl guarantees (per-origin grant, SSRF guard, pinned address)
+ * can be given to it. These run the real classifier, policy and confinement,
+ * with nothing executed and no DNS: every value is synthetic.
+ */
+describe('git remote listing in the planner shell', () => {
+  it('does not let an approved worktree listing under -C authorise a listing against a metadata address', async () => {
+    const resolve = vi.fn(async () => ['93.184.216.34']);
+    const fs = new TestFileSystem(resolve);
+    const ask = vi.fn().mockResolvedValue(true);
+    fs.setApproval(new ApprovalPolicy({ ask }));
+
+    expect((await fs.bash('git -C packages/core worktree list')).success).toBe(true);
+    const result = await fs.bash('git -C packages/core ls-remote http://169.254.169.254/latest/meta-data/');
+
+    expect(result.success).toBe(false);
+    expect(result.output).toContain('Command refused');
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(fs.bashCalls).toEqual(['git -C packages/core worktree list']);
+  });
+
+  it('still runs read-only git under -C without asking', async () => {
+    const fs = new TestFileSystem();
+    const ask = vi.fn().mockResolvedValue(false);
+    fs.setApproval(new ApprovalPolicy({ ask }));
+
+    expect((await fs.bash('git -C packages/core log --oneline -3')).success).toBe(true);
+    expect((await fs.bash('git -C worktree status')).success).toBe(true);
+    expect(ask).not.toHaveBeenCalled();
+    expect(fs.bashCalls).toHaveLength(2);
+  });
+
+  it('asks again for each remote and repository a listing reaches, whatever flag comes first', async () => {
+    const fs = new TestFileSystem();
+    const ask = vi.fn().mockResolvedValue(true);
+    fs.setApproval(new ApprovalPolicy({ ask }));
+
+    for (const command of [
+      'git ls-remote --heads origin',
+      'git ls-remote --heads upstream',
+      'git ls-remote --tags --heads upstream',
+      // The same name under -C is another repository's remote.
+      'git -C packages/core ls-remote --heads origin',
+      'git -C packages/web ls-remote --heads origin',
+    ]) expect((await fs.bash(command)).success).toBe(true);
+    expect(ask).toHaveBeenCalledTimes(5);
+
+    expect((await fs.bash('git ls-remote --heads origin')).success).toBe(true);
+    expect(ask).toHaveBeenCalledTimes(5);
+  });
+
+  // The patterns travel to the server as ref prefixes, so they leave the machine like a URL does.
+  it('withholds a listing whose patterns carry a secret, before asking and without echoing it', async () => {
+    const fs = new TestFileSystem();
+    const ask = vi.fn().mockResolvedValue(true);
+    fs.setApproval(new ApprovalPolicy({ ask }));
+    fs.setOutboundSecrets(() => ['HeldSecret123']);
+    vi.stubEnv('ORDEWELL_TEST_TOKEN', 'EnvSecret456');
+    try {
+      for (const command of [
+        `git ls-remote origin refs/heads/${fakeSecret('github')}`,
+        'git ls-remote --heads origin HeldSecret123',
+        'git -C packages/core ls-remote origin refs/tags/EnvSecret456',
+        // A `cd` that asks puts the whole line under one grant; what it sends is still checked.
+        'cd $HOME && git ls-remote origin HeldSecret123',
+      ]) {
+        const result = await fs.bash(command);
+        expect(result.success).toBe(false);
+        expect(result.output).toContain('secret');
+        expect(result.output).not.toMatch(/a1b2c3d4|HeldSecret123|EnvSecret456/);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(ask).not.toHaveBeenCalled();
+    expect(fs.bashCalls).toEqual([]);
+  });
+});
+
 describe('web commands in the planner shell', () => {
   it('refuses an origin excluded while its approval was pending', async () => {
     const fs = new TestFileSystem();

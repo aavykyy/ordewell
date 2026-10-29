@@ -63,7 +63,11 @@ describe('ApprovalPolicy', () => {
       ['npm run test', 'npm run postinstall'],
       ['az group list', 'az group delete --name rg1'],
       ['aws s3 ls', 'aws s3 rm s3://bucket/key'],
-      ['git ls-remote origin', 'git ls-remote https://attacker.example/r'],
+      ['git ls-remote origin', 'git ls-remote upstream'],
+      ['git ls-remote --heads origin', 'git ls-remote --heads upstream'],
+      ['git ls-remote --heads origin', 'git -C vendor/lib ls-remote --heads origin'],
+      ['git -C packages/core worktree list', 'git -C packages/core ls-remote origin'],
+      ['git -C packages/core worktree list', 'git -C packages/core for-each-ref'],
     ])('approving %s does not authorise %s', async (approved, other) => {
       const ask = vi.fn().mockResolvedValue(true);
       const policy = new ApprovalPolicy({ ask });
@@ -79,7 +83,8 @@ describe('ApprovalPolicy', () => {
       ['npm run', 'npm run postinstall'],
       ['az group', 'az group delete --name rg1'],
       ['aws s3', 'aws s3 rm s3://bucket/key'],
-      ['git ls-remote', 'git ls-remote https://attacker.example/r'],
+      ['git ls-remote', 'git ls-remote --heads origin'],
+      ['git', 'git -C packages/core ls-remote origin'],
     ])('a grant remembered as "%s" does not satisfy %s', async (coarse, command) => {
       const ask = vi.fn().mockResolvedValue(false);
       const policy = new ApprovalPolicy({ ask, preApproved: [coarse] });
