@@ -105,8 +105,12 @@ export type { TaskAction };
 export type Action =
   | { type: 'key'; key: Key }
   | { type: 'sessionStarted'; sessionId: string; goal: string }
-  /** Names the session let go when it is known, so a late clear cannot take the one loaded since. */
-  | { type: 'sessionCleared'; sessionId?: string }
+  /**
+   * Names the session let go when it is known, so a late clear cannot take the
+   * one loaded since. `unreached` is an opening refused before any server saw
+   * it: it never held run settings of its own, so the welcome's still stand.
+   */
+  | { type: 'sessionCleared'; sessionId?: string; unreached?: true }
   | { type: 'sessionDeleted'; sessionId: string }
   /** A saved session's records, which the conversation is rebuilt from as a reload would show it. */
   | ChatRestored

@@ -132,7 +132,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         stopArmed: false,
         forceSendPending: null,
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
-        runSettingsKnown: false,
+        runSettingsKnown: action.unreached ? state.runSettingsKnown : false,
       }, EMPTY_RUN));
 
     // Deleting the session on screen stops it in the daemon; a view left on it
