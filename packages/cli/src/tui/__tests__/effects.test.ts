@@ -1590,8 +1590,14 @@ describe('a daemon that went away mid-session', () => {
     const h = harness({ startConversation });
 
     await runEffect({ type: 'startConversation', goal: 'ship it' }, h.deps);
+    // Whether the opening is still the session on screen is the reducer's to say.
+    const revived = h.actions.find((a): a is Extract<Action, { type: 'openingRevived' }> => a.type === 'openingRevived');
+    expect(revived).toMatchObject({ goal: 'ship it' });
+    const { effects } = reduce(initialState({ sessionId: revived!.sessionId, planner: 'planning' }), revived!);
+    await runEffect(effects[0], h.deps);
 
     expect(startConversation).toHaveBeenCalledTimes(2);
+    expect(startConversation.mock.calls[1][0]).toBe(startConversation.mock.calls[0][0]);
   });
 
   it('gives up with an actionable message when the daemon will not come back', async () => {

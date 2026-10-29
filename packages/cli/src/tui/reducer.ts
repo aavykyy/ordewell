@@ -557,7 +557,10 @@ function reduceAction(state: TuiState, action: Action): Step {
       return drainQueue(state, reported);
     }
 
+    // As `failed`: an opening that let itself go asks on the welcome it left,
+    // never over a session loaded meanwhile.
     case 'workspaceNeedsInit':
+      if (state.sessionId !== null && stale(state, action.sessionId)) return step(state);
       return step({
         ...state,
         planner: 'idle',
@@ -569,7 +572,26 @@ function reduceAction(state: TuiState, action: Action): Step {
         },
       });
 
+    // A refused opening stays on screen while the daemon is revived; the
+    // user may have moved to another session or a fresh welcome since, and
+    // that view, its queue and its planner are not the opening's to take.
+    case 'openingRevived': {
+      const restarted = 'The server had stopped; started a new one';
+      if (stale(state, action.sessionId)) {
+        return step(say(state, 'system', `${restarted}. "${action.goal}" was not sent again, as it is no longer the session on screen.`));
+      }
+      // Stopped, or ended, while the daemon was down: the opening reached no
+      // server, so there is no turn to wait on and no session to keep.
+      if (!plannerInFlight(state) || state.stopRequested) {
+        const cleared = reduceAction(state, { type: 'sessionCleared', sessionId: action.sessionId }).state;
+        return step(say({ ...cleared, planner: 'idle', stopRequested: false }, 'system', `${restarted}. The goal was not sent again, as planning was stopped.`));
+      }
+      const retry: Effect = { type: 'startConversation', goal: action.goal, sessionId: action.sessionId, ...(action.allowInit ? { allowInit: true } : {}) };
+      return step(say(state, 'system', `${restarted} and retried.`), [retry]);
+    }
+
     case 'notice':
+      if (stale(state, action.sessionId)) return step(state);
       return step(say(state, action.level === 'error' ? 'error' : 'system', action.message, !action.holdPlace));
 
     case 'resize': {
