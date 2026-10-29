@@ -367,6 +367,63 @@ describe('an opening retried after a revived daemon', () => {
     expect(h.state.planner).toBe('idle');
   });
 
+  it("keeps the welcome's known run settings when the goal is stopped while the daemon was down", async () => {
+    const revive = deferred<boolean>();
+    const h = tui(
+      { startConversation: vi.fn().mockRejectedValueOnce(refused()).mockResolvedValue({ tasks: [], conversationHistory: [] }) },
+      { reviveDaemon: vi.fn(() => revive.promise) },
+      KNOWN_AUTORUN_WELCOME,
+    );
+
+    h.type('Opening goal');
+    await vi.waitFor(() => expect(h.deps.reviveDaemon).toHaveBeenCalled());
+    h.type('/stop');
+
+    revive.resolve(true);
+    await h.settle();
+
+    expect(h.api.startConversation).toHaveBeenCalledTimes(1);
+    expect(h.state.sessionId).toBeNull();
+    expect(h.state.runSettingsKnown).toBe(true);
+    expect(h.state.runSettings.autorun).toBe(true);
+  });
+
+  it('returns a prompt typed behind the opening to the editor when the daemon does not come back', async () => {
+    const revive = deferred<boolean>();
+    const h = tui({ startConversation: vi.fn().mockRejectedValue(refused()) }, { reviveDaemon: vi.fn(() => revive.promise) });
+
+    h.type('Opening goal');
+    await vi.waitFor(() => expect(h.deps.reviveDaemon).toHaveBeenCalled());
+    h.type('typed while down');
+    expect(h.state.queuedPrompts).toEqual(['typed while down']);
+
+    revive.resolve(false);
+    await h.settle();
+
+    expect(h.state.sessionId).toBeNull();
+    expect(h.state.queuedPrompts).toEqual([]);
+    expect(h.state.editor.text).toBe('typed while down');
+    expect(h.api.sendConversationMessage).not.toHaveBeenCalled();
+  });
+
+  it('returns a prompt typed behind the opening to the editor when the retry is refused too', async () => {
+    const revive = deferred<boolean>();
+    const h = tui({ startConversation: vi.fn().mockRejectedValue(refused()) }, { reviveDaemon: vi.fn(() => revive.promise) });
+
+    h.type('Opening goal');
+    await vi.waitFor(() => expect(h.deps.reviveDaemon).toHaveBeenCalled());
+    h.type('typed while down');
+
+    revive.resolve(true);
+    await h.settle();
+
+    expect(h.api.startConversation).toHaveBeenCalledTimes(2);
+    expect(h.state.sessionId).toBeNull();
+    expect(h.state.queuedPrompts).toEqual([]);
+    expect(h.state.editor.text).toBe('typed while down');
+    expect(h.api.sendConversationMessage).not.toHaveBeenCalled();
+  });
+
   it('does not ask to initialize the workspace over a session loaded while the opening was refused', async () => {
     const answer = deferred<void>();
     const h = tui({

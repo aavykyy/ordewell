@@ -69,14 +69,15 @@ export function stopPlanning(state: TuiState, sessionId: string): Step {
 
 /**
  * The prompts parked behind a dead turn go back where they were typed, in the
- * order they were queued. `/stop` arrives with the editor already cleared (the
- * command consumed it), and the Esc route cannot reach the stop with a queue
- * left — so this is always replacing an empty box.
+ * order they were queued, above any draft. `/stop` arrives with the editor
+ * already cleared (the command consumed it); a session let go mid-turn may
+ * find something typed since.
  */
-function queueToEditor(state: TuiState): TuiState {
+export function queueToEditor(state: TuiState): TuiState {
   const all = unsendAll(state.queuedPrompts);
   if (!all) return state;
-  return { ...state, queuedPrompts: all.rest, editor: { ...state.editor, text: all.text, cursor: all.text.length } };
+  const text = aheadOfDraft(all.text, state.editor.text);
+  return { ...state, queuedPrompts: all.rest, editor: { ...state.editor, text, cursor: all.text.length } };
 }
 
 /**

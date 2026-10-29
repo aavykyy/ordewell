@@ -2,6 +2,7 @@ import { describe, expect, it, vi, type Mock, type Mocked } from 'vitest';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action } from '../reducer';
 import type { TuiState } from '../state';
+import { messagesOf } from './chat';
 
 /**
  * Adversarial: a planner turn on screen has to survive the controls around it
@@ -88,6 +89,26 @@ describe('adversarial: switching session mid-turn', () => {
     expect(cleared.sessionId).toBeNull();
     expect(cleared.queuedPrompts).toHaveLength(0);
     expect(cleared.pendingApprovals).toHaveLength(0);
+  });
+
+  it('clearing a failed start mid-turn hands the queued prompts back to the editor, above a draft', () => {
+    const cleared = reduce(withDraft(turnWithQueue(), 'a draft'), { type: 'sessionCleared' }).state;
+
+    expect(cleared.editor.text).toBe('second prompt\na draft');
+  });
+
+  it.each([
+    ['loading', { type: 'sessionLoaded', sessionId: 's2', goal: 'g' }],
+    ['forking', { type: 'sessionForked', sessionId: 's2', goal: 'g' }],
+  ] as [string, Action][])("%s a session after /stop does not silence the new session's turn failure", (_, switched) => {
+    const stopped = reduce(withDraft(midTurn({ planner: 'planning' as const }), '/stop'), enter).state;
+    expect(stopped.stopRequested).toBe(true);
+
+    const other = reduce(stopped, switched).state;
+    expect(other.stopRequested).toBe(false);
+    const failed = reduce({ ...other, planner: 'planning' }, { type: 'failed', message: 'the turn broke', turn: true, sessionId: 's2' }).state;
+
+    expect(messagesOf(failed).at(-1)).toMatchObject({ role: 'error', text: 'the turn broke' });
   });
 });
 
