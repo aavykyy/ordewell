@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-10-29
+
 ### Fixed
 
 - **Claude Code offers the models you added to its own picker.** Entries in
@@ -52,6 +54,33 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   chat's runner switches do. Save Session says when nothing was saved, and
   why. An error from a command typed after `/new`, such as `/fork`, now shows
   in the chat.
+
+- **Claude Code's named usage limits resume tasks at reset.** Messages such
+  as the five-hour limit are recognized as usage limits; when a reset time is
+  available, the paused task resumes with its existing session and any kept worktree.
+- **Task execution and landing are more reliable.** A runner silent from the
+  start is now flagged as quiet, exited runners no longer leave the host waiting
+  on pipes held by descendants, and overlapping starts, landings and conflict
+  repairs keep their worktrees and holds until they are safe to release.
+- **TUI session changes keep their own state.** Late replies and settings reads
+  no longer leak into another session or overwrite newer settings. If a revived
+  opening is refused, typed prompts return to the editor and the welcome screen
+  restores its run settings.
+- **Planner shell protections cover more Git and text commands.** Git reads use
+  an allowlist; remote listings with URLs or expanded destinations are refused,
+  and approval for a remote listing stays scoped to its command line. Unsafe
+  file and environment reads through sed and awk, and writes through Git and
+  sort, are also refused.
+- **VS Code's Skip picker includes blocked tasks.** Regenerate Plan also asks
+  before replacing an existing plan with tasks, including when no run is active.
+
+### Changed
+
+- **Windows onboarding is clearer.** The README distinguishes the extension's
+  native support from the terminal UI, which has not been verified on native
+  Windows, and documents the limits of Windows testing.
+- **Refresh help describes what happens.** The CLI and TUI re-check runners and
+  reread settings and cached models; refresh does not rediscover provider catalogs.
 
 ## [0.11.1] - 2026-10-27
 
