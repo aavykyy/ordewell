@@ -133,6 +133,32 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       expect(runner.spawn).toHaveBeenCalledTimes(1);
     });
 
+    it('holds a change task for linked configuration an earlier ops task wrote in the checkout', async () => {
+      for (const file of ['.claude/settings.local.json', '.opencode/agents/build.md']) {
+        const root = repo();
+        const configRoot = file.split('/')[0];
+        mkdirSync(join(root, configRoot));
+        writeFileSync(join(root, configRoot, 'notes.md'), 'ignored\n');
+        writeFileSync(join(root, '.git', 'info', 'exclude'), `${configRoot}/\n`);
+        const { orchestrator, runner } = run(root, [{ ...first, ops: true }, next()], { t1: { write: [file] }, t2: { write: [] } });
+        await orchestrator.approveReview();
+        await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain(file));
+        expect(readFileSync(join(root, file), 'utf8')).toBe('written by t1\n');
+        expect(runner.spawn).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it('does not hold a change task for the user\'s own untracked settings a worktree links from the checkout', async () => {
+      const root = repo();
+      mkdirSync(join(root, '.claude'));
+      writeFileSync(join(root, '.claude', 'settings.local.json'), '{}\n');
+      writeFileSync(join(root, '.git', 'info', 'exclude'), '.claude/\n');
+      const { orchestrator, runner } = run(root, [first], { t1: { write: [] } });
+      await orchestrator.approveReview();
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')?.status).toBe('completed'));
+      expect(runner.spawn).toHaveBeenCalledTimes(1);
+    });
+
     it('holds an ops task for configuration a Merge all landed before it first started', async () => {
       const root = repo();
       const { orchestrator, runner } = run(root, [first, next({ ops: true })], { t1: { write: ['.mcp.json'] }, t2: { write: [] } });
@@ -195,6 +221,26 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       await orchestrator.approveReview();
       await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('sub/.mcp.json'));
       expect(runner.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it('holds a dependent for linked configuration written where the runner starts below the repository top', async () => {
+      for (const file of ['.claude/settings.json', '.opencode/agents/build.md']) {
+        const root = repo();
+        const sub = join(root, 'sub');
+        const configRoot = file.split('/')[0];
+        mkdirSync(sub);
+        writeFileSync(join(sub, 'file.txt'), 'x\n');
+        mkdirSync(join(sub, configRoot));
+        writeFileSync(join(sub, configRoot, 'notes.md'), 'ignored\n');
+        writeFileSync(join(sub, '.gitignore'), `${configRoot}/\n`);
+        git(root, 'add', '-A');
+        git(root, 'commit', '-q', '-m', 'sub');
+        const { orchestrator, runner } = run(sub, [first, next()], { t1: { write: [file] }, t2: { write: [] } });
+        await orchestrator.approveReview();
+        await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain(file));
+        expect(readFileSync(join(sub, file), 'utf8')).toBe('written by t1\n');
+        expect(runner.spawn).toHaveBeenCalledTimes(1);
+      }
     });
 
     it('holds a dependent for a root config file a group shares live and an earlier task rewrote', async () => {

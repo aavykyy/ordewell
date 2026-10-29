@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { createHash } from 'crypto';
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'fs';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { defaultExecFile, tryGit } from './gitExec';
 import { repositoryRunnerConfigPaths, RUNNER_CONFIG_ROOTS } from './repositoryRunnerConfig';
@@ -37,6 +37,21 @@ function liveConfig(dir: string): Map<string, string> {
 }
 
 /**
+ * The configuration roots `dir` holds as links to the checkout, which is how a
+ * worktree reads the `.claude` and `.opencode` directories it did not check
+ * out itself.
+ */
+function linkedRoots(dir: string): Set<string> {
+  const linked = new Set<string>();
+  for (const root of RUNNER_CONFIG_ROOTS) {
+    try {
+      if (lstatSync(path.join(dir, root)).isSymbolicLink()) linked.add(root);
+    } catch { /* absent: nothing is linked */ }
+  }
+  return linked;
+}
+
+/**
  * The directories the runner reads from when a task starts in `root`, each
  * with the prefix that names it from there: `root` and every level up to the
  * repository's top, because Claude reads the top's `.claude/settings.local.json`
@@ -66,26 +81,32 @@ function readDirs(root: string): Array<{ dir: string; prefix: string }> {
  * task runs in, a group's loose entries shared live — has no commit to
  * compare with, and its files existed before the run as often as not, so it
  * is compared with its own contents when the run first launched a task of any
- * kind: before a landing can reach it. A worktree is compared that way too,
- * through the `.claude` and `.opencode` links it holds into the main checkout,
- * which git sees as one symlink.
+ * kind: before a landing can reach it. A worktree is compared that way too
+ * for the `.claude` and `.opencode` directories it holds as links into the
+ * main checkout, which git sees as one symlink: what a task wrote through one
+ * is a difference in the checkout, never a first state of the worktree's own.
  */
 export class TaskStartConfig {
   private readonly live = new Map<string, Map<string, string>>();
 
   /**
    * `epoch` names the run the check belongs to; a new run takes a new
-   * baseline. `root` is the workspace root, the checkout a worktree run lands in.
+   * baseline. `root` is the workspace root, the checkout a worktree run lands
+   * in; `cwd` is where the runner starts, and `worktree` whether that is a
+   * worktree prepared for it.
    */
   async check(run: IsolationRun | null, taskId: string, where: { epoch: number; root: string; cwd: string | null; worktree: boolean }): Promise<string[]> {
     const found = where.worktree ? await this.gitDifferences(run, taskId) : [];
-    const id = `${where.epoch}:${run?.id ?? ''}`;
+    const id = String(where.epoch);
     const checkout = readDirs(where.root).flatMap(({ dir, prefix }) =>
       this.liveDifferences(`${id}:checkout:${dir}`, dir).map((name) => `${prefix}${name}`));
     if (!where.worktree) found.push(...checkout);
     else {
-      const workspace = run?.tasks[taskId]?.workspace;
-      if (workspace) found.push(...this.liveDifferences(`${id}:worktree`, workspace));
+      // The runner's own directory, where the checkout's links land; the
+      // worktree root only stands in for a repair, which starts before its
+      // directory is resolved.
+      const cwd = where.cwd ?? run?.tasks[taskId]?.workspace;
+      if (cwd) found.push(...this.worktreeDifferences(id, cwd, where.root));
     }
     return [...new Set(found)].sort();
   }
@@ -93,6 +114,30 @@ export class TaskStartConfig {
   /** The baselines go with the plan they belong to. */
   clear(): void {
     this.live.clear();
+  }
+
+  /**
+   * What a worktree's runner reads that differs from where the run started.
+   * The `.claude` and `.opencode` directories it links from the checkout are
+   * the checkout's own, so they are compared with the checkout's first state,
+   * which an earlier task's write there does not move. Anything else is the
+   * worktree's, and is compared with its own first state: a setup command's
+   * files are trusted, and a task's later write is not.
+   */
+  private worktreeDifferences(id: string, dir: string, root: string): string[] {
+    const now = liveConfig(dir);
+    const linked = linkedRoots(dir);
+    const fromCheckout = (name: string) => linked.has(name.split('/')[0]);
+    const key = `${id}:worktree:${dir}`;
+    let local = this.live.get(key);
+    if (!local) {
+      local = new Map([...now].filter(([name]) => !fromCheckout(name)));
+      this.live.set(key, local);
+    }
+    const checkout = this.live.get(`${id}:checkout:${root}`);
+    return [...now]
+      .filter(([name, hash]) => (fromCheckout(name) ? checkout?.get(name) !== hash : local.get(name) !== hash))
+      .map(([name]) => name);
   }
 
   private liveDifferences(key: string, dir: string): string[] {
