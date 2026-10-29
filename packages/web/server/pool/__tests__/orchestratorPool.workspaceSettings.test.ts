@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { ModelResolver, SettingsService, saveSession, type LegacyPlanState } from '@ordewell/core';
+import { Hono } from 'hono';
+import { ModelResolver, SettingsService, saveSession, type LegacyPlanState, type SettingsResponse, type SettingsUpdateResponse } from '@ordewell/core';
 import { OrchestratorPool } from '../orchestratorPool';
+import { settingsRoute } from '../../routes/settings';
 
 // One daemon serves workspaces A (its cwd) and B, whose `.ordewell/env` name
 // different Claude accounts with different gateway models in their pickers.
@@ -47,6 +49,7 @@ describe.skipIf(MANAGED_SETTINGS.some((dir) => fs.existsSync(dir)))('Orchestrato
   }
 
   const ids = (models: { modelId: string }[] | undefined) => (models ?? []).map((m) => m.modelId);
+  const newPool = () => new OrchestratorPool({ codexSandbox: { ensure: async () => undefined, refresh: async () => undefined } });
 
   beforeEach(async () => {
     for (const key of ENV) saved[key] = process.env[key];
@@ -65,7 +68,7 @@ describe.skipIf(MANAGED_SETTINGS.some((dir) => fs.existsSync(dir)))('Orchestrato
     });
     vi.spyOn(ModelResolver.prototype, 'refresh').mockResolvedValue({});
     vi.spyOn(ModelResolver.prototype, 'pickerOptions').mockResolvedValue([]);
-    pool = new OrchestratorPool({ codexSandbox: { ensure: async () => undefined, refresh: async () => undefined } });
+    pool = newPool();
     // As the TUI does on opening, each workspace asks for its catalog.
     const [a, b] = await Promise.all([pool.getProviderModels(workspaceA), pool.getProviderModels(workspaceB)]);
     expect(ids(a.modelsByRunner['claude-code'])).toContain('gproxy/a-only');
@@ -116,6 +119,57 @@ describe.skipIf(MANAGED_SETTINGS.some((dir) => fs.existsSync(dir)))('Orchestrato
     expect(pool.getSettings(undefined, workspaceA).orchestratorModel).toBe('');
     expect(pool.getSettings().orchestratorModel).toBe('');
     expect((await pool.getProviderModels(workspaceA)).orchestratorModel).toBe('');
+  });
+
+  // A pick made in B is B's: A's account does not serve it, so A plans with
+  // its own default rather than a model its planner cannot be spawned with.
+  it('keeps a model picked in B to B', () => {
+    process.env.AI_PROVIDER = 'claude-code';
+
+    expect(pool.updateSettings({ env: { ORCHESTRATOR_MODEL: 'gproxy/b-only' } }, undefined, workspaceB).orchestratorModel).toBe('gproxy/b-only');
+
+    expect(pool.getSettings(undefined, workspaceB).orchestratorModel).toBe('gproxy/b-only');
+    expect(pool.getSettings(undefined, workspaceA).orchestratorModel).toBe('');
+    expect(pool.getSettings().orchestratorModel).toBe('');
+  });
+
+  // Every client switches planners before it asks for models, so a switch can
+  // be the first thing a workspace's catalog is needed for.
+  describe('before any client has asked for a workspace\'s models', () => {
+    let cold: OrchestratorPool;
+    let app: Hono;
+
+    beforeEach(() => {
+      cold = newPool();
+      app = new Hono().route('/api/settings', settingsRoute(cold));
+    });
+
+    afterEach(() => cold.destroyAll());
+
+    it('restores B\'s remembered Claude model on a switch made from B', async () => {
+      process.env.AI_PROVIDER = 'codex';
+      new SettingsService().setPlannerModel('claude-code', { model: 'gproxy/b-only' });
+
+      const res = await app.request('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ env: { AI_PROVIDER: 'claude-code' }, workspace: workspaceB }),
+      });
+      const body = (await res.json()) as SettingsUpdateResponse;
+
+      expect(body.switchRecall).toMatchObject({ model: 'gproxy/b-only', source: 'remembered' });
+      expect(body.orchestratorModel).toBe('gproxy/b-only');
+      expect(process.env.ORCHESTRATOR_MODEL).toBe('gproxy/b-only');
+    });
+
+    it('reports the planner model B plans with', async () => {
+      process.env.AI_PROVIDER = 'claude-code';
+      process.env.ORCHESTRATOR_MODEL = 'gproxy/b-only';
+
+      const body = (await (await app.request(`/api/settings?workspace=${encodeURIComponent(workspaceB)}`)).json()) as SettingsResponse;
+
+      expect(body.orchestratorModel).toBe('gproxy/b-only');
+    });
   });
 
   it('answers for an open session\'s own workspace over the one a request names', () => {

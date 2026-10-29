@@ -18,6 +18,7 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     outstandingApprovals: vi.fn().mockReturnValue([]),
     approvedScopes: vi.fn().mockReturnValue([]),
     getSettings: vi.fn().mockReturnValue({}),
+    discoverPlannerCatalogs: vi.fn(async () => undefined),
     getRunnerState: vi.fn().mockReturnValue({ runners: [], headless: false, orchestratorModel: 'm' }),
     getInstalledRunners: vi.fn().mockReturnValue([]),
     subscribe: vi.fn(),

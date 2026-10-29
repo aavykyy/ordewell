@@ -13,6 +13,7 @@ export function runnersRoute(pool: OrchestratorPool) {
     // model are judged for the one that will plan rather than the daemon's cwd.
     const workspace = c.req.query('workspace');
     const runners = await pool.getInstalledRunners(workspace);
+    await pool.discoverPlannerCatalogs(undefined, workspace);
     const state = pool.getRunnerState(workspace);
     return c.json({
       runners,

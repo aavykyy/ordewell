@@ -6,6 +6,7 @@ import type { OrchestratorPool } from '../../pool/orchestratorPool';
 function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
   const pool = {
     getSettings: vi.fn(),
+    discoverPlannerCatalogs: vi.fn(async () => undefined),
     setOrchestratorModel: vi.fn(),
     updateSettings: vi.fn(),
     ...overrides,
@@ -105,6 +106,7 @@ describe('/api/settings — the requesting workspace', () => {
     await app.request('/api/settings', { method: 'GET' });
 
     expect(vi.mocked(pool.getSettings).mock.calls).toEqual([[undefined, '/work/b'], ['s1', '/work/b'], [undefined, undefined]]);
+    expect(vi.mocked(pool.discoverPlannerCatalogs).mock.calls).toEqual([[undefined, '/work/b'], ['s1', '/work/b'], [undefined, undefined]]);
   });
 
   it('judges a write for the workspace a client names, never saving the name as a setting', async () => {
@@ -112,6 +114,9 @@ describe('/api/settings — the requesting workspace', () => {
     await patch({ run: { autorun: true }, sessionId: 's1', workspace: '/work/b' });
 
     expect(vi.mocked(pool.updateSettings).mock.calls).toEqual([[{ env: { AI_PROVIDER: 'claude-code' } }, undefined, '/work/b']]);
+    // The switch waits for the catalog it is judged against, which no client has asked for yet.
+    expect(vi.mocked(pool.discoverPlannerCatalogs).mock.calls[0]).toEqual([undefined, '/work/b', 'claude-code']);
+    expect(vi.mocked(pool.discoverPlannerCatalogs).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(pool.updateSettings).mock.invocationCallOrder[0]);
     expect(vi.mocked(pool.updateRunSettings).mock.calls).toEqual([[{ autorun: true }, 's1', '/work/b']]);
     expect(vi.mocked(pool.getSettings).mock.calls).toEqual([['s1', '/work/b']]);
   });

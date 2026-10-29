@@ -18,7 +18,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   runners find it: under `CLAUDE_CONFIG_DIR`, else in `.claude` under the
   `HOME` (`USERPROFILE` on Windows) the workspace's environment sets. Each
   workspace one daemon serves reads its settings, and switches the planner,
-  against its own account's models. A model Claude Code already lists keeps its own
+  against its own account's models, even before any of them were listed; a
+  model picked in one workspace is not handed to another whose account does
+  not serve it. The planner's own local MCP servers and saved tool output come
+  from that account too, and Codex and OpenCode list their models under the
+  workspace's environment as well. A model Claude Code already lists keeps its own
   label and effort levels, and a missing or malformed file changes nothing.
   The files are read when Ordewell discovers Claude's models, so an edit made
   while Ordewell runs shows after a restart (#117).

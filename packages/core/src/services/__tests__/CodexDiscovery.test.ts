@@ -88,17 +88,30 @@ describe('ModelDiscovery — Codex (app-server → cache file → fallback)', ()
     const discovery = new ModelDiscovery(registryWith(CODEX_MANIFEST), noExec, undefined, client, readFile as never);
     const models = await discovery.discover('codex');
     expect(models.map((m) => m.modelId)).toEqual(['gpt-5.6-sol', 'gpt-5.5']);
-    expect(client).toHaveBeenCalledWith('codex', ['app-server']);
+    expect(client).toHaveBeenCalledWith('codex', ['app-server'], { env: process.env });
     expect(readFile).not.toHaveBeenCalled();
   });
 
   it('falls back to the on-disk cache file when the app-server call fails', async () => {
     const client: AppServerClientImpl = vi.fn(async () => null);
     const readFile = vi.fn(() => CACHE_FILE);
-    const discovery = new ModelDiscovery(registryWith(CODEX_MANIFEST), noExec, undefined, client, readFile);
+    const env = async () => ({ HOME: '/home/work' });
+    const discovery = new ModelDiscovery(registryWith(CODEX_MANIFEST), noExec, undefined, client, readFile, undefined, env);
     const models = await discovery.discover('codex');
     expect(models.map((m) => m.modelId)).toEqual(['gpt-5.6-terra']);
-    expect(readFile).toHaveBeenCalledWith('~/.codex/models_cache.json');
+    expect(readFile).toHaveBeenCalledWith('/home/work/.codex/models_cache.json');
+  });
+
+  // A workspace's environment can name another Codex account: the live call
+  // and the cache file are both that account's, not the daemon's.
+  it('asks under the environment runners are launched with, reading the cache CODEX_HOME moves', async () => {
+    const env = { HOME: '/home/work', CODEX_HOME: '/accounts/work/codex' };
+    const client: AppServerClientImpl = vi.fn(async () => null);
+    const readFile = vi.fn(() => CACHE_FILE);
+    const discovery = new ModelDiscovery(registryWith(CODEX_MANIFEST), noExec, undefined, client, readFile, undefined, async () => env);
+    await discovery.discover('codex');
+    expect(client).toHaveBeenCalledWith('codex', ['app-server'], { env });
+    expect(readFile).toHaveBeenCalledWith('/accounts/work/codex/models_cache.json');
   });
 
   it('degrades to canonical aliases with static variants when both live sources fail', async () => {

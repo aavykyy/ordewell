@@ -85,7 +85,8 @@ export const CODEX_MANIFEST: RunnerManifest = {
     appServer: {
       command: 'codex',
       args: ['app-server'],
-      cacheFile: '~/.codex/models_cache.json',
+      // CODEX_HOME moves all of Codex's own files from `~/.codex`.
+      cacheFile: (env) => `${env.CODEX_HOME?.trim() || '~/.codex'}/models_cache.json`,
     },
     canonicalAliases: [
       { modelId: 'gpt-5.6-sol', modelLabel: 'GPT-5.6-Sol' },

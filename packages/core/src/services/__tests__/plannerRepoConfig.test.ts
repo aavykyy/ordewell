@@ -317,6 +317,24 @@ describe('project MCP servers, Claude Code (ADR-0028)', () => {
 
     expect(mcpConfigServers(spawned.lastArgs()).todo).toEqual({ type: 'http', url: 'https://todo.example/mcp' });
   });
+
+  it('passes back the local-scope servers under the home the planner runs with, not this process\'s', async () => {
+    const root = repo();
+    const servers = (name: string) => JSON.stringify({ projects: { [root]: { mcpServers: { [name]: { type: 'http', url: `https://${name}.example/mcp` } } } } });
+    const runnerHome = repo({ '.claude.json': servers('runner-account') });
+    const daemonHome = repo({ '.claude.json': servers('daemon-account') });
+    vi.stubEnv('HOME', daemonHome);
+    vi.stubEnv('USERPROFILE', daemonHome);
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '');
+    try {
+      const { svc, spawned } = service('claude-code', root, [fixture('claude-code', 'prose')], { workspaceEnv: { HOME: runnerHome, USERPROFILE: runnerHome } });
+      await svc.startConversation(request({ approval: approvalSpy(false) }));
+
+      expect(Object.keys(mcpConfigServers(spawned.lastArgs())).sort()).toEqual(['ordewell', 'runner-account']);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 /** Codex's own project config, with a server of each transport and the keys ADR-0028 names. */
@@ -649,6 +667,23 @@ describe('runner state outside the workspace (ADR-0032)', () => {
 
     expect(controlAnswer(spawned.processes[0])).toBe('allow');
     expect(approval.request).not.toHaveBeenCalled();
+  });
+
+  it('lets a Claude Code planner read back its saved tool result under the home it runs with', async () => {
+    const runnerHome = repo({ '.claude/projects/-repo/sess/tool-results/b1.txt': 'row 1' });
+    vi.stubEnv('HOME', repo());
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '');
+    try {
+      const file = join(runnerHome, '.claude/projects/-repo/sess/tool-results/b1.txt');
+      const { svc, spawned } = service('claude-code', repo(), reachingFor('Read', { file_path: file }), { workspaceEnv: { HOME: runnerHome, USERPROFILE: runnerHome } });
+      const approval = approvalSpy(false);
+      await svc.startConversation(request({ approval }));
+
+      expect(controlAnswer(spawned.processes[0])).toBe('allow');
+      expect(approval.request).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('asks about another session\'s saved tool result', async () => {

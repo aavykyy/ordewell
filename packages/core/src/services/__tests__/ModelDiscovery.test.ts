@@ -538,6 +538,16 @@ describe('ModelDiscovery — OpenCode', () => {
     expect(models.some((m) => m.modelId === 'opus' || m.modelId === 'sonnet')).toBe(false);
   });
 
+  // A workspace's environment can name another OpenCode account and config.
+  it('runs its discovery commands under the environment runners are launched with', async () => {
+    const env = { HOME: '/home/work', OPENCODE_CONFIG: '/accounts/work/opencode.json' };
+    const exec = vi.fn<ExecImpl>(async () => ({ stdout: 'opencode/gpt-5.1' }));
+    await new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec, undefined, undefined, undefined, undefined, async () => env).discover('opencode');
+
+    expect(exec).toHaveBeenCalled();
+    for (const [, options] of exec.mock.calls) expect(options?.env).toBe(env);
+  });
+
   it('returns an empty list (not hardcoded models) when every discovery command fails', async () => {
     // The reported bug: with `opencode` unavailable, users saw a phantom
     // hardcoded list (DeepSeek V4 Pro, Kimi K2.6, GPT-5.1, …) they never had.

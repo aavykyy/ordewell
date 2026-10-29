@@ -4,7 +4,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { ModelResolver } from '../ModelResolver';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { runnerHomeDir, type ExecImpl } from '../ModelDiscovery';
+import type { ExecImpl } from '../ModelDiscovery';
+import { expandRunnerHome, runnerHomeDir } from '../../utils/runnerHome';
 import type { IConfig } from '../../interfaces/IConfig';
 import { createTask, type DiscoveredModel } from '../../models/Task';
 import { SessionCatalog } from '../SessionCatalog';
@@ -206,6 +207,15 @@ describe('Claude Code discovery — modelPicker.options in settings.json', () =>
     }
   });
 
+  // Node's os.homedir() returns an empty HOME as it is, so that runner has no
+  // ~/.claude to read; the daemon's account is not its stand-in.
+  it('reads nothing under ~ when the environment runners are launched with sets an empty home', async () => {
+    writeSettings({ modelPicker: { options: [{ model: 'gproxy/daemon-home' }] } });
+    const { resolver } = resolverFor('help', async () => ({ ...process.env, HOME: '', USERPROFILE: '' }));
+
+    expect((await claudeModels(resolver)).map((m) => m.modelId)).toEqual(BASELINE.help);
+  });
+
   it('signs the catalog request in with the login under the runner environment\'s home', async () => {
     const runnerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-claude-runner-home-'));
     try {
@@ -346,8 +356,13 @@ describe('the home a runner resolves ~ against', () => {
     expect(runnerHomeDir(env, platform)).toBe(expected);
   });
 
-  it.each(['linux', 'win32'] as const)('on %s, falls back to this process\'s home when the environment names none', (platform) => {
-    expect(runnerHomeDir({ HOME: '', USERPROFILE: '' }, platform)).toBe(os.homedir());
+  it.each(['linux', 'win32'] as const)('on %s, falls back to this process\'s home only when the environment names none', (platform) => {
     expect(runnerHomeDir({}, platform)).toBe(os.homedir());
+    expect(runnerHomeDir({ HOME: '', USERPROFILE: '' }, platform)).toBe('');
+  });
+
+  it('expands no ~ for a runner whose home is empty', () => {
+    expect(expandRunnerHome('~/.claude/settings.json', { HOME: '', USERPROFILE: '' })).toBeNull();
+    expect(expandRunnerHome('/etc/claude-code/managed-settings.json', { HOME: '', USERPROFILE: '' })).toBe('/etc/claude-code/managed-settings.json');
   });
 });

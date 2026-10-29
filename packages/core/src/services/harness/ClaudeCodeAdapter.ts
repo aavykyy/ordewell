@@ -1,12 +1,14 @@
 import { randomUUID } from 'crypto';
 import { realpathSync } from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import type { SubagentOutcome } from '../../models/Task';
 import { partedPromptUsage, type RunnerSessionCost, type SessionBilling, type UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { findRunnerCommand, type RunnerCommand, type RunnerMcpServer, type RunnerModelRef } from '../../models/RunnerCommand';
 import { claudeThinkingArgs } from '../../plugins/resolveArgs';
+import { claudeConfigDir } from '../../plugins/builtin/claudeModels';
+import type { RunnerEnv } from '../../plugins/types';
+import { expandRunnerHome } from '../../utils/runnerHome';
 import type { AgentEvent, AgentStartOptions, PlannerAsk, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines, structuredPatchText } from './fileDiff';
@@ -578,7 +580,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       '--settings', nativeShell ? nativeShellSettings(nativeShell) : PLANNER_SETTINGS,
       '--append-system-prompt', opts.systemPrompt,
     ];
-    if (opts.mcp) args.push(...this.ordewellServerArgs(opts.mcp, 'planner', this.plannerServers(opts, workspace)));
+    if (opts.mcp) args.push(...this.ordewellServerArgs(opts.mcp, 'planner', this.plannerServers(opts, { ...process.env, ...workspace })));
     if (opts.model) args.push('--model', opts.model);
     // `adaptive` is a thinking *type*, not an effort rung: `--effort adaptive`
     // is warned about and ignored, and adaptive is the default for every model
@@ -590,7 +592,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       this.countFrom(opts.resumeSessionId, opts.resumeCost);
       this.pendingResume = opts.resumeSessionId;
     }
-    this.configDir = workspace.CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
+    const env = { ...process.env, ...workspace };
+    this.configDir = expandRunnerHome(claudeConfigDir(env), env);
     // N2.2: a sandboxed command can read its parent's environment on macOS, so
     // the credentials must not be in this process at all. The harness's own
     // login stays (N3). The launcher's two variables are here as well as in
@@ -667,13 +670,12 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   /**
    * What user-only settings stop the CLI loading that is not the
    * repository's to choose (ADR-0028): the user's own local-scope servers,
-   * under the `CLAUDE_CONFIG_DIR` the planner runs with, and the project
-   * servers approved for it.
+   * from the account in the environment the planner runs with, and the
+   * project servers approved for it.
    */
-  private plannerServers(opts: PlannerStartOptions, workspace: Record<string, string>): Record<string, unknown> {
-    const configDir = workspace.CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR;
+  private plannerServers(opts: PlannerStartOptions, env: RunnerEnv): Record<string, unknown> {
     return {
-      ...claudeLocalServers(configDir, opts.cwd),
+      ...claudeLocalServers(env, opts.cwd),
       ...Object.fromEntries((opts.projectServers ?? []).map((server) => [server.name, server.definition])),
     };
   }
