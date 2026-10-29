@@ -15,8 +15,8 @@ A **harness planner** is a coding agent planning: pick a runner such as `claude-
 `codex` or `opencode`, and the planner conversation runs through that agent
 ([ADR-0009](adr/planner/0009-coding-agents-as-planners.md)). Ordewell asks for no API
 key, because the agent is signed in on its own and the account you already use with
-it pays for planning. The planner's models are the ones that agent lists, and its
-effort levels are the ones the chosen model declares.
+it pays for planning. The planner's models and effort levels come from the same list
+Ordewell discovers for that runner's tasks, described below.
 
 An **API planner** calls a provider's API, with your key where the provider needs
 one. Providers include OpenRouter, Google Gemini, DeepSeek, Moonshot / Kimi and xAI;
@@ -37,10 +37,16 @@ Every AI task runs on a runner, and each runner is set up outside Ordewell:
 - **Signed in.** A runner uses its own login, set up with its own CLI. `/login`, in
   the terminal UI or VS Code, runs the sign-in command of an agent that has one.
 - **Its own models.** A task's model comes from its runner's choices. Ordewell
-  discovers each runner's models, so the choices can change with the runner's version
-  and your account; `ordewell refresh` discovers them again. The
-  model pickers group them by runner and by the backend that serves them, such as
+  discovers each runner's models from the runner itself where it can. When it cannot,
+  or when the runner leaves some out, the list can include the runner's cached catalog
+  or Ordewell's built-in defaults for that runner, and a model that reports no effort
+  levels can get Ordewell's built-in effort levels for that runner. The model pickers
+  group the models by runner and by the backend that serves them, such as
   `OpenCode · openrouter`.
+
+In VS Code, `/refresh` discovers runner models again. In the terminal UI and the CLI,
+`/refresh` and `ordewell refresh` re-read the daemon's catalog, so a list that loaded
+successfully stays until the daemon restarts or a provider key or base URL changes.
 
 The planner gives each AI task a runner, a model, a thinking effort and a mode, and
 you can change any of them before the run. A model an API planner can use is not
@@ -57,7 +63,8 @@ thereby one a runner offers: pick a task's model from its runner's choices.
 | Sign a runner in | `/login` | The runner's own CLI | `/login` |
 | A task's runner, model and effort | `/task-runner <id>`, `/task-model <id>`, `/task-effort <id>` | `ordewell task-runner <id> [runner]`, `ordewell task-model <id> [model]`, `ordewell task-effort <id> [level]`; leave out the last value to list the choices | The task's card |
 | Which of a runner's models tasks may be given | `/allowlist` | `ordewell allowlist set\|clear\|show` | `/allowlist`, or **Ordewell: Configure Model Allowlist** |
-| A newly installed runner or new models | `/refresh` | `ordewell refresh` | `/refresh` |
+| A newly installed runner | `/refresh` | `ordewell refresh` | `/refresh` |
+| A runner's models, discovered again | When the daemon restarts or a provider key or base URL changes | The same | `/refresh` |
 
 ## Where keys live
 
