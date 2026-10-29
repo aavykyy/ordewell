@@ -323,10 +323,11 @@ export class TaskOrchestrator {
   /** Conflict repairs owed with every slot taken and no scheduler to claim them: a freed slot starts them. */
   private owedRepairs = new Set<string>();
   /**
-   * Tasks Mark complete is landing after it ended their attempt: in progress
-   * with no attempt for as long as that takes, and not orphans for it.
+   * Tasks Mark complete is landing after it ended their attempt, and that
+   * landing: in progress with no attempt for as long as it takes, and not
+   * orphans for it.
    */
-  private completing = new Set<string>();
+  private completing = new Map<string, Promise<LandingOutcome>>();
   /** Tasks paused on a usage limit, the run's hold on them, and each runner's wait for its reset (ADR-0018, U1). */
   private readonly limitPauses: LimitPauses;
 
@@ -653,12 +654,13 @@ export class TaskOrchestrator {
   /**
    * Something can still start that nobody has to ask for again: a start
    * admitted and not yet claimed, a force start queued behind its
-   * dependencies, a task that resumes on its own at its usage limit's
-   * reset, or a start a dirty checkout parked for Stash and continue to
-   * replay. A Stop is owed to it, whether or not anything runs.
+   * dependencies, a conflict repair owed a slot or the end of a start hold,
+   * a task that resumes on its own at its usage limit's reset, or a start a
+   * dirty checkout parked for Stash and continue to replay. A Stop is owed to
+   * it, whether or not anything runs.
    */
   get startsPending(): boolean {
-    return this.admissions > 0 || this.queuedStarts.size > 0 || this.runs.blocked || this.store.allTasks.some(waitsForReset);
+    return this.admissions > 0 || this.queuedStarts.size > 0 || this.owedRepairs.size > 0 || this.runs.blocked || this.store.allTasks.some(waitsForReset);
   }
 
   /**
@@ -1234,6 +1236,7 @@ export class TaskOrchestrator {
    * Work that did not land waits on the user — it never fails the task or
    * blocks its dependents — unless its conflict is owed a repair, which takes
    * the slot the ending attempt freed and never one more than the run allows.
+   * A planner turn's start hold holds it as it holds any new spawn (ADR-0029).
    * The repair follows on from the start whose work it repairs: a Stop since
    * that was admitted withdraws it.
    */
@@ -1241,7 +1244,8 @@ export class TaskOrchestrator {
     this.store.markAwaitingUser(task.id, 'conflict');
     this.say(outcome.messages);
     if (outcome.kind !== 'repair-needed') return;
-    if (this.attempts.size < this.config.maxParallelSessions) {
+    const waitsFor = this.startHolds > 0 ? 'the planner\'s turn ends' : this.slotsFull() ? 'a slot is free' : null;
+    if (!waitsFor) {
       const claimed = this.claim(task.id, admission);
       if ('refused' in claimed) this.tell('warn', `The conflict of task "${task.title}" is not repaired: ${claimed.refused}`);
       else this.unawaited(claimed.spawned, `Could not start the repair of task "${task.title}"`);
@@ -1249,14 +1253,15 @@ export class TaskOrchestrator {
       this.store.markPending(task.id);
       // A scheduler driving the run claims it; outside one nothing else would.
       if (!this.isScheduling) this.owedRepairs.add(task.id);
-      this.tell('info', `Task "${task.title}" is repaired once a slot is free.`);
+      this.tell('info', `Task "${task.title}" is repaired once ${waitsFor}.`);
     }
   }
 
-  /** Start the repairs {@link settleUnlanded} left owed, as slots allow. */
+  /** Start the repairs {@link settleUnlanded} left owed, as slots and any start hold allow. */
   private startOwedRepairs(admission: Admitted): void {
+    if (this.startHolds > 0) return;
     for (const id of [...this.owedRepairs]) {
-      if (this.attempts.size >= this.config.maxParallelSessions) return;
+      if (this.slotsFull()) return;
       this.owedRepairs.delete(id);
       const task = this.store.get(id);
       // A retry, skip or edit since has settled it some other way.
@@ -1400,11 +1405,16 @@ export class TaskOrchestrator {
    * as {@link cancelTask} does, but its worktree goes: no task is left to land
    * it into. A spawn still in flight just loses its attempt,
    * which is what makes {@link Attempts} kill the session it is about to
-   * receive. The id's cross-attempt bookkeeping goes too — a hold or retry
-   * count kept for a task that no longer exists would be inherited by nothing.
+   * receive. Mark complete's landing in flight settles first, so its worktree
+   * is not torn down under the merge, and a repair that landing claims is
+   * cancelled as any running attempt is. The id's cross-attempt bookkeeping
+   * goes too — a hold or retry count kept for a task that no longer exists
+   * would be inherited by nothing.
    */
   async releaseTask(taskId: string): Promise<void> {
     this.limitPauses.cancel(taskId);
+    // Its failure is Mark complete's to report.
+    await this.completing.get(taskId)?.catch(() => undefined);
     const phase = this.attempts.phaseOf(taskId);
     if (phase === 'running' || phase === 'integrating') await this.cancelAttempt(taskId, { keep: false });
     else {
@@ -1431,10 +1441,11 @@ export class TaskOrchestrator {
     const verdict = this.attempts.markComplete(task);
     // The user vouches for the work, so it lands the way a passed verdict's
     // would — including a landing a passed verdict already has in flight.
-    this.completing.add(taskId);
+    const landed = ended?.integration ?? this.landing.landVouched(task);
+    this.completing.set(taskId, landed);
     let landing: LandingOutcome;
     try {
-      landing = await (ended?.integration ?? this.landing.landVouched(task));
+      landing = await landed;
     } finally {
       this.completing.delete(taskId);
     }
@@ -1777,7 +1788,7 @@ export class TaskOrchestrator {
       if (this.attempts.has(taskId)) return;
       // A Merge all may have begun while it opened.
       this.refuseOpsDuringMerge(taskId, forced);
-      if (forced.queued && this.holdsQueued(taskId, forced)) {
+      if (forced.queued && (this.holdsQueued(taskId, forced) || this.slotsFull())) {
         this.queuedStarts.set(taskId, { pastGate: forced.pastGate });
         return;
       }
@@ -1842,8 +1853,10 @@ export class TaskOrchestrator {
         this.queuedStarts.delete(id);
         continue;
       }
+      // The start rule leaves slots to the claim, so a start a full run would refuse waits in the queue for one.
+      if (this.slotsFull()) continue;
       const waits = this.startWaits(task, task.research ? undefined : { queued: true, pastGate: queued.pastGate });
-      if (task.research && (waits.length > 0 || this.attempts.size >= this.config.maxParallelSessions)) continue;
+      if (task.research && waits.length > 0) continue;
       if (waits.some((w) => QUEUED_WAITS.has(w.kind))) continue;
       if (this.leftToScheduler(task) && queued.pastGate.length === 0) {
         this.queuedStarts.delete(id);
@@ -1872,6 +1885,10 @@ export class TaskOrchestrator {
   private holdsQueued(taskId: string, forced: Extract<ForcedStart, { queued: true }>): boolean {
     const task = this.store.get(taskId);
     return !!task && this.startWaits(task, forced).some((w) => QUEUED_WAITS.has(w.kind) || w.kind === 'dependencies' || w.kind === 'merge-gate');
+  }
+
+  private slotsFull(): boolean {
+    return this.attempts.size >= this.config.maxParallelSessions;
   }
 
   private sayQueuedAtGate(task: Readonly<Task>, queued: QueuedStart, unmerged: readonly string[]): void {
@@ -1994,7 +2011,8 @@ export class TaskOrchestrator {
     // A retry, Mark not done or an added task since leaves the plan unfinished:
     // still finished, it would tell every surface the run is over while a task waits.
     if (!this.store.isFinished()) this.transition({ type: 'reopen' });
-    if (this.attempts.size > 0) return;
+    // An owed repair is the next attempt: closed under it, the run would hand over the work it repairs.
+    if (this.attempts.size > 0 || this.owedRepairs.size > 0) return;
     // A task on a usage limit keeps the run open: closed, it would be handed
     // over or merged before the work the reset resumes.
     if (this.runState.kind === 'held') return;
