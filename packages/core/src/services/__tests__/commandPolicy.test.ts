@@ -1038,6 +1038,54 @@ describe('a git grant is scoped by the subcommand it runs, past leading flags', 
       expect(classifyCommand(cmd).tier).toBe('auto');
     }
   });
+
+  // A followed `cd` is auto-tier, so the directory never reaches scopeFor: the
+  // grant was the git segment alone, and one approval of a listing in one
+  // repository covered the same listing in every other one (ADR-0027: the
+  // grant includes the directory, so another repository's `origin` is not
+  // covered).
+  it('scopes a listing to the repository a preceding cd selects', () => {
+    const web = classifyCommand('cd packages/web && git ls-remote --heads origin').scope;
+    const other = classifyCommand('cd packages/evil && git ls-remote --heads origin').scope;
+    expect(web).not.toBe(other);
+  });
+
+  // `;` and a substitution leave the `cd` unfollowed but still silent.
+  it.each([
+    'cd packages/web && git ls-remote --heads origin',
+    'cd packages/web; git ls-remote --heads origin',
+    'cd packages/web && git -C . ls-remote origin',
+    'echo $(cd packages/web && git ls-remote origin)',
+    'command cd packages/web && git ls-remote origin',
+  ])('holds %s to its line', (cmd) => {
+    expect(classifyCommand(cmd)).toMatchObject({ tier: 'ask', scope: cmd });
+  });
+});
+
+// Git Bash lexes as posix, so the suffix reaches the tiers: `git.exe` missed
+// every git refusal and one approval granted bare `git.exe`.
+describe('git.exe is read as git', () => {
+  it.each([
+    'git.exe push origin main',
+    'git.exe commit -m x',
+    'git.exe -C x reset --hard',
+    'GIT.EXE push origin main',
+    'git.exe ls-remote http://169.254.169.254/latest/meta-data/',
+    'git.exe -c core.pager=less log',
+    'git.exe tag v1',
+  ])('refuses %s', (cmd) => {
+    expect(classifyCommand(cmd, { dialect: 'posix' }).tier).toBe('refuse');
+  });
+
+  it('scopes it as git, and never silently', () => {
+    expect(classifyCommand('git.exe -C x worktree list', { dialect: 'posix' })).toMatchObject({ tier: 'ask', scope: 'git.exe worktree list' });
+    expect(classifyCommand('git.exe ls-remote --heads origin', { dialect: 'posix' })).toMatchObject({ tier: 'ask', scope: 'git.exe ls-remote --heads origin' });
+    expect(classifyCommand('git.exe log --oneline', { dialect: 'posix' }).tier).toBe('ask');
+  });
+
+  it('passes its remote and patterns to the secret check', () => {
+    expect(classifyCommand('git.exe ls-remote origin refs/heads/x', { dialect: 'posix' }).outboundTexts).toEqual(['origin', 'refs/heads/x']);
+  });
 });
 
 /**

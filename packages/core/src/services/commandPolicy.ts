@@ -629,8 +629,9 @@ const SCOPE_LEAD_ARGS = 2;
 function scopeFor(seg: Segment): string {
   // A program named by its path keeps the path: a grant for `gh` is not one for the repository's `./bin/gh`.
   const name = seg.binaryPath ?? seg.binary;
-  if (!MULTIPLEXERS.includes(seg.binary.toLowerCase())) return name;
-  if (seg.binary.toLowerCase() === 'git') return gitScope(seg, name);
+  const program = programName(seg.binary);
+  if (!MULTIPLEXERS.includes(program)) return name;
+  if (program === 'git') return gitScope(seg, name);
   const lead: string[] = [];
   for (const arg of seg.args) {
     if (arg.startsWith('-')) break;
@@ -744,10 +745,25 @@ function namesConfiguredRemote(seg: Segment, after: string[]): boolean {
   return destination === undefined || REMOTE_NAME.test(destination);
 }
 
+/**
+ * The program a binary name runs, as refusal and scope read it. Git Bash, the
+ * Windows research shell, lexes as posix, so `git.exe` reaches the tiers with
+ * its suffix where the cmd dialect strips it, and it missed every git refusal.
+ * Only refusal and scope read it: the silent tier stays exact.
+ */
+function programName(binary: string): string {
+  return binary.toLowerCase().replace(/\.exe$/, '');
+}
+
+function isRemoteListing(seg: Segment): boolean {
+  const git = { ...seg, binary: programName(seg.binary) };
+  return git.binary === 'git' && subcommandOf(git) === 'ls-remote';
+}
+
 /** The words `git ls-remote` sends its remote: the remote's name and the patterns, which protocol v2 passes on as ref prefixes. */
 function remoteListingTexts(seg: Segment): string[] {
-  const git = { ...seg, binary: seg.binary.toLowerCase() };
-  if (git.binary !== 'git' || subcommandOf(git) !== 'ls-remote') return [];
+  if (!isRemoteListing(seg)) return [];
+  const git = { ...seg, binary: 'git' };
   return scanFlags({ ...git, args: gitArgsAfterSubcommand(git) })?.operands ?? [];
 }
 
@@ -1040,12 +1056,12 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
       return { tier: 'refuse', scope: '', reason: `curl and wget are refused in Full and allowlist mode. ${web.effect ? EFFECT_REFUSAL_HINT : READ_REFUSAL_HINT}` };
     }
     const allow = opts.allow;
-    if (web && allow && web.urls.some((url) => scopeExcluded(allow, `${seg.binary.toLowerCase().replace(/\.exe$/, '')} ${url.origin}/*`))) {
+    if (web && allow && web.urls.some((url) => scopeExcluded(allow, `${programName(seg.binary)} ${url.origin}/*`))) {
       return { tier: 'refuse', scope: '', reason: `The web origin is excluded by the planner allowlist. ${READ_REFUSAL_HINT}` };
     }
     // Matched case-insensitively: cmd.exe builtins and the default macOS and
     // Windows filesystems all take `RM` or `Del` for the refused name.
-    const reason = refusalFor({ ...seg, binary: seg.binary.toLowerCase() }, opts.trustedWebResolves);
+    const reason = refusalFor({ ...seg, binary: programName(seg.binary) }, opts.trustedWebResolves);
     if (reason) return { tier: 'refuse', scope: '', reason: withWrapperNote(reason, wrappers) };
     if (runner && !XARGS_TARGETS.includes(seg.binary)) {
       return {
@@ -1056,7 +1072,7 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
     }
   }
 
-  if (unwrapped.some(({ seg }) => seg.binary.toLowerCase().replace(/\.exe$/, '') === 'wget')
+  if (unwrapped.some(({ seg }) => programName(seg.binary) === 'wget')
     && wgetVersionCommands(command, opts.dialect).includes(undefined)) {
     return { tier: 'refuse', scope: '', reason: `The wget executable cannot be checked safely in this working directory. ${READ_REFUSAL_HINT}` };
   }
@@ -1079,9 +1095,15 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   // left out: `command cd` is unwrapped to `cd`, so what remains is a lookup.
   // A glob that can climb through `..` is held to the line for the same
   // reason: under `cat`, one approval would cover every later file it names.
+  // A `cd` that runs silently still picks the repository a remote listing
+  // reaches, as `-C` does, so that listing is held to the line too: under its
+  // own words, approving `origin` in one repository covered `origin` in every
+  // other (ADR-0027).
+  const changesDirectory = unwrapped.some(({ seg }) => seg.binary.toLowerCase() === 'cd');
   const lineScoped = nonAuto.some((u) => {
     const name = u.seg.binary.toLowerCase();
-    return name === 'cd' || (name !== 'command' && SHELL_STATE_COMMANDS.has(name)) || climbsByGlob(u.seg);
+    return name === 'cd' || (name !== 'command' && SHELL_STATE_COMMANDS.has(name)) || climbsByGlob(u.seg)
+      || (changesDirectory && isRemoteListing(u.seg));
   });
   const webUrls = nonAuto.flatMap((u) => webCommand(u.seg, opts.trustedWebResolves)?.urls ?? []);
   const outboundTexts = nonAuto.flatMap((u) => webCommand(u.seg, opts.trustedWebResolves)?.outboundTexts ?? remoteListingTexts(u.seg));
@@ -1095,7 +1117,7 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   // never covers `xargs cat`.
   const scopes = [...new Set(nonAuto.flatMap((u) => {
     const web = webCommand(u.seg, opts.trustedWebResolves);
-    return web ? web.urls.map((url) => `${u.seg.binary.toLowerCase().replace(/\.exe$/, '')} ${url.origin}/*`)
+    return web ? web.urls.map((url) => `${programName(u.seg.binary)} ${url.origin}/*`)
       : [lineScoped ? trimmed : u.runner ? `${u.runner} ${scopeFor(u.seg)}` : scopeFor(u.seg)];
   }))].sort();
   const scope = scopes.join(' + ');

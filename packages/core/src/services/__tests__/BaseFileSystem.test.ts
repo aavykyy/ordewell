@@ -743,6 +743,21 @@ describe('git remote listing in the planner shell', () => {
     expect(ask).toHaveBeenCalledTimes(5);
   });
 
+  // A followed `cd` selects a repository the way `-C` does, but it is an
+  // auto-tier segment, so the directory never enters the grant: one repository's
+  // `origin` was approved for every other repository's `origin`.
+  it('asks again for a listing in a repository a preceding cd selects', async () => {
+    const fs = new TestFileSystem();
+    const ask = vi.fn().mockResolvedValue(true);
+    fs.setApproval(new ApprovalPolicy({ ask }));
+
+    expect((await fs.bash('cd packages/web && git ls-remote --heads origin')).success).toBe(true);
+    expect(ask).toHaveBeenCalledTimes(1);
+
+    expect((await fs.bash('cd packages/evil && git ls-remote --heads origin')).success).toBe(true);
+    expect(ask).toHaveBeenCalledTimes(2);
+  });
+
   // The patterns travel to the server as ref prefixes, so they leave the machine like a URL does.
   it('withholds a listing whose patterns carry a secret, before asking and without echoing it', async () => {
     const fs = new TestFileSystem();

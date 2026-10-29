@@ -372,9 +372,10 @@ Research subagents get `fetch` and `web_search`, and still never prompt
   hold for it. The refusal names neither the command nor the destination.
 - **A remote the repository configures asks, under its whole line.** The
   grant is the command as written, `-C`, flags, remote and patterns
-  included, so `git ls-remote --heads origin` covers neither `upstream` nor
-  `origin` of another repository, and an approval of another git command
-  covers no listing.
+  included, and the whole line when a `cd` on it picks the repository, so
+  `git ls-remote --heads origin` covers neither `upstream` nor `origin` of
+  another repository, and an approval of another git command covers no
+  listing. `git.exe`, as Git Bash names it, is held to the same rules.
 - **Its remote and patterns pass the outbound secret check before approval,**
   as a web command's URL does: protocol v2 sends the patterns to the server
   as ref prefixes.
@@ -497,3 +498,4 @@ filed as its own issue.
 - 2026-10-25 — read-only tasks read through Ordewell's `fetch` and `web_search` under this policy, never prompting, each attempt with a budget of its own (ADR-0046).
 - 2026-10-25 — a read its caller cancels after it was allowed keeps its count; only a refused one is given back.
 - 2026-10-29 — `git ls-remote` naming its destination is refused; a configured remote asks under its whole line, its remote and patterns secret-checked.
+- 2026-10-29 — a listing after a `cd` is granted under the whole line, and `git.exe` is read as git.
