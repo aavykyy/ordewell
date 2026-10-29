@@ -17,9 +17,11 @@ export type RunnerStop = 'usage-limit' | 'stopped';
  * `task_complete` call that names a limit is retryable once the limit resets, so it pauses the
  * task instead of failing it. Deliberately narrow: a false positive would leave
  * a genuinely broken task waiting on the user forever, and the words below are
- * the ones the runners print for this and nothing else.
+ * the ones the runners print for this and nothing else. Claude Code names
+ * the limit it hit ("You've hit your 5-hour limit", "… your Opus limit"), so
+ * its phrase is taken whatever the name, as its reset reader takes it.
  */
-const USAGE_LIMIT_RE = /\b(?:usage|session|weekly|daily|monthly) limit\b|\brate limit (?:exceeded|reached)\b|\brate[- ]limited\b|\blimit (?:will )?reset\b|\bquota (?:exceeded|reached)\b|\btoo many requests\b/i;
+const USAGE_LIMIT_RE = /\b(?:usage|session|weekly|daily|monthly) limit\b|\byou['’]ve hit your (?:[\w'’-]+ ){0,3}?limit\b|\brate limit (?:exceeded|reached)\b|\brate[- ]limited\b|\blimit (?:will )?reset\b|\bquota (?:exceeded|reached)\b|\btoo many requests\b/i;
 
 /** How much of a stopped runner's tail is read for the limit signature: the error is the last thing it prints. */
 const USAGE_LIMIT_TAIL = 4096;

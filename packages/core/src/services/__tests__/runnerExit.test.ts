@@ -14,6 +14,34 @@ describe('classifyRunnerStop', () => {
     expect(classifyRunnerStop(output)).toBe('usage-limit');
   });
 
+  // Claude Code names the limit it hit, and not every name is one the words
+  // above cover: the 5-hour one stopped task #31 and waited for the user.
+  it.each([
+    "You've hit your 5-hour limit · resets 3:50pm (Europe/Rome)",
+    "You've hit your 5-hour limit · resets Oct 30, 3:50pm (Europe/Rome)",
+    "You’ve hit your 5-hour limit · resets 3:50pm (Europe/Rome)",
+    "You've hit your Opus limit · resets Oct 26, 8pm (Europe/Rome)",
+    "You've hit your limit · resets Jan 2, 2027, 9am (America/New_York)",
+    "You've hit your 5-hour limit.",
+  ])('reads Claude Code\'s limit from %j', (output) => {
+    expect(classifyRunnerStop(output)).toBe('usage-limit');
+    expect(classifyRunnerStop({ message: output })).toBe('usage-limit');
+  });
+
+  it.each([
+    "You've hit your stride: the parser handles every case now.",
+    "You've hit your breakpoint in src/index.ts.",
+    'The upload enforces a 5-hour limit on each job.',
+    'Test exceeded the time limit of 5000ms',
+    'Context limit reached; compacting the conversation.',
+  ])('does not read a limit from %j', (output) => {
+    expect(classifyRunnerStop(output)).toBe('stopped');
+  });
+
+  it('believes a runner that said in a field the failure was not its limit, whatever its words', () => {
+    expect(classifyRunnerStop({ message: "You've hit your 5-hour limit · resets 3:50pm (Europe/Rome)", usageLimit: false })).toBe('stopped');
+  });
+
   it('treats an ordinary crash as stopped', () => {
     expect(classifyRunnerStop('compilation failed: unexpected token')).toBe('stopped');
     expect(classifyRunnerStop('')).toBe('stopped');
@@ -47,8 +75,12 @@ describe('readUsageLimitReset', () => {
       ["You've hit your Opus limit · resets Oct 26, 8pm (Europe/Rome)", '2026-10-26T19:00:00.000Z'],
       ["You've hit your limit · resets Jan 2, 2027, 9am (America/New_York)", '2027-01-02T14:00:00.000Z'],
       ["You've hit your team's shared budget · ask your admin to raise it · your session limit resets 11:30pm (UTC)", '2026-10-11T23:30:00.000Z'],
+      // Over an hour past 3:50pm in Rome, still on summer time (UTC+2): tomorrow's.
+      ["You've hit your 5-hour limit · resets 3:50pm (Europe/Rome)", '2026-10-12T13:50:00.000Z'],
     ])('reads %j', (message, expected) => {
       expect(readUsageLimitReset('claude-code', `Working…\n${message}\n`, now)?.toISOString()).toBe(expected);
+      // A reset it can read is no use to a limit the stop was not classified as.
+      expect(classifyRunnerStop({ message })).toBe('usage-limit');
     });
 
     it('places a bare time that has passed on the next day', () => {
