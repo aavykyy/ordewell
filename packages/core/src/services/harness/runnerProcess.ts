@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'child_process';
+import { Socket } from 'net';
 import { StringDecoder } from 'string_decoder';
 import { augmentedPath } from '../../utils/shellPath';
 import { planDirectLaunch, isExecutableResolved, ExecutableNotFoundError } from '../../utils/launch';
@@ -17,6 +18,24 @@ const STDERR_TAIL_CHARS = 4000;
  * that a descendant still holding its stdout or stderr does not hang the turn.
  */
 const CLOSE_GRACE_MS = 2000;
+
+/**
+ * Let go of the pipes of a runner that has exited, for a descendant that still
+ * holds them: one setsid'd out of the group outlives Stop, and its pipes alone
+ * would keep the host alive for as long as it runs. Unref'd rather than
+ * destroyed, so the host can exit without the holder's next write meeting a
+ * closed pipe — SIGPIPE would end a process that is not ours to stop — and
+ * still drained, so a full pipe never blocks it either. The pipes close, and
+ * their handles go, when the holder lets go of them.
+ */
+function releasePipes(child: ChildProcess): void {
+  for (const stream of [child.stdin, child.stdout, child.stderr]) {
+    if (stream instanceof Socket) stream.unref();
+  }
+  for (const stream of [child.stdout, child.stderr]) {
+    if (stream instanceof Socket) stream.resume();
+  }
+}
 
 export interface RunnerCommand {
   command: string;
@@ -142,6 +161,7 @@ export class RunnerProcess {
       const grace = setTimeout(() => {
         for (const flush of [...this.stdoutEnds]) flush();
         this.end({ code, signal });
+        releasePipes(child);
       }, CLOSE_GRACE_MS);
       grace.unref?.();
       void this.ended.then(() => clearTimeout(grace));
