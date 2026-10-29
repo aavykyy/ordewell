@@ -16,7 +16,7 @@ import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { IsolationRunController } from './IsolationRunController';
 import type { Landing, LandingOutcome } from './Landing';
 import { SELF_REPO } from './isolationRecord';
-import { taskStartConfig } from './taskStartConfig';
+import { TaskStartConfig } from './taskStartConfig';
 import { taskRefOf } from './TaskRefs';
 import { classifyRunnerStop, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import type { ResearchTasks } from './ResearchTasks';
@@ -44,7 +44,7 @@ import type { OrchestratorObserver, StartAdmission } from './TaskOrchestrator';
 
 class TaskStartConfigError extends Error {
   constructor(paths: string[]) {
-    super(`repository configuration ${paths.map((p) => JSON.stringify(p)).join(', ')} was added during this run; review and commit it, or remove it, before continuing`);
+    super(`repository configuration ${paths.map((p) => JSON.stringify(p)).join(', ')} differs from where this run started; remove it to continue, or start a new run once your branch holds it`);
   }
 }
 
@@ -256,7 +256,7 @@ export interface AttemptsDeps {
   store: PlanStore;
   output: TaskOutputSource;
   /** Where an attempt runs, and its worktree once it ends. */
-  runs: Pick<IsolationRunController, 'attemptCwd' | 'workspaceCwd' | 'snapshotWorkspace' | 'filesChangedSince' | 'release' | 'openRecord' | 'skillLayout' | 'current'>;
+  runs: Pick<IsolationRunController, 'attemptCwd' | 'workspaceCwd' | 'snapshotWorkspace' | 'filesChangedSince' | 'release' | 'openRecord' | 'skillLayout' | 'current' | 'epoch'>;
   /** A passed attempt's work, or a repair's, onto the integration branch, while the attempt stays live. */
   landing: Pick<Landing, 'landPassed' | 'settleRepair' | 'nextRepair' | 'repairPrompt'>;
   registry: RunnerRegistry | null;
@@ -317,6 +317,7 @@ export class Attempts {
   private readonly live = new Map<string, TaskAttempt>();
   /** Bumped by every plan load: an ended attempt's wind-down belongs to the scope before it. */
   private planScope = 0;
+  private readonly startConfig = new TaskStartConfig();
   /** Each task's runners still winding down once stopped: a continue waits for them (ADR-0018, L1). */
   private readonly windDowns = new Map<string, Promise<void>>();
   /**
@@ -534,6 +535,7 @@ export class Attempts {
     const ended = this.endAll('load');
     this.planScope += 1;
     this.spawnCounts.clear();
+    this.startConfig.clear();
     return ended;
   }
 
@@ -696,14 +698,15 @@ export class Attempts {
       // two processes, and count from before what the first one still reports.
       if (kind.kind === 'continuation') await this.windDowns.get(task.id);
       if (!attempt.script && kind.kind === 'repair') {
-        const paths = await taskStartConfig(runs.current, task.id, true);
+        const paths = await this.startConfig.check(runs.current, task.id, { epoch: runs.epoch, cwd: null, worktree: true });
         if (paths.length) throw new TaskStartConfigError(paths);
       }
       const { cwd, worktree, previousWork, workspace } = await attemptCwd(kind, task, runs);
       attempt.cwd = cwd;
       attempt.worktree = worktree;
-      if (!attempt.script && kind.kind !== 'repair') {
-        const paths = await taskStartConfig(runs.current, task.id, worktree);
+      // A read-only task withholds project configuration (ADR-0046), so none reaches it.
+      if (!attempt.script && kind.kind !== 'repair' && !landsNothing(kind)) {
+        const paths = await this.startConfig.check(runs.current, task.id, { epoch: runs.epoch, cwd, worktree });
         if (paths.length) throw new TaskStartConfigError(paths);
       }
       if (checksTree(kind)) attempt.snapshot = await runs.snapshotWorkspace();

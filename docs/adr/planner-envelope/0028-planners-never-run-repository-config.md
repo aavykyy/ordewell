@@ -241,34 +241,48 @@ specifies.
   verdict, a landing) and the two launch boundaries below. Ordewell claims no
   launch-time consent it does not have.
 - **Where the boundary sits.** Configuration introduced during a run reaches a
-  later launch only after the user consents to it. Before a runner is spawned,
-  the attempt's tree — its worktree, or the workspace root it runs in — is
-  compared with the base the run recorded, untracked and ignored files
-  included, for the paths that can run code or redirect the runner:
-  `.mcp.json`, `.claude/settings.json`, `.claude/settings.local.json`,
-  `.claude/hooks/`, `.claude/plugins/`, `.claude-plugin/`, and a `plugin.json`
-  or `marketplace.json` under `.claude/`. A difference holds the start with a
-  reason naming each path, so a landing that added one stops the run's later
-  starts. The base is the one the run recorded and does not move, so the hold
-  stands for the run: the user consents by reviewing the configuration and
-  starting a run whose base holds it, and one they do not keep is removed. A
-  run with no recorded base, and a diff git cannot take, lets the start
-  through: an old saved run may have neither. A conflict repair is checked
-  before its attempt reopens, and a held start keeps its worktree. A script
-  task has no runner and is not checked.
-  The list is Claude Code's: a repository's OpenCode and Codex configuration is
-  outside it, and a landing that introduces one is not held.
+  later launch only after the user consents to it. Before a change or ops
+  task's runner is spawned, the directories it reads are compared with where
+  the run started, untracked and ignored files included, for the paths that
+  can run code or redirect the runner: `.mcp.json`, `.claude/settings.json`,
+  `.claude/settings.local.json`, `.claude/hooks/`, `.claude/plugins/`,
+  `.claude-plugin/`, a `plugin.json` or `marketplace.json` under `.claude/`,
+  OpenCode's `opencode.json` and plugin and tool directories, and `.codex/`
+  (the list is the runners', and holds a start for any of them whichever
+  runner it launches). A difference holds the start with a reason naming each
+  path, so a landing that added one stops the run's later starts.
+  - *A worktree* is compared with the base commit the run recorded, at the
+    repository's top and, when the workspace is below it, in the directory the
+    runner starts in. A group's loose entries, shared live with the real
+    workspace, are compared as the checkout is.
+  - *The checkout* an ops task or a shared run works in has no base commit,
+    and its personal files (an ignored `.claude/settings.local.json`) predate
+    the run, so it is compared with its own contents when the run first
+    launched a task there. A run that never isolates is held the same way. The
+    baseline is kept in memory for the run: a restarted daemon takes it anew at
+    its next launch. A Merge all that changes the checkout holds the next ops
+    start, which the user lifts by removing the configuration or starting a new
+    run.
+  - The baseline does not move, so a hold stands for the run: the user
+    consents by reviewing the configuration and starting a run whose base holds
+    it, and one they do not keep is removed. Committing it does not lift the
+    hold. A run with no recorded base, and a diff git cannot take, lets the
+    start through: an old saved run may have neither. A conflict repair is
+    checked before its attempt reopens, and a held start keeps its worktree. A
+    script task has no runner and a read-only task withholds project
+    configuration (ADR-0046), so neither is checked.
 - **A name cannot be taken over.** A Claude change or ops task launch reads
-  the working directory's `.mcp.json`, `.claude/settings.json` and
-  `.claude/settings.local.json`, and refuses to start when one declares a
-  server named `ordewell`. Claude's precedence between the files it reads and
+  the working directory's `.mcp.json` and refuses to start when it declares a
+  server named `ordewell`. Claude takes MCP servers from that file and the
+  user's own config and ignores an `mcpServers` key in a settings file, so
+  those are not read. Claude's precedence between the files it reads and
   the `--mcp-config` Ordewell passes is undocumented, so the collision has no
   known answer: the repository's entry could replace the server the attempt's
   token travels through, and the task would lose its completion route, or run
   against a server the repository chose. The repository renames or removes the
   entry; the launch does not guess. A planner's own readers refuse such a
   server too, so it is never put to approval or started there (ADR-0022, S3).
-  The files are read before the spawn, so a change made after it is outside
+  The file is read before the spawn, so a change made after it is outside
   this.
 
 ## Key properties
@@ -388,3 +402,7 @@ specifies.
   and states the boundary: a start whose tree differs from the run's base in a
   configuration path is held for consent, and a Claude task launch refuses a
   repository server named `ordewell`.
+- 2026-10-29 — the launch check reads the runner's own directory (a workspace
+  below its repository's top, a group's shared entries, the checkout an ops or
+  shared task runs in), covers OpenCode's and Codex's configuration, skips
+  read-only tasks, and no longer reads settings files for an `ordewell` server.

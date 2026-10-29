@@ -20,16 +20,16 @@ describe('Claude task repository MCP collisions', () => {
     expect(spawned.processes).toHaveLength(0);
   });
 
-  it.each(['settings.json', 'settings.local.json'])('refuses a collision in .claude/%s', async (file) => {
+  it.each(['settings.json', 'settings.local.json'])('starts despite an mcpServers entry in .claude/%s, which Claude does not read', async (file) => {
     const cwd = mkdtempSync(path.join(tmpdir(), 'claude-collision-'));
     dirs.push(cwd);
     mkdirSync(path.join(cwd, '.claude'));
     writeFileSync(path.join(cwd, '.claude', file), JSON.stringify({ mcpServers: { ordewell: {} } }));
     const spawned = fakeSpawn([]);
     const adapter = new ClaudeCodeAdapter({ spawn: spawned.spawn, fetch, resolvePath: async () => '/usr/bin', exists: () => true, workspaceEnv: async () => ({}) });
-    await expect(adapter.start({ kind: 'task', cwd, mode: 'acceptEdits', flags: { permissionMode: 'acceptEdits', modeSettings: {} } }))
-      .rejects.toThrow(new RegExp(`\\.claude/${file.replace('.', '\\.')}.*rename or remove.*ordewell`, 'i'));
-    expect(spawned.processes).toHaveLength(0);
+    await adapter.start({ kind: 'task', cwd, mode: 'acceptEdits', flags: { permissionMode: 'acceptEdits', modeSettings: {} } });
+    expect(spawned.processes).toHaveLength(1);
+    adapter.dispose();
   });
 
   it.each([

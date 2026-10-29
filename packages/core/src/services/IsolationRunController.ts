@@ -192,6 +192,7 @@ export class IsolationRunController {
   /** Resolver task id → the conflicted task it resolves; see {@link linkResolver}. */
   private resolvers: Record<string, string> = {};
   private opening: Promise<boolean> | null = null;
+  private opened = 0;
   /** Bumped by an interrupt, so an activation in flight across it does not open the run it ended. */
   private activations = 0;
   /** The start a dirty tree turned away, handed back once the user chooses how to go on. */
@@ -221,6 +222,9 @@ export class IsolationRunController {
   get mergedRun(): string | null { return this.run ? null : this.merged; }
 
   get isOpen(): boolean { return this.mode !== null; }
+
+  /** How many runs have opened: what tells one run's launches from the next one's. */
+  get epoch(): number { return this.opened; }
 
   /** The open run has decided whether it isolates. */
   get decided(): boolean { return this.mode === 'isolated' || this.mode === 'shared'; }
@@ -325,6 +329,7 @@ export class IsolationRunController {
   open(): void {
     if (this.mode) return;
     this.mode = 'undecided';
+    this.opened += 1;
   }
 
   /**

@@ -1127,11 +1127,12 @@ and ops tasks never pass through it.
 runner loads at launch and that can run code or redirect its traffic: Claude
 Code's `.mcp.json`, `.claude/settings.json`, `.claude/settings.local.json`,
 `.claude/hooks/`, `.claude/plugins/`, `.claude-plugin/`, and the `plugin.json`
-and `marketplace.json` manifests under `.claude/`
+and `marketplace.json` manifests under `.claude/`; OpenCode's `opencode.json`
+and its plugin and tool directories; Codex's `.codex/`
 (`repositoryRunnerConfigPaths`). A *planner* loads none of it (ADR-0028); a
-change or ops task loads it as its runner does, so a start whose tree differs
-from the run's base in one of these paths is held for the user's consent.
-OpenCode's and Codex's project configuration is not classified.
+change or ops task loads it as its runner does, so a start whose runner
+directory differs from where the run started in one of these paths is held
+for the user's consent. A read-only task withholds it and is never held.
 *Avoid:* "project settings" (it names one file, not hooks, plugins and servers
 together), "trusted config" (no runner's trust dialog decides it).
 
