@@ -101,10 +101,55 @@ describe('classifyCommand', () => {
       'git notes add -m hello',
       'git format-patch -1 HEAD',
       'git -C sub rm old.txt',
+      // Not named anywhere, so refused because git is an allowlist: a list of
+      // its writers was never complete.
+      'git symbolic-ref HEAD refs/heads/attacker',
+      'git symbolic-ref --short HEAD refs/heads/attacker',
+      'git hash-object -w README.md',
+      'git hash-object -tw blob README.md',
+      'git update-server-info',
+      'git commit-graph write',
+      'git multi-pack-index write',
+      'git pack-objects base',
+      'git index-pack x.pack',
+      'git rerere forget a.txt',
+      'git -C sub update-server-info',
+      'git my-alias',
+      'git worktree add ../wt',
+      'git worktree -n remove list',
+      'git notes add -m hello',
+      'git bisect start',
+      'git sparse-checkout set src',
+      'git reflog expire --all',
       'npm publish',
       'kubectl delete pod foo',
     ])('%s', (cmd) => {
       expect(classifyCommand(cmd).tier).toBe('refuse');
+    });
+
+    // Refusing a writer must not take its subcommand's reads with it.
+    it.each([
+      'git worktree list',
+      'git worktree list --porcelain',
+      'git notes',
+      'git notes list',
+      'git notes show HEAD',
+      'git bisect log',
+      'git sparse-checkout list',
+      'git reflog',
+      'git reflog show main',
+      'git symbolic-ref HEAD',
+      'git symbolic-ref --short HEAD',
+      'git hash-object -t blob README.md',
+      'git for-each-ref',
+      'git merge-base main HEAD',
+    ])('asks for the read %s', (cmd) => {
+      expect(classifyCommand(cmd).tier).toBe('ask');
+    });
+
+    it('names an unknown git subcommand and a write form of a reading one', () => {
+      expect(classifyCommand('git commit-graph write').reason).toContain('"git commit-graph" is not a git subcommand known only to read');
+      expect(classifyCommand('git worktree add ../wt').reason).toContain('"git worktree add ../wt" is not a read-only form');
     });
 
     it('refuses output redirection, which would make the planner a writer', () => {
@@ -1001,6 +1046,13 @@ describe('sed and awk programs are read for commands they run and files they wri
     [`awk 'BEGIN{ARGV[1]="/etc/passwd"; ARGC=2} {print}'`, '"ARGV"'],
     [`awk 'BEGIN{print ENVIRON["OPENAI_API_KEY"]}'`, '"ENVIRON"'],
     ["awk 'BEGIN{for (k in ENVIRON) print k, ENVIRON[k]}'", '"ENVIRON"'],
+    // gawk reaches ENVIRON and ARGV through SYMTAB under a name built at run
+    // time, and `awk` may be gawk.
+    [`gawk 'BEGIN{print SYMTAB["ENVIRON"]["OPENAI_API_KEY"]}'`, '"SYMTAB"'],
+    [`awk 'BEGIN{print SYMTAB["ENVIRON"]["HOME"]}' f`, '"SYMTAB"'],
+    [`gawk 'BEGIN{print SYMTAB["EN" "VIRON"]["HOME"]}'`, '"SYMTAB"'],
+    [`gawk 'BEGIN{e="ENVIRON"; for (k in SYMTAB[e]) print k}'`, '"SYMTAB"'],
+    [`gawk 'BEGIN{SYMTAB["ARGV"][1]="/etc/passwd"; ARGC=2} {print}'`, '"SYMTAB"'],
   ])('refuses %s, which reads what confinement cannot see', (cmd, named) => {
     const { tier, reason } = classifyCommand(cmd);
     expect(tier).toBe('refuse');

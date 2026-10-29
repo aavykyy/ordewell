@@ -31,7 +31,7 @@ export const AWK_FAMILY = ['awk', 'gawk', 'mawk', 'nawk'];
 const INSPECT_OR_TASK = 'Use the read-only research tools, or describe it as a task.';
 
 /** What a program does that the planner may not, or that it cannot be read well enough to rule out. */
-type Hazard = 'exec' | 'pipe' | 'write' | 'read' | 'environment' | 'extension' | 'unreadable';
+type Hazard = 'exec' | 'pipe' | 'write' | 'read' | 'environment' | 'symbol-table' | 'extension' | 'unreadable';
 
 // ---------------------------------------------------------------------------
 // sed
@@ -449,6 +449,8 @@ function awkRefusalFor(binary: string, programs: string[]): string | undefined {
         return `The "${binary}" program reads a file it names itself ("getline <" or an "ARGV" entry), which path confinement cannot see. Name the file as an operand instead.`;
       case 'environment':
         return `The "${binary}" program reads the environment ("ENVIRON"), which holds credentials. Run printenv for the one variable you need, which asks first.`;
+      case 'symbol-table':
+        return `The "${binary}" program uses "SYMTAB", which gawk reads as every global by name, "ENVIRON" and "ARGV" included. Name the variable you need directly.`;
       case 'extension':
         return `The "${binary}" program uses an "@" form, which loads an extension, includes a source file or calls a function by name — none of which this classifier can inspect. ${INSPECT_OR_TASK}`;
       default:
@@ -630,6 +632,12 @@ function awkProgramHazard(program: string): Hazard | undefined {
       // Assigning an entry adds a file for awk to read after the operands
       // confinement saw; reading one is rare enough to refuse with it.
       if (word === 'ARGV') return 'read';
+      // gawk's table of every global by name reaches ENVIRON and ARGV with
+      // neither word written, under a name the program can build as it runs
+      // (`SYMTAB["EN" "VIRON"]`), so the table itself is the hazard. `awk` may
+      // be gawk. FUNCTAB only names functions; calling one through it needs
+      // the `@` form refused above.
+      if (word === 'SYMTAB') return 'symbol-table';
       if (word === 'getline') getlineDepth = depth;
       if (word === 'print' || word === 'printf') printDepth = depth;
       slash = AWK_KEYWORDS.includes(word) ? 'unclear' : 'divide';

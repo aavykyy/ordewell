@@ -248,6 +248,9 @@ describe('BaseFileSystem — bash tiers', () => {
     ["awk '{print}' README.md", "awk 'BEGIN{while((getline l < \"/tmp/outside-secret.txt\")>0) print l}'"],
     ["awk '{print}' README.md", "awk 'BEGIN{print ENVIRON[\"OPENAI_API_KEY\"]}'"],
     ['git log', 'git rm README.md'],
+    ["gawk '{print}' README.md", "gawk 'BEGIN{print SYMTAB[\"ENVIRON\"][\"OPENAI_API_KEY\"]}'"],
+    ['git symbolic-ref --short HEAD', 'git symbolic-ref --short HEAD refs/heads/attacker'],
+    ['git hash-object -t blob README.md', 'git hash-object -w README.md'],
   ])('runs nothing for "%s" then "%s", whatever was approved', async (approved, next) => {
     const fs = new TestFileSystem();
     const asked: string[] = [];
