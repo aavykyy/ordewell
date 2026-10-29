@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { AUTO_COMMANDS, classifyCommand, innerCommandScopes, pathLikeArgs, pathRefs } from '../commandPolicy';
+import { parseAllowlist } from '../plannerAllowlist';
 
 describe('classifyCommand', () => {
   describe('auto tier — read-only inspection runs with no prompt', () => {
@@ -921,28 +922,151 @@ describe('a grant covers the command that was approved, not its family', () => {
 /**
  * Read-only against the repository, but it contacts whatever host the remote
  * resolves to — around the web fetcher's per-origin approval and its
- * request-forgery guard. It could only move from permitted to prompted once the
- * scope carried the destination: under the old scope, one approval of the
- * workspace's own remote would have authorised a listing against any host.
+ * request-forgery guard. A configured remote prompts, scoped to the whole
+ * line; a destination the line spells out is refused.
  */
-describe('the remote-listing subcommand prompts, scoped to where it reaches', () => {
+describe('the remote-listing subcommand prompts for a configured remote, scoped to where it reaches', () => {
   it('no longer runs unprompted', () => {
     expect(classifyCommand('git ls-remote origin').tier).toBe('ask');
-    expect(classifyCommand('git ls-remote https://github.com/o/r').tier).toBe('ask');
+    expect(classifyCommand('git ls-remote https://github.com/o/r').tier).toBe('refuse');
   });
 
   it('does not let an approval for one destination cover another', () => {
     const origin = classifyCommand('git ls-remote origin').scope;
-    const attacker = classifyCommand('git ls-remote https://attacker.example/r').scope;
+    const upstream = classifyCommand('git ls-remote upstream').scope;
     expect(origin).toBe('git ls-remote origin');
-    expect(attacker).toBe('git ls-remote https://attacker.example/r');
-    expect(origin).not.toBe(attacker);
+    expect(upstream).toBe('git ls-remote upstream');
+    expect(classifyCommand('git ls-remote https://attacker.example/r').tier).toBe('refuse');
   });
 
   it('keeps the rest of the read-only version-control surface unprompted', () => {
     for (const cmd of ['git ls-files', 'git ls-tree HEAD', 'git log --oneline -5', 'git status']) {
       expect(classifyCommand(cmd).tier).toBe('auto');
     }
+  });
+
+  // Git's transport resolves the host itself and follows a redirect, so no
+  // approval of the text can hold it to a vetted, pinned origin (ADR-0027).
+  it.each([
+    'git ls-remote https://trusted.example/x',
+    'git ls-remote --heads https://trusted.example/x',
+    'git ls-remote https://trusted.example/x --heads',
+    'git -C packages/core ls-remote http://169.254.169.254/latest/meta-data/',
+    'git ls-remote --tags http://10.0.0.7/r',
+    'git ls-remote http://[::1]/r',
+    'git ls-remote http://localhost/r',
+    'git ls-remote ssh://git@host.example/r',
+    'git ls-remote git://host.example/r',
+    'git ls-remote git@host.example:o/r',
+    'git ls-remote file:///tmp/r',
+    'git ls-remote ext::nc',
+    'git ls-remote ../elsewhere',
+    'git ls-remote ./vendored',
+    'git ls-remote /srv/repo',
+    'git ls-remote -- https://trusted.example/x',
+    'git ls-remote --sort=refname https://trusted.example/x',
+    'git ls-remote $REMOTE',
+    'GIT -C packages/core ls-remote https://trusted.example/x',
+    'echo $(git ls-remote https://trusted.example/x)',
+  ])('refuses a listing that names its destination: %s', (cmd) => {
+    const result = classifyCommand(cmd);
+    expect(result.tier).toBe('refuse');
+    expect(result.reason).toContain('git ls-remote');
+    expect(result.reason).not.toContain('trusted.example');
+  });
+
+  it.each([
+    ['git ls-remote', 'git ls-remote'],
+    ['git ls-remote origin', 'git ls-remote origin'],
+    ['git ls-remote --heads origin', 'git ls-remote --heads origin'],
+    ['git ls-remote origin --heads', 'git ls-remote origin --heads'],
+    ['git ls-remote --heads --tags upstream main', 'git ls-remote --heads --tags upstream main'],
+    ['git -C packages/core ls-remote --heads origin', 'git -C packages/core ls-remote --heads origin'],
+  ])('asks about a listing of a configured remote under its whole line: %s', (cmd, scope) => {
+    expect(classifyCommand(cmd)).toMatchObject({ tier: 'ask', scope });
+  });
+
+  it('hands the remote and its patterns to the outbound secret check', () => {
+    expect(classifyCommand('git -C packages/core ls-remote --heads origin main').outboundTexts).toEqual(['origin', 'main']);
+    expect(classifyCommand('git ls-remote').outboundTexts).toBeUndefined();
+    expect(classifyCommand('git -C packages/core for-each-ref').outboundTexts).toBeUndefined();
+  });
+});
+
+/**
+ * git's scope stopped at its first flag, so the commonest spelling of all,
+ * `git -C <dir> …`, scoped to bare `git`, and one approval of a worktree
+ * listing covered every later git command that asks.
+ */
+describe('a git grant is scoped by the subcommand it runs, past leading flags', () => {
+  it.each([
+    ['git -C packages/core worktree list', 'git worktree list'],
+    ['git --no-pager -C packages/core for-each-ref refs/heads', 'git for-each-ref refs/heads'],
+    ['git -C packages/core show-ref --heads', 'git show-ref'],
+    ['git -C packages/core notes list', 'git notes list'],
+  ])('%s scopes to %s', (cmd, scope) => {
+    expect(classifyCommand(cmd)).toMatchObject({ tier: 'ask', scope });
+  });
+
+  it('gives no two git operations behind the same leading flag one scope', () => {
+    const scopes = ['git -C packages/core worktree list', 'git -C packages/core ls-remote origin',
+      'git -C packages/core notes show', 'git -C packages/core for-each-ref']
+      .map((cmd) => classifyCommand(cmd).scope);
+    expect(new Set(scopes).size).toBe(scopes.length);
+    expect(scopes).not.toContain('git');
+  });
+
+  // A rule must spell out at least the words the scope holds (ADR-0026), so
+  // a bare `git` rule stopped covering everything behind a leading flag too.
+  it.each([
+    ['git ls-remote *', 'git ls-remote origin', 'git ls-remote *'],
+    ['git ls-remote *', 'git ls-remote --heads upstream', undefined],
+    ['git ls-remote *', 'git -C packages/core ls-remote origin', undefined],
+    ['git ls-remote', 'git ls-remote origin', undefined],
+    ['git', 'git -C packages/core worktree list', undefined],
+    ['git', 'git -C packages/core ls-remote origin', undefined],
+  ])('the allowlist rule %s covering %s is %s', (rule, cmd, allowedBy) => {
+    expect(classifyCommand(cmd, { allow: parseAllowlist([rule]) }).allowedBy).toBe(allowedBy);
+  });
+
+  it('refuses a named destination whatever the allowlist says', () => {
+    expect(classifyCommand('git ls-remote https://trusted.example/x', { allow: parseAllowlist(['git ls-remote *', 'git']) }).tier).toBe('refuse');
+  });
+
+  it('keeps read-only git under -C unprompted', () => {
+    for (const cmd of ['git -C packages/core log --oneline -5', 'git -C packages/core status', 'git -C worktree diff']) {
+      expect(classifyCommand(cmd).tier).toBe('auto');
+    }
+  });
+});
+
+/**
+ * A subcommand's action was read from after the first word spelled like the
+ * subcommand, which under `-C` can be the directory, so a listing in a
+ * directory named after the subcommand was refused as a write.
+ */
+describe('a git action is read after the subcommand itself, not a flag value spelled like it', () => {
+  it.each([
+    'git -C worktree worktree list',
+    'git -C notes notes list',
+    'git -C reflog reflog show',
+    'git -C list worktree list',
+  ])('asks about %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('ask');
+  });
+
+  it.each([
+    'git -C worktree worktree add ../x',
+    'git -C list worktree add ../x',
+    'git -C packages/core worktree remove x',
+    'git -C worktree worktree prune',
+    'git -C notes notes add -m x',
+    'git -C show notes add -m x',
+    'git -C reflog reflog expire --all',
+    'git -C tag tag v1',
+    'git -C branch branch -D x',
+  ])('still refuses the write %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
   });
 });
 

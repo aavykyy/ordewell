@@ -387,7 +387,7 @@ export abstract class BaseFileSystem implements IFileSystem {
     command = disableWebCommandStartup(command, this.researchShell.dialect);
     const { approval, root } = site;
     const allow = approval.allowlist?.();
-    const { tier, scope, reason, allowedBy, perInvocation, scopes: commandScopes, webUrls, webOutboundTexts } = classifyCommand(command, {
+    const { tier, scope, reason, allowedBy, perInvocation, scopes: commandScopes, webUrls, outboundTexts } = classifyCommand(command, {
       ...this.policyOptions(), ...approval.commandPolicy?.(), ...(allow ? { allow } : {}),
     });
 
@@ -421,8 +421,11 @@ export abstract class BaseFileSystem implements IFileSystem {
 
     if (tier === 'refuse') return this.sealedInstead(site, command, request, refusal(`Command refused: ${reason}${site.task ? `\n${TASK_UNSEALED} ${TASK_CONTINUE}` : ''}`), signal);
 
-    if (webUrls?.length && carriesSecret([...(webOutboundTexts ?? []), ...webUrls.map((url) => url.href)], [...this.outboundSecrets(), ...sensitiveEnvValues(process.env)])) {
-      return refusal('Command refused: a web command contains what looks like a secret. Fetch the page with your web fetch tool, without credentials.');
+    const outbound = [...(outboundTexts ?? []), ...(webUrls ?? []).map((url) => url.href)];
+    if (outbound.length && carriesSecret(outbound, [...this.outboundSecrets(), ...sensitiveEnvValues(process.env)])) {
+      return refusal(webUrls?.length
+        ? 'Command refused: a web command contains what looks like a secret. Fetch the page with your web fetch tool, without credentials.'
+        : 'Command refused: what this command sends over the network contains what looks like a secret. Run it without the value.');
     }
 
     const vettedAddresses = new Map<string, string>();

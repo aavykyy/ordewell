@@ -362,10 +362,29 @@ Research subagents get `fetch` and `web_search`, and still never prompt
   and the like) says the planner should not do it itself, and sends it to
   the plan as an ops task, with a change task beside it if it writes files.
 
+### `git ls-remote` in `run_command`
+
+- **A destination the command line spells out is refused,** not asked: a URL
+  of any scheme, an address, an scp-style `host:path`, a
+  `transport::address` or a path. Git connects through its own transport,
+  which resolves the host itself and follows a redirect, so none of the
+  guarantees above (an origin grant, the SSRF guard, a pinned address) can
+  hold for it. The refusal names neither the command nor the destination.
+- **A remote the repository configures asks, under its whole line.** The
+  grant is the command as written, `-C`, flags, remote and patterns
+  included, so `git ls-remote --heads origin` covers neither `upstream` nor
+  `origin` of another repository, and an approval of another git command
+  covers no listing.
+- **Its remote and patterns pass the outbound secret check before approval,**
+  as a web command's URL does: protocol v2 sends the patterns to the server
+  as ref prefixes.
+
 GNU Wget 1.x has no curl-style host-to-address override preserving the
 original hostname for HTTP and TLS, so it still resolves again at connection
 time. Curl pins the named URL hosts, but an explicitly approved redirect to
-another host is still outside that pin set. Both residuals require phase 2.
+another host is still outside that pin set. A configured remote's address is
+the repository's to choose and is not vetted before `git ls-remote` runs.
+These residuals require phase 2.
 
 ### Phase 2: filtering at the network
 
@@ -477,3 +496,4 @@ filed as its own issue.
 - 2026-10-21 — read-only tasks withhold native web tools because they have no task web-policy channel (ADR-0046).
 - 2026-10-25 — read-only tasks read through Ordewell's `fetch` and `web_search` under this policy, never prompting, each attempt with a budget of its own (ADR-0046).
 - 2026-10-25 — a read its caller cancels after it was allowed keeps its count; only a refused one is given back.
+- 2026-10-29 — `git ls-remote` naming its destination is refused; a configured remote asks under its whole line, its remote and patterns secret-checked.
