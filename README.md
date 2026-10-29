@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  <strong>Task orchestration for coding agents.</strong><br>
-  Turn a goal into an editable plan. Run it with your coding agents. Review and merge.
+  <strong>Stop juggling agent tabs. Talk to one planner.</strong><br>
+  It runs Claude Code, Codex and OpenCode for you, in plain sight, and nothing runs until you approve.
 </p>
 
 <p align="center">
@@ -34,10 +34,17 @@ plans wait for your approval by default; run settings let you automate execution
 and merging.
 
 Claude Code, Codex and OpenCode are supported out of the box, and can be mixed
-freely within one plan.
+freely within one plan. Try it in your project, with nothing to install:
+
+```bash
+npx ordewell
+```
 
 This README describes 0.11.2. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
+
+Ordewell is pre-1.0, so minor releases can include breaking changes. Read the
+[changelog](CHANGELOG.md) before you upgrade.
 
 ## Features
 
@@ -49,12 +56,15 @@ for versions available to install and their release notes.
   <tr><td><b>Read-only tasks</b></td><td>Review, audit or prototype without landing changes. Research tasks report back to the planner while you keep talking.</td></tr>
   <tr><td><b>Completion reports</b></td><td>AI tasks pass their completion check with a <code>task_complete</code> report marked <code>done</code>; scripts use exit status. Task handoffs share summaries, findings and evidence. Review the diff and test evidence before merging.</td></tr>
   <tr><td><b>Run controls</b></td><td>Let the supervisor watch and suggest, or act within limits you set. Choose autorun and automatic merging in <code>/settings</code>.</td></tr>
+  <tr><td><b>Usage limits</b></td><td>A task that hits its agent's account limit pauses. Claude Code and Codex name the reset, and the task then continues in its saved session, while Ordewell is running. After a restart it waits for you to resume it. OpenCode names no reset, so its tasks wait for you. Move a paused task to another agent and its unfinished work comes with it.</td></tr>
   <tr><td><b>Planner choices</b></td><td>Plan with a supported coding agent without an extra API key, or use an API provider. The planner reads your repository; changes run through tasks in the plan.</td></tr>
   <tr><td><b>Interfaces</b></td><td>Use the terminal UI, VS Code extension, CLI or local API. Follow live task logs and see account usage limits alongside context and cost.</td></tr>
   <tr><td><b>Skills</b></td><td>Share your team's instructions in repository skills that the planner attaches to tasks across runners.</td></tr>
 </table>
 
 ## Installation
+
+`npx ordewell` runs it without installing. To keep it:
 
 ```bash
 npm install -g ordewell
@@ -196,7 +206,9 @@ between worktrees. See
 The [documentation](https://ordewell.ai/docs) covers the planner options, skills,
 commands, configuration and platform notes. Design decisions, including the options
 that were rejected, are recorded as [architecture decision records](docs/adr/), and
-[CONTEXT.md](CONTEXT.md) defines the project's vocabulary. To write your own
+[CONTEXT.md](CONTEXT.md) defines the project's vocabulary. For how the planner and
+the runners each get their models and credentials, see
+[planners and runners](docs/planners-and-runners.md). To write your own
 planner or task skills, see the [skills guide](docs/skills.md). If Codex's
 sandbox cannot start on your machine, see [troubleshooting](docs/troubleshooting.md).
 
@@ -213,6 +225,11 @@ The full roadmap, and where to help, is in [#21](https://github.com/ordewell/ord
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for the
 build order and project layout, and report security issues through
 [SECURITY.md](SECURITY.md) rather than the public tracker.
+
+Good places to start are the issues labelled
+[good first issue](https://github.com/ordewell/ordewell/issues?q=is%3Aopen+label%3A%22good+first+issue%22)
+and the [runner integrations](https://github.com/ordewell/ordewell/issues?q=is%3Aopen+label%3A%22runner+integration%22)
+that are open for help.
 
 ## Acknowledgements
 
