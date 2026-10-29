@@ -67,6 +67,8 @@ describe('adversarial: what was open on the session left behind stays with it', 
   it.each([
     ['a load', [{ type: 'sessionLoaded', sessionId: 'b', goal: 'g' }, { type: 'planUpdated', plan: planOf('B'), sessionId: 'b' }]],
     ['a clear', [{ type: 'sessionCleared' }]],
+    // A fork (and a rewind, which forks) copies the task list, so `task-1` is the fork's too.
+    ['a fork', [{ type: 'sessionForked', sessionId: 'b', goal: 'g' }, { type: 'planUpdated', plan: planOf('A'), sessionId: 'b' }]],
   ] as [string, Action[]][])('%s closes the prompt editor, so Enter saves nothing', (_, actions) => {
     const editing = editingA();
     expect(editing.taskEditor?.text).toBe('A!');
@@ -95,6 +97,21 @@ describe('adversarial: what was open on the session left behind stays with it', 
 
     const own = reduce(initialState({ sessionId: 'b', planner: 'planning' }), { type: 'failed', message: 'refused', turn: true, sessionId: 'b' }).state;
     expect(own.planner).toBe('idle');
+  });
+
+  it('a late clear for the session left behind does not take the one loaded since', () => {
+    const onB = reduce(initialState({ sessionId: 'a', planner: 'planning' }), { type: 'sessionLoaded', sessionId: 'b', goal: 'g' }).state;
+    const after = reduce(onB, { type: 'sessionCleared', sessionId: 'a' }).state;
+    expect(after.sessionId).toBe('b');
+    expect(after.goal).toBe('g');
+    expect(reduce(onB, { type: 'sessionCleared', sessionId: 'b' }).state.sessionId).toBeNull();
+  });
+
+  it('an approval answer that failed for the session left behind is not reported on this one', () => {
+    const onB = reduce(initialState({ sessionId: 'a' }), { type: 'sessionLoaded', sessionId: 'b', goal: 'g' }).state;
+    const message = 'Could not deliver the approval answer: the planner will treat it as denied.';
+    expect(JSON.stringify(reduce(onB, { type: 'failed', message, sessionId: 'a' }).state.conversation)).not.toContain(message);
+    expect(JSON.stringify(reduce(onB, { type: 'failed', message, sessionId: 'b' }).state.conversation)).toContain(message);
   });
 
   it('/new and a clear leave no paused or resending planner on the welcome', () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fromTranscript, type SurfacePlan } from '@ordewell/core';
-import { DaemonError } from '../../apiClient';
+import { DaemonError, UnreadableResponseError } from '../../apiClient';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action, type Effect } from '../reducer';
 import type { TuiState } from '../state';
@@ -357,5 +357,90 @@ describe('a compaction the daemon is still running', () => {
 
     expect(t.state.planner).toBe('idle');
     expect(blocksOf(t.state)).toEqual([expect.objectContaining({ compactionId: 'c1', status: 'condensed', summary: 'Conversation condensed: the state' })]);
+  });
+});
+
+/**
+ * The user can load another session while a turn's call is out. What the call
+ * ends in — a refusal, a loss the daemon cannot read back, an unusable reply —
+ * is that turn's session's, and must not clear, idle or drain the one on screen.
+ */
+describe('a turn that ends after another session was loaded', () => {
+  /** A call the test settles once session b is on screen. */
+  function held() {
+    let settle: ((err: unknown) => void) | undefined;
+    const call = vi.fn(() => new Promise<SurfacePlan>((_, reject) => { settle = reject; }));
+    return { call, fail: async (err: unknown) => { await vi.waitFor(() => expect(settle).toBeDefined()); settle?.(err); } };
+  }
+
+  /** Session b loaded with its own turn joined and a prompt queued behind it. */
+  function loadB(t: ReturnType<typeof tui>): void {
+    t.send({ type: 'sessionLoaded', sessionId: 'b', goal: 'goal b' });
+    t.send({ type: 'turnJoined', sessionId: 'b', turnId: 'turn-b' });
+    t.type('queued for b');
+    expect(t.state.queuedPrompts).toEqual(['queued for b']);
+    t.sent.length = 0;
+  }
+
+  function expectBUntouched(t: ReturnType<typeof tui>, foreign: RegExp): void {
+    expect(t.state.sessionId).toBe('b');
+    expect(t.state.goal).toBe('goal b');
+    expect(t.state.planner).toBe('joined');
+    expect(t.state.queuedPrompts).toEqual(['queued for b']);
+    expect(t.sent).not.toContainEqual(expect.objectContaining({ type: 'sendMessage' }));
+    expect(messagesOf(t.state).some((m) => foreign.test(m.text))).toBe(false);
+  }
+
+  it('a lost reply the daemon no longer holds the session for', async () => {
+    const send = held();
+    const t = tui({ sendConversationMessage: send.call, adoptSession: vi.fn().mockRejectedValue(sessionGone()) }, { sessionId: 'a', planner: 'planning' });
+    const running = t.run({ type: 'sendMessage', sessionId: 'a', message: 'x' });
+    loadB(t);
+
+    await send.fail(timedOut());
+    await running;
+
+    expectBUntouched(t, /no longer holding that session/);
+  });
+
+  it('a reply that arrived unusable', async () => {
+    const send = held();
+    const t = tui({ sendConversationMessage: send.call }, { sessionId: 'a', planner: 'planning' });
+    const running = t.run({ type: 'sendMessage', sessionId: 'a', message: 'x' });
+    loadB(t);
+
+    await send.fail(new UnreadableResponseError('/conversation', 'not JSON'));
+    await running;
+
+    expectBUntouched(t, /could not be used/);
+  });
+
+  it.each([
+    ['refused', new DaemonError('no key configured', 400), {}, /no key configured/],
+    ['lost, and the daemon holds no session for it', timedOut(), { adoptSession: vi.fn().mockRejectedValue(sessionGone()) }, /holds no session for it/],
+  ] as [string, unknown, Partial<OrdewellApi>, RegExp][])('an opening turn %s', async (_, err, api, foreign) => {
+    const start = held();
+    const t = tui({ startConversation: start.call, ...api });
+    const running = t.run({ type: 'startConversation', goal: 'goal c' });
+    loadB(t);
+
+    await start.fail(err);
+    await running;
+
+    expectBUntouched(t, foreign);
+  });
+
+  // The guard above must not swallow the failure of the session that let
+  // itself go: it is reported on the welcome it left, and ends the turn there.
+  it('an opening turn refused with nothing else loaded still says why and ends the turn', async () => {
+    const t = tui({ startConversation: vi.fn().mockRejectedValue(new DaemonError('no key configured', 400)) });
+    t.type('goal c');
+    expect(t.state.planner).toBe('planning');
+
+    await t.run(t.sent[0]!);
+
+    expect(t.state.sessionId).toBeNull();
+    expect(t.state.planner).toBe('idle');
+    expect(messagesOf(t.state).some((m) => /no key configured/.test(m.text))).toBe(true);
   });
 });
