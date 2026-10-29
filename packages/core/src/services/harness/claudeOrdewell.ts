@@ -1,4 +1,6 @@
-import { ownerOnlyConfigFile, type McpClientConfig, type OwnerOnlyFile } from '../mcp';
+import { ORDEWELL_MCP_SERVER_NAME, ownerOnlyConfigFile, type McpClientConfig, type OwnerOnlyFile } from '../mcp';
+import * as path from 'path';
+import { isRecord, readText } from './repoConfig';
 import { MCP_CLIENT_TOOL_NAMES, type OrdewellToolBinding, type OrdewellToolRole } from './ordewellBinding';
 
 /** What Claude Code is launched with to reach the server: its arguments, and the file they name. */
@@ -11,6 +13,19 @@ export interface ClaudeOrdewellLaunch {
 export interface ClaudeOrdewellBinding extends OrdewellToolBinding<string> {
   /** `servers` are others to put in the same file, by name; none of them can stand in for Ordewell's. */
   launch(mcp: McpClientConfig, role: OrdewellToolRole, servers?: Record<string, unknown>): ClaudeOrdewellLaunch;
+}
+
+/** Refuse an ambiguous claim: Claude does not document MCP config precedence. */
+export function assertNoClaudeTaskCollision(cwd: string): void {
+  for (const source of ['.mcp.json', '.claude/settings.json', '.claude/settings.local.json']) {
+    const text = readText(path.join(cwd, source));
+    if (text === undefined) continue;
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); } catch { continue; }
+    if (isRecord(parsed) && isRecord(parsed.mcpServers) && Object.hasOwn(parsed.mcpServers, ORDEWELL_MCP_SERVER_NAME)) {
+      throw new Error(`${source} declares an MCP server named ordewell; rename or remove the ordewell server before starting this task.`);
+    }
+  }
 }
 
 export const CLAUDE_ORDEWELL: ClaudeOrdewellBinding = {
