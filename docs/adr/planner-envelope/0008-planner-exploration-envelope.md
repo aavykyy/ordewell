@@ -201,11 +201,18 @@ classified as `ask` with a binary-wide scope:
 - sed's `r`/`R` commands, awk's `getline < file` and an assignment to `ARGV`,
   which read a file the program names where path confinement, reading only
   the arguments, never sees it; and awk's `ENVIRON`, which reads the provider
-  keys bare `env` asks before printing.
+  keys bare `env` asks before printing, and gawk's `SYMTAB`, which reaches
+  both arrays by a name the program can build as it runs.
 - `git rm`, `git mv`, `git worktree remove`, `git format-patch` and the other
   git subcommands that write the working tree, the index, the object store or
   a file of their own. On a host with no sandbox the classifier is the only
-  guard, and one approval of `git rm` deleted the file.
+  guard, and one approval of `git rm` deleted the file. A list of those
+  writers was never complete (`git symbolic-ref HEAD <ref>`,
+  `git hash-object -w`, `git commit-graph write` still asked), so git is an
+  allowlist: a subcommand not known to read is refused, and one that reads
+  under some arguments and writes under others (`worktree list`,
+  `symbolic-ref HEAD`, `hash-object` without `-w`) asks only in its reading
+  form.
 - `enable -f lib.so name`, which loads a shared object into the shell and runs
   its code, as `source` runs a script. Refused; plain `enable` still asks.
 
@@ -433,3 +440,4 @@ model's refusal to write were never security evidence.
 - 2026-10-21 — the planner performs an exact effect itself as a script task through `run_script`, outside this envelope, and the refusals and the `allowlist` mode's refusal point there instead of at an ops task alone ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
 - 2026-10-24 — a glob that can match `..` asks under its line; jq and yq programs are read for environment access and module or file loads.
 - 2026-10-29 — sed and awk programs that read a file they name or the environment are refused, and so are git's subcommands that write.
+- 2026-10-29 — git's subcommands are an allowlist with per-subcommand reading forms, and gawk's `SYMTAB` is refused.

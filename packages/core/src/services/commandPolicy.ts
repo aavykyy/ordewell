@@ -87,6 +87,55 @@ export const GIT_READONLY_SUBCOMMANDS = [
   'rev-parse', 'rev-list', 'describe', 'blame', 'grep', 'shortlog', 'whatchanged', 'cat-file',
 ];
 
+const onlyAction = (...reads: string[]) => (after: string[]): boolean =>
+  after[0] === undefined || reads.includes(after[0]);
+
+/**
+ * The git subcommands outside {@link GIT_READONLY_SUBCOMMANDS} that may run once
+ * approved, each with a test of the arguments after it under which it only
+ * reads. Every other subcommand is refused.
+ *
+ * An allowlist because a list of git's writers was never complete: with
+ * `rm`, `mv` and the rest refused, `git symbolic-ref HEAD refs/heads/x`,
+ * `git hash-object -w`, `git update-server-info` and `git commit-graph write`
+ * still asked, and the first two share a scope with their read, so one
+ * approval of the read ran the write with no second prompt. An alias the
+ * repository defines is refused with them: it can run a shell command.
+ *
+ * The test reads positionally: a subcommand's action is the word right after
+ * it, and `symbolic-ref` with a second name writes, so a flag value counted as
+ * a name refuses rather than asks.
+ */
+const GIT_PROMPTABLE: Record<string, (after: string[]) => boolean> = {
+  'ls-remote': () => true,
+  'for-each-ref': () => true,
+  'show-ref': () => true,
+  'name-rev': () => true,
+  'merge-base': () => true,
+  'count-objects': () => true,
+  'cherry': () => true,
+  'range-diff': () => true,
+  'diff-tree': () => true,
+  'diff-files': () => true,
+  'diff-index': () => true,
+  'show-branch': () => true,
+  'annotate': () => true,
+  'check-ignore': () => true,
+  'check-attr': () => true,
+  'check-ref-format': () => true,
+  'check-mailmap': () => true,
+  'var': () => true,
+  'version': () => true,
+  'worktree': onlyAction('list'),
+  'notes': onlyAction('list', 'show'),
+  'bisect': onlyAction('log'),
+  'sparse-checkout': onlyAction('list'),
+  'reflog': onlyAction('show', 'exists'),
+  'symbolic-ref': (after) => after.filter((a) => !a.startsWith('-')).length <= 1,
+  // `-w` writes the object; git's shared flag set keeps it for `git diff -w`.
+  'hash-object': (after) => !after.some((a) => /^-[^-]*w/.test(a)),
+};
+
 /**
  * Never runs, with or without approval.
  *
@@ -112,19 +161,17 @@ export const REFUSED_COMMANDS = [
 /**
  * Destructive or outward-facing subcommands of otherwise-permitted multiplexers.
  *
- * git's list includes the subcommands that write the working tree, the index,
- * the object store or a file of their own (`rm`, `mv`, `worktree`,
- * `format-patch`, ...): left on the prompt tier, one approval ran the write on
- * a host with no sandbox to stop it, where this list is the only guard.
+ * git's list names its commonest writers so the refusal says so; any other
+ * subcommand not known to read is refused by {@link GIT_PROMPTABLE}.
  */
 const REFUSED_SUBCOMMANDS: Record<string, string[]> = {
   git: ['push', 'reset', 'clean', 'checkout', 'switch', 'restore', 'rebase', 'merge', 'commit',
     'am', 'apply', 'cherry-pick', 'revert', 'stash', 'gc', 'prune', 'filter-branch',
     'update-ref', 'remote', 'config', 'init', 'clone', 'fetch', 'pull', 'submodule',
-    'add', 'rm', 'mv', 'worktree', 'notes', 'format-patch', 'bisect', 'replace', 'mergetool',
+    'add', 'rm', 'mv', 'format-patch', 'replace', 'mergetool',
     'repack', 'update-index', 'read-tree', 'checkout-index', 'merge-file', 'bundle',
     'commit-tree', 'write-tree', 'mktree', 'mktag', 'unpack-objects', 'fast-import',
-    'pack-refs', 'prune-packed', 'maintenance', 'sparse-checkout'],
+    'pack-refs', 'prune-packed', 'maintenance'],
   npm: ['publish', 'unpublish', 'deprecate', 'owner', 'access', 'token', 'login', 'logout'],
   yarn: ['publish', 'npm'],
   pnpm: ['publish'],
@@ -709,6 +756,16 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   // the subcommand, so these have to be caught here.
   if (seg.binary === 'git') {
     const sub = subcommandOf(seg);
+    if (sub !== undefined && !GIT_READONLY_SUBCOMMANDS.includes(sub)) {
+      const reads = GIT_PROMPTABLE[sub];
+      const after = seg.args.slice(seg.args.indexOf(sub) + 1);
+      if (!reads) {
+        return `"git ${sub}" is not a git subcommand known only to read, so it may write the repository. You are a read-only planner: ${EFFECT_ROUTE}`;
+      }
+      if (!reads(after)) {
+        return `"git ${[sub, ...after].join(' ')}" is not a read-only form of "git ${sub}". You are a read-only planner: ${EFFECT_ROUTE}`;
+      }
+    }
     if (sub === 'branch' || sub === 'tag') {
       const flag = seg.args.find((a) => ['-D', '-d', '-m', '-M', '--delete', '--move'].includes(a))
         ?? seg.args.slice(seg.args.indexOf(sub) + 1).find(swallowsRefName);
