@@ -1165,7 +1165,9 @@ export class TaskOrchestrator {
         this.store.markPending(task.id);
         this.hold(task.id, failure.hold, false);
       }
-      await this.runs.release(task.id, { keep: failure.leaves === 'failed' && failure.keepWorktree });
+      if (failure.leaves !== 'held' || !failure.preserveWorktree) {
+        await this.runs.release(task.id, { keep: failure.leaves === 'failed' && failure.keepWorktree });
+      }
       const { level, text, toastOnly } = failure.notice;
       if (toastOnly) this.notifications[level](text);
       else this.tell(level, text);

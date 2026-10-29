@@ -78,6 +78,45 @@ function writingRunner(files: Record<string, { write: string[]; needs?: string[]
 }
 
 describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
+  it('holds a dependent task when configuration was added during the run', async () => {
+    const root = repo();
+    const { runner } = writingRunner({ t1: { write: ['.mcp.json'] }, t2: { write: [] } });
+    const isolation = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
+    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root });
+    orchestrator.loadPlan([
+      createTask({ id: 't1', order: 1, title: 'Add config', prompt: 'write config' }),
+      createTask({ id: 't2', order: 2, title: 'Next', prompt: 'continue', dependencies: ['t1'] }),
+    ]);
+    await orchestrator.approveReview();
+    await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('.mcp.json'));
+    expect(orchestrator.holdReason('t2')).toContain('added during this run');
+    expect(runner.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts with configuration already present in the base', async () => {
+    const root = repo(undefined, { '.mcp.json': '{}' });
+    const { runner } = writingRunner({ t1: { write: [] } });
+    const isolation = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
+    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root });
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Start', prompt: 'work' })]);
+    await orchestrator.approveReview();
+    expect(runner.spawn).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')?.status).toBe('completed'));
+  });
+
+  it('starts a dependent after an instruction-only edit', async () => {
+    const root = repo();
+    const { runner } = writingRunner({ t1: { write: ['CLAUDE.md'] }, t2: { write: [] } });
+    const isolation = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
+    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root });
+    orchestrator.loadPlan([
+      createTask({ id: 't1', order: 1, title: 'Instructions', prompt: 'write instructions' }),
+      createTask({ id: 't2', order: 2, title: 'Next', prompt: 'work', dependencies: ['t1'] }),
+    ]);
+    await orchestrator.approveReview();
+    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t2')?.status).toBe('completed'));
+    expect(runner.spawn).toHaveBeenCalledTimes(2);
+  });
   it('lands every task on the integration branch and leaves the user\'s branch and tree untouched', async () => {
     const root = repo();
     const base = git(root, 'rev-parse', 'HEAD');
