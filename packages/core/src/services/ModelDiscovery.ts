@@ -237,13 +237,27 @@ function applyVariants(models: DiscoveredModel[], manifest: RunnerManifest): Dis
   return models.map((m) => (m.variants.length > 0 ? m : { ...m, variants }));
 }
 
-function expandHome(filePath: string): string {
-  return filePath.replace(/^~/, osMod.homedir());
+/**
+ * The directory `~` names for a runner launched with `env`. Claude Code finds
+ * `~/.claude` through Node's `os.homedir()`, which reads HOME on POSIX and
+ * USERPROFILE on Windows before asking the system, so a workspace environment
+ * that sets one moves the runner's settings and login with it.
+ */
+export function runnerHomeDir(env: RunnerEnv, platform: NodeJS.Platform = process.platform): string {
+  const name = platform === 'win32' ? 'USERPROFILE' : 'HOME';
+  // Windows names are case-insensitive, and a merged environment is a plain
+  // object: the last spelling is the one a later source set.
+  const key = platform === 'win32' ? Object.keys(env).filter((k) => k.toUpperCase() === name).pop() : name;
+  return (key && env[key]) || osMod.homedir();
+}
+
+function expandHome(filePath: string, env: RunnerEnv = process.env): string {
+  return filePath.replace(/^~/, () => runnerHomeDir(env));
 }
 
 function listDir(dir: string): string[] {
   try {
-    return fsSync.readdirSync(expandHome(dir));
+    return fsSync.readdirSync(dir);
   } catch {
     return [];
   }
@@ -267,7 +281,7 @@ function resolveApiAuth(authMethods: ApiAuthMethod[], env: RunnerEnv): { header:
       if (method.type === 'env') {
         token = env[method.varName];
       } else {
-        const filePath = expandHome(typeof method.path === 'function' ? method.path(env) : method.path);
+        const filePath = expandHome(typeof method.path === 'function' ? method.path(env) : method.path, env);
         if (!fsSync.existsSync(filePath)) continue;
         const data = JSON.parse(fsSync.readFileSync(filePath, 'utf8'));
         token = method.jsonPath.split('.').reduce((obj: unknown, key: string) => {
@@ -583,7 +597,11 @@ export class ModelDiscovery {
   private withSettingsModels(models: DiscoveredModel[], manifest: RunnerManifest, env: RunnerEnv): DiscoveredModel[] {
     const read = manifest.modelDiscovery.settingsModels;
     if (!read) return models;
-    const files: RunnerSettingsFiles = { read: this.readFileImpl, list: listDir, env };
+    const files: RunnerSettingsFiles = {
+      read: (filePath) => this.readFileImpl(expandHome(filePath, env)),
+      list: (dir) => listDir(expandHome(dir, env)),
+      env,
+    };
     const seen = new Set(models.map((m) => m.modelId));
     const added = read(files).filter((m) => !seen.has(m.modelId));
     return added.length > 0 ? [...models, ...applyVariants(added, manifest)] : models;

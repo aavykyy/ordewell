@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { ModelResolver } from '../ModelResolver';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import type { ExecImpl } from '../ModelDiscovery';
+import { runnerHomeDir, type ExecImpl } from '../ModelDiscovery';
 import type { IConfig } from '../../interfaces/IConfig';
 import { createTask, type DiscoveredModel } from '../../models/Task';
 import { SessionCatalog } from '../SessionCatalog';
@@ -191,6 +191,46 @@ describe('Claude Code discovery — modelPicker.options in settings.json', () =>
     expect(calls.exec).toBe(2);
   });
 
+  // A workspace's `.ordewell/env` may set HOME (USERPROFILE on Windows), and
+  // the runner's `claude` finds `~/.claude` under that home, not the daemon's.
+  it('reads ~/.claude under the home of the environment runners are launched with', async () => {
+    const runnerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-claude-runner-home-'));
+    try {
+      writeSettings({ modelPicker: { options: [{ model: 'gproxy/runner-home' }] } }, path.join(runnerHome, '.claude'));
+      writeSettings({ modelPicker: { options: [{ model: 'gproxy/daemon-home' }] } });
+      const { resolver } = resolverFor('help', async () => ({ ...process.env, HOME: runnerHome, USERPROFILE: runnerHome }));
+
+      expect((await claudeModels(resolver)).map((m) => m.modelId)).toEqual([...BASELINE.help, 'gproxy/runner-home']);
+    } finally {
+      fs.rmSync(runnerHome, { recursive: true, force: true });
+    }
+  });
+
+  it('signs the catalog request in with the login under the runner environment\'s home', async () => {
+    const runnerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-claude-runner-home-'));
+    try {
+      for (const [dir, token] of [[runnerHome, 'runner-home-token'], [home, 'daemon-home-token']]) {
+        fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+        fs.writeFileSync(path.join(dir, '.claude', '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: token } }));
+      }
+      const seen: Array<Record<string, string>> = [];
+      const fetchImpl = (async (_url: string, init: { headers: Record<string, string> }) => {
+        seen.push(init.headers);
+        return { ok: true, json: async () => ({ data: [{ id: 'claude-sonnet-5', display_name: 'Claude Sonnet 5' }] }) };
+      }) as unknown as typeof fetch;
+      const signed = new ModelResolver(new RunnerRegistry(), {} as IConfig, {
+        execImpl: async () => ({ stdout: CLAUDE_HELP }),
+        fetchImpl,
+        env: async () => ({ ...process.env, HOME: runnerHome, USERPROFILE: runnerHome }),
+      });
+
+      expect((await claudeModels(signed)).map((m) => m.modelId)).toEqual(BASELINE.api);
+      expect(seen.map((h) => h.Authorization)).toEqual(['Bearer runner-home-token']);
+    } finally {
+      fs.rmSync(runnerHome, { recursive: true, force: true });
+    }
+  });
+
   it('signs the catalog request in with the login CLAUDE_CONFIG_DIR moves', async () => {
     const moved = path.join(home, 'work-account');
     fs.mkdirSync(moved);
@@ -291,5 +331,23 @@ describe('Claude Code\'s modelPicker precedence', () => {
       [`${managed}/managed-settings.json`]: { modelPicker: { options: [] } },
       '~/.claude/settings.json': picker('gproxy/mine'),
     }))).toEqual([]);
+  });
+});
+
+describe('the home a runner resolves ~ against', () => {
+  // As Node's os.homedir() reads it inside the runner: HOME on POSIX,
+  // USERPROFILE on Windows, whose variable names ignore case.
+  it.each([
+    ['linux', { HOME: '/home/work', USERPROFILE: 'C:\\Users\\other' }, '/home/work'],
+    ['darwin', { HOME: '/Users/work' }, '/Users/work'],
+    ['win32', { HOME: '/home/other', USERPROFILE: 'C:\\Users\\work' }, 'C:\\Users\\work'],
+    ['win32', { USERPROFILE: 'C:\\Users\\daemon', UserProfile: 'C:\\Users\\work' }, 'C:\\Users\\work'],
+  ] as const)('on %s, from %j', (platform, env, expected) => {
+    expect(runnerHomeDir(env, platform)).toBe(expected);
+  });
+
+  it.each(['linux', 'win32'] as const)('on %s, falls back to this process\'s home when the environment names none', (platform) => {
+    expect(runnerHomeDir({ HOME: '', USERPROFILE: '' }, platform)).toBe(os.homedir());
+    expect(runnerHomeDir({}, platform)).toBe(os.homedir());
   });
 });

@@ -188,9 +188,10 @@ Ordewell takes the whole list from the highest file that sets one: the managed
 settings file (`managed-settings.json` and its `managed-settings.d/` files in
 Claude Code's system directory), then your user settings,
 `~/.claude/settings.json` or `settings.json` in `CLAUDE_CONFIG_DIR` when that
-is set. `CLAUDE_CONFIG_DIR` is read from the environment the workspace's tasks
-run with, its `.envrc` or `.ordewell/env` included, so each workspace a daemon
-serves is offered its own account's list. Ordewell reads the files when it
+is set. `CLAUDE_CONFIG_DIR`, and the `HOME` (`USERPROFILE` on Windows) that
+`~` stands for, are read from the environment the workspace's tasks run with,
+its `.envrc` or `.ordewell/env` included, so each workspace a daemon serves is
+offered its own account's list. Ordewell reads the files when it
 discovers Claude's models, so restart it after editing one.
 
 Ordewell does not read a list your organization delivers any other way: from

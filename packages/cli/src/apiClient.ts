@@ -786,18 +786,21 @@ export class ApiClient {
     return { ready, close: () => { closed = true; socket.close(); } };
   }
 
+  // Every settings call names this workspace, as `getModels` does: the
+  // planner's model is judged against its runner catalog, which its own
+  // CLAUDE_CONFIG_DIR can make another account's than the daemon's cwd.
   getSettings(sessionId?: string): Promise<SettingsResponse> {
-    const route = sessionId ? `/api/settings?sessionId=${encodeURIComponent(sessionId)}` : '/api/settings';
-    return this.call('GET', route, 'Failed to fetch settings');
+    const session = sessionId ? `sessionId=${encodeURIComponent(sessionId)}&` : '';
+    return this.call('GET', `/api/settings?${session}workspace=${encodeURIComponent(this.workspace)}`, 'Failed to fetch settings');
   }
 
   /** Save run settings (ADR-0030); with `sessionId`, that session's run takes them at once. */
   updateRunSettings(changes: Partial<GlobalRunSettings>, sessionId?: string): Promise<SettingsResponse> {
-    return this.call('PATCH', '/api/settings', 'Change run settings failed', { run: changes, ...(sessionId ? { sessionId } : {}) });
+    return this.call('PATCH', '/api/settings', 'Change run settings failed', { run: changes, ...(sessionId ? { sessionId } : {}), workspace: this.workspace });
   }
 
   updateSettings(changes: Record<string, unknown>): Promise<SettingsUpdateResponse> {
-    return this.call('PATCH', '/api/settings', 'Failed to update settings', changes);
+    return this.call('PATCH', '/api/settings', 'Failed to update settings', { ...changes, workspace: this.workspace });
   }
 }
 

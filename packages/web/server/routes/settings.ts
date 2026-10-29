@@ -13,8 +13,9 @@ export function settingsRoute(pool: OrchestratorPool) {
     await installedPlannerDetected();
     // An open session answers with its own run settings; no id or an id it no
     // longer holds answers with the file's, which a new session starts from
-    // (ADR-0030).
-    const settings: SettingsResponse = pool.getSettings(c.req.query('sessionId') || undefined);
+    // (ADR-0030). The planner's model is judged against the runner catalog of
+    // the session's workspace, else of the one the client is in.
+    const settings: SettingsResponse = pool.getSettings(c.req.query('sessionId') || undefined, c.req.query('workspace') || undefined);
     return c.json(settings);
   });
 
@@ -22,26 +23,30 @@ export function settingsRoute(pool: OrchestratorPool) {
     try {
       await installedPlannerDetected();
       const body = await jsonObject(c);
-      if (Object.keys(body).length === 0) {
+      // Every client names its workspace, which is not itself a change.
+      if (Object.keys(body).every((key) => key === 'workspace')) {
         return refuse(c, 400, 'At least one setting field is required');
       }
       // Run settings (ADR-0030) are named fields under `run`, never environment
-      // variables; `sessionId` is the session the change was made in.
-      const { run, sessionId: namedSession, ...rest } = body;
+      // variables; `sessionId` is the session the change was made in, and
+      // `workspace` the one the client is in, whose catalog a pick is judged by.
+      const { run, sessionId: namedSession, workspace: namedWorkspace, ...rest } = body;
       if (namedSession !== undefined && typeof namedSession !== 'string') return refuse(c, 400, 'sessionId must be a string');
+      if (namedWorkspace !== undefined && typeof namedWorkspace !== 'string') return refuse(c, 400, 'workspace must be a string');
       const sessionId = namedSession || undefined;
+      const workspace = namedWorkspace || undefined;
       if (run !== undefined) {
         if (!run || typeof run !== 'object' || Array.isArray(run)) return refuse(c, 400, 'run must be an object of run settings');
         try {
-          pool.updateRunSettings(run as Partial<GlobalRunSettings>, sessionId);
+          pool.updateRunSettings(run as Partial<GlobalRunSettings>, sessionId, workspace);
         } catch (err) {
           if (err instanceof RunSettingsError) return refuse(c, 400, err.message);
           throw err;
         }
       }
       const result: SettingsUpdateResponse = Object.keys(rest).length > 0
-        ? (sessionId ? pool.updateSettings(rest, sessionId) : pool.updateSettings(rest))
-        : pool.getSettings(sessionId);
+        ? pool.updateSettings(rest, sessionId, workspace)
+        : pool.getSettings(sessionId, workspace);
       return c.json(result);
     } catch (err) {
       return failure(c, err, 'settings update', { fallback: 400 });

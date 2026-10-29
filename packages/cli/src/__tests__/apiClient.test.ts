@@ -247,19 +247,24 @@ describe('ApiClient', () => {
     refused.close();
   });
 
-  it('getSettings names the session whose values it wants', async () => {
+  // One daemon serves several workspaces: the planner's model in a settings
+  // answer is judged against the runner catalog of the one this client is in.
+  it('getSettings names its workspace, and the session whose values it wants', async () => {
     const srv = await startCustomServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ path: req.url }));
     });
     servers.push(srv);
+    const client = new ApiClient(srv.port, '/work/space B');
 
-    const result = await new ApiClient(srv.port).getSettings('s1');
+    const withSession = await client.getSettings('s1');
+    const without = await client.getSettings();
 
-    expect((result as { path?: string }).path).toBe('/api/settings?sessionId=s1');
+    expect((withSession as { path?: string }).path).toBe('/api/settings?sessionId=s1&workspace=%2Fwork%2Fspace%20B');
+    expect((without as { path?: string }).path).toBe('/api/settings?workspace=%2Fwork%2Fspace%20B');
   });
 
-  it('updateSettings sends PATCH to /api/settings with the payload', async () => {
+  it('updateSettings sends PATCH to /api/settings with the payload and its workspace', async () => {
     const srv = await startCustomServer((req, res) => {
       let body = '';
       req.on('data', (chunk) => { body += chunk; });
@@ -272,9 +277,11 @@ describe('ApiClient', () => {
       });
     });
     servers.push(srv);
-    const client = new ApiClient(srv.port);
+    const client = new ApiClient(srv.port, '/work/b');
     const result = await client.updateSettings({ modelAllowlist: { opencode: ['a', 'b'] } });
-    expect(result).toEqual({ modelAllowlist: { opencode: ['a', 'b'] }, saved: true });
+    expect(result).toEqual({ modelAllowlist: { opencode: ['a', 'b'] }, workspace: '/work/b', saved: true });
+    const run = await client.updateRunSettings({ autorun: true }, 's1');
+    expect(run).toEqual({ run: { autorun: true }, sessionId: 's1', workspace: '/work/b', saved: true });
   });
 });
 

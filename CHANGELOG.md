@@ -14,8 +14,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   `modelPicker.options` of Claude Code's settings, such as a gateway's
   `gproxy/default`, now appear beside the discovered Claude models and can be
   picked for the planner and for tasks. As in Claude Code, a managed settings
-  file's list replaces your own, and your own is read where
-  `CLAUDE_CONFIG_DIR` puts it. A model Claude Code already lists keeps its own
+  file's list replaces your own, and your own is read where the workspace's
+  runners find it: under `CLAUDE_CONFIG_DIR`, else in `.claude` under the
+  `HOME` (`USERPROFILE` on Windows) the workspace's environment sets. Each
+  workspace one daemon serves reads its settings, and switches the planner,
+  against its own account's models. A model Claude Code already lists keeps its own
   label and effort levels, and a missing or malformed file changes nothing.
   The files are read when Ordewell discovers Claude's models, so an edit made
   while Ordewell runs shows after a restart (#117).

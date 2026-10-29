@@ -444,8 +444,13 @@ export class OrchestratorPool {
     });
   }
 
-  getSettings(sessionId?: string): SettingsResponse {
-    const config = this.plannerConfig();
+  /**
+   * What `sessionId`, or a client in `workspace`, plans with: the planner's
+   * model is judged against that workspace's runner catalog (see
+   * {@link settingsWorkspace}).
+   */
+  getSettings(sessionId?: string, workspace?: string): SettingsResponse {
+    const config = this.plannerConfig(undefined, this.settingsWorkspace(sessionId, workspace));
     const userSettings = this.settingsService.getAll();
     const live = sessionId ? this.sessions.get(sessionId) : undefined;
     return {
@@ -475,10 +480,20 @@ export class OrchestratorPool {
    * they were opened with. Throws a {@link RunSettingsError}, saving nothing,
    * for a value out of range.
    */
-  updateRunSettings(changes: Partial<GlobalRunSettings>, sessionId?: string): SettingsResponse {
+  updateRunSettings(changes: Partial<GlobalRunSettings>, sessionId?: string, workspace?: string): SettingsResponse {
     this.settingsService.updateRunSettings(changes);
     if (sessionId) this.sessions.get(sessionId)?.applyRunSettings(changes);
-    return this.getSettings(sessionId);
+    return this.getSettings(sessionId, workspace);
+  }
+
+  /**
+   * The workspace whose runner catalog a settings read or write is judged
+   * against: an open session's own, else the one the client says it is in.
+   * Without either the daemon's cwd stands in. One daemon serves several
+   * workspaces, and each may name another Claude account in its environment.
+   */
+  private settingsWorkspace(sessionId: string | undefined, workspace: string | undefined): string | undefined {
+    return (sessionId ? this.sessions.get(sessionId)?.workspaceRoot : undefined) ?? workspace;
   }
 
   /**
@@ -501,17 +516,18 @@ export class OrchestratorPool {
    * The provider planning right now. A vendor planner is resolved from its
    * model id, so this is read again after a write rather than carried over.
    */
-  private plannerProviderInEffect(): PlannerBackendId {
-    return this.plannerConfig().aiProvider;
+  private plannerProviderInEffect(workspace: string | undefined): PlannerBackendId {
+    return this.plannerConfig(undefined, workspace).aiProvider;
   }
 
-  updateSettings(changes: Record<string, unknown>, sessionId?: string): SettingsUpdateResponse {
+  updateSettings(changes: Record<string, unknown>, sessionId?: string, requestWorkspace?: string): SettingsUpdateResponse {
+    const workspace = this.settingsWorkspace(sessionId, requestWorkspace);
     // Read before any of this call's changes land, so a switch is judged
     // against what was actually in effect a moment ago. The model and effort
     // too, with where they came from: a detected agent does not plan with a
     // vendor model left in the environment, and judging against it would
     // remember that model as the agent's own pick.
-    const current: PlannerSelectionCurrent = this.plannerConfig().planner;
+    const current: PlannerSelectionCurrent = this.plannerConfig(undefined, workspace).planner;
 
     // Only allowlisted keys reach `process.env`, and everything else comes back
     // to the caller by name — the daemon's environment is inherited by every
@@ -542,7 +558,7 @@ export class OrchestratorPool {
     // before the credential refresh below clears the resolver's cache — so a
     // settings write never waits on (async) discovery.
     const selection = touchesPlanner
-      ? selectPlanner(current, plannerChange, this.plannerModelMemory, this.plannerCatalogFor(plannerChange.provider ?? current.provider, sessionId ? this.sessions.get(sessionId)?.workspaceRoot : undefined))
+      ? selectPlanner(current, plannerChange, this.plannerModelMemory, this.plannerCatalogFor(plannerChange.provider ?? current.provider, workspace))
       : undefined;
 
     if (envChanges) {
@@ -583,7 +599,7 @@ export class OrchestratorPool {
       process.env.ORDEWELL_PLANNER_EFFORT = selection.next.effort;
       // Read once the env above is written: the pick is for whoever that
       // routes to, which a switch or the model's own catalog may have changed.
-      if (plannerChange.model !== undefined) this.pickedModel = { model: selection.next.model, provider: this.plannerProviderInEffect() };
+      if (plannerChange.model !== undefined) this.pickedModel = { model: selection.next.model, provider: this.plannerProviderInEffect(workspace) };
     }
 
     if (changes.modelAllowlist && typeof changes.modelAllowlist === 'object') {
@@ -604,14 +620,14 @@ export class OrchestratorPool {
       // Without a switch a vendor pick is keyed by the provider its model id
       // resolves to now, which the env written above already reflects.
       const switched = provider !== current.provider;
-      this.plannerModelMemory.remember(switched ? provider : this.plannerProviderInEffect(), model, effort);
+      this.plannerModelMemory.remember(switched ? provider : this.plannerProviderInEffect(workspace), model, effort);
     }
 
     // Refused keys are named back rather than dropped: a client that sent one
     // wrote it to `.env` on the strength of this response, and would otherwise
     // reinstate the refusal as the next daemon's startup environment.
     const rejectedEnvKeys = admission?.rejected ?? [];
-    const settings: SettingsUpdateResponse = this.getSettings(sessionId);
+    const settings: SettingsUpdateResponse = this.getSettings(sessionId, workspace);
     if (rejectedEnvKeys.length > 0) settings.rejectedEnvKeys = rejectedEnvKeys;
     if (selection?.recall) settings.switchRecall = selection.recall;
     return settings;
@@ -680,15 +696,15 @@ export class OrchestratorPool {
       models: allModels,
       modelsByRunner,
       modesByRunner: runnerModesFrom(this.registry, runnerIds),
-      orchestratorModel: this.plannerConfig().orchestratorModel,
+      orchestratorModel: this.plannerConfig(undefined, workspace).orchestratorModel,
       providers,
       orchestratorModels,
       providerErrors,
     };
   }
 
-  getRunnerState(): { enabledRunners: RunnerId[]; orchestratorModel: string } {
-    const config = this.plannerConfig();
+  getRunnerState(workspace?: string): { enabledRunners: RunnerId[]; orchestratorModel: string } {
+    const config = this.plannerConfig(undefined, workspace);
     return { enabledRunners: config.enabledRunners, orchestratorModel: config.orchestratorModel };
   }
 

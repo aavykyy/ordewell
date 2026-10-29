@@ -227,7 +227,7 @@ describe('ordewell model', () => {
     const d = await fakeDaemon({ settings: { aiProvider: 'claude-code' }, models: CATALOG });
     const { handleModel } = await import('../model');
     await capture(() => handleModel(['set', 'sonnet'], new ApiClient(d.port)));
-    expect(d.sent.find((r) => r.method === 'PATCH')!.body).toEqual({ orchestratorModel: 'sonnet' });
+    expect(d.sent.find((r) => r.method === 'PATCH')!.body).toEqual({ ...{ orchestratorModel: 'sonnet' }, workspace: process.cwd() });
     d.close();
   });
 
@@ -260,7 +260,7 @@ describe('ordewell model', () => {
     const d = await fakeDaemon({ settings: { aiProvider: 'opencode' } });
     const { handleModel } = await import('../model');
     await capture(() => handleModel(['set', 'anthropic/claude-sonnet-4-5'], new ApiClient(d.port)));
-    expect(d.sent.find((r) => r.method === 'PATCH')!.body).toEqual({ orchestratorModel: 'anthropic/claude-sonnet-4-5' });
+    expect(d.sent.find((r) => r.method === 'PATCH')!.body).toEqual({ ...{ orchestratorModel: 'anthropic/claude-sonnet-4-5' }, workspace: process.cwd() });
     d.close();
   });
 
@@ -268,7 +268,7 @@ describe('ordewell model', () => {
     const d = await fakeDaemon({ settings: { aiProvider: 'openrouter' }, models: CATALOG });
     const { handleModel } = await import('../model');
     await capture(() => handleModel(['set', 'anything/at-all'], new ApiClient(d.port)));
-    expect(d.sent.find((r) => r.method === 'PATCH')!.body).toEqual({ orchestratorModel: 'anything/at-all' });
+    expect(d.sent.find((r) => r.method === 'PATCH')!.body).toEqual({ ...{ orchestratorModel: 'anything/at-all' }, workspace: process.cwd() });
     d.close();
   });
 });
@@ -377,7 +377,7 @@ describe('ordewell supervisor, automerge, trailer and autorun (ADR-0030)', () =>
     const d = await fakeDaemon({ settings: { run: RUN } });
     const commands = await import('../runSettings');
     await capture(() => commands[handler]([...args], new ApiClient(d.port)));
-    expect(d.sent.find((r) => r.method === 'PATCH')!.body).toEqual({ run });
+    expect(d.sent.find((r) => r.method === 'PATCH')!.body).toEqual({ run, workspace: process.cwd() });
     d.close();
   });
 
