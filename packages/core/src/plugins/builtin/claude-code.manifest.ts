@@ -1,5 +1,5 @@
 import type { RunnerManifest } from '../types';
-import { parseAnthropicModels, parseClaudeHelp } from './claudeModels';
+import { parseAnthropicModels, parseClaudeHelp, parseClaudeSettingsModels } from './claudeModels';
 
 /**
  * A turn on a signed-out account ends with this line, which the status
@@ -48,6 +48,11 @@ export const CLAUDE_CODE_MANIFEST: RunnerManifest = {
     // 3. canonicalAliases — stable --model contracts (opus/sonnet/haiku/fable)
     //    merged into any successful result to fill gaps, and used as the full
     //    last-resort list when both API and CLI are unavailable.
+    //
+    // Whichever source answers, the models the user added to Claude's own
+    // picker (`modelPicker.options` in ~/.claude/settings.json, usually
+    // gateway IDs) are appended (settingsModels): the CLI accepts them as
+    // `--model` values though no catalog above lists them.
     apiDiscovery: {
       url: 'https://api.anthropic.com/v1/models?limit=100',
       headers: { 'anthropic-version': '2023-06-01' },
@@ -60,6 +65,7 @@ export const CLAUDE_CODE_MANIFEST: RunnerManifest = {
     discoveryCommands: [
       { command: 'claude', args: ['--help'], parser: parseClaudeHelp },
     ],
+    settingsModels: { file: '~/.claude/settings.json', parser: parseClaudeSettingsModels },
     canonicalAliases: [
       { modelId: 'opus', modelLabel: 'Opus' },
       { modelId: 'sonnet', modelLabel: 'Sonnet' },

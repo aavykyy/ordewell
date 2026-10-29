@@ -170,6 +170,22 @@ Finish it (`git rebase --continue`) or abort it (`git rebase --abort`) in the
 repository named, check out the base branch, and merge again. A run that
 started on a detached HEAD names no branch and is not checked.
 
+## A gateway model is not offered for Claude Code
+
+An edit is refused with **Runner "claude-code" does not offer model
+"gproxy/default"**, or `ordewell model set` says the model was not discovered.
+
+The sources Ordewell asks for Claude Code's models, the Anthropic Models API
+and `claude --help`, list only Anthropic's models. Ordewell also offers each
+model listed in `modelPicker.options` of `~/.claude/settings.json`:
+
+```json
+{ "modelPicker": { "options": [{ "model": "gproxy/default", "label": "Gateway" }] } }
+```
+
+A row needs a `model` string; `label` is optional. Ordewell reads the file when
+it discovers Claude's models, so restart it after editing the file.
+
 ## A runner shows as switched off, and tasks are flagged
 
 A task row reads **codex is switched off** or **Opus 4 is not in the allowlist**,

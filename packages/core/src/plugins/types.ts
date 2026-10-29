@@ -132,6 +132,13 @@ export interface RunnerModelDiscovery {
    * fails, discovery falls through to `discoveryCommands` + `canonicalAliases`.
    */
   apiDiscovery?: ApiDiscoveryConfig;
+  /**
+   * Models the user registered in the runner's own settings file (`~`
+   * expanded), such as gateway IDs no catalog lists. Appended to whatever the
+   * other methods produced, success or fallback: an ID they already offer
+   * keeps their entry. A missing or unreadable file adds nothing.
+   */
+  settingsModels?: { file: string; parser: ModelOutputParser };
   preferredPatterns?: { id: string; label: string }[];
   variants?: { id: string; label: string }[];
   discoveryCommands?: DiscoveryCommand[];

@@ -8,6 +8,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Claude Code offers the models you added to its own picker.** Entries in
+  `modelPicker.options` of `~/.claude/settings.json`, such as a gateway's
+  `gproxy/default`, now appear beside the discovered Claude models and can be
+  picked for the planner and for tasks. A model Claude Code already lists keeps
+  its own label and effort levels, and a missing or malformed file changes
+  nothing. The file is read when Ordewell discovers Claude's models, so an
+  edit made while Ordewell runs shows after a restart (#117).
+
 ## [0.11.1] - 2026-10-27
 
 ### Changed

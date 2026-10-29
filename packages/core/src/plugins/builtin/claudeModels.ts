@@ -1,8 +1,8 @@
 import type { DiscoveredModel } from '../../models/Task';
 
-// Claude Code's two model catalogs, as its manifest reads them: the Anthropic
-// Models API, and the `--model` option of `claude --help` when no credential
-// reaches the API.
+// Claude Code's model sources, as its manifest reads them: the Anthropic
+// Models API, the `--model` option of `claude --help` when no credential
+// reaches the API, and the picker entries the user added in its settings.
 
 /**
  * Parse the Anthropic Models API response (`GET /v1/models`). The API returns
@@ -161,5 +161,40 @@ export function parseClaudeHelp(stdout: string): DiscoveredModel[] {
     }
   }
 
+  return models;
+}
+
+/**
+ * Parse the `modelPicker.options` the user added to Claude Code's
+ * `settings.json`: `{ model, label? }` rows, typically gateway IDs that only
+ * the user's proxy serves and no catalog lists. A row without a usable
+ * `model` string is skipped, and anything that is not that shape yields
+ * nothing: a hand-edited file must never break discovery.
+ */
+export function parseClaudeSettingsModels(content: string): DiscoveredModel[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return [];
+  }
+  const picker = parsed && typeof parsed === 'object' ? (parsed as { modelPicker?: unknown }).modelPicker : undefined;
+  const options = picker && typeof picker === 'object' ? (picker as { options?: unknown }).options : undefined;
+  if (!Array.isArray(options)) return [];
+
+  const seen = new Set<string>();
+  const models: DiscoveredModel[] = [];
+  for (const row of options as unknown[]) {
+    if (!row || typeof row !== 'object') continue;
+    const { model, label } = row as { model?: unknown; label?: unknown };
+    if (typeof model !== 'string' || !model.trim() || seen.has(model)) continue;
+    seen.add(model);
+    models.push({
+      modelId: model,
+      modelLabel: typeof label === 'string' && label.trim() ? label : model,
+      runnerProvider: model.includes('/') ? model.split('/')[0] : undefined,
+      variants: [],
+    });
+  }
   return models;
 }
