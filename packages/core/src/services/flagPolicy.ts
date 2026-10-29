@@ -223,15 +223,16 @@ export const FLAG_POLICY: Record<string, FlagSpec> = {
   sort: {
     cluster: true,
     // Absent on purpose: `-o`/`--output` writes a file with no redirect for the
-    // redirect check to see, and `--compress-program` names a program that sort
-    // runs over its own temporary files — a permitted binary as an interpreter.
+    // redirect check to see, `-T`/`--temporary-directory` names where sort writes
+    // its run files, and `--compress-program` names a program that sort runs
+    // over its own temporary files — a permitted binary as an interpreter.
     booleans: ['-b', '-c', '-C', '-d', '-f', '-g', '-h', '-i', '-M', '-n', '-r', '-R', '-s', '-u',
       '-V', '-z', '--ignore-leading-blanks', '--check', '--dictionary-order', '--ignore-case',
       '--general-numeric-sort', '--human-numeric-sort', '--ignore-nonprinting', '--month-sort',
       '--numeric-sort', '--random-sort', '--reverse', '--stable', '--unique', '--version-sort',
       '--zero-terminated', '--debug'],
-    values: ['-k', '-t', '-S', '-T', '--key', '--field-separator', '--buffer-size',
-      '--temporary-directory', '--random-source', '--batch-size', '--parallel', '--sort'],
+    values: ['-k', '-t', '-S', '--key', '--field-separator', '--buffer-size',
+      '--random-source', '--batch-size', '--parallel', '--sort'],
   },
   uniq: {
     cluster: true,

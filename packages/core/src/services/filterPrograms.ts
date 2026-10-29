@@ -4,10 +4,14 @@
  * Both are text filters, and both can run a command or write a file from inside
  * their own program: sed's `e` command and the `e` flag of `s` hand text to the
  * shell, and its `w`/`W` commands and the `w` flag of `s` write a file; awk has
- * `system()`, pipes to and from commands, and `print > file`. None of that is a
- * flag, so a classifier that looks at a segment's binary and flags saw
- * `sed '1e rm -rf src'` as a plain `sed` and put it on the prompt tier — where
- * one approval of an ordinary substitution is remembered for every later `sed`.
+ * `system()`, pipes to and from commands, and `print > file`. Both can also
+ * read a file their program names — sed's `r`/`R`, awk's `getline < file` and
+ * an assignment to `ARGV` — which path confinement never sees, since it reads
+ * only the arguments, and awk reads the process environment, provider keys
+ * included, through `ENVIRON`. None of that is a flag, so a classifier that
+ * looks at a segment's binary and flags saw `sed '1e rm -rf src'` as a plain
+ * `sed` and put it on the prompt tier — where one approval of an ordinary
+ * substitution is remembered for every later `sed`.
  *
  * The parsers here are deliberately partial. They follow the grammar a planner
  * actually writes and answer "cannot read" for everything else, and "cannot
@@ -27,7 +31,7 @@ export const AWK_FAMILY = ['awk', 'gawk', 'mawk', 'nawk'];
 const INSPECT_OR_TASK = 'Use the read-only research tools, or describe it as a task.';
 
 /** What a program does that the planner may not, or that it cannot be read well enough to rule out. */
-type Hazard = 'exec' | 'pipe' | 'write' | 'extension' | 'unreadable';
+type Hazard = 'exec' | 'pipe' | 'write' | 'read' | 'environment' | 'extension' | 'unreadable';
 
 // ---------------------------------------------------------------------------
 // sed
@@ -192,6 +196,8 @@ function sedRefusalFor(binary: string, scripts: string[]): string | undefined {
       return `The "${binary}" script runs a shell command (the "e" command or the "e" flag of "s"), which this classifier cannot inspect. ${INSPECT_OR_TASK}`;
     case 'write':
       return `The "${binary}" script writes a file (the "w"/"W" command or the "w" flag of "s"). You are a read-only planner — print the output instead, or describe the write as a task.`;
+    case 'read':
+      return `The "${binary}" script reads a file it names itself (the "r"/"R" command), which path confinement cannot see. Read that file directly instead.`;
     default:
       return `This classifier could not read the "${binary}" script well enough to rule out a shell command or a file write in it. Rewrite it with plain print, delete and substitute commands, or describe the work as a task.`;
   }
@@ -311,6 +317,7 @@ function sedScriptHazard(script: string): Hazard | undefined {
     if (cmd === undefined) return 'unreadable';
     if (cmd === 'e') return 'exec';
     if (cmd === 'w' || cmd === 'W') return 'write';
+    if (cmd === 'r' || cmd === 'R') return 'read';
     if (cmd === '{' || cmd === '}') continue;
     if (cmd === '#') { while (i < n && script[i] !== '\n') i++; continue; }
     if (SED_BARE_COMMANDS.includes(cmd)) {
@@ -329,9 +336,9 @@ function sedScriptHazard(script: string): Hazard | undefined {
       if (!commandEnds()) return 'unreadable';
       continue;
     }
-    // Text for `a`/`i`/`c` and the file `r`/`R` reads both run to the end of
-    // the line, `;` included, with a backslash carrying the text onto the next.
-    if ('aicrR'.includes(cmd)) {
+    // Text for `a`/`i`/`c` runs to the end of the line, `;` included, with a
+    // backslash carrying the text onto the next.
+    if ('aic'.includes(cmd)) {
       while (i < n && script[i] !== '\n') i += script[i] === '\\' ? 2 : 1;
       continue;
     }
@@ -438,6 +445,10 @@ function awkRefusalFor(binary: string, programs: string[]): string | undefined {
         return `The "${binary}" program pipes to or from a command ("|"), which runs it through a shell this classifier cannot inspect. ${INSPECT_OR_TASK}`;
       case 'write':
         return `The "${binary}" program redirects its output to a file (">"). You are a read-only planner — print to standard output instead, or describe the write as a task.`;
+      case 'read':
+        return `The "${binary}" program reads a file it names itself ("getline <" or an "ARGV" entry), which path confinement cannot see. Name the file as an operand instead.`;
+      case 'environment':
+        return `The "${binary}" program reads the environment ("ENVIRON"), which holds credentials. Run printenv for the one variable you need, which asks first.`;
       case 'extension':
         return `The "${binary}" program uses an "@" form, which loads an extension, includes a source file or calls a function by name — none of which this classifier can inspect. ${INSPECT_OR_TASK}`;
       default:
@@ -472,6 +483,11 @@ function awkProgramHazard(program: string): Hazard | undefined {
   // Set inside a print statement, at the paren depth it began at: only a `>`
   // at that depth is a redirect, `print (a > b)` compares.
   let printDepth: number | undefined;
+  // Set after `getline`, at its depth: a `<` there or deeper, before the
+  // statement or the enclosing parenthesis ends, names a file to read. A
+  // comparison caught by it, `getline > 0 && n < 3`, refuses; reading it as a
+  // comparison would let `getline line < f` through.
+  let getlineDepth: number | undefined;
   // After `,`, `&&` or `||` a newline continues the statement instead of ending it.
   let continues = false;
 
@@ -536,7 +552,7 @@ function awkProgramHazard(program: string): Hazard | undefined {
       continue;
     }
     if (c === '\n' || c === ';') {
-      if (c === ';' || !continues) printDepth = undefined;
+      if (c === ';' || !continues) { printDepth = undefined; getlineDepth = undefined; }
       slash = 'regex';
       i++;
       continue;
@@ -581,10 +597,22 @@ function awkProgramHazard(program: string): Hazard | undefined {
       slash = 'unclear';
       continue;
     }
+    if (c === '<') {
+      if (getlineDepth !== undefined && depth >= getlineDepth) return 'read';
+      i++;
+      slash = 'unclear';
+      continue;
+    }
     if (c === '(' || c === '[') { depth++; i++; slash = 'regex'; continue; }
-    if (c === ')' || c === ']') { depth--; i++; slash = 'divide'; continue; }
+    if (c === ')' || c === ']') {
+      depth--;
+      if (getlineDepth !== undefined && depth < getlineDepth) getlineDepth = undefined;
+      i++;
+      slash = 'divide';
+      continue;
+    }
     if (c === '{' || c === '}') {
-      if (c === '}') printDepth = undefined;
+      if (c === '}') { printDepth = undefined; getlineDepth = undefined; }
       i++;
       slash = 'regex';
       continue;
@@ -598,6 +626,11 @@ function awkProgramHazard(program: string): Hazard | undefined {
       // Any mention, not only a call: there is no reading of `system` in an
       // awk program that is not the built-in.
       if (word === 'system') return 'exec';
+      if (word === 'ENVIRON') return 'environment';
+      // Assigning an entry adds a file for awk to read after the operands
+      // confinement saw; reading one is rare enough to refuse with it.
+      if (word === 'ARGV') return 'read';
+      if (word === 'getline') getlineDepth = depth;
       if (word === 'print' || word === 'printf') printDepth = depth;
       slash = AWK_KEYWORDS.includes(word) ? 'unclear' : 'divide';
       continue;

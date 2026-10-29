@@ -109,11 +109,22 @@ export const REFUSED_COMMANDS = [
   'taskkill', 'tskill', 'reg', 'regedit', 'sc', 'net', 'runas', 'schtasks',
 ];
 
-/** Destructive or outward-facing subcommands of otherwise-permitted multiplexers. */
+/**
+ * Destructive or outward-facing subcommands of otherwise-permitted multiplexers.
+ *
+ * git's list includes the subcommands that write the working tree, the index,
+ * the object store or a file of their own (`rm`, `mv`, `worktree`,
+ * `format-patch`, ...): left on the prompt tier, one approval ran the write on
+ * a host with no sandbox to stop it, where this list is the only guard.
+ */
 const REFUSED_SUBCOMMANDS: Record<string, string[]> = {
   git: ['push', 'reset', 'clean', 'checkout', 'switch', 'restore', 'rebase', 'merge', 'commit',
     'am', 'apply', 'cherry-pick', 'revert', 'stash', 'gc', 'prune', 'filter-branch',
-    'update-ref', 'remote', 'config', 'init', 'clone', 'fetch', 'pull', 'submodule'],
+    'update-ref', 'remote', 'config', 'init', 'clone', 'fetch', 'pull', 'submodule',
+    'add', 'rm', 'mv', 'worktree', 'notes', 'format-patch', 'bisect', 'replace', 'mergetool',
+    'repack', 'update-index', 'read-tree', 'checkout-index', 'merge-file', 'bundle',
+    'commit-tree', 'write-tree', 'mktree', 'mktag', 'unpack-objects', 'fast-import',
+    'pack-refs', 'prune-packed', 'maintenance', 'sparse-checkout'],
   npm: ['publish', 'unpublish', 'deprecate', 'owner', 'access', 'token', 'login', 'logout'],
   yarn: ['publish', 'npm'],
   pnpm: ['publish'],

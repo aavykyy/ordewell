@@ -91,6 +91,16 @@ describe('classifyCommand', () => {
       'touch newfile',
       'git push origin main',
       'git commit -m "x"',
+      // Writes to the working tree, the index or a file of their own: on a host
+      // with no sandbox, one approval of these deleted a tracked file.
+      'git rm old.txt',
+      'git rm -r src',
+      'git add README.md',
+      'git mv a.txt b.txt',
+      'git worktree remove ../wt',
+      'git notes add -m hello',
+      'git format-patch -1 HEAD',
+      'git -C sub rm old.txt',
       'npm publish',
       'kubectl delete pod foo',
     ])('%s', (cmd) => {
@@ -639,6 +649,10 @@ describe('flags on permitted binaries are an allowlist, not an afterthought', ()
     'tree -o out.txt',
     'git diff --output=out.diff',
     'git archive --output=x.tar HEAD',
+    // sort writes its run files into the directory these name.
+    'sort -T . names.txt',
+    'sort -T/tmp names.txt',
+    'sort --temporary-directory=/tmp names.txt',
     'find . -fprint out.txt',
     'find . -fprint0 out.txt',
     'find . -fprintf out.txt "%p"',
@@ -958,7 +972,7 @@ describe('a command runner is classified by the command it runs', () => {
   );
 });
 
-describe('sed and awk programs are read for commands they run and files they write', () => {
+describe('sed and awk programs are read for commands they run and files they write or read', () => {
   it.each([
     "awk 'BEGIN{system(\"rm -rf x\")}'",
     "awk '{print | \"sh\"}' f",
@@ -972,6 +986,35 @@ describe('sed and awk programs are read for commands they run and files they wri
     'sed -f script.sed f',
   ])('refuses %s', (cmd) => {
     expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // Path confinement reads only the arguments, so a file the program names, and
+  // the environment that holds provider keys, were reached with no prompt once
+  // any ordinary `sed` or `awk` had been approved.
+  it.each([
+    ["sed -n '1r /etc/passwd' README.md", '"r"/"R" command'],
+    ["sed '$R ~/.ssh/id_rsa' README.md", '"r"/"R" command'],
+    ["sed -e 's/a/b/' -e '1 r /etc/passwd' f", '"r"/"R" command'],
+    [`awk 'BEGIN{while((getline l < "/etc/passwd")>0) print l}'`, '"getline <"'],
+    [`awk '{getline line<"/etc/passwd"; print line}' f`, '"getline <"'],
+    [`awk 'BEGIN{getline a[1] < "/etc/passwd"; print a[1]}'`, '"getline <"'],
+    [`awk 'BEGIN{ARGV[1]="/etc/passwd"; ARGC=2} {print}'`, '"ARGV"'],
+    [`awk 'BEGIN{print ENVIRON["OPENAI_API_KEY"]}'`, '"ENVIRON"'],
+    ["awk 'BEGIN{for (k in ENVIRON) print k, ENVIRON[k]}'", '"ENVIRON"'],
+  ])('refuses %s, which reads what confinement cannot see', (cmd, named) => {
+    const { tier, reason } = classifyCommand(cmd);
+    expect(tier).toBe('refuse');
+    expect(reason).toContain(named);
+  });
+
+  it('leaves getline from the input, and a comparison outside it, on the prompt tier', () => {
+    expect(classifyCommand("awk '{while ((getline line) > 0) n++} END {print n}' f")).toEqual({ tier: 'ask', scope: 'awk' });
+    expect(classifyCommand("awk 'NR < 3 {print}' f")).toEqual({ tier: 'ask', scope: 'awk' });
+    expect(classifyCommand("awk '{if ((getline l) < 1) exit; print l}' f")).toEqual({ tier: 'ask', scope: 'awk' });
+    expect(classifyCommand("awk '{getline}\n$1 < 3 {print}' f")).toEqual({ tier: 'ask', scope: 'awk' });
+    expect(classifyCommand(`awk '{print $1 "<" ENV}' f`)).toEqual({ tier: 'ask', scope: 'awk' });
+    expect(classifyCommand("sed 's/r/R/g' f")).toEqual({ tier: 'ask', scope: 'sed' });
+    expect(classifyCommand("sed -n '1p' f").tier).toBe('auto');
   });
 
   // GNU sed takes an option after a file name, so the script can arrive last.

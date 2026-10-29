@@ -240,6 +240,27 @@ describe('BaseFileSystem — bash tiers', () => {
     expect((await fs.bash('npm test')).output).not.toContain('sed -n');
   });
 
+  // A grant for `sed` or `awk` is the bare binary, so these ran unprompted once
+  // an ordinary substitution or print had been approved, and on a host with no
+  // sandbox one approval of `git rm` deleted the file.
+  it.each([
+    ["sed 's/hello/world/' README.md", "sed -n '1r /tmp/outside-secret.txt' README.md"],
+    ["awk '{print}' README.md", "awk 'BEGIN{while((getline l < \"/tmp/outside-secret.txt\")>0) print l}'"],
+    ["awk '{print}' README.md", "awk 'BEGIN{print ENVIRON[\"OPENAI_API_KEY\"]}'"],
+    ['git log', 'git rm README.md'],
+  ])('runs nothing for "%s" then "%s", whatever was approved', async (approved, next) => {
+    const fs = new TestFileSystem();
+    const asked: string[] = [];
+    fs.setApproval(new ApprovalPolicy({ ask: async (req) => { asked.push(req.subject); return true; } }));
+
+    await fs.bash(approved);
+    const result = await fs.bash(next);
+
+    expect(result.success).toBe(false);
+    expect(fs.bashCalls).toEqual([approved]);
+    expect(asked).not.toContain(next);
+  });
+
   // The model wrote the path from the directory it cd'd into; the refusal names
   // it from the root, which reads as a path it never meant without the reason.
   it('says why a path after an unfollowed cd was judged from the root', async () => {
