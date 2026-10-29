@@ -1123,6 +1123,18 @@ a *read-only task*'s `fetch` and `web_search`, which never ask anyone; change
 and ops tasks never pass through it.
 *Avoid:* "SSRF check" for the whole decision (the guard is its last step).
 
+**Repository runner configuration** — the files in a repository that its
+runner loads at launch and that can run code or redirect its traffic: Claude
+Code's `.mcp.json`, `.claude/settings.json`, `.claude/settings.local.json`,
+`.claude/hooks/`, `.claude/plugins/`, `.claude-plugin/`, and the `plugin.json`
+and `marketplace.json` manifests under `.claude/`
+(`repositoryRunnerConfigPaths`). A *planner* loads none of it (ADR-0028); a
+change or ops task loads it as its runner does, so a start whose tree differs
+from the run's base in one of these paths is held for the user's consent.
+OpenCode's and Codex's project configuration is not classified.
+*Avoid:* "project settings" (it names one file, not hooks, plugins and servers
+together), "trusted config" (no runner's trust dialog decides it).
+
 **Project MCP server** — an MCP server the repository declares for its
 runner (`.mcp.json`, the project's `opencode.json`, `.codex/config.toml`).
 A planner's runner never reads these itself (ADR-0028); Ordewell does, and
