@@ -110,3 +110,132 @@ describe('execution audit: a release waits for a landing started by a resolver',
     expect(ops.lastIndexOf('release:t1')).toBeGreaterThan(ops.lastIndexOf('integrate:t1'));
   });
 });
+
+/**
+ * Mark complete of the conflicted task and its resolver's landing of it can
+ * overlap: each holds the task, and neither's end may let go of the other's
+ * hold. Every `integrate:t1` after the first (the conflict) is one of them.
+ */
+describe('execution audit: overlapping landings of one task each hold it', () => {
+  const landingsOfT1 = (env: Awaited<ReturnType<typeof resolving>>) => env.isolation.taskIdsFor('integrate').filter((id) => id === 't1').length - 1;
+
+  /** Mark complete of t1 lands, held; then t2 passes and its resolver landing of t1 queues behind it, held. */
+  async function overlapping(env: Awaited<ReturnType<typeof resolving>>) {
+    const openOwn = env.isolation.holdIntegration('t1');
+    const marked = env.orchestrator.markTaskComplete('t1');
+    await vi.waitFor(() => expect(landingsOfT1(env)).toBe(1));
+    return {
+      marked,
+      openOwn,
+      resolverLands: async () => {
+        const openResolver = env.isolation.holdIntegration('t1');
+        env.latest('t2').reportComplete({ status: 'done', summary: '' });
+        await vi.waitFor(() => expect(landingsOfT1(env)).toBe(2));
+        return openResolver;
+      },
+    };
+  }
+
+  it('holds a delete begun after both queued until the later landing settles', async () => {
+    const env = await resolving();
+    const { marked, openOwn, resolverLands } = await overlapping(env);
+    const openResolver = await resolverLands();
+
+    let released = false;
+    const release = env.orchestrator.releaseTask('t1').then(() => { released = true; });
+    openOwn();
+    await marked;
+    await flushMicrotasks();
+
+    // The resolver's merge is still in t1's worktree.
+    expect(released).toBe(false);
+    expect(env.isolation.taskIdsFor('release')).toEqual([]);
+    await expect(env.orchestrator.retryTask('t1')).rejects.toThrow('is being marked complete: its work is landing');
+
+    openResolver();
+    await release;
+    const ops = env.ops();
+    expect(ops.lastIndexOf('release:t1')).toBeGreaterThan(ops.lastIndexOf('integrate:t1'));
+    expect(env.orchestrator.storeInstance.getExecutionLog().filter((s) => s.id === 't1')).toHaveLength(1);
+  });
+
+  it('holds a delete begun under the first landing for a second one that began before it settled', async () => {
+    const env = await resolving();
+    const { marked, openOwn, resolverLands } = await overlapping(env);
+
+    let released = false;
+    const release = env.orchestrator.releaseTask('t1').then(() => { released = true; });
+    await flushMicrotasks();
+    const openResolver = await resolverLands();
+    openOwn();
+    await marked;
+    await flushMicrotasks();
+
+    expect(released).toBe(false);
+    expect(env.isolation.taskIdsFor('release')).toEqual([]);
+    await expect(env.orchestrator.retryTask('t1')).rejects.toThrow('is being marked complete: its work is landing');
+
+    openResolver();
+    await release;
+    const ops = env.ops();
+    expect(ops.lastIndexOf('release:t1')).toBeGreaterThan(ops.lastIndexOf('integrate:t1'));
+  });
+});
+
+describe('execution audit: a later landing does not undo the one that completed the task', () => {
+  it('keeps the conflicted task completed when its resolver landing fails after Mark complete landed it', async () => {
+    const env = await resolving();
+    const openOwn = env.isolation.holdIntegration('t1');
+    const marked = env.orchestrator.markTaskComplete('t1');
+    await vi.waitFor(() => expect(env.isolation.taskIdsFor('integrate').filter((id) => id === 't1')).toHaveLength(2));
+    const openResolver = env.isolation.holdIntegration('t1');
+    env.latest('t2').reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(env.isolation.taskIdsFor('integrate').filter((id) => id === 't1')).toHaveLength(3));
+
+    openOwn();
+    await marked;
+    expect(env.orchestrator.storeInstance.get('t1')!.status).toBe('completed');
+    // git cannot check the second merge of work that has already landed.
+    env.isolation.outcomes.set('t1', 'failed');
+    openResolver();
+    await vi.waitFor(() => expect(env.orchestrator.storeInstance.get('t2')!.status).toBe('completed'));
+    await flushMicrotasks();
+
+    expect(env.orchestrator.storeInstance.get('t1')!.status).toBe('completed');
+  });
+});
+
+describe('execution audit: no landing of a task begins while it is being released', () => {
+  it('does not land the conflicted task through a resolver that passes while its worktree is torn down', async () => {
+    const env = await resolving();
+    const release = env.isolation.release.bind(env.isolation);
+    vi.spyOn(env.isolation, 'release').mockImplementation(async (run, taskId, opts) => {
+      if (taskId === 't1') {
+        env.latest('t2').reportComplete({ status: 'done', summary: '' });
+        await vi.waitFor(() => expect(env.orchestrator.storeInstance.get('t2')!.status).toBe('completed'));
+      }
+      return release(run, taskId, opts);
+    });
+
+    await env.orchestrator.releaseTask('t1');
+    await flushMicrotasks();
+
+    // Only the merge that conflicted: none was begun under the teardown.
+    expect(env.isolation.taskIdsFor('integrate').filter((id) => id === 't1')).toHaveLength(1);
+    expect(env.orchestrator.storeInstance.get('t1')!.status).not.toBe('completed');
+  });
+
+  it('does not land a task marked complete while its worktree is torn down', async () => {
+    const env = await resolving();
+    const release = env.isolation.release.bind(env.isolation);
+    vi.spyOn(env.isolation, 'release').mockImplementation(async (run, taskId, opts) => {
+      if (taskId === 't1') await env.orchestrator.markTaskComplete('t1');
+      return release(run, taskId, opts);
+    });
+
+    await env.orchestrator.releaseTask('t1');
+
+    expect(env.isolation.taskIdsFor('integrate').filter((id) => id === 't1')).toHaveLength(1);
+    expect(env.orchestrator.storeInstance.get('t1')!.status).not.toBe('completed');
+  });
+});

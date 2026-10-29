@@ -155,11 +155,12 @@ export class Landing {
    * clean — and one the resolver did not really bring along conflicts again
    * instead of being taken at its word. Null when there is nothing to land.
    * The task is named before its landing settles, so the caller can hold
-   * its worktree for as long as the merge is in it.
+   * its worktree for as long as the merge is in it; one the caller says is
+   * `leaving` the plan is not landed at all.
    */
-  landResolved(resolverId: string): { task: Readonly<Task>; outcome: Promise<LandingOutcome> } | null {
+  landResolved(resolverId: string, leaving: (taskId: string) => boolean = () => false): { task: Readonly<Task>; outcome: Promise<LandingOutcome> } | null {
     const conflictedId = this.runs.takeResolver(resolverId);
-    if (!conflictedId) return null;
+    if (!conflictedId || leaving(conflictedId)) return null;
     const task = this.tasks.get(conflictedId);
     // Only the conflict it was added for: a task retried since has a new
     // attempt of its own, whose worktree it would merge half-done.
