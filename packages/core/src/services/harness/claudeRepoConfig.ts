@@ -1,5 +1,6 @@
-import * as os from 'os';
 import * as path from 'path';
+import type { RunnerEnv } from '../../plugins/types';
+import { expandRunnerHome } from '../../utils/runnerHome';
 import {
   NO_SERVERS, insideOnDisk, isRecord, readText, takesOrdewellsName,
   type InstructionFile, type ProjectMcpServer, type ProjectServers, type RepoConfigReader,
@@ -80,11 +81,13 @@ export const CLAUDE_REPO_CONFIG: RepoConfigReader = {
  * The user's local-scope servers for `workspace`: their own entries in
  * Claude Code's `.claude.json`, which user-only settings stop the CLI from
  * loading for a planner, though the repository has no say in them
- * (ADR-0028). `configDir` is the `CLAUDE_CONFIG_DIR` the planner runs under.
+ * (ADR-0028). `env` is the environment the planner runs with: its
+ * `CLAUDE_CONFIG_DIR` holds the file, else its home does.
  */
-export function claudeLocalServers(configDir: string | undefined, workspace: string): Record<string, unknown> {
-  const file = configDir ? path.join(configDir, '.claude.json') : path.join(os.homedir(), '.claude.json');
-  const text = readText(file);
+export function claudeLocalServers(env: RunnerEnv, workspace: string): Record<string, unknown> {
+  const configDir = env.CLAUDE_CONFIG_DIR?.trim();
+  const file = expandRunnerHome(configDir ? path.join(configDir, '.claude.json') : '~/.claude.json', env);
+  const text = file === null ? undefined : readText(file);
   if (text === undefined) return {};
   try {
     const parsed: unknown = JSON.parse(text);

@@ -115,10 +115,11 @@ export interface RunnerModelDiscovery {
    * Stdio JSON-RPC discovery (Codex `app-server`): spawn the command, send
    * `initialize` then `model/list`, and read the catalog from the response.
    * Tried BEFORE apiDiscovery and command discovery. When the call fails,
-   * `cacheFile` (the runner's own on-disk catalog cache, `~` expanded) is
-   * read before falling through to the remaining discovery methods.
+   * `cacheFile` (the runner's own on-disk catalog cache, `~` expanded, or
+   * found from the runner's environment) is read before falling through to
+   * the remaining discovery methods.
    */
-  appServer?: { command: string; args: string[]; cacheFile?: string };
+  appServer?: { command: string; args: string[]; cacheFile?: string | ((env: RunnerEnv) => string) };
   /**
    * Optional last-resort list for a CLI that cannot enumerate
    * models. Used only when command discovery fails entirely or the CLI is

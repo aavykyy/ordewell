@@ -49,6 +49,8 @@ import {
   WorkspaceNotAProjectError,
   ensureStateDirIgnored,
   runnerForProvider,
+  isApiProvider,
+  isPlannerBackend,
   PlannerModelMemory,
   selectPlanner,
   admitSettingsEnv,
@@ -156,11 +158,13 @@ export class OrchestratorPool {
   private settingsService = new SettingsService();
   private plannerModelMemory = new PlannerModelMemory(this.settingsService);
   /**
-   * The model a settings write picked in this daemon. The environment's model
-   * is otherwise inherited, and an agent planning only because detection
-   * found it does not plan with an inherited model it cannot be shown to run.
+   * The model a settings write picked in this daemon, and the workspace it was
+   * picked in. The environment's model is otherwise inherited, and an agent
+   * planning only because detection found it does not plan with an inherited
+   * model it cannot be shown to run. The pick is that workspace's: another
+   * may name another account, whose catalog judges the model afresh.
    */
-  private pickedModel: PlannerPick | undefined;
+  private pickedModel: (PlannerPick & { workspace: string }) | undefined;
   private runner: IRunner;
   /** One probe per daemon, asked again whenever the runner list is refreshed (ADR-0033). */
   private codexSandbox: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
@@ -414,7 +418,7 @@ export class OrchestratorPool {
       enabledRunners: this.enabledRunnerOverride(),
       modelOverride,
       providerModelLists: () => this.cachedProviderLists,
-      pickedModel: () => this.pickedModel,
+      pickedModel: () => (this.pickedModel?.workspace === workspaceKey(workspace) ? this.pickedModel : undefined),
       agentCatalog: (provider) => this.plannerCatalogFor(provider, workspace).map((model) => model.id),
     });
   }
@@ -501,8 +505,9 @@ export class OrchestratorPool {
    * remembered model against — a harness planner's own runner catalog, or the
    * cross-provider picker list for a vendor (ADR-0009), same split as
    * `plannerModelItems` in the TUI reducer. Read from whatever the resolver
-   * has already cached so this stays synchronous; a cold cache degrades to an
-   * empty catalog rather than kicking off discovery mid-settings-write.
+   * has already cached so this stays synchronous; the routes discover it
+   * first ({@link discoverPlannerCatalogs}), and a catalog still cold degrades
+   * to an empty one rather than kicking off discovery mid-settings-write.
    */
   private plannerCatalogFor(provider: PlannerBackendId, workspace?: string): PlannerModelCandidate[] {
     const runner = runnerForProvider(provider);
@@ -510,6 +515,29 @@ export class OrchestratorPool {
       return this.resolverFor(workspace).getCachedRunnerModels(runner).map((m) => ({ id: m.modelId, variants: m.variants }));
     }
     return this.modelResolver.getCachedPickerOptions().map((o) => ({ id: o.id }));
+  }
+
+  /**
+   * Discover what {@link plannerCatalogFor} reads for `workspace`'s planner in
+   * effect and, on a switch, for `switchTo`, so the synchronous read or write
+   * that follows judges the model against that workspace's own catalog. Only
+   * a models request discovers it otherwise, and a client switching planners
+   * asks for models after the switch: a cold catalog would recall nothing
+   * and clear the model. A vendor planner's model does not depend on its
+   * catalog, so that is fetched only for a switch to one. Never throws: a
+   * catalog that cannot be discovered stays empty.
+   */
+  async discoverPlannerCatalogs(sessionId: string | undefined, requestWorkspace: string | undefined, switchTo?: unknown): Promise<void> {
+    const workspace = this.settingsWorkspace(sessionId, requestWorkspace);
+    const incoming = typeof switchTo === 'string' && isPlannerBackend(switchTo) ? switchTo : undefined;
+    const runners = [this.plannerProviderInEffect(workspace), incoming]
+      .map((provider) => provider && runnerForProvider(provider))
+      .filter((runner): runner is RunnerId => !!runner);
+    const resolver = this.resolverFor(workspace);
+    await Promise.all([
+      resolver.modelsForRunners(runners),
+      incoming && isApiProvider(incoming) ? resolver.pickerOptions().catch(() => []) : undefined,
+    ]);
   }
 
   /**
@@ -555,8 +583,8 @@ export class OrchestratorPool {
     };
     const touchesPlanner = Object.values(plannerChange).some((v) => v !== undefined);
     // Judged against the incoming provider's catalog as already discovered —
-    // before the credential refresh below clears the resolver's cache — so a
-    // settings write never waits on (async) discovery.
+    // before the credential refresh below clears the resolver's cache — so
+    // the write itself never waits on (async) discovery.
     const selection = touchesPlanner
       ? selectPlanner(current, plannerChange, this.plannerModelMemory, this.plannerCatalogFor(plannerChange.provider ?? current.provider, workspace))
       : undefined;
@@ -599,7 +627,9 @@ export class OrchestratorPool {
       process.env.ORDEWELL_PLANNER_EFFORT = selection.next.effort;
       // Read once the env above is written: the pick is for whoever that
       // routes to, which a switch or the model's own catalog may have changed.
-      if (plannerChange.model !== undefined) this.pickedModel = { model: selection.next.model, provider: this.plannerProviderInEffect(workspace) };
+      if (plannerChange.model !== undefined) {
+        this.pickedModel = { model: selection.next.model, provider: this.plannerProviderInEffect(workspace), workspace: workspaceKey(workspace) };
+      }
     }
 
     if (changes.modelAllowlist && typeof changes.modelAllowlist === 'object') {
@@ -716,8 +746,8 @@ export class OrchestratorPool {
    */
   private resolverFor(workspace: string | undefined): ModelResolver {
     if (this.suppliedModelResolver || !workspace) return this.modelResolver;
-    const key = resolve(workspace);
-    if (key === resolve(process.cwd())) return this.modelResolver;
+    const key = workspaceKey(workspace);
+    if (key === workspaceKey(undefined)) return this.modelResolver;
     let resolver = this.workspaceResolvers.get(key);
     if (!resolver) {
       resolver = this.modelResolver.withRunnerEnv(async () => ({ ...process.env, ...(await workspaceEnvOf(key)) }));
@@ -1011,4 +1041,9 @@ export function removeSession(sessionId: string, workspace: string) { return del
 
 function stringField(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+/** One spelling per workspace; a request that names none is the daemon's cwd's. */
+function workspaceKey(workspace: string | undefined): string {
+  return resolve(workspace ?? process.cwd());
 }

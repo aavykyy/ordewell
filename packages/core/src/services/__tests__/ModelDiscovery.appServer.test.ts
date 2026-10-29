@@ -40,6 +40,19 @@ lines.on('line', (line) => {
     expect(models?.map((m) => m.displayName)).toEqual(['日本語モデル']);
   });
 
+  it('launches the server under the environment it is given', async () => {
+    const script = stub(`
+lines.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.id === 1) return send({ id: 1, result: {} });
+  send({ id: 2, result: { data: [{ id: process.env.CODEX_HOME }] } });
+});`);
+
+    const models = await defaultAppServerClient(process.execPath, [script], { timeout: 5000, env: { ...process.env, CODEX_HOME: '/accounts/work/codex' } });
+
+    expect(models?.map((m) => m.id)).toEqual(['/accounts/work/codex']);
+  });
+
   it('answers null, instead of crashing the host, when the server stops reading its input', async () => {
     const script = stub(`
 lines.on('line', (line) => {

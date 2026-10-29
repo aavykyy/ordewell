@@ -3,6 +3,7 @@ import { LineBuffer, type AgentProcessDeps } from './AgentAdapter';
 import { CodexRpc, type RpcMessage } from './codexRpc';
 import { RunnerProcess } from './runnerProcess';
 import { settleWithin } from './settleWithin';
+import type { RunnerEnv } from '../../plugins/types';
 
 /**
  * One raw model entry from an app-server `model/list` response. Field names are
@@ -21,8 +22,14 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 export interface AppServerModelsOptions {
   /** How long the whole handshake gets before the call answers `null`. */
   timeout?: number;
+  /** The environment the runner is launched with, which can name its account and home; this process's when absent. */
+  env?: RunnerEnv;
   /** Tests inject the process boundary; the real call stays on the defaults. */
   deps?: Partial<AgentProcessDeps>;
+}
+
+function definedOnly(env: RunnerEnv): Record<string, string> {
+  return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined));
 }
 
 /** A protocol line, or null for the banners some CLIs print beside their JSON. */
@@ -66,10 +73,9 @@ export async function openAppServer(command: string, args: string[], launch: App
   const runner = new RunnerProcess({
     spawn: nodeSpawn,
     fetch: globalThis.fetch,
-    // The cwd is no workspace: discovery asks for the catalog before one is
-    // chosen, so it pays no direnv round trip before a spawn with a deadline.
-    // The account monitor passes the workspace's environment itself, since
-    // that can choose whose account is read.
+    // The cwd is no workspace, so it pays no direnv round trip before a spawn
+    // with a deadline. Discovery and the account monitor pass the workspace's
+    // environment themselves, since that can choose whose account is read.
     workspaceEnv: async () => ({}),
     ...launch.deps,
   });
@@ -144,7 +150,11 @@ export async function discoverAppServerModels(
   args: string[],
   options: AppServerModelsOptions = {},
 ): Promise<AppServerModel[] | null> {
-  const server = await openAppServer(command, args, { cwd: process.cwd(), deps: options.deps });
+  const env = options.env;
+  const server = await openAppServer(command, args, {
+    cwd: process.cwd(),
+    deps: { ...(env ? { workspaceEnv: async () => definedOnly(env) } : {}), ...options.deps },
+  });
   if (!server) return null;
   const { rpc } = server;
 

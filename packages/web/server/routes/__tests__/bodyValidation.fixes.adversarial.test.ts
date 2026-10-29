@@ -62,7 +62,7 @@ describe('a plan route given a body that is not JSON', () => {
 
 describe('the settings route given a malformed body', () => {
   it('answers 400', async () => {
-    const pool = { getSettings: vi.fn(), updateSettings: vi.fn() } as unknown as OrchestratorPool;
+    const pool = { getSettings: vi.fn(), updateSettings: vi.fn(), discoverPlannerCatalogs: vi.fn(async () => undefined) } as unknown as OrchestratorPool;
     const app = new Hono().route('/api/settings', settingsRoute(pool));
 
     const res = await app.request('/api/settings', {
@@ -79,7 +79,8 @@ describe('the runner list', () => {
   it('asks the login probe and the planner model of the workspace that will plan', async () => {
     const getInstalledRunners = vi.fn(async () => []);
     const getRunnerState = vi.fn(() => ({ enabledRunners: [], orchestratorModel: '' }));
-    const pool = { getInstalledRunners, getRunnerState } as unknown as OrchestratorPool;
+    const discoverPlannerCatalogs = vi.fn(async () => undefined);
+    const pool = { getInstalledRunners, getRunnerState, discoverPlannerCatalogs } as unknown as OrchestratorPool;
 
     const res = await new Hono().route('/api/runners', runnersRoute(pool))
       .request('/api/runners?workspace=%2Fprojects%2Fa');
@@ -87,6 +88,8 @@ describe('the runner list', () => {
     expect(res.status).toBe(200);
     expect(getInstalledRunners).toHaveBeenCalledWith('/projects/a');
     expect(getRunnerState).toHaveBeenCalledWith('/projects/a');
+    expect(discoverPlannerCatalogs).toHaveBeenCalledWith(undefined, '/projects/a');
+    expect(discoverPlannerCatalogs.mock.invocationCallOrder[0]).toBeLessThan(getRunnerState.mock.invocationCallOrder[0]);
   });
 });
 
