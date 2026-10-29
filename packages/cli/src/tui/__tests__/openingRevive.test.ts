@@ -13,6 +13,11 @@ import { messagesOf } from './chat';
  * screen, nor carry that session's queued prompt into the opening.
  */
 
+const RUN_SETTINGS = {
+  supervisorLevel: 'watch', mergeAtGatesAutomatically: false, plannedWithTrailer: true,
+  autorun: false, supervisorRetryLimit: 3, wakeUpReadBudget: 0,
+} as const;
+
 const refused = (): Error => Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:3742'), { code: 'ECONNREFUSED' });
 
 const B_PLAN = {
@@ -159,6 +164,62 @@ describe('an opening retried after a revived daemon', () => {
     expect(h.state.planner).toBe('idle');
     expect(messagesOf(h.state).at(-1)).toMatchObject({ role: 'error' });
     expect(messagesOf(h.state).at(-1)?.text).toContain('No Ordewell server is listening on port 3742');
+  });
+
+  it('reads the run settings back onto the welcome it lets the opening go to', async () => {
+    const h = tui(
+      {
+        startConversation: vi.fn().mockRejectedValue(refused()),
+        getSettings: vi.fn(async () => ({ run: { ...RUN_SETTINGS, autorun: true } })),
+      },
+      { reviveDaemon: vi.fn().mockResolvedValue(false) },
+    );
+
+    h.type('Opening goal');
+    await h.settle();
+
+    expect(h.state.sessionId).toBeNull();
+    expect(h.api.getSettings).toHaveBeenLastCalledWith(undefined);
+    expect(h.state.runSettingsKnown).toBe(true);
+    expect(h.state.runSettings.autorun).toBe(true);
+  });
+
+  it('reads the run settings back onto the welcome when the retry is refused too', async () => {
+    const h = tui({
+      startConversation: vi.fn().mockRejectedValue(refused()),
+      getSettings: vi.fn(async () => ({ run: { ...RUN_SETTINGS, autorun: true } })),
+    });
+
+    h.type('Opening goal');
+    await h.settle();
+
+    expect(h.state.sessionId).toBeNull();
+    expect(h.state.runSettingsKnown).toBe(true);
+    expect(h.state.runSettings.autorun).toBe(true);
+  });
+
+  it("keeps the welcome's run settings off a session loaded while the daemon failed to come back", async () => {
+    const revive = deferred<boolean>();
+    const h = tui(
+      {
+        startConversation: vi.fn().mockRejectedValue(refused()),
+        getSettings: vi.fn(async (sessionId?: string) => ({ run: { ...RUN_SETTINGS, autorun: sessionId === 'B' } })),
+      },
+      { reviveDaemon: vi.fn(() => revive.promise) },
+    );
+
+    h.type('Opening goal');
+    await vi.waitFor(() => expect(h.deps.reviveDaemon).toHaveBeenCalled());
+    h.fire({ type: 'loadSession', sessionId: 'B' });
+    await vi.waitFor(() => expect(h.state.sessionId).toBe('B'));
+    await vi.waitFor(() => expect(h.state.runSettings.autorun).toBe(true));
+
+    revive.resolve(false);
+    await h.settle();
+
+    expect(h.api.getSettings).toHaveBeenLastCalledWith(undefined);
+    expect(h.state.sessionId).toBe('B');
+    expect(h.state.runSettings.autorun).toBe(true);
   });
 
   it('does not revive twice for one opening: a refused retry is reported on the welcome', async () => {
