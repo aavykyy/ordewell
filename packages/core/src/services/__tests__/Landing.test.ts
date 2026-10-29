@@ -328,10 +328,10 @@ describe('Landing', () => {
     it('lands the conflicted task it was added for once it has landed itself', async () => {
       const { landing, runs, record } = await resolving();
 
-      const resolved = await landing.landResolved('r1');
+      const resolved = landing.landResolved('r1');
 
       expect(resolved?.task.id).toBe('t1');
-      expect(resolved?.outcome).toEqual({ kind: 'landed', messages: [{ level: 'info', text: 'Task "Task t1" landed through its conflict resolution.' }] });
+      expect(await resolved?.outcome).toEqual({ kind: 'landed', messages: [{ level: 'info', text: 'Task "Task t1" landed through its conflict resolution.' }] });
       expect(record('t1')?.status).toBe('merged');
       expect(runs.planIsolation?.resolvers).toEqual({});
     });
@@ -340,14 +340,14 @@ describe('Landing', () => {
       const { landing, isolation, prepare, t1 } = await resolving();
       await prepare(t1);
 
-      expect(await landing.landResolved('r1')).toBeNull();
+      expect(landing.landResolved('r1')).toBeNull();
       expect(isolation.taskIdsFor('integrate')).toEqual(['t1']);
     });
 
     it('has nothing to land for a task that resolves nothing', async () => {
       const { landing } = await resolving();
 
-      expect(await landing.landResolved('t1')).toBeNull();
+      expect(landing.landResolved('t1')).toBeNull();
     });
 
     it('is built on the conflicted task\'s runner, model and mode, and merges its branch by hand', async () => {
