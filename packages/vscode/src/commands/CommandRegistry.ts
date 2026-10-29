@@ -6,7 +6,7 @@ import {
   DEFAULT_RUNNERS, ModelResolver, RunnerRegistry, saveState, clearState,
   listSessions, loadSession,
   SettingsService, installedPlannerDetected,
-  taskActionCommand, taskRowActions, type ExecutionCommand, type TaskAction,
+  taskActionCommand, taskRowView, type ExecutionCommand, type TaskAction,
 } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { forkConversation, rewindConversation, compactConversation } from '../plan/conversation';
@@ -59,10 +59,14 @@ export function orderLabelItems(plan: LegacyPlanState): { label: string; descrip
   }));
 }
 
-/** Whether a task's card offers `action`: a fresh retry on a failed task, else what its row offers. */
-function offers(action: Exclude<TaskAction, 'run' | 'complete' | 'uncomplete'>, task: Task, subtask: boolean): boolean {
+/**
+ * Whether a task's card offers `action`: a fresh retry on a failed task, else
+ * what its row offers, read against the plan as the card reads it, so a task
+ * held up by a failed dependency is blocked and offers Skip.
+ */
+function offers(action: Exclude<TaskAction, 'run' | 'complete' | 'uncomplete'>, task: Task, parent: Task | null, plan: LegacyPlanState): boolean {
   if (action === 'retry') return task.status === 'failed' && task.type !== 'user';
-  return taskRowActions(task, subtask ? 'subtask' : 'task').includes(action);
+  return taskRowView(task, { parent, tasks: plan.tasks }).actions.includes(action);
 }
 
 const PICK_WORDS = {
@@ -81,7 +85,7 @@ export async function pickTaskFor(action: keyof typeof PICK_WORDS, plan: LegacyP
   const id = typeof passed === 'string' ? passed : passed?.id;
   if (id) return id;
   const items = flattenTasksWithParents(plan.tasks)
-    .filter(({ task, parent }) => offers(action, task, parent !== null))
+    .filter(({ task, parent }) => offers(action, task, parent, plan))
     .map(({ task, label }) => ({ label: `${label}. ${task.title}`, description: task.id }));
   if (items.length === 0) {
     vscode.window.showInformationMessage(PICK_WORDS[action].none);
@@ -461,11 +465,15 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         vscode.window.showInformationMessage('No goal to regenerate from. Describe a goal first.');
         return;
       }
-      // A fresh plan ends the old one's scope, and with it the run (as New Session does).
+      // A fresh plan ends the old one's scope, and with it the run; the old
+      // plan is gone before the planner answers, so ask as New Session does.
       const run = deps.session.activity;
-      if (deps.session.isExecuting || run.advancesOnItsOwn || run.resumable) {
+      const running = deps.session.isExecuting || run.advancesOnItsOwn || run.resumable;
+      if (running || deps.getCurrentPlan().tasks.length > 0) {
         const confirm = await vscode.window.showWarningMessage(
-          'Regenerate the plan? The run in progress is stopped, and the current plan and its progress are replaced.',
+          running
+            ? 'Regenerate the plan? The run in progress is stopped, and the current plan and its progress are replaced.'
+            : 'Regenerate the plan? The current plan and its progress are replaced.',
           { modal: true },
           'Regenerate',
         );
