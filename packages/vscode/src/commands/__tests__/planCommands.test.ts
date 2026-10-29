@@ -10,7 +10,7 @@ const registerCommand = vscode.commands.registerCommand as unknown as ReturnType
 const showWarningMessage = vscode.window.showWarningMessage as unknown as ReturnType<typeof vi.fn>;
 const showInformationMessage = vscode.window.showInformationMessage as unknown as ReturnType<typeof vi.fn>;
 
-function registered({ isExecuting = false, activity = IDLE_ACTIVITY, unsaved = null as string | null } = {}) {
+function registered({ isExecuting = false, activity = IDLE_ACTIVITY, unsaved = null as string | null, tasks = [createTask({ id: 't1', order: 1, title: 'Parse JSON' })] } = {}) {
   registerCommand.mockClear();
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-plan-commands-'));
   const calls: string[] = [];
@@ -18,7 +18,7 @@ function registered({ isExecuting = false, activity = IDLE_ACTIVITY, unsaved = n
     session: { isExecuting, activity, reset: vi.fn(() => calls.push('reset')) },
     chatProvider: { setState: vi.fn(), conversation: { reset: vi.fn() }, run: { reset: vi.fn() } },
     fsAdapter: { getWorkspaceRoot: () => workspace },
-    getCurrentPlan: () => ({ ...createEmptyPlan(), tasks: [createTask({ id: 't1', order: 1, title: 'Parse JSON' })] }),
+    getCurrentPlan: () => ({ ...createEmptyPlan(), tasks }),
     setCurrentPlan: vi.fn(),
     getCurrentGoal: () => 'build me a parser',
     setCurrentGoal: vi.fn(),
@@ -61,8 +61,19 @@ describe('ordewell.regeneratePlan', () => {
     expect(h.deps.handleStartPlanning).toHaveBeenCalledWith('build me a parser');
   });
 
-  it('asks nothing with no run to stop', async () => {
-    const h = registered();
+  // startPlanning drops the old plan before the planner answers, so even a failed regenerate loses it.
+  it('asks before replacing an idle plan, and keeps it on a no', async () => {
+    const h = registered({ tasks: [createTask({ id: 't1', order: 1, title: 'Parse JSON', status: 'completed' })] });
+    showWarningMessage.mockResolvedValueOnce(undefined);
+
+    await h.command('ordewell.regeneratePlan')();
+
+    expect(showWarningMessage.mock.calls[0]![0]).toBe('Regenerate the plan? The current plan and its progress are replaced.');
+    expect(h.deps.handleStartPlanning).not.toHaveBeenCalled();
+  });
+
+  it('asks nothing with no plan and no run to lose', async () => {
+    const h = registered({ tasks: [] });
 
     await h.command('ordewell.regeneratePlan')();
 
