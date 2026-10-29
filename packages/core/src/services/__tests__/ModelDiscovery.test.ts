@@ -3,6 +3,26 @@ import { discoverGeminiModels, ModelDiscovery, type ExecImpl } from '../ModelDis
 import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { OPENCODE_MANIFEST } from '../../plugins/builtin/opencode.manifest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
+// Claude discovery reads its settings and credentials under HOME: an empty
+// one keeps a developer's own gateway models out of the exact lists below.
+let home: string;
+const savedHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+beforeEach(() => {
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-discovery-'));
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+});
+afterEach(() => {
+  for (const [key, value] of Object.entries(savedHome)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  fs.rmSync(home, { recursive: true, force: true });
+});
 
 function registryWith(...manifests: Array<{ name: string }>): RunnerRegistry {
   const byName = new Map(manifests.map((m) => [m.name, m]));

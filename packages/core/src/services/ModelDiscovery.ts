@@ -513,7 +513,14 @@ export class ModelDiscovery {
       return [];
     }
 
-    let models: DiscoveredModel[];
+    const found = await this.discoverFromSources(manifest);
+    const models = this.withSettingsModels(found.models, manifest);
+    if (found.cacheable && models.length > 0) this.cache.set(runner, models);
+    else this.misses.set(runner, { models, at: this.now() });
+    return models;
+  }
+
+  private async discoverFromSources(manifest: RunnerManifest): Promise<{ models: DiscoveredModel[]; cacheable: boolean }> {
     let cacheable = true;
     const discovery = manifest.modelDiscovery;
 
@@ -521,10 +528,7 @@ export class ModelDiscovery {
     //    runner's own cache file second; falls through on total failure.
     if (discovery.appServer) {
       const appServerModels = await this.discoverFromAppServer(manifest);
-      if (appServerModels && appServerModels.length > 0) {
-        this.cache.set(runner, appServerModels);
-        return appServerModels;
-      }
+      if (appServerModels && appServerModels.length > 0) return { models: appServerModels, cacheable: true };
       // Both live and cache-file sources failed — whatever the remaining
       // methods produce is a degraded fallback; don't cache it, so a
       // transient failure heals on the next lookup.
@@ -537,27 +541,34 @@ export class ModelDiscovery {
     if (discovery.apiDiscovery) {
       const apiModels = await discoverFromApi(manifest, discovery.apiDiscovery, this.fetchImpl);
       if (apiModels && apiModels.length > 0) {
-        models = applyVariants(mergeCanonicalAliases(apiModels, manifest), manifest);
-        if (cacheable && models.length > 0) this.cache.set(runner, models);
-        return models;
+        return { models: applyVariants(mergeCanonicalAliases(apiModels, manifest), manifest), cacheable };
       }
     }
 
     // 2. Command-based discovery (CLI subcommand or --help parsing).
     if (discovery.method === 'command' && (discovery.command || discovery.discoveryCommands?.length)) {
       const result = await discoverFromCommand(manifest, this.execImpl);
-      models = result.models;
       // A fallback-only result means the CLI wasn't reachable — don't cache
       // it, so a transient failure (PATH, network, cold start) heals on the
       // next lookup instead of persisting until an explicit refresh.
-      cacheable = !result.fromFallback;
-    } else {
-      models = buildFallbackModels(manifest);
+      return { models: result.models, cacheable: !result.fromFallback };
     }
+    return { models: buildFallbackModels(manifest), cacheable };
+  }
 
-    if (cacheable && models.length > 0) this.cache.set(runner, models);
-    else this.misses.set(runner, { models, at: this.now() });
-    return models;
+  /**
+   * Append the models the user registered in the runner's own settings file.
+   * Read on every discovery rather than cached apart, so a refresh picks up an
+   * edit; whatever the sources already offer keeps its entry and metadata.
+   */
+  private withSettingsModels(models: DiscoveredModel[], manifest: RunnerManifest): DiscoveredModel[] {
+    const settings = manifest.modelDiscovery.settingsModels;
+    if (!settings) return models;
+    const content = this.readFileImpl(settings.file);
+    if (!content) return models;
+    const seen = new Set(models.map((m) => m.modelId));
+    const added = parseModelOutput(content, settings.parser, manifest).filter((m) => !seen.has(m.modelId));
+    return added.length > 0 ? [...models, ...applyVariants(added, manifest)] : models;
   }
 
   clear(): void {
