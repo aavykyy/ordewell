@@ -17,6 +17,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   its own label and effort levels, and a missing or malformed file changes
   nothing. The file is read when Ordewell discovers Claude's models, so an
   edit made while Ordewell runs shows after a restart (#117).
+- **A task whose runner is still starting says so.** Until the runner reports
+  Ordewell's tools connected, its row, its VS Code card and its task chat read
+  "Connecting Ordewell's tools" instead of plain Running or Working, and
+  "Connecting Ordewell's tools, retry" once the one respawn takes over. No
+  prompt has been sent at that point, and nothing waits on an answer from you.
+  The wait, the respawn and the hold after a second miss are unchanged (#117).
 
 ## [0.11.1] - 2026-10-27
 

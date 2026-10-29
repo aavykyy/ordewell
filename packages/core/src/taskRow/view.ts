@@ -9,7 +9,7 @@ import { capConflictFiles } from '../services/conflictFiles';
 import { planBlocks, type BlockingSubject, type PlanBlocks } from '../services/blocking';
 import { checkOf, type LoopSubject } from '../models/Loop';
 import { assignedRunnerOf, assignmentConsequence, assignmentIssue, assignmentIssueText, type AssignmentScope } from '../services/AssignmentScope';
-import { approvalLabel, awaitingLabel, isTaskRunning, NOT_STARTED, receiptLabel, resumeLabel, taskStatusKind, WAITS_FOR_APPROVAL_LABEL, type TaskStatusKind } from './status';
+import { approvalLabel, attachingLabel, awaitingLabel, isTaskRunning, NOT_STARTED, receiptLabel, resumeLabel, taskStatusKind, WAITS_FOR_APPROVAL_LABEL, type TaskStatusKind } from './status';
 import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskRowPlacement } from './actions';
 import { loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, type LoopCheckState } from './loop';
 
@@ -29,6 +29,8 @@ export interface TaskRowSubject {
   idleSince?: string | null;
   /** What its runner reported through `task_complete` while the attempt winds down (ADR-0018, L1). */
   completionReceived?: Verdict['reported'];
+  /** Which spawn of its starting runner waits for Ordewell's tools to connect (ADR-0025). */
+  attaching?: 1 | 2;
   awaitingReason?: AwaitingReason;
   skipReason?: string;
   /** When a task paused on a usage limit resumes on its own (ISO time). */
@@ -170,6 +172,8 @@ export interface TaskRowView {
   approvals: string | null;
   /** "Completion received" while its runner's report waits for the verdict (ADR-0018, L1), in sentence case; null otherwise. Never a pass. */
   receipt: string | null;
+  /** "Connecting Ordewell's tools" while its runner starts and they have not connected (ADR-0025), in sentence case; null otherwise. */
+  attaching: string | null;
   /** That it waits for the user's approval to start, in sentence case; null once it started, or when it needs none. */
   waitsForApproval: string | null;
   /** Why it is held out of the scheduler, in sentence case; null when it is not held. */
@@ -327,6 +331,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     resumes: resumeLabel(task, context.now),
     approvals: approvalLabel(task.awaitingApproval),
     receipt: receiptLabel(task),
+    attaching: attachingLabel(task),
     waitsForApproval: task.waitsForApproval && NOT_STARTED.has(task.status) ? WAITS_FOR_APPROVAL_LABEL : null,
     holdReason: task.holdReason?.trim() || null,
     research: task.type === 'ai' && task.research === true,

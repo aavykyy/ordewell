@@ -33,7 +33,7 @@ export interface RunnerOption {
  * streams — `task_started` reaches it before the plan refresh does — so the
  * card's editability reads it when present.
  */
-export type TaskCardRun = Pick<RunTask, 'idleSince' | 'completionReceived' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage'> & { status?: Task['status'] };
+export type TaskCardRun = Pick<RunTask, 'idleSince' | 'completionReceived' | 'attaching' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage'> & { status?: Task['status'] };
 
 interface TaskCardProps {
   task: Task;
@@ -114,12 +114,13 @@ const STATUS_BADGE: Record<TaskStatusKind, { label: string; cls: string }> = {
   awaiting: { label: 'Awaiting User', cls: 'status-blocked' },
 };
 
-/** The status badge: what an awaiting task waits on, a report received, why it is held, the failure a blocked one waits on, or why one was skipped, outranks the generic word. */
-export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'receipt' | 'blockedBy' | 'skipReason' | 'holdReason'>): { label: string; cls: string } {
+/** The status badge: what an awaiting task waits on, a report received, a runner still connecting Ordewell's tools, why it is held, the failure a blocked one waits on, or why one was skipped, outranks the generic word. */
+export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'receipt' | 'attaching' | 'blockedBy' | 'skipReason' | 'holdReason'>): { label: string; cls: string } {
   const badge = STATUS_BADGE[row.status];
   if (row.status === 'skipped') return { ...badge, label: skippedLabel(row.skipReason) };
   if (row.awaiting) return { ...badge, label: row.awaiting };
   if (row.receipt) return { ...badge, label: row.receipt };
+  if (row.attaching) return { ...badge, label: row.attaching };
   if (row.holdReason) return { ...badge, label: holdLabel(row.holdReason) };
   return { ...badge, label: row.blockedBy ? blockedByLabel(row.blockedBy) : badge.label };
 }
@@ -445,6 +446,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
     handoff,
     idleSince,
     completionReceived: run?.completionReceived,
+    attaching: run?.attaching,
     awaitingApproval,
     isolation,
     mergeGate,

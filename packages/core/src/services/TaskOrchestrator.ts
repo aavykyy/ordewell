@@ -472,6 +472,11 @@ export class TaskOrchestrator {
     return this.attempts.receipt(taskId);
   }
 
+  /** Which spawn of a live attempt's runner waits for Ordewell's tools to connect (ADR-0025); null when none does. */
+  getToolsAttaching(taskId: string): 1 | 2 | null {
+    return this.attempts.attaching(taskId);
+  }
+
   /** Recent clean output of a task's latest attempt, running or ended; null if it never ran. */
   getLiveOutput(taskId: string, opts: LiveTailOptions): LiveTail | null {
     return this.attempts.liveTail(taskId, opts);

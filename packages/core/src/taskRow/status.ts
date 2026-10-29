@@ -77,6 +77,16 @@ export function receiptLabel(task: { status: string; completionReceived?: Verdic
   return isTaskRunning(task) && task.completionReceived ? RECEIPT_LABELS[task.completionReceived] : null;
 }
 
+/**
+ * That a running task's runner is up and has not yet reported Ordewell's
+ * tools connected (ADR-0025), on its first spawn or its one respawn; null
+ * otherwise. Nothing was sent to it, and no person is being asked anything.
+ */
+export function attachingLabel(task: { status: string; attaching?: 1 | 2 }): string | null {
+  if (!isTaskRunning(task) || !task.attaching) return null;
+  return task.attaching === 2 ? "Connecting Ordewell's tools, retry" : "Connecting Ordewell's tools";
+}
+
 /** Runner requests a task waits on (ADR-0018, A1); null when none do. */
 export function approvalLabel(count: number | undefined): string | null {
   if (!count) return null;

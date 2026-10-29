@@ -11,6 +11,7 @@ import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import type { IRunnerSession, StructuredEvent, StructuredTurnEnd } from '../../interfaces/IRunner';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
+import type { AttachState } from '../harness/ordewellBinding';
 import { OrdewellMcpServer, type CheckpointAnswer, type McpClientConfig } from '../mcp';
 import { claudeSteerRecording, fakeSpawn, fixture, sseResponse, type FakeAgentProcess, type FakeEventStream, type ScriptedReply } from './harnessTestKit';
 
@@ -28,7 +29,9 @@ type Turn = { onEvent: (event: AgentEvent) => void; resolve: () => void; reject:
 
 /** A task adapter driven by hand: each `send` stays open until the test ends it. */
 class HandAdapter implements TaskModeAgentAdapter {
-  async mcpAttached(): Promise<boolean> { return true; }
+  /** The runner's report on Ordewell's server: connected at once, unless a test holds it. */
+  attach: () => Promise<AttachState> = async () => 'connected';
+  mcpAttached(): Promise<AttachState> { return this.attach(); }
   readonly agentId = 'claude-code';
   readonly exited = false;
   readonly starts: AgentStartOptions[] = [];
@@ -941,6 +944,87 @@ describe('the Ordewell task tools (ADR-0022)', () => {
 
     expect(adapters[0].starts[0]).toHaveProperty('mcp');
     session.kill();
+  });
+});
+
+describe('the startup while Ordewell\'s tools attach (ADR-0025)', () => {
+  const plan = (): LegacyPlanState => ({
+    tasks: [createTask({ id: 'a1', order: 1, title: 'First', prompt: 'Do the task', taskMode: 'acceptEdits' })],
+    generatedAt: '2026-10-29T00:00:00Z', lastUpdated: '2026-10-29T00:00:00Z', status: 'approved', runners: ['claude-code'],
+  });
+
+  /** A plan whose every spawn waits for the test to say what its runner reports of the server. */
+  async function attaching() {
+    const reports: Array<(state: AttachState) => void> = [];
+    const { runner, adapters } = byHand((adapter) => {
+      adapter.attach = () => new Promise<AttachState>((resolve) => reports.push(resolve));
+    });
+    const messages: SessionMessage[] = [];
+    const notices: string[] = [];
+    const session = makeSession({ runner, broadcast: (m) => messages.push(m), onNotice: (n) => notices.push(n.message) });
+    session.loadPlan(plan(), 'goal', testWorkspace);
+    // A start waits for the spawn it claimed, so the test answers the attach while it runs.
+    const started = session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await until(() => reports.length === 1);
+    const row = () => session.runSnapshot().tasks.find((t) => t.id === 'a1')!;
+    const lastStatus = () => messages.filter((m) => m.type === 'status_update').at(-1)?.tasks.find((t) => t.id === 'a1');
+    return { session, started, adapters, reports, notices, row, lastStatus };
+  }
+
+  it('says the runner is connecting Ordewell\'s tools until it reports them connected, and sends the task only then', async () => {
+    const { session, started, adapters, reports, row, lastStatus } = await attaching();
+
+    expect(row()).toMatchObject({ status: 'in_progress', attaching: 1 });
+    expect(lastStatus()).toMatchObject({ status: 'in_progress', attaching: 1 });
+    expect(adapters[0].sent).toEqual([]);
+
+    reports[0]('connected');
+    await started;
+    await until(() => adapters[0].sent.length === 1);
+
+    expect(row().attaching).toBeUndefined();
+    expect(lastStatus()?.attaching).toBeUndefined();
+    expect(row().status).toBe('in_progress');
+    await session.execute({ command: 'stop_run' }, { kind: 'user' });
+  });
+
+  it('says the respawn is connecting them once the first spawn missed, then holds the task with nothing sent when it misses too', async () => {
+    const { started, adapters, reports, notices, row, lastStatus } = await attaching();
+
+    reports[0]('pending');
+    await until(() => reports.length === 2);
+
+    expect(row()).toMatchObject({ status: 'in_progress', attaching: 2 });
+    expect(lastStatus()).toMatchObject({ attaching: 2 });
+    expect(adapters[0].disposed).toBe(1);
+    expect(notices.some((n) => n.includes('respawning once'))).toBe(true);
+
+    reports[1]('pending');
+    await started;
+    await until(() => row().status === 'pending');
+
+    expect(row().attaching).toBeUndefined();
+    expect(lastStatus()?.attaching).toBeUndefined();
+    expect(row().holdReason).toBe('could not connect to Ordewell\'s tools; start it again');
+    expect(adapters.map((a) => a.sent)).toEqual([[], []]);
+  });
+
+  it('drops the progress when the task is stopped while its tools attach, and a late report starts nothing', async () => {
+    const { session, started, adapters, reports, row, lastStatus } = await attaching();
+
+    await session.execute({ command: 'stop_task', task: 'a1' }, { kind: 'user' });
+
+    expect(row().status).toBe('pending');
+    expect(row().attaching).toBeUndefined();
+    expect(lastStatus()?.attaching).toBeUndefined();
+
+    // The stop does not reach a spawn still attaching: the runner is only taken back once it reports.
+    reports[0]('connected');
+    await started;
+    await tick();
+    expect(row().attaching).toBeUndefined();
+    expect(adapters[0].disposed).toBe(1);
+    expect(adapters.map((a) => a.sent)).toEqual([[]]);
   });
 });
 

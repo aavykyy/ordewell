@@ -65,6 +65,25 @@ describe('a task card, pinned before its rules move to core', () => {
     expect(badge()?.textContent).toBe('Failure report received');
   });
 
+  it('says a starting task\'s runner is connecting Ordewell\'s tools, then the retry, until the run drops it (ADR-0025)', () => {
+    const task = makeTask({ status: 'in_progress', attempted: true });
+    const { rerender } = render(<TaskCard task={task} models={[]} isExecuting run={{ attaching: 1 }} />);
+    expect(badge()?.textContent).toBe('Connecting Ordewell\'s tools');
+    expect(badge()?.className).toBe('task-status-badge status-running');
+
+    rerender(<TaskCard task={task} models={[]} isExecuting run={{ attaching: 2 }} />);
+    expect(badge()?.textContent).toBe('Connecting Ordewell\'s tools, retry');
+
+    rerender(<TaskCard task={task} models={[]} isExecuting run={{}} />);
+    expect(badge()?.textContent).toBe('Running');
+  });
+
+  it('says a starting subtask\'s runner is connecting Ordewell\'s tools as its parent card does', () => {
+    const parent = makeTask({ id: 'p1', order: 2, title: 'Parent' });
+    render(<SubTaskCard task={makeTask({ status: 'in_progress', attempted: true })} parentTask={parent} models={[]} isExecuting run={{ attaching: 1 }} />);
+    expect(badge()?.textContent).toBe('Connecting Ordewell\'s tools');
+  });
+
   it.each([
     ['completed', 'Executed'],
     ['in_progress', 'Running'],

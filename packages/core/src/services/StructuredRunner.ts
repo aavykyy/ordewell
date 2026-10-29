@@ -230,6 +230,7 @@ interface SessionLaunch {
   readTask?: (args: ReadTaskArgs) => McpToolReply;
   applyPatch?: (args: ApplyPatchArgs) => Promise<McpToolReply>;
   onNotice?: (message: string) => void;
+  onAttaching?: (spawn: 1 | 2) => void;
 }
 
 /**
@@ -328,6 +329,7 @@ export class StructuredSession extends AbstractRunnerSession {
    */
   private async startAttached(opts: TaskStartOptions): Promise<void> {
     const { server, scope, shell, savePatch, webReads } = this.launch.tools;
+    this.launch.onAttaching?.(1);
     const spawned = await spawnAttached({
       runner: this.launch.runner,
       create: () => this.launch.createAdapter(this.launch.runner, this.launch.deps),
@@ -368,7 +370,10 @@ export class StructuredSession extends AbstractRunnerSession {
       },
       cancelled: this.ended.signal,
       startupExit: () => this.startupExit,
-      onRespawn: (failure) => this.launch.onNotice?.(`${this.launch.runner} started without Ordewell's tools (${failure}); respawning once.`),
+      onRespawn: (failure) => {
+        this.launch.onNotice?.(`${this.launch.runner} started without Ordewell's tools (${failure}); respawning once.`);
+        this.launch.onAttaching?.(2);
+      },
       failed: (first, second) => `Could not start ${this.launch.runner} with Ordewell's tools, so the task was not sent to it. First spawn: ${first}. Respawn: ${second}.`,
     });
     if (!spawned) return;
@@ -1021,6 +1026,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
       ...(opts.readTask ? { readTask: opts.readTask } : {}),
       ...(opts.applyPatch ? { applyPatch: opts.applyPatch } : {}),
       onNotice: opts.onNotice,
+      onAttaching: opts.onAttaching,
     });
 
     console.error(`[structured] Starting ${opts.runner} [${opts.mode ?? 'default'}] (${opts.modelId || 'default'}) for task ${opts.taskId.slice(0, 8)}`);

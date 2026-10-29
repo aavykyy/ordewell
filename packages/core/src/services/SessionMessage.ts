@@ -30,6 +30,13 @@ export type SerializedTaskStatus = {
    * ends or a new turn voids the report, and never saved.
    */
   completionReceived?: NonNullable<Verdict['reported']>;
+  /**
+   * Which spawn of a starting runner waits for Ordewell's tools to connect
+   * (ADR-0025): 1, then 2 after its one respawn. Nothing was sent to the
+   * runner yet. Absent once they connect, and when the attempt ends; a second
+   * miss holds the task, which `holdReason` says.
+   */
+  attaching?: 1 | 2;
   /** Absent unless the plan has an isolation run, so a shared-root plan's updates are unchanged. */
   isolation?: TaskIsolation;
   /** What an `awaiting_user` task waits on, when it was saved (ADR-0018, W1). */
@@ -375,7 +382,7 @@ export type PlanSnapshot = { type: 'plan_snapshot'; plan: SurfacePlan | SurfaceP
 /** What only the status stream says about a task; a plan refresh keeps these as they were. */
 export type RunTaskStatus = Partial<Pick<
   SerializedTaskStatus,
-  'verdict' | 'idleSince' | 'completionReceived' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'attempted'
+  'verdict' | 'idleSince' | 'completionReceived' | 'attaching' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'attempted'
 >>;
 
 /** A task in the run view: the plan's fields, then the status stream's. */
@@ -486,6 +493,7 @@ export function serializeTaskStatus(
   waitsForApproval = false,
   holdReason: string | null = null,
   completionReceived: Verdict['reported'] | null = null,
+  attaching: 1 | 2 | null = null,
 ): SerializedTaskStatus {
   return {
     id: t.id,
@@ -496,6 +504,7 @@ export function serializeTaskStatus(
       : null,
     idleSince,
     ...(completionReceived ? { completionReceived } : {}),
+    ...(attaching ? { attaching } : {}),
     ...(t.attempted ? { attempted: true as const } : {}),
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(isolation ? { isolation } : {}),

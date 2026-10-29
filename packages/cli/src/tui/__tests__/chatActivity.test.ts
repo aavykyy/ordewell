@@ -42,6 +42,11 @@ describe('chatActivity: a task chat', () => {
     expect(chatActivity(state({ tasks, taskView: viewing('t1') }))).toEqual({ label: 'Working…', busy: true });
   });
 
+  it('says its runner is connecting Ordewell\'s tools, not working, while nothing has been sent to it (ADR-0025)', () => {
+    expect(chatActivity(state({ tasks: [task({ status: 'in_progress', attaching: 1 })], taskView: viewing('t1') }))).toEqual({ label: 'Connecting Ordewell\'s tools…', busy: true });
+    expect(chatActivity(state({ tasks: [task({ status: 'in_progress', attaching: 2 })], taskView: viewing('t1') }))).toEqual({ label: 'Connecting Ordewell\'s tools, retry…', busy: true });
+  });
+
   it('is empty when another task is running and the selected one is not', () => {
     const tasks = [task({ status: 'in_progress' }), task({ id: 't2', order: 2, status: 'completed' })];
     expect(chatActivity(state({ status: 'executing', tasks, taskView: viewing('t2') }))).toBeNull();
