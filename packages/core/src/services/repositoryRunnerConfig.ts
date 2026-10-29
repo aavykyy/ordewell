@@ -1,4 +1,7 @@
-/** Select repository-root runner configuration from repository-relative changed paths. */
+/** Where a runner looks for project configuration, relative to the directory it starts in. */
+export const RUNNER_CONFIG_ROOTS = ['.mcp.json', '.claude', '.claude-plugin', 'opencode.json', 'opencode.jsonc', '.opencode', '.codex'] as const;
+
+/** Select runner configuration that can run code or redirect a launch from paths relative to the directory the runner starts in. */
 export function repositoryRunnerConfigPaths(paths: readonly string[]): string[] {
   return [...new Set(paths.filter(path =>
     // Project MCP servers start commands or send data to a repository-chosen URL.
@@ -14,6 +17,13 @@ export function repositoryRunnerConfigPaths(paths: readonly string[]): string[] 
     // Plugin metadata can load plugins and their executable components.
     path.startsWith('.claude-plugin/') ||
     // Plugin and marketplace manifests can select code for the runner to load.
-    /^\.claude\/(?:[^/]+\/)*(?:plugin|marketplace)\.json$/.test(path)
+    /^\.claude\/(?:[^/]+\/)*(?:plugin|marketplace)\.json$/.test(path) ||
+    // OpenCode config declares MCP servers and plugins; its plugin and tool
+    // directories are code it loads. The rest of `.opencode/` is dependencies
+    // OpenCode installs itself, which a later launch must not be held for.
+    /^(?:\.opencode\/)?opencode\.jsonc?$/.test(path) ||
+    /^\.opencode\/(?:plugins?|tools?)\//.test(path) ||
+    // Codex project config carries MCP servers, hooks and `notify` commands.
+    path.startsWith('.codex/')
   ))].sort();
 }

@@ -59,6 +59,7 @@ function setup(opts: { tasks?: Task[]; spawn?: Spawn; repairs?: string[]; landPa
     openRecord: () => undefined,
     skillLayout: () => ({ repos: [], worktrees: false }),
     current: null,
+    epoch: 1,
   };
   const landing: AttemptsDeps['landing'] = {
     nextRepair: (taskId) => (repairs.has(taskId) ? { n: 1, limit: 2 } : null),

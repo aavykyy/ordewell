@@ -15,16 +15,20 @@ export interface ClaudeOrdewellBinding extends OrdewellToolBinding<string> {
   launch(mcp: McpClientConfig, role: OrdewellToolRole, servers?: Record<string, unknown>): ClaudeOrdewellLaunch;
 }
 
-/** Refuse an ambiguous claim: Claude does not document MCP config precedence. */
+/**
+ * Refuse an ambiguous claim: Claude does not document MCP config precedence.
+ * Only `.mcp.json` is read: Claude takes MCP servers from it and from the
+ * user's own config, and ignores an `mcpServers` key in a settings file
+ * (`claude mcp list` over a project whose `.claude/settings.json` declares one
+ * does not list it), so a stale entry there is no claim on the name.
+ */
 export function assertNoClaudeTaskCollision(cwd: string): void {
-  for (const source of ['.mcp.json', '.claude/settings.json', '.claude/settings.local.json']) {
-    const text = readText(path.join(cwd, source));
-    if (text === undefined) continue;
-    let parsed: unknown;
-    try { parsed = JSON.parse(text); } catch { continue; }
-    if (isRecord(parsed) && isRecord(parsed.mcpServers) && Object.hasOwn(parsed.mcpServers, ORDEWELL_MCP_SERVER_NAME)) {
-      throw new Error(`${source} declares an MCP server named ordewell; rename or remove the ordewell server before starting this task.`);
-    }
+  const text = readText(path.join(cwd, '.mcp.json'));
+  if (text === undefined) return;
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { return; }
+  if (isRecord(parsed) && isRecord(parsed.mcpServers) && Object.hasOwn(parsed.mcpServers, ORDEWELL_MCP_SERVER_NAME)) {
+    throw new Error('.mcp.json declares an MCP server named ordewell; rename or remove the ordewell server before starting this task.');
   }
 }
 

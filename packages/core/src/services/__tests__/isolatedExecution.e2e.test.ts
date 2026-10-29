@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { TaskOrchestrator } from '../TaskOrchestrator';
 import { IsolationRunController } from '../IsolationRunController';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
@@ -14,6 +14,7 @@ import type { SessionMessage } from '../SessionMessage';
 import type { Session } from '../createSession';
 import * as sessionStore from '../../utils/sessionStore';
 import { fakeConfig, FakeRunnerSession } from '../../testing';
+import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { fakeNotification, makeSession } from './sessionTestKit';
 
 const hasGit = (() => {
@@ -65,7 +66,10 @@ function writingRunner(files: Record<string, { write: string[]; needs?: string[]
       const job = files[opts.taskId];
       setTimeout(() => {
         if (job.needs) sawPredecessor[opts.taskId] = job.needs.every((file) => existsSync(join(opts.cwd!, file)));
-        for (const file of job.write) writeFileSync(join(opts.cwd!, file), `written by ${opts.taskId}\n`);
+        for (const file of job.write) {
+          mkdirSync(dirname(join(opts.cwd!, file)), { recursive: true });
+          writeFileSync(join(opts.cwd!, file), `written by ${opts.taskId}\n`);
+        }
         session.reportComplete({ status: 'done', summary: 'Done.' });
       }, 5);
       return session;
@@ -89,8 +93,97 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     ]);
     await orchestrator.approveReview();
     await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('.mcp.json'));
-    expect(orchestrator.holdReason('t2')).toContain('added during this run');
+    expect(orchestrator.holdReason('t2')).toContain('differs from where this run started');
+    expect(orchestrator.holdReason('t2')).not.toContain('commit it');
     expect(runner.spawn).toHaveBeenCalledTimes(1);
+    // The held start keeps its worktree beside the checkout, for the user to look at.
+    expect(git(root, 'worktree', 'list', '--porcelain')).toContain('/2-next');
+  });
+
+  describe('where the runner reads configuration', () => {
+    function run(root: string, plan: Task[], files: Parameters<typeof writingRunner>[0], extra: { registry?: RunnerRegistry } = {}) {
+      const { runner } = writingRunner(files);
+      const isolation = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
+      const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root, ...extra });
+      orchestrator.loadPlan(plan);
+      return { orchestrator, runner };
+    }
+    const first = createTask({ id: 't1', order: 1, title: 'Add config', prompt: 'write config' });
+    const next = (over: Partial<Task> = {}) => createTask({ id: 't2', order: 2, title: 'Next', prompt: 'continue', dependencies: ['t1'], ...over });
+
+    it('does not hold an ops task for the user\'s own untracked settings in the checkout', async () => {
+      const root = repo();
+      mkdirSync(join(root, '.claude'));
+      writeFileSync(join(root, '.claude', 'settings.local.json'), '{}\n');
+      writeFileSync(join(root, '.git', 'info', 'exclude'), '.claude/settings.local.json\n');
+      const { orchestrator, runner } = run(root, [{ ...first, prompt: 'write a' }, next({ ops: true })], { t1: { write: ['a.txt'] }, t2: { write: [] } });
+      await orchestrator.approveReview();
+      // An ops task waits for its change predecessor's work to be merged into the checkout it runs in (ADR-0020).
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')?.status).toBe('completed'));
+      expect(await orchestrator.mergeRun()).toEqual({ outcome: 'merged' });
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t2')?.status).toBe('completed'));
+      expect(runner.spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it('holds an ops task for configuration an earlier ops task wrote in the checkout', async () => {
+      const root = repo();
+      const { orchestrator, runner } = run(root, [{ ...first, ops: true }, next({ ops: true })], { t1: { write: ['.mcp.json'] }, t2: { write: [] } });
+      await orchestrator.approveReview();
+      await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('.mcp.json'));
+      expect(runner.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it('holds a task that follows one which wrote configuration into a shared run', async () => {
+      const root = repo();
+      writeFileSync(join(root, 'README.md'), 'edited\n');
+      const { orchestrator, runner } = run(root, [first, next()], { t1: { write: ['.claude/settings.json'] }, t2: { write: [] } });
+      await orchestrator.approveReview();
+      await orchestrator.continueBlockedRun('shared');
+      await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('.claude/settings.json'));
+      expect(runner.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it('holds a dependent for configuration landed below the repository top', async () => {
+      const root = repo();
+      mkdirSync(join(root, 'sub'));
+      writeFileSync(join(root, 'sub', 'file.txt'), 'x\n');
+      git(root, 'add', '-A');
+      git(root, 'commit', '-q', '-m', 'sub');
+      const { orchestrator, runner } = run(join(root, 'sub'), [first, next()], { t1: { write: ['.mcp.json'] }, t2: { write: [] } });
+      await orchestrator.approveReview();
+      await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('sub/.mcp.json'));
+      expect(runner.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it('holds a dependent for a root config file a group shares live and an earlier task rewrote', async () => {
+      const dir = tempDir();
+      repo(join(dir, 'api'));
+      repo(join(dir, 'web'));
+      writeFileSync(join(dir, '.mcp.json'), '{}\n');
+      const { orchestrator, runner } = run(dir, [first, next()], { t1: { write: ['.mcp.json'] }, t2: { write: [] } });
+      await orchestrator.approveReview();
+      await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('.mcp.json'));
+      expect(runner.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it('holds a dependent for OpenCode and Codex configuration, not only Claude\'s', async () => {
+      for (const file of ['opencode.json', '.codex/config.toml']) {
+        const root = repo();
+        const { orchestrator, runner } = run(root, [first, next()], { t1: { write: [file] }, t2: { write: [] } });
+        await orchestrator.approveReview();
+        await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain(file));
+        expect(runner.spawn).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it('starts a read-only task, which withholds project configuration, and keeps no worktree for it', async () => {
+      const root = repo();
+      const { orchestrator, runner } = run(root, [first, next({ taskMode: 'plan' })], { t1: { write: ['.mcp.json'] }, t2: { write: [] } }, { registry: new RunnerRegistry() });
+      await orchestrator.approveReview();
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t2')?.status).toBe('completed'));
+      expect(runner.spawn).toHaveBeenCalledTimes(2);
+      expect(git(root, 'worktree', 'list', '--porcelain')).not.toContain('/2-next');
+    });
   });
 
   it('starts with configuration already present in the base', async () => {

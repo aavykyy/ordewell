@@ -1,25 +1,105 @@
 import * as path from 'path';
-import { existsSync } from 'fs';
+import { createHash } from 'crypto';
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'fs';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { defaultExecFile, tryGit } from './gitExec';
-import { repositoryRunnerConfigPaths } from './repositoryRunnerConfig';
+import { repositoryRunnerConfigPaths, RUNNER_CONFIG_ROOTS } from './repositoryRunnerConfig';
 import { augmentedPath } from '../utils/shellPath';
 
-/** Configuration that differs from the run's base in the tree the runner will read. */
-export async function taskStartConfig(run: IsolationRun | null, taskId: string, worktree: boolean): Promise<string[]> {
-  if (!run) return [];
-  const invoker = { exec: defaultExecFile, resolvePath: augmentedPath };
-  const found: string[] = [];
-  for (const repo of run.repos) {
-    const cwd = worktree ? run.tasks[taskId]?.repos[repo.path]?.worktree : repo.root;
-    if (!cwd || !repo.baseRef || !existsSync(cwd)) continue;
-    const diff = await tryGit(invoker, cwd, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '--diff-filter=ACMRTU', '-z', repo.baseRef, '--']);
-    const untracked = await tryGit(invoker, cwd, ['ls-files', '--others', '-z', '--', '.mcp.json', '.claude', '.claude-plugin']);
-    // Old restored runs and test doubles may have no reachable base or diff;
-    // without evidence of a difference there is no reason to hold the start.
-    if (!diff.ok || !untracked.ok) continue;
-    const paths = repositoryRunnerConfigPaths([...diff.stdout.split('\0'), ...untracked.stdout.split('\0')]);
-    found.push(...paths.map((name) => repo.path === '.' ? name : path.posix.join(repo.path, name)));
+const MAX_FILES = 2000;
+const MAX_DEPTH = 8;
+
+/**
+ * Content hash of every runner-configuration file under `dir`; a missing
+ * directory holds none. Read synchronously: the few small files are cheaper
+ * than the turns an async walk would add before the spawn.
+ */
+function liveConfig(dir: string): Map<string, string> {
+  const found = new Map<string, string>();
+  const visit = (rel: string, depth: number): void => {
+    if (found.size >= MAX_FILES || depth > MAX_DEPTH) return;
+    const full = path.join(dir, rel);
+    try {
+      // A symlinked file is read through, because a group shares its root
+      // config live that way; a symlinked directory is not followed.
+      const link = lstatSync(full);
+      const info = link.isSymbolicLink() ? statSync(full) : link;
+      if (info.isFile()) {
+        found.set(rel, createHash('sha1').update(readFileSync(full)).digest('hex'));
+      } else if (info.isDirectory() && !link.isSymbolicLink() && path.basename(rel) !== 'node_modules') {
+        for (const name of readdirSync(full)) visit(path.posix.join(rel, name), depth + 1);
+      }
+    } catch { /* gone or unreadable: nothing for the runner to read either */ }
+  };
+  for (const root of RUNNER_CONFIG_ROOTS) visit(root, 0);
+  const selected = new Set(repositoryRunnerConfigPaths([...found.keys()]));
+  return new Map([...found].filter(([name]) => selected.has(name)));
+}
+
+/**
+ * Configuration that reaches a task's launch without the user having consented
+ * to it (ADR-0028): what differs, in the directories the runner reads, from
+ * where the run started.
+ *
+ * Git trees are compared with the base commit the run recorded, which survives
+ * a restart. A directory outside a worktree — the checkout an ops or shared
+ * task runs in, a group's loose entries shared live — has no commit to
+ * compare with, and its files existed before the run as often as not, so it
+ * is compared with its own contents when the run first launched a task there.
+ */
+export class TaskStartConfig {
+  private readonly live = new Map<string, Map<string, string>>();
+
+  /** `epoch` names the run the check belongs to; a new run takes a new baseline. */
+  async check(run: IsolationRun | null, taskId: string, where: { epoch: number; cwd: string | null; worktree: boolean }): Promise<string[]> {
+    const found = where.worktree ? await this.gitDifferences(run, taskId) : [];
+    // A lone repository's worktree is all of what its runner reads, and the base commit covers it.
+    const liveDir = where.worktree ? (run && !run.repos.some((r) => r.path === '.') ? run.tasks[taskId]?.workspace : undefined) : where.cwd;
+    if (liveDir) found.push(...this.liveDifferences(epochKey(run, where), liveDir));
+    return [...new Set(found)].sort();
   }
-  return [...new Set(found)].sort();
+
+  /** The baselines go with the plan they belong to. */
+  clear(): void {
+    this.live.clear();
+  }
+
+  private liveDifferences(key: string, dir: string): string[] {
+    const now = liveConfig(dir);
+    const before = this.live.get(key);
+    if (!before) {
+      this.live.set(key, now);
+      return [];
+    }
+    return [...now].filter(([name, hash]) => before.get(name) !== hash).map(([name]) => name);
+  }
+
+  private async gitDifferences(run: IsolationRun | null, taskId: string): Promise<string[]> {
+    if (!run) return [];
+    const invoker = { exec: defaultExecFile, resolvePath: augmentedPath };
+    const found: string[] = [];
+    for (const repo of run.repos) {
+      const cwd = run.tasks[taskId]?.repos[repo.path]?.worktree;
+      if (!cwd || !repo.baseRef || !existsSync(cwd)) continue;
+      // A workspace below its repository's top starts the runner there, and Claude reads that directory's own config.
+      const prefix = repo.path === '.' ? (await tryGit(invoker, repo.root, ['rev-parse', '--show-prefix'])).stdout.trim() : '';
+      const roots = [...RUNNER_CONFIG_ROOTS, ...(prefix ? RUNNER_CONFIG_ROOTS.map((r) => `${prefix}${r}`) : [])];
+      const diff = await tryGit(invoker, cwd, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '--diff-filter=ACMRTU', '-z', repo.baseRef, '--']);
+      const untracked = await tryGit(invoker, cwd, ['ls-files', '--others', '-z', '--', ...roots]);
+      // Old restored runs and test doubles may have no reachable base or diff;
+      // without evidence of a difference there is no reason to hold the start.
+      if (!diff.ok || !untracked.ok) continue;
+      for (const name of [...diff.stdout.split('\0'), ...untracked.stdout.split('\0')]) {
+        const here = prefix && name.startsWith(prefix) ? name.slice(prefix.length) : undefined;
+        if (repositoryRunnerConfigPaths([name]).length || (here !== undefined && repositoryRunnerConfigPaths([here]).length)) {
+          found.push(repo.path === '.' ? name : path.posix.join(repo.path, name));
+        }
+      }
+    }
+    return found;
+  }
+}
+
+function epochKey(run: IsolationRun | null, where: { epoch: number; worktree: boolean }): string {
+  return `${where.epoch}:${run?.id ?? ''}:${where.worktree ? 'worktree' : 'checkout'}`;
 }
