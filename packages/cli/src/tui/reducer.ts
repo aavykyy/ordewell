@@ -111,6 +111,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // id is let go rather than guessed at. A reply that was merely lost is not
     // this: the session is the daemon's and the turn may be running (`turnLost`).
     case 'sessionCleared':
+      if (stale(state, action.sessionId)) return step(state);
       // Prompts belong to the session that raised them; the old planner is gone,
       // and the turn gate it held with it.
       return step(withRun({
@@ -445,13 +446,17 @@ function reduceAction(state: TuiState, action: Action): Step {
 
     // A fork holds no run and no turn, whatever the session it came from was
     // doing — the original keeps both, and its events are stale from here on.
-    // Its plan arrives next, onto an empty run view.
+    // Its plan arrives next, onto an empty run view. Nor does it keep an open
+    // prompt editor: the fork copies the task ids, so Enter would save the
+    // original's draft into the fork.
     case 'sessionForked':
       return step(withRun({
         ...state,
         sessionId: action.sessionId,
         goal: action.goal,
         taskView: null,
+        expandedTaskId: null,
+        taskEditor: null,
         status: 'idle',
         planner: 'idle',
         turnGate: NO_TURN,
@@ -516,6 +521,9 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step(state, [{ type: 'loadIsolationPreview' }]);
 
     case 'failed': {
+      // Dropped only once another session is on screen: a session that let
+      // itself go (`sessionCleared`) reports why onto the welcome it left.
+      if (state.sessionId !== null && stale(state, action.sessionId)) return step(state);
       // A failed call may have been the task view's log read; the view falls
       // back to whatever the live stream sent rather than waiting forever.
       if (!action.turn) {
@@ -524,7 +532,6 @@ function reduceAction(state: TuiState, action: Action): Step {
         // its way, so the start indicator must not outlive it.
         return step(state.status === 'starting' ? { ...abandoned, status: 'idle' } : abandoned);
       }
-      if (stale(state, action.sessionId)) return step(state);
       // A force send stopped the turn in flight; the forced turn is already on
       // its way, so the stop is not news and the prompts held behind it keep
       // their order rather than draining into the turn replacing it. Only the

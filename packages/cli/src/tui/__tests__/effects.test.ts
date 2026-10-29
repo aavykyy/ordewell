@@ -501,7 +501,7 @@ describe('planning', () => {
 
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
     expect(close).toHaveBeenCalled();
-    expect(h.actions).toContainEqual({ type: 'failed', message: 'no key', turn: true });
+    expect(h.actions).toContainEqual({ type: 'failed', message: 'no key', turn: true, sessionId: 'session-new' });
   });
 
   it('continues an open conversation', async () => {
@@ -2528,6 +2528,19 @@ describe('a structured task\'s log, messages and interrupt', () => {
 
     expect(messageOf(h.actions, 'failed')).toMatch(/still waiting for approval/);
   });
+
+  // The user may have loaded another session before the answer failed; the
+  // reducer drops a failure that names a session no longer on screen.
+  it.each([
+    { type: 'respondApproval', sessionId: 's1', approvalId: 'ap-1', granted: true },
+    { type: 'answerTaskApproval', sessionId: 's1', approvalId: 'ap-1', answer: { decision: 'allow' } },
+  ] as Effect[])('names the session a lost $type was for', async (effect) => {
+    const h = harness({ respondToApproval: vi.fn().mockRejectedValue(new Error('HTTP 409')) } as Partial<OrdewellApi>);
+
+    await runEffect(effect, h.deps);
+
+    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'failed', sessionId: 's1' }));
+  });
 });
 
 
@@ -2673,7 +2686,7 @@ describe('following the session', () => {
 
     expect(types(h.actions)).not.toContain('sessionCleared');
     expect(h.follows[0].close).not.toHaveBeenCalled();
-    expect(h.actions).toContainEqual({ type: 'failed', message: 'The planner turn was stopped', code: 'planner_turn_stopped', turn: true });
+    expect(h.actions).toContainEqual({ type: 'failed', message: 'The planner turn was stopped', code: 'planner_turn_stopped', turn: true, sessionId: 'session-new' });
   });
 
   it('drops the follow of a first turn the daemon never registered', async () => {

@@ -84,13 +84,16 @@ export interface EffectDeps {
  * the daemon's first-turn registration race never comes up.
  */
 export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void> {
+  // An opening turn's session is minted before the first attempt, so its
+  // failure can name it, and a revived daemon's retry opens the same one.
+  const performed: Performed = effect.type === 'startConversation' ? { ...effect, sessionId: deps.newSessionId() } : effect;
   const turn = isPlannerTurn(effect);
   // The user may have loaded another session while the turn ran; its failure
   // must not end that one's turn or drain that one's queue.
-  const turnSession = turn && 'sessionId' in effect ? { sessionId: effect.sessionId } : {};
+  const turnSession = turn && 'sessionId' in performed ? { sessionId: performed.sessionId } : {};
   const fail = (action: Extract<Action, { type: 'failed' }>): void => deps.dispatch(turn ? { ...action, turn, ...turnSession } : action);
   try {
-    await perform(effect, deps);
+    await perform(performed, deps);
   } catch (err) {
     if (!isConnectionRefused(err)) {
       fail(failedFrom(err));
@@ -120,7 +123,7 @@ export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void>
       deps.dispatch({ type: 'daemonReconnected' });
     }
     try {
-      await perform(effect, deps);
+      await perform(performed, deps);
     } catch (retryErr) {
       // A fresh daemon holds no sessions, so the retry of anything
       // session-scoped legitimately 404s. Say which of the two happened.
@@ -128,6 +131,9 @@ export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void>
     }
   }
 }
+
+/** An effect as `perform` runs it: an opening turn carries the session `runEffect` minted for it. */
+type Performed = Exclude<Effect, { type: 'startConversation' }> | (Extract<Effect, { type: 'startConversation' }> & { sessionId: string });
 
 /** The effects that are a planner turn: their failure is the turn's, and ends it. */
 function isPlannerTurn(effect: Effect): boolean {
@@ -180,12 +186,12 @@ function plannerModelNotice(recall: PlannerModelRecall): string {
   }
 }
 
-async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
+async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
   const { api, dispatch, workspace } = deps;
 
   switch (effect.type) {
     case 'startConversation': {
-      const sessionId = deps.newSessionId();
+      const { sessionId } = effect;
       dispatch({ type: 'sessionStarted', sessionId, goal: effect.goal });
       try {
         await converse(deps, sessionId, () => api.startConversation(sessionId, effect.goal, undefined, workspace, effect.allowInit), true);
@@ -202,7 +208,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
         // session kept). Neither leaves a conversation a reply could continue,
         // so the id is let go: keeping it would 404 every following message.
         unfollow(deps, sessionId);
-        dispatch({ type: 'sessionCleared' });
+        dispatch({ type: 'sessionCleared', sessionId });
         // The welcome is not any session: its run settings are the file's again (ADR-0030).
         await reloadSettings(deps);
         // Offer to initialize instead of just reporting failure — but only
@@ -303,7 +309,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       } catch {
         // The planner's own timeout denies an unanswered request, so a lost
         // answer degrades to a denial rather than a stuck session.
-        dispatch({ type: 'failed', message: 'Could not deliver the approval answer: the planner will treat it as denied.' });
+        dispatch({ type: 'failed', message: 'Could not deliver the approval answer: the planner will treat it as denied.', sessionId: effect.sessionId });
       }
       return;
     }
@@ -315,7 +321,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       } catch {
         // A runner's request never times out, so a lost answer leaves it
         // waiting rather than denied.
-        dispatch({ type: 'failed', message: 'Could not deliver the answer: the task is still waiting for approval.' });
+        dispatch({ type: 'failed', message: 'Could not deliver the answer: the task is still waiting for approval.', sessionId: effect.sessionId });
       }
       return;
     }
@@ -1035,7 +1041,7 @@ async function converse(deps: EffectDeps, sessionId: string, call: () => Promise
   }
   if (unusable) {
     const { err, shown } = unusable;
-    deps.dispatch({ ...failedFrom(shown ? new Error(`The planner's reply arrived but could not be shown: ${explain(err)}`) : err), turn: true });
+    deps.dispatch({ ...failedFrom(shown ? new Error(`The planner's reply arrived but could not be shown: ${explain(err)}`) : err), turn: true, sessionId });
   } else if (lost !== null) {
     await settleLostReply(deps, sessionId, { opening, reason: lost });
   }
@@ -1101,12 +1107,12 @@ async function readBackSession(deps: EffectDeps, sessionId: string, how: { openi
   } catch (err) {
     if (err instanceof DaemonError && err.code === 'session_not_found' && how.opening) {
       unfollow(deps, sessionId);
-      deps.dispatch({ type: 'sessionCleared' });
-      deps.dispatch({ type: 'failed', message: 'The reply was lost and the server holds no session for it. Send your goal again to start over.', code: err.code, turn: true });
+      deps.dispatch({ type: 'sessionCleared', sessionId });
+      deps.dispatch({ type: 'failed', message: 'The reply was lost and the server holds no session for it. Send your goal again to start over.', code: err.code, turn: true, sessionId });
       return;
     }
     if (how.turnEnded || (err instanceof DaemonError && err.code === 'session_not_found')) {
-      deps.dispatch({ ...failedFrom(err), turn: true });
+      deps.dispatch({ ...failedFrom(err), turn: true, sessionId });
       return;
     }
     deps.dispatch({ type: 'notice', level: 'error', message: `Could not read the session back from the server: ${explain(err)}` });

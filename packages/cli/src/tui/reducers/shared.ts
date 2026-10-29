@@ -102,7 +102,8 @@ export type { TaskAction };
 export type Action =
   | { type: 'key'; key: Key }
   | { type: 'sessionStarted'; sessionId: string; goal: string }
-  | { type: 'sessionCleared' }
+  /** Names the session let go when it is known, so a late clear cannot take the one loaded since. */
+  | { type: 'sessionCleared'; sessionId?: string }
   | { type: 'sessionDeleted'; sessionId: string }
   /** A saved session's records, which the conversation is rebuilt from as a reload would show it. */
   | ChatRestored
@@ -189,7 +190,8 @@ export type Action =
    * `code` is the daemon's stable reason for a refusal, when it gave one.
    * `turn` marks a failure of the planner turn's own call, the only kind that
    * ends the turn; anything else failing mid-turn leaves it running. A turn's
-   * failure names the session it was for, as every other turn result does.
+   * failure names the session it was for, as every other turn result does, and
+   * so does an approval answer's: once that session is off screen it is dropped.
    */
   | { type: 'failed'; message: string; code?: DaemonErrorCode; turn?: true; sessionId?: string }
   /** The workspace has no project marker — offer to initialize it rather than just failing. */
