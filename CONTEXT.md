@@ -2236,8 +2236,13 @@ executor model discovery for the planner (`modelsForRunners`), (b) the
 planner/review **picker catalog** (`pickerOptions` — fetched provider
 catalogs only; shortcuts are a curated label/ordering overlay on fetched ids,
 never injected as standalone entries), and (c) building the **provider model lists** that drive
-routing (`refresh`). Constructed with `(registry, config)`; owns all model caches
-behind one `invalidate()`. Discovery (formerly the `ModelDiscovery` class), the
+routing (`refresh`). It also answers which of those catalogs a planner pick
+for a provider is judged against (`plannerCatalog`, and `cachedPlannerCatalog`
+from what is held). Constructed with `(registry, config)`. A workspace whose
+runners launch with another environment gets a view of it (`withRunnerEnv`,
+one per key) with runner catalogs of its own and the vendor catalogs shared;
+one `invalidate()`, made on any view, owns every one of those caches, and an
+answer begun before it fills none of them. Discovery (formerly the `ModelDiscovery` class), the
 OpenRouter catalog fetch, and Gemini discovery are its *implementation*, not its
 interface. `fetch` and `exec` are injectable so the subsystem is testable without
 network or child processes.

@@ -2,11 +2,12 @@ import { ModelDiscovery, clearGeminiCache, type ExecImpl } from './ModelDiscover
 import { ModelCatalog } from './ModelCatalog';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { RunnerEnv } from '../plugins/types';
-import type { IConfig } from '../interfaces/IConfig';
+import type { IConfig, PlannerBackendId } from '../interfaces/IConfig';
 import type { DiscoveredModel, RunnerId } from '../models/Task';
+import type { PlannerModelCandidate } from './PlannerModelMemory';
 import { fetchAllProviderModels, collectProviderCredentials, toOrchestratorOptions, type OrchestratorOption, type ProviderModelLists } from './ProviderRouting';
 import { ORCHESTRATOR_SHORTCUTS } from './ModelShortcuts';
-import { PROVIDER_PRIORITY, isApiProvider, prefixModelId, stripModelPrefix } from './ProviderRegistry';
+import { PROVIDER_PRIORITY, isApiProvider, prefixModelId, runnerForProvider, stripModelPrefix } from './ProviderRegistry';
 
 export interface ModelResolverDeps {
   fetchImpl?: typeof fetch;
@@ -15,19 +16,32 @@ export interface ModelResolverDeps {
   env?: () => Promise<RunnerEnv>;
 }
 
-/** The vendor catalogs, which no runner environment changes: one copy shared by every {@link ModelResolver.withRunnerEnv} view. */
+/** The vendor catalogs, which no runner environment changes. */
 interface VendorCatalog {
   options: OrchestratorOption[] | null;
   /** A catalog load under way: a second ask, or a warm-up, shares it rather than fetching again. */
   load: Promise<OrchestratorOption[]> | null;
   errors: Record<string, string>;
+  /** Bumped by every invalidate: a load begun before one answers its own askers but fills no cache. */
+  generation: number;
+}
+
+/**
+ * What a resolver and its {@link ModelResolver.withRunnerEnv} views hold in
+ * common: one copy of the vendor catalogs, and the views themselves, so a
+ * refresh of any of them reaches the runner catalogs of every environment.
+ */
+interface SharedCatalogs {
+  vendor: VendorCatalog;
+  root: ModelResolver;
+  views: Map<string, ModelResolver>;
 }
 
 export class ModelResolver {
   private discovery: ModelDiscovery;
   private fetchImpl?: typeof fetch;
   private execImpl?: ExecImpl;
-  private vendor: VendorCatalog = { options: null, load: null, errors: {} };
+  private shared: SharedCatalogs;
 
   constructor(
     private registry: RunnerRegistry,
@@ -37,18 +51,34 @@ export class ModelResolver {
     this.discovery = new ModelDiscovery(registry, deps.execImpl, deps.fetchImpl, undefined, undefined, undefined, deps.env);
     this.fetchImpl = deps.fetchImpl;
     this.execImpl = deps.execImpl;
+    this.shared = { vendor: { options: null, load: null, errors: {}, generation: 0 }, root: this, views: new Map() };
+  }
+
+  private get vendor(): VendorCatalog {
+    return this.shared.vendor;
   }
 
   /**
    * This resolver for runners launched with another environment, a
    * workspace's own: their catalogs are discovered and cached under `env`, as
    * `CLAUDE_CONFIG_DIR` there can name another account, while the vendor
-   * catalogs stay this resolver's, fetched once.
+   * catalogs stay this resolver's, fetched once. One view per `key`, made on
+   * its first ask: a later ask with the same key gets that view, whatever
+   * `env` it passes.
    */
-  withRunnerEnv(env: () => Promise<RunnerEnv>): ModelResolver {
-    const view = new ModelResolver(this.registry, this.config, { fetchImpl: this.fetchImpl, execImpl: this.execImpl, env });
-    view.vendor = this.vendor;
+  withRunnerEnv(key: string, env: () => Promise<RunnerEnv>): ModelResolver {
+    let view = this.shared.views.get(key);
+    if (!view) {
+      view = new ModelResolver(this.registry, this.config, { fetchImpl: this.fetchImpl, execImpl: this.execImpl, env });
+      view.shared = this.shared;
+      this.shared.views.set(key, view);
+    }
     return view;
+  }
+
+  /** Every runner-environment catalog this resolver's family holds: its root's and each view's. */
+  private runnerCatalogs(): ModelDiscovery[] {
+    return [this.shared.root, ...this.shared.views.values()].map((resolver) => resolver.discovery);
   }
 
   static builtinOptions(): OrchestratorOption[] {
@@ -92,6 +122,8 @@ export class ModelResolver {
   }
 
   private async loadPickerOptions(): Promise<OrchestratorOption[]> {
+    const vendor = this.vendor;
+    const generation = vendor.generation;
     // Which endpoints to probe is one policy shared with every other surface —
     // see collectProviderCredentials (only key-configured providers, plus an
     // explicitly-pointed openai_compatible endpoint).
@@ -102,9 +134,14 @@ export class ModelResolver {
       baseUrls,
       fetchImpl: this.fetchImpl,
     });
-    this.vendor.errors = errors;
-    this.vendor.options = toOrchestratorOptions(models, ORCHESTRATOR_SHORTCUTS);
-    return this.vendor.options;
+    const options = toOrchestratorOptions(models, ORCHESTRATOR_SHORTCUTS);
+    // Begun before an invalidate, so asked with what may be old credentials:
+    // its askers get it, and the cache waits for the load asked after.
+    if (vendor.generation === generation) {
+      vendor.errors = errors;
+      vendor.options = options;
+    }
+    return options;
   }
 
   /**
@@ -127,8 +164,27 @@ export class ModelResolver {
     return lists;
   }
 
+  /** Forget every runner catalog, each workspace's included; the vendor catalogs stay. */
   refreshRunnerModels(): void {
-    this.discovery.clear();
+    for (const discovery of this.runnerCatalogs()) discovery.clear();
+  }
+
+  /**
+   * The models a pick for `provider` is judged against: a harness planner's
+   * own runner catalog, or the vendor picker catalog (ADR-0009). Discovered
+   * if not held. Never throws: a catalog that cannot be had is empty.
+   */
+  async plannerCatalog(provider: PlannerBackendId): Promise<PlannerModelCandidate[]> {
+    const runner = runnerForProvider(provider);
+    if (runner) return candidatesOf((await this.modelsForRunners([runner]))[runner] ?? []);
+    return (await this.pickerOptions().catch(() => [])).map((o) => ({ id: o.id }));
+  }
+
+  /** {@link plannerCatalog} from what is already held, so a cold catalog is empty; never discovers. */
+  cachedPlannerCatalog(provider: PlannerBackendId): PlannerModelCandidate[] {
+    const runner = runnerForProvider(provider);
+    if (runner) return candidatesOf(this.getCachedRunnerModels(runner));
+    return this.getCachedPickerOptions().map((o) => ({ id: o.id }));
   }
 
   /**
@@ -172,8 +228,10 @@ export class ModelResolver {
     return cap && cap > 0 ? cap : undefined;
   }
 
+  /** Forget every catalog: the vendor ones, and each runner environment's. */
   invalidate(): void {
-    this.discovery.clear();
+    this.refreshRunnerModels();
+    this.vendor.generation++;
     this.vendor.options = null;
     this.vendor.load = null;
     this.vendor.errors = {};
@@ -185,4 +243,8 @@ export class ModelResolver {
       clearGeminiCache(this.config.geminiKey);
     }
   }
+}
+
+function candidatesOf(models: DiscoveredModel[]): PlannerModelCandidate[] {
+  return models.map((m) => ({ id: m.modelId, variants: m.variants }));
 }

@@ -90,8 +90,10 @@ describe('OrchestratorPool.getProviderModels — per workspace', () => {
     await pool.getProviderModels(ws);
     await pool.getProviderModels();
 
-    expect(withRunnerEnv).toHaveBeenCalledTimes(1);
-    expect(await withRunnerEnv.mock.calls[0][0]()).toMatchObject({ CLAUDE_CONFIG_DIR: '/accounts/b' });
+    // One view for the workspace, however often it is asked for.
+    expect(new Set(withRunnerEnv.mock.calls.map(([key]) => key)).size).toBe(1);
+    expect(new Set(withRunnerEnv.mock.results.map((result) => result.value)).size).toBe(1);
+    expect(await withRunnerEnv.mock.calls[0][1]()).toMatchObject({ CLAUDE_CONFIG_DIR: '/accounts/b' });
     const view = withRunnerEnv.mock.results[0].value;
     expect(askedOf[0]).toBe(view);
     expect(askedOf[1]).toBe(view);

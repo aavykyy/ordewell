@@ -227,8 +227,7 @@ describe('OrchestratorPool settings for a detected coding agent', () => {
   /** A daemon whose discovery has already listed OpenCode's own models. */
   function poolWithOpenCodeCatalog(ids: string[]): OrchestratorPool {
     const modelResolver = {
-      getCachedRunnerModels: (runner: string) => (runner === 'opencode' ? ids.map((modelId) => ({ modelId, modelLabel: modelId })) : []),
-      getCachedPickerOptions: () => [],
+      cachedPlannerCatalog: (provider: string) => (provider === 'opencode' ? ids.map((id) => ({ id })) : []),
     };
     return new OrchestratorPool({
       modelResolver,

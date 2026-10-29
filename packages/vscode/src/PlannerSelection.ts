@@ -1,11 +1,10 @@
 import {
   CLI_PROVIDERS, getProviderMeta, plannerBackendEntries, runnerForProvider, selectPlanner,
-  type PlannerBackendId, type ModelResolver, type PlannerModelCandidate, type PlannerModelMemory,
+  type PlannerBackendId, type ModelResolver, type PlannerModelMemory,
   type PlannerSelectionChange, type PlannerSelectionResult, type PlannerUsability, type RunnerInstallation,
 } from '@ordewell/core';
 import type { VsCodeConfig } from './adapters/VsCodeConfig';
 import type { ChatViewProvider, PlannerBackend } from './providers/ChatViewProvider';
-import { plannerCatalog } from './plan/PlannerModelSwitch';
 
 export interface PlannerSelectionDeps {
   config: VsCodeConfig;
@@ -86,7 +85,7 @@ export class PlannerSelection {
     const { config, plannerModelMemory } = this.deps;
     // The model as the extension reads it, a Gemini id normalized.
     const current = { ...config.planner, model: config.orchestratorModel };
-    const catalog = await this.catalogFor(change.provider ?? current.provider);
+    const catalog = await this.deps.modelResolver.plannerCatalog(change.provider ?? current.provider);
     const result = selectPlanner(current, change, plannerModelMemory, catalog);
     const { next } = result;
     // The effective provider can be a detected default, which is never saved; a
@@ -112,12 +111,6 @@ export class PlannerSelection {
     return result;
   }
 
-  private async catalogFor(provider: PlannerBackendId): Promise<PlannerModelCandidate[]> {
-    const runner = runnerForProvider(provider);
-    return runner
-      ? plannerCatalog((await this.deps.modelResolver.modelsForRunners([runner]))[runner] ?? [], undefined)
-      : plannerCatalog(undefined, await this.deps.modelResolver.pickerOptions());
-  }
 
   private async publish(logLine: string): Promise<void> {
     this.deps.sendModelConfig();

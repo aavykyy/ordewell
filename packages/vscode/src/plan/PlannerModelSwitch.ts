@@ -20,7 +20,7 @@ export function recallPlannerModel(
 }
 
 /** The DiscoveredModel/picker shapes normalized to what core judges a planner pick against. */
-export function plannerCatalog(
+function plannerCatalog(
   harnessModels: DiscoveredModel[] | undefined,
   vendorOptions: VendorModelOption[] | undefined,
 ): PlannerModelCandidate[] {
