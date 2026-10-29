@@ -36,7 +36,8 @@ export interface PlanManagerDeps {
   /** Whether a planner turn holds the session — read off the session, never tracked here. */
   isGeneratingPlan: () => boolean;
   persistState: () => void;
-  saveCurrentSession: () => void;
+  /** Null once written; otherwise why nothing was. */
+  saveCurrentSession: () => string | null;
   /** Push this window's run settings after its session is restored, loaded or replaced (ADR-0030). */
   sendRunSettings: () => void;
   /** Redraw the planner list after a re-probe changed the verdict, so the pill stops saying signed out. */

@@ -6,7 +6,7 @@ import {
   DEFAULT_RUNNERS, ModelResolver, RunnerRegistry, saveState, clearState,
   listSessions, loadSession,
   SettingsService, installedPlannerDetected,
-  taskActionCommand, type ExecutionCommand,
+  taskActionCommand, taskRowActions, type ExecutionCommand, type TaskAction,
 } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { forkConversation, rewindConversation, compactConversation } from '../plan/conversation';
@@ -38,7 +38,8 @@ export interface CommandDeps {
   sendRunnerAndModels: () => Promise<void>;
   runApiKeyWizard: (preselected?: ApiProvider) => Promise<void>;
   persistState: () => void;
-  saveCurrentSession: () => void;
+  /** Null once written; otherwise why nothing was. */
+  saveCurrentSession: () => string | null;
   /** Push this window's run settings after its session is loaded or replaced (ADR-0030). */
   sendRunSettings: () => void;
   /** Release the oldest prompt held while the planner was busy, once it no longer is. */
@@ -56,6 +57,37 @@ export function orderLabelItems(plan: LegacyPlanState): { label: string; descrip
     label: `${label}. ${task.title}`,
     description: task.id,
   }));
+}
+
+/** Whether a task's card offers `action`: a fresh retry on a failed task, else what its row offers. */
+function offers(action: Exclude<TaskAction, 'run' | 'complete' | 'uncomplete'>, task: Task, subtask: boolean): boolean {
+  if (action === 'retry') return task.status === 'failed' && task.type !== 'user';
+  return taskRowActions(task, subtask ? 'subtask' : 'task').includes(action);
+}
+
+const PICK_WORDS = {
+  'force-start': { placeHolder: 'Select task to force start', none: 'No tasks to force start.' },
+  skip: { placeHolder: 'Select task to skip', none: 'No tasks to skip.' },
+  retry: { placeHolder: 'Select failed task to retry', none: 'No failed tasks to retry.' },
+  cancel: { placeHolder: 'Select running task to cancel', none: 'No running tasks to cancel.' },
+} as const;
+
+/**
+ * The task a task command acts on: the one its caller passed, or one picked
+ * from those it applies to. The Command Palette passes none, and these
+ * commands did nothing from it.
+ */
+export async function pickTaskFor(action: keyof typeof PICK_WORDS, plan: LegacyPlanState, passed?: Task | string): Promise<string | undefined> {
+  const id = typeof passed === 'string' ? passed : passed?.id;
+  if (id) return id;
+  const items = flattenTasksWithParents(plan.tasks)
+    .filter(({ task, parent }) => offers(action, task, parent !== null))
+    .map(({ task, label }) => ({ label: `${label}. ${task.title}`, description: task.id }));
+  if (items.length === 0) {
+    vscode.window.showInformationMessage(PICK_WORDS[action].none);
+    return undefined;
+  }
+  return (await vscode.window.showQuickPick(items, { placeHolder: PICK_WORDS[action].placeHolder }))?.description;
 }
 
 /**
@@ -128,7 +160,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       }
       if (!target) return;
 
-      const newEnabled = await toggleRunner(
+      const { enabled, keptLast } = await toggleRunner(
         {
           settingsService: deps.settingsService,
           config: deps.config,
@@ -136,7 +168,9 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         },
         target,
       );
-      vscode.window.showInformationMessage(`Enabled runners: ${newEnabled.length === 0 ? '(none: enable at least one)' : newEnabled.join(', ')}`);
+      vscode.window.showInformationMessage(keptLast
+        ? `${target} is the only enabled runner, so it stays on: enable another runner first.`
+        : `Enabled runners: ${enabled.join(', ')}`);
     }),
   );
   context.subscriptions.push(
@@ -287,29 +321,29 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     }),
   );
   context.subscriptions.push(
-    vscode.commands.registerCommand('ordewell.forceStartTask', async (taskItem?: Task) => {
-      const taskId = taskItem?.id;
+    vscode.commands.registerCommand('ordewell.forceStartTask', async (taskItem?: Task | string) => {
+      const taskId = await pickTaskFor('force-start', deps.getCurrentPlan(), taskItem);
       if (!taskId) return;
       await userCommand(() => forceStartPastGate(taskId, deps));
     }),
   );
   context.subscriptions.push(
-    vscode.commands.registerCommand('ordewell.skipTask', async (taskItem?: Task) => {
-      const taskId = taskItem?.id;
+    vscode.commands.registerCommand('ordewell.skipTask', async (taskItem?: Task | string) => {
+      const taskId = await pickTaskFor('skip', deps.getCurrentPlan(), taskItem);
       if (!taskId) return;
       await userCommand(taskActionCommand('skip', taskId));
     }),
   );
   context.subscriptions.push(
-    vscode.commands.registerCommand('ordewell.retryTask', async (taskItem?: Task) => {
-      const taskId = taskItem?.id;
+    vscode.commands.registerCommand('ordewell.retryTask', async (taskItem?: Task | string) => {
+      const taskId = await pickTaskFor('retry', deps.getCurrentPlan(), taskItem);
       if (!taskId) return;
       await userCommand(taskActionCommand('retry', taskId));
     }),
   );
   context.subscriptions.push(
-    vscode.commands.registerCommand('ordewell.cancelTask', async (taskItem?: Task) => {
-      const taskId = taskItem?.id;
+    vscode.commands.registerCommand('ordewell.cancelTask', async (taskItem?: Task | string) => {
+      const taskId = await pickTaskFor('cancel', deps.getCurrentPlan(), taskItem);
       if (!taskId) return;
       await userCommand(taskActionCommand('cancel', taskId));
     }),
@@ -323,8 +357,9 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       });
       if (!goal) return;
       deps.setCurrentGoal(goal);
-      deps.saveCurrentSession();
-      vscode.window.showInformationMessage(`Session saved: "${goal}"`);
+      const unsaved = deps.saveCurrentSession();
+      if (unsaved) vscode.window.showWarningMessage(`Session not saved: ${unsaved}`);
+      else vscode.window.showInformationMessage(`Session saved: "${goal}"`);
     }),
   );
   context.subscriptions.push(
@@ -383,7 +418,10 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         deps.setCurrentPlan(createEmptyPlan());
         deps.chatProvider.setState('empty');
         deps.chatProvider.conversation.reset();
+        deps.chatProvider.run.reset();
         clearState(deps.fsAdapter.getWorkspaceRoot());
+        // reset() keeps the outgoing plan's run settings; with no plan open the file is what the next one opens with (ADR-0030).
+        deps.sendRunSettings();
       }
     }),
   );
@@ -422,6 +460,16 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       if (!goal) {
         vscode.window.showInformationMessage('No goal to regenerate from. Describe a goal first.');
         return;
+      }
+      // A fresh plan ends the old one's scope, and with it the run (as New Session does).
+      const run = deps.session.activity;
+      if (deps.session.isExecuting || run.advancesOnItsOwn || run.resumable) {
+        const confirm = await vscode.window.showWarningMessage(
+          'Regenerate the plan? The run in progress is stopped, and the current plan and its progress are replaced.',
+          { modal: true },
+          'Regenerate',
+        );
+        if (confirm !== 'Regenerate') return;
       }
       // The session's planner gate waits for the probe and refuses an
       // unready planner in the chat's own words; a wait here read as idle.

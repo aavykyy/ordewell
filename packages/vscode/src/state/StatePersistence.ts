@@ -14,21 +14,24 @@ export interface PersistenceDeps {
   warn: (msg: string) => void;
 }
 
-export function saveCurrentSession(deps: PersistenceDeps): void {
+/** Null once the session is written; otherwise why nothing was, for a caller that tells the user. */
+export function saveCurrentSession(deps: PersistenceDeps): string | null {
   const plan = deps.getCurrentPlan();
-  if (plan.tasks.length === 0) return;
+  if (plan.tasks.length === 0) return 'it has no tasks yet.';
   const goal = deps.getCurrentGoal() || plan.tasks[0]?.title || '(untitled)';
   // The Session's own saves check the lease; this one writes the file directly (ADR-0049).
   const held = deps.session.heldElsewhere();
   if (held) {
     deps.log(`Session not saved: ${describeHeld(held)}`);
-    return;
+    return describeHeld(held);
   }
   try {
     const meta = saveSession(plan, goal, deps.workspaceRoot(), deps.session.sessionId);
     deps.log(`Session saved: ${meta.id}: "${goal}" (${meta.taskCount} tasks)`);
+    return null;
   } catch (err) {
     deps.log(`Session save error: ${err}`);
+    return err instanceof Error ? err.message : String(err);
   }
 }
 

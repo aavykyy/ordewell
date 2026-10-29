@@ -76,6 +76,14 @@ describe('reduceHost gates', () => {
     const sent = reduceHost(cleared, { type: 'turnRequested' });
     expect(reduceHost(sent, msg({ type: 'showError', error: 'real' })).error).toBe('real');
   });
+
+  // /fork fails before any turn opens, and /compact's turn may never open either.
+  it('shows the error of a command typed after a new session', () => {
+    const cleared = reduceHost(staleSession(), { type: 'resetSession', kind: 'new' });
+    const sent = reduceHost(cleared, { type: 'commandSent' });
+    expect(reduceHost(sent, msg({ type: 'showError', error: 'Could not fork the conversation: no session' })).error)
+      .toBe('Could not fork the conversation: no session');
+  });
 });
 
 describe('reduceHost after the watchdog', () => {

@@ -45,9 +45,17 @@ export async function setRunnerEnabled(deps: EnableRunnerDeps, runnerId: RunnerI
   });
 }
 
-/** Turn a runner on or off, from the command palette. */
-export async function toggleRunner(deps: EnabledRunnerDeps, runnerId: RunnerId): Promise<string[]> {
-  return updateEnabled(deps, (enabled) => (
-    enabled.includes(runnerId) ? enabled.filter((r) => r !== runnerId) : [...enabled, runnerId]
-  ));
+/**
+ * Turn a runner on or off, from the command palette. The last runner left in
+ * the saved list stays on, as in {@link setRunnerEnabled}; `keptLast` says so.
+ */
+export async function toggleRunner(deps: EnabledRunnerDeps, runnerId: RunnerId): Promise<{ enabled: string[]; keptLast: boolean }> {
+  let keptLast = false;
+  const enabled = await updateEnabled(deps, (enabled) => {
+    if (!enabled.includes(runnerId)) return [...enabled, runnerId];
+    const rest = enabled.filter((r) => r !== runnerId);
+    keptLast = rest.length === 0;
+    return keptLast ? enabled : rest;
+  });
+  return { enabled, keptLast };
 }

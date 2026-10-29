@@ -158,7 +158,7 @@ describe('VS Code keyless first-run process boundary', () => {
       notifications: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), confirm: async () => undefined },
       getCurrentPlan: () => plan, setCurrentPlan: (value) => { plan = value; },
       getCurrentGoal: () => goal, setCurrentGoal: (value) => { goal = value; },
-      isGeneratingPlan: () => session.isPlannerBusy, persistState: () => {}, saveCurrentSession: () => {}, sendRunSettings: () => {}, log: () => {},
+      isGeneratingPlan: () => session.isPlannerBusy, persistState: () => {}, saveCurrentSession: () => null, sendRunSettings: () => {}, log: () => {},
     };
     return { deps, session, runner, messages, config };
   }

@@ -38,6 +38,20 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   "Connecting Ordewell's tools, retry" once the one respawn takes over. No
   prompt has been sent at that point, and nothing waits on an answer from you.
   The wait, the respawn and the hold after a second miss are unchanged (#117).
+- **VS Code: a failed task has a Retry button.** It shows on the task's and
+  the subtask's card once the run has ended as well as during it, beside
+  Skip, in place of a Run Task that Ordewell refused on a failed task.
+- **VS Code: the palette's Force Start, Skip, Retry and Cancel Task commands
+  work.** Run from the Command Palette, they did nothing; they now ask which
+  task, listing only the tasks the action applies to.
+- **VS Code warns before a new plan stops a run.** `/new` now says that a run
+  in progress is stopped, and Regenerate Plan asks first while a run is live.
+- **VS Code: smaller fixes.** Clear All Tasks shows, and starts the next plan
+  with, the run settings from your settings file instead of the cleared
+  plan's. The palette's Toggle Runner keeps the last enabled runner on, as the
+  chat's runner switches do. Save Session says when nothing was saved, and
+  why. An error from a command typed after `/new`, such as `/fork`, now shows
+  in the chat.
 
 ## [0.11.1] - 2026-10-27
 
