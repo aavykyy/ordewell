@@ -267,6 +267,12 @@ describe('sessions', () => {
     expect(state.overlay).toMatchObject({ kind: 'picker', picker: { action: { kind: 'load-session' } } });
   });
 
+  it('/resume opens the same saved-session picker as /sessions', () => {
+    const { state, effects } = run('/resume');
+    expect(effects).toEqual([{ type: 'loadSessions' }]);
+    expect(state.overlay).toMatchObject({ kind: 'picker', picker: { action: { kind: 'load-session' } } });
+  });
+
   it('/load pulls a session by id', () => {
     expect(run('/load session-9').effects).toEqual([{ type: 'loadSession', sessionId: 'session-9' }]);
   });

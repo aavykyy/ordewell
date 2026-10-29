@@ -76,7 +76,51 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'quit', usage: '/quit', description: 'Exit the TUI', category: 'system' },
 ];
 
-const BY_NAME = new Map(SLASH_COMMANDS.map((c) => [c.name, c]));
+/**
+ * Familiar spellings the planner chat answers the same way as a built-in. Kept
+ * as data rather than extra `SLASH_COMMANDS` rows so one canonical command owns
+ * the behaviour: an alias is a name and a target, never a second
+ * implementation, so the pair cannot drift and a further synonym is one line.
+ * An alias also joins `BY_NAME` below, which is what `registerSkillCommands`
+ * checks first — a skill may never silently shadow it.
+ */
+export interface CommandAlias {
+  name: string;
+  target: string;
+  description: string;
+}
+
+export const COMMAND_ALIASES: CommandAlias[] = [
+  // Editors call reopening a saved session "resume"; here it must open the same
+  // saved-session picker as /sessions, not restart a task or a runner.
+  { name: 'resume', target: 'sessions', description: 'Alias for /sessions: open a saved session, not restart a task' },
+];
+
+/**
+ * The built-in table with each alias placed right after the command it spells,
+ * so `/help` and the completion menu group a synonym with its target. This is
+ * what user-facing listings read; `SLASH_COMMANDS` stays the canonical,
+ * one-entry-per-behaviour list the parity test checks.
+ */
+export function slashCommandTable(): SlashCommand[] {
+  const table: SlashCommand[] = [];
+  for (const command of SLASH_COMMANDS) {
+    table.push(command);
+    for (const alias of COMMAND_ALIASES) {
+      if (alias.target !== command.name) continue;
+      table.push({ name: alias.name, usage: `/${alias.name}`, description: alias.description, category: command.category });
+    }
+  }
+  return table;
+}
+
+const BY_NAME = new Map(slashCommandTable().map((c) => [c.name, c]));
+
+/** The canonical command a name finally runs as: an alias resolves to its target, everything else is itself. */
+export function canonicalCommandName(name: string): string {
+  const key = name.replace(/^\//, '').toLowerCase();
+  return COMMAND_ALIASES.find((a) => a.name === key)?.target ?? key;
+}
 
 export interface SkillCommandSource {
   name: string;
@@ -135,7 +179,7 @@ export function completions(text: string): SlashCommand[] {
   const typed = text.slice(1);
   if (/\s/.test(typed)) return [];
   const prefix = typed.toLowerCase();
-  return [...SLASH_COMMANDS, ...skillCommands].filter((c) => c.name.startsWith(prefix));
+  return [...slashCommandTable(), ...skillCommands].filter((c) => c.name.startsWith(prefix));
 }
 
 /** A `/word` token found anywhere in a prompt, whitespace- (or string-edge-) bounded. */
@@ -227,6 +271,6 @@ export function composerCompletions(token: SlashToken, runner: readonly RunnerCo
  * only ever loads a discovered skill, never a built-in.
  */
 export function tokenCompletions(token: SlashToken): SlashCommand[] {
-  const pool = token.start === 0 ? [...SLASH_COMMANDS, ...skillCommands] : skillCommands;
+  const pool = token.start === 0 ? [...slashCommandTable(), ...skillCommands] : skillCommands;
   return pool.filter((c) => c.name.startsWith(token.name));
 }
