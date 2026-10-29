@@ -40,12 +40,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return runner && modelResolver ? modelResolver.getCachedRunnerModels(runner).map((model) => model.modelId) : [];
     });
     const runnerRegistry = new RunnerRegistry();
-    modelResolver = new ModelResolver(runnerRegistry, config);
+    const fsAdapter = new VsCodeFileSystem();
+    // Read from the account the runners use, as the login probe below is: a
+    // workspace's CLAUDE_CONFIG_DIR moves Claude's picker lineup with it.
+    modelResolver = new ModelResolver(runnerRegistry, config, {
+      env: async () => ({ ...process.env, ...(await workspaceEnvOf(fsAdapter.getWorkspaceRoot())) }),
+    });
     const settingsService = new SettingsService();
     await moveAutonomyFromVsCodeSetting(settingsService);
     await moveEnabledRunnersFromVsCodeSetting(settingsService);
 
-    const fsAdapter = new VsCodeFileSystem();
     // The login probe must ask the same account the planner will use, so it
     // reads the workspace's .envrc/.ordewell/env exactly as a spawn does (ADR-0016).
     const runnerInstallation = new RunnerInstallation(runnerRegistry, undefined, undefined, {

@@ -285,15 +285,15 @@ describe('ApiClient — endpoints the TUI drives', () => {
     vi.restoreAllMocks();
   });
 
-  it('fetches the provider model catalog', async () => {
+  it('fetches the provider model catalog of its workspace', async () => {
     const server = await startCustomServer((req, res) => {
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ path: req.url, models: [{ modelId: 'a/b' }], providers: ['openrouter'] }));
     });
     servers.push(server);
 
-    const result = await new ApiClient(server.port).getModels();
-    expect((result as { path?: string }).path).toBe('/api/models');
+    const result = await new ApiClient(server.port, '/work/space B').getModels();
+    expect((result as { path?: string }).path).toBe('/api/models?workspace=%2Fwork%2Fspace%20B');
     expect(result.models?.[0]?.modelId).toBe('a/b');
   });
 

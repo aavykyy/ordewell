@@ -226,6 +226,7 @@ function fakeResolver(modelsByRunner: Partial<Record<string, DiscoveredModel[]>>
     contextWindowFor: vi.fn(() => undefined),
     maxOutputTokensFor: vi.fn(() => undefined),
     warmPickerOptions: vi.fn(),
+    withRunnerEnv: vi.fn(),
   } satisfies Record<keyof ModelResolver, unknown>;
 }
 

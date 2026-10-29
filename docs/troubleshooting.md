@@ -188,10 +188,19 @@ Ordewell takes the whole list from the highest file that sets one: the managed
 settings file (`managed-settings.json` and its `managed-settings.d/` files in
 Claude Code's system directory), then your user settings,
 `~/.claude/settings.json` or `settings.json` in `CLAUDE_CONFIG_DIR` when that
-is set. The daemon reads `CLAUDE_CONFIG_DIR` from its own environment and the
-workspace it was started in. A list your organization delivers from the
-claude.ai console or by MDM is not read. Ordewell reads the files when it
+is set. `CLAUDE_CONFIG_DIR` is read from the environment the workspace's tasks
+run with, its `.envrc` or `.ordewell/env` included, so each workspace a daemon
+serves is offered its own account's list. Ordewell reads the files when it
 discovers Claude's models, so restart it after editing one.
+
+Ordewell does not read a list your organization delivers any other way: from
+the claude.ai console or a Claude apps gateway (server-managed settings), a
+macOS configuration profile, or the Windows `HKLM` or `HKCU` registry. Such a
+list is not offered. And because Claude Code takes the whole list from the
+highest source that sets one, such a list also replaces a file's list in
+Claude Code's own `/model` picker while Ordewell still offers the file's.
+Ordewell ignores a row's `behavesAs` and the list's `replaceBuiltInOptions`
+too: it offers the listed models beside Anthropic's own either way.
 
 ## A runner shows as switched off, and tasks are flagged
 

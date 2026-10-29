@@ -185,6 +185,20 @@ describe('ModelResolver.pickerOptions', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it('shares the vendor catalog with a view for another runner environment', async () => {
+    const fetchImpl = vi.fn(fakeFetch([['/models', { data: [{ id: 'vendor/catalog', name: 'Catalog' }] }]]));
+    const resolver = new ModelResolver(fakeRegistry({}), configWith(), { fetchImpl: fetchImpl as unknown as typeof fetch });
+    const view = resolver.withRunnerEnv(async () => ({ CLAUDE_CONFIG_DIR: '/elsewhere' }));
+
+    await resolver.pickerOptions();
+    expect(view.getCachedPickerOptions().map((o) => o.id)).toContain('vendor/catalog');
+    await view.pickerOptions();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    view.invalidate();
+    expect(resolver.getCachedPickerOptions()).toEqual([]);
+  });
+
   it('records a per-provider fetch failure in getDiscoveryErrors', async () => {
     // OpenRouter catalog 500s; Gemini succeeds. The picker still yields the
     // Gemini option, and the OpenRouter failure is flagged for the surfaces.

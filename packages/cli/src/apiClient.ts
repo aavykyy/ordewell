@@ -368,7 +368,9 @@ export class ApiClient {
 
   /** The full provider catalog the daemon has discovered (used by the TUI model picker). */
   getModels(): Promise<ModelsResponse> {
-    return this.call('GET', '/api/models', 'Failed to fetch models');
+    // Discovered under this workspace's environment, as its tasks are launched:
+    // its CLAUDE_CONFIG_DIR picks the Claude account whose models are offered.
+    return this.call('GET', `/api/models?workspace=${encodeURIComponent(this.workspace)}`, 'Failed to fetch models');
   }
 
   setRunnerEnabled(runner: string, enabled: boolean): Promise<OkResponse> {

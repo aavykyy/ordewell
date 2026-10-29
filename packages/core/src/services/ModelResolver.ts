@@ -15,13 +15,19 @@ export interface ModelResolverDeps {
   env?: () => Promise<RunnerEnv>;
 }
 
+/** The vendor catalogs, which no runner environment changes: one copy shared by every {@link ModelResolver.withRunnerEnv} view. */
+interface VendorCatalog {
+  options: OrchestratorOption[] | null;
+  /** A catalog load under way: a second ask, or a warm-up, shares it rather than fetching again. */
+  load: Promise<OrchestratorOption[]> | null;
+  errors: Record<string, string>;
+}
+
 export class ModelResolver {
   private discovery: ModelDiscovery;
   private fetchImpl?: typeof fetch;
-  private cachedPickerOptions: OrchestratorOption[] | null = null;
-  /** A catalog load under way: a second ask, or a warm-up, shares it rather than fetching again. */
-  private pickerLoad: Promise<OrchestratorOption[]> | null = null;
-  private lastDiscoveryErrors: Record<string, string> = {};
+  private execImpl?: ExecImpl;
+  private vendor: VendorCatalog = { options: null, load: null, errors: {} };
 
   constructor(
     private registry: RunnerRegistry,
@@ -30,6 +36,19 @@ export class ModelResolver {
   ) {
     this.discovery = new ModelDiscovery(registry, deps.execImpl, deps.fetchImpl, undefined, undefined, undefined, deps.env);
     this.fetchImpl = deps.fetchImpl;
+    this.execImpl = deps.execImpl;
+  }
+
+  /**
+   * This resolver for runners launched with another environment, a
+   * workspace's own: their catalogs are discovered and cached under `env`, as
+   * `CLAUDE_CONFIG_DIR` there can name another account, while the vendor
+   * catalogs stay this resolver's, fetched once.
+   */
+  withRunnerEnv(env: () => Promise<RunnerEnv>): ModelResolver {
+    const view = new ModelResolver(this.registry, this.config, { fetchImpl: this.fetchImpl, execImpl: this.execImpl, env });
+    view.vendor = this.vendor;
+    return view;
   }
 
   static builtinOptions(): OrchestratorOption[] {
@@ -53,13 +72,13 @@ export class ModelResolver {
   }
 
   async pickerOptions(): Promise<OrchestratorOption[]> {
-    if (this.cachedPickerOptions) return this.cachedPickerOptions;
-    if (!this.pickerLoad) {
+    if (this.vendor.options) return this.vendor.options;
+    if (!this.vendor.load) {
       const load = this.loadPickerOptions();
-      this.pickerLoad = load;
-      void load.finally(() => { if (this.pickerLoad === load) this.pickerLoad = null; }).catch(() => {});
+      this.vendor.load = load;
+      void load.finally(() => { if (this.vendor.load === load) this.vendor.load = null; }).catch(() => {});
     }
-    return this.pickerLoad;
+    return this.vendor.load;
   }
 
   /**
@@ -68,7 +87,7 @@ export class ModelResolver {
    * known yet reads it from them on a later call, never waiting on the fetch.
    */
   warmPickerOptions(): void {
-    if (this.cachedPickerOptions || this.pickerLoad) return;
+    if (this.vendor.options || this.vendor.load) return;
     this.pickerOptions().catch(() => {});
   }
 
@@ -83,9 +102,9 @@ export class ModelResolver {
       baseUrls,
       fetchImpl: this.fetchImpl,
     });
-    this.lastDiscoveryErrors = errors;
-    this.cachedPickerOptions = toOrchestratorOptions(models, ORCHESTRATOR_SHORTCUTS);
-    return this.cachedPickerOptions;
+    this.vendor.errors = errors;
+    this.vendor.options = toOrchestratorOptions(models, ORCHESTRATOR_SHORTCUTS);
+    return this.vendor.options;
   }
 
   /**
@@ -95,7 +114,7 @@ export class ModelResolver {
    * key/endpoint is set but whose catalog could not be reached.
    */
   getDiscoveryErrors(): Record<string, string> {
-    return this.lastDiscoveryErrors;
+    return this.vendor.errors;
   }
 
   async refresh(): Promise<ProviderModelLists> {
@@ -122,7 +141,7 @@ export class ModelResolver {
   }
 
   getCachedPickerOptions(): OrchestratorOption[] {
-    return this.cachedPickerOptions ?? [];
+    return this.vendor.options ?? [];
   }
 
   /**
@@ -137,7 +156,7 @@ export class ModelResolver {
   contextWindowFor(source: string, model: string): number | undefined {
     if (!model) return undefined;
     const window = isApiProvider(source)
-      ? this.cachedPickerOptions?.find((o) => o.apiProvider === source && o.id === prefixModelId(source, stripModelPrefix(model, source)))?.contextWindow
+      ? this.vendor.options?.find((o) => o.apiProvider === source && o.id === prefixModelId(source, stripModelPrefix(model, source)))?.contextWindow
       : this.discovery.getCached(source)?.find((m) => m.modelId === model)?.contextWindow;
     return window && window > 0 ? window : undefined;
   }
@@ -149,15 +168,15 @@ export class ModelResolver {
    */
   maxOutputTokensFor(source: string, model: string): number | undefined {
     if (!model || !isApiProvider(source)) return undefined;
-    const cap = this.cachedPickerOptions?.find((o) => o.apiProvider === source && o.id === prefixModelId(source, stripModelPrefix(model, source)))?.maxOutputTokens;
+    const cap = this.vendor.options?.find((o) => o.apiProvider === source && o.id === prefixModelId(source, stripModelPrefix(model, source)))?.maxOutputTokens;
     return cap && cap > 0 ? cap : undefined;
   }
 
   invalidate(): void {
     this.discovery.clear();
-    this.cachedPickerOptions = null;
-    this.pickerLoad = null;
-    this.lastDiscoveryErrors = {};
+    this.vendor.options = null;
+    this.vendor.load = null;
+    this.vendor.errors = {};
     if (!this.fetchImpl) {
       for (const provider of PROVIDER_PRIORITY) {
         const baseUrl = this.config.getProviderBaseUrl(provider);

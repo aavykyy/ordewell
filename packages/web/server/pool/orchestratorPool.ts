@@ -140,6 +140,10 @@ export class OrchestratorPool {
   private sequence = new Map<string, number>();
   private registry: CoreRunnerRegistry = new RunnerRegistry();
   private modelResolver: ModelResolver;
+  /** A host that supplied its own resolver answers for every workspace, as a supplied probe does. */
+  private suppliedModelResolver: boolean;
+  /** Per workspace other than the daemon's cwd: see {@link resolverFor}. */
+  private workspaceResolvers = new Map<string, ModelResolver>();
   private runnerInstallation: RunnerInstall;
   /**
    * A host that supplied its own probe (a test, or a surface that owns one).
@@ -177,6 +181,7 @@ export class OrchestratorPool {
         workspace: () => process.cwd(),
       });
     // Read from the account the runners use, as the login probe above is.
+    this.suppliedModelResolver = deps.modelResolver !== undefined;
     this.modelResolver = deps.modelResolver ?? new ModelResolver(this.registry, new WebConfig(), {
       env: async () => ({ ...process.env, ...(await workspaceEnvOf(process.cwd())) }),
     });
@@ -376,7 +381,7 @@ export class OrchestratorPool {
       ensureStateDirIgnored(workspace);
       assertWorkspaceIsProject(workspace);
     }
-    const config = this.plannerConfig(modelOverride);
+    const config = this.plannerConfig(modelOverride, workspace);
     const fsAdapter = new PoolFileSystem(workspace);
     const broadcast = (msg: SessionMessage) => this.broadcast(sessionId, msg);
     const runner = new PoolAwareRunner(sessionId, broadcast, this.runner);
@@ -390,7 +395,7 @@ export class OrchestratorPool {
       broadcast,
       // The notification channel above is silent here; this is how a client hears how the run isolates.
       onNotice: (notice) => this.broadcast(sessionId, notice),
-      modelResolver: this.modelResolver,
+      modelResolver: this.resolverFor(workspace),
       settings: () => this.runtimeSettings(),
       sessionId,
       ...(this.leaseHost ? { leaseHost: this.leaseHost } : {}),
@@ -404,13 +409,13 @@ export class OrchestratorPool {
    * lists are handed over as a reader, not a snapshot, so a credential change
    * reaches a session that is already open.
    */
-  private plannerConfig(modelOverride?: string): WebConfig {
+  private plannerConfig(modelOverride?: string, workspace?: string): WebConfig {
     return new WebConfig({
       enabledRunners: this.enabledRunnerOverride(),
       modelOverride,
       providerModelLists: () => this.cachedProviderLists,
       pickedModel: () => this.pickedModel,
-      agentCatalog: (provider) => this.plannerCatalogFor(provider).map((model) => model.id),
+      agentCatalog: (provider) => this.plannerCatalogFor(provider, workspace).map((model) => model.id),
     });
   }
 
@@ -484,10 +489,10 @@ export class OrchestratorPool {
    * has already cached so this stays synchronous; a cold cache degrades to an
    * empty catalog rather than kicking off discovery mid-settings-write.
    */
-  private plannerCatalogFor(provider: PlannerBackendId): PlannerModelCandidate[] {
+  private plannerCatalogFor(provider: PlannerBackendId, workspace?: string): PlannerModelCandidate[] {
     const runner = runnerForProvider(provider);
     if (runner) {
-      return this.modelResolver.getCachedRunnerModels(runner).map((m) => ({ id: m.modelId, variants: m.variants }));
+      return this.resolverFor(workspace).getCachedRunnerModels(runner).map((m) => ({ id: m.modelId, variants: m.variants }));
     }
     return this.modelResolver.getCachedPickerOptions().map((o) => ({ id: o.id }));
   }
@@ -537,7 +542,7 @@ export class OrchestratorPool {
     // before the credential refresh below clears the resolver's cache — so a
     // settings write never waits on (async) discovery.
     const selection = touchesPlanner
-      ? selectPlanner(current, plannerChange, this.plannerModelMemory, this.plannerCatalogFor(plannerChange.provider ?? current.provider))
+      ? selectPlanner(current, plannerChange, this.plannerModelMemory, this.plannerCatalogFor(plannerChange.provider ?? current.provider, sessionId ? this.sessions.get(sessionId)?.workspaceRoot : undefined))
       : undefined;
 
     if (envChanges) {
@@ -562,8 +567,10 @@ export class OrchestratorPool {
       // A new/changed provider key or base URL must re-probe the catalog;
       // without this the picker keeps serving the pre-key cache until restart.
       if (touched) {
-        this.modelResolver.invalidate();
-        this.modelResolver.refreshRunnerModels();
+        for (const resolver of [this.modelResolver, ...this.workspaceResolvers.values()]) {
+          resolver.invalidate();
+          resolver.refreshRunnerModels();
+        }
         this.dropUnkeyedProviderLists();
       }
     }
@@ -630,20 +637,26 @@ export class OrchestratorPool {
     return model;
   }
 
-  async getProviderModels(): Promise<ModelsResponse> {
+  /**
+   * The catalog as `workspace`'s runners see it: Claude Code's picker lineup
+   * follows the `CLAUDE_CONFIG_DIR` that workspace's environment sets.
+   * Without a workspace the daemon's cwd stands in.
+   */
+  async getProviderModels(workspace?: string): Promise<ModelsResponse> {
     const config = new WebConfig();
+    const resolver = this.resolverFor(workspace);
 
     const runnerIds = this.registry.list().map((p) => p.manifest.name);
     const [runnerModels, providerLists] = await Promise.all([
-      this.modelResolver.modelsForRunners(runnerIds),
-      this.modelResolver.refresh(),
+      resolver.modelsForRunners(runnerIds),
+      resolver.refresh(),
       this.codexSandbox.ensure(),
     ]);
 
     // `refresh()` populates the picker cache, so this is the same fetch — no
     // second network round-trip. Errors are whatever that fetch recorded.
-    const orchestratorModels = await this.modelResolver.pickerOptions();
-    const providerErrors = this.modelResolver.getDiscoveryErrors();
+    const orchestratorModels = await resolver.pickerOptions();
+    const providerErrors = resolver.getDiscoveryErrors();
 
     this.cachedProviderLists = providerLists;
 
@@ -677,6 +690,24 @@ export class OrchestratorPool {
   getRunnerState(): { enabledRunners: RunnerId[]; orchestratorModel: string } {
     const config = this.plannerConfig();
     return { enabledRunners: config.enabledRunners, orchestratorModel: config.orchestratorModel };
+  }
+
+  /**
+   * The resolver whose runner catalogs are discovered under `workspace`'s
+   * environment, the one its tasks are launched with. Kept per workspace,
+   * since one daemon serves several and a catalog is cached until refreshed;
+   * the vendor catalogs are shared by all of them.
+   */
+  private resolverFor(workspace: string | undefined): ModelResolver {
+    if (this.suppliedModelResolver || !workspace) return this.modelResolver;
+    const key = resolve(workspace);
+    if (key === resolve(process.cwd())) return this.modelResolver;
+    let resolver = this.workspaceResolvers.get(key);
+    if (!resolver) {
+      resolver = this.modelResolver.withRunnerEnv(async () => ({ ...process.env, ...(await workspaceEnvOf(key)) }));
+      this.workspaceResolvers.set(key, resolver);
+    }
+    return resolver;
   }
 
   /**

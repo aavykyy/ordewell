@@ -185,7 +185,8 @@ export function claudeManagedSettingsDir(platform: NodeJS.Platform = process.pla
  * file and its `managed-settings.d/` drop-ins rank above user settings, and a
  * later drop-in replaces an earlier lineup. Project files cannot set it, and
  * Ordewell's `--settings` never does. Server-managed, MDM and registry policy
- * are out of reach here, so a lineup only they set is not offered.
+ * are out of reach here, so a lineup only they set is not offered, and one
+ * they set above these files is not seen to override them.
  */
 export function readClaudeSettingsModels(files: RunnerSettingsFiles, platform: NodeJS.Platform = process.platform): DiscoveredModel[] {
   const managed = claudeManagedSettingsDir(platform);
