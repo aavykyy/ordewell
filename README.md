@@ -66,7 +66,33 @@ get it from [Open VSX](https://open-vsx.org/extension/ordewell/ordewell). The
 extension bundles its own core and needs nothing from npm.
 
 **Requirements:** Node.js 20.3 or newer, at least one of Claude Code, Codex or
-OpenCode, and git for task isolation. On Windows, run the terminal UI under WSL.
+OpenCode, and git for task isolation.
+
+### Windows
+
+| Surface | On Windows |
+| --- | --- |
+| VS Code extension and its local daemon | Supported natively |
+| Terminal UI (`ordewell`) | Not verified on native Windows. Run it under [WSL](https://learn.microsoft.com/windows/wsl/install) |
+
+To run your first goal natively, in PowerShell:
+
+```powershell
+code --install-extension ordewell.ordewell
+claude --version    # or: codex --version, opencode --version
+```
+
+Then open your project folder in VS Code, open the Ordewell panel from the
+activity bar, type a goal, review the plan and approve it. At least one runner
+must be installed and on your `PATH`; if it is greyed out right after
+installing, reload the window. Ordewell finds npm-installed runners (`.cmd` and
+`.exe` shims) on Windows.
+
+Two things are not verified on Windows: whether Codex's read-only sandbox is
+enforced, and `%VAR%` expansion on the `cmd.exe` shim route
+([ADR-0010](docs/adr/platform/0010-windows-support.md)). The planner's shell
+also has no OS sandbox on Windows and relies on its command rules alone; see
+[troubleshooting](docs/troubleshooting.md).
 
 ## What Ordewell sends
 
