@@ -333,8 +333,9 @@ of.
   segment that never becomes a command can still carry the `||` or `;` that
   makes the shell's directory depend on what ran. Any `;`, `||`, `&`, newline,
   subshell, substitution, state-changing builtin or `cd` it cannot read stops
-  following for the whole command. A `cd` inside a multi-stage pipeline runs in
-  a subshell and is not counted.
+  following for the whole command, and so does a `cd` re-cased for cmd.exe
+  (`CD`) or spelled `chdir`, which cmd.exe and zsh run as `cd`. A `cd` inside
+  a multi-stage pipeline runs in a subshell and is not counted.
 - **The fallback never relaxes.** When nothing is followed, paths are judged
   from the root. That is never more permissive than the truth while every `cd`
   stays inside the workspace: a path with no net climb stays inside from any
@@ -343,7 +344,7 @@ of.
   and ask under their own scopes.
 - **A `cd` that asks is granted for its line only.** Its grant is the exact
   command, not `cd`, and so is the grant of a builtin that can move the shell
-  (`pushd`, `popd`, `builtin`, the other state-changing builtins). Confinement
+  (`chdir`, `pushd`, `popd`, `builtin`, the other state-changing builtins). Confinement
   did not follow it, so the paths after it were judged from the root; under a
   binary-name grant, approving `cd "$HOME"` would have approved
   `cd "$HOME" && cat .ssh/id_rsa`.
@@ -442,3 +443,4 @@ model's refusal to write were never security evidence.
 - 2026-10-29 — sed and awk programs that read a file they name or the environment are refused, and so are git's subcommands that write.
 - 2026-10-29 — git's subcommands are an allowlist with per-subcommand reading forms, and gawk's `SYMTAB` is refused.
 - 2026-10-29 — git is scoped by its operands past leading flags, so `git -C <dir> …` no longer scopes to bare `git`.
+- 2026-10-29 — `chdir` and a re-cased `CD` move the shell: following stops, and the grant is the line.

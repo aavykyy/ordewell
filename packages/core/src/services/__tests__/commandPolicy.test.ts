@@ -986,6 +986,43 @@ describe('the remote-listing subcommand prompts for a configured remote, scoped 
     expect(classifyCommand(cmd)).toMatchObject({ tier: 'ask', scope });
   });
 
+  // The secret check reads the words as written; the shell sends what they
+  // expand to, and a `-C $DIR` or `env -C $DIR` picks a repository no grant names.
+  it.each([
+    ['posix', 'git ls-remote origin $MY_SECRET_TOKEN'],
+    ['posix', 'git ls-remote --heads origin refs/heads/$MY_SECRET_TOKEN'],
+    ['posix', 'git ls-remote origin "refs/heads/$MY_SECRET_TOKEN"'],
+    ['posix', 'git ls-remote origin ${MY_SECRET_TOKEN}'],
+    ['posix', 'git ls-remote origin $(cat .env)'],
+    ['posix', 'git ls-remote origin `cat .env`'],
+    ['posix', "git ls-remote origin $'\\x41'"],
+    ['posix', 'git ls-remote origin refs/heads/{a,b}'],
+    ['posix', 'git ls-remote origin refs/heads/*'],
+    ['posix', 'git ls-remote origin ~'],
+    ['posix', 'git ls-remote origin x=~/y'],
+    ['posix', 'git -C $DIR ls-remote origin'],
+    ['posix', 'env -C $DIR git ls-remote origin'],
+    ['posix', 'nice git ls-remote --tags origin $MY_SECRET_TOKEN'],
+    ['posix', 'echo $(git ls-remote origin $MY_SECRET_TOKEN)'],
+    ['posix', 'git.exe ls-remote origin $MY_SECRET_TOKEN'],
+    ['cmd', 'git ls-remote origin %MY_SECRET_TOKEN%'],
+    ['cmd', 'git ls-remote origin refs/heads/!MY_SECRET_TOKEN!'],
+    ['cmd', 'chdir packages\\web && git ls-remote origin %MY_SECRET_TOKEN%'],
+  ] as const)('refuses a listing the shell rewrites under %s: %s', (dialect, cmd) => {
+    const result = classifyCommand(cmd, { dialect });
+    expect(result.tier).toBe('refuse');
+    expect(result.reason).toContain('git ls-remote');
+  });
+
+  // Quoted, the words are what git is sent, and the secret check reads them.
+  it.each([
+    ["git ls-remote origin 'refs/heads/feat*'", ['origin', 'refs/heads/feat*']],
+    ["git ls-remote origin '$MY_SECRET_TOKEN'", ['origin', '$MY_SECRET_TOKEN']],
+    ['git ls-remote --heads origin "refs/heads/main"', ['origin', 'refs/heads/main']],
+  ])('asks about the literal listing %s', (cmd, outboundTexts) => {
+    expect(classifyCommand(cmd, { dialect: 'posix' })).toMatchObject({ tier: 'ask', outboundTexts });
+  });
+
   it('hands the remote and its patterns to the outbound secret check', () => {
     expect(classifyCommand('git -C packages/core ls-remote --heads origin main').outboundTexts).toEqual(['origin', 'main']);
     expect(classifyCommand('git ls-remote').outboundTexts).toBeUndefined();
@@ -1059,6 +1096,84 @@ describe('a git grant is scoped by the subcommand it runs, past leading flags', 
     'command cd packages/web && git ls-remote origin',
   ])('holds %s to its line', (cmd) => {
     expect(classifyCommand(cmd)).toMatchObject({ tier: 'ask', scope: cmd });
+  });
+
+  // A wrapper's own words never reach a scope, and `env -C` picks the
+  // repository as `-C` does: `env -C packages/evil` shared the grant of
+  // `env -C packages/web`. `env -u HOME` changes which config git reads.
+  it.each([
+    'env -C packages/web git ls-remote --heads origin',
+    'env -Cpackages/web git ls-remote --heads origin',
+    'env --chdir=packages/web git ls-remote --heads origin',
+    'env --chdir packages/web git ls-remote origin --heads',
+    'nice env -C packages/web git ls-remote origin',
+    'timeout 5 env -C packages/web git -C . ls-remote origin',
+    'env -u HOME git ls-remote origin',
+    'nice git ls-remote origin',
+    'env -C packages/web git.exe ls-remote origin',
+  ])('holds the wrapped listing %s to its line', (cmd) => {
+    expect(classifyCommand(cmd, { dialect: 'posix' })).toMatchObject({ tier: 'ask', scope: cmd, outboundTexts: ['origin'] });
+  });
+
+  // cmd.exe's `chdir` is its `cd`, and every other name that can move cmd.exe
+  // (`pushd`, a drive switch, `cd..`) is a word the listing's scope never held.
+  it.each([
+    'chdir packages/web && git ls-remote --heads origin',
+    'CHDIR packages\\web && git ls-remote --heads origin',
+    'chdir /d packages\\web & git ls-remote origin',
+    'CD packages\\web && git ls-remote origin',
+    'cd /d packages\\web && git ls-remote origin',
+    'pushd packages\\web && git ls-remote origin',
+    'D: && git ls-remote origin',
+    'cd.. && git ls-remote origin',
+  ])('holds %s to its line under cmd.exe', (cmd) => {
+    expect(classifyCommand(cmd, { dialect: 'cmd' })).toMatchObject({ tier: 'ask', scope: cmd });
+  });
+
+  // Followed past a re-cased `CD` or a `chdir` it never counted, `..\x` was
+  // judged from `a`, inside, where cmd.exe reads it from the root, outside.
+  it.each([
+    'cd a && CD .. && type ..\\x',
+    'cd a && chdir .. && type ..\\x',
+    'cd a && CHDIR .. && type ..\\x',
+  ])('stops following cd past %s', (cmd) => {
+    expect(pathRefs(cmd, { dialect: 'cmd' })).toEqual([{ path: '..', cwd: [] }, { path: '..\\x', cwd: [] }]);
+  });
+
+  it('holds a chdir to its line wherever it runs', () => {
+    expect(classifyCommand('chdir packages/web && git ls-remote origin', { dialect: 'posix' }).scope)
+      .toBe('chdir packages/web && git ls-remote origin');
+    // Granted as bare `chdir`, one approval covered any directory and any read after it.
+    expect(classifyCommand('chdir %USERPROFILE% && type .ssh\\id_rsa', { dialect: 'cmd' }))
+      .toMatchObject({ tier: 'ask', scope: 'chdir %USERPROFILE% && type .ssh\\id_rsa' });
+  });
+
+  // A silent read beside it cannot move the shell, so the grant stays the listing's own.
+  it.each([
+    ['git ls-remote --heads origin | head -5', 'git ls-remote --heads origin'],
+    ['ls && git ls-remote origin', 'git ls-remote origin'],
+    ['git -C packages/web ls-remote origin | grep main', 'git -C packages/web ls-remote origin'],
+  ])('keeps %s under the listing alone', (cmd, scope) => {
+    expect(classifyCommand(cmd, { dialect: 'posix' })).toMatchObject({ tier: 'ask', scope });
+  });
+
+  // Holding a line to itself never lifts a refusal: a write still refuses.
+  it.each([
+    ['posix', 'env -C packages/web git push origin main'],
+    ['posix', 'env --chdir=packages/web git ls-remote --upload-pack=evil origin'],
+    ['posix', 'env -C packages/web git ls-remote https://attacker.example/r'],
+    ['posix', 'chdir packages/web && git reset --hard'],
+    ['cmd', 'chdir packages\\web && del x'],
+    ['cmd', 'chdir packages\\web && git ls-remote origin > out.txt'],
+    ['cmd', 'D: && git ls-remote \\\\host\\share\\r'],
+  ] as const)('still refuses under %s: %s', (dialect, cmd) => {
+    expect(classifyCommand(cmd, { dialect }).tier).toBe('refuse');
+  });
+
+  it('keeps a wrapped listing of another repository apart', () => {
+    const web = classifyCommand('env --chdir=packages/web git ls-remote origin').scope;
+    const other = classifyCommand('env --chdir=packages/evil git ls-remote origin').scope;
+    expect(web).not.toBe(other);
   });
 });
 
