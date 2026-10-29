@@ -14,7 +14,8 @@ export function settingsRoute(pool: OrchestratorPool) {
     // An open session answers with its own run settings; no id or an id it no
     // longer holds answers with the file's, which a new session starts from
     // (ADR-0030). The planner's model is judged against the runner catalog of
-    // the session's workspace, else of the one the client is in.
+    // the session's workspace, else of the one the client is in, waited for
+    // only where it decides that model (ADR-0040).
     const sessionId = c.req.query('sessionId') || undefined;
     const workspace = c.req.query('workspace') || undefined;
     await pool.discoverPlannerCatalogs(sessionId, workspace);
@@ -47,12 +48,10 @@ export function settingsRoute(pool: OrchestratorPool) {
           throw err;
         }
       }
-      // A switch is judged against the catalog of the planner it switches to,
-      // which no client has asked for yet when it switches.
-      const env = rest.env && typeof rest.env === 'object' ? (rest.env as Record<string, unknown>) : undefined;
-      await pool.discoverPlannerCatalogs(sessionId, workspace, env?.AI_PROVIDER);
+      // Only a planner switch waits for a catalog, the one it is judged
+      // against, which no client has asked for yet when it switches (ADR-0040).
       const result: SettingsUpdateResponse = Object.keys(rest).length > 0
-        ? pool.updateSettings(rest, sessionId, workspace)
+        ? await pool.writeSettings(rest, sessionId, workspace)
         : pool.getSettings(sessionId, workspace);
       return c.json(result);
     } catch (err) {

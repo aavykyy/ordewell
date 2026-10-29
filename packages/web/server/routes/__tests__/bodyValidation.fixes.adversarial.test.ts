@@ -62,7 +62,7 @@ describe('a plan route given a body that is not JSON', () => {
 
 describe('the settings route given a malformed body', () => {
   it('answers 400', async () => {
-    const pool = { getSettings: vi.fn(), updateSettings: vi.fn(), discoverPlannerCatalogs: vi.fn(async () => undefined) } as unknown as OrchestratorPool;
+    const pool = { getSettings: vi.fn(), writeSettings: vi.fn(), discoverPlannerCatalogs: vi.fn(async () => undefined) } as unknown as OrchestratorPool;
     const app = new Hono().route('/api/settings', settingsRoute(pool));
 
     const res = await app.request('/api/settings', {

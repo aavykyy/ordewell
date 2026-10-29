@@ -325,7 +325,7 @@ export abstract class BaseConfig implements IConfig {
     const named = isPlannerBackend(configured.setting ?? '') || isPlannerBackend(process.env.AI_PROVIDER ?? '');
     const pickedElsewhere = configured.pickedFor !== undefined && configured.pickedFor !== provider;
     const kept = configured.pickedFor === provider || (!pickedElsewhere && (isApiProvider(provider)
-      || (named && !isForeignModel(provider, model, this.agentCatalog(provider)))));
+      || (named && !isForeignModel(provider, model, () => this.agentCatalog(provider)))));
     if (kept) return { model: override || model, effort, source: override ? 'request' : 'configured' };
     const own = pickedElsewhere || named ? rememberedOrDefault(provider) : detectedAgentChoice(provider, configured);
     // No effort was chosen for a model only this request names.
@@ -336,7 +336,8 @@ export abstract class BaseConfig implements IConfig {
    * The model ids a coding agent was last discovered serving, empty while
    * discovery is cold. A host that holds a runner catalog supplies it: it is
    * the only evidence that tells OpenCode's `provider/model` ids from an
-   * OpenRouter slug.
+   * OpenRouter slug. Asked only when a named agent's configured model is
+   * neither its alias nor its remembered pick.
    */
   protected agentCatalog(_provider: PlannerBackendId): readonly string[] {
     return [];
@@ -390,9 +391,13 @@ export function isVendorModelFor(agent: PlannerBackendId, model: string): boolea
  * discovered catalog does not list. Its stable aliases, its catalog and its
  * remembered pick are its own whatever their shape.
  */
-function isForeignModel(agent: PlannerBackendId, model: string, catalog: readonly string[]): boolean {
-  if (!model || isStableAlias(agent, model) || catalog.includes(model) || rememberedChoice(agent)?.model === model) return false;
-  return isVendorModelFor(agent, model) || (catalog.length > 0 && SLUG_SHAPE.test(model));
+function isForeignModel(agent: PlannerBackendId, model: string, catalog: () => readonly string[]): boolean {
+  if (!model || isStableAlias(agent, model) || rememberedChoice(agent)?.model === model) return false;
+  // Asked last, and only here: a host whose catalog is cold waits for it only
+  // when it is what decides (ADR-0040).
+  const listed = catalog();
+  if (listed.includes(model)) return false;
+  return isVendorModelFor(agent, model) || (listed.length > 0 && SLUG_SHAPE.test(model));
 }
 
 /**

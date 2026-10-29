@@ -50,7 +50,6 @@ import {
   ensureStateDirIgnored,
   runnerForProvider,
   isApiProvider,
-  isPlannerBackend,
   PlannerModelMemory,
   selectPlanner,
   admitSettingsEnv,
@@ -165,6 +164,12 @@ export class OrchestratorPool {
    * may name another account, whose catalog judges the model afresh.
    */
   private pickedModel: (PlannerPick & { workspace: string }) | undefined;
+  /**
+   * The last planner write a route made, so each lands after the ones made
+   * before it: a switch still waiting for its catalog must not write over a
+   * pick made while it waited (ADR-0040).
+   */
+  private plannerWrites: Promise<unknown> = Promise.resolve();
   private runner: IRunner;
   /** One probe per daemon, asked again whenever the runner list is refreshed (ADR-0033). */
   private codexSandbox: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
@@ -413,13 +418,17 @@ export class OrchestratorPool {
    * lists are handed over as a reader, not a snapshot, so a credential change
    * reaches a session that is already open.
    */
-  private plannerConfig(modelOverride?: string, workspace?: string): WebConfig {
+  private plannerConfig(
+    modelOverride?: string,
+    workspace?: string,
+    catalog: (provider: PlannerBackendId) => PlannerModelCandidate[] = (provider) => this.plannerCatalogFor(provider, workspace),
+  ): WebConfig {
     return new WebConfig({
       enabledRunners: this.enabledRunnerOverride(),
       modelOverride,
       providerModelLists: () => this.cachedProviderLists,
       pickedModel: () => (this.pickedModel?.workspace === workspaceKey(workspace) ? this.pickedModel : undefined),
-      agentCatalog: (provider) => this.plannerCatalogFor(provider, workspace).map((model) => model.id),
+      agentCatalog: (provider) => catalog(provider).map((model) => model.id),
     });
   }
 
@@ -506,8 +515,9 @@ export class OrchestratorPool {
    * cross-provider picker list for a vendor (ADR-0009), same split as
    * `plannerModelItems` in the TUI reducer. Read from whatever the resolver
    * has already cached so this stays synchronous; the routes discover it
-   * first ({@link discoverPlannerCatalogs}), and a catalog still cold degrades
-   * to an empty one rather than kicking off discovery mid-settings-write.
+   * first where it decides the answer ({@link discoverPlannerCatalogs},
+   * {@link writeSettings}), and a catalog still cold degrades to an empty one
+   * rather than kicking off discovery mid-settings-write.
    */
   private plannerCatalogFor(provider: PlannerBackendId, workspace?: string): PlannerModelCandidate[] {
     const runner = runnerForProvider(provider);
@@ -518,25 +528,72 @@ export class OrchestratorPool {
   }
 
   /**
-   * Discover what {@link plannerCatalogFor} reads for `workspace`'s planner in
-   * effect and, on a switch, for `switchTo`, so the synchronous read or write
-   * that follows judges the model against that workspace's own catalog. Only
-   * a models request discovers it otherwise, and a client switching planners
-   * asks for models after the switch: a cold catalog would recall nothing
-   * and clear the model. A vendor planner's model does not depend on its
-   * catalog, so that is fetched only for a switch to one. Never throws: a
-   * catalog that cannot be discovered stays empty.
+   * Discover the runner catalog a settings read for `workspace` is judged
+   * against, when the read consults one not yet held. Most reads consult
+   * none — a vendor planner, a model picked in that workspace, an agent's
+   * alias or remembered pick — and answer at once, however slow the runner
+   * is to list its models (ADR-0040). Only a configured model whose owner
+   * only the catalog can tell waits: a cold one would report the wrong model.
+   * Never throws: a catalog that cannot be discovered stays empty.
    */
-  async discoverPlannerCatalogs(sessionId: string | undefined, requestWorkspace: string | undefined, switchTo?: unknown): Promise<void> {
+  async discoverPlannerCatalogs(sessionId: string | undefined, requestWorkspace: string | undefined): Promise<void> {
     const workspace = this.settingsWorkspace(sessionId, requestWorkspace);
-    const incoming = typeof switchTo === 'string' && isPlannerBackend(switchTo) ? switchTo : undefined;
-    const runners = [this.plannerProviderInEffect(workspace), incoming]
-      .map((provider) => provider && runnerForProvider(provider))
-      .filter((runner): runner is RunnerId => !!runner);
+    const consulted: PlannerBackendId[] = [];
+    void this.plannerConfig(undefined, workspace, (provider) => {
+      consulted.push(provider);
+      return this.plannerCatalogFor(provider, workspace);
+    }).planner;
+    await this.discoverUnheld(workspace, consulted);
+  }
+
+  /**
+   * {@link updateSettings} as a route makes it. A write that changes who plans
+   * lands after the planner writes made before it and, where its judgement
+   * reads a catalog not yet held, waits for that one; every other write — a
+   * key, an allowlist, a limit — lands at once (ADR-0040).
+   */
+  async writeSettings(changes: Record<string, unknown>, sessionId?: string, requestWorkspace?: string): Promise<SettingsUpdateResponse> {
+    const change = plannerChangeOf(changes, admittedEnv(changes)?.accepted);
+    if (!changesPlanner(change)) return this.updateSettings(changes, sessionId, requestWorkspace);
+    const turn = this.plannerWrites.then(async () => {
+      // Judged once the writes before it have landed: one may have switched.
+      const workspace = this.settingsWorkspace(sessionId, requestWorkspace);
+      const judging = this.catalogJudging(change, workspace);
+      await this.discoverUnheld(workspace, judging ? [judging] : []);
+      return this.updateSettings(changes, sessionId, requestWorkspace);
+    });
+    this.plannerWrites = turn.catch(() => undefined);
+    return turn;
+  }
+
+  /**
+   * The provider whose catalog `selectPlanner` reads to judge `change`: a
+   * switch with no model of its own restores the remembered pick only from
+   * the incoming catalog, and an agent's effort alone survives only where its
+   * model in effect offers it. An explicit model is the user's word whatever
+   * the catalog lists, and a cold catalog refuses no effort, so it reads none.
+   */
+  private catalogJudging(change: PlannerSelectionChange, workspace: string | undefined): PlannerBackendId | undefined {
+    const current = this.plannerProviderInEffect(workspace);
+    const provider = change.provider ?? current;
+    const model = change.model?.trim();
+    if (provider !== current) return model ? undefined : provider;
+    return model === undefined && change.effort !== undefined && runnerForProvider(provider) ? provider : undefined;
+  }
+
+  /** Discover the catalogs of `providers` that `workspace`'s resolver does not hold yet; never throws. */
+  private async discoverUnheld(workspace: string | undefined, providers: PlannerBackendId[]): Promise<void> {
     const resolver = this.resolverFor(workspace);
+    // Only a real catalog is held; a degraded one comes back from discovery's
+    // own short memory without running the CLI again.
+    const runners = providers
+      .map((provider) => runnerForProvider(provider))
+      .filter((runner): runner is RunnerId => !!runner && resolver.getCachedRunnerModels(runner).length === 0);
+    const vendor = providers.some((provider) => isApiProvider(provider)) && resolver.getCachedPickerOptions().length === 0;
+    if (runners.length === 0 && !vendor) return;
     await Promise.all([
-      resolver.modelsForRunners(runners),
-      incoming && isApiProvider(incoming) ? resolver.pickerOptions().catch(() => []) : undefined,
+      runners.length > 0 ? resolver.modelsForRunners(runners) : undefined,
+      vendor ? resolver.pickerOptions().catch(() => []) : undefined,
     ]);
   }
 
@@ -562,30 +619,14 @@ export class OrchestratorPool {
     // runner it spawns, so this write is the whole of `admitSettingsEnv`'s
     // reason to exist. All downstream reads below use `envChanges`, which is
     // the admitted subset, never the raw body.
-    const rawEnv = changes.env && typeof changes.env === 'object' && !Array.isArray(changes.env)
-      ? (changes.env as Record<string, unknown>)
-      : undefined;
-    const admission = rawEnv ? admitSettingsEnv(rawEnv) : undefined;
+    const admission = admittedEnv(changes);
     const envChanges = admission ? admission.accepted : undefined;
 
-    // A pick arrives either as a top-level field (a vendor model, `ordewell
-    // model set`) or through env (`ordewell planner-effort`, the TUI's
-    // pickers); env wins, as it did when both were written in that order. The
-    // provider is the name the client sent, never re-derived from the model: a
-    // switch may have just cleared that model. An `inherited` write is no
-    // pick at all: it is the environment a client was started under, which
-    // the daemon would have inherited had the client spawned it, so it is
-    // written as it stands and nothing in it is remembered.
-    const plannerChange: PlannerSelectionChange = changes.inherited === true ? {} : {
-      provider: envChanges?.AI_PROVIDER,
-      model: envChanges?.ORCHESTRATOR_MODEL ?? stringField(changes.orchestratorModel),
-      effort: envChanges?.ORDEWELL_PLANNER_EFFORT ?? stringField(changes.plannerThinkingEffort),
-    };
-    const touchesPlanner = Object.values(plannerChange).some((v) => v !== undefined);
+    const plannerChange = plannerChangeOf(changes, envChanges);
     // Judged against the incoming provider's catalog as already discovered —
     // before the credential refresh below clears the resolver's cache — so
     // the write itself never waits on (async) discovery.
-    const selection = touchesPlanner
+    const selection = changesPlanner(plannerChange)
       ? selectPlanner(current, plannerChange, this.plannerModelMemory, this.plannerCatalogFor(plannerChange.provider ?? current.provider, workspace))
       : undefined;
 
@@ -1038,6 +1079,34 @@ export const scanWorkspaces = scanWorkspacesImpl;
 export function getSessionList(workspace: string) { return listSessions(workspace); }
 export function getSession(sessionId: string, workspace: string) { return loadSession(sessionId, workspace); }
 export function removeSession(sessionId: string, workspace: string) { return deleteSession(sessionId, workspace); }
+
+/** A write's `env`, split into what may reach `process.env` and what may not. */
+function admittedEnv(changes: Record<string, unknown>): ReturnType<typeof admitSettingsEnv> | undefined {
+  const raw = changes.env;
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? admitSettingsEnv(raw as Record<string, unknown>) : undefined;
+}
+
+/**
+ * What a settings write asks of who plans. A pick arrives either as a
+ * top-level field (a vendor model, `ordewell model set`) or through env
+ * (`ordewell planner-effort`, the TUI's pickers); env wins, as it did when
+ * both were written in that order. The provider is the name the client sent,
+ * never re-derived from the model: a switch may have just cleared that model.
+ * An `inherited` write is no pick at all: it is the environment a client was
+ * started under, which the daemon would have inherited had the client spawned
+ * it, so it is written as it stands and nothing in it is remembered.
+ */
+function plannerChangeOf(changes: Record<string, unknown>, envChanges: Record<string, string> | undefined): PlannerSelectionChange {
+  return changes.inherited === true ? {} : {
+    provider: envChanges?.AI_PROVIDER,
+    model: envChanges?.ORCHESTRATOR_MODEL ?? stringField(changes.orchestratorModel),
+    effort: envChanges?.ORDEWELL_PLANNER_EFFORT ?? stringField(changes.plannerThinkingEffort),
+  };
+}
+
+function changesPlanner(change: PlannerSelectionChange): boolean {
+  return Object.values(change).some((v) => v !== undefined);
+}
 
 function stringField(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
