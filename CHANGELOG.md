@@ -10,6 +10,17 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [0.11.2] - 2026-10-29
 
+### Added
+
+- **`/resume` opens the session browser in the planner chat.** It answers as
+  an alias of `/sessions` in the terminal UI and VS Code, and is listed beside
+  it in `/help` and the command suggestions. It loads a saved session; it does
+  not restart a task (#139; thanks @Logic769).
+- **A guide to how planners and runners get their models and credentials.**
+  [docs/planners-and-runners.md](docs/planners-and-runners.md) explains where
+  each one's models and keys come from, and where to see and change them, and
+  the README links to it (#140; thanks @hskl18).
+
 ### Fixed
 
 - **Claude Code offers the models you added to its own picker.** Entries in
@@ -54,7 +65,6 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   chat's runner switches do. Save Session says when nothing was saved, and
   why. An error from a command typed after `/new`, such as `/fork`, now shows
   in the chat.
-
 - **Claude Code's named usage limits resume tasks at reset.** Messages such
   as the five-hour limit are recognized as usage limits; when a reset time is
   available, the paused task resumes with its existing session and any kept worktree.

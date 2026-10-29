@@ -4,6 +4,12 @@
 
 ## [0.11.2] - 2026-10-29
 
+### Added
+
+- **`/resume` opens the session browser.** It answers as an alias of
+  `/sessions` in the chat, and is listed beside it in `/help` and the command
+  suggestions (#139; thanks @Logic769).
+
 ### Fixed
 
 - **Claude Code's named usage limits resume tasks at reset.** A five-hour limit
