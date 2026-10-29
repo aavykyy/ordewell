@@ -49,7 +49,6 @@ import {
   WorkspaceNotAProjectError,
   ensureStateDirIgnored,
   runnerForProvider,
-  isApiProvider,
   PlannerModelMemory,
   selectPlanner,
   admitSettingsEnv,
@@ -143,8 +142,6 @@ export class OrchestratorPool {
   private modelResolver: ModelResolver;
   /** A host that supplied its own resolver answers for every workspace, as a supplied probe does. */
   private suppliedModelResolver: boolean;
-  /** Per workspace other than the daemon's cwd: see {@link resolverFor}. */
-  private workspaceResolvers = new Map<string, ModelResolver>();
   private runnerInstallation: RunnerInstall;
   /**
    * A host that supplied its own probe (a test, or a surface that owns one).
@@ -520,11 +517,7 @@ export class OrchestratorPool {
    * rather than kicking off discovery mid-settings-write.
    */
   private plannerCatalogFor(provider: PlannerBackendId, workspace?: string): PlannerModelCandidate[] {
-    const runner = runnerForProvider(provider);
-    if (runner) {
-      return this.resolverFor(workspace).getCachedRunnerModels(runner).map((m) => ({ id: m.modelId, variants: m.variants }));
-    }
-    return this.modelResolver.getCachedPickerOptions().map((o) => ({ id: o.id }));
+    return this.resolverFor(workspace).cachedPlannerCatalog(provider);
   }
 
   /**
@@ -581,20 +574,14 @@ export class OrchestratorPool {
     return model === undefined && change.effort !== undefined && runnerForProvider(provider) ? provider : undefined;
   }
 
-  /** Discover the catalogs of `providers` that `workspace`'s resolver does not hold yet; never throws. */
+  /**
+   * Discover the catalogs of `providers` that `workspace`'s resolver does not
+   * hold yet; a held one, or a degraded one discovery still remembers,
+   * answers at once. Never throws.
+   */
   private async discoverUnheld(workspace: string | undefined, providers: PlannerBackendId[]): Promise<void> {
     const resolver = this.resolverFor(workspace);
-    // Only a real catalog is held; a degraded one comes back from discovery's
-    // own short memory without running the CLI again.
-    const runners = providers
-      .map((provider) => runnerForProvider(provider))
-      .filter((runner): runner is RunnerId => !!runner && resolver.getCachedRunnerModels(runner).length === 0);
-    const vendor = providers.some((provider) => isApiProvider(provider)) && resolver.getCachedPickerOptions().length === 0;
-    if (runners.length === 0 && !vendor) return;
-    await Promise.all([
-      runners.length > 0 ? resolver.modelsForRunners(runners) : undefined,
-      vendor ? resolver.pickerOptions().catch(() => []) : undefined,
-    ]);
+    await Promise.all([...new Set(providers)].map((provider) => resolver.plannerCatalog(provider)));
   }
 
   /**
@@ -649,13 +636,11 @@ export class OrchestratorPool {
           });
         }
       }
-      // A new/changed provider key or base URL must re-probe the catalog;
-      // without this the picker keeps serving the pre-key cache until restart.
+      // A new/changed provider key or base URL must re-probe the catalog, every
+      // workspace's included; without this the picker keeps serving the
+      // pre-key cache until restart.
       if (touched) {
-        for (const resolver of [this.modelResolver, ...this.workspaceResolvers.values()]) {
-          resolver.invalidate();
-          resolver.refreshRunnerModels();
-        }
+        this.modelResolver.invalidate();
         this.dropUnkeyedProviderLists();
       }
     }
@@ -789,12 +774,7 @@ export class OrchestratorPool {
     if (this.suppliedModelResolver || !workspace) return this.modelResolver;
     const key = workspaceKey(workspace);
     if (key === workspaceKey(undefined)) return this.modelResolver;
-    let resolver = this.workspaceResolvers.get(key);
-    if (!resolver) {
-      resolver = this.modelResolver.withRunnerEnv(async () => ({ ...process.env, ...(await workspaceEnvOf(key)) }));
-      this.workspaceResolvers.set(key, resolver);
-    }
-    return resolver;
+    return this.modelResolver.withRunnerEnv(key, async () => ({ ...process.env, ...(await workspaceEnvOf(key)) }));
   }
 
   /**

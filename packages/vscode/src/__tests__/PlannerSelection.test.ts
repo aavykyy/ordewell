@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PlannerModelMemory, recordInstalledPlanner, resetInstalledPlanner, type PlannerModelStore, type RunnerAuth } from '@ordewell/core';
+import { PlannerModelMemory, recordInstalledPlanner, resetInstalledPlanner, runnerForProvider, type PlannerBackendId, type PlannerModelStore, type RunnerAuth } from '@ordewell/core';
 import { __resetConfig, __setConfig, configUpdates } from '../test/vscode.mock';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { PlannerSelection } from '../PlannerSelection';
@@ -15,7 +15,7 @@ function setup(runnerModels: Record<string, { modelId: string; variants: { id: s
   const setPlannerBackends = vi.fn();
   const selection = new PlannerSelection({
     config: new VsCodeConfig(),
-    modelResolver: { modelsForRunners: async (runners: string[]) => Object.fromEntries(runners.map((r) => [r, runnerModels[r] ?? []])), pickerOptions: async () => [] } as never,
+    modelResolver: { plannerCatalog: async (provider: PlannerBackendId) => (runnerModels[runnerForProvider(provider) ?? ''] ?? []).map((m) => ({ id: m.modelId, variants: m.variants })) } as never,
     plannerModelMemory: memory,
     runnerInstallation: { plannerUsability: async () => ({ usable: true, ...(auth ? { auth } : {}) }) } as never,
     chatProvider: { setPlannerBackends } as never,

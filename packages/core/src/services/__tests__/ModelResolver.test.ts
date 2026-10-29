@@ -188,7 +188,7 @@ describe('ModelResolver.pickerOptions', () => {
   it('shares the vendor catalog with a view for another runner environment', async () => {
     const fetchImpl = vi.fn(fakeFetch([['/models', { data: [{ id: 'vendor/catalog', name: 'Catalog' }] }]]));
     const resolver = new ModelResolver(fakeRegistry({}), configWith(), { fetchImpl: fetchImpl as unknown as typeof fetch });
-    const view = resolver.withRunnerEnv(async () => ({ CLAUDE_CONFIG_DIR: '/elsewhere' }));
+    const view = resolver.withRunnerEnv('elsewhere', async () => ({ CLAUDE_CONFIG_DIR: '/elsewhere' }));
 
     await resolver.pickerOptions();
     expect(view.getCachedPickerOptions().map((o) => o.id)).toContain('vendor/catalog');
@@ -479,3 +479,127 @@ describe('ModelResolver.warmPickerOptions', () => {
   });
 });
 
+
+describe('ModelResolver — one catalog family across runner environments', () => {
+  /** An exec that lists `<runner>/<account>`, the account being the env's CLAUDE_CONFIG_DIR, and counts each listing per account. */
+  function accountExec() {
+    const listed: string[] = [];
+    const exec: ExecImpl = vi.fn(async (command: string, options?: { env?: Record<string, string | undefined> }) => {
+      const account = options?.env?.CLAUDE_CONFIG_DIR ?? 'daemon';
+      listed.push(account);
+      return { stdout: `${command.split(' ')[0]}/${account} Model\n` };
+    });
+    return { exec, listed };
+  }
+
+  function gatedFetch(stale: string, fresh: string) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    const fetchImpl = (async (input: Parameters<typeof fetch>[0]) => {
+      if (!String(input).includes('/models')) return new Response('not found', { status: 404 });
+      const id = calls++ === 0 ? stale : fresh;
+      if (id === stale) await gate;
+      return new Response(JSON.stringify({ data: [{ id, name: id }] }), { status: 200 });
+    }) as typeof fetch;
+    return { fetchImpl, release };
+  }
+
+  it('keeps one view per key, each with a runner catalog of its own', async () => {
+    const { exec, listed } = accountExec();
+    const resolver = new ModelResolver(fakeRegistry({ foo: manifest('foo') }), config, { execImpl: exec });
+    const b = resolver.withRunnerEnv('b', async () => ({ CLAUDE_CONFIG_DIR: 'b' }));
+
+    expect(resolver.withRunnerEnv('b', async () => ({ CLAUDE_CONFIG_DIR: 'elsewhere' }))).toBe(b);
+    expect(resolver.withRunnerEnv('c', async () => ({ CLAUDE_CONFIG_DIR: 'c' }))).not.toBe(b);
+    expect((await resolver.modelsForRunners(['foo'])).foo?.map((m) => m.modelId)).toEqual(['foo/daemon']);
+    expect((await b.modelsForRunners(['foo'])).foo?.map((m) => m.modelId)).toEqual(['foo/b']);
+    await b.modelsForRunners(['foo']);
+    expect(listed).toEqual(['daemon', 'b']);
+  });
+
+  it('reaches every runner environment from one invalidate or runner refresh, made on any of them', async () => {
+    const { exec, listed } = accountExec();
+    const resolver = new ModelResolver(fakeRegistry({ foo: manifest('foo') }), configWith(), { execImpl: exec, fetchImpl: fakeFetch([]) });
+    const b = resolver.withRunnerEnv('b', async () => ({ CLAUDE_CONFIG_DIR: 'b' }));
+    const both = () => Promise.all([resolver.modelsForRunners(['foo']), b.modelsForRunners(['foo'])]);
+
+    await both();
+    resolver.invalidate();
+    await both();
+    b.refreshRunnerModels();
+    await both();
+
+    expect(listed.filter((account) => account === 'daemon')).toHaveLength(3);
+    expect(listed.filter((account) => account === 'b')).toHaveLength(3);
+  });
+
+  it('leaves the vendor cache to the load after invalidate() when one begun before it ends last', async () => {
+    const { fetchImpl, release } = gatedFetch('vendor/stale', 'vendor/fresh');
+    const resolver = new ModelResolver(fakeRegistry({}), configWith(), { fetchImpl });
+
+    const before = resolver.pickerOptions();
+    resolver.invalidate();
+    const after = await resolver.pickerOptions();
+    release();
+
+    expect((await before).map((o) => o.id)).toEqual(['vendor/stale']);
+    expect(after.map((o) => o.id)).toEqual(['vendor/fresh']);
+    expect(resolver.getCachedPickerOptions().map((o) => o.id)).toEqual(['vendor/fresh']);
+    expect((await resolver.pickerOptions()).map((o) => o.id)).toEqual(['vendor/fresh']);
+  });
+
+  it('leaves a view\'s runner cache to the discovery after invalidate() when one begun before it ends last', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let call = 0;
+    const exec: ExecImpl = vi.fn(async () => {
+      if (call++ === 0) { await gate; return { stdout: 'foo/stale Stale\n' }; }
+      return { stdout: 'foo/fresh Fresh\n' };
+    });
+    const resolver = new ModelResolver(fakeRegistry({ foo: manifest('foo') }), configWith(), { execImpl: exec, fetchImpl: fakeFetch([]) });
+    const view = resolver.withRunnerEnv('b', async () => ({}));
+
+    const before = view.modelsForRunners(['foo']);
+    resolver.invalidate();
+    await view.modelsForRunners(['foo']);
+    release();
+    await before;
+
+    expect(view.getCachedRunnerModels('foo').map((m) => m.modelId)).toEqual(['foo/fresh']);
+  });
+});
+
+describe('ModelResolver.plannerCatalog', () => {
+  it('judges a harness planner by its own runner catalog, variants included, discovering it if not held', async () => {
+    const exec: ExecImpl = vi.fn().mockResolvedValue({ stdout: 'claude-a Claude A\n' });
+    const variants = [{ id: 'high', label: 'High' }];
+    const resolver = new ModelResolver(fakeRegistry({ 'claude-code': manifest('claude-code', { variants }) }), config, { execImpl: exec });
+
+    expect(resolver.cachedPlannerCatalog('claude-code')).toEqual([]);
+    expect(await resolver.plannerCatalog('claude-code')).toEqual([{ id: 'claude-a', variants }]);
+    expect(resolver.cachedPlannerCatalog('claude-code')).toEqual([{ id: 'claude-a', variants }]);
+    await resolver.plannerCatalog('claude-code');
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it('judges a vendor planner by the picker catalog, which every runner environment shares', async () => {
+    const fetchImpl = vi.fn(fakeFetch([['/models', { data: [{ id: 'vendor/catalog', name: 'Catalog' }] }]]));
+    const resolver = new ModelResolver(fakeRegistry({}), configWith(), { fetchImpl: fetchImpl as unknown as typeof fetch });
+    const view = resolver.withRunnerEnv('b', async () => ({}));
+
+    expect(resolver.cachedPlannerCatalog('openrouter')).toEqual([]);
+    expect(await resolver.plannerCatalog('openrouter')).toEqual([{ id: 'vendor/catalog' }]);
+    expect(view.cachedPlannerCatalog('openrouter')).toEqual([{ id: 'vendor/catalog' }]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers an empty catalog, never a throw, when nothing can be discovered', async () => {
+    const exec: ExecImpl = vi.fn().mockRejectedValue(new Error('not installed'));
+    const fetchImpl = (async () => { throw new Error('offline'); }) as typeof fetch;
+    const resolver = new ModelResolver(fakeRegistry({ codex: manifest('codex', { fallbackModels: [] }) }), configWith(), { execImpl: exec, fetchImpl });
+
+    expect(await resolver.plannerCatalog('codex')).toEqual([]);
+    expect(await resolver.plannerCatalog('openrouter')).toEqual([]);
+  });
+});

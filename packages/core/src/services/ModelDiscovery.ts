@@ -428,6 +428,8 @@ export class ModelDiscovery {
    * same background service.
    */
   private inflight: Map<string, Promise<DiscoveredModel[]>> = new Map();
+  /** Bumped by every `clear()`: a discovery begun before one answers its own lookups but fills no cache. */
+  private generation = 0;
   private registry: RunnerRegistry;
   private execImpl: ExecImpl;
   private fetchImpl?: typeof fetch;
@@ -527,11 +529,14 @@ export class ModelDiscovery {
       return [];
     }
 
+    const generation = this.generation;
     // Every runner is asked under the environment it is launched with: its
     // account, its home and its own files can all move with it.
     const env = await this.env().catch(() => process.env);
     const found = await this.discoverFromSources(manifest, env);
     const models = this.withSettingsModels(found.models, manifest, env);
+    // Asked before a refresh: what the runner says now is the next lookup's to learn.
+    if (generation !== this.generation) return models;
     if (found.cacheable && models.length > 0) this.cache.set(runner, models);
     else this.misses.set(runner, { models, at: this.now() });
     return models;
@@ -598,6 +603,7 @@ export class ModelDiscovery {
   }
 
   clear(): void {
+    this.generation++;
     this.cache.clear();
     this.misses.clear();
     // A refresh asks again at once; it must not join a run that began before it.

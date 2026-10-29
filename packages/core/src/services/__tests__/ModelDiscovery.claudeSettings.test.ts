@@ -183,7 +183,7 @@ describe('Claude Code discovery — modelPicker.options in settings.json', () =>
     writeSettings({ modelPicker: { options: [{ model: 'gproxy/workspace' }] } }, workspace);
     writeSettings({ modelPicker: { options: [{ model: 'gproxy/daemon' }] } });
     const { resolver, calls } = resolverFor('help');
-    const view = resolver.withRunnerEnv(async () => ({ ...process.env, CLAUDE_CONFIG_DIR: workspace }));
+    const view = resolver.withRunnerEnv(workspace, async () => ({ ...process.env, CLAUDE_CONFIG_DIR: workspace }));
 
     expect((await claudeModels(resolver)).map((m) => m.modelId)).toEqual([...BASELINE.help, 'gproxy/daemon']);
     expect((await claudeModels(view)).map((m) => m.modelId)).toEqual([...BASELINE.help, 'gproxy/workspace']);

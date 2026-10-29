@@ -26,7 +26,7 @@ describe('a planner pick is remembered under the live config.aiProvider', () => 
     config = new VsCodeConfig();
     const selection = new PlannerSelection({
       config,
-      modelResolver: { modelsForRunners: async () => ({}), pickerOptions: async () => [] } as never,
+      modelResolver: { plannerCatalog: async () => [] } as never,
       plannerModelMemory: memory,
       runnerInstallation: { plannerUsability: async () => ({ usable: true }) } as never,
       chatProvider: { setPlannerBackends: () => {} } as never,

@@ -883,6 +883,27 @@ describe('ModelDiscovery — OpenCode', () => {
 
     expect(after.map((m) => m.modelId)).toEqual(['opencode/fresh']);
   });
+
+  it('leaves the cache to the discovery after clear() when one begun before it ends last', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let call = 0;
+    const exec: ExecImpl = vi.fn(async (cmd: string) => {
+      if (cmd.includes('--verbose') || cmd.includes('api')) throw new Error('nope');
+      if (call++ === 0) { await gate; return { stdout: 'opencode/stale\n' }; }
+      return { stdout: 'opencode/fresh\n' };
+    });
+    const discovery = new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec);
+
+    const before = discovery.discover('opencode');
+    discovery.clear();
+    await discovery.discover('opencode');
+    release();
+
+    expect((await before).map((m) => m.modelId)).toEqual(['opencode/stale']);
+    expect(discovery.getCached('opencode')?.map((m) => m.modelId)).toEqual(['opencode/fresh']);
+    expect((await discovery.discover('opencode')).map((m) => m.modelId)).toEqual(['opencode/fresh']);
+  });
 });
 
 describe('ModelDiscovery — Claude Code variants', () => {

@@ -14,7 +14,7 @@ import { settingsRoute } from '../../routes/settings';
 // Claude Code alone, signed in with a synthetic key against a stubbed API, so
 // no real credential, settings file or CLI is reached.
 
-const ENV = ['ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR'];
+const ENV = ['ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR', 'OPENROUTER_API_KEY'];
 const MANAGED_SETTINGS = ['/Library/Application Support/ClaudeCode', 'C:\\Program Files\\ClaudeCode', '/etc/claude-code'];
 
 function savedPlan(): LegacyPlanState {
@@ -85,6 +85,22 @@ describe.skipIf(MANAGED_SETTINGS.some((dir) => fs.existsSync(dir)))('Orchestrato
       else process.env[key] = saved[key];
     }
     fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('re-discovers every workspace\'s runner catalog, each under its own account, after a credential change', async () => {
+    const lineup = (name: string, model: string) => fs.writeFileSync(
+      path.join(root, `${name}-claude`, 'settings.json'), JSON.stringify({ modelPicker: { options: [{ model }] } }));
+    lineup('workspace-a', 'gproxy/a-later');
+    lineup('workspace-b', 'gproxy/b-later');
+    expect(ids((await pool.getProviderModels(workspaceB)).modelsByRunner['claude-code'])).not.toContain('gproxy/b-later');
+
+    pool.updateSettings({ env: { OPENROUTER_API_KEY: 'sk-or-synthetic' } });
+
+    const [a, b] = await Promise.all([pool.getProviderModels(workspaceA), pool.getProviderModels(workspaceB)]);
+    expect(ids(a.modelsByRunner['claude-code'])).toContain('gproxy/a-later');
+    expect(ids(a.modelsByRunner['claude-code'])).not.toContain('gproxy/b-later');
+    expect(ids(b.modelsByRunner['claude-code'])).toContain('gproxy/b-later');
+    expect(ids(b.modelsByRunner['claude-code'])).not.toContain('gproxy/a-later');
   });
 
   it('restores B\'s remembered Claude model on a switch made from B', () => {
