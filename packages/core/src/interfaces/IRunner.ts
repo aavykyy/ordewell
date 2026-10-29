@@ -260,6 +260,13 @@ export interface IRunner {
     skills?: readonly TaskSkillSnapshot[];
     /** Something the user should know about how the spawn went that did not stop it — a respawn, most often. */
     onNotice?: (message: string) => void;
+    /**
+     * The runner is being started and has not yet reported Ordewell's tools
+     * connected (ADR-0025): on its first spawn, then on its one respawn.
+     * Nothing has been sent to it, and the spawn resolves only once they
+     * connect or the wait ends.
+     */
+    onAttaching?: (spawn: 1 | 2) => void;
     /** The attempt's work lands as a commit (ADR-0047): its runner is told to write the message in `task_complete`. */
     commits?: true;
     /** A script task's body (ADR-0035): only the script runner reads it, and it runs nothing else. */

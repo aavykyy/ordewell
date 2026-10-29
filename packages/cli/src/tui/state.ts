@@ -37,6 +37,8 @@ export interface TaskView {
   idleSince?: string | null;
   /** What its runner reported through `task_complete`, received while the attempt winds down (ADR-0018, L1). */
   completionReceived?: RunTask['completionReceived'];
+  /** Which spawn of its starting runner waits for Ordewell's tools to connect (ADR-0025). */
+  attaching?: RunTask['attaching'];
   dependencies: string[];
   assignedRunner?: string;
   taskMode?: string;

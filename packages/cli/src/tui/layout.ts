@@ -11,7 +11,7 @@ import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { accountLimitsText, contextMeterText, accountLimitsOf, assignedRunnerOf, describeIsolationPreview, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
+import { accountLimitsText, attachingLabel, contextMeterText, accountLimitsOf, assignedRunnerOf, describeIsolationPreview, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -381,6 +381,9 @@ export function chatActivity(state: TuiState): ChatActivity | null {
   const own = findTask(state.tasks, tv.taskId);
   const task = state.tasks.find((t) => t.subtasks?.some((s) => s.id === tv.taskId)) ?? own;
   if (!task) return null;
+  // Nothing has been sent to a runner whose tools have not connected, so it is not working yet (ADR-0025).
+  const attaching = attachingLabel(task);
+  if (attaching) return { label: `${attaching}…`, busy: true };
   if (isTaskRunning(task) || (own && isTaskRunning(own))) return { label: 'Working…', busy: true };
   const at = task.status === 'awaiting_user' && task.awaitingReason === 'usage-limit' && task.resumeAt ? new Date(task.resumeAt) : null;
   if (at && !Number.isNaN(at.getTime())) return { label: `paused · resumes ${resumeTime(at)}`, busy: false };
@@ -1208,12 +1211,13 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   const bodyPad = parent ? '      ' : '    ';
   // Only a state that wants the user gets a word: a runner approval ("enter
   // opens it") and a task stopped at a question — and a report received while
-  // its attempt winds down, which the spinner alone would hide. Running and
+  // its attempt winds down, or a runner still connecting Ordewell's tools,
+  // which the spinner alone would hide. Running and
   // quiet are the status glyph's job — the spinner and the static '~' — so a
   // running row reads `runner · model` and nothing is repeated above it.
   const activity = row.approvals
     ? `${inRow(row.approvals)}: enter opens it`
-    : row.awaiting ? inRow(row.awaiting) : row.receipt ? inRow(row.receipt) : '';
+    : row.awaiting ? inRow(row.awaiting) : row.receipt ? inRow(row.receipt) : row.attaching ? inRow(row.attaching) : '';
   const skills = (task.skills ?? []).join(' · ');
   // A running row's tag says RUN, so the mark moves to the line beneath it.
   const meta = [activity, ...(row.research && row.running ? [style.cyan('research')] : []), runner, model];

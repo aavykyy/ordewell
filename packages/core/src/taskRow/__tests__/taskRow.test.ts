@@ -86,6 +86,19 @@ describe('a report received while its attempt winds down (ADR-0018, L1)', () => 
   });
 });
 
+describe('a runner starting while Ordewell\'s tools attach (ADR-0025)', () => {
+  it('says its tools are connecting, and on the respawn that it is a retry', () => {
+    expect(taskRowView(subject({ status: 'in_progress', attaching: 1 })).attaching).toBe('Connecting Ordewell\'s tools');
+    expect(taskRowView(subject({ status: 'in_progress', attaching: 2 })).attaching).toBe('Connecting Ordewell\'s tools, retry');
+    expect(taskRowView(subject({ status: 'in_progress', attaching: 1 })).status).toBe('running');
+  });
+
+  it('says nothing once they connected, or once the task has left its attempt', () => {
+    expect(taskRowView(subject({ status: 'in_progress' })).attaching).toBeNull();
+    expect(taskRowView(subject({ status: 'pending', attaching: 2 })).attaching).toBeNull();
+  });
+});
+
 describe('a task paused on a usage limit', () => {
   const now = new Date(2026, 9, 11, 17, 0);
   const paused = { status: 'awaiting_user', type: 'ai' as const, awaitingReason: 'usage-limit' as const };

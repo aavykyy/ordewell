@@ -129,6 +129,12 @@ interface TaskAttempt extends EndedAttempt {
    * turn or a message the runner reads voids it, as it voids the report.
    */
   receipt: Verdict['reported'] | null;
+  /**
+   * Which spawn of its runner waits for Ordewell's tools to connect
+   * (ADR-0025); null until its runner starts and once the tools connect.
+   * Progress for surfaces: the wait itself is the runner's.
+   */
+  attaching: 1 | 2 | null;
 }
 
 const DEFAULT_GIT: GitInvoker = { exec: defaultExecFile, resolvePath: () => augmentedPath() };
@@ -391,6 +397,11 @@ export class Attempts {
     return this.live.get(taskId)?.receipt ?? null;
   }
 
+  /** Which spawn of the live attempt's runner waits for Ordewell's tools to connect; null when none does. */
+  attaching(taskId: string): 1 | 2 | null {
+    return this.live.get(taskId)?.attaching ?? null;
+  }
+
   /** The kind a task's next attempt starts as, short of a repair or a continue: what is weighed before one exists. */
   nextKind(taskId: string): AttemptKind {
     const task = this.deps.store.get(taskId);
@@ -433,6 +444,7 @@ export class Attempts {
       web: null,
       patch: null,
       receipt: null,
+      attaching: null,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.live.set(task.id, attempt);
@@ -694,6 +706,7 @@ export class Attempts {
         return false;
       }
       attempt.phase = 'running';
+      attempt.attaching = null;
       attempt.session = session;
       store.setTaskRunnerSessionId(task.id, undefined);
       store.clearCarriedFrom(task.id);
@@ -861,6 +874,11 @@ export class Attempts {
       applyPatch: (args) => this.applyPatch(task, attempt, args),
       workspaceRoot: this.deps.workspaceRoot(),
       onNotice: (message) => this.host.tell('warn', `Task "${task.title}": ${message}`),
+      onAttaching: (spawn) => {
+        if (this.live.get(task.id) !== attempt) return;
+        attempt.attaching = spawn;
+        this.host.emit('onTaskChanged');
+      },
     });
   }
 
