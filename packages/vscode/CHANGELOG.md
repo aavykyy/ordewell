@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-10-29
+
+### Fixed
+
+- **Claude Code's named usage limits resume tasks at reset.** A five-hour limit
+  message is recognized; when a reset time is available, the task resumes with
+  its existing session and any kept worktree.
+- **Claude Code's configured picker models are available.** Models in
+  `modelPicker.options` appear in planner and task pickers, using the runner's
+  home and workspace environment. Planner settings are checked against the
+  workspace's own catalog, including before its models have been listed.
+- **A task connecting Ordewell's tools shows its status.** Its card and chat
+  show when the runner is connecting, and stopping it stops the runner without
+  waiting for the connection.
+- **Failed tasks have a Retry button.** It appears on task and subtask cards
+  during and after a run. The Force Start, Skip, Retry and Cancel Task palette
+  commands now ask for an eligible task, including blocked tasks for Skip.
+- **Replacing a plan asks for confirmation.** Regenerate Plan confirms when an
+  existing plan has tasks, and `/new` warns when it will stop a run.
+- **Session and task handling is more reliable.** Late errors and fork editors
+  stay with their session, and overlapping task starts, landings and conflict
+  repairs keep their worktrees and holds until safe to release.
+- **Smaller fixes.** Clear All Tasks restores run settings from the settings
+  file; Toggle Runner keeps the last runner enabled; Save Session explains when
+  nothing was saved; and command errors after `/new` appear in the chat.
+
 ## [0.11.1] - 2026-10-27
 
 ### Changed
