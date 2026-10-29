@@ -361,6 +361,37 @@ describe('handleTui', () => {
     expect(daemon.stopDaemon).toHaveBeenCalledWith(4000);
   });
 
+  it('waits for the owned daemon\'s stop before exiting, so the stop is not abandoned', async () => {
+    let stopped!: () => void;
+    daemon.stopDaemon.mockImplementationOnce(() => new Promise<void>((resolve) => { stopped = resolve; }));
+    void handleTui([]);
+    await vi.waitFor(() => expect(fakeTerminal.onKey).toBeDefined());
+
+    fakeTerminal.onKey!({ name: 'ctrl-c' });
+
+    await vi.waitFor(() => expect(daemon.stopDaemon).toHaveBeenCalledWith(4000));
+    expect(fakeTerminal.close).toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+    stopped();
+    await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(0));
+  });
+
+  it('exits after a bounded wait when the owned daemon\'s stop never settles', async () => {
+    daemon.stopDaemon.mockImplementationOnce(() => new Promise<void>(() => {}));
+    void handleTui([]);
+    await vi.waitFor(() => expect(fakeTerminal.onKey).toBeDefined());
+    vi.useFakeTimers();
+    try {
+      fakeTerminal.onKey!({ name: 'ctrl-c' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(exitSpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('leaves a daemon it did not spawn running on exit', async () => {
     daemon.ensureDaemonOwned.mockResolvedValueOnce({ port: 4000, owned: false });
     void handleTui([]);

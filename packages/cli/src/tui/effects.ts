@@ -85,7 +85,10 @@ export interface EffectDeps {
  */
 export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void> {
   const turn = isPlannerTurn(effect);
-  const fail = (action: Extract<Action, { type: 'failed' }>): void => deps.dispatch(turn ? { ...action, turn } : action);
+  // The user may have loaded another session while the turn ran; its failure
+  // must not end that one's turn or drain that one's queue.
+  const turnSession = turn && 'sessionId' in effect ? { sessionId: effect.sessionId } : {};
+  const fail = (action: Extract<Action, { type: 'failed' }>): void => deps.dispatch(turn ? { ...action, turn, ...turnSession } : action);
   try {
     await perform(effect, deps);
   } catch (err) {

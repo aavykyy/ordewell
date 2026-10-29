@@ -78,6 +78,8 @@ function reduceAction(state: TuiState, action: Action): Step {
 
     // A loaded session is a different one: the turn the old one had out, the
     // prompts held behind it and a stop armed against it are not this one's.
+    // Nor is an open prompt editor: task ids repeat across plans, so the
+    // loaded plan's `task-1` would keep it, and Enter save the old draft there.
     // (`sessionStarted` cannot reset them: `startConversation` dispatches it
     // as its own turn begins.)
     case 'sessionLoaded':
@@ -88,8 +90,12 @@ function reduceAction(state: TuiState, action: Action): Step {
         sessionId: action.sessionId,
         goal: action.goal,
         taskView: null,
+        expandedTaskId: null,
+        taskEditor: null,
         status: 'idle',
         planner: 'idle',
+        plannerPause: null,
+        plannerResend: null,
         turnGate: NO_TURN,
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
@@ -114,7 +120,11 @@ function reduceAction(state: TuiState, action: Action): Step {
         sessionId: null,
         goal: '',
         taskView: null,
+        expandedTaskId: null,
+        taskEditor: null,
         status: 'idle',
+        plannerPause: null,
+        plannerResend: null,
         turnGate: NO_TURN,
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
@@ -388,18 +398,24 @@ function reduceAction(state: TuiState, action: Action): Step {
 
     case 'settingsLoaded': {
       // An open /settings or /planner marks the current value from what the daemon now holds.
-      if (action.read !== undefined && action.read < state.settingsRead) return step(state);
+      const { read } = action;
       // A read names the session it answers for. One for a session the user
-      // has left may still carry global settings, but must not paint that
-      // session's run values over this one's, nor advance this session's
-      // watermark and drop a read that is still on its way (ADR-0030).
+      // has left, or a write's answer, still carries the workspace's settings,
+      // but must not paint its run values over this session's, nor advance
+      // this session's run watermark and drop a read on its way (ADR-0030).
       const forThisSession = action.sessionId === undefined
-        ? action.read === undefined || state.sessionId === null
+        ? read === undefined || state.sessionId === null
         : action.sessionId === state.sessionId;
-      const next = applySettings(state, action.settings, forThisSession);
+      const workspaceFresh = read === undefined || read >= state.settingsRead;
+      const runFresh = forThisSession && (read === undefined || read >= state.runSettingsRead);
+      if (!workspaceFresh && !runFresh) return step(state);
+      const next = workspaceFresh
+        ? applySettings(state, action.settings, runFresh)
+        : applySettings(state, { run: action.settings.run }, true);
       return step(refreshStepper({
         ...next,
-        settingsRead: action.read !== undefined && forThisSession ? Math.max(state.settingsRead, action.read) : state.settingsRead,
+        settingsRead: read !== undefined && workspaceFresh ? Math.max(state.settingsRead, read) : state.settingsRead,
+        runSettingsRead: read !== undefined && runFresh ? Math.max(state.runSettingsRead, read) : state.runSettingsRead,
       }));
     }
 
@@ -508,6 +524,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         // its way, so the start indicator must not outlive it.
         return step(state.status === 'starting' ? { ...abandoned, status: 'idle' } : abandoned);
       }
+      if (stale(state, action.sessionId)) return step(state);
       // A force send stopped the turn in flight; the forced turn is already on
       // its way, so the stop is not news and the prompts held behind it keep
       // their order rather than draining into the turn replacing it. Only the

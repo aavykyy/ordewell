@@ -469,8 +469,14 @@ export interface TuiState {
    * first frame painted before the daemon answers.
    */
   runSettingsKnown: boolean;
-  /** The newest settings read this surface started; an older answer is dropped. */
+  /** The newest settings answer applied; an older one's workspace values are dropped. */
   settingsRead: number;
+  /**
+   * The newest answer applied for this session's run values. Apart from
+   * `settingsRead` because a write answers with no session's run, and must
+   * still outrank an older read without dropping the session's own (ADR-0030).
+   */
+  runSettingsRead: number;
   /**
    * Whether the daemon has named who plans and listed the installed runners.
    * It answers both only once its probe for coding agents has, so until then
@@ -746,6 +752,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     runSettings: { ...RUN_SETTINGS_DEFAULTS },
     runSettingsKnown: false,
     settingsRead: 0,
+    runSettingsRead: 0,
     plannerKnown: false,
     runnersKnown: false,
     providersKnown: false,

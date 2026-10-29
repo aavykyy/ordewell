@@ -65,16 +65,40 @@ describe('the session\'s own run settings', () => {
   });
 
   it('does not let an answer for the session left behind drop the current session\'s read', () => {
-    const onB = base({ sessionId: 'b', settingsRead: 1, runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } });
+    const onB = base({ sessionId: 'b', settingsRead: 1, runSettingsRead: 1, runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } });
 
     const oldForA = reduce(onB, { type: 'settingsLoaded', sessionId: 'a', read: 5, settings: {} });
-    expect(oldForA.state.settingsRead).toBe(1);
+    expect(oldForA.state.runSettingsRead).toBe(1);
 
     const currentForB = reduce(oldForA.state, {
       type: 'settingsLoaded', sessionId: 'b', read: 2,
       settings: { run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act' } },
     });
     expect(currentForB.state.runSettings.supervisorLevel).toBe('act');
+  });
+
+  // A /planner pick, key or allowlist write answers with no session's run, so
+  // it cannot raise the session's run watermark; it still outranks every read
+  // started before it.
+  it('keeps a write over an older read that answers after it, without dropping the run values that read carries', () => {
+    const onS1 = base({
+      orchestratorModel: 'old', plannerProvider: 'claude-code', settingsRead: 2, runSettingsRead: 2,
+      runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' },
+    });
+
+    const written = reduce(onS1, {
+      type: 'settingsLoaded', read: 4,
+      settings: { orchestratorModel: 'NEW', aiProvider: 'codex', run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act' } },
+    }).state;
+    expect(written).toMatchObject({ orchestratorModel: 'NEW', plannerProvider: 'codex' });
+    expect(written.runSettings.supervisorLevel).toBe('off');
+
+    const olderRead = reduce(written, {
+      type: 'settingsLoaded', read: 3, sessionId: 's1',
+      settings: { orchestratorModel: 'old', aiProvider: 'claude-code', run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'watch' } },
+    }).state;
+    expect(olderRead).toMatchObject({ orchestratorModel: 'NEW', plannerProvider: 'codex' });
+    expect(olderRead.runSettings.supervisorLevel).toBe('watch');
   });
 });
 
