@@ -3649,6 +3649,7 @@ body.vscode-high-contrast-light .task-card.expanded {
   display: block;
   width: 100%;
   border: 0;
+  border-left: 2px solid var(--accent);
   text-align: left;
   font-family: var(--font-mono);
   font-size: 12px;
