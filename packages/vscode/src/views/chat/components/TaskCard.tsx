@@ -709,7 +709,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
 
             {canEdit && task.type === 'ai' && task.prompt && (
               editingPrompt === null ? (
-                <button type="button" className="task-prompt task-prompt-editable" aria-label="Edit task prompt"
+                <button type="button" className="task-prompt task-prompt-editable" aria-label={`Edit task prompt: ${task.prompt}`}
                   onClick={(e) => { e.stopPropagation(); setEditingPrompt(task.prompt ?? ''); }} title="Click to edit prompt">
                   {task.prompt}
                   <span className="task-prompt-edit-icon">&#9998;</span>

@@ -143,7 +143,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
 
             {canEdit && task.type === 'ai' && task.prompt && (
               editingPrompt === null ? (
-                <button type="button" className="subtask-prompt subtask-prompt-editable" aria-label="Edit subtask prompt"
+                <button type="button" className="subtask-prompt subtask-prompt-editable" aria-label={`Edit subtask prompt: ${task.prompt}`}
                   onClick={(e) => { e.stopPropagation(); setEditingPrompt(task.prompt ?? ''); }} title="Click to edit prompt">
                   {task.prompt}
                   <span className="task-prompt-edit-icon">&#9998;</span>

@@ -134,7 +134,7 @@ describe('editable prompt keyboard controls', () => {
     const onExpandedChange = vi.fn();
     renderCard({ onExpandedChange });
 
-    const prompt = screen.getByRole('button', { name: 'Edit task prompt' });
+    const prompt = screen.getByRole('button', { name: /Edit task prompt:/ });
     prompt.focus();
     expect(prompt).toHaveFocus();
     fireEvent.keyDown(prompt, { key: 'Enter' });
@@ -151,7 +151,7 @@ describe('editable prompt keyboard controls', () => {
     render(<SubTaskCard task={makeTask({ id: 's1' })} parentTask={parent} models={[]} isExecuting onPromptChange={onPromptChange} />);
     fireEvent.click(document.querySelector('.subtask-card-header')!);
 
-    const prompt = screen.getByRole('button', { name: 'Edit subtask prompt' });
+    const prompt = screen.getByRole('button', { name: /Edit subtask prompt:/ });
     prompt.focus();
     expect(prompt).toHaveFocus();
     fireEvent.keyDown(prompt, { key: ' ' });
@@ -165,7 +165,7 @@ describe('editable prompt keyboard controls', () => {
   it('does not expose read-only prompts as controls', () => {
     renderCard({ task: makeTask({ status: 'in_progress' }) });
 
-    expect(screen.queryByRole('button', { name: 'Edit task prompt' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Edit task prompt:/ })).toBeNull();
     expect(screen.getByText('Do the queued work').className).toContain('task-prompt-readonly');
   });
 });
