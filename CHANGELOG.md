@@ -13,6 +13,26 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **VS Code prompts are keyboard accessible.** Editable task and subtask prompts
   are focusable controls with accessible names; read-only prompts remain
   unchanged.
+## [0.11.3] - 2026-10-29
+
+### Fixed
+
+- **Repository configuration introduced during a run waits for your consent.**
+  A task landing that adds or edits configuration its runner loads at launch,
+  such as `.mcp.json`, `.claude/settings.json`, `.claude/settings.local.json`,
+  Claude Code's hooks, plugins and plugin manifests, OpenCode's project config,
+  agent definitions, plugins and tools, and `.codex/`, no longer reaches a
+  later task's launch on its own. The start that would read it is held and
+  names each path; commit the configuration and start a new run whose base
+  holds it, or remove it. Configuration already present when the run started,
+  instruction files such as `CLAUDE.md` and `AGENTS.md`, and a worktree's own
+  setup are not held.
+- **A repository MCP server cannot take Ordewell's name.** A Claude Code change
+  or ops task does not start when the directory it runs in declares a server
+  named `ordewell` in `.mcp.json`, `.claude/settings.json` or
+  `.claude/settings.local.json`. Claude Code does not document which of those
+  wins against the server Ordewell passes, so the task could lose the route it
+  reports completion through. Rename or remove that server to start the task.
 
 ## [0.11.2] - 2026-10-29
 

@@ -13,7 +13,7 @@ import type { AgentEvent, AgentStartOptions, PlannerAsk, PlannerStartOptions, Ta
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines, structuredPatchText } from './fileDiff';
 import { ORDEWELL_MCP_SERVER_NAME, taskCompletionContract, type McpClientConfig } from '../mcp';
-import { CLAUDE_ORDEWELL } from './claudeOrdewell';
+import { assertNoClaudeTaskCollision, CLAUDE_ORDEWELL } from './claudeOrdewell';
 import { PermissionLedger } from './permissionLedger';
 import { ReplyRuns } from './replyRuns';
 import { settleWithin } from './settleWithin';
@@ -646,6 +646,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    */
   private taskSpawnSpec(opts: TaskStartOptions): SpawnSpec {
     const readOnly = readOnlyTask(opts);
+    if (!readOnly) assertNoClaudeTaskCollision(opts.cwd);
     this.readOnlySite = readOnly ? opts : null;
     this.requestedMode = readOnly ? PLANNER_PERMISSION_MODE : opts.flags.permissionMode;
     this.followedModel = opts.model;

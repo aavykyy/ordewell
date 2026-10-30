@@ -96,8 +96,8 @@ use these same restrictions (ADR-0046).**
 A project MCP server is one the repository declares: `.mcp.json` for Claude
 Code; the `mcp` entries of the project's `opencode.json`/`opencode.jsonc` or
 `.opencode/opencode.json[c]` for OpenCode; the `mcp_servers` of the project's
-`.codex/config.toml` for Codex. Each runner is stopped from reading them
-(above and below), and Ordewell reads them itself:
+`.codex/config.toml` for Codex. Each runner is stopped from reading them for a
+planner (above and below), and Ordewell reads them itself:
 
 - **Not started unless approved.** Before the planner's first spawn, each
   server is put to the session's approval policy as kind `mcp_server`. The
@@ -210,11 +210,84 @@ direnv was allowed to export and an untracked `.ordewell/env`.
 
 ### Task configuration
 
-A change or ops task runs the repository's code by design and keeps
-every native capability of its runner (ADR-0020, ADR-0027): its settings,
-hooks, project servers and instruction files load as its runner loads them,
-and its launch is byte for byte what it was. A read-only task instead withholds
-project configuration and native writes as ADR-0046 specifies.
+A change or ops task keeps its runner's native configuration, because it runs
+the repository's code by design (ADR-0020) and its runner stays fully native
+(ADR-0018, R1). The repository's `.claude/settings.json` and
+`.claude/settings.local.json` load with their hooks, helper commands (`env`,
+`apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `otelHeadersHelper`),
+allow rules and plugins; its `.mcp.json` servers, `.claude/hooks/`,
+`.claude/plugins/`, `.claude-plugin/` and the plugin and marketplace manifests
+under `.claude/` arrive as Claude Code reads them; OpenCode's project config
+and Codex's `.codex/config.toml` load as their runners read them. They act at
+launch, before a tool call exists for the approval policy to see. A read-only
+task instead withholds project configuration and native writes as ADR-0046
+specifies.
+
+- **That is deliberate.** A task is where the repository's own tools run: its
+  formatter, its lint rules, its test harness, the skills and commands its
+  authors set up, and the servers that reach the systems they work with. A
+  launch that stripped them would run another runner from the one the user
+  types into (ADR-0018, R1), on the repository the plan named. The consent to
+  that launch is the plan's approval and the task's start.
+- **A gate on tool calls is not a gate on hooks or server startup.**
+  ADR-0018 A1 sends a runner's tool request to a person; a hook, an `env`
+  block, a helper command, plugin code and a server's startup happen before
+  the first tool call and outside that channel, so A1 neither sees nor decides
+  them. In Full with autorun no person approves anything: a task the planner
+  writes starts on the approved plan and loads its runner's configuration as
+  the user. ADR-0035 accepts the same asymmetry — in Full with autorun its
+  consent rule reroutes an effect into a task rather than preventing it — and
+  what holds is the approved plan, the record an attempt leaves (a log, a
+  verdict, a landing) and the two launch boundaries below. Ordewell claims no
+  launch-time consent it does not have.
+- **Where the boundary sits.** Configuration introduced during a run reaches a
+  later launch only after the user consents to it. Before a change or ops
+  task's runner is spawned, the directories it reads are compared with where
+  the run started, untracked and ignored files included, for the paths that
+  can run code or redirect the runner: `.mcp.json`, `.claude/settings.json`,
+  `.claude/settings.local.json`, `.claude/hooks/`, `.claude/plugins/`,
+  `.claude-plugin/`, a `plugin.json` or `marketplace.json` under `.claude/`,
+  OpenCode's `opencode.json` and its plugin, tool and agent directories, and `.codex/`
+  (the list is the runners', and holds a start for any of them whichever
+  runner it launches). A difference holds the start with a reason naming each
+  path, so a landing that added one stops the run's later starts.
+  - *A worktree* is compared with the base commit the run recorded, at the
+    repository's top and, when the workspace is below it, in the directory the
+    runner starts in. The `.claude` and `.opencode` directories a worktree
+    links from the main checkout, and a group's loose entries shared live
+    with the real workspace, are compared as the checkout is: git sees a
+    link, not what a task wrote through it.
+  - *The checkout* an ops task or a shared run works in has no base commit,
+    and its personal files (an ignored `.claude/settings.local.json`) predate
+    the run, so it is compared with its own contents when the run first
+    launched a task of any kind, before a landing can reach it, at the
+    workspace root and each level above it up to the repository's top, which
+    the runner reads too. A run that never isolates is held the same way. The
+    baseline is kept in memory for the run: a restarted daemon takes it anew at
+    its next launch. A Merge all that changes the checkout holds the next ops
+    start, which the user lifts by removing the configuration or starting a new
+    run.
+  - The baseline does not move, so a hold stands for the run: the user
+    consents by reviewing the configuration and starting a run whose base holds
+    it, and one they do not keep is removed. Committing it does not lift the
+    hold. A run with no recorded base, and a diff git cannot take, lets the
+    start through: an old saved run may have neither. A conflict repair is
+    checked before its attempt reopens, and a held start keeps its worktree. A
+    script task has no runner and a read-only task withholds project
+    configuration (ADR-0046), so neither is checked.
+- **A name cannot be taken over.** A Claude change or ops task launch reads
+  the working directory's `.mcp.json` and refuses to start when it declares a
+  server named `ordewell`. Claude takes MCP servers from that file and the
+  user's own config and ignores an `mcpServers` key in a settings file, so
+  those are not read. Claude's precedence between the files it reads and
+  the `--mcp-config` Ordewell passes is undocumented, so the collision has no
+  known answer: the repository's entry could replace the server the attempt's
+  token travels through, and the task would lose its completion route, or run
+  against a server the repository chose. The repository renames or removes the
+  entry; the launch does not guess. A planner's own readers refuse such a
+  server too, so it is never put to approval or started there (ADR-0022, S3).
+  The file is read before the spawn, so a change made after it is outside
+  this.
 
 ## Key properties
 
@@ -245,6 +318,25 @@ project configuration and native writes as ADR-0046 specifies.
   file can change between the approval and the start.
 - **Untrusted for Codex by `CODEX_HOME`.** Rejected: a fresh home loses the
   user's login and config with the repository's.
+- **`--bare` for a task launch.** Rejected: it skips the hooks, skills, custom
+  commands, subagents, plugins, MCP servers and `CLAUDE.md` a repository ships,
+  which is the toolchain the task was started to use; it makes a scripted call
+  start faster, not a task.
+- **`--safe-mode` for a task launch.** Rejected: the same strip, for
+  troubleshooting a broken setup. A task that cannot load the repository's
+  configuration fails the work the plan asked for, and the failure reads as
+  the task's own.
+- **`--strict-mcp-config` for a task launch.** Rejected: it narrows MCP
+  servers alone, while hooks, `env`, helper commands, plugins and allow rules
+  still load and still act first, so it is not this ADR's boundary; it would
+  also drop the repository's own servers, which the task is meant to have.
+- **Hold a task's first launch in a repository for a person to approve its
+  configuration.** Rejected: a card cannot show what a hook does, the plan's
+  approval is already the consent to the task, and in Full with autorun there
+  is no person to ask.
+- **Refuse a repository server named `ordewell` for planners only.** That was
+  the rule. Rejected for tasks: a Claude task launch has the same collision,
+  and the task could lose the very server its completion call needs.
 
 ## History
 
@@ -310,3 +402,11 @@ project configuration and native writes as ADR-0046 specifies.
 - 2026-10-13 — a Claude Code or Codex project server named `ordewell` is not offered either.
 
 - 2026-10-21 — read-only tasks use the same repository-config restrictions as planners (ADR-0046).
+- 2026-10-29 — a change or ops task's launch keeps its runner's configuration
+  and states the boundary: a start whose tree differs from the run's base in a
+  configuration path is held for consent, and a Claude task launch refuses a
+  repository server named `ordewell`.
+- 2026-10-29 — the launch check reads the runner's own directory (a workspace
+  below its repository's top, a group's shared entries, the checkout an ops or
+  shared task runs in), covers OpenCode's and Codex's configuration, skips
+  read-only tasks, and no longer reads settings files for an `ordewell` server.
